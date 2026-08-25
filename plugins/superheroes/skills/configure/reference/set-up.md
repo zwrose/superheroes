@@ -27,14 +27,17 @@ anyone with the repo. Resolve the band-wide decision (it is decided once and is 
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -B -c "
-import sys; sys.path.insert(0,'$ROOT_DIR/lib'); import mode_registry
-print(mode_registry.decide_mode('.', None, True))"   # 'in-repo' | 'global' | 'ask'
+DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero; halting rather than taking an undisclosed storage default" >&2; exit 1; }
+LOC=$(printf '%s' "$DEC" | jq -r '.mode')
+PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')
+[ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting" >&2; exit 1; }
 ```
 
-`ask` → present the choice and record the owner's pick; an already-decided mode is reported, not
-re-asked. A **headless** run (no human) takes `global` (out-of-repo) provisionally and never asks
-(FR-14).
+**Default:** recorded mode when one exists, else provisional `global` (out-of-repo). An
+already-decided mode is reported, not re-asked. **Disclosure:** when `$PROVISIONAL` is `true`, state
+in the set-up output which storage mode was taken, that it is provisional, and that
+`/superheroes:configure` changes it. **Follow-up:** the owner changes storage mode via
+`/superheroes:configure` (view-and-tune §3 for a flip after set-up).
 
 ## 2 — Seed the core + the light hero layers (FR-16)
 

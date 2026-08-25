@@ -146,6 +146,43 @@ def test_plan_refuses_without_owner_authorization(tmp_path):
     assert m.blocked is True and "authorization" in m.reason.lower()
 
 
+def test_execute_refuses_blocked_migration_and_leaves_registry_unchanged(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    reg_path = mr.registry_path(str(tmp_path), root)
+    reg_before = open(reg_path, encoding="utf-8").read()
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=False)
+    res = mm.execute(m, root=root)
+    assert res["status"] == "blocked"
+    assert "authorization" in res.get("reason", "").lower()
+    reg_after = open(reg_path, encoding="utf-8").read()
+    assert reg_before == reg_after
+
+
+def test_preview_enumerates_without_owner_authorization_and_execute_stays_blocked(tmp_path, capsys):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
+    os.makedirs(ddir, exist_ok=True)
+    sc.atomic_write(os.path.join(ddir, "spec.md"), "spec\n")
+    capsys.readouterr()
+    rc = mm.main(["preview", "--cwd", str(tmp_path), "--root", root, "--target", mr.GLOBAL])
+    preview_out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert preview_out.get("blocked") is not True
+    assert preview_out.get("calibration") or preview_out.get("definitionDocs")
+    capsys.readouterr()
+    rc = mm.main(["execute", "--cwd", str(tmp_path), "--root", root, "--target", mr.GLOBAL])
+    execute_out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert execute_out.get("status") == "blocked"
+    assert "FR-14" in execute_out.get("reason", "")
+
+
 # --------------------------------------------------------------------------- A4 preview
 
 
@@ -444,12 +481,12 @@ def test_interrupted_rebind_recovers_via_recover(tmp_path):
 
 
 def test_cli_fr14_blocked_without_owner_authorized(tmp_path, capsys):
-    """FR-14: plan/preview/execute without --owner-authorized must refuse."""
+    """FR-14: plan/execute without --owner-authorized must refuse; preview enumerates read-only."""
     _init_repo(tmp_path, "git@github.com:o/r.git")
     root = str(tmp_path / "store")
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
     _seed_in_repo_calibration(tmp_path)
-    for cmd in ("plan", "preview", "execute"):
+    for cmd in ("plan", "execute"):
         capsys.readouterr()
         rc = mm.main([cmd, "--cwd", str(tmp_path), "--root", root, "--target", mr.GLOBAL])
         out = json.loads(capsys.readouterr().out)

@@ -1,3 +1,11 @@
+## Contents
+
+- §1 — Apply mechanical updates silently (FR-8)
+- §2 — Adopt a legacy / pre-registry project (FR-15), safely (UFR-9)
+- §3 — First-push rebind (FR-9) and its recovery (UFR-10)
+- §4 — Confirm provisional calibration (FR-18)
+- Fix posture (FR-17)
+
 # configure — fix path
 
 Reached from `configure` when a project is configured but needs repair (FR-1): a legacy/pre-registry
@@ -72,10 +80,15 @@ survives the re-anchoring). A headless run records a rebind conflict un-applied 
 
 ## 4 — Confirm provisional calibration (FR-18)
 
-If the calibration is still **provisional** (auto-generated, not yet validated), surface it as
-unconfirmed and offer the owner to review and confirm it. On the owner's explicit confirm, flip the
-whole calibration — the shared core **and** every present hero layer — through the lib's confirm
-path. `write` cannot do this (reuse-not-clobber returns `reused` on an existing file); `confirm`
+If the calibration is still **provisional** (auto-generated, not yet validated):
+
+**Default:** do not run `confirm` — leave the calibration provisional. **Disclosure:** write into
+the run's durable output what is unconfirmed and what confirming would change (the shared core and
+every present hero layer flip from provisional to confirmed). **Follow-up:** `core_md.py confirm`
+runs **only** when the owner asks for confirmation in this turn — invoking `/superheroes:configure`
+is not itself the confirm.
+
+`write` cannot do this (reuse-not-clobber returns `reused` on an existing file); `confirm`
 re-renders the core in place and surgically flips each layer, preserving `created`/`nudge-ack` and
 bumping `updated`:
 
@@ -92,8 +105,8 @@ untouched (no split state), so the whole calibration stays provisional until it 
 
 Only this explicit owner-confirm confirms the profile; merely viewing it never does (FR-18).
 
-## Headless posture (FR-17)
+## Fix posture (FR-17)
 
-While running with no human to answer, do not perform any fix that needs an owner decision — a
-rebind conflict, an owner-choice migration, or a storage-mode flip. Record the situation as a
-provisional, un-applied fix, apply only what is mechanical, and continue without blocking.
+Do not perform any fix that needs an owner decision — a rebind conflict, an owner-choice migration,
+or a storage-mode flip. Record the situation as a provisional, un-applied fix, apply only what is
+mechanical, and continue without blocking.
