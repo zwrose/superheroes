@@ -313,9 +313,12 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/mode_migrate.py" preview --cwd . --target <in-repo|global>
 # present the calibration + definition documents + work-item records it lists, and the
 # collaborator-visibility note;
-# on the owner's explicit confirm:
-python3 -B "$ROOT_DIR/lib/mode_migrate.py" execute --cwd . --target <in-repo|global>
+# on the owner's explicit confirm in this turn (invoking configure is not itself the confirm):
+python3 -B "$ROOT_DIR/lib/mode_migrate.py" execute --cwd . --target <in-repo|global> --owner-authorized true
 ```
+
+Pass `--owner-authorized true` **only** when the owner confirmed the migration in the current turn.
+A run with no such confirmation passes nothing — `execute` reports the blocked result as-is.
 
 - **What moves:** the full calibration (the shared core, every hero layer, the pinned patterns),
   **every definition document**, and **every other work-item record** the preview lists under

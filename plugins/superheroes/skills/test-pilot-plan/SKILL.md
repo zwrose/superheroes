@@ -17,7 +17,7 @@ test-pilot-execute.
    ad-hoc DB writes, no direct seed scripts outside a block. No exceptions.
 2. **`--allow-protected` MUST NOT be passed unless the user explicitly
    instructed it in the current session.** A refusal from the gate is a
-   STOP-and-ask, not a retry-with-flag.
+   STOP-and-hand-back with the refusal recorded, not a retry-with-flag.
 3. **Read CATALOG.md in full before selecting blocks** — every invocation,
    no exceptions, even if you read it earlier this session.
 4. Manifests are edited via this flow; hand-edits must update `updatedAt`
