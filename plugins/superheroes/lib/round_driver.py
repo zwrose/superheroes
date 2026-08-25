@@ -5499,9 +5499,7 @@ def _resolve_prior_comments_path(session_dir, state):
         return path
     cfg = state.get("config") if isinstance(state, dict) else {}
     if _session_in_pr_mode(session_dir, cfg):
-        if (isinstance(state, dict) and isinstance(state.get("rounds"), dict)
-                and "round" in state):
-            _record_round(state, "priorCommentsUnavailable", True)
+        _record_round(state, "priorCommentsUnavailable", True)
         return _prior_comments_unavailable_marker()
     return ""
 

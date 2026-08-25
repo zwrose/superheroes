@@ -2,6 +2,8 @@
 import json
 import os
 
+import pytest
+
 import round_driver as RD
 import round_records as RR
 
@@ -67,3 +69,16 @@ def test_prior_comments_absent_meta_fail_closed_discloses(tmp_path):
     path = RD._resolve_prior_comments_path(session_dir, state)
     assert path.startswith("(")
     assert state["rounds"]["1"]["priorCommentsUnavailable"] is True
+
+
+def test_prior_comments_unavailable_marker_and_disclosure_inseparable(tmp_path):
+    # axis: PR-mode unavailable marker must always record priorCommentsUnavailable — never decouple
+    session_dir = _session_with_mode(tmp_path, "pr")
+    state = RD.new_state(_cfg(tmp_path))
+    path = RD._resolve_prior_comments_path(session_dir, state)
+    assert path == RD._prior_comments_unavailable_marker()
+    assert state["rounds"]["1"]["priorCommentsUnavailable"] is True
+
+    broken = {"rounds": {}, "config": _cfg(tmp_path)}
+    with pytest.raises(KeyError):
+        RD._resolve_prior_comments_path(session_dir, broken)
