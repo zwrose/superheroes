@@ -107,7 +107,9 @@ The minted `$PROFILE` is the path Step 4 writes to.
 Do not interview. Build the profile from Step 1 detection + `CLAUDE.md` + named provisional
 defaults. Write `status: provisional` always on this path — the interview branch that produced
 `status: confirmed` is retired; only `/superheroes:configure` confirms a profile with a real verify
-story. State in the **profile provenance block** which fields were defaulted rather than answered.
+story. State in the **review-crew layer body** (`$REVIEW_LAYER_BODY`, `## Setup disclosures`
+section piped to `core_md.py write-layer` in Step 4b) which fields were defaulted rather than
+answered.
 
 Defaults when detection + `CLAUDE.md` did not answer:
 
@@ -171,7 +173,9 @@ printf '%s' "$REVIEW_LAYER_BODY" \
 `write` above is the **create** path: on an existing core it returns `reused`/`proposed`/`refused`/`deferred`.
 A `refused` result (including `fable-on-external-engine`, `core-md-unreadable`, or
 `dispatch-gate-evaluation-failed`) means the write did not apply — surface the `violations` to the
-owner and **stop**; never proceed to write the layer as if the write had succeeded. For
+owner and **stop**; never proceed to write the layer as if the write had succeeded. On refusal the
+`## Setup disclosures` block (including which fields were defaulted) never lands in the review-crew
+layer. For
 `core-md-unreadable`, the existing `core.md` could not be read, so the write was refused rather than
 overwriting it — surface the path from the violation's `detail` to the owner. On a successful create path without refusal, `reused`/`proposed`
 apply as before. Confirming a pre-existing **provisional** core/layer is a separate path —
