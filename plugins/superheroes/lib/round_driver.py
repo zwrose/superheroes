@@ -5214,6 +5214,22 @@ def _session_pr_checkout_path(session_dir):
     return path if os.path.isdir(path) else ""
 
 
+def _session_in_pr_mode(session_dir, config=None):
+    """True when the session's recorded mode is PR.
+
+    Reads ``meta.json`` first, then optional ``config`` — same precedence as the
+    ``MODE`` order placeholder. Fail-closed: absent, unreadable, or unrecognized
+    mode values resolve True so prior-comments absence discloses rather than
+    defaulting to branch silence.
+    """
+    meta = _session_meta(session_dir)
+    cfg = config if isinstance(config, dict) else {}
+    mode = meta.get("mode") or cfg.get("mode")
+    if mode == "branch":
+        return False
+    return True
+
+
 def _label(value):
     return value if isinstance(value, str) else repr(value)
 
@@ -5475,13 +5491,17 @@ def _prior_comments_unavailable_marker():
 def _resolve_prior_comments_path(session_dir, state):
     """Panel prior-comments path — never fabricates ``[]``.
 
-    Branch mode (no detached PR checkout): empty path — legitimately no prior comments.
-    PR mode: real file when present; otherwise a prose marker plus a round disclosure."""
+    Branch mode: empty path — legitimately no prior comments.
+    PR mode (or fail-closed unknown/absent mode): real file when present; otherwise a
+    prose marker plus a round disclosure."""
     path = os.path.join(session_dir, "prior-comments.json")
     if os.path.isfile(path):
         return path
-    if _session_pr_checkout_path(session_dir):
-        _record_round(state, "priorCommentsUnavailable", True)
+    cfg = state.get("config") if isinstance(state, dict) else {}
+    if _session_in_pr_mode(session_dir, cfg):
+        if (isinstance(state, dict) and isinstance(state.get("rounds"), dict)
+                and "round" in state):
+            _record_round(state, "priorCommentsUnavailable", True)
         return _prior_comments_unavailable_marker()
     return ""
 
