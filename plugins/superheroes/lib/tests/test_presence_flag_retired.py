@@ -45,55 +45,139 @@ _CENSUS_SELF_PATHS = {
     os.path.normpath(os.path.join(_PLUGIN_ROOT, "lib/tests/test_review_only_headless.py")),
 }
 
-_BOOTSTRAP_SURFACES = [
-    "skills/audit-debt/SKILL.md",
-    "skills/review-spec/SKILL.md",
-    "skills/review-init/SKILL.md",
-    "skills/review-code/reference/setup.md",
-    "skills/test-pilot-init/SKILL.md",
-]
+_DECIDE_LOCATION_INVOCATION = re.compile(r"decide-location\)")
+
+# Conversation-driven surfaces disclose in the run transcript, not a durable file artifact (R-2).
+_CONVERSATION_DRIVEN_DISCLOSURE_SURFACES = frozenset({
+    "skills/configure/reference/set-up.md",
+})
 
 # Cross-doc literal-agreement pin: carrier noun is the only per-surface variable.
 _DISCLOSURE_CARRIER_BY_SURFACE = {
     "skills/audit-debt/SKILL.md": "audit report",
-    "skills/review-spec/SKILL.md": "terminal summary artifact",
-    "skills/review-init/SKILL.md": "profile provenance block",
+    "skills/review-spec/SKILL.md": "receipt",
+    "skills/review-init/SKILL.md": "review-crew layer body",
     "skills/review-code/reference/setup.md": "dispatch summary",
-    "skills/test-pilot-init/SKILL.md": "profile provenance block",
+    "skills/test-pilot-init/SKILL.md": "test-pilot layer body",
+    "skills/configure/reference/set-up.md": "set-up output",
 }
 
-# Byte-for-byte pins from shipped FIX-B prose (multi-line where the skill wraps the sentence).
+# Byte-for-byte pins from shipped prose (multi-line where the skill wraps the sentence).
 _DISCLOSURE_PIN_BY_SURFACE = {
     "skills/audit-debt/SKILL.md": (
-        "**Disclosure (provisional storage).** When `.provisional` is `true`, write into the "
-        "**audit report**: the storage location taken, that it is a provisional default rather "
-        "than an owner choice, and that `/superheroes:configure` changes it."
+        "**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is "
+        "`in-repo` or `global` (`ask` no longer exists); `.source` is where the decision came from: "
+        "`env` (environment override `REVIEW_CREW_STORAGE` for this run only; never recorded), "
+        "`registry` (a mode the owner recorded; authoritative), `backfilled` (a mode inferred from "
+        "consistent existing evidence and then recorded), `provisional` (nothing recorded and no "
+        "consistent evidence; the lib's default, re-taken next run); `.provisional` is `true` when "
+        "the mode was not owner-recorded. **Default:** the returned `.mode` (recorded when "
+        "configured, else the lib's provisional default). Bootstrap blocks never record — an "
+        "unrecorded mode is re-taken next run. **Disclosure.** Write into the **audit report** "
+        "(`$SESSION_DIR/report.md`): the storage mode taken, its source, whether it is provisional, "
+        "and that `/superheroes:configure` changes it. When `.provisional` is `true`, also state "
+        "that it is a provisional default rather than an owner choice and will be re-taken on the "
+        "next run when not recorded. **Follow-up:** `/superheroes:configure`.\n"
     ),
     "skills/review-spec/SKILL.md": (
-        "**Disclosure (provisional storage).** When `.provisional` is `true`, write into the "
-        "**terminal summary artifact**: the storage location taken, that it is a provisional "
-        "default rather than an owner choice, and that `/superheroes:configure` changes it."
+        "**Storage location.** `decide-location` JSON: `.mode` (`in-repo`|`global`; `ask` gone), "
+        "`.source`\n"
+        "(`env` — `REVIEW_CREW_STORAGE` override this run, never recorded; `registry` — "
+        "owner-recorded; `backfilled` — inferred then recorded; `provisional` — lib default, "
+        "re-taken next run), `.provisional` (`true` when not owner-recorded). **Default:**\n"
+        "returned `.mode`. Bootstrap blocks never record — unrecorded modes re-taken next run.\n"
+        "**Disclosure.** Write into `$SESSION_DIR/receipt.md` (assembled in §6): mode, source, "
+        "provisional\n"
+        "status, and `/superheroes:configure` follow-up; when `.provisional` is `true`, note it is "
+        "a\n"
+        "provisional default and will be re-taken next run when not recorded.\n"
     ),
     "skills/review-init/SKILL.md": (
-        "**Disclosure (provisional storage).** When `.provisional` is\n"
-        "`true`, write into the **profile provenance block**: the storage location taken, that "
-        "it is a\n"
-        "provisional default rather than an owner choice, and that `/superheroes:configure` "
-        "changes it."
+        "**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is "
+        "`in-repo` or\n"
+        "`global` (`ask` no longer exists); `.source` is where the decision came from: `env` "
+        "(environment\n"
+        "override `REVIEW_CREW_STORAGE` for this run only; never recorded), `registry` (a mode the "
+        "owner\n"
+        "recorded; authoritative), `backfilled` (a mode inferred from consistent existing evidence "
+        "and then\n"
+        "recorded), `provisional` (nothing recorded and no consistent evidence; the lib's default, "
+        "re-taken\n"
+        "next run); `.provisional` is `true` when the mode was not owner-recorded. **Default:**\n"
+        "the returned `.mode` (recorded when configured, else the lib's provisional default). "
+        "Bootstrap\n"
+        "blocks never record — an unrecorded mode is re-taken next run. **Disclosure.** Write into "
+        "the\n"
+        "**review-crew layer body** (`$REVIEW_LAYER_BODY`, written through `core_md.py write-layer` "
+        "in Step\n"
+        "4b — a `## Setup disclosures` section, not the generated provenance block): the storage "
+        "mode\n"
+        "taken, its source, whether it is provisional, and that `/superheroes:configure` changes "
+        "it. When\n"
+        "`.provisional` is `true`, also state that it is a provisional default rather than an "
+        "owner choice\n"
+        "and will be re-taken on the next run when not recorded. **Follow-up:** "
+        "`/superheroes:configure`.\n"
+        "The minted `$PROFILE` is the path Step 4 writes to.\n"
     ),
     "skills/review-code/reference/setup.md": (
-        "**Disclosure (provisional storage).** When `.provisional` is `true`, write into the "
-        "**dispatch summary**: the storage location taken, that it is a provisional default "
-        "rather than an owner choice, and that `/superheroes:configure` changes it."
+        "**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is "
+        "`in-repo` or `global` (`ask` no longer exists); `.source` is where the decision came from: "
+        "`env` (environment override `REVIEW_CREW_STORAGE` for this run only; never recorded), "
+        "`registry` (a mode the owner recorded; authoritative), `backfilled` (a mode inferred from "
+        "consistent existing evidence and then recorded), `provisional` (nothing recorded and no "
+        "consistent evidence; the lib's default, re-taken next run); `.provisional` is `true` when "
+        "the mode was not owner-recorded. **Default:** the returned `.mode` (recorded when "
+        "configured, else the lib's provisional default). Bootstrap blocks never record — an "
+        "unrecorded mode is re-taken next run. **Disclosure.** Write into `$SESSION_DIR/meta.json` "
+        "when that file is written (`storageMode`, `storageSource`, `storageProvisional` from "
+        "`$LOC`, `$SOURCE`, `$PROVISIONAL`) — the durable session record review-code's setup path "
+        "owns — and repeat the same facts in the **dispatch summary** for visibility. When "
+        "`.provisional` is `true`, also state that it is a provisional default rather than an "
+        "owner choice and will be re-taken on the next run when not recorded, and that "
+        "`/superheroes:configure` changes it. **Follow-up:** `/superheroes:configure`.\n"
     ),
     "skills/test-pilot-init/SKILL.md": (
-        "**Disclosure (provisional storage).** When `.provisional` is\n"
-        "`true`, write into the **profile provenance block**: the storage location taken, that "
-        "it is a\n"
-        "provisional default rather than an owner choice, and that `/superheroes:configure` "
-        "changes it."
+        "**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is "
+        "`in-repo` or\n"
+        "`global` (`ask` no longer exists); `.source` is where the decision came from: `env` "
+        "(environment\n"
+        "override `TEST_PILOT_STORAGE` for this run only; never recorded), `registry` (a mode the "
+        "owner\n"
+        "recorded; authoritative), `backfilled` (a mode inferred from consistent existing evidence "
+        "and then\n"
+        "recorded), `provisional` (nothing recorded and no consistent evidence; the lib's default, "
+        "re-taken\n"
+        "next run); `.provisional` is `true` when the mode was not owner-recorded. **Default:**\n"
+        "the returned `.mode` (recorded when configured, else the lib's provisional default). "
+        "Bootstrap\n"
+        "blocks never record — an unrecorded mode is re-taken next run. **Disclosure.** Write into "
+        "the\n"
+        "**test-pilot layer body** (the markdown piped to `core_md.py write-layer --hero "
+        "test-pilot` in\n"
+        "Step 6 — a `## Setup disclosures` section, not the generated provenance block): the "
+        "storage mode\n"
+        "taken, its source, whether it is provisional, and that `/superheroes:configure` changes "
+        "it. When\n"
+        "`.provisional` is `true`, also state that it is a provisional default rather than an "
+        "owner choice\n"
+        "and will be re-taken on the next run when not recorded. **Follow-up:** "
+        "`/superheroes:configure`.\n"
+    ),
+    "skills/configure/reference/set-up.md": (
+        "**Default:** recorded mode when one exists, else provisional `global` (out-of-repo). An\n"
+        "already-decided mode is reported, not re-asked. **Disclosure:** when `$PROVISIONAL` is "
+        "`true`, state\n"
+        "in the set-up output which storage mode was taken, that it is provisional, and that\n"
+        "`/superheroes:configure` changes it. **Follow-up:** the owner changes storage mode via\n"
+        "`/superheroes:configure` (view-and-tune §3 for a flip after set-up).\n"
     ),
 }
+
+# Byte pins for bootstrap safety guards inside each surface's decide-location window.
+_NONZERO_EXIT_GUARD = 'decide-location) || {'
+_USABLE_VALUE_GUARD = '[ -n "$LOC" ] && [ -n "$PROVISIONAL" ]'
+_RECONCILE_MODE_PATTERN = re.compile(r"reconcile\s+--mode")
 
 _DECIDE_MODE_DIRECT_PATTERN = re.compile(r"mode_registry\.decide_mode\(")
 
@@ -184,6 +268,24 @@ def _walk_text_files(root):
         dirnames[:] = [d for d in dirnames if d not in (".git", "__pycache__")]
         for name in filenames:
             yield os.path.join(dirpath, name)
+
+
+def _discover_decide_location_surfaces():
+    """Walk skills/ for decide-location CLI invocations — census is derived, not hand-maintained."""
+    surfaces = set()
+    for path in _walk_text_files(_SKILLS_ROOT):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except (UnicodeDecodeError, OSError):
+            continue
+        if "DEC=$(python" not in text or not _DECIDE_LOCATION_INVOCATION.search(text):
+            continue
+        surfaces.add(os.path.relpath(path, _PLUGIN_ROOT))
+    return frozenset(surfaces)
+
+
+_BOOTSTRAP_SURFACES = sorted(_discover_decide_location_surfaces())
 
 
 def _init_repo(d, remote=None):
@@ -334,12 +436,26 @@ def test_decide_mode_never_returns_ask(tmp_path, monkeypatch):
     _assert_no_ask(mr.decide_mode(str(repo3), None, root=root))
 
 
-# axis: cardinality floor — exactly five bootstrap surfaces carry the disclosure pin.
+# axis: derived decide-location census equals the disclosure-pin map in both directions.
 def test_bootstrap_disclosure_pin_cardinality_floor():
     """#1136: a surface silently dropping out of the disclosure census must go red."""
-    assert len(_BOOTSTRAP_SURFACES) == 5
-    assert set(_BOOTSTRAP_SURFACES) == set(_DISCLOSURE_PIN_BY_SURFACE)
-    assert set(_DISCLOSURE_CARRIER_BY_SURFACE) == set(_BOOTSTRAP_SURFACES)
+    discovered = set(_discover_decide_location_surfaces())
+    pin_surfaces = set(_DISCLOSURE_PIN_BY_SURFACE)
+    carrier_surfaces = set(_DISCLOSURE_CARRIER_BY_SURFACE)
+    missing_pins = discovered - pin_surfaces
+    stale_pins = pin_surfaces - discovered
+    assert not missing_pins, (
+        "decide-location call site(s) lack a disclosure pin — add to _DISCLOSURE_PIN_BY_SURFACE "
+        "(#1136). Missing:\n" + "\n".join(sorted(missing_pins))
+    )
+    assert not stale_pins, (
+        "disclosure pin(s) left behind for surface(s) that no longer call decide-location — "
+        "remove stale pin (#1136). Stale:\n" + "\n".join(sorted(stale_pins))
+    )
+    assert carrier_surfaces == discovered, (
+        "disclosure carrier map must match the derived decide-location census (#1136). "
+        "discovered=%r carriers=%r" % (sorted(discovered), sorted(carrier_surfaces))
+    )
 
 
 @pytest.mark.parametrize("surface_rel", _BOOTSTRAP_SURFACES)
@@ -361,8 +477,38 @@ def test_bootstrap_surface_reads_provisional_and_discloses(surface_rel):
         "re-point this detector (#1136)" % surface_rel
     )
     pin = _DISCLOSURE_PIN_BY_SURFACE[surface_rel]
+    carrier = _DISCLOSURE_CARRIER_BY_SURFACE[surface_rel]
     assert pin in window, (
         "%s is missing the byte-pinned disclosure sentence for carrier %r in the bootstrap window "
-        "— a default would be taken silently (#1136)" % (
-            surface_rel, _DISCLOSURE_CARRIER_BY_SURFACE[surface_rel])
+        "— a default would be taken silently (#1136)" % (surface_rel, carrier)
+    )
+    # R-2: configure's owner invocation is the hearing-from-the-owner event — carrier is the run's
+    # set-up output, not a durable file artifact; do not demand a file path pin here.
+    if surface_rel not in _CONVERSATION_DRIVEN_DISCLOSURE_SURFACES:
+        assert "$SESSION_DIR" in pin or "layer body" in pin or "receipt.md" in pin, (
+            "%s disclosure pin must name a durable carrier artifact (#1136)" % surface_rel
+        )
+
+
+@pytest.mark.parametrize("surface_rel", _BOOTSTRAP_SURFACES)
+# axis: bootstrap safety guards — non-zero exit, usable JSON fields, no reconcile --mode (R-1).
+def test_bootstrap_surface_safety_guards(surface_rel):
+    """Bootstrap must halt on decide-location failure and must not reconcile during bootstrap."""
+    text = _read_plugin_rel(surface_rel)
+    window = _bootstrap_disclosure_window(text)
+    assert window is not None, (
+        "%s has no fenced bootstrap block around decide-location (#1136)" % surface_rel
+    )
+    bash_close = window.find("```", 3)
+    assert bash_close > 0, "%s bootstrap window has no fenced bash block (#1136)" % surface_rel
+    bash_block = window[:bash_close + 3]
+    assert _NONZERO_EXIT_GUARD in bash_block, (
+        "%s bootstrap is missing the non-zero-exit guard on decide-location (#1136)" % surface_rel
+    )
+    assert _USABLE_VALUE_GUARD in bash_block, (
+        "%s bootstrap is missing the usable-value guard on LOC/PROVISIONAL (#1136)" % surface_rel
+    )
+    assert not _RECONCILE_MODE_PATTERN.search(bash_block), (
+        "%s bootstrap still contains reconcile --mode — bootstrap reconciliation is retired "
+        "(#1136)" % surface_rel
     )

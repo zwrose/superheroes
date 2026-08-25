@@ -43,6 +43,15 @@ _PRESENCE_FLAG_SURFACE = (
     _VERIFICATION_MD,
 )
 
+# Byte-pin: inline bootstrap must leave created files uncommitted — not a substring on
+# "uncommitted" alone (C4).
+_NORMATIVE_UNCOMMITTED_SENTENCE = (
+    "When the created layer lands **in-repo**, **do not ask whether to commit** the new files: "
+    "write the core + layer, leave them **uncommitted and untracked**, say so in the "
+    "**dispatch summary**, and continue. Committing them unasked would be a review writing to "
+    "the user's index — the honest answer is to leave the files for a human to stage."
+)
+
 # Literal census: every line carrying AskUserQuestion must match one pinned line byte-for-byte.
 _ASK_USER_QUESTION_ALLOWED_LINES = frozenset({
     # skills/review-code/SKILL.md § --review-only
@@ -83,14 +92,29 @@ def _section(text, heading):
     return text[body_start:m.start()] if m else text[body_start:]
 
 
+def _walk_review_code_markdown():
+    """Derive the review-code markdown census — no hand-maintained file list."""
+    for dirpath, dirnames, filenames in os.walk(_REVIEW_CODE):
+        dirnames[:] = [d for d in dirnames if d not in (".git", "__pycache__")]
+        for name in filenames:
+            if name.endswith(".md"):
+                yield os.path.join(dirpath, name)
+
+
 def _ask_user_question_violations(text, label):
-    """Every AskUserQuestion occurrence must be on an allowlisted line — no verb heuristic."""
+    """Every AskUserQuestion occurrence must be on an allowlisted line — inspect each independently."""
     hits = []
     for lineno, line in enumerate(text.splitlines(), 1):
         if _QUESTION not in line:
             continue
-        if line not in _ASK_USER_QUESTION_ALLOWED_LINES:
-            hits.append(f"{label} line {lineno}: {line}")
+        start = 0
+        while True:
+            idx = line.find(_QUESTION, start)
+            if idx < 0:
+                break
+            if line not in _ASK_USER_QUESTION_ALLOWED_LINES:
+                hits.append(f"{label} line {lineno}: {line}")
+            start = idx + len(_QUESTION)
     return hits
 
 
@@ -133,15 +157,9 @@ def test_no_presence_flag_on_review_code_surface():
     )
 
 
-# axis: `--review-only` is one path — literal AskUserQuestion census plus no presentation branch.
-def test_review_only_is_a_single_path(review_only, headless_contract):
+# axis: `--review-only` is one path — no presentation branch on owner presence.
+def test_review_only_is_a_single_path(review_only):
     """#1136: `--review-only` must not stall on or branch for owner presence."""
-    hits = _ask_user_question_violations(review_only, "`--review-only` section")
-    hits.extend(_ask_user_question_violations(headless_contract, "headless-presentation.md"))
-    assert not hits, (
-        "an `AskUserQuestion` occurrence is not one of the pinned prohibition lines — a positive "
-        "instruction or evasion would pass a verb heuristic (#1136). Hits:\n" + "\n".join(hits)
-    )
     branch_hits = []
     for lineno, line in enumerate(review_only.splitlines(), 1):
         for pat in _CHANNEL_BRANCH_PATTERNS:
@@ -151,6 +169,19 @@ def test_review_only_is_a_single_path(review_only, headless_contract):
         "the `--review-only` section still selects between interactive and headless "
         "presentation channels — presence is an event, not a branch (#1136). Hits:\n"
         + "\n".join(branch_hits)
+    )
+
+
+# axis: literal AskUserQuestion census across every review-code markdown surface — derived walk.
+def test_review_code_surfaces_ask_user_question_census():
+    """#1136: every review-code markdown file must pin or prohibit each AskUserQuestion occurrence."""
+    hits = []
+    for path in _walk_review_code_markdown():
+        rel = os.path.relpath(path, _PLUGIN_ROOT)
+        hits.extend(_ask_user_question_violations(_read(path), rel))
+    assert not hits, (
+        "an `AskUserQuestion` occurrence is not one of the pinned prohibition lines — a positive "
+        "instruction or evasion would pass a verb heuristic (#1136). Hits:\n" + "\n".join(hits)
     )
 
 
@@ -211,8 +242,8 @@ def test_undecided_set_preserved_as_category():
     )
 
 
-# axis: inline review-init bootstrap still records the headless answer — created files stay
-# uncommitted when the inline bootstrap runs. Not the decide-location bootstrap block.
+# axis: inline review-init bootstrap still records the headless answer — byte-pin the normative
+# sentence requiring files stay uncommitted and untracked with no commit question.
 def test_inline_bootstrap_writes_headless_answers():
     """Setup's inline review-init route must still say files are left uncommitted."""
     setup = _read(_SETUP_MD)
@@ -227,7 +258,9 @@ def test_inline_bootstrap_writes_headless_answers():
     route = "\n\n".join(inline + [
         para for para in setup.split("\n\n") if "not the only question in there" in para
     ])
-    assert "uncommitted" in route, (
-        "the inline bootstrap does not say what a headless in-repo run does with the files it "
-        "creates — without an explicit uncommitted answer, Setup may commit or ask (#1136)"
+    assert _NORMATIVE_UNCOMMITTED_SENTENCE in route, (
+        "the inline bootstrap is missing the byte-pinned normative sentence requiring created "
+        "files stay uncommitted and untracked with no commit question — prose that merely "
+        "contains 'uncommitted' while authorizing the opposite would pass a substring search "
+        "(#1136)"
     )
