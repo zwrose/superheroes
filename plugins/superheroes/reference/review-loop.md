@@ -28,8 +28,10 @@ If the user declines or ignores it, record the dismissal (see "Recording a dismi
 ### Learning-loop proposal (end of run)
 
 **Not run.** The learning loop learns from decisions a human made; a gate nobody answered produced
-none, and applying a calibration edit unasked would be the worse failure. Keep the analyze snippet
-below for reference when an owner runs configure interactively; do not invoke it at end of run here:
+none, and applying a calibration edit unasked would be the worse failure. Proposals are not
+surfaced this run — recorded decisions remain in `$DECISIONS` for a future run when an owner
+reviews them. Keep the analyze snippet below for reference only; do not invoke it at end of run
+here:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -40,7 +42,8 @@ python3 -B "$ROOT_DIR/lib/decisions.py" \
 ### Provisional-profile confirmation (end of run)
 
 **Not run** — same reason as the learning-loop proposal above; confirming a provisional profile
-unasked would apply a calibration edit nobody authorized. `/superheroes:configure` is the follow-up.
+unasked would apply a calibration edit nobody authorized. Recorded decisions and the provisional
+profile remain for a future owner review.
 
 ### Recording a dismissal (shared)
 

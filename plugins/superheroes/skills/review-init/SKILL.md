@@ -78,14 +78,15 @@ storage location and mint the path before writing:
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
-  DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location)
+  DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
   PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
-  # When PROVISIONAL is "true": disclose in the run output the location taken, that it is provisional,
-  # and that /superheroes:configure changes it (triad part 2).
-  REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
-  if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
-    echo "note: couldn't record the band storage mode this run — the provisional default will be taken again next run; change via /superheroes:configure."
+  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
+  if [ "$PROVISIONAL" != "true" ]; then
+    REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
+    if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
+      echo "note: couldn't record the band storage mode this run — the provisional default will be taken again next run; change via /superheroes:configure."
+    fi
   fi
   PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
 fi
@@ -93,17 +94,17 @@ fi
 
 **Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or
 `global` (`ask` no longer exists). **Default:** the returned `.mode` (recorded when configured,
-else the lib's provisional default). **Disclosure:** when `.provisional` is `true`, state in the
-run output which location was taken, that it is provisional, and that `/superheroes:configure`
-confirms or changes it. **Follow-up:** `/superheroes:configure`. The minted `$PROFILE` is the path
-Step 4 writes to.
+else the lib's provisional default). **Disclosure (provisional storage).** When `.provisional` is
+`true`, write into the **profile provenance block**: the storage location taken, that it is a
+provisional default rather than an owner choice, and that `/superheroes:configure` changes it.
+**Follow-up:** `/superheroes:configure`. The minted `$PROFILE` is the path Step 4 writes to.
 
 ## Step 3 — Create: detection + defaults (no interview)
 
 Do not interview. Build the profile from Step 1 detection + `CLAUDE.md` + named provisional
 defaults. Write `status: provisional` always on this path — the interview branch that produced
 `status: confirmed` is retired; only `/superheroes:configure` confirms a profile with a real verify
-story. State in the run output which fields were defaulted rather than answered.
+story. State in the **profile provenance block** which fields were defaulted rather than answered.
 
 Defaults when detection + `CLAUDE.md` did not answer:
 
