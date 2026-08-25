@@ -2806,16 +2806,26 @@ def test_sanitized_view_receipt_binds_producer_diff_keys(tmp_path):
 # #763: review parse layer — verdicts result kind + normalize_review_stdout
 
 
-def _load_verification_verdicts():
-    spec = importlib.util.spec_from_file_location(
-        "verification", os.path.join(_HERE, "..", "verification.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.VERDICTS
-
-
-def test_verdicts_constant_matches_verification_module():
-    assert EA.VERDICTS == _load_verification_verdicts()
+# RETIRED (#1147): `test_verdicts_constant_matches_verification_module` asserted
+# `EA.VERDICTS == verification.VERDICTS`. It was written when the two modules each held their own
+# literal tuple, so the comparison could catch the vocabularies drifting apart. Since #1123
+# collapsed the definition, BOTH names are bindings of the SAME object —
+# `engine_adapter.VERDICTS = round_phases.VERDICTS` and `verification.VERDICTS =
+# round_phases.VERDICTS` — so the assertion compared a value against itself. Be exact about what
+# that means, because the imprecise version of this sentence was itself a review finding: the
+# assertion could not fail for ANY EDIT TO THE SHARED DEFINITION it claimed to pin. Mutating
+# `round_phases.VERDICTS` moved both operands together and left it green (proved by probe: the
+# mutation reddened a real consumer, `test_round_adapters.py::test_verifier_payload_faults`, while
+# this test stayed green). It retained exactly one residual bite — an edit REBINDING either alias
+# to a fresh literal, re-splitting the vocabulary — which is not the drift it was written for and
+# is not what its name claims it covers. A guard that cannot fail on the axis it advertises is
+# worse than no guard: it reads as coverage while pinning nothing, so the surface looks watched
+# when it is not. Retired rather than repaired, per the owner-ruled scope. KNOWN RESIDUAL, carried
+# to the PR: no test now pins either alias to `round_phases.VERDICTS` (the layering suite's
+# re-export identity test at `test_payload_contracts_layering.py` covers payload-contract names,
+# not this one), so a future re-split would go unflagged here. If one is wanted, the pin belongs at
+# the definition as an identity assertion, not as this value comparison. The single definition
+# lives in `round_phases.py`, which is itself pinned in `escalation.SAFETY_MACHINERY`.
 
 
 def _review_base_template_literals():
