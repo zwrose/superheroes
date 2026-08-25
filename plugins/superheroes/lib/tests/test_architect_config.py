@@ -213,3 +213,120 @@ def test_gitignore_covers_trusts_git_not_ignored(tmp_path):
     with open(os.path.join(repo, ".gitignore"), "w") as fh:
         fh.write("docs/superheroes/\n!docs/superheroes/\n")
     assert AC._gitignore_covers(repo, "docs/superheroes") is False
+
+
+def test_schema_version_is_two():
+    assert AC.SCHEMA_VERSION == 2
+
+
+def _write_future_policy_file(tmp_path, store):
+    """Hand-write a version-99 doc-policy.json with future keys."""
+    p = AC.policy_path(str(tmp_path), root=store)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    content = (
+        '{"schemaVersion": 99, "location": "docs/superheroes", '
+        '"visibility": "committed", "confirmed": true, '
+        '"disclosures": ["future disclosure"], '
+        '"futureKey": "keep me"}'
+    )
+    raw_bytes = content.encode("utf-8")
+    with open(p, "wb") as fh:
+        fh.write(raw_bytes)
+    return p, raw_bytes
+
+
+def test_write_policy_refuses_over_newer_persisted_no_schema_in_argument(tmp_path):
+    store = str(tmp_path / "store")
+    p, raw_bytes = _write_future_policy_file(tmp_path, store)
+    # architect-init bypass: fresh dict with no schemaVersion at all.
+    pol = {"location": "docs/other", "visibility": AC.COMMITTED, "confirmed": False}
+    result = AC.write_policy(str(tmp_path), pol, root=store)
+    assert result is None
+    with open(p, "rb") as fh:
+        assert fh.read() == raw_bytes
+
+
+def test_write_policy_refuses_over_newer_persisted_with_current_argument(tmp_path):
+    store = str(tmp_path / "store")
+    p, raw_bytes = _write_future_policy_file(tmp_path, store)
+    pol = {
+        "schemaVersion": AC.SCHEMA_VERSION,
+        "location": "docs/other",
+        "visibility": AC.COMMITTED,
+        "confirmed": False,
+    }
+    result = AC.write_policy(str(tmp_path), pol, root=store)
+    assert result is None
+    with open(p, "rb") as fh:
+        assert fh.read() == raw_bytes
+
+
+def test_read_policy_preserves_future_record_in_memory(tmp_path):
+    store = str(tmp_path / "store")
+    _write_future_policy_file(tmp_path, store)
+    got = AC.read_policy(str(tmp_path), root=store)
+    assert got["location"] == "docs/superheroes"
+    assert got["visibility"] == AC.COMMITTED
+    assert got["confirmed"] is True
+    assert got["disclosures"] == ["future disclosure"]
+    with open(AC.policy_path(str(tmp_path), root=store), encoding="utf-8") as fh:
+        raw = json.load(fh)
+    migrated = AC._migrate(raw)
+    assert migrated["futureKey"] == "keep me"
+    assert migrated["schemaVersion"] == 99
+
+
+def test_migrate_traversal_guard_applies_to_newer_record(tmp_path):
+    rec = {
+        "schemaVersion": 99,
+        "location": "../escape",
+        "visibility": "committed",
+        "confirmed": True,
+        "futureKey": "keep me",
+    }
+    migrated = AC._migrate(rec)
+    assert migrated["location"] == AC.DEFAULT_LOCATION
+    assert migrated["schemaVersion"] == 99
+    assert migrated["futureKey"] == "keep me"
+
+
+def test_version_one_record_still_migrates_and_writes(tmp_path):
+    store = str(tmp_path / "store")
+    p = AC.policy_path(str(tmp_path), root=store)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as fh:
+        json.dump(
+            {"schemaVersion": 1, "location": "docs/superheroes",
+             "visibility": "committed", "confirmed": True},
+            fh,
+        )
+    got = AC.read_policy(str(tmp_path), root=store)
+    assert got["confirmed"] is True
+    pol = {"location": "docs/upgraded", "visibility": AC.COMMITTED, "confirmed": True}
+    written = AC.write_policy(str(tmp_path), pol, root=store)
+    assert written is not None
+    assert written["location"] == "docs/upgraded"
+    got2 = AC.read_policy(str(tmp_path), root=store)
+    assert got2["location"] == "docs/upgraded"
+
+
+def test_no_schema_version_record_still_writable(tmp_path):
+    store = str(tmp_path / "store")
+    pol = {"location": "docs/superheroes", "visibility": AC.COMMITTED, "confirmed": False}
+    written = AC.write_policy(str(tmp_path), pol, root=store)
+    assert written is not None
+    assert written["schemaVersion"] == AC.SCHEMA_VERSION
+
+
+def test_normalize_disclosures_none():
+    assert AC._normalize_disclosures(None) == []
+
+
+def test_normalize_disclosures_non_list_shapes():
+    assert AC._normalize_disclosures("not a list") == []
+    assert AC._normalize_disclosures(42) == []
+    assert AC._normalize_disclosures({"key": "val"}) == []
+
+
+def test_normalize_disclosures_filters_non_string_entries():
+    assert AC._normalize_disclosures(["ok", 1, "also ok", None, True]) == ["ok", "also ok"]
