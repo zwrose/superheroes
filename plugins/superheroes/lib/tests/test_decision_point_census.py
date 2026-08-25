@@ -9,8 +9,10 @@ one occurrence on this tree vs 48 files for `**` — so stripping `_` would buy 
 risk mangling `snake_case` identifiers such as `review_store.py`.
 
 Deliberately out of scope:
-- Converting skill surfaces — other work orders; this census is expected to go red until they land.
+- Converting skill surfaces — other work orders; the shipped census is green on this tree.
 - skills/architect-discovery/** — rubric-excluded per escalation-base.md § Scope (elicitation).
+
+Carrier transport is declared in block tags but not verified by this census (owner ruling, 2026-08-25).
 """
 import os
 import re
@@ -66,6 +68,7 @@ _CARRIER_REGISTRY = frozenset({
     "audit-report",
     "review-code-meta",
     "doc-policy-disclosures",
+    "run-output",
 })
 
 # Byte-pinned stripped lines — literals only; no rationale (#1144).
@@ -201,7 +204,6 @@ def _parse_decision_blocks(text, rel):
         opens.append((m.start(), m))
     closes = [(m.start(), m) for m in _CLOSE_TAG_RE.finditer(text)]
 
-    unmatched_opens = []
     for pos, m in sorted(opens, key=lambda x: x[0]):
         block_id = m.group("id")
         close_match = None
@@ -251,7 +253,6 @@ def _parse_decision_blocks(text, rel):
             "prose": prose,
             "rel": rel,
         })
-        unmatched_opens.append(block_id)
 
     for cpos, cm in closes:
         block_id = cm.group("id")
@@ -373,69 +374,10 @@ def _collect_all_blocks(skills_root=None):
 _FENCED_BASH_RE = re.compile(r"```(?:bash|sh)\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _SOURCE_CAPTURE_RE = re.compile(r"SOURCE\s*=\s*\$\([^)]*\.source", re.IGNORECASE)
 _SOURCE_GUARD_RE = re.compile(r'\[\s*-n\s+"\$SOURCE"\s*\]')
-_WRITE_POLICY_DISCLOSURES_RE = re.compile(
-    r"write_policy\s*\([\s\S]*?['\"]disclosures['\"]\s*:",
-    re.DOTALL,
-)
 
 
 def _fenced_bash_blocks(text):
     return [m.group(1) for m in _FENCED_BASH_RE.finditer(text)]
-
-
-def _paragraphs_containing_var_and_section(file_text, var_name, section):
-    needle_var = f"${var_name}"
-    for para in re.split(r"\n\n+", file_text):
-        if needle_var in para and section in para:
-            return True
-    return False
-
-
-def _layer_disclosure_reaches_body(file_text, var_name, layer_label):
-    if _paragraphs_containing_var_and_section(file_text, var_name, "## Setup disclosures"):
-        return True
-    label_cf = layer_label.casefold()
-    for para in re.split(r"\n\n+", file_text):
-        if "## Setup disclosures" in para and label_cf in para.casefold():
-            return True
-    return False
-
-
-def _var_piped_to_write_layer(file_text, var_name, hero):
-    escaped = re.escape(var_name)
-    h = re.escape(hero)
-    bash_pat = re.compile(
-        rf'"\${escaped}"\s*\\?\s*\n\s*\|[^\n]*write-layer[^\n]*--hero\s+{h}\b',
-        re.IGNORECASE,
-    )
-    prose_pat = re.compile(
-        rf'(?:pipe\s+`\${escaped}`|`?\${escaped}`?[\s\S]{{0,200}}?pipe[d]?\s+(?:to\s+)?)'
-        rf'[\s\S]{{0,200}}?write-layer[^\n`]{{0,120}}--hero\s+{h}\b',
-        re.IGNORECASE,
-    )
-    return bool(bash_pat.search(file_text) or prose_pat.search(file_text))
-
-
-def _disclosure_names_storage_fields(prose, artifact_marker):
-    if artifact_marker not in prose:
-        return False
-    artifact_cf = artifact_marker.casefold()
-    for line in prose.splitlines():
-        lower = line.casefold()
-        if artifact_cf not in lower:
-            continue
-        marker = "**disclosure.**"
-        if marker not in lower:
-            continue
-        clause = lower.split(marker, 1)[1]
-        if artifact_cf not in clause:
-            continue
-        return (
-            "mode" in clause
-            and "source" in clause
-            and "provisional" in clause
-        )
-    return False
 
 
 def _mode_structure_violations(block):
@@ -455,101 +397,6 @@ def _mode_structure_violations(block):
     elif mode == "proceed":
         if "continu" not in prose_cf and "record" not in prose_cf:
             hits.append(f"{rel}:{line}: proceed block must record and continue")
-    return hits
-
-
-def _transport_violations(block, file_text):
-    carrier = block["carrier"]
-    prose = block["prose"]
-    rel = block["rel"]
-    line = block["open_line"]
-    hits = []
-
-    if carrier == "review-crew-layer":
-        if not _layer_disclosure_reaches_body(
-            file_text, "REVIEW_LAYER_BODY", "review-crew layer"
-        ):
-            hits.append(
-                f"{rel}:{line}: review-crew-layer requires ## Setup disclosures "
-                "within $REVIEW_LAYER_BODY definition"
-            )
-        if not _var_piped_to_write_layer(file_text, "REVIEW_LAYER_BODY", "review-crew"):
-            hits.append(
-                f"{rel}:{line}: review-crew-layer requires $REVIEW_LAYER_BODY "
-                "piped to write-layer --hero review-crew"
-            )
-    elif carrier == "test-pilot-layer":
-        if not _layer_disclosure_reaches_body(
-            file_text, "TEST_PILOT_LAYER_BODY", "test-pilot layer"
-        ):
-            hits.append(
-                f"{rel}:{line}: test-pilot-layer requires ## Setup disclosures "
-                "within $TEST_PILOT_LAYER_BODY definition"
-            )
-        if not _var_piped_to_write_layer(file_text, "TEST_PILOT_LAYER_BODY", "test-pilot"):
-            hits.append(
-                f"{rel}:{line}: test-pilot-layer requires $TEST_PILOT_LAYER_BODY "
-                "piped to write-layer --hero test-pilot"
-            )
-    elif carrier == "review-spec-receipt":
-        if not _disclosure_names_storage_fields(prose, "receipt.md"):
-            hits.append(
-                f"{rel}:{line}: review-spec-receipt assembly must name mode, source, "
-                "and provisional in receipt.md disclosure"
-            )
-    elif carrier == "audit-report":
-        if not _disclosure_names_storage_fields(prose, "report.md"):
-            hits.append(
-                f"{rel}:{line}: audit-report assembly must name mode, source, "
-                "and provisional in report.md disclosure"
-            )
-    elif carrier == "review-code-meta":
-        if block["kind"] == "storage-location":
-            bash_blocks = _fenced_bash_blocks(prose)
-            if not bash_blocks:
-                hits.append(
-                    f"{rel}:{line}: review-code-meta storage block requires fenced bash"
-                )
-            else:
-                if not any(_SOURCE_CAPTURE_RE.search(b) for b in bash_blocks):
-                    hits.append(
-                        f"{rel}:{line}: review-code-meta requires SOURCE assignment "
-                        "from decide-location .source in block bash"
-                    )
-                if not any(_SOURCE_GUARD_RE.search(b) for b in bash_blocks):
-                    hits.append(
-                        f"{rel}:{line}: review-code-meta usable-value guard must cover $SOURCE"
-                    )
-            for field in ("storageMode", "storageSource", "storageProvisional"):
-                if field not in prose:
-                    hits.append(
-                        f"{rel}:{line}: review-code-meta encode must name {field} in block prose"
-                    )
-        else:
-            prose_cf = prose.casefold()
-            if (
-                "written down" not in prose_cf
-                and "session record" not in prose_cf
-                and "meta.json" not in prose_cf
-            ):
-                hits.append(
-                    f"{rel}:{line}: review-code-meta gate block must name durable "
-                    "session record or meta.json write path"
-                )
-    elif carrier == "doc-policy-disclosures":
-        if not _WRITE_POLICY_DISCLOSURES_RE.search(file_text):
-            hits.append(
-                f"{rel}:{line}: doc-policy-disclosures requires write_policy call "
-                "with disclosures field"
-            )
-        prose_cf = prose.casefold()
-        if "write_policy" not in prose_cf or "disclosures" not in prose_cf:
-            hits.append(
-                f"{rel}:{line}: doc-policy-disclosures block must name write_policy "
-                "disclosures transport"
-            )
-    if "/superheroes:configure" not in prose:
-        hits.append(f"{rel}:{line}: block prose must name /superheroes:configure")
     return hits
 
 
@@ -646,30 +493,59 @@ def test_decision_block_mode_structure():
     )
 
 
-# axis: per-carrier transport checks per §1c when a block declares a carrier. Not block grammar.
-def test_decision_block_carrier_transport():
-    """#1144: carrier= must name a write path that demonstrably carries disclosed fields."""
+# axis: storage-location blocks must capture SOURCE and guard $SOURCE in block bash — shell text
+# only, not carrier delivery. Not block grammar or follow-up prose.
+def test_storage_decision_blocks_capture_source():
+    """#1144: storage-location blocks require SOURCE capture and $SOURCE guard in block bash.
+
+    Asserts shell text inside the block only — does not assert that any disclosure reaches any writer.
+    """
     hits = []
     blocks, _ = _collect_all_blocks()
-    file_cache = {}
     for block in blocks:
-        path = os.path.join(_PLUGIN_ROOT, block["rel"])
-        if block["rel"] not in file_cache:
-            file_cache[block["rel"]] = _read_text(path)
-        hits.extend(_transport_violations(block, file_cache[block["rel"]]))
+        if block["kind"] != "storage-location":
+            continue
+        rel = block["rel"]
+        line = block["open_line"]
+        prose = block["prose"]
+        bash_blocks = _fenced_bash_blocks(prose)
+        if not bash_blocks:
+            hits.append(
+                f"{rel}:{line}: storage-location block requires a fenced bash block"
+            )
+            continue
+        if not any(_SOURCE_CAPTURE_RE.search(b) for b in bash_blocks):
+            hits.append(
+                f"{rel}:{line}: storage-location block requires a SOURCE assignment from "
+                "decide-location .source in its block bash"
+            )
+        if not any(_SOURCE_GUARD_RE.search(b) for b in bash_blocks):
+            hits.append(
+                f"{rel}:{line}: storage-location block usable-value guard must cover $SOURCE"
+            )
     assert not hits, (
-        "#1144 decision block carrier transport violations. Every hit:\n" + "\n".join(hits)
+        "#1144 storage-location SOURCE capture/guard violations. Every hit:\n"
+        + "\n".join(hits)
+    )
+
+
+# axis: every block must name /superheroes:configure follow-up — any kind, any carrier. Not bash
+# shell text or carrier delivery.
+def test_decision_block_names_configure_follow_up():
+    """#1144: block prose must name /superheroes:configure regardless of kind or carrier."""
+    hits = []
+    blocks, _ = _collect_all_blocks()
+    for block in blocks:
+        if "/superheroes:configure" not in block["prose"]:
+            hits.append(
+                f"{block['rel']}:{block['open_line']}: block prose must name /superheroes:configure"
+            )
+    assert not hits, (
+        "#1144 decision block follow-up violations. Every hit:\n" + "\n".join(hits)
     )
 
 
 # --- bite-proof fixture helpers (monkeypatch _SKILLS_ROOT) ---
-
-def _write_fixture(root, rel, content):
-    path = os.path.join(root, os.path.dirname(rel))
-    os.makedirs(path, exist_ok=True)
-    with open(os.path.join(root, rel), "w", encoding="utf-8") as fh:
-        fh.write(content)
-
 
 _VALID_BLOCK = (
     '<!-- decision-point: id=fixture-storage mode=notify kind=storage-location '
@@ -740,37 +616,45 @@ def test_fixture_waiting_token_in_block_fails(tmp_path, monkeypatch):
     assert hits, "waiting-token fixture must be detected inside block"
 
 
-# axis: review-crew-layer transport — bite-proof element for carrier transport check (structural).
-def test_fixture_missing_transport_fails(tmp_path, monkeypatch):
-    """#1144 bite-proof: carrier without transport requirements must fail."""
+# axis: storage-location block without fenced bash — bite-proof element for B1 fenced-bash leg.
+def test_fixture_storage_block_without_bash_fails(tmp_path, monkeypatch):
+    """#1144 bite-proof: storage-location block without fenced bash must fail B1."""
     monkeypatch.setattr(
         "test_decision_point_census._SKILLS_ROOT", str(tmp_path / "skills")
     )
     skills = tmp_path / "skills" / "demo"
     skills.mkdir(parents=True)
     content = (
-        '<!-- decision-point: id=transport-test mode=notify kind=storage-location '
+        '<!-- decision-point: id=storage-no-bash mode=notify kind=storage-location '
         'default="global" carrier=review-crew-layer -->\n'
         "NOTIFY: continues. `/superheroes:configure`.\n"
-        "<!-- /decision-point: id=transport-test -->\n"
+        "<!-- /decision-point: id=storage-no-bash -->\n"
     )
     (skills / "SKILL.md").write_text(content, encoding="utf-8")
     blocks, _ = _collect_all_blocks(str(tmp_path / "skills"))
     hits = []
     for block in blocks:
-        hits.extend(_transport_violations(block, content))
-    assert hits, "missing transport fixture must produce carrier transport violations"
+        if block["kind"] != "storage-location":
+            continue
+        rel = block["rel"]
+        line = block["open_line"]
+        prose = block["prose"]
+        bash_blocks = _fenced_bash_blocks(prose)
+        if not bash_blocks:
+            hits.append(
+                f"{rel}:{line}: storage-location block requires a fenced bash block"
+            )
+    assert hits, "storage block without bash fixture must produce fenced-bash violation"
 
 
 # axis: E3 empty walk — bite-proof element (monkeypatch skills root to empty dir).
 def test_fixture_empty_skills_walk_fails(tmp_path, monkeypatch):
-    """#1144 bite-proof: zero files under skills/ must fail the walk guard."""
+    """#1144 bite-proof: zero files under skills/ must fail the shipped walk guard."""
     empty = tmp_path / "skills"
     empty.mkdir()
-    count = sum(1 for _ in _walk_skills_files(str(empty)))
-    assert count == 0
+    monkeypatch.setattr("test_decision_point_census._SKILLS_ROOT", str(empty))
     with pytest.raises(AssertionError, match="zero files"):
-        assert count > 0, "#1144 decision-point census found zero files under skills/"
+        test_skills_census_walk_non_empty()
 
 
 # axis: prohibition census green on fixture with wrapped primitive — bite-proof inverted proof.

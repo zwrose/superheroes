@@ -78,7 +78,7 @@ DEC=$(python3 -B "$ROOT_DIR/lib/store.py" decide-location) || { echo "decide-loc
 LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
 SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
 PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
-[ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
+[ -n "$LOC" ] && [ -n "$PROVISIONAL" ] && [ -n "$SOURCE" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
 PATHS=$(python3 -B "$ROOT_DIR/lib/store.py" create --location "$LOC") || RC=$?
 RC=${RC:-0}
 if [ "$RC" -ne 0 ]; then
