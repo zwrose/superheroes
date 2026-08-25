@@ -6,7 +6,6 @@
 3. [Fixer Subagent Prompt](#fixer-subagent-prompt)
 4. [Verification Rules (for subagents)](#verification-rules-for-subagents)
 5. [Common Mistakes](#common-mistakes)
-6. [--post API Commands](#--post-api-commands)
 
 ---
 
@@ -746,19 +745,14 @@ These are the base rubric's binding verification rules, restated in every subage
 | Finding based on assumed code state                     | Subagents must verify against `$SESSION_DIR/repo/` (PR mode) or the working tree (branch mode). No "I think this calls X" — open the file and confirm.             |
 | Marking test issues as Critical                         | Critical is reserved for production bugs, data loss, security vulns. Test anti-patterns are Important at most — see the base rubric's "Severity tiers".            |
 | Severity miscalibrated to deployment context            | Calibrate to the profile's threat model (strict / multi-user when the profile is absent). Don't raise threats the profile declares out of scope.                  |
-| Posting without interactive approval                    | Every finding goes through `AskUserQuestion` (individually for Critical/Important, batched for Minor/Nit). Never auto-post anything from raw subagent output.      |
-| Not using `resolve_diff_lines.py` before posting        | Always run the script before `gh api ... reviews`. It moves out-of-hunk comments to valid lines and drops comments for files not in the diff. Skipping it → 422.   |
-| Not verifying the review was actually posted            | After `gh api ... reviews` returns success, fetch the last review and confirm `state` and `submitted_at`. Silent failures and duplicate posts have happened.       |
+| Using diff.txt line numbers as file line numbers        | Diff line numbers and file line numbers are different. A finding must cite the FILE line; `lib/diff_scope.py` parses `@@` hunk headers to derive which file lines the round diff makes anchorable, and the compile step drops a finding that misses them. |
 | Re-flagging issues the author already justified         | PR mode: raise the finding and note the prior justification; the post-verification filter drops only non-CONFIRMED findings (see `round-driver.md`). |
-| Using diff.txt line numbers as file line numbers        | Diff line numbers and file line numbers are different. `resolve_diff_lines.py` parses `@@` hunk headers to map between them; trust the script.                     |
 | Dropping resolved Important findings silently           | If reachability or the post-verification author-justification filter drops an Important, mention it — the justification is quoted in the record.                      |
-| Skipping `--post` verification when GH returns success  | `gh api` can return 200 on a malformed body that GitHub silently treats as a no-op. Always run the post-submit verify call.                                        |
-| Trying to delete a bad review via API                   | Submitted reviews cannot be deleted via the GitHub API. Never iterate by re-posting — fix `review-resolved.json` and retry only after the resolve script is clean. |
 | Tiering or skipping specialists based on "what changed" | Round 1 is always the full panel; later rounds follow `round_driver.py` `next` (delta audits + scoped finder, or a full panel on #174/unknown). Never skip by eye. |
 | **Continuing when `$BASE_REF` is not a commit**         | An empty `$BASE_REF` makes `git diff "$BASE_REF"...HEAD` argv `...HEAD` — git reads it as `HEAD...HEAD` and emits a **zero-line diff at exit 0**, so the panel reviews nothing and the loop certifies clean. The literal string `null` (what `jq -r` prints for an absent key) is non-empty, so a `[ -n … ]` test passes it while `git diff null...HEAD` exits 128 and still leaves an empty artifact. Setup validates with `git rev-parse --verify --quiet "$BASE_REF^{commit}"` — which rejects empty, `null`, a deleted branch, and a non-commit tag — and every consumer uses the guarded diff command that halts on a failed OR empty diff. Never substitute a branch name to "recover" (#637). |
 | **Diffing against the worktree's local base branch**    | A long-lived worktree's local `main` goes stale as a matter of course; three-dot diff then walks back to a stale merge-base and drags already-merged work into the review (#637 — ~6,600 contaminated lines against 2,931 real). The bootstrap fetches the base and pins it to a commit; never re-resolve the base from a branch name mid-run. |
 | Using `gh pr diff` inside the loop                      | Rounds 2+ have local fix commits not on the remote. Always recompute the diff locally each round **with the guarded per-round command from the SKILL's Setup** — `git diff "$BASE_REF"...HEAD` against the **pinned remote base commit**, including its failed-diff and empty-diff halts — never a branch name and never a bare copy.                                               |
-| Auto-fixing a PR you don't have checked out             | Auto-fix needs the PR's branch as the current branch **or** an adopted build (tracks remote `origin` with merge ref `refs/heads/<PR branch>` **and** `HEAD` == the PR's `headRefOid`); anything else — detached HEAD, an unrelated branch, a stale adopted branch — stops and goes to `--post`/`--review-only`.                                        |
+| Auto-fixing a PR you don't have checked out             | Auto-fix needs the PR's branch as the current branch **or** an adopted build (tracks remote `origin` with merge ref `refs/heads/<PR branch>` **and** `HEAD` == the PR's `headRefOid`); anything else — detached HEAD, an unrelated branch, a stale adopted branch — stops and goes to `--review-only`.                                        |
 | Re-reviewing on a broken tree                           | If `VERIFY_CMD` fails after a fix, HALT. Never run the next review round on code that doesn't pass verification. (No gate when the profile is `mode: unverified`.) |
 | Re-raising a finding the user skipped                   | Skipped identities go in the skip-set and are excluded from every later round's effective findings AND the circuit breaker.                                        |
 | Eyeballing "are we stuck?" by hand                      | The audit-keyed stall breaker lives in `round_driver.py` — never call `circuit_breaker.py` inside the auto-fix loop.                                                 |
@@ -768,58 +762,6 @@ These are the base rubric's binding verification rules, restated in every subage
 | Skipping the profile bootstrap                           | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                         |
 
 ---
-
-## --post API Commands
-
-The exact commands for building the review payload, running the anchor validator, posting to GitHub, and verifying the post (referenced from `### --post` in `SKILL.md`).
-
-**Build the review JSON** from approved findings:
-
-```bash
-cat > "$SESSION_DIR/round-1/review.json" <<EOF
-{
-  "commit_id": "<HEAD_SHA from meta.json>",
-  "body": "<summary from compiled.json + verdict label>",
-  "event": "<user's choice>",
-  "comments": [
-    {"path": "<file>", "line": <N>, "side": "RIGHT", "body": "<severity tag + finding body + suggestion>"}
-  ]
-}
-EOF
-```
-
-> **External-engine secret hygiene (#38).** When the reviewer engine is Codex or Cursor, each
-> finding's `body`/`suggestion` free-text is **already secret-scrubbed** at the adapter boundary
-> (`engine_adapter.parse_result` runs `readout.scrub` before the finding enters the standard form),
-> so this `--post` payload — which copies `body`/`suggestion` straight into the public PR comment via
-> `gh api … /reviews` with no scrub of its own — carries no external secret in the clear. This is the
-> one surface the native `readout.build_readout` handoff does not gate; the adapter pre-scrub covers it.
-
-**Run `resolve_diff_lines.py`** to validate every comment anchor against the diff. This is non-optional — GitHub returns 422 "Line could not be resolved" for any inline comment whose `(file, line)` doesn't land on a `+` or context line inside a hunk; the script moves out-of-hunk comments to the nearest valid line (prefixing the body with `(Re: line N)`) and drops comments for files not in the diff:
-
-```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -B "$ROOT_DIR/lib/resolve_diff_lines.py" \
-  "$SESSION_DIR/round-1/diff.txt" \
-  "$SESSION_DIR/round-1/review.json" \
-  --output "$SESSION_DIR/round-1/review-resolved.json"
-```
-
-**Post the review:**
-
-```bash
-gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
-  --input "$SESSION_DIR/round-1/review-resolved.json"
-```
-
-**Post-submit verification — non-optional.** Fetch the last review to confirm it actually landed (silent failures and accidental duplicates have happened):
-
-```bash
-gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
-  --jq '.[-1] | {id, state, submitted_at, html_url}'
-```
-
-If the post returns 422 despite running `resolve_diff_lines.py`, the script's stderr will have logged which comments were moved or dropped — re-check those, fix manually in `review-resolved.json`, and retry the `gh api ... reviews` call. Do **not** test line validity by posting real reviews iteratively; submitted reviews cannot be deleted via API.
 
 ## Per-seat dispatch + the seat map (#510)
 
@@ -843,7 +785,7 @@ carries `{vendor, model, effort, tier, family, source}`:
   the dispatch target.
 - **The grounding seat** (`$SEAT_MAP.seats["grounding-seat"]`) is *assigned* a vendor by the seat map
   — chosen to be independent of both the author (code) and narrative (PR text) families — and that
-  assignment is recorded in the receipt. On the **read-only paths** (`--post`, `--review-only`) it
+  assignment is recorded in the receipt. On the **read-only path** (`--review-only`) it
   is **live-dispatched under #609** with the PR body staged as seat-readable input — full contract:
   `grounding-seat.md`. The driver-owned auto-fix loop does **not** run SKILL step 8 today,
   so on that path the seat does not influence certification.

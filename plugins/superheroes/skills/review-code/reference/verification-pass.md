@@ -17,7 +17,7 @@ do not judge realness yourself and do not reimplement them here or in a second s
 
 ## Where it runs
 
-On the **read-only paths**, inside `## Compile + Dedupe`, **every round**, after the
+On the **read-only path**, inside `## Compile + Dedupe`, **every round**, after the
 mechanical filters (steps 1–5) and **before** the verdict. On the **auto-fix loop**, the same
 mechanical compile (steps 1–4 + 5 nit cap) and this verification stage run **inside
 `round_driver.py`** when findings are submitted — see `round-driver.md`. This stage **replaces**
@@ -46,7 +46,7 @@ attempt must never be globbed and honored.
    tier, resolved via `--role verifier`; never the session model). Dispatch on the **reviewer
    engine** (`$REVIEWER_ENGINE`). Each verifier reads the cluster's findings (with their staged
    `id`s), the round diff, and the repo — the working tree on branch/auto-fix paths, or
-   `$SESSION_DIR/repo` on `--post` / `--review-only`. It must **never** read the PR's own
+   `$SESSION_DIR/repo` on `--review-only`. It must **never** read the PR's own
    description or narrative (the #230 immunity). The clusters' verifiers run in **parallel**,
    so each writes its **OWN** file — `$SESSION_DIR/round-<N>/verdicts-<cluster-index>.json`,
    where `<cluster-index>` is the cluster's 0-based position in the `cluster_findings` order —
@@ -57,7 +57,7 @@ attempt must never be globbed and honored.
    `$SESSION_DIR/round-<N>/orders/dispatch-verifiers/<skey>.a<K>.md` on `next` — dispatch that
    file, do not hand-compose. Template body: `rubric/orders/dispatch-verifiers.md`.
 
-   **On the read-only paths**, the orchestrator still dispatches verifiers manually; use the same
+   **On the read-only path**, the orchestrator still dispatches verifiers manually; use the same
    shipped template at `rubric/orders/dispatch-verifiers.md` only as reference for what the emitted
    order contains — or dispatch the driver-emitted file when you have run `next` through the driver.
 
@@ -130,7 +130,7 @@ ids verbatim. Write the grouping to `$SESSION_DIR/round-<N>/grouping.json`.
 
 **On the auto-fix loop**, dispatch the driver-emitted order at
 `$SESSION_DIR/round-<N>/orders/dispatch-synthesis/<skey>.a<K>.md` (template body:
-`rubric/orders/dispatch-synthesis.md`). **On the read-only paths**, the orchestrator dispatches
+`rubric/orders/dispatch-synthesis.md`). **On the read-only path**, the orchestrator dispatches
 manually against that same shipped template.
 
 Then finalize:

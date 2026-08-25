@@ -42,7 +42,7 @@ MAKER_EXCLUDED_SEATS = frozenset(PANEL_ROSTER)
 # one is a violation, never an excused degradation (#670 review).
 UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
     "live-vendors",           # build() synthesized ["claude"] when handed no live vendors
-    "preflight-cache-only",   # --post / receipt-only path: vendors were never probed
+    "preflight-cache-only",   # receipt-only path: vendors were never probed
     "compose-failed",         # compose blew up and every seat fell open to Claude
 })
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}

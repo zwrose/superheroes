@@ -298,8 +298,8 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     )
     if pr_checkout:
         ph["PR_CHECKOUT_INSTRUCTION_BLOCK"] = (
-            "## PR branch checkout (--post / --review-only PR paths only)\n"
-            "On the read-only PR paths the PR branch is checked out at %s.\n"
+            "## PR branch checkout (--review-only PR path only)\n"
+            "On the read-only PR path the PR branch is checked out at %s.\n"
             "This is the ONLY source of truth for verifying code. Use Read, Grep, and Glob\n"
             "against this directory, NOT the main repo working directory — it may be on a\n"
             "different branch with stale or missing code. (On the auto-fix loop there is no\n"

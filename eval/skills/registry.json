@@ -12,7 +12,7 @@
     ],
     "superheroes/review-code": [
       "reviewing code changes on a local branch or an open pull request",
-      "auto-fixed locally or posted to GitHub"
+      "auto-fixed locally"
     ],
     "superheroes/review-init": [
       "refresh review-crew's calibration layer",

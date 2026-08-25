@@ -517,7 +517,7 @@ def live_vendors_for_composition(
         notes.append({
             "constraint": "preflight-cache-only",
             "reason": (
-                "receipt-only path (e.g. --post): no fresh liveness cache within TTL — "
+                "receipt-only path: no fresh liveness cache within TTL — "
                 "vendors not probed; panel falls open to Claude"
             ),
         })

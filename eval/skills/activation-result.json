@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-08-17",
+  "recordedAt": "2026-08-24",
   "observations": [
     {
       "skill": "superheroes/architect-discovery",
@@ -990,21 +990,21 @@
     },
     {
       "skill": "superheroes/review-code",
-      "phrase": "check this PR for correctness issues and post findings to GitHub",
+      "phrase": "check this PR for correctness issues without touching my working tree",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/review-code",
-      "phrase": "check this PR for correctness issues and post findings to GitHub",
+      "phrase": "check this PR for correctness issues without touching my working tree",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/review-code",
-      "phrase": "check this PR for correctness issues and post findings to GitHub",
+      "phrase": "check this PR for correctness issues without touching my working tree",
       "direction": "should_fire",
       "run": 2,
       "activated": true
