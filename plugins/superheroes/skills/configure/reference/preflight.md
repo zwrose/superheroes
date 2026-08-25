@@ -191,8 +191,7 @@ reuses the existing receipt** — either way, a `review-code` compose inside the
 read the homes rather than any prose restatement: the artifact writer in `lib/liveness_cache.py`,
 the `compose-liveness` command in `lib/preflight_probe.py`, and `lib/seat_map.py`'s compose (which
 stamps `liveCellsSource` downstream).** This file deliberately restates no field lists: a restated
-shape drifts from the code by construction — four review findings against this one paragraph were
-exactly that drift. When per-seat
+shape drifts from the code by construction, and the homes cannot. When per-seat
 review pins are configured (the `--pins` supply the compose accepts, added by #607), pass them
 through so only pin-reachable models are probed. This is the **write side** — the read side lives in
 the `review-code` compose. **Fail-direction unchanged:** a probe failure drops **that cell**
