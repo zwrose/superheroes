@@ -529,39 +529,115 @@ def test_seat_channel_fixer_folds_on_the_same_table_but_never_via_the_read_only_
 SESSION = "/tmp/rd1035-census"
 LANDING = SESSION + "/round-1/landing/p/skey.a1.payload.json"
 BARE = SESSION + "/round-1/landing/p/skey.a1.bare.json"
+_DIFF = SESSION + "/round-1/diff.txt"
+
+# Populated by `round_orders._panel_derived_placeholders` / `_channel_derived_placeholders`.
+_DERIVED_PLACEHOLDER_NAMES = frozenset({
+    "OUTPUT_CHANNEL_BLOCK",
+    "PR_CHECKOUT_CONTEXT_LINE",
+    "PRIOR_COMMENTS_CONTEXT_LINE",
+    "FOCUS_CONTEXT_LINE",
+    "PR_CHECKOUT_INSTRUCTION_BLOCK",
+})
+
+# Auxiliary inputs consumed by derivation but not declared in the template body.
+_FIXTURE_AUX_INPUTS = {
+    RD.P_PANEL: frozenset({"CHANNEL", "FOCUS_NOTES", "FINDINGS_OUTPUT_PATH", "PR_CHECKOUT_PATH"}),
+    RD.P_VERIFIERS: frozenset({"CHANNEL"}),
+    RD.P_SYNTHESIS: frozenset({"CHANNEL", "GROUPING_OUTPUT_PATH"}),
+    RD.P_GAPSWEEP: frozenset({"CHANNEL", "FINDINGS_OUTPUT_PATH"}),
+    RD.P_AUDITS: frozenset({"CHANNEL"}),
+    RD.P_SCOPED: frozenset({"CHANNEL", "FINDINGS_OUTPUT_PATH"}),
+}
+
+# Realistic placeholder values preserved from the prior hand-typed fixture — keyed by phase then
+# name. `CHANNEL` is always bound to the `channel` argument, never listed here.
+_KNOWN_REALISTIC_VALUES = {
+    RD.P_PANEL: {
+        "MODE": "branch",
+        "MODE_EVIDENCE": "Review session mode branch (from session metadata).",
+        "REPO": "r",
+        "TARGET": "t",
+        "DIFF_PATH": _DIFF,
+        "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+        "CORE_PATH": "/proj/core.md",
+        "LAYER_PATH": "/proj/layer.md",
+        "PR_CHECKOUT_PATH": "",
+        "PRIOR_COMMENTS_PATH": SESSION + "/prior-comments.json",
+        "FOCUS_NOTES": "",
+        "DIMENSION": "correctness",
+        "FINDINGS_OUTPUT_PATH": SESSION + "/round-1/findings-x.json",
+    },
+    RD.P_VERIFIERS: {
+        "CLUSTER_FINDINGS_PATH": SESSION + "/round-1/clusters/0.json",
+        "DIFF_PATH": _DIFF,
+        "VERIFICATION_ROOT": "/proj",
+        "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+    },
+    RD.P_SYNTHESIS: {
+        "VERIFIED_FINDINGS_PATH": SESSION + "/round-1/verified.json",
+        "DIFF_PATH": _DIFF,
+        "VERIFICATION_ROOT": "/proj",
+        "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+        "GROUPING_OUTPUT_PATH": SESSION + "/round-1/grouping.json",
+    },
+    RD.P_GAPSWEEP: {
+        "DIFF_PATH": _DIFF,
+        "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+        "CORE_PATH": "/proj/core.md",
+        "LAYER_PATH": "/proj/layer.md",
+        "VERIFICATION_ROOT": "/proj",
+        "FINDINGS_OUTPUT_PATH": SESSION + "/round-1/gap-sweep-findings.json",
+    },
+    RD.P_AUDITS: {
+        "TARGET_SUMMARY_PATH": SESSION + "/round-1/audit-targets/x.json",
+        "HEAD_DIFF_PATH": SESSION + "/round-1/head.diff",
+        "VERIFICATION_ROOT": "/proj",
+        "TARGET_ID": "t1",
+        "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+    },
+    RD.P_SCOPED: {
+        "HUNKS_PATH": SESSION + "/round-1/scoped-hunks.json",
+        "HEAD_DIFF_PATH": SESSION + "/round-1/head.diff",
+        "CORE_PATH": "/proj/core.md",
+        "LAYER_PATH": "/proj/layer.md",
+        "VERIFICATION_ROOT": "/proj",
+        "FINDINGS_OUTPUT_PATH": SESSION + "/round-1/scoped-findings.json",
+        "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+    },
+}
+
+
+def _template_declared_placeholders(phase):
+    template, reason = RO._read_template(phase)
+    if reason:
+        return None, reason
+    return set(RO._PLACEHOLDER_RE.findall(template or "")), None
+
+
+def _fixture_direct_placeholder_names(phase):
+    declared, reason = _template_declared_placeholders(phase)
+    if reason:
+        return None, reason
+    aux = _FIXTURE_AUX_INPUTS.get(phase, frozenset({"CHANNEL"}))
+    return (declared - _DERIVED_PLACEHOLDER_NAMES) | aux, None
 
 
 def _phase_placeholders(phase, channel):
-    common = {"RUBRIC_PATH": "/plugin/rubric/review-base.md", "CHANNEL": channel}
-    diff = SESSION + "/round-1/diff.txt"
-    if phase == RD.P_PANEL:
-        return dict(common, MODE="branch", REPO="r", TARGET="t", DIFF_PATH=diff,
-                    CORE_PATH="/proj/core.md", LAYER_PATH="/proj/layer.md",
-                    PR_CHECKOUT_PATH="", PRIOR_COMMENTS_PATH=SESSION + "/prior-comments.json",
-                    FOCUS_NOTES="", DIMENSION="correctness",
-                    FINDINGS_OUTPUT_PATH=SESSION + "/round-1/findings-x.json")
-    if phase == RD.P_VERIFIERS:
-        return dict(common, CLUSTER_FINDINGS_PATH=SESSION + "/round-1/clusters/0.json",
-                    DIFF_PATH=diff, VERIFICATION_ROOT="/proj")
-    if phase == RD.P_SYNTHESIS:
-        return dict(common, VERIFIED_FINDINGS_PATH=SESSION + "/round-1/verified.json",
-                    DIFF_PATH=diff, VERIFICATION_ROOT="/proj",
-                    GROUPING_OUTPUT_PATH=SESSION + "/round-1/grouping.json")
-    if phase == RD.P_GAPSWEEP:
-        return dict(common, DIFF_PATH=diff, CORE_PATH="/proj/core.md",
-                    LAYER_PATH="/proj/layer.md", VERIFICATION_ROOT="/proj",
-                    FINDINGS_OUTPUT_PATH=SESSION + "/round-1/gap-sweep-findings.json")
-    if phase == RD.P_AUDITS:
-        return dict(common, TARGET_SUMMARY_PATH=SESSION + "/round-1/audit-targets/x.json",
-                    HEAD_DIFF_PATH=SESSION + "/round-1/head.diff",
-                    VERIFICATION_ROOT="/proj", TARGET_ID="t1")
-    if phase == RD.P_SCOPED:
-        return dict(common, HUNKS_PATH=SESSION + "/round-1/scoped-hunks.json",
-                    HEAD_DIFF_PATH=SESSION + "/round-1/head.diff",
-                    CORE_PATH="/proj/core.md", LAYER_PATH="/proj/layer.md",
-                    VERIFICATION_ROOT="/proj",
-                    FINDINGS_OUTPUT_PATH=SESSION + "/round-1/scoped-findings.json")
-    raise AssertionError("unmapped phase %r" % phase)
+    declared, reason = _template_declared_placeholders(phase)
+    if reason:
+        raise AssertionError("unmapped phase %r" % phase)
+    direct_names, _ = _fixture_direct_placeholder_names(phase)
+    known = _KNOWN_REALISTIC_VALUES.get(phase, {})
+    result = {}
+    for name in sorted(direct_names):
+        if name == "CHANNEL":
+            result[name] = channel
+        elif name in known:
+            result[name] = known[name]
+        else:
+            result[name] = "STUB:%s" % name
+    return result
 
 
 def test_read_only_channel_phases_is_derived_not_hand_typed():
@@ -579,6 +655,42 @@ def test_read_only_channel_phases_is_derived_not_hand_typed():
     assert RD.P_FIXER not in fold, "the fixer must stay excluded from the fold"
     extra = fold - order_phases
     assert not extra, "fold names phase(s) ORDER_PHASES does not know about: %s" % sorted(extra)
+
+
+def test_panel_fixture_supplies_realistic_values_and_exact_key_set():
+    """Anti-vacuity: the derived fixture must not stub every value, and its key set must match the
+    template's direct placeholders plus the auxiliary inputs this phase's derivation consumes.
+
+    `render_order` refuses both directions (`unfilled-placeholder` and `unused-context-key`), so
+    both halves of the key-set check are load-bearing.
+    """
+    ph = _phase_placeholders(RD.P_PANEL, RD.CHANNEL_FILE)
+    for name in ("MODE", "DIFF_PATH", "FINDINGS_OUTPUT_PATH", "CHANNEL"):
+        assert not ph[name].startswith("STUB:"), (name, ph[name])
+    expected_keys, reason = _fixture_direct_placeholder_names(RD.P_PANEL)
+    assert reason is None, reason
+    assert set(ph.keys()) == expected_keys
+
+
+def test_placeholder_fixture_known_table_covers_every_template_placeholder():
+    """Drift pin (strong form): every placeholder declared in an order template must have a
+    realistic (non-stub) value in `_KNOWN_REALISTIC_VALUES` for that phase.
+
+    Adding `{{NEW}}` to any template without extending the known-name table makes this test fail
+    without touching the fixture builder — the mirror is derived from the template, not hand-typed.
+    """
+    gaps = []
+    for phase in sorted(RD._READ_ONLY_CHANNEL_PHASES):
+        declared, reason = _template_declared_placeholders(phase)
+        assert reason is None, (phase, reason)
+        direct = declared - _DERIVED_PLACEHOLDER_NAMES
+        known = _KNOWN_REALISTIC_VALUES.get(phase, {})
+        for name in sorted(direct):
+            if name == "CHANNEL":
+                continue
+            if name not in known:
+                gaps.append("%s:%s" % (phase, name))
+    assert not gaps, "template placeholder(s) missing realistic fixture value: %s" % gaps
 
 
 def _render_phase(phase, host_seat):
