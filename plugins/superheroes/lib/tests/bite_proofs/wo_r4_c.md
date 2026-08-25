@@ -82,6 +82,8 @@ E       assert True is False
 1 passed in 0.38s
 ```
 
+**2026-08-24 (WO-K):** Detector orphaned when WO-I moved the probe's status producer from `_git_scrubbed` to `_git_scrubbed_bytes` while this test still patched `_git_scrubbed` only — cell `[appeared-none-True-False]` collapsed to vacuous clean-tree reads. Restored here: fake now patches `_git_scrubbed_bytes` with bytes returns; `assert status_call["n"] > 0` added to prevent reintroduction.
+
 ## BP-R4-C4 — runner-owned truncation marker (`test_engine_stdout_marker_prefix_under_cap_not_truncated`)
 
 **Guarded element:** `engine_dispatch.py:_stdout_capture_truncated` — axis: engine-forged marker prefix in body text under the byte cap is not treated as runner truncation.

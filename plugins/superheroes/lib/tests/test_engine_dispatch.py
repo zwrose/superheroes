@@ -1,5 +1,6 @@
 import argparse
 import ast
+import hashlib
 import importlib.util
 import json
 import os
@@ -11,6 +12,9 @@ import time
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+
+# Sentinel for monkeypatch.setattr two-argument form (target, name) without private pytest API.
+_MONKEYPATCH_SETATTR_DEFAULT = object()
 
 
 def _load():
@@ -5479,20 +5483,27 @@ def test_self_created_worktree_without_foreign_lease_still_dirties(tmp_path):
 
 def test_worktree_baseline_fallback_on_enumeration_failure(tmp_path, monkeypatch):
     wt, _main = _linked_worktree_pair(tmp_path)
-    real_git = ED._git_scrubbed
+    real_bytes = ED._git_scrubbed_bytes
+    worktree_list_call = {"n": 0}
 
     def fail_worktree_list(cwd_real, *args, timeout=None):
         if args[:2] == ("worktree", "list"):
+            worktree_list_call["n"] += 1
             raise subprocess.TimeoutExpired(cmd=args, timeout=timeout or 1)
-        return real_git(cwd_real, *args, timeout=timeout)
+        return real_bytes(cwd_real, *args, timeout=timeout)
 
-    monkeypatch.setattr(ED, "_git_scrubbed", fail_worktree_list)
+    _register_probe_git_fake(
+        monkeypatch,
+        "_git_scrubbed_bytes",
+        fail_worktree_list,
+    )
     baseline = ED._worktree_baseline(os.path.realpath(wt), timeout=5)
     assert baseline is not None
     with open(os.path.join(wt, "dirty.txt"), "w", encoding="utf-8") as fh:
         fh.write("x")
     current = ED._worktree_baseline(os.path.realpath(wt), timeout=5)
     assert current != baseline
+    assert worktree_list_call["n"] > 0
 
 
 # --- WO-R4-A (#1109): bounded stdout cap + like-with-like dirt comparison ----------
@@ -5652,6 +5663,23 @@ def _lease_state_roots(sibling, state):
     raise ValueError(state)
 
 
+def _line_porcelain_to_z(text):
+    """Convert line-oriented porcelain fixture text to ``-z`` NUL-delimited form."""
+    chunks = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if len(line) >= 3 and line[0] in "RC" and " -> " in line:
+            status = line[:3]
+            new_path, old_path = line[3:].strip().split(" -> ", 1)
+            chunks.append(status + new_path.strip())
+            chunks.append(old_path.strip())
+        else:
+            chunks.append(line)
+    text = "\0".join(chunks) + ("\0" if chunks else "")
+    return text.encode("utf-8", errors="surrogateescape")
+
+
 @pytest.mark.parametrize("open_enum_ok", [True, False])
 @pytest.mark.parametrize("forfeit_enum_ok", [True, False])
 @pytest.mark.parametrize("open_lease", ["none", "live", "dead"])
@@ -5674,7 +5702,8 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
         "?? %s/sibling.txt\n"
         "?? %s/extra.txt\n"
     ) % (sibling_rel, sibling_rel)
-    real_git = ED._git_scrubbed
+    real_text_git = ED._git_scrubbed
+    real_bytes_git = ED._git_scrubbed_bytes
     foreign_call = {"n": 0}
     status_call = {"n": 0}
 
@@ -5688,7 +5717,7 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
             return None
         return _lease_state_roots(sibling_real, forfeit_lease)
 
-    def fake_git(cwd_real, *args, timeout=None):
+    def fake_status_git(cwd_real, *args, timeout=None):
         if args[:2] == ("status", "--porcelain=v1"):
             status_call["n"] += 1
             plain = plain_porcelain
@@ -5701,12 +5730,22 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
                 plain = plain_porcelain + sibling_plain
                 uall = uall_porcelain + sibling_uall
             if "-uall" in args:
-                return subprocess.CompletedProcess(args, 0, uall, "")
-            return subprocess.CompletedProcess(args, 0, plain, "")
-        return real_git(cwd_real, *args, timeout=timeout)
+                return subprocess.CompletedProcess(
+                    args, 0, _line_porcelain_to_z(uall), b"",
+                )
+            return subprocess.CompletedProcess(
+                args, 0, _line_porcelain_to_z(plain), b"",
+            )
+        if args and args[0] == "rev-parse":
+            return real_text_git(cwd_real, *args, timeout=timeout)
+        return real_bytes_git(cwd_real, *args, timeout=timeout)
 
     monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
-    monkeypatch.setattr(ED, "_git_scrubbed", fake_git)
+    _register_probe_git_fake(
+        monkeypatch,
+        "_git_scrubbed_bytes",
+        fake_status_git,
+    )
     baseline = ED._worktree_baseline(cwd, timeout=5)
     assert baseline is not None
     verdict = ED._worktree_dirt_verdict(baseline, cwd, timeout=5)
@@ -5717,7 +5756,43 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
         "forfeit_lease": forfeit_lease,
         "baseline": baseline,
     }
+    assert status_call["n"] > 0
     assert sibling_real.startswith(cwd + os.sep)
+
+
+def _independent_legacy_porcelain_sha256(cwd):
+    """Porcelain digest from raw git, not from _legacy_worktree_porcelain_sha256."""
+    status = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain=v1"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    if status.returncode != 0:
+        return None
+    porcelain = status.stdout or ""
+    return hashlib.sha256(porcelain.encode("utf-8")).hexdigest()
+
+
+def _mode_worktree_baseline(cwd, mode):
+    head = ED._git_scrubbed(cwd, "rev-parse", "HEAD", timeout=5)
+    assert head.returncode == 0
+    live_excluded = ED._foreign_leased_worktree_roots(cwd, timeout=5)
+    if live_excluded is None:
+        excluded_roots = None
+    else:
+        excluded_roots = sorted(live_excluded)
+    porcelain_sha256 = ED._worktree_porcelain_snapshot(
+        cwd, mode, excluded_roots, timeout=5,
+    )
+    assert porcelain_sha256 is not None
+    return {
+        "headSha": (head.stdout or "").strip(),
+        "porcelainSha256": porcelain_sha256,
+        "mode": mode,
+        "excludedRoots": excluded_roots,
+    }
 
 
 def test_legacy_worktree_baseline_unchanged_tree_not_dirty(tmp_path):
@@ -5727,9 +5802,15 @@ def test_legacy_worktree_baseline_unchanged_tree_not_dirty(tmp_path):
     assert modern is not None
     legacy = {
         "headSha": modern["headSha"],
-        "porcelainSha256": modern["porcelainSha256"],
+        "porcelainSha256": _independent_legacy_porcelain_sha256(cwd),
     }
     assert ED._worktree_dirt_verdict(legacy, cwd, timeout=5) is False
+    wrong_digest = hashlib.sha256(b"not-the-porcelain").hexdigest()
+    legacy_wrong = {
+        "headSha": modern["headSha"],
+        "porcelainSha256": wrong_digest,
+    }
+    assert ED._worktree_dirt_verdict(legacy_wrong, cwd, timeout=5) is True
 
 
 def test_unreadable_worktree_baseline_fail_closed(tmp_path):
@@ -5753,6 +5834,1247 @@ def test_worktree_dirt_verdict_true_positive_on_write(tmp_path):
     with open(os.path.join(wt, "attempt-write.txt"), "w", encoding="utf-8") as fh:
         fh.write("dirty\n")
     assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+# --- WO-B (#1122): dirt probe by-construction tests + bite-proof detectors ----------
+# --- WO-M (#1122): runtime probe git fake route registration -----------------------
+
+
+PROBE_GIT_FAKE_ROUTES = {
+    "test_worktree_baseline_fallback_on_enumeration_failure": {
+        ("_git_scrubbed_bytes", "worktree"),
+        ("_git_scrubbed_bytes", "status"),
+    },
+    "test_worktree_dirt_invariant_unchanged_tree_cross_product": {
+        ("_git_scrubbed_bytes", "status"),
+    },
+    "test_worktree_entry_set_fail_closed_on_timeout_and_nonzero_exit": {
+        ("_git_scrubbed_bytes", "status"),
+    },
+    "test_worktree_baseline_non_utf8_pathname_no_raise": {
+        ("_git_scrubbed_bytes", "status"),
+        ("_git_scrubbed_bytes", "worktree"),
+    },
+    "test_probe_git_fake_routes_are_live": {
+        ("_git_scrubbed", "rev-parse"),
+        ("_git_scrubbed_bytes", "worktree"),
+        ("_git_scrubbed_bytes", "status"),
+    },
+}
+
+PROBE_PRODUCTION_GIT_ROUTES = frozenset({
+    ("_git_scrubbed", "rev-parse"),
+    ("_git_scrubbed_bytes", "worktree"),
+    ("_git_scrubbed_bytes", "status"),
+})
+
+_PROBE_GIT_HELPER_NAMES = frozenset({"_git_scrubbed", "_git_scrubbed_bytes"})
+
+
+class _ProbeGitFakeInstallState:
+    def __init__(self):
+        self.test_name = None
+        self.installed_routes = set()
+        self.registered_fakes = set()
+        self.helper_snapshots = {}
+
+    def begin_test(self, test_name):
+        self.test_name = test_name
+        self.installed_routes = set()
+        self.registered_fakes = set()
+        self.helper_snapshots = {}
+
+
+_PROBE_GIT_STATE = _ProbeGitFakeInstallState()
+_probe_git_chokepoint_depth = 0
+
+
+def _finish_probe_git_fake_route_check(test_name, installed):
+    declared = PROBE_GIT_FAKE_ROUTES.get(test_name)
+    if declared is not None:
+        if installed != declared:
+            raise AssertionError(
+                "%s: installed probe git fake routes %r != declared %r"
+                % (test_name, sorted(installed), sorted(declared))
+            )
+        return
+    if installed:
+        raise AssertionError(
+            "%s: undeclared probe git fake routes installed %r"
+            % (test_name, sorted(installed))
+        )
+
+
+def _finish_probe_git_fake_identity_check(test_name, snapshots, registered_fakes):
+    errors = []
+    for helper_name in sorted(_PROBE_GIT_HELPER_NAMES):
+        current = getattr(ED, helper_name)
+        snapshot = snapshots[helper_name]
+        if current is snapshot or current in registered_fakes:
+            continue
+        errors.append(
+            "%s: probe git helper ED.%s has unregistered value %r"
+            % (test_name, helper_name, current)
+        )
+    if errors:
+        raise AssertionError("; ".join(errors))
+
+
+def _register_probe_git_fake(monkeypatch, helper_name, fake):
+    """Install a probe-surface git helper fake; record routes at call time."""
+    global _probe_git_chokepoint_depth
+    if helper_name not in _PROBE_GIT_HELPER_NAMES:
+        raise ValueError("not a probe git helper: %r" % (helper_name,))
+    _wrapper_invocation_depth = [0]
+
+    def wrapper(cwd_real, *args, timeout=None, **kwargs):
+        if _wrapper_invocation_depth[0] == 0:
+            if args:
+                subcommand = args[0]
+            else:
+                subcommand = ""
+            _PROBE_GIT_STATE.installed_routes.add((helper_name, subcommand))
+        _wrapper_invocation_depth[0] += 1
+        try:
+            return fake(cwd_real, *args, timeout=timeout, **kwargs)
+        finally:
+            _wrapper_invocation_depth[0] -= 1
+
+    _probe_git_chokepoint_depth += 1
+    try:
+        _PROBE_GIT_STATE.registered_fakes.add(wrapper)
+        monkeypatch.setattr(ED, helper_name, wrapper)
+    finally:
+        _probe_git_chokepoint_depth -= 1
+
+
+def _wrap_monkeypatch_for_probe_git_fakes(monkeypatch, test_name):
+    real_setattr = monkeypatch.setattr
+
+    def guarded_setattr(target, name, value=_MONKEYPATCH_SETATTR_DEFAULT, raising=True):
+        if value is _MONKEYPATCH_SETATTR_DEFAULT:
+            return real_setattr(target, name, raising=raising)
+        if target is ED and name in _PROBE_GIT_HELPER_NAMES:
+            if _probe_git_chokepoint_depth == 0:
+                pytest.fail(
+                    "%s: probe git fake ED.%s installed via setattr bypass; "
+                    "use _register_probe_git_fake"
+                    % (test_name, name)
+                )
+        return real_setattr(target, name, value, raising=raising)
+
+    monkeypatch.setattr(monkeypatch, "setattr", guarded_setattr)
+
+
+@pytest.fixture(autouse=True)
+def _probe_git_fake_route_registry(request, monkeypatch):
+    test_name = request.node.originalname or request.node.name.split("[", 1)[0]
+    _PROBE_GIT_STATE.begin_test(test_name)
+    _PROBE_GIT_STATE.helper_snapshots = {
+        name: getattr(ED, name) for name in _PROBE_GIT_HELPER_NAMES
+    }
+    _wrap_monkeypatch_for_probe_git_fakes(monkeypatch, test_name)
+    yield
+    teardown_errors = []
+    try:
+        _finish_probe_git_fake_identity_check(
+            test_name,
+            _PROBE_GIT_STATE.helper_snapshots,
+            set(_PROBE_GIT_STATE.registered_fakes),
+        )
+    except AssertionError as exc:
+        teardown_errors.append(str(exc))
+    if test_name in PROBE_GIT_FAKE_ROUTES or _PROBE_GIT_STATE.installed_routes:
+        try:
+            _finish_probe_git_fake_route_check(
+                test_name, set(_PROBE_GIT_STATE.installed_routes),
+            )
+        except AssertionError as exc:
+            teardown_errors.append(str(exc))
+    if teardown_errors:
+        raise AssertionError("\n".join(teardown_errors))
+
+
+def _install_git_route_recorders(monkeypatch, observed):
+    real_scrubbed = ED._git_scrubbed
+    real_scrubbed_bytes = ED._git_scrubbed_bytes
+
+    def recording_scrubbed(cwd_real, *args, timeout=None):
+        observed.append(("_git_scrubbed", args[0]))
+        return real_scrubbed(cwd_real, *args, timeout=timeout)
+
+    def recording_scrubbed_bytes(cwd_real, *args, timeout=None):
+        observed.append(("_git_scrubbed_bytes", args[0]))
+        return real_scrubbed_bytes(cwd_real, *args, timeout=timeout)
+
+    _register_probe_git_fake(monkeypatch, "_git_scrubbed", recording_scrubbed)
+    _register_probe_git_fake(
+        monkeypatch, "_git_scrubbed_bytes", recording_scrubbed_bytes,
+    )
+
+
+def test_probe_git_fake_routes_are_live(tmp_path, monkeypatch):
+    """Guard: declared probe git fake routes match production observation pin."""
+    for test_name in PROBE_GIT_FAKE_ROUTES:
+        fn = globals().get(test_name)
+        assert callable(fn), (
+            "PROBE_GIT_FAKE_ROUTES key %r is not a test function in this module"
+            % (test_name,)
+        )
+
+    observed = []
+    _install_git_route_recorders(monkeypatch, observed)
+
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    verdict = ED._worktree_dirt_verdict(baseline, cwd, timeout=5)
+    assert verdict is False
+
+    observed_set = set(observed)
+    assert observed_set == PROBE_PRODUCTION_GIT_ROUTES, (
+        "observed production git routes %r != expected %r"
+        % (sorted(observed_set), sorted(PROBE_PRODUCTION_GIT_ROUTES))
+    )
+
+    for test_name, declared_routes in PROBE_GIT_FAKE_ROUTES.items():
+        for route in declared_routes:
+            assert route in observed_set, (
+                "%s declares route %r but probe path never issued it; observed %r"
+                % (test_name, route, sorted(observed_set))
+            )
+
+
+def test_probe_git_fake_declaration_binding_detects_helper_mismatch():
+    with pytest.raises(AssertionError, match="!="):
+        _finish_probe_git_fake_route_check(
+            "test_worktree_baseline_fallback_on_enumeration_failure",
+            {("_git_scrubbed", "worktree")},
+        )
+
+
+def test_probe_git_fake_detects_undeclared_wrapped_install(monkeypatch):
+    def _install_from_helper():
+        _register_probe_git_fake(
+            monkeypatch,
+            "_git_scrubbed_bytes",
+            lambda cwd_real, *args, timeout=None, **kwargs: None,
+        )
+
+    _install_from_helper()
+    ED._git_scrubbed_bytes(os.path.realpath("/tmp"), "status")
+    with pytest.raises(AssertionError, match="undeclared"):
+        _finish_probe_git_fake_route_check(
+            _PROBE_GIT_STATE.test_name,
+            set(_PROBE_GIT_STATE.installed_routes),
+        )
+    _PROBE_GIT_STATE.installed_routes.clear()
+
+
+def test_probe_git_fake_bypass_setattr_fails_by_name(monkeypatch):
+    with pytest.raises(pytest.fail.Exception, match="setattr bypass"):
+        monkeypatch.setattr(ED, "_git_scrubbed_bytes", lambda *a, **k: None)
+
+
+def test_probe_git_fake_raw_assignment_bypass_detected():
+    real = ED._git_scrubbed_bytes
+    ED._git_scrubbed_bytes = lambda *a, **k: None
+    try:
+        with pytest.raises(AssertionError, match="unregistered value"):
+            _finish_probe_git_fake_identity_check(
+                _PROBE_GIT_STATE.test_name,
+                _PROBE_GIT_STATE.helper_snapshots,
+                set(_PROBE_GIT_STATE.registered_fakes),
+            )
+    finally:
+        ED._git_scrubbed_bytes = real
+
+
+def test_probe_git_fake_builtin_setattr_bypass_detected():
+    real = ED._git_scrubbed_bytes
+    setattr(ED, "_git_scrubbed_bytes", lambda *a, **k: None)
+    try:
+        with pytest.raises(AssertionError, match="unregistered value"):
+            _finish_probe_git_fake_identity_check(
+                _PROBE_GIT_STATE.test_name,
+                _PROBE_GIT_STATE.helper_snapshots,
+                set(_PROBE_GIT_STATE.registered_fakes),
+            )
+    finally:
+        ED._git_scrubbed_bytes = real
+
+
+def test_probe_git_fake_flag_flip_bypass_dead(monkeypatch):
+    assert not hasattr(_PROBE_GIT_STATE, "_chokepoint_active")
+    with pytest.raises(pytest.fail.Exception, match="setattr bypass"):
+        monkeypatch.setattr(ED, "_git_scrubbed_bytes", lambda *a, **k: None)
+
+
+def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source):
+    """Run a single child pytest case out-of-process with the real autouse fixture."""
+    tests_dir = _HERE
+    pyc_dir = os.path.join(str(tmp_path), "pyc")
+    conftest_path = os.path.join(tmp_path, "conftest.py")
+    conftest_source = (
+        "import sys\n"
+        "sys.path.insert(0, %s)\n"
+        "\n"
+        "import test_engine_dispatch as TED\n"
+        "\n"
+        "_probe_git_fake_route_registry = TED._probe_git_fake_route_registry\n"
+        "assert sys.pycache_prefix == %s and sys.dont_write_bytecode, "
+        "\"child must not import stale bytecode of the fixture under test\"\n"
+        % (repr(tests_dir), repr(pyc_dir))
+    )
+    ast.parse(conftest_source)
+    with open(conftest_path, "w", encoding="utf-8") as fh:
+        fh.write(conftest_source)
+
+    module_name = "test_probe_guard_child"
+    body_lines = child_body_source.strip("\n").splitlines()
+    indented_body = "".join("    " + line + "\n" for line in body_lines)
+    module_source = (
+        "import sys\n"
+        "sys.path.insert(0, %s)\n"
+        "\n"
+        "import test_engine_dispatch as TED\n"
+        "\n"
+        "def %s(tmp_path, monkeypatch):\n"
+        "%s"
+        % (repr(tests_dir), child_test_name, indented_body)
+    )
+    ast.parse(module_source)
+    module_path = os.path.join(tmp_path, module_name + ".py")
+    with open(module_path, "w", encoding="utf-8") as fh:
+        fh.write(module_source)
+
+    # Child inherits store isolation (WORKHORSE_STORE_ROOT, SUPERHEROES_WORKTREES_ROOT, TEST_PILOT_STORE_ROOT) from plugins/superheroes/lib/tests/conftest.py's autouse _isolate_store_root by environment inheritance only — the child's rootdir is tmp_path, so that conftest is never loaded; the in-process tempfile.gettempdir pins from _pin_temp_base_to_tmp_path do not reach the child, so a child body must not exercise temp-writing ED paths without pinning them itself.
+    env = dict(os.environ)
+    for key in list(env):
+        if (
+            key == "PYTEST_ADDOPTS"
+            or key == "PYTEST_CURRENT_TEST"
+            or key.startswith("PYTEST_XDIST")
+            or key == "PYTEST_PLUGINS"
+        ):
+            del env[key]
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    env["PYTHONPYCACHEPREFIX"] = pyc_dir
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+
+    try:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "--color=no",
+                "--basetemp",
+                os.path.join(str(tmp_path), "child-basetemp"),
+                "%s.py::%s" % (module_name, child_test_name),
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout
+        if stdout is None:
+            stdout = ""
+        elif isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", "replace")
+        stderr = exc.stderr
+        if stderr is None:
+            stderr = ""
+        elif isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", "replace")
+        pytest.fail(
+            "child pytest timed out after 120s; stdout=%r stderr=%r"
+            % (stdout, stderr)
+        )
+
+
+# Accepted residuals, not closed by these detectors:
+# 1. An install that is never called is invisible — routes are recorded at call
+#    time, so a registered fake that is never reached leaves the observed set
+#    empty and the route check never runs.
+# 2. A re-entrant call on a different route is never observed — the chokepoint
+#    wrapper records only at invocation depth 0.
+
+
+def test_probe_git_fake_teardown_raises_on_undeclared_route_end_to_end(tmp_path):
+    """Prove G2b (line 5902): fixture teardown raises on undeclared routes.
+
+    Does not prove: (1) an install that is never called is invisible;
+    (2) a re-entrant call on a different route is never observed.
+    """
+    child_body = """
+def fake_scrubbed_bytes(cwd_real, *args, timeout=None, **kwargs):
+    return b""
+TED._register_probe_git_fake(monkeypatch, "_git_scrubbed_bytes", fake_scrubbed_bytes)
+TED.ED._git_scrubbed_bytes(str(tmp_path), "status", timeout=5)
+"""
+    child = _run_probe_guard_selftest_child(
+        tmp_path,
+        "test_probe_guard_child_undeclared_route",
+        child_body,
+    )
+    combined = child.stdout + child.stderr
+    msg = "stdout=%r stderr=%r" % (child.stdout, child.stderr)
+    assert child.returncode != 0, msg
+    assert "1 passed" in child.stdout, msg
+    assert "undeclared probe git fake routes installed" in combined, msg
+
+
+def test_probe_git_fake_teardown_raises_on_declared_route_mismatch_end_to_end(
+    tmp_path,
+):
+    """Prove G2a (line 5896): fixture teardown raises on declared route mismatch.
+
+    Does not prove: (1) an install that is never called is invisible;
+    (2) a re-entrant call on a different route is never observed.
+    """
+    declared = PROBE_GIT_FAKE_ROUTES[
+        "test_worktree_entry_set_fail_closed_on_timeout_and_nonzero_exit"
+    ]
+    assert ("_git_scrubbed_bytes", "worktree") not in declared, declared
+    child_body = """
+def fake_scrubbed_bytes(cwd_real, *args, timeout=None, **kwargs):
+    return b""
+TED._register_probe_git_fake(monkeypatch, "_git_scrubbed_bytes", fake_scrubbed_bytes)
+TED.ED._git_scrubbed_bytes(str(tmp_path), "worktree", timeout=5)
+"""
+    child = _run_probe_guard_selftest_child(
+        tmp_path,
+        "test_worktree_entry_set_fail_closed_on_timeout_and_nonzero_exit",
+        child_body,
+    )
+    combined = child.stdout + child.stderr
+    msg = "stdout=%r stderr=%r" % (child.stdout, child.stderr)
+    assert child.returncode != 0, msg
+    assert "1 passed" in child.stdout, msg
+    assert "installed probe git fake routes" in combined, msg
+    assert "!= declared" in combined, msg
+
+
+def test_probe_git_fake_teardown_raises_on_unregistered_helper_value_end_to_end(
+    tmp_path,
+):
+    """Prove G3 (line 5920): fixture teardown raises on unregistered helper value.
+
+    Does not prove: (1) an install that is never called is invisible;
+    (2) a re-entrant call on a different route is never observed.
+    """
+    child_body = """
+setattr(TED.ED, "_git_scrubbed_bytes", lambda *a, **k: None)
+"""
+    child = _run_probe_guard_selftest_child(
+        tmp_path,
+        "test_probe_guard_child_unregistered_value",
+        child_body,
+    )
+    combined = child.stdout + child.stderr
+    msg = "stdout=%r stderr=%r" % (child.stdout, child.stderr)
+    assert child.returncode != 0, msg
+    assert "1 passed" in child.stdout, msg
+    assert "has unregistered value" in combined, msg
+
+
+def _nested_sibling_worktree(main, cwd, name="sib"):
+    sib = os.path.join(cwd, ".claude", "worktrees", name)
+    os.makedirs(os.path.dirname(sib), exist_ok=True)
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", sib], check=True)
+    return sib
+
+
+def _lease_state_value(state, sibling_real):
+    if state == "none":
+        return set()
+    if state == "leased":
+        return {sibling_real}
+    if state == "unreadable":
+        return None
+    raise ValueError(state)
+
+
+@pytest.mark.parametrize("baseline_lease", ["none", "leased", "unreadable"])
+@pytest.mark.parametrize("verdict_lease", ["none", "leased", "unreadable"])
+def test_worktree_dirt_by_construction_invariant_transition_cross_product(
+    tmp_path, monkeypatch, baseline_lease, verdict_lease,
+):
+    wt, main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sib = _nested_sibling_worktree(main, cwd)
+    sib_real = os.path.realpath(sib)
+    with open(os.path.join(sib, "sibling.txt"), "w", encoding="utf-8") as fh:
+        fh.write("peer\n")
+    sib_proc = None
+    if baseline_lease == "leased" or verdict_lease == "leased":
+        sib_proc = _install_foreign_lease(sib)
+    foreign_call = {"n": 0}
+
+    def fake_foreign(cwd_real, timeout=None):
+        foreign_call["n"] += 1
+        if foreign_call["n"] == 1:
+            return _lease_state_value(baseline_lease, sib_real)
+        return _lease_state_value(verdict_lease, sib_real)
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    try:
+        baseline = ED._worktree_baseline(cwd, timeout=5)
+        assert baseline is not None
+        verdict = ED._worktree_dirt_verdict(baseline, cwd, timeout=5)
+        assert verdict is False, (
+            "cell baseline_lease=%r verdict_lease=%r baseline=%r"
+            % (baseline_lease, verdict_lease, baseline)
+        )
+    finally:
+        if sib_proc is not None:
+            ED._terminate_process_group(sib_proc.pid)
+            sib_proc.wait(timeout=2)
+
+
+def test_worktree_dirt_exclusion_grows_between_snapshots(tmp_path, monkeypatch):
+    wt, main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sib = _nested_sibling_worktree(main, cwd)
+    sib_real = os.path.realpath(sib)
+    with open(os.path.join(sib, "sibling.txt"), "w", encoding="utf-8") as fh:
+        fh.write("peer\n")
+    foreign_call = {"n": 0}
+
+    def fake_foreign(cwd_real, timeout=None):
+        foreign_call["n"] += 1
+        if foreign_call["n"] == 1:
+            return set()
+        return {sib_real}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
+
+
+def test_worktree_dirt_ancestor_collapse_real_git_porcelain(tmp_path, monkeypatch):
+    wt, main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sib_real_holder = {"path": None}
+    foreign_call = {"n": 0}
+
+    def fake_foreign(cwd_real, timeout=None):
+        foreign_call["n"] += 1
+        if foreign_call["n"] == 1:
+            return None
+        return {sib_real_holder["path"]}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    sib = _nested_sibling_worktree(main, cwd)
+    sib_real_holder["path"] = os.path.realpath(sib)
+    with open(os.path.join(sib, "sibling.txt"), "w", encoding="utf-8") as fh:
+        fh.write("peer\n")
+    plain = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain=v1"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    uall = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain=v1", "-uall"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    assert "?? .claude/\n" in plain or plain.strip() == "?? .claude/"
+    assert ".claude/worktrees/sib/" in uall
+    assert "?? .claude/\n" not in uall
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
+
+
+def test_filter_entry_list_drops_entries_under_excluded_root(tmp_path):
+    cwd = os.path.realpath(str(tmp_path / "cwd"))
+    os.makedirs(cwd, exist_ok=True)
+    root = os.path.join(cwd, "leased")
+    entries = [
+        ["??", "leased/file.txt"],
+        ["??", "leased/nested/deep.txt"],
+        ["??", "outside.txt"],
+    ]
+    filtered = ED._filter_entry_list(entries, cwd, {root})
+    assert filtered == [["??", "outside.txt"]]
+
+
+def test_worktree_dirt_exclusion_union_baseline_and_verdict_roots(tmp_path, monkeypatch):
+    wt, main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sib = _nested_sibling_worktree(main, cwd)
+    sib_real = os.path.realpath(sib)
+    with open(os.path.join(sib, "sibling.txt"), "w", encoding="utf-8") as fh:
+        fh.write("peer\n")
+
+    call = {"n": 0}
+
+    def foreign_baseline_only(cwd_real, timeout=None):
+        call["n"] += 1
+        if call["n"] == 1:
+            return {sib_real}
+        return set()
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", foreign_baseline_only)
+    baseline_only = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline_only is not None
+    assert ED._worktree_dirt_verdict(baseline_only, cwd, timeout=5) is False
+
+    call["n"] = 0
+    sib_real_verdict = {"path": None}
+
+    def foreign_verdict_only(cwd_real, timeout=None):
+        call["n"] += 1
+        if call["n"] == 1:
+            return set()
+        return {sib_real_verdict["path"]}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", foreign_verdict_only)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    sib_verdict = _nested_sibling_worktree(main, cwd, name="verdict-only")
+    sib_real_verdict["path"] = os.path.realpath(sib_verdict)
+    with open(os.path.join(sib_verdict, "sibling.txt"), "w", encoding="utf-8") as fh:
+        fh.write("peer\n")
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
+
+
+def test_worktree_dirt_symlink_to_leased_root_reads_dirty(tmp_path):
+    # Axis: path shape, not resolved target — a symlink must not be silently discarded.
+    wt, main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sib = _nested_sibling_worktree(main, cwd)
+    sib_proc = _install_foreign_lease(sib)
+    try:
+        baseline = ED._worktree_baseline(cwd, timeout=5)
+        assert baseline is not None
+        os.symlink(".claude/worktrees/sib", os.path.join(cwd, "alias"))
+        assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+    finally:
+        ED._terminate_process_group(sib_proc.pid)
+        sib_proc.wait(timeout=2)
+
+
+def test_worktree_dirt_verdict_overflow_fail_closed(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    head = subprocess.run(
+        ["git", "-C", cwd, "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    baseline = {
+        "headSha": head,
+        "entriesVersion": ED.BASELINE_ENTRIES_VERSION,
+        "entriesOverflow": True,
+        "entries": [],
+    }
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
+    malformed_entries = {
+        "headSha": head,
+        "entriesVersion": ED.BASELINE_ENTRIES_VERSION,
+        "entriesOverflow": False,
+        "entries": ["?? ok.txt", 1],
+    }
+    assert ED._worktree_dirt_verdict(malformed_entries, cwd, timeout=5) is None
+    malformed_type = {
+        "headSha": head,
+        "entriesVersion": ED.BASELINE_ENTRIES_VERSION,
+        "entriesOverflow": False,
+        "entries": "not-a-list",
+    }
+    assert ED._worktree_dirt_verdict(malformed_type, cwd, timeout=5) is None
+
+
+def test_worktree_baseline_has_entry_set_not_digest_or_mode(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    assert baseline.get("entriesVersion") == ED.BASELINE_ENTRIES_VERSION
+    assert isinstance(baseline.get("entries"), list)
+    assert "porcelainSha256" not in baseline
+    assert "mode" not in baseline
+
+
+def test_worktree_dirt_head_movement_reads_dirty(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    new_file = os.path.join(wt, "head-move.txt")
+    with open(new_file, "w", encoding="utf-8") as fh:
+        fh.write("move\n")
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "add", "head-move.txt"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "head move"],
+        check=True,
+    )
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+# --- WO-D (#1122): false-clean path fixes ------------------------------------
+
+
+def test_worktree_dirt_ancestor_exclusion_root_not_admitted(tmp_path):
+    main = str(tmp_path / "main")
+    _git_init(main)
+    nested = os.path.join(main, ".claude", "worktrees", "build")
+    os.makedirs(os.path.dirname(nested), exist_ok=True)
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", nested], check=True)
+    cwd = os.path.realpath(nested)
+    main_real = os.path.realpath(main)
+    ancestor_proc = _install_foreign_lease(main)
+    try:
+        roots = ED._foreign_leased_worktree_roots(cwd, timeout=5)
+        assert roots is not None
+        assert main_real not in roots
+        baseline = ED._worktree_baseline(cwd, timeout=5)
+        assert baseline is not None
+        with open(os.path.join(cwd, "attempt-left-this.txt"), "w", encoding="utf-8") as fh:
+            fh.write("x\n")
+        with open(os.path.join(cwd, "and-this.txt"), "w", encoding="utf-8") as fh:
+            fh.write("y\n")
+        assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+    finally:
+        ED._terminate_process_group(ancestor_proc.pid)
+        ancestor_proc.wait(timeout=2)
+
+
+def test_worktree_dirt_rename_out_of_excluded_root_reads_dirty(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    leased_dir = os.path.join(cwd, "leased")
+    os.makedirs(leased_dir, exist_ok=True)
+    secret = os.path.join(leased_dir, "secret.txt")
+    with open(secret, "w", encoding="utf-8") as fh:
+        fh.write("secret\n")
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "add", "leased/secret.txt"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "add secret"],
+        check=True,
+    )
+    leased_root = os.path.realpath(leased_dir)
+
+    def fake_foreign(cwd_real, timeout=None):
+        return {leased_root}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    subprocess.run(
+        ["git", "-C", cwd, "mv", "leased/secret.txt", "escaped.txt"],
+        check=True,
+    )
+    porcelain = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain=v1", "-z"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    assert "escaped.txt" in porcelain
+    assert "leased/secret.txt" in porcelain
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+def test_worktree_dirt_rename_inside_excluded_root_still_excluded(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    leased_dir = os.path.join(cwd, "leased")
+    os.makedirs(leased_dir, exist_ok=True)
+    with open(os.path.join(leased_dir, "a.txt"), "w", encoding="utf-8") as fh:
+        fh.write("a\n")
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "add", "leased/a.txt"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "add leased files"],
+        check=True,
+    )
+    leased_root = os.path.realpath(leased_dir)
+
+    def fake_foreign(cwd_real, timeout=None):
+        return {leased_root}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    subprocess.run(
+        ["git", "-C", cwd, "mv", "leased/a.txt", "leased/b.txt"],
+        check=True,
+    )
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
+
+
+def test_worktree_dirt_quoted_path_outside_excluded_root_reads_dirty(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    leased_dir = os.path.join(cwd, "leased")
+    os.makedirs(leased_dir, exist_ok=True)
+    leased_root = os.path.realpath(leased_dir)
+
+    def fake_foreign(cwd_real, timeout=None):
+        return {leased_root}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    quoted_name = "café file.txt"
+    with open(os.path.join(cwd, quoted_name), "w", encoding="utf-8") as fh:
+        fh.write("quoted\n")
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+def test_worktree_dirt_quoted_path_inside_excluded_root_still_excluded(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    leased_dir = os.path.join(cwd, "leased")
+    os.makedirs(leased_dir, exist_ok=True)
+    leased_root = os.path.realpath(leased_dir)
+
+    def fake_foreign(cwd_real, timeout=None):
+        return {leased_root}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    quoted_name = "café file.txt"
+    with open(os.path.join(leased_dir, quoted_name), "w", encoding="utf-8") as fh:
+        fh.write("quoted\n")
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
+
+
+@pytest.mark.parametrize("baseline_lease", ["none", "leased", "unreadable"])
+@pytest.mark.parametrize("verdict_lease", ["none", "leased", "unreadable"])
+def test_worktree_dirt_by_construction_dirty_outside_excluded_root_cross_product(
+    tmp_path, monkeypatch, baseline_lease, verdict_lease,
+):
+    wt, main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sib = _nested_sibling_worktree(main, cwd)
+    sib_real = os.path.realpath(sib)
+    with open(os.path.join(sib, "sibling.txt"), "w", encoding="utf-8") as fh:
+        fh.write("peer\n")
+    sib_proc = None
+    if baseline_lease == "leased" or verdict_lease == "leased":
+        sib_proc = _install_foreign_lease(sib)
+    foreign_call = {"n": 0}
+
+    def fake_foreign(cwd_real, timeout=None):
+        foreign_call["n"] += 1
+        if foreign_call["n"] == 1:
+            return _lease_state_value(baseline_lease, sib_real)
+        return _lease_state_value(verdict_lease, sib_real)
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    try:
+        baseline = ED._worktree_baseline(cwd, timeout=5)
+        assert baseline is not None
+        with open(os.path.join(cwd, "outside-dirty.txt"), "w", encoding="utf-8") as fh:
+            fh.write("dirty\n")
+        verdict = ED._worktree_dirt_verdict(baseline, cwd, timeout=5)
+        assert verdict is True, (
+            "cell baseline_lease=%r verdict_lease=%r baseline=%r"
+            % (baseline_lease, verdict_lease, baseline)
+        )
+    finally:
+        if sib_proc is not None:
+            ED._terminate_process_group(sib_proc.pid)
+            sib_proc.wait(timeout=2)
+
+
+def test_worktree_baseline_overflow_producer_bound(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    monkeypatch.setattr(ED, "MAX_BASELINE_ENTRIES", 3)
+    for idx in range(5):
+        with open(os.path.join(wt, "overflow-%d.txt" % idx), "w", encoding="utf-8") as fh:
+            fh.write("%d\n" % idx)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    assert baseline.get("entriesOverflow") is True
+    assert baseline.get("entries") == []
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
+
+
+def test_worktree_baseline_entry_bytes_overflow_producer_bound(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    monkeypatch.setattr(ED, "MAX_BASELINE_ENTRY_BYTES", 10)
+    with open(os.path.join(wt, "one-file.txt"), "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    assert baseline.get("entriesOverflow") is True
+    assert baseline.get("entries") == []
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
+
+
+def test_worktree_dirt_unsupported_entries_version_fail_closed(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    modern = ED._worktree_baseline(cwd, timeout=5)
+    assert modern is not None
+    head = modern["headSha"]
+    for bad_version in (1, 99, "2", None, ED.BASELINE_ENTRIES_VERSION - 1):
+        baseline = dict(modern)
+        baseline["entriesVersion"] = bad_version
+        assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
+    legacy = {
+        "headSha": head,
+        "porcelainSha256": ED._legacy_worktree_porcelain_sha256(cwd, timeout=5),
+    }
+    assert ED._worktree_dirt_verdict(legacy, cwd, timeout=5) is not None
+
+
+# --- WO-G (#1122): injective entry records + consumer guards ----------------
+
+
+def test_worktree_dirt_unit_separator_filename_outside_excluded_root_reads_dirty(
+    tmp_path, monkeypatch,
+):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    leased_dir = os.path.join(cwd, "leased")
+    os.makedirs(leased_dir, exist_ok=True)
+    leased_root = os.path.realpath(leased_dir)
+
+    def fake_foreign(cwd_real, timeout=None):
+        return {leased_root}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    sep_dir_name = "leased\x1fleased"
+    sep_dir = os.path.join(cwd, sep_dir_name)
+    os.makedirs(sep_dir, exist_ok=True)
+    probe_path = os.path.join(sep_dir, "probe.txt")
+    with open(probe_path, "w", encoding="utf-8") as fh:
+        fh.write("probe\n")
+    created_rel = sep_dir_name + "/probe.txt"
+    assert not ED._path_under_excluded_root(
+        os.path.normpath(os.path.join(cwd, created_rel)), {leased_root},
+    )
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+def test_parse_porcelain_z_entries_rename_endpoints_injective():
+    data = "R  a\x1fb\x00c\x00R  a\x00b\x1fc\x00"
+    records = [record for record, _paths in ED._parse_porcelain_z_entries(data)]
+    assert len(records) == 2
+    assert records[0] != records[1]
+    assert records[0] == ["R ", "a\x1fb", "c"]
+    assert records[1] == ["R ", "a", "b\x1fc"]
+
+
+def test_worktree_dirt_unit_separator_inside_excluded_root_still_excluded(
+    tmp_path, monkeypatch,
+):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    leased_dir = os.path.join(cwd, "leased")
+    os.makedirs(leased_dir, exist_ok=True)
+    sep_name = "inner\x1fprobe.txt"
+    with open(os.path.join(leased_dir, sep_name), "w", encoding="utf-8") as fh:
+        fh.write("inside\n")
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "add", "leased/"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "add sep inside leased"],
+        check=True,
+    )
+    leased_root = os.path.realpath(leased_dir)
+
+    def fake_foreign(cwd_real, timeout=None):
+        return {leased_root}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
+
+
+@pytest.mark.parametrize(
+    "bad_roots",
+    [
+        lambda cwd: [cwd],
+        lambda cwd: [""],
+        lambda cwd: ["/"],
+        lambda cwd: [os.path.dirname(cwd)],
+    ],
+    ids=["cwd", "empty", "slash", "ancestor"],
+)
+def test_worktree_dirt_consumer_root_guard_bad_persisted_root_reads_dirty(
+    tmp_path, monkeypatch, bad_roots,
+):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    baseline["excludedRoots"] = bad_roots(cwd)
+    with open(os.path.join(cwd, "consumer-guard-dirty.txt"), "w", encoding="utf-8") as fh:
+        fh.write("dirty\n")
+
+    def fake_foreign(cwd_real, timeout=None):
+        return set()
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+def test_worktree_entry_set_fail_closed_on_timeout_and_nonzero_exit(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    real_bytes = ED._git_scrubbed_bytes
+
+    def fake_timeout(cwd_real, *args, timeout=None):
+        if args and args[0] == "status" and "-z" in args:
+            raise subprocess.TimeoutExpired(cmd=args, timeout=timeout or 1)
+        return real_bytes(cwd_real, *args, timeout=timeout)
+
+    _register_probe_git_fake(
+        monkeypatch,
+        "_git_scrubbed_bytes",
+        fake_timeout,
+    )
+    assert ED._worktree_entry_set(cwd, timeout=5) is None
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
+
+    def fake_nonzero(cwd_real, *args, timeout=None):
+        if args and args[0] == "status" and "-z" in args:
+            return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"")
+        return real_bytes(cwd_real, *args, timeout=timeout)
+
+    _register_probe_git_fake(
+        monkeypatch,
+        "_git_scrubbed_bytes",
+        fake_nonzero,
+    )
+    assert ED._worktree_entry_set(cwd, timeout=5) is None
+
+
+# --- WO-E (#1122): retained mode-branch coverage + de-tautologized legacy pin ---
+
+
+@pytest.mark.parametrize("mode", ["plain", "filtered"])
+def test_mode_worktree_baseline_unchanged_tree_not_dirty(tmp_path, mode):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = _mode_worktree_baseline(cwd, mode)
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
+
+
+@pytest.mark.parametrize("mode", ["plain", "filtered"])
+def test_mode_worktree_baseline_dirtied_tree_reads_dirty(tmp_path, mode):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = _mode_worktree_baseline(cwd, mode)
+    with open(os.path.join(wt, "mode-dirt-%s.txt" % mode), "w", encoding="utf-8") as fh:
+        fh.write("dirty\n")
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+@pytest.mark.parametrize("mode", ["plain", "filtered"])
+def test_mode_worktree_baseline_head_movement_reads_dirty(tmp_path, mode):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = _mode_worktree_baseline(cwd, mode)
+    new_file = os.path.join(wt, "mode-head-%s.txt" % mode)
+    with open(new_file, "w", encoding="utf-8") as fh:
+        fh.write("move\n")
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "add", os.path.basename(new_file)],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "mode head move"],
+        check=True,
+    )
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+def test_mode_worktree_baseline_bogus_mode_fail_closed(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = _mode_worktree_baseline(cwd, "plain")
+    baseline["mode"] = "bogus"
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
+
+
+def test_mode_worktree_baseline_none_mode_uses_legacy_branch(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    modern = ED._worktree_baseline(cwd, timeout=5)
+    assert modern is not None
+    legacy = {
+        "headSha": modern["headSha"],
+        "porcelainSha256": _independent_legacy_porcelain_sha256(cwd),
+        "mode": None,
+    }
+    assert ED._worktree_dirt_verdict(legacy, cwd, timeout=5) is False
+
+
+# --- WO-I (#1122): probe-scoped byte-level enumeration -----------------------------
+
+
+def _probe_producer_output(cwd, producer):
+    if producer == "entry_set":
+        return ED._worktree_entry_set(cwd, timeout=5)
+    if producer == "legacy":
+        return ED._legacy_worktree_porcelain_sha256(cwd, timeout=5)
+    excluded = ED._foreign_leased_worktree_roots(cwd, timeout=5)
+    excluded_roots = sorted(excluded) if excluded is not None else None
+    return ED._worktree_porcelain_snapshot(cwd, producer, excluded_roots, timeout=5)
+
+
+def _cr_lf_probe_repo(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    cr_name = "a\rb"
+    with open(os.path.join(wt, cr_name), "wb") as fh:
+        fh.write(b"cr-content\n")
+    return wt, cwd, cr_name
+
+
+@pytest.mark.parametrize(
+    "producer",
+    ["entry_set", "filtered", "plain", "legacy"],
+    ids=["entry_set", "snapshot_filtered", "snapshot_plain", "legacy"],
+)
+def test_probe_producers_distinguish_cr_from_lf_in_pathnames(tmp_path, producer):
+    wt, cwd, cr_name = _cr_lf_probe_repo(tmp_path)
+    before = _probe_producer_output(cwd, producer)
+    assert before is not None
+    os.remove(os.path.join(wt, cr_name))
+    lf_name = "a\nb"
+    with open(os.path.join(wt, lf_name), "wb") as fh:
+        fh.write(b"lf-content\n")
+    after = _probe_producer_output(cwd, producer)
+    assert after is not None
+    assert before != after
+
+
+def test_probe_dirt_verdict_cr_lf_swap_reads_dirty(tmp_path):
+    wt, cwd, cr_name = _cr_lf_probe_repo(tmp_path)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    os.remove(os.path.join(wt, cr_name))
+    lf_name = "a\nb"
+    with open(os.path.join(wt, lf_name), "wb") as fh:
+        fh.write(b"lf-content\n")
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+def test_parse_and_filter_shims_surrogate_str_no_raise(tmp_path):
+    surrogate_path = b"/tmp/foo\x80bar".decode("utf-8", errors="surrogateescape")
+    porcelain_str = "worktree " + surrogate_path + "\nbranch refs/heads/main"
+    worktrees = ED._parse_git_worktree_list(porcelain_str)
+    assert len(worktrees) == 1
+    cwd = os.path.realpath(str(tmp_path / "wt"))
+    os.makedirs(cwd, exist_ok=True)
+    rel = b"a\x80b".decode("utf-8", errors="surrogateescape")
+    porcelain = "?? " + rel + "\n"
+    filtered = ED._filter_porcelain_for_foreign_worktrees(porcelain, cwd, set())
+    assert filtered
+
+
+def test_parse_git_worktree_list_preserves_cr_in_path():
+    raw_path = b"/tmp/example\rpath"
+    porcelain = b"worktree " + raw_path + b"\nbranch refs/heads/main"
+    worktrees = ED._parse_git_worktree_list(porcelain)
+    assert len(worktrees) == 1
+    decoded_path = raw_path.decode("utf-8", errors="surrogateescape")
+    assert worktrees[0]["path"] == os.path.realpath(decoded_path)
+    assert "\r" in decoded_path
+
+
+def test_parse_git_worktree_list_empty_bytes():
+    assert ED._parse_git_worktree_list(b"") == []
+
+
+def test_filter_porcelain_preserves_cr_in_pathname(tmp_path):
+    cwd = os.path.realpath(str(tmp_path / "wt"))
+    os.makedirs(cwd, exist_ok=True)
+    porcelain = b"?? a\rb\n"
+    filtered = ED._filter_porcelain_for_foreign_worktrees(porcelain, cwd, set())
+    assert filtered == porcelain
+
+
+def test_parse_porcelain_z_entries_empty_bytes():
+    assert list(ED._parse_porcelain_z_entries(b"")) == []
+
+
+def test_worktree_baseline_non_utf8_pathname_no_raise(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    real_bytes = ED._git_scrubbed_bytes
+
+    def fake_status(cwd_real, *args, timeout=None):
+        if args and args[0] == "status" and "-z" in args:
+            porcelain = b"?? a\x80b\0"
+            return subprocess.CompletedProcess(args, 0, stdout=porcelain, stderr=b"")
+        return real_bytes(cwd_real, *args, timeout=timeout)
+
+    _register_probe_git_fake(
+        monkeypatch,
+        "_git_scrubbed_bytes",
+        fake_status,
+    )
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    assert baseline["entries"]
+
+
+def test_probe_digest_compatibility_ordinary_tree(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    with open(os.path.join(wt, "ordinary.txt"), "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    status_plain = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain=v1"],
+        capture_output=True,
+        timeout=5,
+    )
+    expected_plain = hashlib.sha256(status_plain.stdout).hexdigest()
+    excluded = ED._foreign_leased_worktree_roots(cwd, timeout=5)
+    excluded_roots = sorted(excluded) if excluded is not None else None
+    assert (
+        ED._worktree_porcelain_snapshot(cwd, "plain", excluded_roots, timeout=5)
+        == expected_plain
+    )
+    status_uall = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain=v1", "-uall"],
+        capture_output=True,
+        timeout=5,
+    )
+    expected_legacy = hashlib.sha256(status_uall.stdout).hexdigest()
+    assert ED._legacy_worktree_porcelain_sha256(cwd, timeout=5) == expected_legacy
 
 
 # --- #609 stage 2: inseparable PR-body / session-dir staging ---
