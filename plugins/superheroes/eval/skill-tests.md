@@ -55,7 +55,7 @@ Shared abbreviations: **R-CODE** = `skills/review-code/SKILL.md`, **R-PLAN** =
 |---|---------|-------------------|----------------------------|----------|-----|
 | S1 | Profile `status: stable` | Normal operation. Calibration is read from the profile fields; no status-driven posture change. | BASE "Where calibration comes from"; R-CODE §1 Setup "Read the verify story" | yes | already correct |
 | S2 | Profile `status: provisional` (e.g. a headless-written profile) | The review **proceeds normally** off the profile's recorded fields. Strictness is **not** keyed off the `status` flag — it follows the profile's **threat-model field**, which a headless/provisional profile sets to the STRICT value (multi-user, err toward flagging). So a provisional profile reviews with a strict posture **because of its strict threat-model field**, not because of the status flag. | R-INIT §3 (headless writes provisional + STRICT threat model); BASE "Calibration comes from the profile" (strictness is threat-model-driven) | yes | already correct |
-| S6 | Existing profile is `status: provisional` **AND the run is interactive** | After the review output, the skill offers **ONE non-blocking** `AskUserQuestion` to confirm the provisional profile: **Confirm (mark stable)** flips `status: provisional → stable` + bumps `updated:` (only on the user's choice — never auto-flips), **Refresh via review-init** points at `/superheroes:review-init`, **Keep provisional** records a dismissal under the constant `provisional-confirm` signal (suppresses re-asking until the profile changes). **Skipped** when headless/non-interactive, when `status:` is already `stable`, or when `provisional-confirm` is already in `nudge-ack`. Closes spec gap C1. | R-CODE / R-PLAN / R-DEBT §"Learning Loop & Staleness Nudge" → "Provisional-profile confirmation (interactive only, end of run)" (byte-identical across the three) + "Recording a dismissal (shared)" (constant `provisional-confirm` signal); R-CODE end-of-loop / `--review-only` end-of-run "(3) provisional-profile confirmation"; R-PLAN §5 / R-DEBT §5 end-of-run "(3) …" | yes | C1 closed — now implemented |
+| S6 | Existing profile is `status: provisional` | The end-of-run provisional-profile confirmation step is **not run** — the profile stays `provisional`. Confirmation happens through `/superheroes:configure` (the fix path, FR-18), not via an in-run prompt. Closes spec gap C1 by routing confirmation to the calibration front door rather than blocking or waiting mid-review. | R-CODE / R-PLAN / R-DEBT §"Learning Loop & Staleness Nudge" (provisional-profile confirmation removed); `configure` SKILL.md FR-18; `configure/reference/fix.md` | yes | C1 closed — confirmation via configure |
 | S3 | Profile is **stale** — material drift detected (`rubric-version` advanced, `schema` outdated, ≥ DEP_THRESHOLD added deps, new top-level src dir, or verify-command / default-branch no longer resolves) | The review **runs to completion normally** (drift is informational only at Setup — "Do NOT act on `drift` here"). **After** the review output, a **single non-blocking nudge** line is printed — only when `message` is non-null. | R-CODE §1 Setup (capture `DOCTOR_JSON`, don't act on drift) + §"Learning Loop & Staleness Nudge" → "Staleness nudge (end of run)"; R-PLAN, R-DEBT same; DOCTOR "Material drift is ANY of" | yes | already correct |
 | S4 | Stale profile, but the same drift signal was already dismissed (`nudge-ack` contains its `signal_hash`) | The nudge is **suppressed** — printed only when `nudge_acked` is false. Re-fires only once the signal changes (a new `signal_hash`). | R-CODE §"Staleness nudge (end of run)" ("only when … `nudge_acked` is false"); DOCTOR (`nudge_acked = signal_hash in nudge-ack`); R-PLAN, R-DEBT same | yes | already correct |
 | S5 | User dismisses / ignores the staleness nudge | Record the dismissal by writing the doctor's `signal_hash` into the profile's `nudge-ack` map (the only profile write either nudge makes, and only on dismissal). | R-CODE §"Recording a dismissal (shared)"; R-PLAN, R-DEBT same | yes | already correct |
@@ -154,19 +154,12 @@ make any row hold.
 **C1 — "next interactive review offers to confirm a provisional profile" (spec
 line ~195). — CLOSED (implemented).** The design spec says a *headless*-written
 `status: provisional` profile should have "the next interactive review offer to
-confirm it." This is now implemented as a fourth shared end-of-run behavior:
-**Provisional-profile confirmation (interactive only, end of run)** in the
-`## Learning Loop & Staleness Nudge` section, byte-identical across `review-code`,
-`review-plan`, and `audit-debt` (cell **S6**). When an existing profile is
-`status: provisional` and the run is interactive (and `provisional-confirm` is not
-already in `nudge-ack`), the skill offers ONE non-blocking `AskUserQuestion` after
-the review output: **Confirm (mark stable)** flips `status: provisional → stable`
-+ bumps `updated:` (only on the user's explicit choice — it never auto-flips),
-**Refresh via review-init** defers to `/superheroes:review-init`, and **Keep
-provisional** records a dismissal under the constant `provisional-confirm` signal
-so it doesn't re-ask until the profile changes. It is **skipped** on
-headless/non-interactive runs (never blocks an automated run), when `status:` is
-already `stable`, or when the signal is already acked. The confirm-and-upgrade
-path still also exists in `review-init` reconcile (I5); the new behavior is the
-proactive, non-blocking nudge the spec called for, placed at end of run alongside
-the staleness nudge and learning-loop proposal — Setup still scopes reconcile out.
+confirm it." That offer no longer runs inside review skills (cell **S6**): the
+end-of-run provisional-profile confirmation step is removed from `review-code`,
+`review-plan`, and `audit-debt`. A `status: provisional` profile **stays
+provisional** through review runs; confirmation happens through
+`/superheroes:configure` on the fix path (FR-18) — the owner runs configure and
+explicitly confirms, which is the hearing event. No skill blocks or waits for that
+answer mid-review. The confirm-and-upgrade path still also exists in `review-init`
+reconcile (I5); configure is the proactive front door the spec's confirmation need
+routes to.

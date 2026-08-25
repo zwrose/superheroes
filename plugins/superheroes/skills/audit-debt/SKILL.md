@@ -96,22 +96,19 @@ Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
-  INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
-  LOC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
-  # If LOC is "ask" → AskUserQuestion, set LOC to owner's pick, then record band-wide (FR-3).
-  # If LOC is already in-repo/global → skip record, go straight to create.
-  REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
-  if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
-    echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
-  fi
+  DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
+  LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
+  SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
+  PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
+  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
   PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
 fi
 ```
 
-When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
+**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or `global` (`ask` no longer exists); `.source` is where the decision came from: `env` (environment override `REVIEW_CREW_STORAGE` for this run only; never recorded), `registry` (a mode the owner recorded; authoritative), `backfilled` (a mode inferred from consistent existing evidence and then recorded), `provisional` (nothing recorded and no consistent evidence; the lib's default, re-taken next run); `.provisional` is `true` when the mode was not owner-recorded. **Default:** the returned `.mode` (recorded when configured, else the lib's provisional default). Bootstrap blocks never record — an unrecorded mode is re-taken next run. **Disclosure.** Write into the **audit report** (`$SESSION_DIR/report.md`): the storage mode taken, its source, whether it is provisional, and that `/superheroes:configure` changes it. When `.provisional` is `true`, also state that it is a provisional default rather than an owner choice and will be re-taken on the next run when not recorded. **Follow-up:** `/superheroes:configure`.
 
-When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Staleness, reconcile, and learning-loop steps are out of scope here.)
+When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → defaults → seed canonical patterns → write the profile to `$PROFILE`), then continue. Every run gets a provisional, strict-threat-model profile from detected defaults. (Staleness, reconcile, and learning-loop steps are out of scope here.)
 
 **Detect the ecosystem.** Mirror review-init's detection: read the profile's `signals` (`dep-set`, `default-branch`, `forge`) and `## Verify` block if present, and detect the manifest/lockfile the same way review-init Step 1 does. The ecosystem drives the dependency audit, the source-dir census, and the dependency-churn pass below.
 
@@ -365,24 +362,30 @@ Render `$SESSION_DIR/report.md`: a markdown report grouped by category (Architec
 
 **Consolidate into proposed GitHub issues.** `audit-debt` never edits code — its output is a backlog. (The forge is GitHub; the profile records the forge.) Roll the surviving findings **across all tiers, including Minor and Nit** into a proposed set of issues:
 
-- **Critical / Important:** apply the review gate — auto-include findings with `recommendation` of `Fix` or `Defer` (filing an issue _is_ deferring real debt to a backlog), and ask the user only about `Skip`/borderline ones via `AskUserQuestion` (lead with the POV; **File** / **Drop**).
+- **Critical / Important:** apply the review gate — auto-include findings with `recommendation` of
+  `Fix` or `Defer` (filing an issue _is_ deferring real debt to a backlog). Findings with POV
+  `Skip` or a borderline disposition are **not** asked and **not** silently dropped — list them in
+  the audit report under **Undecided — needs a human call**, in full with the POV line (per
+  `skills/review-code/reference/headless-presentation.md`).
 - **Minor / Nit:** these carry no POV; include them by default.
 
-**Record decisions (learning loop).** This issue-gate is audit-debt's resolution point: append one `decisions.py` record per finding decided here to the resolved decisions store (`$DECISIONS`), per `## Learning Loop & Staleness Nudge`. Map the action: a finding **filed** as an issue (auto-included `Fix`/`Defer`, or **File** on a gated one) → `fix`; a **Drop** / deselected finding → `skip`. (`guidance` does not arise in audit-debt — it files or drops, it never edits code.) This append is non-blocking and never gates the sweep.
+**Record decisions (learning loop).** Append one `decisions.py` `fix` record per finding filed as an issue (auto-included `Fix`/`Defer`) to `$DECISIONS` — per `## Learning Loop & Staleness Nudge`. Undecided findings get no record; the audit report carries them. Non-blocking.
 - **Do not mix tiers within a single issue.** A Critical/Important finding gets its own issue (or is grouped only with closely-related same-tier findings). Minor/Nit findings are consolidated into their own separate lower-tier issue(s) — never folded into a higher-tier issue.
 
 Present the proposed issue set in chat (title + tier + the findings each issue covers).
 
 Per `the-architect/rubric/escalation-base.md`: filing debt issues is reversible (issues can be
 closed/deleted) → **NOTIFY, not GATE**. By default, file the Critical/Important debt items as
-issues and report what was filed (with the issue links = the reverse path). Only **GATE** (ask
-first) when filing would touch the hard floor — e.g. it would post to a public/shared tracker the
-owner hasn't opted into, or spend on a paid tracker. Saving the report locally is **PROCEED**
-(record-only) — write it and state the path.
+issues and report what was filed (with the issue links = the reverse path). Only **GATE** —
+durable write-down + hand-back in the **audit report**, no filing — when filing would touch the
+hard floor — e.g. it would post to a public/shared tracker the owner hasn't opted into, or spend
+on a paid tracker. Saving the report locally is **PROCEED** (record-only) — write it and state
+the path.
 
-For the Minor/Nit findings and any Skip/borderline Critical/Important ones (where the POV
-recommends Drop), present those as a deselect pass via `AskUserQuestion` (**File** / **Drop**)
-before filing, then file the kept ones.
+For the Minor/Nit findings and any Skip/borderline Critical/Important ones, include the
+Skip/borderline set in the report under **Undecided — needs a human call** (not asked, not
+silently dropped) before filing auto-included items. The count summary states the filed set and the
+undecided set separately so one number cannot read as a decision nobody made.
 
 Issue title format: `"<severity>: <finding title>"` (for a multi-finding lower-tier issue, a summary title like `"Nit: 5 convention nits across src/"`). Body: each finding's text + `file:line` + suggestion + effort estimate, then `_Surfaced by /superheroes:audit-debt on <date>_`. The POV guides filing decisions; it is not written into the issue body.
 
@@ -395,7 +398,12 @@ cp "$SESSION_DIR/report.md" "docs/debt-audit-$(date +%Y-%m-%d).md"
 
 Report where it was saved. No ask needed — saving locally is record-only and reversible (the file can be deleted).
 
-**Then, after filing issues and saving the report**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge** (print the doctor `message` only when non-null and `nudge_acked` is false), (2) the **learning-loop proposal** (`decisions.py analyze` → at most one user-gated `AskUserQuestion`, never auto-applied), then (3) the **provisional-profile confirmation** (interactive only — offer to confirm a `status: provisional` profile; skipped when headless, already stable, or already acked). All three are placed after the audit output and none blocks.
+**Then, after filing issues and saving the report**, run the non-blocking end-of-run steps from
+`## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge** (print the doctor
+`message` only when non-null and `nudge_acked` is false). Skip the **learning-loop proposal** and
+the **provisional-profile confirmation** — the learning loop learns from decisions a human made, and
+a gate nobody answered produced none; applying a calibration edit unasked would be the worse
+failure.
 
 End of skill — no code edits, no commits, no posting to PRs, no further checks (beyond the non-blocking end-of-run learning-loop/staleness steps above, which write only the project-level `.claude/review-decisions.json` store and — only on a dismissal — the profile's `nudge-ack` map).
 
@@ -417,7 +425,7 @@ If the user declines or ignores it, record the dismissal (see "Recording a dismi
 
 ### Learning-loop proposal (end of run)
 
-After the staleness nudge, analyze the decision store for a repeated signal:
+**Not run.** Proposals are not surfaced this run — recorded decisions remain in `$DECISIONS` for a future owner review. Keep the analyze snippet for reference only; do not invoke at end of run:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -425,24 +433,9 @@ python3 -B "$ROOT_DIR/lib/decisions.py" \
   analyze "$DECISIONS" --nudge-ack <comma-separated profile nudge-ack hashes>
 ```
 
-Pass the profile's current `nudge-ack` map keys (read from the resolved profile (`$PROFILE`)'s provenance block) as the comma-separated `--nudge-ack` list so an already-dismissed proposal does not re-fire. If the result's `proposal` is non-null, present it via **ONE** `AskUserQuestion` (lead with `proposal.text`; the proposal names a `target` of `profile` or `CLAUDE.md`):
-- **Apply to `<target>`** — apply the proposed calibration/convention edit to the named target.
-- **Edit then apply** — open a free-text edit, then apply the edited version.
-- **Dismiss** — do not apply; record the dismissal using `proposal.signal_hash` (see below).
+### Provisional-profile confirmation (end of run)
 
-**Apply ONLY on explicit choice** (**Apply** / **Edit then apply**) — never automatically. If `proposal` is null, do nothing.
-
-### Provisional-profile confirmation (interactive only, end of run)
-
-If the loaded profile's `status:` is `provisional` AND this run is interactive (a human is present to answer) AND the provisional-confirm signal is not already in the profile's `nudge-ack`, offer ONE non-blocking `AskUserQuestion` after the review output:
-
-> This project's review profile was auto-generated (provisional) and hasn't been confirmed. Confirm it now?
-
-- **Confirm (mark stable)** — flip the profile's provenance `status: provisional` → `status: stable` in the resolved profile (`$PROFILE`) (a small, user-approved provenance write; bump `updated:`). Nothing else changes.
-- **Refresh via configure** — point the user at `/superheroes:configure` (its reconcile re-detects + can flip status) and do not change the profile now.
-- **Keep provisional** — record a dismissal (see "Recording a dismissal") using the constant provisional-confirm signal hash so this does not re-ask until the profile changes.
-
-Skip this entirely when the run is **headless/non-interactive** (no human to answer — never block an automated run), when `status:` is already `stable`, or when the provisional-confirm signal is already acknowledged. This is the spec's "next interactive review offers to confirm a provisional profile" behavior; it never auto-flips without the user's choice.
+**Not run** — confirming a provisional profile unasked would apply a calibration edit nobody authorized. Recorded decisions and the provisional profile remain for a future owner review.
 
 ### Recording a dismissal (shared)
 
