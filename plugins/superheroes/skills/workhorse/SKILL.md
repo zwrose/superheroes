@@ -378,7 +378,7 @@ board wiring) and the fail-loud go/no-go. Don't restate it here.
 
 ~20–40 lines, **posted on the issue** and carried into the PR. Six items, in order:
 
-1. **Shape** — what gets built where; expected diff size as TWO numbers — non-test changed lines (additions plus deletions outside `tests/`; the input to the scope check below) and test lines (derived from the DoD: one fixture per row, one bite-proof per guarded element, one census per invariant).
+1. **Shape** — what gets built where; expected diff size as THREE numbers — non-test changed lines (additions plus deletions outside `tests/`; the input to the scope check below), test-code lines (derived from the DoD: one fixture per row, one bite-proof per guarded element, one census per invariant), and **record lines** — the committed prose receipts the build owes, chiefly the bite-proof records under `lib/tests/bite_proofs/`. Budget the third bucket separately because it is receipts, not test code: the two-number form had nowhere to put it, so PR #1129 landed **648 unbudgeted record lines** while both of its estimated buckets came in on target. The scope check and its 2× tripwire below read the **non-test** number only — record lines never enlarge the size you may ship without disclosure.
 2. **Contracts & state** — new/changed interfaces and data shapes; where state lives and who mutates it.
 3. **Reuse plan** — what existing code you build on; what you checked for before writing new.
 4. **Hard seams** — the 2–3 riskiest spots and how each is handled; conscious deferrals stated.

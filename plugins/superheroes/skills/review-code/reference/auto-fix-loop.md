@@ -333,9 +333,16 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > argparse before dispatch with a usage error, a non-zero exit, and no result object. A **`verdicts`**
 > payload now travels through `dispatch-review` for verifier seats — a correct `{"verdicts": [...]}`
 > stdout no longer parses `unreadable` by construction; **`grouping`** and **`ruling`** payloads are
-> likewise recognised for synthesis judges and fix auditors. **Per-id audit rulings** (`dispatch-audits`) still do not
-> travel through this verb; encode those inside audit result objects or use the file-writing auditor
-> path. For verifier delivery channels, see `verification-pass.md`.
+> likewise recognised for synthesis judges and fix auditors. A **`ruling`** payload is recognised only
+> when the object carries `id`, `reason`, and a `ruling` drawn from `audits.AUDIT_RULINGS`, and
+> validates against the `P_AUDITS` contract; the terminal result then carries the scrubbed ruling
+> record under **`ruling`**, with `id` and `reason` **nested inside that record and not mirrored at
+> top level** — **one per-id ruling per dispatch**. What does not
+> travel through this verb is the round-driver's `dispatch-audits` **phase submission**: its seat
+> payloads land on the per-target artifact path the order names, and the `collectionManifest`
+> provenance is built out-of-band from the orchestrator's own dispatch records, so the batch submit
+> stays the driver's channel (`round-driver.md`). For verifier delivery channels, see
+> `verification-pass.md`.
 >
 > **`engagement.read` (#687).** When the result carries an **`engagement`** block with a non-`null`
 > value (present only when the attempt produced stdout that was graded), `engagement.read` is
