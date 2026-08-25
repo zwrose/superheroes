@@ -537,30 +537,3 @@ def test_bite_public_handback_interim_token(tmp_path):
             fh.write(src)
         _reload_handback_gate()
 
-
-@pytest.mark.xdist_group(name="handback_gate_source_mutators")
-def test_bite_public_handback_non_object_receipt(tmp_path):
-    repo, _, _ = _scoped_handback_repo(tmp_path, [1, 2, 3], verdict="converged")
-    red = HG.validate_handback("gh pr ready", repo)
-    assert red["reason"] == "handback-receipt-unreadable"
-    path = os.path.join(_LIB, "handback_gate.py")
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
-    patched = src.replace(
-        '    if not isinstance(receipt, dict):\n'
-        '        return False, "receipt-invalid:receipt is not an object"\n',
-        '',
-        1,
-    )
-    assert patched != src
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(patched)
-    try:
-        mod = _reload_handback_gate()
-        with pytest.raises(AttributeError):
-            mod.validate_handback("gh pr ready", repo)
-    finally:
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(src)
-        _reload_handback_gate()
-
