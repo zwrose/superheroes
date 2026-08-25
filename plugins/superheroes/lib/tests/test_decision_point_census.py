@@ -295,18 +295,16 @@ def _line_in_block(line_no, blocks):
     return False
 
 
-def _hit_on_pinned_offset(norm_text, offset, primitive, lines):
-    """True when the match at offset is exempted by a byte-pinned line."""
+def _hit_on_pinned_offset(norm_text, offset, lines):
+    """True when the match at offset is exempted by a byte-pinned line.
+
+    Attribution uses the start line only — a cross-line match spanning a pinned start line
+    is exempt even when continuation lines are not pinned.
+    """
     line_starts = _line_starts(norm_text)
-    norm_primitive = _normalize_match_text(primitive)
-    plen = len(norm_primitive)
     line_no = _offset_to_line(line_starts, offset)
     if line_no > len(lines):
         return False
-    line_end = line_starts[line_no] if line_no < len(line_starts) else len(norm_text)
-    if offset + plen <= line_end:
-        return _is_byte_pinned(lines[line_no - 1].strip())
-    # Match spans past the starting line — exempt only when the start line is pinned.
     return _is_byte_pinned(lines[line_no - 1].strip())
 
 
@@ -339,7 +337,7 @@ def _scan_forbidden_violations(skills_root=None):
                 if idx < 0:
                     break
                 line_no = _offset_to_line(line_starts, idx)
-                if _hit_on_pinned_offset(norm_text, idx, primitive, lines):
+                if _hit_on_pinned_offset(norm_text, idx, lines):
                     start = idx + max(len(norm_primitive), 1)
                     continue
                 if not _line_in_block(line_no, blocks):
@@ -372,8 +370,21 @@ def _collect_all_blocks(skills_root=None):
 
 
 _FENCED_BASH_RE = re.compile(r"```(?:bash|sh)\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
-_SOURCE_CAPTURE_RE = re.compile(r"SOURCE\s*=\s*\$\([^)]*\.source", re.IGNORECASE)
+_SOURCE_CAPTURE_RE = re.compile(
+    r"\bSOURCE\s*=\s*\$\([^)]*\.source", re.IGNORECASE
+)
 _SOURCE_GUARD_RE = re.compile(r'\[\s*-n\s+"\$SOURCE"\s*\]')
+
+
+def _has_uncommented_source_guard(bash_text):
+    """True when an uncommented `[ -n "$SOURCE" ]` guard appears in fenced bash."""
+    for line in bash_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if _SOURCE_GUARD_RE.search(line):
+            return True
+    return False
 
 
 def _fenced_bash_blocks(text):
@@ -413,9 +424,10 @@ def test_forbidden_primitive_registry_non_empty():
     assert _FORBIDDEN_PRIMITIVES, "#1144 forbidden-primitive set must not be empty"
 
 
-# axis: E6 — carrier registry must be non-empty and resolvable. Not transport shape.
+# axis: E6 — carrier registry must be non-empty. Resolution is checked in
+# test_decision_blocks_well_formed via _parse_decision_blocks. Not transport shape.
 def test_carrier_registry_non_empty():
-    """#1144: every carrier= value must resolve to a registry key."""
+    """#1144: carrier registry must not be empty (resolution checked in well-formedness)."""
     assert _CARRIER_REGISTRY, "#1144 carrier registry must not be empty"
 
 
@@ -493,12 +505,14 @@ def test_decision_block_mode_structure():
     )
 
 
-# axis: storage-location blocks must capture SOURCE and guard $SOURCE in block bash — shell text
-# only, not carrier delivery. Not block grammar or follow-up prose.
+# axis: storage-location blocks must lexically contain SOURCE=$(… .source and an uncommented
+# [ -n "$SOURCE" ] in block bash — text only, not decide-location output flow. Not follow-up prose.
 def test_storage_decision_blocks_capture_source():
-    """#1144: storage-location blocks require SOURCE capture and $SOURCE guard in block bash.
+    """#1144: storage-location block bash must lexically contain SOURCE capture and guard.
 
-    Asserts shell text inside the block only — does not assert that any disclosure reaches any writer.
+    Lexical only: the text ``SOURCE=$(… .source`` must appear in fenced bash, and an
+    uncommented ``[ -n "$SOURCE" ]`` guard expression must appear. Does not prove the value
+    flows from decide-location's output.
     """
     hits = []
     blocks, _ = _collect_all_blocks()
@@ -516,12 +530,13 @@ def test_storage_decision_blocks_capture_source():
             continue
         if not any(_SOURCE_CAPTURE_RE.search(b) for b in bash_blocks):
             hits.append(
-                f"{rel}:{line}: storage-location block requires a SOURCE assignment from "
-                "decide-location .source in its block bash"
+                f"{rel}:{line}: storage-location block bash must lexically contain "
+                "SOURCE=$(… .source (text match only; does not prove decide-location output)"
             )
-        if not any(_SOURCE_GUARD_RE.search(b) for b in bash_blocks):
+        if not any(_has_uncommented_source_guard(b) for b in bash_blocks):
             hits.append(
-                f"{rel}:{line}: storage-location block usable-value guard must cover $SOURCE"
+                f"{rel}:{line}: storage-location block bash must contain an uncommented "
+                '[ -n "$SOURCE" ] guard expression (text match only)'
             )
     assert not hits, (
         "#1144 storage-location SOURCE capture/guard violations. Every hit:\n"
@@ -573,7 +588,9 @@ def test_fixture_duplicate_decision_block_id_fails(tmp_path, monkeypatch):
     )
     (skills / "SKILL.md").write_text(content, encoding="utf-8")
     _, errors = _collect_all_blocks(str(tmp_path / "skills"))
-    assert errors, "duplicate id fixture must produce well-formedness errors"
+    assert any("duplicate" in e for e in errors), (
+        "duplicate id fixture must be reported"
+    )
 
 
 # axis: orphan close — bite-proof element for block well-formedness.
@@ -593,7 +610,7 @@ def test_fixture_orphan_close_fails(tmp_path, monkeypatch):
 
 # axis: waiting token inside block — bite-proof element.
 def test_fixture_waiting_token_in_block_fails(tmp_path, monkeypatch):
-    """#1144 bite-proof: waiting token inside block must fail."""
+    """#1144 bite-proof: waiting token inside block must fail the shipped check."""
     monkeypatch.setattr(
         "test_decision_point_census._SKILLS_ROOT", str(tmp_path / "skills")
     )
@@ -606,14 +623,11 @@ def test_fixture_waiting_token_in_block_fails(tmp_path, monkeypatch):
         "<!-- /decision-point: id=wait-test -->\n"
     )
     (skills / "SKILL.md").write_text(content, encoding="utf-8")
-    blocks, _ = _collect_all_blocks(str(tmp_path / "skills"))
-    hits = []
-    for block in blocks:
-        norm_prose = _normalize_match_text(block["prose"]).casefold()
-        for token in _WAITING_TOKENS:
-            if token.casefold() in norm_prose:
-                hits.append(token)
-    assert hits, "waiting-token fixture must be detected inside block"
+    with pytest.raises(
+        AssertionError,
+        match="waiting token inside decision block",
+    ):
+        test_no_waiting_tokens_in_decision_blocks()
 
 
 # axis: storage-location block without fenced bash — exercises the shipped B1 fenced-bash check.
@@ -632,6 +646,54 @@ def test_fixture_storage_block_without_bash_fails(tmp_path, monkeypatch):
     )
     (skills / "SKILL.md").write_text(content, encoding="utf-8")
     with pytest.raises(AssertionError, match="requires a fenced bash block"):
+        test_storage_decision_blocks_capture_source()
+
+
+# axis: lexical SOURCE capture — fabricated .source passes (documented limitation).
+def test_fixture_fabricated_source_capture_passes_lexically(tmp_path, monkeypatch):
+    """#1144: fabricated SOURCE=$(printf fake.source) passes the lexical capture check."""
+    monkeypatch.setattr(
+        "test_decision_point_census._SKILLS_ROOT", str(tmp_path / "skills")
+    )
+    skills = tmp_path / "skills" / "demo"
+    skills.mkdir(parents=True)
+    content = (
+        '<!-- decision-point: id=fake-source mode=notify kind=storage-location '
+        'default="global" carrier=review-crew-layer -->\n'
+        "```bash\n"
+        'SOURCE=$(printf fake.source)\n'
+        '[ -n "$SOURCE" ] || exit 1\n'
+        "```\n"
+        "NOTIFY: continues. `/superheroes:configure`.\n"
+        "<!-- /decision-point: id=fake-source -->\n"
+    )
+    (skills / "SKILL.md").write_text(content, encoding="utf-8")
+    test_storage_decision_blocks_capture_source()
+
+
+# axis: uncommented SOURCE guard — commented guard must fail the shipped check.
+def test_fixture_commented_source_guard_fails(tmp_path, monkeypatch):
+    """#1144 bite-proof: commented-out [ -n "$SOURCE" ] must fail the guard leg."""
+    monkeypatch.setattr(
+        "test_decision_point_census._SKILLS_ROOT", str(tmp_path / "skills")
+    )
+    skills = tmp_path / "skills" / "demo"
+    skills.mkdir(parents=True)
+    content = (
+        '<!-- decision-point: id=commented-guard mode=notify kind=storage-location '
+        'default="global" carrier=review-crew-layer -->\n'
+        "```bash\n"
+        'SOURCE=$(printf \'%s\' "$DEC" | jq -r \'.source\')\n'
+        '# [ -n "$SOURCE" ]\n'
+        "```\n"
+        "NOTIFY: continues. `/superheroes:configure`.\n"
+        "<!-- /decision-point: id=commented-guard -->\n"
+    )
+    (skills / "SKILL.md").write_text(content, encoding="utf-8")
+    with pytest.raises(
+        AssertionError,
+        match='uncommented \\[ -n "\\$SOURCE" \\] guard expression',
+    ):
         test_storage_decision_blocks_capture_source()
 
 
@@ -658,7 +720,6 @@ def test_fixture_wrapped_primitive_passes_prohibition(tmp_path, monkeypatch):
         'default="provisional global" carrier=review-crew-layer -->\n'
         'DEC=$(python3 store.py decide-location) || exit 1\n'
         "## Setup disclosures\n"
-        "$REVIEW_LAYER_BODY piped to write-layer --hero review-crew\n"
         "NOTIFY: continues after disclosure. `/superheroes:configure`.\n"
         "<!-- /decision-point: id=storage -->\n"
     )
