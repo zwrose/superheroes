@@ -73,7 +73,7 @@ _HOOKS_JSON = "hooks/hooks.json"
 _OWNER_AUTHORITY_GATE = "hooks/owner_authority_gate.py"
 _OWNER_AUTHORITY = "lib/owner_authority.py"
 _ALLOWLIST_REF = "reference/owner-authority-allowlist.md"
-_IMPORT_RE = re.compile(r"^\s*(?:from\s+(\w+)\s+import|import\s+(\w+))")
+_IMPORT_RE = re.compile(r"^\s*(?:from\s+(\w+)\s+import(?:\s+[\w, ]+)?|import\s+([\w,\s]+))")
 
 
 def _read(rel):
@@ -166,7 +166,7 @@ def test_carveout_clauses_present_in_doctrine_home():
 
 
 def test_copyholder_pointer_states_the_new_shape():
-    paragraph = _pointer_paragraph_text()
+    paragraph = _collapse_whitespace(_pointer_paragraph_text())
     for clause in _POINTER_CLAUSES:
         assert clause in paragraph, (
             f"{_COPY_HOLDER} (pointer paragraph): missing clause: {clause!r}"
@@ -204,10 +204,14 @@ def _direct_lib_local_imports(rel_py):
         match = _IMPORT_RE.match(line)
         if not match:
             continue
-        module = match.group(1) or match.group(2)
-        lib_path = os.path.join(PLUGIN, "lib", f"{module}.py")
-        if os.path.isfile(lib_path):
-            found.add(module)
+        if match.group(1):
+            modules = [match.group(1)]
+        else:
+            modules = [part.strip() for part in match.group(2).split(",") if part.strip()]
+        for module in modules:
+            lib_path = os.path.join(PLUGIN, "lib", f"{module}.py")
+            if os.path.isfile(lib_path):
+                found.add(module)
     return found
 
 
@@ -264,9 +268,9 @@ def test_gate_wiring_edges_hold():
 
 
 def test_classifier_direct_dependencies_are_classified():
-    # mode_registry is a gate-critical dependency (its read decides calibration_state), it is
-    # not in SAFETY_MACHINERY, and whether it should join is an advisor decision recorded as a
-    # follow-up on PR #1154 — not something this pin decides.
+    # mode_registry is a gate-critical dependency (its read decides calibration_state); it is now
+    # in SAFETY_MACHINERY (WO-F #1154), so the fixer refuses it. It is deliberately not a
+    # gate-family member — an ordered round touching it needs no owner pre-authorization.
     direct = _direct_lib_local_imports(_OWNER_AUTHORITY)
     expected = {"mode_registry"}
     assert direct == expected, (
@@ -281,5 +285,15 @@ def test_every_family_member_is_refused_to_the_fixer():
         abs_path = os.path.join(PLUGIN, rel)
         assert ESC.is_safety_machinery(abs_path, band_roots) is True, (
             f"family member {rel!r} must be refused to the fixer "
+            f"(is_safety_machinery({abs_path!r}, {band_roots!r}))"
+        )
+
+
+def test_gate_dependencies_are_fixer_refused():
+    band_roots = [PLUGIN]
+    for module in sorted(_direct_lib_local_imports(_OWNER_AUTHORITY)):
+        abs_path = os.path.join(PLUGIN, "lib", f"{module}.py")
+        assert ESC.is_safety_machinery(abs_path, band_roots) is True, (
+            f"gate dependency {module!r} must be refused to the fixer "
             f"(is_safety_machinery({abs_path!r}, {band_roots!r}))"
         )

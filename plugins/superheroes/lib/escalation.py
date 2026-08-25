@@ -140,6 +140,7 @@ SAFETY_MACHINERY = (
     # halt/refusal guarantee without tripping any pin.
     "worktree_guard.py",      # worktree-protection gate core (git-discard/forced-removal refusals)
     "owner_authority.py",     # owner-authority gate core (merge/release/publish refusals)
+    "mode_registry.py",       # decides owner_authority.calibration_state(); uncalibrated → gate allow (permissive fall-open) — fixer must refuse
     "worktree_guard_gate.py", # PreToolUse hook wrapper that invokes worktree_guard
     "owner_authority_gate.py",# PreToolUse hook wrapper that invokes owner_authority
     "owner-authority-allowlist.md",  # named owner-authority-gate-family member — fixer must refuse or the carve-out is decorative on this member

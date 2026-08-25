@@ -447,6 +447,12 @@ change**, scoped to the findings' own surfaces and nothing wider — never a sta
 - `lib/owner_authority.py` (its classifier core)
 - `reference/owner-authority-allowlist.md` (its allowlist reference)
 
+**The family is not the whole gate.** The three files above need the owner's word per change; other
+components the gate's verdict depends on — `hooks/hooks.json` and `lib/mode_registry.py` — are safety
+machinery, so the fixer refuses them, but an ordered round touching them needs **no** owner
+pre-authorization. `hooks/hooks.json` is deliberately not a family member: it registers many hooks,
+and making it one would extend owner pre-authorization to every unrelated hook change.
+
 This family is the mechanical never-merge floor, so a round that could edit it on its own authority
 could edit away the control that keeps the merge click the owner's.
 

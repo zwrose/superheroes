@@ -639,8 +639,9 @@ and `REPO_ROOT` resolved in setup), exactly as it embeds the absolute `RUBRIC`/`
 fixer edits any file, it gates it with those embedded absolute values:
 `python3 -B "<absolute ESC_WRAPPER path>" guard --root "<absolute REPO_ROOT>" --path "<file>"`.
 If `allow` is false, the fixer MUST NOT edit that file (it is safety machinery — the authoritative
-membership is the `SAFETY_MACHINERY` tuple in `escalation.py`); surface it as a finding under
-"escalated" for the orchestrator to route instead. A `degraded:true`
+membership is the `SAFETY_MACHINERY` tuple in `escalation.py`); report the refusal and let the
+orchestrator route it per `rubric/review-discipline.md` § *The safety-machinery route — the guard
+refuses the fixer*. A `degraded:true`
 result also refuses (fail-closed). The fixer never pushes/merges/deploys (those stay user-gated).
 
 **Where those findings go next.** A refusal here means this loop **cannot converge on that surface** —

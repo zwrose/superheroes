@@ -52,6 +52,7 @@
     {"path": "plugins/superheroes/lib/delta_surface.py", "allow": false},
     {"path": "plugins/superheroes/lib/worktree_guard.py", "allow": false},
     {"path": "plugins/superheroes/lib/owner_authority.py", "allow": false},
+    {"path": "plugins/superheroes/lib/mode_registry.py", "allow": false},
     {"path": "plugins/superheroes/hooks/worktree_guard_gate.py", "allow": false},
     {"path": "plugins/superheroes/hooks/owner_authority_gate.py", "allow": false},
     {"path": "plugins/superheroes/reference/owner-authority-allowlist.md", "allow": false},
