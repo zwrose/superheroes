@@ -164,11 +164,12 @@ def _enumerate(src_cal_dir, dst_cal_dir, src_docs_base, dst_docs_base):
     return files
 
 
-def plan(cwd, target_mode, *, root=None, interactive):
-    """Enumerate a flip to target_mode. Refuses unattended (FR-14). Records cwd/root/remote_key
-    on the Migration so execute()/recover() need no extra params."""
-    if not interactive:
-        return Migration(blocked=True, reason="never switch unattended (FR-14)",
+def plan(cwd, target_mode, *, root=None, owner_authorized):
+    """Enumerate a flip to target_mode. Refuses without owner authorization (FR-14). Records
+    cwd/root/remote_key on the Migration so execute()/recover() need no extra params."""
+    if not owner_authorized:
+        return Migration(blocked=True,
+                         reason="storage migration requires owner authorization (FR-14)",
                          cwd=cwd, root=root, target=target_mode)
     current = mode_registry.resolve(cwd, root)["mode"]
     in_cal, gl_cal = _in_repo_cal_dir(cwd), _global_cal_dir(cwd, root)
@@ -424,7 +425,7 @@ def main(argv):
         if name in ("plan", "preview", "execute"):
             sp.add_argument("--target", choices=(mode_registry.IN_REPO, mode_registry.GLOBAL),
                             required=True)
-            sp.add_argument("--interactive", default="true")
+            sp.add_argument("--owner-authorized", default="false")
     args = ap.parse_args(argv)
     try:
         if args.cmd == "recover":
@@ -432,7 +433,8 @@ def main(argv):
         elif args.cmd == "rebind":
             out = rebind(args.cwd, root=args.root)
         else:
-            m = plan(args.cwd, args.target, root=args.root, interactive=_b(args.interactive))
+            m = plan(args.cwd, args.target, root=args.root,
+                     owner_authorized=_b(args.owner_authorized))
             if args.cmd == "plan":
                 out = {"kind": m.kind, "target": m.target, "blocked": m.blocked,
                        "reason": m.reason, "files": m.files}

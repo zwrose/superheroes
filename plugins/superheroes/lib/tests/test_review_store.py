@@ -285,11 +285,14 @@ def test_resolve_decisions_prefers_legacy_store_when_present(tmp_path):
 def test_decide_location_greenfield_delegates_to_decide_mode(tmp_path):
     repo = _init_repo(tmp_path / "r")
     root = str(tmp_path / "store")
-    assert rs.decide_location("in-repo", True, cwd=repo, root=root) == "in-repo"   # env wins
-    assert rs.decide_location("global", False, cwd=repo, root=root) == "global"    # env wins
-    assert rs.decide_location(None, True, cwd=repo, root=root) == "ask"            # greenfield interactive
-    assert rs.decide_location(None, False, cwd=repo, root=root) == "global"        # greenfield headless
-    assert rs.decide_location("bogus", True, cwd=repo, root=root) == "ask"         # invalid env falls through
+    assert rs.decide_location("in-repo", cwd=repo, root=root) == {
+        "mode": "in-repo", "source": "env", "provisional": False}
+    assert rs.decide_location("global", cwd=repo, root=root) == {
+        "mode": "global", "source": "env", "provisional": False}
+    d = rs.decide_location(None, cwd=repo, root=root)
+    assert d["mode"] == "global" and d["source"] == "provisional" and d["provisional"] is True
+    d = rs.decide_location("bogus", cwd=repo, root=root)
+    assert d["mode"] == "global" and d["provisional"] is True  # invalid env falls through
 
 
 def test_decide_location_honors_recorded_mode(tmp_path):
@@ -297,8 +300,8 @@ def test_decide_location_honors_recorded_mode(tmp_path):
     repo = _init_repo(tmp_path / "r")
     root = str(tmp_path / "store")
     mr.write_registry(repo, mr.GLOBAL, None, root=root)
-    # FR-4 / the #35 fix: a recorded mode is returned, never "ask", even interactive.
-    assert rs.decide_location(None, True, cwd=repo, root=root) == "global"
+    d = rs.decide_location(None, cwd=repo, root=root)
+    assert d == {"mode": "global", "source": "registry", "provisional": False}
 
 
 def test_no_import_cycle_heroes_and_mode_registry():
@@ -420,17 +423,27 @@ def test_resolve_global_none_when_all_pointers_dangle(tmp_path):
 def test_cli_decide_location(tmp_path):
     repo = _init_repo(tmp_path / "r")
     home = tmp_path / "home"
-    out = _run_cli(["decide-location", "--interactive", "true"], repo, home)
-    assert out.returncode == 0 and out.stdout.strip() == "ask"
-    out = _run_cli(["decide-location", "--interactive", "false"], repo, home)
-    assert out.stdout.strip() == "global"
-    # env override wins regardless of --interactive
+    out = _run_cli(["decide-location"], repo, home)
+    assert out.returncode == 0
+    payload = json.loads(out.stdout)
+    assert set(payload) >= {"mode", "source", "provisional"}
+    assert payload["mode"] in ("in-repo", "global")
+    assert payload["mode"] == "global" and payload["provisional"] is True
     mod = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "review_store.py")
     env = dict(os.environ, HOME=str(home), REVIEW_CREW_STORAGE="in-repo")
-    r = subprocess.run([sys.executable, mod, "decide-location", "--interactive", "true"],
+    r = subprocess.run([sys.executable, mod, "decide-location"],
                        cwd=repo, env=env, capture_output=True, text=True)
-    assert r.stdout.strip() == "in-repo"
+    payload = json.loads(r.stdout)
+    assert payload["mode"] == "in-repo" and payload["source"] == "env"
+
+
+def test_cli_decide_location_rejects_stale_interactive_flag(tmp_path):
+    repo = _init_repo(tmp_path / "r")
+    home = tmp_path / "home"
+    out = _run_cli(["decide-location", "--interactive", "true"], repo, home)
+    assert out.returncode != 0
+    assert "1136" in out.stderr
 
 
 def test_create_and_resolve_from_subdirectory(tmp_path):

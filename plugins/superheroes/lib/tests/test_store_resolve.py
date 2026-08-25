@@ -205,11 +205,14 @@ def test_worktrees_share_an_entry(tmp_path):
 def test_decide_location_greenfield_delegates_to_decide_mode(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     root = str(tmp_path / "store")
-    assert store.decide_location("in-repo", True, cwd=repo, root=root) == "in-repo"
-    assert store.decide_location("global", False, cwd=repo, root=root) == "global"
-    assert store.decide_location(None, True, cwd=repo, root=root) == "ask"
-    assert store.decide_location(None, False, cwd=repo, root=root) == "global"
-    assert store.decide_location("bogus", True, cwd=repo, root=root) == "ask"  # invalid env falls through
+    assert store.decide_location("in-repo", cwd=repo, root=root) == {
+        "mode": "in-repo", "source": "env", "provisional": False}
+    assert store.decide_location("global", cwd=repo, root=root) == {
+        "mode": "global", "source": "env", "provisional": False}
+    d = store.decide_location(None, cwd=repo, root=root)
+    assert d["mode"] == "global" and d["source"] == "provisional" and d["provisional"] is True
+    d = store.decide_location("bogus", cwd=repo, root=root)
+    assert d["mode"] == "global" and d["provisional"] is True  # invalid env falls through
 
 
 def test_decide_location_honors_recorded_mode(tmp_path):
@@ -217,7 +220,33 @@ def test_decide_location_honors_recorded_mode(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     root = str(tmp_path / "store")
     mr.write_registry(repo, mr.IN_REPO, None, root=root)
-    assert store.decide_location(None, True, cwd=repo, root=root) == "in-repo"  # FR-4, no "ask"
+    d = store.decide_location(None, cwd=repo, root=root)
+    assert d == {"mode": "in-repo", "source": "registry", "provisional": False}
+
+
+def test_cli_decide_location_emits_json(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    env = dict(os.environ, TEST_PILOT_STORE_ROOT=str(tmp_path / "store"))
+    lib = os.path.dirname(os.path.abspath(store.__file__))
+    out = subprocess.run(
+        ["/usr/bin/python3", os.path.join(lib, "store.py"), "decide-location"],
+        capture_output=True, text=True, cwd=repo, env=env)
+    assert out.returncode == 0
+    payload = json.loads(out.stdout)
+    assert set(payload) >= {"mode", "source", "provisional"}
+    assert payload["mode"] in ("in-repo", "global")
+
+
+def test_cli_decide_location_rejects_stale_interactive_flag(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    env = dict(os.environ, TEST_PILOT_STORE_ROOT=str(tmp_path / "store"))
+    lib = os.path.dirname(os.path.abspath(store.__file__))
+    out = subprocess.run(
+        ["/usr/bin/python3", os.path.join(lib, "store.py"), "decide-location",
+         "--interactive", "true"],
+        capture_output=True, text=True, cwd=repo, env=env)
+    assert out.returncode != 0
+    assert "1136" in out.stderr
 
 
 def test_resolve_global_self_heals_dangling_remote_pointer(tmp_path):

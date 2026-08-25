@@ -150,16 +150,17 @@ def resolve(cwd, kind, legacy_root=None, registry_root=None):
             "entry_id": cal.get("entry_id")}
 
 
-def decide_location(env_value, interactive, cwd=None, root=None):
+def decide_location(env_value, cwd=None, root=None):
     """Where to create when nothing resolved — now band-wide registry-aware.
     Delegates the mode decision to the shared resolver so review-crew and test-pilot
     never diverge (CONVENTIONS §2.3/§2.4): env override wins, else the recorded/
-    backfilled band mode, else (interactive) 'ask' / (headless) provisional 'global'.
-    The lazy import avoids any import cycle with mode_registry; root defaults to the
-    registry's own project store (NOT review-crew's store_root)."""
+    backfilled band mode, else provisional 'global' with provisional=True. Returns a
+    dict {"mode", "source", "provisional"}. The lazy import avoids any import cycle with
+    mode_registry; root defaults to the registry's own project store (NOT review-crew's
+    store_root)."""
     import mode_registry
     return mode_registry.decide_mode(
-        cwd if cwd is not None else os.getcwd(), env_value, interactive, root=root)
+        cwd if cwd is not None else os.getcwd(), env_value, root=root)
 
 
 def _parse_kv(args, flag):
@@ -195,9 +196,12 @@ def main(argv):
                 create(os.getcwd(), kind, location, legacy_root=legacy_root) + "\n")
             return 0
         if cmd == "decide-location":
-            interactive = _parse_kv(args, "--interactive") != "false"
-            sys.stdout.write(
-                decide_location(os.environ.get("REVIEW_CREW_STORAGE"), interactive) + "\n")
+            if "--interactive" in args:
+                sys.stderr.write(
+                    "decide-location: --interactive was removed (#1136); omit the flag\n")
+                return 2
+            sys.stdout.write(json.dumps(
+                decide_location(os.environ.get("REVIEW_CREW_STORAGE"))) + "\n")
             return 0
     except Exception as exc:  # internal error -> non-zero exit per the failure contract
         sys.stderr.write(f"review_store error: {exc}\n")

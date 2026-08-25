@@ -242,20 +242,22 @@ def resolve(cwd, root=None):
     return {"mode": GLOBAL, "authoritative": False, "source": "provisional", "evidence": verdict}
 
 
-def decide_mode(cwd, env_value, interactive, root=None):
+def decide_mode(cwd, env_value, root=None):
     """Band-wide create-time mode decision (CONVENTIONS §2.3/§2.4). The single
     decision both heroes' decide_location delegate to, so review-crew and test-pilot
-    never diverge. Precedence: env override → recorded/backfilled mode →
-    (interactive ? 'ask' : provisional GLOBAL). Returns 'in-repo' | 'global' | 'ask'.
-    Propagates UnknownSchemaVersion from resolve() so a newer registry fails closed
-    (UFR-2); local-only and never blocks (UFR-3). The env path never records (UFR-7);
-    a headless greenfield returns GLOBAL without recording (UFR-5)."""
+    never diverge. Precedence: env override → recorded/backfilled mode → provisional
+    GLOBAL. Returns {"mode": "in-repo"|"global", "source": str, "provisional": bool}.
+    The string "ask" is gone — no surface detects owner presence; callers use
+    provisional=True to know a disclosure is owed. Propagates UnknownSchemaVersion from
+    resolve() so a newer registry fails closed (UFR-2); local-only and never blocks
+    (UFR-3). The env path never records (UFR-7); a greenfield returns provisional GLOBAL
+    without recording (UFR-5)."""
     if env_value in (IN_REPO, GLOBAL):
-        return env_value
+        return {"mode": env_value, "source": "env", "provisional": False}
     r = resolve(cwd, root)
     if r["source"] in ("registry", "backfilled"):
-        return r["mode"]
-    return "ask" if interactive else GLOBAL
+        return {"mode": r["mode"], "source": r["source"], "provisional": False}
+    return {"mode": GLOBAL, "source": "provisional", "provisional": True}
 
 
 def resolve_artifact(cwd, in_repo_path, global_path, root=None):

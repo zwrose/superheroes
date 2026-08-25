@@ -409,9 +409,12 @@ def test_evidence_agrees_with_hero_resolve_for_repo_root_cwd(tmp_path, monkeypat
 def test_decide_mode_env_wins_without_touching_registry(tmp_path):
     _init_repo(tmp_path)
     root = str(tmp_path / "store")
-    assert mr.decide_mode(str(tmp_path), mr.IN_REPO, True, root=root) == mr.IN_REPO
-    assert mr.decide_mode(str(tmp_path), mr.GLOBAL, False, root=root) == mr.GLOBAL
-    assert mr.decide_mode(str(tmp_path), "bogus", True, root=root) == "ask"  # invalid env falls through
+    d = mr.decide_mode(str(tmp_path), mr.IN_REPO, root=root)
+    assert d == {"mode": mr.IN_REPO, "source": "env", "provisional": False}
+    d = mr.decide_mode(str(tmp_path), mr.GLOBAL, root=root)
+    assert d == {"mode": mr.GLOBAL, "source": "env", "provisional": False}
+    d = mr.decide_mode(str(tmp_path), "bogus", root=root)
+    assert d["mode"] == mr.GLOBAL and d["source"] == "provisional" and d["provisional"] is True
     assert mr.read_registry(str(tmp_path), root=root) is None  # env path records nothing
 
 
@@ -419,8 +422,8 @@ def test_decide_mode_recorded_mode_is_returned_not_asked(tmp_path):
     _init_repo(tmp_path)
     root = str(tmp_path / "store")
     mr.write_registry(str(tmp_path), mr.IN_REPO, None, root=root)
-    # FR-4 / the #35 fix: a recorded mode is returned even when interactive — never "ask".
-    assert mr.decide_mode(str(tmp_path), None, True, root=root) == mr.IN_REPO
+    d = mr.decide_mode(str(tmp_path), None, root=root)
+    assert d == {"mode": mr.IN_REPO, "source": "registry", "provisional": False}
 
 
 def test_decide_mode_backfilled_mode_is_returned(tmp_path, monkeypatch):
@@ -429,7 +432,8 @@ def test_decide_mode_backfilled_mode_is_returned(tmp_path, monkeypatch):
     (tmp_path / ".claude" / "review-profile.md").write_text("x")
     monkeypatch.setattr(mr, "_hero_global_root", lambda n: str(tmp_path / ("g_" + n)))
     root = str(tmp_path / "store")
-    assert mr.decide_mode(str(tmp_path), None, True, root=root) == mr.IN_REPO  # FR-6 (in-repo side)
+    d = mr.decide_mode(str(tmp_path), None, root=root)
+    assert d == {"mode": mr.IN_REPO, "source": "backfilled", "provisional": False}
 
 
 def test_decide_mode_backfills_global_evidence(tmp_path, monkeypatch):
@@ -444,21 +448,78 @@ def test_decide_mode_backfills_global_evidence(tmp_path, monkeypatch):
     monkeypatch.setattr(mr, "_hero_global_root",
                         lambda n: g if n == "review-crew" else str(tmp_path / ("x_" + n)))
     root = str(tmp_path / "store")
-    assert mr.decide_mode(str(tmp_path), None, True, root=root) == mr.GLOBAL
+    d = mr.decide_mode(str(tmp_path), None, root=root)
+    assert d == {"mode": mr.GLOBAL, "source": "backfilled", "provisional": False}
 
 
-def test_decide_mode_greenfield_interactive_asks(tmp_path):
+def test_decide_mode_greenfield_is_provisional_global_unrecorded(tmp_path):
+    # UFR-5: greenfield → provisional global, never frozen as authoritative.
     _init_repo(tmp_path)
     root = str(tmp_path / "store")
-    assert mr.decide_mode(str(tmp_path), None, True, root=root) == "ask"
-
-
-def test_decide_mode_greenfield_headless_is_provisional_global_unrecorded(tmp_path):
-    # UFR-5: headless greenfield → provisional global, never frozen as authoritative.
-    _init_repo(tmp_path)
-    root = str(tmp_path / "store")
-    assert mr.decide_mode(str(tmp_path), None, False, root=root) == mr.GLOBAL
+    d = mr.decide_mode(str(tmp_path), None, root=root)
+    assert d == {"mode": mr.GLOBAL, "source": "provisional", "provisional": True}
     assert mr.read_registry(str(tmp_path), root=root) is None  # not recorded
+
+
+def test_decide_mode_ask_is_unreachable(tmp_path, monkeypatch):
+    """Census: over env set/unset × registry recorded/backfilled/absent, mode is never 'ask'."""
+    import store_core as sc
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "_hero_global_root", lambda n: str(tmp_path / ("g_" + n)))
+
+    def _assert_no_ask(d):
+        assert d["mode"] in (mr.IN_REPO, mr.GLOBAL)
+        assert d["mode"] != "ask"
+
+    # env override set
+    _assert_no_ask(mr.decide_mode(str(tmp_path), mr.IN_REPO, root=root))
+    _assert_no_ask(mr.decide_mode(str(tmp_path), mr.GLOBAL, root=root))
+    _assert_no_ask(mr.decide_mode(str(tmp_path), "bogus", root=root))
+
+    # registry recorded
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _assert_no_ask(mr.decide_mode(str(tmp_path), None, root=root))
+
+    # backfilled (fresh repo, evidence present, no registry)
+    repo2 = tmp_path / "repo2"
+    repo2.mkdir()
+    _init_repo(repo2)
+    (repo2 / ".claude").mkdir()
+    (repo2 / ".claude" / "review-profile.md").write_text("x")
+    _assert_no_ask(mr.decide_mode(str(repo2), None, root=root))
+
+    # absent / greenfield
+    repo3 = tmp_path / "repo3"
+    repo3.mkdir()
+    _init_repo(repo3)
+    _assert_no_ask(mr.decide_mode(str(repo3), None, root=root))
+
+
+def test_decide_mode_provenance_honest_per_rung(tmp_path, monkeypatch):
+    """Each precedence rung names itself in source; provisional=True only on provisional."""
+    import store_core as sc
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "_hero_global_root", lambda n: str(tmp_path / ("g_" + n)))
+
+    d = mr.decide_mode(str(tmp_path), mr.IN_REPO, root=root)
+    assert d["source"] == "env" and d["provisional"] is False
+
+    d = mr.decide_mode(str(tmp_path), None, root=root)
+    assert d["source"] == "provisional" and d["provisional"] is True
+
+    mr.write_registry(str(tmp_path), mr.GLOBAL, "rk", root=root)
+    d = mr.decide_mode(str(tmp_path), None, root=root)
+    assert d["source"] == "registry" and d["provisional"] is False
+
+    repo2 = tmp_path / "repo2"
+    repo2.mkdir()
+    _init_repo(repo2)
+    (repo2 / ".claude").mkdir()
+    (repo2 / ".claude" / "review-profile.md").write_text("x")
+    d = mr.decide_mode(str(repo2), None, root=root)
+    assert d["source"] == "backfilled" and d["provisional"] is False
 
 
 def test_decide_mode_propagates_unknown_schema_version(tmp_path):
@@ -467,7 +528,7 @@ def test_decide_mode_propagates_unknown_schema_version(tmp_path):
     root = str(tmp_path / "store")
     _write_raw(str(tmp_path), root, {"schemaVersion": 999, "storageMode": "in-repo"})
     with pytest.raises(mr.UnknownSchemaVersion):
-        mr.decide_mode(str(tmp_path), None, True, root=root)
+        mr.decide_mode(str(tmp_path), None, root=root)
 
 
 def test_config_lock_at_keys_on_an_arbitrary_store_dir(tmp_path):

@@ -420,15 +420,16 @@ def create(cwd, location, root):
             "artifacts_dir": d["artifacts_dir"]}
 
 
-def decide_location(env_value, interactive, cwd=None, root=None):
+def decide_location(env_value, cwd=None, root=None):
     """Band-wide registry-aware create-time decision (CONVENTIONS §2.3/§2.4): env
-    override wins, else the recorded/backfilled band mode, else (interactive) 'ask' /
-    (headless) provisional 'global'. Delegates to the one shared resolver so
-    test-pilot and review-crew never diverge. Lazy import avoids an import cycle;
-    root defaults to the registry's own project store (NOT test-pilot's store_root)."""
+    override wins, else the recorded/backfilled band mode, else provisional 'global'
+    with provisional=True. Returns a dict {"mode", "source", "provisional"}. Delegates
+    to the one shared resolver so test-pilot and review-crew never diverge. Lazy import
+    avoids an import cycle; root defaults to the registry's own project store (NOT
+    test-pilot's store_root)."""
     import mode_registry
     return mode_registry.decide_mode(
-        cwd if cwd is not None else os.getcwd(), env_value, interactive, root=root)
+        cwd if cwd is not None else os.getcwd(), env_value, root=root)
 
 
 def _parse_kv(args, flag, default=None):
@@ -460,9 +461,12 @@ def main(argv):
                 json.dumps(create(os.getcwd(), location, store_root())) + "\n")
             return 0
         if cmd == "decide-location":
-            interactive = _parse_kv(args, "--interactive") != "false"
-            sys.stdout.write(decide_location(
-                os.environ.get("TEST_PILOT_STORAGE"), interactive) + "\n")
+            if "--interactive" in args:
+                sys.stderr.write(
+                    "decide-location: --interactive was removed (#1136); omit the flag\n")
+                return 2
+            sys.stdout.write(json.dumps(
+                decide_location(os.environ.get("TEST_PILOT_STORAGE"))) + "\n")
             return 0
         if cmd == "key":
             branch = _parse_kv(args, "--branch")

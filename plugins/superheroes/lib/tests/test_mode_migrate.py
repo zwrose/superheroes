@@ -42,7 +42,7 @@ def _seed_flip_inputs(tmp_path, root):
 
 
 def _stage_to_phase(tmp_path, root, phase, flip_registry):
-    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True)
     gdir = os.path.join(mr.project_store_dir(str(tmp_path), root), "config")
     os.makedirs(gdir, exist_ok=True)
     for f in m.files:
@@ -67,7 +67,7 @@ def test_plan_enumerates_calibration_and_defdocs_and_marks_bookkeeping_not_moved
     ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
     os.makedirs(ddir, exist_ok=True)
     sc.atomic_write(os.path.join(ddir, "spec.md"), "spec body\n")
-    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True)
     moved = {os.path.basename(f["src"]) for f in m.files}
     assert {"core.md", "review-crew.md", "spec.md"} <= moved
     assert not any("registry.json" in f["src"] or "config.lock" in f["src"] for f in m.files)
@@ -85,7 +85,7 @@ def test_plan_moves_findings_md_and_preview_buckets_it_as_a_work_item_record(tmp
     os.makedirs(ddir, exist_ok=True)
     sc.atomic_write(os.path.join(ddir, "spec.md"), "spec body\n")
     sc.atomic_write(os.path.join(ddir, "findings.md"), "owner ratification\n")
-    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True)
     moved = {f["src"] for f in m.files}
     spec_src = os.path.join(ddir, "spec.md")
     findings_src = os.path.join(ddir, "findings.md")
@@ -109,7 +109,7 @@ def test_preview_buckets_are_disjoint_and_cover_every_moved_file(tmp_path):
     sc.atomic_write(os.path.join(ddir, "plan.md"), "plan\n")
     sc.atomic_write(os.path.join(ddir, "tasks.md"), "tasks\n")
     sc.atomic_write(os.path.join(ddir, "findings.md"), "findings\n")
-    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True)
     pv = mm.preview(m)
     cal, defs, records = pv["calibration"], pv["definitionDocs"], pv["workItemRecords"]
     assert not (set(cal) & set(defs))
@@ -129,7 +129,7 @@ def test_calibration_bucket_excludes_every_work_item_doc(tmp_path):
     sc.atomic_write(os.path.join(ddir, "plan.md"), "plan\n")
     sc.atomic_write(os.path.join(ddir, "tasks.md"), "tasks\n")
     sc.atomic_write(os.path.join(ddir, "findings.md"), "findings\n")
-    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True)
     pv = mm.preview(m)
     assert pv["calibration"], "calibration bucket empty — the exclusion assertion would be vacuous"
     work_item_basenames = {"spec.md", "plan.md", "tasks.md", "findings.md"}
@@ -137,13 +137,13 @@ def test_calibration_bucket_excludes_every_work_item_doc(tmp_path):
         assert os.path.basename(path) not in work_item_basenames
 
 
-def test_plan_refuses_when_not_interactive(tmp_path):
+def test_plan_refuses_without_owner_authorization(tmp_path):
     _init_repo(tmp_path, "git@github.com:o/r.git")
     root = str(tmp_path / "store")
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
     _seed_in_repo_calibration(tmp_path)
-    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=False)
-    assert m.blocked is True and "unattended" in m.reason.lower()
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=False)
+    assert m.blocked is True and "authorization" in m.reason.lower()
 
 
 # --------------------------------------------------------------------------- A4 preview
@@ -161,7 +161,7 @@ def test_preview_buckets_every_definition_doc_basename_by_name(tmp_path):
     os.makedirs(ddir, exist_ok=True)
     for name in ("spec.md", "plan.md", "tasks.md", "findings.md"):
         sc.atomic_write(os.path.join(ddir, name), name + " body\n")
-    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True)
     pv = mm.preview(m)
     for name in _EXPECTED_DEFINITION_DOCS:
         src = os.path.join(ddir, name)
@@ -185,7 +185,7 @@ def test_preview_disclosure_names_every_non_empty_bucket(tmp_path):
     os.makedirs(ddir, exist_ok=True)
     for name in ("spec.md", "plan.md", "tasks.md", "findings.md"):
         sc.atomic_write(os.path.join(ddir, name), name + " body\n")
-    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True)
     pv = mm.preview(m)
     disc = pv["disclosure"].lower()
     if pv["workItemRecords"]:
@@ -207,7 +207,7 @@ def test_preview_disclosure_names_every_non_empty_bucket(tmp_path):
     os.makedirs(gdocs, exist_ok=True)
     for name in ("spec.md", "plan.md", "tasks.md", "findings.md"):
         sc.atomic_write(os.path.join(gdocs, name), name + " body\n")
-    m = mm.plan(str(tmp_path), mr.IN_REPO, root=root, interactive=True)
+    m = mm.plan(str(tmp_path), mr.IN_REPO, root=root, owner_authorized=True)
     pv = mm.preview(m)
     disc = pv["disclosure"].lower()
     if pv["workItemRecords"]:
@@ -249,7 +249,7 @@ def test_preview_lists_calibration_and_defdocs(tmp_path):
     ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
     os.makedirs(ddir, exist_ok=True)
     sc.atomic_write(os.path.join(ddir, "spec.md"), "spec\n")
-    pv = mm.preview(mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True))
+    pv = mm.preview(mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True))
     assert pv["target"] == mr.GLOBAL
     assert any("core.md" in c for c in pv["calibration"])
     assert any("spec.md" in d for d in pv["definitionDocs"])
@@ -264,7 +264,7 @@ def test_execute_flip_moves_everything_and_flips_mode(tmp_path):
     root = str(tmp_path / "store")
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
     _seed_in_repo_calibration(tmp_path)
-    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True)
     res = mm.execute(m, root=root)
     assert res["status"] == "done"
     assert mr.resolve(str(tmp_path), root=root)["mode"] == mr.GLOBAL
@@ -279,7 +279,7 @@ def test_execute_aborts_before_delete_when_registry_write_fails(tmp_path, monkey
     root = str(tmp_path / "store")
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
     _seed_in_repo_calibration(tmp_path)
-    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True)
     monkeypatch.setattr(mm, "_commit_registry", lambda *a, **k: False)
     res = mm.execute(m, root=root)
     assert res["status"] == "blocked"
@@ -327,7 +327,7 @@ def test_execute_busy_when_lock_held(tmp_path):
     root = str(tmp_path / "store")
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
     _seed_in_repo_calibration(tmp_path)
-    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True)
     with mr.config_lock(str(tmp_path), root=root) as got:
         assert got is True
         res = mm.execute(m, root=root)
@@ -441,6 +441,22 @@ def test_interrupted_rebind_recovers_via_recover(tmp_path):
 
 
 # --------------------------------------------------------------------------- A8 CLI
+
+
+def test_cli_fr14_blocked_without_owner_authorized(tmp_path, capsys):
+    """FR-14: plan/preview/execute without --owner-authorized must refuse."""
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    for cmd in ("plan", "preview", "execute"):
+        capsys.readouterr()
+        rc = mm.main([cmd, "--cwd", str(tmp_path), "--root", root, "--target", mr.GLOBAL])
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 0, cmd
+        assert out.get("blocked") is True or out.get("status") == "blocked", (
+            f"FR-14: {cmd} without --owner-authorized must be blocked")
+        assert "FR-14" in out.get("reason", "")
 
 
 def test_cli_recover_noop_outputs_json(tmp_path, capsys):
