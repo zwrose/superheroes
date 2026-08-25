@@ -914,10 +914,10 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
             return _refuse("handback-receipt-unreadable",
                             "receipt invalid: %s" % bind_why[len("receipt-invalid:"):],
                             subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-        if bind_why == "verdict-not-allowlisted":
-            return _refuse("handback-verdict-not-allowlisted", "",
+        if bind_why == "receipt-interim-not-handback-evidence":
+            return _refuse("receipt-interim-not-handback-evidence", "",
                             subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-        return _refuse(bind_why, "",
+        return _refuse("handback-verdict-not-allowlisted", "",
                         subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
 
     if head_sha != sidecar.get("headSha"):
