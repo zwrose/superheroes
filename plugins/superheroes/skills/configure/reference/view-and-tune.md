@@ -12,8 +12,8 @@ up-to-date project changes nothing (FR-12).
 
 `ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` is assigned once per bash block below.
 
-Gate write-downs on this path land in `$REVIEW_LAYER_BODY` under `## Setup disclosures` and are
-piped to `core_md.py write-layer --hero review-crew` before the run hands back.
+Gate write-downs on this path are written down in the run output and are never written into a
+hero layer — their payloads carry machine-local absolute paths that must not reach a collaborator-visible in-repo file, and `write-layer` replaces a layer wholesale.
 
 ## 1 — Render the combined view (FR-4) + drift notice (FR-7)
 
@@ -65,11 +65,10 @@ action that owns it, leaving the rest of the calibration untouched:
 - **Sweep orphaned per-project stores** → when the view's `storage health` line reports orphaned
   or unknown-provenance stores:
 
-<!-- decision-point: id=configure-tune-orphan-store-sweep mode=gate kind=owner-gate default="report only — no sweep without current-turn owner authorization" carrier=review-crew-layer -->
+<!-- decision-point: id=configure-tune-orphan-store-sweep mode=gate kind=owner-gate default="report only — no sweep without current-turn owner authorization" carrier=run-output -->
 
-  Always run the read-only report first. GATE: write the counts and orphan list into
-  `$REVIEW_LAYER_BODY` under `## Setup disclosures`, pipe to `core_md.py write-layer --hero
-  review-crew`, and hand back — do **not** run `store_sweep.py sweep` on the default path.
+  Always run the read-only report first. GATE: write the counts and orphan list down in the run
+  output, and hand back — do **not** run `store_sweep.py sweep` on the default path.
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -303,10 +302,12 @@ action that owns it, leaving the rest of the calibration untouched:
   first, then merge only the requested overlay document. Pass `null` (or empty stdin) to remove
   the overlay and return to shipped-defaults-only.
 
-<!-- decision-point: id=configure-tune-gate-policy mode=proceed kind=owner-gate default="retain shipped-defaults-only gate policy overlay" carrier=review-crew-layer -->
+<!-- decision-point: id=configure-tune-gate-policy mode=proceed kind=owner-gate default="retain shipped-defaults-only gate policy overlay" carrier=run-output -->
 
   PROCEED: retain the shipped-defaults-only overlay unless the owner selects this tune action in
-  this turn, and continue. Follow-up: `/superheroes:configure`.
+  this turn, record in the run output that the shipped-defaults-only gate-policy overlay was
+  retained and that `/superheroes:configure` changes it, and continue. Follow-up:
+  `/superheroes:configure`.
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -330,12 +331,11 @@ action that owns it, leaving the rest of the calibration untouched:
 
 ## 3 — Flip the storage mode (FR-10), always showing what will move
 
-<!-- decision-point: id=configure-tune-storage-flip mode=gate kind=owner-gate default="preview only — no execute without current-turn owner authorization" carrier=review-crew-layer -->
+<!-- decision-point: id=configure-tune-storage-flip mode=gate kind=owner-gate default="preview only — no execute without current-turn owner authorization" carrier=run-output -->
 
 The flip is the only destructive action — always show **exactly what will move**. GATE: run
-preview only, write the exact move list into `$REVIEW_LAYER_BODY` under `## Setup disclosures`,
-pipe to `core_md.py write-layer --hero review-crew`, and hand back — do **not** run `execute` on
-the default path.
+preview only, write the exact move list down in the run output, and hand back — do **not** run
+`execute` on the default path.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
