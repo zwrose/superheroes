@@ -27,22 +27,26 @@ anyone with the repo. Resolve the band-wide decision (it is decided once and is 
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -B -c "
-import sys; sys.path.insert(0,'$ROOT_DIR/lib'); import mode_registry
-print(mode_registry.decide_mode('.', None, True))"   # 'in-repo' | 'global' | 'ask'
+DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero; halting rather than taking an undisclosed storage default" >&2; exit 1; }
+LOC=$(printf '%s' "$DEC" | jq -r '.mode')
+PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')
+[ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting" >&2; exit 1; }
 ```
 
-`ask` → present the choice and record the owner's pick; an already-decided mode is reported, not
-re-asked. A **headless** run (no human) takes `global` (out-of-repo) provisionally and never asks
-(FR-14).
+**Default:** recorded mode when one exists, else provisional `global` (out-of-repo). An
+already-decided mode is reported, not re-asked. **Disclosure:** when `$PROVISIONAL` is `true`, state
+in the set-up output which storage mode was taken, that it is provisional, and that
+`/superheroes:configure` changes it. **Follow-up:** the owner changes storage mode via
+`/superheroes:configure` (view-and-tune §3 for a flip after set-up).
 
 ## 2 — Seed the core + the light hero layers (FR-16)
 
 Once the mode is set, seed the shared **core** (the project's stack, verify command, threat model)
 and the two light layers — the-architect's doc-policy and review-crew's threat model — in the same
 pass. Drive each hero's calibration logic through its now-internal `*-init` skill (reached from
-here, not advertised separately). Detect facts from the repo first; ask only what detection leaves
-open. Write the core confirmed when the owner answered, provisional on a headless run.
+here, not advertised separately). Detect facts from the repo; do not ask. Write the core
+**provisional**, stating which fields were defaulted rather than answered; the owner confirms via
+the FR-18 confirm step.
 
 ## 3 — Verify command first (UFR-5)
 
@@ -209,9 +213,10 @@ disclosed degradation. A decline leaves every role on its default and set-up sti
    A failed or timed-out test dispatch leaves the engine **not-ready** — builds and mechanical fixes fall
    open to Claude until it works. Never present a not-working engine as ready.
 
-**Headless (`INTERACTIVE=false`).** Take the strict/provisional posture: probe and record what is
-detectable, but never block and never apply the authorization — leave any external implementation engine
-not-ready until an interactive run can grant + test it.
+**Set-up posture.** Take the strict/provisional posture: probe and record what is detectable, but
+never block and never apply the authorization — leave any external implementation engine not-ready
+until the owner grants and tests it, which they do by running `/superheroes:configure` and saying
+so in that turn.
 
 ## 4.6 — Offer the review-discipline CLAUDE.md section (in-repo mode only), decline still completes
 
