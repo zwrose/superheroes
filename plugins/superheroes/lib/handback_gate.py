@@ -837,7 +837,7 @@ def _receipt_bindings_ok(sidecar, receipt):
     """Delegate receipt shape to ``round_driver.validate_receipt``; layer verdict allowlist on top."""
     if not isinstance(receipt, dict):
         return False, "receipt-invalid:receipt is not an object"
-    if receipt.get("schema") == RD.RECEIPT_INTERIM_SCHEMA:
+    if RD.receipt_kind(receipt) == RD.RECEIPT_INTERIM_SCHEMA:
         return False, "receipt-interim-not-handback-evidence"
     ok, why = RD.validate_receipt(receipt)
     if not ok:
