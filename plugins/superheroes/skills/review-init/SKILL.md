@@ -181,7 +181,8 @@ A `refused` result (including `fable-on-external-engine`, `core-md-unreadable`, 
 `dispatch-gate-evaluation-failed`) means the write did not apply — surface the `violations` to the
 owner and **stop**; never proceed to write the layer as if the write had succeeded. On refusal the
 `## Setup disclosures` block (including which fields were defaulted) never lands in the review-crew
-layer. For
+layer — those disclosures are stated in the run output instead, naming which fields were
+defaulted, so a refused write does not silently take the disclosure with it. For
 `core-md-unreadable`, the existing `core.md` could not be read, so the write was refused rather than
 overwriting it — surface the path from the violation's `detail` to the owner. On a successful create path without refusal, `reused`/`proposed`
 apply as before. Confirming a pre-existing **provisional** core/layer is a separate path —
