@@ -532,10 +532,11 @@ def _stdout_capture_truncated(text):
     return _STDOUT_TRUNCATION_MARKER_RE.match(text) is not None
 
 
-def _cap_content_budget(max_bytes, stream, observed_bytes):
+def _cap_content_budget(max_bytes, stream, observed_bytes, marker_bytes=None):
     """Bytes available for tail content after reserving space for the truncation marker."""
-    marker = _truncation_marker(stream, observed_bytes).encode("utf-8")
-    return max(0, max_bytes - len(marker))
+    if marker_bytes is None:
+        marker_bytes = _truncation_marker(stream, observed_bytes).encode("utf-8")
+    return max(0, max_bytes - len(marker_bytes))
 
 
 def _cap_bytes_with_truncation_marker(data, max_bytes, stream, observed_bytes=None):
@@ -545,7 +546,9 @@ def _cap_bytes_with_truncation_marker(data, max_bytes, stream, observed_bytes=No
     if observed_bytes <= max_bytes and len(data) <= max_bytes:
         return data, False
     marker = _truncation_marker(stream, observed_bytes).encode("utf-8")
-    content_budget = _cap_content_budget(max_bytes, stream, observed_bytes)
+    content_budget = _cap_content_budget(
+        max_bytes, stream, observed_bytes, marker_bytes=marker,
+    )
     tail = data[-content_budget:] if content_budget else b""
     capped = marker + tail
     if len(capped) > max_bytes:

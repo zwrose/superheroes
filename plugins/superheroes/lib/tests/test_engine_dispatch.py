@@ -5878,6 +5878,19 @@ def _oversized_digit_forged_head_marker_capture():
     return marker + "short body\n"
 
 
+def _just_over_digit_bound_forged_head_marker_capture():
+    # The 5000-digit case's bite-proof red is interpreter-dependent (int() limit on 3.11+);
+    # this just-over-bound run is version-independent because int() always succeeds here.
+    digit_count = ED._STDOUT_MARKER_CLAIMED_BYTES_DIGITS_MAX + 8
+    marker = (
+        ED.STDOUT_TRUNCATION_MARKER_PREFIX
+        + ("9" * digit_count)
+        + ED.STDOUT_TRUNCATION_MARKER_SUFFIX
+        + "\n"
+    )
+    return marker + "short body\n"
+
+
 def test_stdout_marker_overruled_oversized_digit_claim_null_marker_bytes(tmp_path):
     """axis: oversized forged marker digit run yields null markerBytes without raising."""
     run_dir = str(tmp_path / "run")
@@ -5885,6 +5898,23 @@ def test_stdout_marker_overruled_oversized_digit_claim_null_marker_bytes(tmp_pat
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write(_oversized_digit_forged_head_marker_capture())
+    stamped = 58
+    state = {"attempts": {1: {"ended": {"stdoutBytes": stamped, "stdoutBytesPreCap": True}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) is None
+    records, _ = ED._journal_read(run_dir)
+    overruled = [r for r in records if r.get("kind") == "stdout-marker-overruled"]
+    assert len(overruled) == 1
+    assert overruled[0]["markerBytes"] is None
+    assert overruled[0]["stampedBytes"] == stamped
+
+
+def test_stdout_marker_overruled_just_over_digit_bound_claim_null_marker_bytes(tmp_path):
+    """axis: just-over-bound forged marker digit run yields null markerBytes without raising."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_just_over_digit_bound_forged_head_marker_capture())
     stamped = 58
     state = {"attempts": {1: {"ended": {"stdoutBytes": stamped, "stdoutBytesPreCap": True}}}}
     assert ED._attempt_stdout_truncated(run_dir, state, 1) is None
