@@ -203,6 +203,12 @@ def test_skew_version_skew_divergent(tmp_path):
     assert record["status"] == VS.STATUS_CHECKED_DEGRADED
     assert record["detail"] == VS.DETAIL_SEMANTICS_DIVERGENT
     assert "lib/version_skew.py" in record["reason"]
+    assert "family/registry" not in record["reason"]
+    assert "watched review semantics differ" in record["reason"]
+    assert (
+        "lib/version_skew.py differ between the running plugin and this repository"
+        in record["reason"]
+    )
 
 
 def test_evidence_unreadable_plugin_side_missing(tmp_path):
