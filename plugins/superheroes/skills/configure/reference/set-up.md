@@ -44,8 +44,9 @@ in the set-up output which storage mode was taken, that it is provisional, and t
 `/superheroes:configure` (view-and-tune §3 for a flip after set-up).
 
 NOTIFY: take the returned `.mode` from `decide-location`, record mode/source/provisional status in
-`## Setup disclosures` within `$REVIEW_LAYER_BODY`, disclose in set-up output when provisional, and
-the run continues. Follow-up: `/superheroes:configure`.
+the set-up output and carry it into the hero's `## Setup disclosures` section per the §2 carrier
+note, disclose in set-up output when provisional, and the run continues. Follow-up:
+`/superheroes:configure`.
 
 <!-- /decision-point: id=configure-setup-storage-location -->
 
@@ -58,18 +59,11 @@ here, not advertised separately). Detect facts from the repo; do not ask. Write 
 **provisional**, stating which fields were defaulted rather than answered; the owner confirms via
 the FR-18 confirm step.
 
-Assemble hero layer bodies with a `## Setup disclosures` section carrying every NOTIFY default
-from this path. Pipe review-crew disclosures through `$REVIEW_LAYER_BODY` to
-`core_md.py write-layer --hero review-crew`; pipe test-pilot-specific disclosures through the
-test-pilot layer body to `core_md.py write-layer --hero test-pilot` when that layer is written:
-
-```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-printf '%s' "$REVIEW_LAYER_BODY" \
-  | python3 -B "$ROOT_DIR/lib/core_md.py" write-layer --hero review-crew --status provisional
-printf '%s' "$TEST_PILOT_LAYER_BODY" \
-  | python3 -B "$ROOT_DIR/lib/core_md.py" write-layer --hero test-pilot --status provisional
-```
+Set-up's decisions are disclosed in the **set-up output** — this path's own report to the owner.
+Each hero's `## Setup disclosures` section is **assembled and written by that hero's `*-init`
+skill**, which this path drives; set-up hands its defaults to those skills, it does not write hero
+layers itself. Review-crew disclosures are written in `review-init` Step 4b; test-pilot disclosures
+in `test-pilot-init` Step 6.
 
 ## 3 — Verify command first (UFR-5)
 
@@ -78,7 +72,8 @@ printf '%s' "$TEST_PILOT_LAYER_BODY" \
 When no verify command is detectable, take the provisional default **`mode: review-only`** (matching
 `review-init`'s default for the same field) — **never edit the owner's build config yourself** and
 never guess a command. NOTIFY: record `mode: review-only` in the core facts and disclose it in
-`## Setup disclosures` within `$REVIEW_LAYER_BODY`, and the run continues. The owner may set a real
+the set-up output and carry it into the hero's `## Setup disclosures` section per the §2 carrier
+note, and the run continues. The owner may set a real
 verify command via `/superheroes:configure`.
 
 <!-- /decision-point: id=configure-setup-verify-command -->
@@ -90,7 +85,8 @@ verify command via `/superheroes:configure`.
 Where a heavier or optional hero applies (**test-pilot**, **guardian**, or any hero needing extra
 tooling such as a connected browser), the default is to **leave it un-set-up** and disclose that
 optional heroes were skipped and that `/superheroes:configure` can add them. NOTIFY: record the
-skipped heroes in `## Setup disclosures` within `$REVIEW_LAYER_BODY` and the run continues.
+skipped heroes in the set-up output and carry them into the hero's `## Setup disclosures` section
+per the §2 carrier note and the run continues.
 Set-up still **completes** and the project is usable without them.
 
 <!-- /decision-point: id=configure-setup-optional-heroes -->
@@ -110,7 +106,8 @@ skips tuning. The default is **off**: do not offer guardian threshold/cadence tu
 set-up; disclose that guardian runs on defaults and that `/superheroes:configure` can tune it.
 `guardian.md` is a thin adder for those deviations (empty is valid). The `guardian-config` fence
 shape is in `skills/guardian/reference/calibration.md`. NOTIFY: record guardian-left-on-defaults in
-`## Setup disclosures` within `$REVIEW_LAYER_BODY` and the run continues.
+the set-up output and carry it into the hero's `## Setup disclosures` section per the §2 carrier
+note and the run continues.
 
 <!-- /decision-point: id=configure-setup-guardian-tuning -->
 
@@ -196,8 +193,9 @@ supports; disclose at `command` or below) are defined in `rubric/review-discipli
 doc rather than restating the table here.
 
 The default is the honest level the repo evidences, or **`none`** when nothing is detectable —
-disclose any degradation per the show-it contract. NOTIFY: record the level in `## Setup disclosures`
-within `$REVIEW_LAYER_BODY` and the run continues. Set-up still **completes**; the owner may change
+disclose any degradation per the show-it contract. NOTIFY: record the level in the set-up output and
+carry it into the hero's `## Setup disclosures` section per the §2 carrier note and the run
+continues. Set-up still **completes**; the owner may change
 the declaration via `/superheroes:configure`.
 
 To persist a declaration when the owner supplies one in this turn (multi-line prose on stdin):
@@ -226,8 +224,9 @@ bring **Codex** and/or **Cursor** into the loop per role on the owner's word. Th
 is the named provisional defaults — **reviewer**, **implementer**, and **pilot** → `claude`;
 **briefCheck** → `codex` (the cross-vendor default — a Claude brief-check is a disclosed
 degradation). NOTIFY: probe availability, record the per-role defaults (or owner overrides from
-this turn) into `enginePreferences` and disclose the picks in `## Setup disclosures` within
-`$REVIEW_LAYER_BODY`, and the run continues. Follow-up: `/superheroes:configure`.
+this turn) into `enginePreferences` and disclose the picks in the set-up output and carry them
+into the hero's `## Setup disclosures` section per the §2 carrier note, and the run continues.
+Follow-up: `/superheroes:configure`.
 
 1. **Availability (FR-11).** Probe both engines and show a readiness matrix — installed + signed in, or
    what to fix:
@@ -286,7 +285,8 @@ until the owner grants and tests it via `/superheroes:configure`.
 When the storage mode decided in §1 is **in-repo**, **never write** the project's `CLAUDE.md`
 unasked — the band's review-discipline section (source of truth:
 `$ROOT_DIR/rubric/review-discipline.md`) is owner-gated. NOTIFY: record the offer as **un-made** in
-`## Setup disclosures` within `$REVIEW_LAYER_BODY` and the run continues. The owner may append it
+the set-up output and carry it into the hero's `## Setup disclosures` section per the §2 carrier
+note and the run continues. The owner may append it
 via `/superheroes:configure` (show the text before writing; idempotent — an existing `Review
 discipline` heading means report-and-skip). **Never offer this in out-of-repo mode** — that mode
 exists to keep the repo free of superheroes traces; there the SessionStart bootstrap note is the sole
@@ -307,7 +307,8 @@ calibration. This is test-pilot's existing rule; preserve it.
 
 If `route` reported "incomplete set-up" — the storage mode was recorded but not every light layer
 was written (a prior run was interrupted) — do **not** present the project as healthy. NOTIFY:
-report what is missing in set-up output and `## Setup disclosures` within `$REVIEW_LAYER_BODY`, and
-the run continues. The owner may finish the remaining layers via `/superheroes:configure`.
+report what is missing in the set-up output and carry it into the hero's `## Setup disclosures`
+section per the §2 carrier note, and the run continues. The owner may finish the remaining layers
+via `/superheroes:configure`.
 
 <!-- /decision-point: id=configure-setup-recovery -->
