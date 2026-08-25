@@ -45,6 +45,25 @@ _CENSUS_SELF_PATHS = {
     os.path.normpath(os.path.join(_PLUGIN_ROOT, "lib/tests/test_review_only_headless.py")),
 }
 
+# Bite-proof records are receipts, not consumed surfaces: they are categorically outside every
+# content census, exactly as detector self-paths are. A proof must be free to quote the literal
+# it proves — a census that polices its own evidence re-fires on every new proof.
+# Standing advisor ruling, 2026-08-25 (#1136).
+_CENSUS_EXCLUDED_DIRS = (
+    os.path.normpath(os.path.join(_PLUGIN_ROOT, "lib/tests/bite_proofs")),
+)
+
+
+def _census_excluded(path):
+    """Files the census must not read: detector self-paths and bite-proof receipts."""
+    norm = os.path.normpath(path)
+    if norm in _CENSUS_SELF_PATHS:
+        return True
+    return any(
+        norm.startswith(d + os.sep) for d in _CENSUS_EXCLUDED_DIRS
+    )
+
+
 _DECIDE_LOCATION_INVOCATION = re.compile(r"decide-location\)")
 
 # Conversation-driven surfaces disclose in the run transcript, not a durable file artifact (R-2).
@@ -321,7 +340,7 @@ def _premise_literal_hits(literal):
     needle = literal.casefold()
     for root in _CENSUS_ROOTS:
         for path in _walk_text_files(root):
-            if os.path.normpath(path) in _CENSUS_SELF_PATHS:
+            if _census_excluded(path):
                 continue
             try:
                 with open(path, encoding="utf-8") as fh:
@@ -348,7 +367,7 @@ def test_no_interactive_presence_flag_in_census_trees():
     hits = []
     for root in _CENSUS_ROOTS:
         for path in _walk_text_files(root):
-            if os.path.normpath(path) in _CENSUS_SELF_PATHS:
+            if _census_excluded(path):
                 continue
             try:
                 with open(path, encoding="utf-8") as fh:
