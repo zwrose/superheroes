@@ -14,7 +14,7 @@ if _LIB_DIR not in sys.path:
 import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_LOCATION = "docs/superheroes"
 COMMITTED = "committed"
 GITIGNORED = "gitignored"
@@ -36,6 +36,15 @@ def _safe_location(location):
     return norm
 
 
+def _normalize_disclosures(raw):
+    """A list of disclosure strings; absent or invalid shapes default to []."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [s for s in raw if isinstance(s, str)]
+
+
 def _migrate(rec):
     """Fill an older/partial record forward to the current shape (migrate-on-read).
     Returns a normalized dict, or None if it cannot be coerced to a valid policy."""
@@ -46,12 +55,14 @@ def _migrate(rec):
     if visibility not in _VISIBILITIES:
         visibility = COMMITTED
     confirmed = bool(rec.get("confirmed", False))
+    disclosures = _normalize_disclosures(rec.get("disclosures"))
     return {"schemaVersion": SCHEMA_VERSION, "location": location,
-            "visibility": visibility, "confirmed": confirmed}
+            "visibility": visibility, "confirmed": confirmed,
+            "disclosures": disclosures}
 
 
 def read_policy(cwd, root=None):
-    """{location, visibility, confirmed} or None (absent/corrupt). Migrates an older/partial
+    """{location, visibility, confirmed, disclosures} or None (absent/corrupt). Migrates an older/partial
     record forward **in memory only** (no write-back on read) — the next write_policy persists
     the current shape. This deliberately removes the migrate-write-back failure mode the plan
     flagged while still satisfying the spec's UFR-5 (migrate on read, no manual re-init)."""
@@ -66,7 +77,8 @@ def read_policy(cwd, root=None):
     if migrated is None:
         return None
     return {"location": migrated["location"], "visibility": migrated["visibility"],
-            "confirmed": migrated["confirmed"]}
+            "confirmed": migrated["confirmed"],
+            "disclosures": migrated["disclosures"]}
 
 
 def write_policy(cwd, policy, root=None):
