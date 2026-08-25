@@ -470,6 +470,16 @@ bypasses in the confirmation round. This is how you satisfy the existing rules �
 complete target enumeration — when authoring; this adds no seventh validity rule and leaves the
 six validity rules unchanged.
 
+**A removal census owes two sweeps, not one** — whether you author it into an order or, in a lane
+where you type the change, run it yourself. Alongside the **identifier** grep for the symbol being
+removed, run a **vocabulary** sweep for the values that symbol never spells: enum members, artifact
+filenames, API verbs, degradation and refusal tokens, and the prose that names them. The identifier
+grep terminates cleanly while the invariant still fails, because the surviving reference is a
+*string* the symbol search was never going to reach — the same class as a census that counts sites
+and misses the one nobody enumerated. Recorded specimen: on PR #1137 the `--post` identifier sweep
+came back clean while a bare `post` enum member survived, caught in review round 3; it is the second
+recorded instance of this class. Both sweeps are pasted into the build record, not promised.
+
 **Order-template doctrine — obligations on the order at authoring time, not a seventh rule.** Like
 the paragraph above, this **adds no seventh validity rule** and leaves the six validity rules
 unchanged. Three recorded specimens from the 2026-08-14/15 build wave attach to the **order** on

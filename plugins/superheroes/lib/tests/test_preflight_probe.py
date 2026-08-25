@@ -1398,34 +1398,6 @@ def test_live_vendors_for_composition_cache_miss_stale_probes_and_writes(tmp_pat
     assert rec is not None
 
 
-def test_live_vendors_for_composition_cache_only_miss_no_probe():
-    def _boom(argv, **kwargs):
-        raise AssertionError("run must not be called in cache-only miss")
-
-    live, _live_cells, _liv, notes, provenance = pp.live_vendors_for_composition(
-        ["codex", "cursor"],
-        run=_boom,
-        probe_mode="cache-only",
-        cache_path="/nonexistent/path.json",
-        now=1000.0,
-    )
-    assert live == ["claude"]
-    assert provenance == "unprobed"
-    assert any(n.get("constraint") == "preflight-cache-only" for n in notes)
-
-
-def test_live_vendors_for_composition_cache_only_miss_never_stamps_probed():
-    # bite-axis: cache-only with no usable cache must not claim probed provenance
-    _live, _live_cells, _liv, _notes, provenance = pp.live_vendors_for_composition(
-        ["codex"],
-        probe_mode="cache-only",
-        cache_path="/nonexistent/path.json",
-        now=1000.0,
-    )
-    assert provenance != "probed"
-    assert provenance == "unprobed"
-
-
 def test_live_vendors_for_composition_provenance_per_branch(tmp_path, monkeypatch):
     import liveness_cache
 
@@ -1456,15 +1428,6 @@ def test_live_vendors_for_composition_provenance_per_branch(tmp_path, monkeypatc
         now=now + 1,
     )
     assert cache_hit_prov == "probed"
-
-    _live, _cells, _liv, _notes, cache_only_miss_prov = pp.live_vendors_for_composition(
-        ["codex"],
-        run=_boom,
-        probe_mode="cache-only",
-        cache_path="/nonexistent/path.json",
-        now=now,
-    )
-    assert cache_only_miss_prov == "unprobed"
 
     _live, _cells, _liv, _notes, fresh_prov = pp.live_vendors_for_composition(
         ["codex"],
@@ -1509,15 +1472,6 @@ def test_live_vendors_for_composition_provenance_values_in_vocabulary_home(tmp_p
     )
     provenance_values.append(cache_hit_prov)
 
-    _live, _cells, _liv, _notes, cache_only_miss_prov = pp.live_vendors_for_composition(
-        ["codex"],
-        run=_boom,
-        probe_mode="cache-only",
-        cache_path="/nonexistent/path.json",
-        now=now,
-    )
-    provenance_values.append(cache_only_miss_prov)
-
     _live, _cells, _liv, _notes, fresh_prov = pp.live_vendors_for_composition(
         ["codex"],
         run=fake0,
@@ -1528,40 +1482,6 @@ def test_live_vendors_for_composition_provenance_values_in_vocabulary_home(tmp_p
 
     for prov in provenance_values:
         assert prov in vocab
-
-
-def test_live_vendors_for_composition_cache_only_hit_reuses(tmp_path, monkeypatch):
-    import liveness_cache
-
-    monkeypatch.delenv(liveness_cache._ENV_TTL, raising=False)
-    needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
-    liveness = {
-        "codex": {
-            "live": True,
-            "models": {m: {"ok": True, "detail": ""} for m, _ in needed["codex"]},
-            "cells": [
-                {"model": m, "effort": e, "ok": True, "detail": ""}
-                for m, e in needed["codex"]
-            ],
-        },
-        "claude": {"live": True, "models": {}, "cells": []},
-    }
-    cache_path = str(tmp_path / "composition-liveness.json")
-    now = 2000.0
-    liveness_cache.write(liveness, needed, path=cache_path, now=now)
-
-    def _boom(argv, **kwargs):
-        raise AssertionError("run must not be called on cache-only hit")
-
-    live, _live_cells, _liv, notes, _prov = pp.live_vendors_for_composition(
-        ["codex"],
-        run=_boom,
-        probe_mode="cache-only",
-        cache_path=cache_path,
-        now=now + 5,
-    )
-    assert "codex" in live
-    assert any(n.get("constraint") == "preflight-cache" for n in notes)
 
 
 def test_live_vendors_for_composition_cache_write_failure_disclosed(tmp_path):

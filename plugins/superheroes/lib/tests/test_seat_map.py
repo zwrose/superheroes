@@ -637,66 +637,6 @@ def test_reachable_configs_pin_not_allowed_rotates(monkeypatch):
     assert default_cell in rc["codex"]
 
 
-def test_cli_compose_cache_only_ignores_live_vendors(monkeypatch, tmp_path, capsys):
-    import liveness_cache
-
-    cache_file = tmp_path / "empty-cache-dir" / "composition-liveness.json"
-    monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
-
-    rc = SM.main(
-        [
-            "x",
-            "compose",
-            "--probe-mode",
-            "cache-only",
-            "--live-vendors",
-            "claude,codex,cursor",
-            "--configured-engines",
-            "codex,cursor",
-            "--author-family",
-            "cursor",
-            "--narrative-family",
-            "anthropic",
-            "--pr-number",
-            "610",
-        ]
-    )
-    assert rc == 0
-    receipt = json.loads(capsys.readouterr().out)
-    assert any(d.get("constraint") == "preflight-cache-only" for d in receipt["degradations"])
-    assert receipt["liveVendors"] == ["claude"]
-
-
-def test_cli_compose_cache_only_no_live_vendors(monkeypatch, tmp_path, capsys):
-    import liveness_cache
-
-    cache_file = tmp_path / "composition-liveness.json"
-    monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
-
-    rc = SM.main(
-        [
-            "x",
-            "compose",
-            "--probe-mode",
-            "cache-only",
-            "--configured-engines",
-            "codex,cursor",
-            "--author-family",
-            "cursor",
-            "--narrative-family",
-            "anthropic",
-            "--pr-number",
-            "610",
-        ]
-    )
-    assert rc == 0
-    receipt = json.loads(capsys.readouterr().out)
-    assert any(d.get("constraint") == "preflight-cache-only" for d in receipt["degradations"])
-    assert receipt["liveVendors"] == ["claude"]
-    for seat_cfg in receipt["seats"].values():
-        assert seat_cfg["vendor"] == "claude"
-
-
 def test_composer_authored_diff_excludes_cursor_from_strong_critical_and_grounding():
     """#651: a composer-made diff derives authorFamily 'xai' straight from the registry, so grok —
     now the same family — is excluded from every strong-tier and critical seat and from grounding.
@@ -946,7 +886,10 @@ def test_pinned_maker_seat_is_still_a_violation():
     )
 
 
-def test_cache_only_synthesized_liveness_is_a_violation():
+def test_legacy_cache_only_constraint_still_marks_liveness_synthesized():
+    # The `preflight-cache-only` producer was reaped (#1138), but seat maps are persisted and
+    # re-read, so a map written by an OLDER plugin version can still carry the constraint. It
+    # must keep reading as unproven liveness — dropping the deny-list member would fall open.
     base = {
         "seats": {
             "test-reviewer": {
@@ -978,17 +921,29 @@ def test_cache_only_synthesized_liveness_is_a_violation():
 
 
 def test_compose_merges_probe_notes_before_deriving_the_receipt(monkeypatch, tmp_path, capsys):
+    # axis: a note the preflight returns is in `degradations` BEFORE violations are derived,
+    # so a fell-open panel reads as unproven liveness rather than a clean maker-family pass.
     import liveness_cache
+    import preflight_probe
 
     cache_file = tmp_path / "composition-liveness.json"
     monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
+
+    def _fell_open(configured, **kwargs):
+        return (
+            ["claude"],
+            [],
+            {"claude": {"live": True, "models": {}, "cells": []}},
+            [{"constraint": "compose-failed", "reason": "probe unavailable"}],
+            liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED,
+        )
+
+    monkeypatch.setattr(preflight_probe, "live_vendors_for_composition", _fell_open)
 
     rc = SM.main(
         [
             "x",
             "compose",
-            "--probe-mode",
-            "cache-only",
             "--configured-engines",
             "codex,cursor",
             "--author-family",
@@ -1001,7 +956,7 @@ def test_compose_merges_probe_notes_before_deriving_the_receipt(monkeypatch, tmp
     )
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
-    assert any(d.get("constraint") == "preflight-cache-only" for d in receipt["degradations"])
+    assert any(d.get("constraint") == "compose-failed" for d in receipt["degradations"])
     assert any(v.get("constraint") == "maker-family" for v in receipt["violations"])
 
 
@@ -1596,6 +1551,7 @@ def test_classify_unproven_liveness_liveness_pin_scoped_absent():
 
 
 def test_classify_unproven_liveness_preflight_cache_only_degradation():
+    # Legacy-receipt axis: no live producer since #1138; a stale map must still classify unproven.
     receipt = {
         "seats": _full_seats_template(),
         "liveVendors": list(THREE_VENDORS),
@@ -1758,34 +1714,6 @@ def test_live_cells_fields_for_receipt_preserves_unprobed():
     cells, source = SM._live_cells_fields_for_receipt(seat_map)
     assert source == "unprobed"
     assert cells == []
-
-
-def test_cli_compose_cache_only_emits_unprobed_live_cells_source(monkeypatch, tmp_path, capsys):
-    import liveness_cache
-
-    cache_file = tmp_path / "composition-liveness.json"
-    monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
-
-    rc = SM.main(
-        [
-            "x",
-            "compose",
-            "--probe-mode",
-            "cache-only",
-            "--configured-engines",
-            "codex,cursor",
-            "--author-family",
-            "cursor",
-            "--narrative-family",
-            "anthropic",
-            "--pr-number",
-            "610",
-        ]
-    )
-    assert rc == 0
-    receipt = json.loads(capsys.readouterr().out)
-    assert receipt["liveCellsSource"] == "unprobed"
-    assert receipt["liveCells"] == []
 
 
 # --- pin-shape normalization + refusal (#1039) -------------------------------------------------

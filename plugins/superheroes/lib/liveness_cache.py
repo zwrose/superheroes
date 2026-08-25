@@ -22,7 +22,10 @@ _ENV_TTL = "SUPERHEROES_LIVENESS_TTL_SECONDS"
 
 # probed = per-cell probe evidence (fresh or TTL-cached); synthesized = derived from a
 # vendor-level rollup, never probed per cell; unprobed = no probe evidence of any kind exists
-# and the cells carry no verification weight.
+# and the cells carry no verification weight. `unprobed` has had no live producer since the
+# cache-only receipt-only path was reaped (#1138); it stays in the vocabulary because seat maps
+# are persisted and re-read, and a map written by an older plugin version must keep reading as
+# unusable evidence in `seat_map._resolvable_families_for_seat`.
 LIVE_CELLS_SOURCE_PROBED = "probed"
 LIVE_CELLS_SOURCE_SYNTHESIZED = "synthesized"
 LIVE_CELLS_SOURCE_UNPROBED = "unprobed"
