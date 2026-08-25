@@ -305,7 +305,7 @@ def detect(repo_root: str, plugin_root: str) -> dict:
         entries = ", ".join(differing)
         reason = (
             "plugin-version-skew: installed %s, this repository's version at %s — "
-            "family/registry semantics may differ (%s differ between the running plugin and "
+            "watched review semantics differ (%s differ between the running plugin and "
             "this repository). The guard cannot know the semantic delta, only that one may exist: "
             "apply ratified deltas by hand or wait for the release cut."
         ) % (installed_version, repo_version, entries)
