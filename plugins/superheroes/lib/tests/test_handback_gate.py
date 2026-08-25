@@ -9,6 +9,8 @@ import subprocess
 
 import pytest
 
+from bite_support import patched_module
+
 import handback_gate as hg
 import round_driver as RD
 import round_records as RR
@@ -787,42 +789,18 @@ def test_pr_inherited_repo_between_pr_and_ready(tmp_path):
 
 # --- bite-proof -------------------------------------------------------------------------------
 
-def _neutralize(path, old, new):
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
-    patched = src.replace(old, new, 1)
-    assert patched != src, "neutralization target not found"
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(patched)
-    return src
-
-
-def _restore(path, src):
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(src)
-    import importlib
-    import handback_gate as mod
-    importlib.reload(mod)
-    return mod
-
-
 def test_bite_scope_silence(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     _commit_file(repo, "f.txt", "x\n")
     red = hg.validate_handback("gh pr ready", repo)
     assert red["decision"] == "allow" and red["reason"] is None
-    path = hg.__file__
-    src = _neutralize(path,
-                      '        return _allow()\n\n    for inv in guarded:',
-                      '        return _refuse("handback-no-receipt", "scope silence broken", subject=_empty_subject())\n\n    for inv in guarded:')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr ready", repo)
-        assert green["decision"] == "refuse"
-        assert green["reason"] == "handback-no-receipt"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('        return _allow()\n\n    for inv in guarded:',
+         '        return _refuse("handback-no-receipt", "scope silence broken", subject=_empty_subject())\n\n    for inv in guarded:'),
+    ])
+    green = mod.validate_handback("gh pr ready", repo)
+    assert green["decision"] == "refuse"
+    assert green["reason"] == "handback-no-receipt"
 
 
 def test_bite_no_receipt(tmp_path):
@@ -831,17 +809,12 @@ def test_bite_no_receipt(tmp_path):
     _write_build_lane(repo)
     red = hg.validate_handback("gh pr ready", repo)
     assert red["reason"] == "handback-no-receipt"
-    path = hg.__file__
-    src = _neutralize(path,
-                      'if not os.path.isfile(sidecar_path):',
-                      'if False and not os.path.isfile(sidecar_path):')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr ready", repo)
-        assert green["reason"] != "handback-no-receipt"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('if not os.path.isfile(sidecar_path):',
+         'if False and not os.path.isfile(sidecar_path):'),
+    ])
+    green = mod.validate_handback("gh pr ready", repo)
+    assert green["reason"] != "handback-no-receipt"
 
 
 def test_bite_verdict_allowlist(tmp_path):
@@ -855,26 +828,14 @@ def test_bite_verdict_allowlist(tmp_path):
                     base_ref="main", base_sha=base_sha)
     red = hg.validate_handback("gh pr ready", repo)
     assert red["reason"] == "handback-verdict-not-allowlisted"
-    path = hg.__file__
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
-    patched = src.replace(
-        '    if verdict not in HANDBACK_VERDICT_ALLOWLIST:\n'
-        '        return False, "verdict-not-allowlisted"',
-        '    if False and verdict not in HANDBACK_VERDICT_ALLOWLIST:\n'
-        '        return False, "verdict-not-allowlisted"',
-        1,
-    )
-    assert patched != src
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(patched)
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr ready", repo)
-        assert green["decision"] == "allow"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('    if verdict not in HANDBACK_VERDICT_ALLOWLIST:\n'
+         '        return False, "verdict-not-allowlisted"',
+         '    if False and verdict not in HANDBACK_VERDICT_ALLOWLIST:\n'
+         '        return False, "verdict-not-allowlisted"'),
+    ])
+    green = mod.validate_handback("gh pr ready", repo)
+    assert green["decision"] == "allow"
 
 
 def test_bite_head_binding(tmp_path):
@@ -887,139 +848,99 @@ def test_bite_head_binding(tmp_path):
         json.dump(sidecar, fh)
     red = hg.validate_handback("gh pr ready", repo)
     assert red["reason"] == "handback-head-mismatch"
-    path = hg.__file__
-    src = _neutralize(path,
-                      'if head_sha != sidecar.get("headSha"):',
-                      'if False and head_sha != sidecar.get("headSha"):')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr ready", repo)
-        assert green["decision"] == "allow"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('if head_sha != sidecar.get("headSha"):',
+         'if False and head_sha != sidecar.get("headSha"):'),
+    ])
+    green = mod.validate_handback("gh pr ready", repo)
+    assert green["decision"] == "allow"
 
 
 def test_bite_repo_binding_inline_gh_repo(tmp_path):
     repo, _, _ = _scoped_repo(tmp_path)
     red = hg.validate_handback("GH_REPO=other/repo gh pr ready", repo)
     assert red["reason"] == "handback-repo-mismatch"
-    path = hg.__file__
-    src = _neutralize(path,
-                      'if subject.get("repo") and subject["repo"] != sidecar.get("repoId"):',
-                      'if False and subject.get("repo") and subject["repo"] != sidecar.get("repoId"):')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("GH_REPO=other/repo gh pr ready", repo)
-        assert green["decision"] == "allow"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('if subject.get("repo") and subject["repo"] != sidecar.get("repoId"):',
+         'if False and subject.get("repo") and subject["repo"] != sidecar.get("repoId"):'),
+    ])
+    green = mod.validate_handback("GH_REPO=other/repo gh pr ready", repo)
+    assert green["decision"] == "allow"
 
 
 def test_bite_subject_unresolvable_selector(tmp_path):
     repo, _, _ = _scoped_repo(tmp_path)
     red = hg.validate_handback("gh pr ready 42", repo)
     assert red["reason"] == "handback-subject-unresolvable"
-    path = hg.__file__
-    src = _neutralize(path,
-                      'if action == "pr-ready" and pr.get("selector"):',
-                      'if False and action == "pr-ready" and pr.get("selector"):')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr ready 42", repo)
-        assert green["decision"] == "allow"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('if action == "pr-ready" and pr.get("selector"):',
+         'if False and action == "pr-ready" and pr.get("selector"):'),
+    ])
+    green = mod.validate_handback("gh pr ready 42", repo)
+    assert green["decision"] == "allow"
 
 
 def test_bite_draft_undo_passthrough(tmp_path):
     repo, _, _ = _scoped_repo(tmp_path)
     assert hg.validate_handback("gh pr create --draft", repo)["decision"] == "allow"
     assert hg.validate_handback("gh pr ready --undo", repo)["decision"] == "allow"
-    path = hg.__file__
-    src = _neutralize(path,
-                      '        if inv["action"] == "pr-create" and inv.get("draft"):\n            continue',
-                      '        if False and inv["action"] == "pr-create" and inv.get("draft"):\n            continue')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        red = mod.validate_handback("gh pr create --draft", repo)
-        assert red["decision"] == "refuse"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('        if inv["action"] == "pr-create" and inv.get("draft"):\n            continue',
+         '        if False and inv["action"] == "pr-create" and inv.get("draft"):\n            continue'),
+    ])
+    red = mod.validate_handback("gh pr create --draft", repo)
+    assert red["decision"] == "refuse"
 
 
 def test_bite_unknown_option_refuses(tmp_path):
     repo, _, _ = _scoped_repo(tmp_path)
     red = hg.validate_handback("gh pr create --totally-unknown --base main", repo)
     assert red["reason"] == "handback-inspection-failed"
-    path = hg.__file__
-    src = _neutralize(path,
-                      '        if inv.get("unrecognized") or inv["action"] == "unrecognized":',
-                      '        if False and (inv.get("unrecognized") or inv["action"] == "unrecognized"):')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr create --totally-unknown --base main", repo)
-        assert green["decision"] == "allow"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('        if inv.get("unrecognized") or inv["action"] == "unrecognized":',
+         '        if False and (inv.get("unrecognized") or inv["action"] == "unrecognized"):'),
+    ])
+    green = mod.validate_handback("gh pr create --totally-unknown --base main", repo)
+    assert green["decision"] == "allow"
 
 
 def test_bite_explicit_false_boolean():
     assert hg.parse_gh_invocations("gh pr create --draft=false")[0]["draft"] is False
-    path = hg.__file__
-    src = _neutralize(path,
-                      'def _parse_bool_value(raw):\n'
-                      '    """Parse an explicit boolean flag value. None means unparseable."""\n'
-                      '    if raw is None:',
-                      'def _parse_bool_value(raw):\n'
-                      '    """Parse an explicit boolean flag value. None means unparseable."""\n'
-                      '    return True\n'
-                      '    if raw is None:')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        inv = mod.parse_gh_invocations("gh pr create --draft=false")
-        assert inv[0]["draft"] is True
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('def _parse_bool_value(raw):\n'
+         '    """Parse an explicit boolean flag value. None means unparseable."""\n'
+         '    if raw is None:',
+         'def _parse_bool_value(raw):\n'
+         '    """Parse an explicit boolean flag value. None means unparseable."""\n'
+         '    return True\n'
+         '    if raw is None:'),
+    ])
+    inv = mod.parse_gh_invocations("gh pr create --draft=false")
+    assert inv[0]["draft"] is True
 
 
 def test_bite_inherited_repo_flag(tmp_path):
     repo, _, _ = _scoped_repo(tmp_path)
     red = hg.validate_handback("gh -R other/repo pr ready", repo)
     assert red["reason"] == "handback-repo-mismatch"
-    path = hg.__file__
-    src = _neutralize(path,
-                      '    if global_repo and parsed.get("repo") is None:\n        parsed["repo"] = global_repo',
-                      '    if False and global_repo and parsed.get("repo") is None:\n        parsed["repo"] = global_repo')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh -R other/repo pr ready", repo)
-        assert green["decision"] == "allow"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('    if global_repo and parsed.get("repo") is None:\n        parsed["repo"] = global_repo',
+         '    if False and global_repo and parsed.get("repo") is None:\n        parsed["repo"] = global_repo'),
+    ])
+    green = mod.validate_handback("gh -R other/repo pr ready", repo)
+    assert green["decision"] == "allow"
 
 
 def test_bite_host_qualified_repo():
     inv = hg.parse_gh_invocations("gh --repo ghe.example.com/org/repo pr ready")[0]
     red = hg.command_subject(inv)["repo"]
     assert red == "ghe.example.com/org/repo"
-    path = hg.__file__
-    src = _neutralize(path,
-                      'if _GH_HOST_REPO_SLUG.match(value):',
-                      'if False and _GH_HOST_REPO_SLUG.match(value):')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.command_subject(inv)["repo"]
-        assert green is None
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('if _GH_HOST_REPO_SLUG.match(value):',
+         'if False and _GH_HOST_REPO_SLUG.match(value):'),
+    ])
+    green = mod.command_subject(inv)["repo"]
+    assert green is None
 
 
 def test_bite_stale_marker_silence(tmp_path):
@@ -1027,20 +948,15 @@ def test_bite_stale_marker_silence(tmp_path):
     _write_build_lane(repo, repoRoot="/stale")
     red = hg.validate_handback("gh pr ready", repo)
     assert red["decision"] == "allow"
-    path = hg.__file__
-    src = _neutralize(path,
-                      '    if not scope["inScope"]:\n'
-                      '        # §4.2: neither valid marker → silent allow; stale alone is out of scope too.\n'
-                      '        return _allow()',
-                      '    if not scope["inScope"]:\n'
-                      '        return _refuse("handback-no-receipt", "stale silence broken")')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr ready", repo)
-        assert green["decision"] == "refuse"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('    if not scope["inScope"]:\n'
+         '        # §4.2: neither valid marker → silent allow; stale alone is out of scope too.\n'
+         '        return _allow()',
+         '    if not scope["inScope"]:\n'
+         '        return _refuse("handback-no-receipt", "stale silence broken")'),
+    ])
+    green = mod.validate_handback("gh pr ready", repo)
+    assert green["decision"] == "refuse"
 
 
 def test_bite_receipt_delegation(tmp_path):
@@ -1060,17 +976,12 @@ def test_bite_receipt_delegation(tmp_path):
         json.dump(sidecar, fh)
     red = hg.validate_handback("gh pr ready", repo)
     assert red["reason"] == "handback-receipt-unreadable"
-    path = hg.__file__
-    src = _neutralize(path,
-                      '    ok, why = RD.validate_receipt(receipt)',
-                      '    ok, why = True, None  # bite: skip validate_receipt')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr ready", repo)
-        assert green["decision"] == "allow"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('    ok, why = RD.validate_receipt(receipt)',
+         '    ok, why = True, None  # bite: skip validate_receipt'),
+    ])
+    green = mod.validate_handback("gh pr ready", repo)
+    assert green["decision"] == "allow"
 
 
 def test_bite_branch_binding(tmp_path):
@@ -1083,36 +994,26 @@ def test_bite_branch_binding(tmp_path):
         json.dump(sidecar, fh)
     red = hg.validate_handback("gh pr ready", repo)
     assert red["reason"] == "handback-branch-mismatch"
-    path = hg.__file__
-    src = _neutralize(path,
-                      '    if branch and branch != sidecar.get("branch"):',
-                      '    if False and branch and branch != sidecar.get("branch"):')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr ready", repo)
-        assert green["decision"] == "allow"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('    if branch and branch != sidecar.get("branch"):',
+         '    if False and branch and branch != sidecar.get("branch"):'),
+    ])
+    green = mod.validate_handback("gh pr ready", repo)
+    assert green["decision"] == "allow"
 
 
 def test_bite_attached_short_repo(tmp_path):
     repo, _, _ = _scoped_repo(tmp_path)
     red = hg.validate_handback("gh pr create -tupdate --base main", repo)
     assert red["decision"] == "allow"
-    path = hg.__file__
-    src = _neutralize(path,
-                      '            rest = letters[i + 1:]\n'
-                      '            parts.append((flag, rest if rest else None))',
-                      '            rest = letters[i + 1:]\n'
-                      '            parts.append((flag, None))')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr create -tupdate --base main", repo)
-        assert green["decision"] == "refuse"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('            rest = letters[i + 1:]\n'
+         '            parts.append((flag, rest if rest else None))',
+         '            rest = letters[i + 1:]\n'
+         '            parts.append((flag, None))'),
+    ])
+    green = mod.validate_handback("gh pr create -tupdate --base main", repo)
+    assert green["decision"] == "refuse"
 
 
 def test_bite_url_only_from_operands(tmp_path):
@@ -1120,17 +1021,12 @@ def test_bite_url_only_from_operands(tmp_path):
     url = "https://github.com/other/repo/pull/1"
     red = hg.validate_handback("gh pr create --body %s --base main" % url, repo)
     assert red["decision"] == "allow"
-    path = hg.__file__
-    src = _neutralize(path,
-                      '    for operand in pr.get("operands") or []:',
-                      '    for operand in ([pr.get("body")] if pr.get("body") else []) + (pr.get("operands") or []):')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr create --body %s --base main" % url, repo)
-        assert green["reason"] == "handback-repo-mismatch"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('    for operand in pr.get("operands") or []:',
+         '    for operand in ([pr.get("body")] if pr.get("body") else []) + (pr.get("operands") or []):'),
+    ])
+    green = mod.validate_handback("gh pr create --body %s --base main" % url, repo)
+    assert green["reason"] == "handback-repo-mismatch"
 
 
 def test_bite_non_mutating_leaves_family(tmp_path):
@@ -1139,17 +1035,12 @@ def test_bite_non_mutating_leaves_family(tmp_path):
     _write_build_lane(repo)
     red = hg.validate_handback("gh pr ready --help", repo)
     assert red["decision"] == "allow"
-    path = hg.__file__
-    src = _neutralize(path,
-                      '        if inv.get("non_mutating"):\n            continue',
-                      '        if False and inv.get("non_mutating"):\n            continue')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr ready --help", repo)
-        assert green["reason"] == "handback-no-receipt"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('        if inv.get("non_mutating"):\n            continue',
+         '        if False and inv.get("non_mutating"):\n            continue'),
+    ])
+    green = mod.validate_handback("gh pr ready --help", repo)
+    assert green["reason"] == "handback-no-receipt"
 
 
 def test_bite_branch_bound_marker_staleness(tmp_path):
@@ -1158,17 +1049,24 @@ def test_bite_branch_bound_marker_staleness(tmp_path):
     _write_build_lane(repo, branch="other-branch")
     red = hg.validate_handback("gh pr ready", repo)
     assert red["decision"] == "allow"
-    path = hg.__file__
-    src = _neutralize(path,
-                      '    ok, why = _marker_branch_matches(obj["branch"], repo_root)',
-                      '    ok, why = True, None  # bite: skip branch staleness')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr ready", repo)
-        assert green["decision"] == "refuse"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('    for key in ("issue", "declaredAt", "repoRoot", "branch"):\n'
+         '        if not isinstance(obj.get(key), str) or not obj.get(key):\n'
+         '            return False, "missing or empty field: %s" % key\n'
+         '    ok, why = _marker_repo_matches(obj["repoRoot"], repo_root)\n'
+         '    if not ok:\n'
+         '        return False, why\n'
+         '    ok, why = _marker_branch_matches(obj["branch"], repo_root)',
+         '    for key in ("issue", "declaredAt", "repoRoot", "branch"):\n'
+         '        if not isinstance(obj.get(key), str) or not obj.get(key):\n'
+         '            return False, "missing or empty field: %s" % key\n'
+         '    ok, why = _marker_repo_matches(obj["repoRoot"], repo_root)\n'
+         '    if not ok:\n'
+         '        return False, why\n'
+         '    ok, why = True, None  # bite: skip branch staleness'),
+    ])
+    green = mod.validate_handback("gh pr ready", repo)
+    assert green["decision"] == "refuse"
 
 
 def test_bite_diff_invocation_matches_production(tmp_path):
@@ -1181,17 +1079,12 @@ def test_bite_diff_invocation_matches_production(tmp_path):
     _write_sidecar(repo, session, _certified_receipt(), base_ref="main", base_sha=base_sha)
     red = hg.validate_handback("gh pr ready", repo)
     assert red["decision"] == "allow"
-    path = hg.__file__
-    src = _neutralize(path,
-                      '            ["git", "-C", repo_root, "diff", "%s...HEAD" % base_sha],',
-                      '            ["git", "-C", repo_root, "-c", "core.quotepath=false", "diff", "--no-color", "--no-ext-diff", "%s...HEAD" % base_sha],')
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr ready", repo)
-        assert green["reason"] == "handback-diff-mismatch"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('            ["git", "-C", repo_root, "diff", "%s...HEAD" % base_sha],',
+         '            ["git", "-C", repo_root, "-c", "core.quotepath=false", "diff", "--no-color", "--no-ext-diff", "%s...HEAD" % base_sha],'),
+    ])
+    green = mod.validate_handback("gh pr ready", repo)
+    assert green["reason"] == "handback-diff-mismatch"
 
 
 def test_bite_base_ref_round_trip(tmp_path):
@@ -1204,25 +1097,11 @@ def test_bite_base_ref_round_trip(tmp_path):
         json.dump(sidecar, fh)
     red = hg.validate_handback("gh pr create --base main", repo)
     assert red["reason"] == "handback-receipt-unreadable"
-    path = hg.__file__
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
-    patched = src.replace(
-        '    if _LEGACY_BASE_SHA.match(sidecar.get("baseRef") or ""):',
-        '    if False and _LEGACY_BASE_SHA.match(sidecar.get("baseRef") or ""):',
-        1,
-    ).replace(
-        '        if cmd_base != sidecar_base:',
-        '        if False and cmd_base != sidecar_base:',
-        1,
-    )
-    assert patched != src
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(patched)
-    try:
-        import importlib
-        mod = importlib.reload(hg)
-        green = mod.validate_handback("gh pr create --base main", repo)
-        assert green["decision"] == "allow"
-    finally:
-        _restore(path, src)
+    mod = patched_module(hg, [
+        ('    if _LEGACY_BASE_SHA.match(sidecar.get("baseRef") or ""):',
+         '    if False and _LEGACY_BASE_SHA.match(sidecar.get("baseRef") or ""):'),
+        ('        if cmd_base != sidecar_base:',
+         '        if False and cmd_base != sidecar_base:'),
+    ])
+    green = mod.validate_handback("gh pr create --base main", repo)
+    assert green["decision"] == "allow"
