@@ -488,3 +488,63 @@ def test_wiring_proof_xdist_subprocess(tmp_path):
     if "unrecognized arguments: -n" in proc.stderr:
         pytest.skip("pytest-xdist unavailable in subprocess environment")
     _assert_wiring_failure(proc, root)
+
+
+def test_plugin_loads_with_xdist_disabled():
+    target = os.path.join(
+        _REPO_ROOT,
+        "plugins",
+        "superheroes",
+        "lib",
+        "tests",
+        "test_pilot_malformed_input.py",
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            "-m",
+            "pytest",
+            target,
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:xdist",
+            "-p",
+            "no:randomly",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONHASHSEED": "0"},
+    )
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode == 0, combined
+    assert "INTERNALERROR" not in combined
+    assert "PluginValidationError" not in combined
+
+
+def test_pytest_configure_installs_audit_hook_once(monkeypatch):
+    saved = sg._AUDIT_HOOK_INSTALLED
+    sg._AUDIT_HOOK_INSTALLED = False
+    calls = []
+
+    def counting_addaudithook(hook):
+        calls.append(hook)
+
+    monkeypatch.setattr(sg.sys, "addaudithook", counting_addaudithook)
+    config = types.SimpleNamespace(
+        rootpath=_REPO_ROOT,
+        workerinput=None,
+        _source_guard_baseline=None,
+    )
+    try:
+        sg.pytest_configure(config)
+        assert sg._AUDIT_HOOK_INSTALLED is True
+        assert len(calls) == 1
+        sg.pytest_configure(config)
+        assert len(calls) == 1
+    finally:
+        sg._AUDIT_HOOK_INSTALLED = saved

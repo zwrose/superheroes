@@ -32,6 +32,7 @@ _CURRENT_SIGNATURES = {}
 _SESSION_START_DIRTY = set()
 _REPO_ROOT = None
 _CURRENT_TEST_NODEID = None
+_AUDIT_HOOK_INSTALLED = False
 
 
 class ShippedSourceWrite(RuntimeError):
@@ -180,7 +181,7 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
-    global _REPO_ROOT, _SESSION_START_DIRTY
+    global _REPO_ROOT, _SESSION_START_DIRTY, _AUDIT_HOOK_INSTALLED
     config._source_guard_active = True
     _REPO_ROOT = _resolve_repo_root(config)
 
@@ -200,11 +201,12 @@ def pytest_configure(config):
         _WATCHED_PATHS.update(paths)
         _apply_baseline(baseline)
 
-    if not getattr(config, "_source_guard_hook_installed", False):
+    if not _AUDIT_HOOK_INSTALLED:
         sys.addaudithook(audit_hook)
-        config._source_guard_hook_installed = True
+        _AUDIT_HOOK_INSTALLED = True
 
 
+@pytest.hookimpl(optionalhook=True)
 def pytest_configure_node(node):
     baseline = node.config._source_guard_baseline
     node.workerinput["source_guard_baseline"] = baseline
