@@ -117,12 +117,11 @@ AUTHOR_FAMILY=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');
 SEAT_PINS=$(echo "$EP" | jq -c 'if (.seatPins // {}) == {} then empty else .seatPins end')  # owner per-seat pins (#607); empty/absent → omit --pins
 PINS_ARGS=()
 [ -n "$SEAT_PINS" ] && PINS_ARGS=(--pins "$SEAT_PINS")
-# Leg 1 (#610): panel-dispatching paths probe live vendors on a cache miss. Every review-code
-# path dispatches a panel, so this is always `probe`; seat_map's `cache-only` mode (reuse a fresh
-# short-TTL liveness receipt or fall open to Claude, disclosed) has no review-code caller since
-# --post was removed (#1121).
-PROBE_MODE=probe
-SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --probe-mode "$PROBE_MODE" --repo-root "$REPO_ROOT" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to Claude"}]}')
+# Leg 1 (#610): compose probes live vendors on a cache miss and rides a within-TTL receipt
+# otherwise. Every review-code path dispatches a panel, so there is no receipt-only mode to
+# select: seat_map's `cache-only` probe mode lost its last caller when --post was removed
+# (#1121) and was reaped in #1138.
+SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --repo-root "$REPO_ROOT" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to Claude"}]}')
 ```
 
 The compose receipt always carries `pluginVersionSkew` — `{"status", "detail", "inspectedRoot"}`

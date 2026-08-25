@@ -6,8 +6,12 @@ outside the round diff's hunks (SKILL.md § Compile + Dedupe, step 2). It walks
 `@@` hunk headers so a diff line number is never mistaken for a file line
 number.
 
-Deviations from the resolve-diff-lines.ts original this was ported from
-(intentional): each diff line has a trailing '\\r' stripped so CRLF diffs don't
+Provenance, quoted from the deleted module: this parser was carved out of
+`lib/resolve_diff_lines.py` when that module was removed with `--post` (#1121),
+and that module described itself as a port of a `resolve-diff-lines.ts` original.
+That TypeScript file has never existed in this repository — it is upstream
+history, not a path to look for here. Deviation from it that the port made
+deliberately: each diff line has a trailing '\\r' stripped so CRLF diffs don't
 leave '\\r' in filenames. Limitation: --no-prefix diffs ('+++ <path>' without
 'b/') are NOT recognized; no line of such a file is anchorable.
 """

@@ -715,10 +715,11 @@ disabled, and these limits are not owner-configurable through `enginePreferences
 
 **Seat-map preflight economics** (#610, #795): the composition preflight that decides which
 **(vendor, model, effort)** cells are live for the panel is **gated, cached, and pin-scoped**. It
-runs only on panel-dispatching entries — a receipt-only path reuses a fresh
-**short-TTL machine-readable liveness receipt** or fall open to Claude, never re-probing; a compose
-within the TTL rides the receipt (the workhorse intake preflight can seed it); and only
-**pin-reachable** models are probed. The **fail-direction is unchanged**: a probe failure still
+runs only on panel-dispatching entries; a compose within the TTL rides a **short-TTL
+machine-readable liveness receipt** instead of re-probing (the workhorse intake preflight can seed
+it); and only **pin-reachable** models are probed. There is no longer a receipt-only entry to
+select — the `cache-only` probe mode that reused a receipt or fell open to Claude lost its last
+caller when `--post` was removed (#1121) and was reaped in #1138. The **fail-direction is unchanged**: a probe failure still
 drops **that cell** loudly (disclosed degradation), not the whole vendor; the cache only ever skips
 re-proving recent liveness, and never converts a failure into a pass. The receipt carries two
 deliberately distinct pools: **`liveVendors`** — the pessimistic rollup of vendors live at every
@@ -727,9 +728,12 @@ needed cell (unchanged from today); this is the **audit vendor pool** that `revi
 panel preflight never probed — and **`liveCells`**, the per-cell verdicts that are the **seating**
 currency (a panel seat may take a cell only if that exact cell probed live). A vendor can therefore
 be absent from `liveVendors` while some of its cells remain in `liveCells`, and that divergence is
-correct, not a bug. `liveCells` records provenance (`probed`, `synthesized`, or `unprobed`); only
-`probed` counts as verification evidence — `unprobed` is the receipt-only path where
-vendors were never probed. Claude is never probed and is live by construction — a stated exception,
+correct, not a bug. `liveCells` is the cell list itself (`[vendor, model, effort]` entries);
+provenance is the separate top-level **`liveCellsSource`** field (`probed`, `synthesized`, or
+`unprobed`), and only `probed` counts as verification evidence. `unprobed` — cells no probe of any kind covered — has
+had **no live producer since #1138** reaped the receipt-only path; it stays in the vocabulary
+because seat maps are persisted and re-read, so a map written by an older plugin version must keep
+reading as unusable evidence rather than falling open. Claude is never probed and is live by construction — a stated exception,
 not an oversight.
 
 **Confinement + hygiene.** External reviewers run read-only; external implementers run
