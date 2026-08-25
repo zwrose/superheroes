@@ -1707,7 +1707,7 @@ def test_grounding_stage_region_markers_match_conventions_10_7():
 
 
 def test_grounding_stage_session_modes_match_review_base_guard():
-    """§11: grounding_stage consumes review_base_guard.SESSION_MODES as the mode SSOT."""
+    """§11: grounding_stage derives session mode through session_mode.resolve."""
     import inspect
 
     import grounding_stage
@@ -1715,8 +1715,8 @@ def test_grounding_stage_session_modes_match_review_base_guard():
 
     assert review_base_guard.SESSION_MODES == frozenset({"pr", "branch"})
     read_meta_source = inspect.getsource(grounding_stage._read_meta)
-    assert "review_base_guard.SESSION_MODES" in read_meta_source, (
-        "grounding_stage._read_meta must reference review_base_guard.SESSION_MODES"
+    assert "session_mode.resolve" in read_meta_source, (
+        "grounding_stage._read_meta must derive through session_mode.resolve"
     )
     gs_source = _read("lib/grounding_stage.py")
     assert not re.search(
@@ -5377,3 +5377,73 @@ def test_round_driver_no_fail_open_branch_default_for_session_mode():
     text = _read("lib/round_driver.py")
     assert 'or "branch"' not in text
     assert "or 'branch'" not in text
+
+
+_REVIEW_CODE_SKILL_MODE_DOC = "skills/review-code/SKILL.md"
+
+
+def _review_code_skill_shell_mode_assignments(doc_path=_REVIEW_CODE_SKILL_MODE_DOC):
+    """Parse MODE=<value> from bash fences in review-code SKILL.md (session-mode pin)."""
+    text = _read(doc_path)
+    assignments = []
+    for fence in re.findall(r"```bash\n(.*?)```", text, re.DOTALL):
+        assignments.extend(re.findall(r"\bMODE=([^\s;]+)", fence))
+    return assignments
+
+
+def test_review_code_skill_shell_mode_assignments_match_session_mode_modes():
+    """T1: shell-fence MODE= assignments equal session_mode.MODES exactly."""
+    import session_mode
+
+    assignments = _review_code_skill_shell_mode_assignments()
+    assert len(assignments) >= 2, (
+        "review-code SKILL.md: expected at least two MODE= assignments in bash fences, "
+        "found %d (anti-vacuity)" % len(assignments)
+    )
+    assert set(assignments) == set(session_mode.MODES), (
+        "review-code SKILL.md MODE= assignments %r must equal session_mode.MODES %r"
+        % (sorted(set(assignments)), sorted(session_mode.MODES))
+    )
+
+
+def test_review_code_skill_shell_mode_assignments_anti_vacuity():
+    """T2: shell-fence pin must find at least two MODE= assignments."""
+    assignments = _review_code_skill_shell_mode_assignments()
+    assert len(assignments) >= 2, (
+        "review-code SKILL.md: MODE= parse found %d assignment(s); need >= 2"
+        % len(assignments)
+    )
+
+
+def test_session_mode_guards_derive_through_resolve():
+    """T3: check_base and _read_meta derive through session_mode.resolve."""
+    import inspect
+
+    import grounding_stage
+    import review_base_guard
+
+    check_base_source = inspect.getsource(review_base_guard.check_base)
+    read_meta_source = inspect.getsource(grounding_stage._read_meta)
+    assert "session_mode.resolve" in check_base_source
+    assert "session_mode.resolve" in read_meta_source
+    assert "not in SESSION_MODES" not in check_base_source
+    assert "not in SESSION_MODES" not in read_meta_source
+
+
+def test_grounding_stage_branch_disposition_uses_mode_branch_constant():
+    """Branch-mode disposition compares against session_mode.MODE_BRANCH."""
+    import inspect
+
+    import grounding_stage
+
+    for label, func in (
+        ("stage", grounding_stage.stage),
+        ("_trust_boundary", grounding_stage._trust_boundary),
+    ):
+        src = inspect.getsource(func)
+        assert "session_mode.MODE_BRANCH" in src, (
+            "grounding_stage.%s must compare against session_mode.MODE_BRANCH" % label
+        )
+        assert '== "branch"' not in src and "== 'branch'" not in src, (
+            "grounding_stage.%s must not compare against bare branch literal" % label
+        )

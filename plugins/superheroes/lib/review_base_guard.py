@@ -544,7 +544,8 @@ def check_base(session_dir, repo_root, prior_pin=None, run=None):
     mode = meta.get("mode")
     # Fail closed: defaulting unrecognized mode to branch mode made the fork check inert when
     # mode was unset; the guard cannot know whether fork comparison applies without a known mode.
-    if mode not in SESSION_MODES:
+    mode_resolved = session_mode.resolve(meta, None)
+    if not mode_resolved["resolved"]:
         return {
             "ok": False,
             "reason": REASON_MODE_UNRECOGNIZED,
@@ -553,7 +554,7 @@ def check_base(session_dir, repo_root, prior_pin=None, run=None):
     base_repo = origin_repo(repo_root, run=run)
     base_repo_check = "not-applicable-branch-mode"
     # Branch mode's base is origin/HEAD, i.e. origin by construction — nothing to compare.
-    if mode == "pr":
+    if mode_resolved["mode"] == session_mode.MODE_PR:
         pr_repo = pr_base_repo(session_dir)
         if pr_repo is None:
             return {

@@ -1,7 +1,51 @@
 """Tests for session_mode.resolve — review-session mode SSOT (#1151)."""
+import json
+import os
+import subprocess
+
 import pytest
 
 import session_mode as sm
+
+
+def _init_repo(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "t@t"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "t"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(root), "commit", "-q", "--allow-empty", "-m", "init"],
+        check=True,
+        capture_output=True,
+    )
+    sha = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return str(root), sha
+
+
+def _write_check_base_meta(session_dir, repo_root, sha, **overrides):
+    os.makedirs(session_dir, exist_ok=True)
+    meta = {
+        "mode": "branch",
+        "baseRef": sha,
+        "baseBranch": "main",
+        "baseFetch": "origin",
+        "repoRoot": repo_root,
+    }
+    meta.update(overrides)
+    with open(os.path.join(session_dir, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+
+
+def _write_session_meta(session_dir, payload):
+    os.makedirs(session_dir, exist_ok=True)
+    with open(os.path.join(session_dir, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
 
 
 def _assert_resolved(result, mode, evidence):
@@ -121,3 +165,92 @@ def test_evidence_line_resolved_from_config():
 def test_evidence_line_unresolved_returns_disclosure():
     result = sm.resolve({}, {})
     assert sm.evidence_line(result) == result["disclosure"]
+
+
+@pytest.fixture
+def git_repo(tmp_path):
+    return _init_repo(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "meta_payload,expected_mode_repr",
+    [
+        ({}, None),
+        ({"mode": None}, None),
+        ({"mode": "bogus"}, "bogus"),
+        ({"mode": 5}, 5),
+    ],
+)
+def test_check_base_mode_derivation_refuses_invalid(
+    git_repo, tmp_path, meta_payload, expected_mode_repr,
+):
+    """T4: check_base still refuses invalid session modes with unchanged reason/detail."""
+    import review_base_guard as rbg
+
+    root, sha = git_repo
+    session = str(tmp_path / "sess-invalid")
+    payload = {
+        "baseRef": sha,
+        "baseBranch": "main",
+        "baseFetch": "origin",
+        "repoRoot": root,
+    }
+    payload.update(meta_payload)
+    _write_session_meta(session, payload)
+    result = rbg.check_base(session, root)
+    assert result["ok"] is False
+    assert result["reason"] == rbg.REASON_MODE_UNRECOGNIZED
+    assert result["detail"] == (
+        "meta.mode must be 'pr' or 'branch', got %s" % repr(expected_mode_repr)
+    )
+
+
+@pytest.mark.parametrize("mode", ["pr", "branch"])
+def test_check_base_mode_derivation_accepts_valid(git_repo, tmp_path, mode):
+    """T4: check_base still proceeds past mode resolution for pr and branch."""
+    import review_base_guard as rbg
+
+    root, sha = git_repo
+    session = str(tmp_path / ("sess-" + mode))
+    _write_check_base_meta(session, root, sha, mode=mode)
+    if mode == "pr":
+        subprocess.run(
+            ["git", "-C", root, "remote", "add", "origin", "git@github.com:acme/widget.git"],
+            check=True,
+            capture_output=True,
+        )
+        with open(os.path.join(session, "pr.json"), "w", encoding="utf-8") as fh:
+            json.dump({"url": "https://github.com/acme/widget/pull/1"}, fh)
+    result = rbg.check_base(session, root)
+    assert result.get("reason") != rbg.REASON_MODE_UNRECOGNIZED
+
+
+@pytest.mark.parametrize(
+    "meta_payload",
+    [
+        {},
+        {"mode": None},
+        {"mode": "bogus"},
+        {"mode": 5},
+    ],
+)
+def test_read_meta_mode_derivation_refuses_invalid(tmp_path, meta_payload):
+    """T4: _read_meta still refuses invalid session modes with unchanged reason."""
+    import grounding_stage as gs
+
+    session = str(tmp_path / "sess-invalid")
+    _write_session_meta(session, meta_payload)
+    result = gs._read_meta(session)
+    assert result["ok"] is False
+    assert result["reason"] == "meta-mode-unknown"
+
+
+@pytest.mark.parametrize("mode", ["pr", "branch"])
+def test_read_meta_mode_derivation_accepts_valid(tmp_path, mode):
+    """T4: _read_meta still proceeds for pr and branch."""
+    import grounding_stage as gs
+
+    session = str(tmp_path / ("sess-" + mode))
+    _write_session_meta(session, {"mode": mode})
+    result = gs._read_meta(session)
+    assert result == {"ok": True, "mode": mode}
