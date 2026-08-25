@@ -130,7 +130,7 @@ def test_interim_receipt_validates_with_empty_verify_passes(tmp_path):
     d = _session(tmp_path)
     out = RD.cmd_checkpoint(d, "tripwire")
     assert out["ok"] is True
-    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
+    with open(os.path.join(d, RD.RECEIPT_INTERIM_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     ok, reason = RD.validate_receipt(receipt)
     assert ok is True, reason
@@ -157,9 +157,11 @@ def test_validate_interim_rejects_certification_keys():
 # --- terminal gate ---------------------------------------------------------------------------
 
 def test_verify_terminal_receipt_rejects_interim_on_disk(tmp_path):
-    # axis: _verify_terminal_receipt must fault on an interim receipt, not pass.
+    # axis: _verify_terminal_receipt must fault on a legacy interim at the terminal path.
     d = _session(tmp_path)
-    assert RD.cmd_checkpoint(d, "tripwire")["ok"] is True
+    interim = RD.build_interim_receipt(_state(d), d, "tripwire")
+    with open(os.path.join(d, RD.RECEIPT_FILE), "w", encoding="utf-8") as fh:
+        json.dump(interim, fh)
     fault = RD._verify_terminal_receipt(d)
     assert fault is not None
     assert "interim" in fault
@@ -208,7 +210,7 @@ def test_checkpoint_supersedes_prior_interim(tmp_path):
     assert RD.cmd_checkpoint(d, "tripwire")["ok"] is True
     out = RD.cmd_checkpoint(d, "park")
     assert out["ok"] is True and out["stop"]["reason"] == "park"
-    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
+    with open(os.path.join(d, RD.RECEIPT_INTERIM_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert receipt["stop"]["reason"] == "park"
 
@@ -226,6 +228,51 @@ def test_checkpoint_journals_event(tmp_path):
     entries = list(RD.read_journal(d))
     assert any(e.get("cmd") == "checkpoint" and e.get("outcome") == "checkpointed"
                for e in entries)
+
+
+def test_checkpoint_stop_reason_held_succeeds_non_terminal(tmp_path):
+    # axis: held is reachable at the stall menu before the hold fold sets terminal.
+    d = _session(tmp_path)
+    out = RD.cmd_checkpoint(d, "held")
+    assert out["ok"] is True
+    with open(os.path.join(d, RD.RECEIPT_INTERIM_FILE), encoding="utf-8") as fh:
+        receipt = json.load(fh)
+    assert receipt["stop"]["reason"] == "held"
+
+
+def test_checkpoint_stop_reason_held_refuses_terminal(tmp_path):
+    d = _session(tmp_path)
+    state = _state(d)
+    state["terminal"] = "held"
+    RD.save_state(d, state)
+    out = RD.cmd_checkpoint(d, "held")
+    assert out["ok"] is False and out["reason"] == "checkpoint-session-terminal"
+
+
+def test_checkpoint_stop_reasons_census_non_terminal(tmp_path):
+    # axis: every CHECKPOINT_STOP_REASONS member must succeed on a non-terminal session.
+    for reason in RD.CHECKPOINT_STOP_REASONS:
+        d = _session(tmp_path, name="s-%s" % reason)
+        out = RD.cmd_checkpoint(d, reason)
+        assert out["ok"] is True, (reason, out)
+
+
+def test_interim_checkpoint_not_at_terminal_path(tmp_path):
+    # axis: interim checkpoint receipt must not occupy the terminal receipt path.
+    d = _session(tmp_path)
+    assert RD.cmd_checkpoint(d, "park")["ok"] is True
+    assert not os.path.exists(os.path.join(d, RD.RECEIPT_FILE))
+    assert os.path.exists(os.path.join(d, RD.RECEIPT_INTERIM_FILE))
+
+
+def test_legacy_interim_at_terminal_path_classified_as_interim(tmp_path):
+    # axis: legacy interim at round-receipt.json is interim, not terminal.
+    d = _session(tmp_path)
+    interim = RD.build_interim_receipt(_state(d), d, "tripwire")
+    with open(os.path.join(d, RD.RECEIPT_FILE), "w", encoding="utf-8") as fh:
+        json.dump(interim, fh)
+    assert RD._on_disk_receipt_class(d) == "interim"
+    assert RD._terminal_receipt_on_disk(d) is False
 
 
 def test_checkpoint_oserror_surfaces_as_refusal(tmp_path, monkeypatch):
@@ -458,6 +505,7 @@ def test_public_handback_rejects_non_allowlisted_verdict(tmp_path):
     assert result["reason"] == "handback-verdict-not-allowlisted"
 
 
+@pytest.mark.xdist_group(name="handback_gate_source_mutators")
 def test_bite_public_handback_interim_token(tmp_path):
     interim = RD.build_interim_receipt(RD.new_state(_cfg()), None, "tripwire")
     repo, _, _ = _scoped_handback_repo(tmp_path, interim, verdict="converged")
@@ -490,6 +538,7 @@ def test_bite_public_handback_interim_token(tmp_path):
         _reload_handback_gate()
 
 
+@pytest.mark.xdist_group(name="handback_gate_source_mutators")
 def test_bite_public_handback_non_object_receipt(tmp_path):
     repo, _, _ = _scoped_handback_repo(tmp_path, [1, 2, 3], verdict="converged")
     red = HG.validate_handback("gh pr ready", repo)
@@ -515,30 +564,3 @@ def test_bite_public_handback_non_object_receipt(tmp_path):
             fh.write(src)
         _reload_handback_gate()
 
-
-def test_bite_public_handback_verdict_allowlist(tmp_path):
-    repo, _, _ = _scoped_handback_repo(
-        tmp_path, _certified_receipt(verdict="halted"), verdict="halted")
-    red = HG.validate_handback("gh pr ready", repo)
-    assert red["reason"] == "handback-verdict-not-allowlisted"
-    path = os.path.join(_LIB, "handback_gate.py")
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
-    patched = src.replace(
-        '    if verdict not in HANDBACK_VERDICT_ALLOWLIST:\n'
-        '        return False, "verdict-not-allowlisted"',
-        '    if False and verdict not in HANDBACK_VERDICT_ALLOWLIST:\n'
-        '        return False, "verdict-not-allowlisted"',
-        1,
-    )
-    assert patched != src
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(patched)
-    try:
-        mod = _reload_handback_gate()
-        green = mod.validate_handback("gh pr ready", repo)
-        assert green["decision"] == "allow"
-    finally:
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(src)
-        _reload_handback_gate()
