@@ -160,7 +160,7 @@ if [ "$LOCATION" = "none" ]; then
   # /superheroes:configure changes it.
   REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
   if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
-    echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
+    echo "note: couldn't record the band storage mode this run — the provisional default will be taken again next run; change via /superheroes:configure."
   fi
   PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")

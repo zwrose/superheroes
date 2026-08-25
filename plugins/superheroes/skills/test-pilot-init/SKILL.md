@@ -62,7 +62,7 @@ PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
 # and that /superheroes:configure changes it (triad part 2).
 REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
 if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
-  echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
+  echo "note: couldn't record the band storage mode this run — the provisional default will be taken again next run; change via /superheroes:configure."
 fi
 PATHS=$(python3 -B "$ROOT_DIR/lib/store.py" create --location "$LOC") || RC=$?
 RC=${RC:-0}

@@ -360,7 +360,7 @@ def rebind(cwd, *, root=None):
     """FR-9 first-push re-keying: move the whole <common-dir-key> project store to the
     <remote-key> store (registry.json travels), merge, and surface a value conflict rather than
     clobber. Locked + journalled at the rebind-invariant <common-dir-key> so an interruption is
-    recoverable regardless of the now-changed active config_key (UFR-10). Takes no `interactive`
+    recoverable regardless of the now-changed active config_key (UFR-10). Takes no `owner_authorized`
     flag (unlike the destructive flip's plan/execute, which refuse unattended): a rebind is a
     mechanical re-key that runs even headless, and its one owner-decision part — a value conflict
     — is surfaced (applied=False) regardless of mode, satisfying FR-9 + FR-17 in both."""
