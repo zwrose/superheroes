@@ -102,7 +102,10 @@ ITEM_DETAIL_EVIDENCE_UNAVAILABLE = "item-evidence-unavailable"
 ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED = "report-missing-items-delivered"
 ITEM_DETAIL_STDOUT_CAPPED = "stdout-capped-by-attempt"
 STDOUT_TRUNCATION_MARKER_PREFIX = "<<<SUPERHEROES-STDOUT-TRUNCATED:"
+STDERR_TRUNCATION_MARKER_PREFIX = "<<<SUPERHEROES-STDERR-TRUNCATED:"
 STDOUT_TRUNCATION_MARKER_SUFFIX = ">>>"
+CAP_STREAM_STDOUT = "stdout"
+CAP_STREAM_STDERR = "stderr"
 ITEM_CHECK_FIELDS = frozenset(("declared", "expected", "delivered", "missing"))
 ITEM_EVIDENCE_CAUSE_FALSY_BASE = "falsy-base-sha"
 ITEM_EVIDENCE_CAUSE_DIFF_TIMEOUT = "diff-timeout"
@@ -484,9 +487,17 @@ def _validate_linked_build_cwd(cwd, timeout=None):
 
 
 def _stdout_truncation_marker(observed_bytes):
-    return "%s%d%s\n" % (
-        STDOUT_TRUNCATION_MARKER_PREFIX, int(observed_bytes), STDOUT_TRUNCATION_MARKER_SUFFIX,
-    )
+    return _truncation_marker(CAP_STREAM_STDOUT, observed_bytes)
+
+
+def _truncation_marker(stream, observed_bytes):
+    if stream == CAP_STREAM_STDERR:
+        prefix = STDERR_TRUNCATION_MARKER_PREFIX
+    elif stream == CAP_STREAM_STDOUT:
+        prefix = STDOUT_TRUNCATION_MARKER_PREFIX
+    else:
+        raise ValueError("unknown cap stream: %r" % (stream,))
+    return "%s%d%s\n" % (prefix, int(observed_bytes), STDOUT_TRUNCATION_MARKER_SUFFIX)
 
 
 _STDOUT_TRUNCATION_MARKER_RE = re.compile(
@@ -495,6 +506,23 @@ _STDOUT_TRUNCATION_MARKER_RE = re.compile(
         re.escape(STDOUT_TRUNCATION_MARKER_SUFFIX),
     )
 )
+_STDOUT_MARKER_CLAIMED_BYTES_DIGITS_MAX = 32
+
+
+def _bounded_stdout_marker_claimed_bytes(text):
+    """Byte count claimed by a head truncation marker; None when absent or unsafe to parse."""
+    if not text:
+        return None
+    match = _STDOUT_TRUNCATION_MARKER_RE.match(text)
+    if match is None:
+        return None
+    digits = match.group(1)
+    if len(digits) > _STDOUT_MARKER_CLAIMED_BYTES_DIGITS_MAX:
+        return None
+    try:
+        return int(digits)
+    except (ValueError, TypeError):
+        return None
 
 
 def _stdout_capture_truncated(text):
@@ -504,16 +532,30 @@ def _stdout_capture_truncated(text):
     return _STDOUT_TRUNCATION_MARKER_RE.match(text) is not None
 
 
-def _bytes_with_stdout_cap(data, max_bytes, observed_bytes=None):
-    """Keep the last max_bytes of stdout content, prefixing a truncation marker when capped."""
+def _cap_bytes_with_truncation_marker(data, max_bytes, stream, observed_bytes=None, *, _return_budget=False):
+    """One home for keep-last-N-bytes + truncation-marker + clamp arithmetic."""
     if observed_bytes is None:
         observed_bytes = len(data)
-    if len(data) <= max_bytes:
+    if observed_bytes <= max_bytes and len(data) <= max_bytes:
+        if _return_budget:
+            return data, False, 0
         return data, False
-    marker = _stdout_truncation_marker(observed_bytes).encode("utf-8")
+    marker = _truncation_marker(stream, observed_bytes).encode("utf-8")
     content_budget = max(0, max_bytes - len(marker))
     tail = data[-content_budget:] if content_budget else b""
-    return marker + tail, True
+    capped = marker + tail
+    if len(capped) > max_bytes:
+        capped = capped[:max_bytes]
+    if _return_budget:
+        return capped, True, content_budget
+    return capped, True
+
+
+def _bytes_with_stdout_cap(data, max_bytes, observed_bytes=None, stream=None):
+    """Keep the last max_bytes of stream content, prefixing a truncation marker when capped."""
+    if stream is None:
+        raise ValueError("cap stream is required")
+    return _cap_bytes_with_truncation_marker(data, max_bytes, stream, observed_bytes)
 
 
 def _parse_git_worktree_list(porcelain_data):
@@ -523,22 +565,13 @@ def _parse_git_worktree_list(porcelain_data):
         porcelain_bytes = porcelain_data
     else:
         porcelain_bytes = porcelain_data.encode("utf-8", errors="surrogateescape")
+    text = porcelain_bytes.decode("utf-8", errors="surrogateescape")
     worktrees = []
-    current = None
-    for line in porcelain_bytes.split(b"\n"):
-        if line.startswith(b"worktree "):
-            if current is not None:
-                worktrees.append(current)
-            path_text = line[len(b"worktree "):].strip().decode(
-                "utf-8", errors="surrogateescape",
-            )
-            current = {"path": os.path.realpath(path_text)}
-        elif current is not None and line.startswith(b"branch "):
-            current["branch"] = line[len(b"branch "):].strip().decode(
-                "utf-8", errors="surrogateescape",
-            )
-    if current is not None:
-        worktrees.append(current)
+    for block in sibling_worktree_probe._parse_worktree_list(text):
+        path = block.get("path")
+        if path is None:
+            continue
+        worktrees.append({"path": os.path.realpath(path)})
     return worktrees
 
 
@@ -1452,7 +1485,7 @@ def _write_report_missing_items_delivered_detail(run_dir_real, state, attempt):
         if not engine_adapter.write_prompt_is_contracted(fed_prompt):
             return None
         stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
-        stdout = _read_capped_text(stdout_path)
+        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
         engine = opened.get("engine")
         role_kind = opened.get("roleKind", "build")
         res = engine_adapter.grade_write_report(engine, role_kind, stdout, fed_prompt)
@@ -1921,7 +1954,7 @@ def _cleanup(proc, pgid):
             pass
 
 
-def _bounded_stdout_cap_from_file(fh, max_bytes):
+def _bounded_stdout_cap_from_file(fh, max_bytes, stream):
     """Read at most max_bytes (+ marker) from fh without loading an oversized file. Never raises."""
     try:
         fh.seek(0, os.SEEK_END)
@@ -1931,23 +1964,24 @@ def _bounded_stdout_cap_from_file(fh, max_bytes):
         if observed <= max_bytes:
             fh.seek(0)
             return fh.read(observed), False, observed
-        marker = _stdout_truncation_marker(observed).encode("utf-8")
-        content_budget = max(0, max_bytes - len(marker))
+        _probe, _truncated, content_budget = _cap_bytes_with_truncation_marker(
+            b"", max_bytes, stream, observed, _return_budget=True,
+        )
         if content_budget > 0:
             fh.seek(-content_budget, os.SEEK_END)
             tail = fh.read(content_budget)
         else:
             tail = b""
-        capped = marker + tail
-        if len(capped) > max_bytes:
-            capped = capped[:max_bytes]
-        return capped, True, observed
+        capped, truncated = _cap_bytes_with_truncation_marker(
+            tail, max_bytes, stream, observed,
+        )
+        return capped, truncated, observed
     except (OSError, MemoryError):
         return None, False, 0
 
 
 # Injected-seam sentinel; tests call this directly.
-def _cap_file_tail(path, max_bytes):
+def _cap_file_tail(path, max_bytes, stream):
     """Keep only the last max_bytes of a file (result JSON is at the tail). Never raises.
 
     Returns (truncated, observed): truncated is True when the file exceeded budget and was
@@ -1957,7 +1991,7 @@ def _cap_file_tail(path, max_bytes):
     """
     try:
         with open(path, "rb") as fh:
-            capped, truncated, observed = _bounded_stdout_cap_from_file(fh, max_bytes)
+            capped, truncated, observed = _bounded_stdout_cap_from_file(fh, max_bytes, stream)
     except (OSError, MemoryError):
         return False, None
     if capped is None:
@@ -1973,11 +2007,13 @@ def _cap_file_tail(path, max_bytes):
     return True, observed
 
 
-def _read_capped_text(path, max_bytes=MAX_STDOUT_CAPTURE):
+def _read_capped_text(path, max_bytes=MAX_STDOUT_CAPTURE, stream=None):
     """Read at most the last max_bytes of a text file. Never raises."""
+    if stream is None:
+        raise ValueError("cap stream is required")
     try:
         with open(path, "rb") as fh:
-            capped, _truncated, _observed = _bounded_stdout_cap_from_file(fh, max_bytes)
+            capped, _truncated, _observed = _bounded_stdout_cap_from_file(fh, max_bytes, stream)
         if capped is None:
             return ""
         return capped.decode("utf-8", errors="ignore")
@@ -2014,15 +2050,15 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
     out = bytearray()
     err = bytearray()
 
-    def _drain(stream, sink, cap):
+    def _drain(pipe, sink, cap, cap_stream):
         total_observed = 0
         try:
-            for chunk in iter(lambda: stream.read(4096), b""):
+            for chunk in iter(lambda: pipe.read(4096), b""):
                 total_observed += len(chunk)
                 sink.extend(chunk)
                 if total_observed > cap or len(sink) > cap:
                     capped, _truncated = _bytes_with_stdout_cap(
-                        bytes(sink), cap, total_observed,
+                        bytes(sink), cap, total_observed, cap_stream,
                     )
                     sink.clear()
                     sink.extend(capped)
@@ -2030,8 +2066,16 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
             pass
 
     wt = threading.Thread(target=_feed, daemon=True)
-    ot = threading.Thread(target=_drain, args=(proc.stdout, out, MAX_STDOUT_CAPTURE), daemon=True)
-    et = threading.Thread(target=_drain, args=(proc.stderr, err, MAX_STDERR_CAPTURE), daemon=True)
+    ot = threading.Thread(
+        target=_drain,
+        args=(proc.stdout, out, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT),
+        daemon=True,
+    )
+    et = threading.Thread(
+        target=_drain,
+        args=(proc.stderr, err, MAX_STDERR_CAPTURE, CAP_STREAM_STDERR),
+        daemon=True,
+    )
     for t in (wt, ot, et):
         t.start()
 
@@ -2224,8 +2268,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         stdout_path, stderr_path, prev_stdout, prev_stderr,
         last_activity_at, activity_stream,
     )
-    _, stdout_observed = _cap_file_tail(stdout_path, MAX_STDOUT_CAPTURE)
-    _, stderr_observed = _cap_file_tail(stderr_path, MAX_STDERR_CAPTURE)
+    _, stdout_observed = _cap_file_tail(stdout_path, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT)
+    _, stderr_observed = _cap_file_tail(stderr_path, MAX_STDERR_CAPTURE, CAP_STREAM_STDERR)
     returncode = proc.returncode
     elapsed = time.monotonic() - start
     ended_record = {
@@ -2508,7 +2552,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
-    stdout = _read_capped_text(stdout_path)
+    stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
     if not stdout and not os.path.exists(stdout_path):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
@@ -2667,7 +2711,7 @@ def _grade_write_attempt(run_dir_real, state, attempt):
     if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
-    stdout = _read_capped_text(stdout_path)
+    stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
     if not stdout and not os.path.exists(stdout_path):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
@@ -2744,27 +2788,43 @@ def _attempt_stdout_truncated(run_dir_real, state, attempt):
     # only — measured by _cap_file_tail); unstamped records (_execute_injected_attempt
     # or any future producer) fall through to the marker read.
     if observed is not None and ended.get("stdoutBytesPreCap") is True:
+        text = _read_capped_text(stdout_path)
+        if _stdout_capture_truncated(text):
+            _journal_append(run_dir_real, {
+                "kind": "stdout-marker-overruled",
+                "attempt": attempt,
+                "stampedBytes": observed,
+                "markerBytes": _bounded_stdout_marker_claimed_bytes(text),
+                "at": time.time(),
+            })
         return None
-    text = _read_capped_text(stdout_path)
+    text = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
     if _stdout_capture_truncated(text):
         return observed if observed is not None else size
     return None
 
 
 def _stdout_capped_forfeit(engine, observed_bytes, *, run_dir_real=None, state=None, attempts=1):
+    observed_int = int(observed_bytes)
+    if attempts < MAX_ATTEMPTS:
+        reason_clause = (
+            "the retry was refused because the gradeable tail was lost. "
+        )
+    else:
+        reason_clause = "the attempt budget was exhausted. "
     terminal = {
         "ok": False,
         "terminal": True,
         "reason": dispatch_outcome.REASON_FORFEITED,
-        "detail": "%s:%d" % (ITEM_DETAIL_STDOUT_CAPPED, int(observed_bytes)),
+        "detail": "%s:%d" % (ITEM_DETAIL_STDOUT_CAPPED, observed_int),
         "attempts": attempts,
         "forfeited": True,
         "disclosure": (
-            "%s attempt 1 report was truncated at the %d-byte stdout capture cap; "
-            "the retry was refused because the gradeable tail was lost. "
+            "%s attempt %d report was truncated at the %d-byte stdout capture cap; "
+            "%s"
             "The work may nevertheless be complete on disk — inspect the worktree "
             "and reconstruct from the diff rather than re-running the order."
-            % (engine, int(observed_bytes))
+            % (engine, int(attempts), observed_int, reason_clause)
         ),
     }
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
