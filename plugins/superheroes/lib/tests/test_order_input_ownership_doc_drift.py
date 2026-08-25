@@ -1,4 +1,5 @@
 """Drift pin: order-input ownership docs bound to round_driver materialization (#1107 WO-R2-D)."""
+import json
 import os
 import re
 import tempfile
@@ -36,7 +37,7 @@ def _derive_driver_materialized_round_paths():
     session_dir = _probe_session_dir()
     rdir = RR.round_dir(session_dir, _PROBE_RND)
     paths = set()
-    for fn in (RD._ensure_round_diff, RD._ensure_round_head_diff, RD._ensure_fix_batch_file):
+    for fn in RD.ROUND_MATERIALIZER_REGISTRY.values():
         rel = os.path.relpath(fn(session_dir, _PROBE_RND, _PROBE_STATE), rdir)
         paths.add(rel.replace("\\", "/"))
     roster = ["verifier:c0", "finding::auth.py::12"]
@@ -149,6 +150,54 @@ def test_round_driver_ownership_covers_code_derived_artifacts():
             "round-driver.md Order-input ownership missing code-derived artifact "
             "%r (expected needle %r in section)" % (rel_path, needle)
         )
+
+
+def test_materializer_census_derives_from_production_registry():
+    # axis: census walks ROUND_MATERIALIZER_REGISTRY — never a hand-maintained helper tuple
+    session_dir = _probe_session_dir()
+    rdir = RR.round_dir(session_dir, _PROBE_RND)
+    synth_rel = "synthetic-registry-probe.json"
+
+    def _synthetic_materializer(session_dir, rnd, state):
+        path = os.path.join(RR.round_dir(session_dir, rnd), synth_rel)
+        return RD._ensure_bytes_at_path(session_dir, path, b"{}")
+
+    reg = dict(RD.ROUND_MATERIALIZER_REGISTRY)
+    reg["wo1107_synthetic_materializer"] = _synthetic_materializer
+    original = RD.ROUND_MATERIALIZER_REGISTRY
+    RD.ROUND_MATERIALIZER_REGISTRY = reg
+    try:
+        derived = _derive_driver_materialized_round_paths()
+        assert synth_rel in derived
+        hand_paths = set()
+        for fn in (RD._ensure_round_diff, RD._ensure_round_head_diff, RD._ensure_fix_batch_file):
+            rel = os.path.relpath(fn(session_dir, _PROBE_RND, _PROBE_STATE), rdir)
+            hand_paths.add(rel.replace("\\", "/"))
+        assert synth_rel not in hand_paths
+    finally:
+        RD.ROUND_MATERIALIZER_REGISTRY = original
+
+
+def test_fix_batch_file_round_trips_non_empty_batch(tmp_path):
+    # axis: fix-batch.json must carry finding ids from state — not merely exist as an empty file
+    session_dir = str(tmp_path)
+    rnd = 1
+    ident = "finding::auth.py::42"
+    entry = {
+        "id": "%s@L42" % ident,
+        "identity": ident,
+        "file": "auth.py",
+        "line": 42,
+        "title": "leak",
+        "severity": "Important",
+    }
+    state = {"_fixBatch": [entry]}
+    path = RD._ensure_fix_batch_file(session_dir, rnd, state)
+    with open(path, encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    assert len(on_disk) == 1
+    assert on_disk[0]["id"] == entry["id"]
+    assert on_disk[0]["identity"] == ident
 
 
 def test_round_driver_assigns_driver_ownership_for_head_diff_and_fix_batch():
