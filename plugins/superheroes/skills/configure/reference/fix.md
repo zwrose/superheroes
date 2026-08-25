@@ -76,7 +76,7 @@ python3 -B "$ROOT_DIR/lib/mode_migrate.py" rebind --cwd .
 A `conflict` result means the pre-remote and an existing remote-keyed setting disagree on a value —
 **surface the conflict for the owner; nothing is silently overwritten**. An interrupted rebind is
 recovered automatically by the Step-1 `recover` on the next run (the journal lives at a key that
-survives the re-anchoring). A headless run records a rebind conflict un-applied and continues (FR-17).
+survives the re-anchoring). A rebind conflict is recorded un-applied and the run continues (FR-17).
 
 ## 4 — Confirm provisional calibration (FR-18)
 

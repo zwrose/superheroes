@@ -70,5 +70,5 @@ tunable via `view-and-tune.md` §2. Model-tier overrides (including explicit `fa
 | --- | --- |
 | Skipping the Step-1 recover | A crashed flip is invisible until recover runs first — run it every time. |
 | Re-deciding a recorded storage mode during set-up/fix | The mode is sticky (FR-11); only the explicit, confirmed flip on the tune menu changes it. |
-| Flipping storage unattended | A headless run never flips (FR-14); it records the owner-choice fix un-applied and continues. |
+| Flipping storage unattended | A storage flip happens only with the owner's explicit authorization in the current turn; without it the flip is recorded un-applied and the run continues. |
 | Editing the owner's build config to add a verify command | Propose it for the owner to add — `configure` never edits their build config (UFR-5). |

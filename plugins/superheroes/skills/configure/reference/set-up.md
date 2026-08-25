@@ -44,8 +44,9 @@ in the set-up output which storage mode was taken, that it is provisional, and t
 Once the mode is set, seed the shared **core** (the project's stack, verify command, threat model)
 and the two light layers — the-architect's doc-policy and review-crew's threat model — in the same
 pass. Drive each hero's calibration logic through its now-internal `*-init` skill (reached from
-here, not advertised separately). Detect facts from the repo first; ask only what detection leaves
-open. Write the core confirmed when the owner answered, provisional on a headless run.
+here, not advertised separately). Detect facts from the repo; do not ask. Write the core
+**provisional**, stating which fields were defaulted rather than answered; the owner confirms via
+the FR-18 confirm step.
 
 ## 3 — Verify command first (UFR-5)
 
