@@ -258,6 +258,42 @@ receipt that the repaired detector bites again.
 
 ---
 
+## BP-CR-10 — retired: non-object receipt `isinstance` guard bite-proof (vacuous after WO-b3)
+
+**Retired detector:** `test_bite_public_handback_non_object_receipt` — the source-rewriting bite-proof
+that removed the `if not isinstance(receipt, dict):` guard in `_receipt_bindings_ok` and expected
+`validate_handback` to raise `AttributeError` on a non-dict receipt.
+
+**Why retired, not repaired.** WO-b3 changed `handback_gate.py:840` from
+`receipt.get("schema") == RD.RECEIPT_INTERIM_SCHEMA` to
+`RD.receipt_kind(receipt) == RD.RECEIPT_INTERIM_SCHEMA`. `RD.receipt_kind` opens with its own
+`if not isinstance(receipt, dict): return None` (`round_driver.py:648–649`), so a non-dict receipt
+no longer crashes on `.get`. With the `isinstance` guard removed, the same refusal still flows through
+`RD.receipt_kind` (returns `None`, no interim match) and then `RD.validate_receipt`, whose opening
+check returns `(False, "receipt is not an object")` — wrapped by `_receipt_bindings_ok` into the
+identical token `receipt-invalid:receipt is not an object`. The mutation is behavior-neutral; the
+proof cannot bite.
+
+**Measured evidence on integrated head (pre-retirement):**
+```
+        try:
+            mod = _reload_handback_gate()
+            with pytest.raises(AttributeError):
+>               mod.validate_handback("gh pr ready", repo)
+E               Failed: DID NOT RAISE <class 'AttributeError'>
+plugins/superheroes/lib/tests/test_interim_receipt.py:561: Failed
+1 failed, 29 passed in 253.30s
+```
+
+**Surviving non-mutating coverage:** `test_public_handback_rejects_non_object_receipt` (same file,
+`:490`) — axis: scalar/list JSON must refuse cleanly through the public boundary with
+`handback-receipt-unreadable`, never `AttributeError` on `.get`.
+
+**Production guard retained:** the `if not isinstance(receipt, dict):` lines in `handback_gate.py`
+stay; only the vacuous proof was removed.
+
+---
+
 ## Closing state
 
 After the full probe sequence:
