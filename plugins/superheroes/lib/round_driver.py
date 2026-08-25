@@ -114,6 +114,7 @@ STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"
 JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
 RECEIPT_FILE = "round-receipt.json"
+RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 
 # --- the #723 schema matrix -------------------------------------------------------------------
 # `SCHEMA_VERSION` stays the version a v2 RECEIPT keys off (and the version an in-flight v2 state
@@ -3800,7 +3801,7 @@ def _terminal_receipt_on_disk(session_dir):
 def _write_interim_receipt(session_dir, state, stop_reason):
     """Write an interim receipt atomically. OSError PROPAGATES — same stance as `_write_receipt`."""
     receipt = build_interim_receipt(state, session_dir, stop_reason)
-    path = os.path.join(session_dir, RECEIPT_FILE)
+    path = os.path.join(session_dir, RECEIPT_INTERIM_FILE)
     round_commit.atomic_write_bytes(
         path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     return receipt
@@ -7542,7 +7543,9 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
             if why is not None:
                 return _refuse_cmd(session_dir, "attest", why, detail=str(failure_ref))
             artifact_snapshot = _session_artifact_hashes(session_dir,
-                                                         exclude=(RECEIPT_FILE, STATE_FILE,
+                                                         exclude=(RECEIPT_FILE,
+                                                                  RECEIPT_INTERIM_FILE,
+                                                                  STATE_FILE,
                                                                   JOURNAL_FILE,
                                                                   round_records.LOCK_FILE))
             return _cmd_attest_locked(session_dir, failure_ref, note, git=git, state=state,
@@ -7643,7 +7646,7 @@ def cmd_checkpoint(session_dir, stop_reason):
             if not ok:
                 return _refuse_cmd(session_dir, "checkpoint", "interim-receipt-invalid",
                                    fault=FAULT_INTERNAL, detail=invalid)
-            path = os.path.join(session_dir, RECEIPT_FILE)
+            path = os.path.join(session_dir, RECEIPT_INTERIM_FILE)
             receipt_bytes = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
             checkpoint_entry = _journal_entry_for_commit(
                 session_dir, "checkpoint", "checkpointed", stopReason=stop_reason)

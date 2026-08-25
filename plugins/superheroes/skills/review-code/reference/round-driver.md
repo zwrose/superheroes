@@ -114,7 +114,7 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" checkpoint \
 `--stop-reason` is required; the only accepted values are `tripwire`, `park`, and `held`
 (`CHECKPOINT_STOP_REASONS`).
 
-**What it writes.** An interim `round-receipt.json` built by `build_interim_receipt`: it starts from
+**What it writes.** An interim `round-receipt-interim.json` built by `build_interim_receipt`: it starts from
 `build_receipt` (journal-derived `rounds`, `findings`, `decisions`, `seatMap`, `scriptRan`,
 `degraded`, `skippedBlockers` — including **per-pass verdict totals** on each round as
 `rounds[].verifyPasses`), then strips terminal-only keys (`certification`, `certificationShape`,
@@ -125,9 +125,11 @@ certification.
 
 **Which stops invoke it.** Call `checkpoint` when the orchestrator parks at a non-terminal stop
 with `--stop-reason` matching the stop: **tripwire** (third-rework tripwire), **park** (owner gate
-park before the owner rules), or **held** (terminal `held` verdict — certification withheld, but the
-orchestrator still checkpoints progress before handback). These are orchestrator doctrine; the
-driver only validates the reason against `CHECKPOINT_STOP_REASONS`.
+park before the owner rules), or **held** (stall menu — certification not yet folded; the
+orchestrator checkpoints progress before the hold choice is submitted). Once the hold fold sets
+`terminal = "held"`, `checkpoint` refuses (`checkpoint-session-terminal`) and the terminal
+`round-receipt.json` (full `rounds` record, `verdict: "held"`) is the record from then on. These are
+orchestrator doctrine; the driver only validates the reason against `CHECKPOINT_STOP_REASONS`.
 
 **Terminal receipt preserved.** `cmd_checkpoint` refuses when the session is already terminal
 (`checkpoint-session-terminal`) or when a **terminal** certified/attested receipt sits on disk

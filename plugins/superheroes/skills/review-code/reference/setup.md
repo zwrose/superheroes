@@ -29,6 +29,7 @@
 | `$SESSION_DIR/loop-state.json`                      | round driver   | Auto-fix loop only: driver state (`next`/`submit` protocol)                                 |
 | `$SESSION_DIR/driver-journal.jsonl`                 | round driver   | Auto-fix loop only: `scriptRan` journal (one line per `next`/`submit`)                      |
 | `$SESSION_DIR/round-receipt.json`                   | round driver   | Auto-fix loop only: terminal receipt (`validate_receipt` shape)                             |
+| `$SESSION_DIR/round-receipt-interim.json`           | round driver   | Auto-fix loop only: interim checkpoint receipt (`receipt-interim/1`; not handback evidence) |
 
 ## Setup resolution — run these in order
 
