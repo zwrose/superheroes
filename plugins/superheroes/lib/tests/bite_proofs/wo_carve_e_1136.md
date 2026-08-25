@@ -54,8 +54,8 @@ So the red came from the exclusion being gone, not from unrelated drift.
 **Counting note, recorded because this record tripped it.** An earlier draft of this paragraph
 counted the outside-hits with `grep -E '^E   lib/'` — exactly three spaces after `E`. Pytest emits
 nine, so that pattern matched **nothing** and would have reported `0` outside-hits whether or not
-any existed: the number was true but its evidence was vacuous. That is `rubric/bite-proof.md`
-mode 4's fixture-vacuity face — a probe green (here, a reassuring zero) that the fixture could
+any existed: the number was true but its evidence was vacuous. That is the bite-proof rubric's
+mode 4 fixture-vacuity face — a probe green (here, a reassuring zero) that the fixture could
 never have produced any other way. Caught by the confirming review round on this build. The
 patterns above are the corrected, tolerant ones.
 
@@ -88,7 +88,7 @@ nothing could not be reverted.
 (`PYTEST_EXIT=0`), so the green brackets the red on both sides.
 
 **Provenance of this record.** BP-E1 originally shipped with `Neutralization: none` — a green-only
-record, vacuous under `rubric/bite-proof.md`. PR #1142's completion round produced the missing red
+record, vacuous under the bite-proof rubric. PR #1142's completion round produced the missing red
 half as a receipt in that PR's build record and filed copying it into this file as follow-up 3
 (#1148 item 4). The runs above were **re-executed from scratch** for #1148 rather than transcribed,
 and independently reproduce PR #1142's counts (red 2 failed / 19 passed; green 21 passed).
