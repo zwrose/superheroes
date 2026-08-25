@@ -1110,6 +1110,45 @@ def test_launch_build_unknown_effort_refuses_before_any_spawn(tmp_path, monkeypa
     assert result["reason"] == "effort-not-registry-known"
     records = ll.read(repo)["records"]
     assert not [r for r in records if r.get("event") == "started"]
+    # The refusal is accounted, not merely aborted: it reserves and then terminalizes at the
+    # same stage its model-resolution sibling uses, so a reader sees why the lane never ran.
+    assert len([r for r in records if r.get("event") == "reserved"]) == 1
+    refused = [r for r in records if r.get("event") == "refused"]
+    assert len(refused) == 1
+    assert refused[0]["stage"] == "model"
+    assert refused[0]["reason"] == "effort-not-registry-known"
+
+
+def test_opus_effort_pin_survives_a_spawn_retry(tmp_path, monkeypatch):
+  # axis: the pin rides every attempt — a retried spawn is still an opus child at medium
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv(L.EFFORT_ENV, "high")
+    captured = []
+    calls = {"n": 0}
+
+    def oserror_then_capture(argv, cwd, out_fh, err_fh, child_env):
+        calls["n"] += 1
+        captured.append(dict(child_env))
+        if calls["n"] == 1:
+            raise OSError("spawn failed")
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=oserror_then_capture,
+        settle_seconds=0.3,
+        backoff_seconds=(0,),
+    )
+    assert result["ok"] is True
+    assert result["model"] == "opus"
+    assert calls["n"] == 2
+    assert [env[L.EFFORT_ENV] for env in captured] == ["medium", "medium"]
+    _reap(result)
 
 
 # --- retry / settle branches -------------------------------------------------
