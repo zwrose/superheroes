@@ -35,6 +35,7 @@ _HOME = "rubric/bite-proof.md"
 # implementer § The rules — disclosure shapes and doctrine reference in short-return rule (count=1)
 # implementer § Validating — validity rule 6 names expected bite-proof (count=1)
 # test-reviewer § Named test-smell taxonomy — axis-line smell cites doctrine home (count=1)
+# review-discipline § Review bars and recorded residuals — structural-pin doctrine cites vacuity-mode home (count=1)
 # CONVENTIONS §12 — verification contracts pointer to vacuity-trap home (count=2)
 _CONSUMER_ROSTER = [
     ("skills/workhorse/SKILL.md", "## 6. Decompose into work orders", 1),
@@ -43,6 +44,7 @@ _CONSUMER_ROSTER = [
     ("agents/implementer.md", "## The rules", 1),
     ("agents/implementer.md", "## Validating your work order", 1),
     ("agents/test-reviewer.md", "## Named test-smell taxonomy", 1),
+    ("rubric/review-discipline.md", "## Review bars and recorded residuals", 1),
     (
         "../../CONVENTIONS.md",
         "## 12. Verification contracts (fix-ships-its-detector, real-seam tests)",
