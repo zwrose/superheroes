@@ -141,17 +141,21 @@ Then write `meta.json` in both modes:
 # The orchestrator sets FOCUS_JSON from the `--focus` argument (if any) before this block runs.
 FOCUS_ARG=$(printf '%s' "${FOCUS_JSON:-}" | jq -cs 'if length == 1 and ((.[0]|type) == "object" or (.[0]|type) == "array") then .[0] else empty end' 2>/dev/null); [ -n "$FOCUS_ARG" ] || { [ -n "${FOCUS_JSON:-}" ] && FOCUS_ARG=$(printf '%s' "$FOCUS_JSON" | jq -Rs .) || FOCUS_ARG=null; }   # -s SLURPS, so the encoder can only ever emit ONE document: a lone JSON object/array rides through as JSON, and everything else (free text, a bare scalar, several documents, malformed JSON) becomes one JSON string via stdin — never a multi-document value --argjson would reject, and never a silently truncated note
 PR_ARG=$(printf '%s' "${PR_NUMBER:-null}" | jq -cs 'if length == 1 and (.[0]|type) == "number" then .[0] else null end' 2>/dev/null); [ -n "$PR_ARG" ] || PR_ARG=null
+STORAGE_MODE_ARG=$(printf '%s' "${LOC:-}" | jq -Rsc 'if type == "string" and length > 0 then . else null end' 2>/dev/null); [ -n "$STORAGE_MODE_ARG" ] || STORAGE_MODE_ARG=null
+STORAGE_SOURCE_ARG=$(printf '%s' "${SOURCE:-}" | jq -Rsc 'if type == "string" and length > 0 then . else null end' 2>/dev/null); [ -n "$STORAGE_SOURCE_ARG" ] || STORAGE_SOURCE_ARG=null
+STORAGE_PROVISIONAL_ARG=$(printf '%s' "${PROVISIONAL:-}" | jq -cs 'if length == 1 and .[0] == true then true elif length == 1 and .[0] == false then false else null end' 2>/dev/null); [ -n "$STORAGE_PROVISIONAL_ARG" ] || STORAGE_PROVISIONAL_ARG=null
 jq -n --arg mode "$MODE" --arg path "$REVIEW_PATH" --arg repo "$REPO" --arg branch "$BRANCH" \
   --arg headSha "$HEAD_SHA" --arg baseRef "$BASE_REF" --arg baseBranch "$BASE_BRANCH" --arg repoRoot "$REPO_ROOT" \
   --arg baseFetch "$BASE_FETCH" --arg sessionDir "$SESSION_DIR" --arg verify "${VERIFY_CMD:-unverified}" \
   --argjson pr "$PR_ARG" --argjson focusNotes "$FOCUS_ARG" \
-  '{mode:$mode,path:$path,pr:$pr,repo:$repo,branch:$branch,headSha:$headSha,baseRef:$baseRef,baseBranch:$baseBranch,baseFetch:$baseFetch,repoRoot:$repoRoot,sessionDir:$sessionDir,verify:$verify,focusNotes:$focusNotes}' \
+  --argjson storageMode "$STORAGE_MODE_ARG" --argjson storageSource "$STORAGE_SOURCE_ARG" --argjson storageProvisional "$STORAGE_PROVISIONAL_ARG" \
+  '{mode:$mode,path:$path,pr:$pr,repo:$repo,branch:$branch,headSha:$headSha,baseRef:$baseRef,baseBranch:$baseBranch,baseFetch:$baseFetch,repoRoot:$repoRoot,sessionDir:$sessionDir,verify:$verify,focusNotes:$focusNotes,storageMode:$storageMode,storageSource:$storageSource,storageProvisional:$storageProvisional}' \
   > "$SESSION_DIR/meta.json.tmp" \
   && mv "$SESSION_DIR/meta.json.tmp" "$SESSION_DIR/meta.json" \
   || { rm -f "$SESSION_DIR/meta.json.tmp"; echo "review-code: could not write meta.json — halting rather than continuing without the session record (#637)" >&2; exit 1; }
 ```
 
-`REVIEW_PATH` is `loop` (default) or `review-only`, decided from the flags at invocation. `post` was a third value and was removed with the mode (#1121) — never re-add it: a resumed `post` run has no flow left to continue. It is written to `meta.json` so a cold-resumed orchestrator (after compaction) knows which top-level flow to continue. The `verify` field records the verify command string, or `"unverified"` / `"review-only"`, so a cold-resumed orchestrator recovers the verify story.
+`REVIEW_PATH` is `loop` (default) or `review-only`, decided from the flags at invocation. `post` was a third value and was removed with the mode (#1121) — never re-add it: a resumed `post` run has no flow left to continue. It is written to `meta.json` so a cold-resumed orchestrator (after compaction) knows which top-level flow to continue. The `verify` field records the verify command string, or `"unverified"` / `"review-only"`, so a cold-resumed orchestrator recovers the verify story. `storageMode`, `storageSource`, and `storageProvisional` record storage-bootstrap disclosure when bootstrap ran (`$LOC`, `$SOURCE`, `$PROVISIONAL`); when bootstrap did not run they are JSON `null` — not empty strings — so a reader can tell no storage decision was taken this run.
 
 Size the round-1 diff for the dispatch summary (after writing it to `round-1/diff.txt` per the command above):
 
