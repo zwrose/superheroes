@@ -39,7 +39,7 @@ def _isolate_hero_globals(monkeypatch, tmp_path):
 
 def test_fresh_project_routes_to_set_up(tmp_path):
     _init_repo(tmp_path)
-    out = crt.route(str(tmp_path), interactive=True, root=str(tmp_path / "store"))
+    out = crt.route(str(tmp_path), root=str(tmp_path / "store"))
     assert out["path"] == "set-up"
 
 
@@ -48,7 +48,7 @@ def test_healthy_project_with_layers_routes_to_view(tmp_path):
     root = str(tmp_path / "store")
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
     _seed_light_layers(_seed_core(tmp_path))
-    out = crt.route(str(tmp_path), interactive=True, root=root)
+    out = crt.route(str(tmp_path), root=root)
     assert out["path"] == "view"
 
 
@@ -57,7 +57,7 @@ def test_incomplete_set_up_layers_missing_routes_to_fix(tmp_path):
     root = str(tmp_path / "store")
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
     _seed_core(tmp_path)
-    out = crt.route(str(tmp_path), interactive=True, root=root)
+    out = crt.route(str(tmp_path), root=root)
     assert out["path"] == "fix" and "incomplete" in " ".join(out["reasons"]).lower()
 
 
@@ -66,7 +66,7 @@ def test_provisional_calibration_routes_to_fix(tmp_path):
     root = str(tmp_path / "store")
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
     _seed_light_layers(_seed_core(tmp_path, status="provisional"))
-    out = crt.route(str(tmp_path), interactive=True, root=root)
+    out = crt.route(str(tmp_path), root=root)
     assert out["path"] == "fix" and "provisional" in " ".join(out["reasons"]).lower()
 
 
@@ -77,7 +77,7 @@ def test_structural_signal_routes_to_fix(tmp_path, monkeypatch):
     _seed_light_layers(_seed_core(tmp_path))   # otherwise healthy
     monkeypatch.setattr(crt.mode_reconcile, "gather_signals",
                         lambda cwd, root=None: [{"type": "migration-pending", "identity": "x", "detail": {}}])
-    out = crt.route(str(tmp_path), interactive=True, root=root)
+    out = crt.route(str(tmp_path), root=root)
     assert out["path"] == "fix" and "structural" in " ".join(out["reasons"]).lower()
 
 
@@ -88,7 +88,7 @@ def test_staleness_drift_stays_in_view(tmp_path, monkeypatch):
     _seed_light_layers(_seed_core(tmp_path))   # healthy; a non-structural drift signal stays in view
     monkeypatch.setattr(crt.mode_reconcile, "gather_signals",
                         lambda cwd, root=None: [{"type": "hero-behind", "identity": "x", "detail": {}}])
-    out = crt.route(str(tmp_path), interactive=True, root=root)
+    out = crt.route(str(tmp_path), root=root)
     assert out["path"] == "view"
 
 
@@ -100,7 +100,7 @@ def test_legacy_profile_no_core_routes_to_fix(tmp_path):
     root = str(tmp_path / "store")
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "review-profile.md").write_text("legacy profile\n")
-    out = crt.route(str(tmp_path), interactive=True, root=root)
+    out = crt.route(str(tmp_path), root=root)
     assert out["path"] == "fix"
     assert any(s.get("type") == core_md.LEGACY_PROFILE_REASON for s in out["signals"])
 
@@ -118,7 +118,7 @@ def test_stray_legacy_with_core_routes_to_fix(tmp_path):
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
     _seed_light_layers(_seed_core(tmp_path, status="confirmed"))
     (tmp_path / ".claude" / "review-profile.md").write_text("stray legacy\n")
-    out = crt.route(str(tmp_path), interactive=True, root=root)
+    out = crt.route(str(tmp_path), root=root)
     assert out["path"] == "fix"
     assert core_md.LEGACY_PROFILE_REASON in " ".join(out["reasons"])
     assert any(s.get("type") == core_md.LEGACY_PROFILE_REASON for s in out["signals"])
@@ -131,7 +131,7 @@ def test_healthy_project_without_stray_legacy_stays_in_view(tmp_path):
     root = str(tmp_path / "store")
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
     _seed_light_layers(_seed_core(tmp_path, status="confirmed"))
-    out = crt.route(str(tmp_path), interactive=True, root=root)
+    out = crt.route(str(tmp_path), root=root)
     assert out["path"] == "view"
 
 
@@ -158,7 +158,7 @@ def test_route_fix_when_git_unavailable(tmp_path, monkeypatch):
         return real_run_git(cwd, *args)
 
     monkeypatch.setattr(sc, "run_git_result", fake)
-    out = crt.route(str(tmp_path), interactive=True, root=root)
+    out = crt.route(str(tmp_path), root=root)
     assert out["path"] == "fix"
 
 
@@ -180,6 +180,6 @@ def test_route_fix_when_git_fails_at_layer_lookup(tmp_path, monkeypatch):
         return real_core_path(cwd, root)
 
     monkeypatch.setattr(core_md, "core_path", counting_core_path)
-    out = crt.route(str(tmp_path), interactive=True, root=root)
+    out = crt.route(str(tmp_path), root=root)
     assert out["path"] == "fix"
     assert calls["n"] >= 3

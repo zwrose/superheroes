@@ -55,15 +55,11 @@ Record the preference order for the profile.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-LOC=$(python3 -B "$ROOT_DIR/lib/store.py" decide-location --interactive true)
-# "ask" -> AskUserQuestion: in-repo (committed, team-shared) vs global
-# (~/.claude/test-pilot/, zero git footprint). Headless runs get "global".
-# If LOC is "ask" → AskUserQuestion, set LOC to owner's pick, then record band-wide (FR-3).
-# If LOC is already in-repo/global → skip record, go straight to create.
-REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
-if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
-  echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
-fi
+DEC=$(python3 -B "$ROOT_DIR/lib/store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
+LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
+SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
+PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
+[ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
 PATHS=$(python3 -B "$ROOT_DIR/lib/store.py" create --location "$LOC") || RC=$?
 RC=${RC:-0}
 if [ "$RC" -ne 0 ]; then
@@ -72,37 +68,43 @@ if [ "$RC" -ne 0 ]; then
 fi
 ```
 
-## Step 5 — Interview only the gaps
+**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or
+`global` (`ask` no longer exists); `.source` is where the decision came from: `env` (environment
+override `TEST_PILOT_STORAGE` for this run only; never recorded), `registry` (a mode the owner
+recorded; authoritative), `backfilled` (a mode inferred from consistent existing evidence and then
+recorded), `provisional` (nothing recorded and no consistent evidence; the lib's default, re-taken
+next run); `.provisional` is `true` when the mode was not owner-recorded. **Default:**
+the returned `.mode` (recorded when configured, else the lib's provisional default). Bootstrap
+blocks never record — an unrecorded mode is re-taken next run. **Disclosure.** Write into the
+**test-pilot layer body** (the markdown piped to `core_md.py write-layer --hero test-pilot` in
+Step 6 — a `## Setup disclosures` section, not the generated provenance block): the storage mode
+taken, its source, whether it is provisional, and that `/superheroes:configure` changes it. When
+`.provisional` is `true`, also state that it is a provisional default rather than an owner choice
+and will be re-taken on the next run when not recorded. **Follow-up:** `/superheroes:configure`.
 
-Ask ONLY what detection + CLAUDE.md left open. The user may not know the
-option space — for each question, present the options with one-line
-trade-offs AND a recommendation derived from what you detected.
+## Step 5 — Provisional defaults (no interview)
 
-1. **Auth strategy** — how execute gets a signed-in session:
-   - *Test-user credentials* (env var NAMES only, never secrets): needs a
-     password/credentials login to already exist in the app.
-   - *Auth bypass*: a dev-only sign-in path; enables unattended runs in a
-     clean browser, but requires an app code change and care that it can
-     never reach production.
-   - *Real browser session* (forces Claude in Chrome): zero app changes;
-     runs are semi-attended and drive the user's real, signed-in browser.
-   Recommend from detection: OAuth-only providers and no credentials/test
-   login → real browser session is the zero-code default.
-2. **Protected targets** — which DB/surface the gate must refuse. Suggest
-   the production/main DB you detected. If the app reads the same local DB
-   the seeds would target, ALSO ask which seeding story the user wants:
-   seed the local dev DB the app already reads (simplest — the app sees the
-   data; protect only production-shaped names/URIs), or seed an isolated
-   scratch DB with the profile's `devCommand` overriding the connection env
-   var (stricter; the app only sees it when started via the profile).
-3. **Base URL / readiness probe** — confirm.
+Do not interview. Take named provisional defaults for every field detection + `CLAUDE.md` left
+open. Write which fields were defaulted into the **profile provenance block** (the same durable
+surface Step 6 writes). Never guess a protected target — when detection cannot name a
+production-shaped DB/surface to refuse, state that in the provenance block and leave the gate
+**refusing** rather than inventing a target.
+
+**Provisional defaults** (when detection + `CLAUDE.md` did not answer):
+
+1. **Auth strategy** — `review-only` (provisional default): unattended execute cannot assume
+   credentials; the owner confirms via `/superheroes:configure`.
+2. **Protected targets** — only names detection actually found; if none, record `none detected —
+   gate refuses` and do not scaffold a target list.
+3. **Base URL / readiness probe** — detected dev URL/port when present, else
+   `http://localhost:<detected-port>` when a port was detected, else refuse to guess.
 
 ## Step 6 — Scaffold
 
 1. Fill `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/templates/profile.md` (prose AND the
    `json test-pilot-config` block — keep them consistent) and write it to
-   the resolved profile path. Set provenance `status=stable` when the user
-   answered the interview, `status=provisional` on headless defaults.
+   the resolved profile path. Set provenance `status=provisional` always on this create path —
+   only `/superheroes:configure` confirms with real answers.
 2. Write 1–2 starter blocks bespoke to this app into the resolved
    `blocks_dir`, from `templates/starter-block.py` — e.g. an HTTP seeder
    against the detected API, or a `run-command` design wrapping an existing
@@ -112,8 +114,9 @@ trade-offs AND a recommendation derived from what you detected.
    `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/catalog.py" --blocks-dir <blocks_dir>`
 4. CREATE path (fresh setup, FR-5): pipe the shared facts JSON (stack, verify command,
    threat model) into `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/core_md.py" write
-   --status confirmed` (use `provisional` on a headless run) to write the band-wide `core.md`,
-   and pipe test-pilot's own sections (its `json test-pilot-config` block + prose) into
+   --status provisional` to write the band-wide `core.md`,
+   and pipe test-pilot's own sections (its `json test-pilot-config` block + prose, including the
+   `## Setup disclosures` storage-mode block from Step 4) into
    `core_md.py write-layer --hero test-pilot --status <s>` so they land in the `test-pilot.md`
    layer (FR-3). On reconcile of a pre-existing profile, the legacy `profile.md` is not adopted —
    `resolve_shared` returns the `legacy-profile-unsupported` refusal pointing at

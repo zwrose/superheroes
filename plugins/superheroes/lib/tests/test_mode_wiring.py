@@ -1,4 +1,4 @@
-# Structural check that I2 wired the heroes into the registry record + coalesced nudge.
+# Structural check that bootstrap skills omit retired reconciliation + surface the coalesced nudge.
 import os
 import re
 import pytest
@@ -8,8 +8,9 @@ from skill_surface import surface_text
 _SKILLS = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "skills")
 
-ASK_RECORD_SKILLS = ["review-init",
-                     "review-spec", "review-code", "audit-debt", "test-pilot-init"]
+BOOTSTRAP_NO_RECONCILE_SKILLS = [
+    "review-init", "review-spec", "review-code", "audit-debt", "test-pilot-init",
+]
 NUDGE_SKILLS = ["review-init", "review-code", "audit-debt",
                 "test-pilot-init", "test-pilot-plan", "test-pilot-execute"]
 # Snippet N uses $ROOT_DIR; these run skills must define it (the review-crew skills + test-pilot-init already do).
@@ -21,14 +22,15 @@ def _skill(name):
 
 
 # NOTE: Both test functions below are STRUCTURAL string-presence checks only.
-# They verify the required substrings exist somewhere in the skill file, but do NOT
-# verify correct placement or gating of the snippet (e.g. that Snippet R is inside
-# the `if [ "$LOCATION" = "none" ]` block, or that Snippet N is in the resolver block).
-@pytest.mark.parametrize("name", ASK_RECORD_SKILLS)
-def test_ask_branch_records_greenfield_pick(name):
+# They verify the required substrings exist (or are absent) somewhere in the skill file, but do NOT
+# verify correct placement or gating of the snippet (e.g. that Snippet N is in the resolver block).
+@pytest.mark.parametrize("name", BOOTSTRAP_NO_RECONCILE_SKILLS)
+def test_bootstrap_skill_does_not_reconcile_mode(name):
     body = _skill(name)
-    assert "mode_reconcile.py" in body and "reconcile --mode" in body, \
-        f"{name} must record the greenfield pick via mode_reconcile reconcile --mode (FR-3)"
+    assert "reconcile --mode" not in body, (
+        f"{name} bootstrap must not invoke reconcile --mode — authoritative mode writes belong "
+        "on configure's owner-authorized migration path only (FR-3/#1136)"
+    )
 
 
 @pytest.mark.parametrize("name", NUDGE_SKILLS)

@@ -37,7 +37,7 @@ def _review_layer_missing(cwd, root):
     return not os.path.isfile(layer)
 
 
-def route(cwd, *, interactive, root=None):
+def route(cwd, *, root=None):
     """Sense the calibration state → {"path": "set-up"|"fix"|"view", "reasons": [...],
     "signals": [...]}. Pure; never writes."""
     try:
@@ -59,8 +59,8 @@ def route(cwd, *, interactive, root=None):
                 "reasons": ["incomplete set-up — calibration is missing pieces"],
                 "signals": signals}
 
-    # 3. Provisional calibration (FR-18) — surface for the owner to confirm (interactive only).
-    if interactive and core is not None and core.get("status") == "provisional":
+    # 3. Provisional calibration (FR-18) — surface for the owner to confirm.
+    if core is not None and core.get("status") == "provisional":
         return {"path": "fix",
                 "reasons": ["calibration is still provisional — review and confirm it"],
                 "signals": signals}
