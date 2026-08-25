@@ -40,13 +40,17 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B -c "
 import sys, json; sys.path.insert(0, '$ROOT_DIR/lib')
 import configure_route
-print(json.dumps(configure_route.route('.', interactive=True)))
+print(json.dumps(configure_route.route('.')))
 "
 ```
 
-Read the `path` and surface the plain-language `reasons`. `INTERACTIVE` is `false` on a headless
-run (no human to answer) — pass it through so the libs take the provisional / out-of-repo / strict
-posture and never flip storage unattended (FR-14/FR-17). Then run the matching path:
+Read the `path` and surface the plain-language `reasons`. There is no presence flag — the libs
+always take the provisional / out-of-repo / strict posture, and storage is never flipped without
+the owner's explicit authorization in this turn (FR-14/FR-17). **FR-14 is preserved but its shape
+changed:** `lib/mode_migrate.py` no longer takes a presence boolean; it takes an explicit owner
+authorization that **defaults to refusing**. `configure` passes that authorization only when the
+owner asked for the migration in the current turn — the owner's words being the hearing event.
+Then run the matching path:
 
 - **`set-up`** → follow `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/configure/reference/set-up.md`.
 - **`fix`** → follow `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/configure/reference/fix.md`.

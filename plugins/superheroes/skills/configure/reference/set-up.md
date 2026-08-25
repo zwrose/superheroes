@@ -209,9 +209,10 @@ disclosed degradation. A decline leaves every role on its default and set-up sti
    A failed or timed-out test dispatch leaves the engine **not-ready** — builds and mechanical fixes fall
    open to Claude until it works. Never present a not-working engine as ready.
 
-**Headless (`INTERACTIVE=false`).** Take the strict/provisional posture: probe and record what is
-detectable, but never block and never apply the authorization — leave any external implementation engine
-not-ready until an interactive run can grant + test it.
+**Set-up posture.** Take the strict/provisional posture: probe and record what is detectable, but
+never block and never apply the authorization — leave any external implementation engine not-ready
+until the owner grants and tests it, which they do by running `/superheroes:configure` and saying
+so in that turn.
 
 ## 4.6 — Offer the review-discipline CLAUDE.md section (in-repo mode only), decline still completes
 
