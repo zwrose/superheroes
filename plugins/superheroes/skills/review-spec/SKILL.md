@@ -122,6 +122,7 @@ Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile 
 
 **Profile bootstrap (run before locating the spec or dispatching anything).** The review engine reads its per-project calibration from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
+<!-- decision-point: id=review-spec-storage-location mode=notify kind=storage-location default="returned .mode (recorded when configured, else the lib's provisional default)" carrier=review-spec-receipt -->
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
@@ -129,18 +130,19 @@ if [ "$LOCATION" = "none" ]; then
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
   SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
   PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
-  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
+  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] && [ -n "$SOURCE" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
   PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
 fi
 ```
-
 **Storage location.** `decide-location` JSON: `.mode` (`in-repo`|`global`; `ask` gone), `.source`
 (`env` — `REVIEW_CREW_STORAGE` override this run, never recorded; `registry` — owner-recorded; `backfilled` — inferred then recorded; `provisional` — lib default, re-taken next run), `.provisional` (`true` when not owner-recorded). **Default:**
 returned `.mode`. Bootstrap blocks never record — unrecorded modes re-taken next run.
 **Disclosure.** Write into `$SESSION_DIR/receipt.md` (assembled in §6): mode, source, provisional
 status, and `/superheroes:configure` follow-up; when `.provisional` is `true`, note it is a
 provisional default and will be re-taken next run when not recorded.
+NOTIFY: take the returned `.mode` from `decide-location`, disclose in `$SESSION_DIR/receipt.md`, and the run continues. Follow-up: `/superheroes:configure`.
+<!-- /decision-point: id=review-spec-storage-location -->
 
 When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → defaults → seed canonical patterns → write the profile to `$PROFILE`), then continue. (Staleness, reconcile, and learning-loop steps are out of scope here.)
 

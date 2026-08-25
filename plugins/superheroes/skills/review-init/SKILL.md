@@ -75,6 +75,8 @@ If `$LOCATION` is not `none` (a profile resolved at `$PROFILE`) → **Reconcile*
 (Step 5). Otherwise (`$LOCATION` is `none`) → **Create** (Steps 3–4); decide the
 storage location and mint the path before writing:
 
+<!-- decision-point: id=review-init-storage-location mode=notify kind=storage-location default="returned .mode (recorded when configured, else the lib's provisional default)" carrier=review-crew-layer -->
+
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
@@ -82,7 +84,7 @@ if [ "$LOCATION" = "none" ]; then
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
   SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
   PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
-  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
+  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] && [ -n "$SOURCE" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
   PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
 fi
 ```
@@ -101,6 +103,10 @@ taken, its source, whether it is provisional, and that `/superheroes:configure` 
 `.provisional` is `true`, also state that it is a provisional default rather than an owner choice
 and will be re-taken on the next run when not recorded. **Follow-up:** `/superheroes:configure`.
 The minted `$PROFILE` is the path Step 4 writes to.
+NOTIFY: take the returned `.mode` from `decide-location`, record mode/source/provisional status in
+`## Setup disclosures` within `$REVIEW_LAYER_BODY`, and the run continues. Follow-up:
+`/superheroes:configure`.
+<!-- /decision-point: id=review-init-storage-location -->
 
 ## Step 3 — Create: detection + defaults (no interview)
 
