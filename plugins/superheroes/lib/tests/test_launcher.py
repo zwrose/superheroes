@@ -935,7 +935,7 @@ def _reap(result):
         pass
 
 
-def test_opus_child_pinned_medium_over_ambient_high(tmp_path, monkeypatch):
+def test_opus_child_effort_pinned_medium_over_ambient_high(tmp_path, monkeypatch):
   # axis: resolved opus tier pins CLAUDE_EFFORT=medium in the child even when the launching
   # env carries high — the inheritance accident #1156 closes
     repo = _init_repo(tmp_path / "repo")
