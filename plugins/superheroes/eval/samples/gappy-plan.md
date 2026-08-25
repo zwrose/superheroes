@@ -1,7 +1,7 @@
 # Sync Pipeline Implementation Plan (SAMPLE — deliberately gappy)
 
 > This is a frozen review-crew eval sample, not a real plan. It exists for the
-> manual plan-time premortem scenario in `eval/skill-tests.md`: it contains a
+> manual plan-time premortem scenario in `eval/skill-tests-v1-frozen.md`: it contains a
 > multi-step write with NO failure-handling statement and an unstated
 > load-bearing assumption. Do not "fix" it.
 
