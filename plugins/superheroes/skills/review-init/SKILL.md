@@ -80,24 +80,24 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
   DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
+  SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
   PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
   [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
-  if [ "$PROVISIONAL" != "true" ]; then
-    REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
-    if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
-      echo "note: couldn't record the band storage mode this run — the provisional default will be taken again next run; change via /superheroes:configure."
-    fi
-  fi
   PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
 fi
 ```
 
 **Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or
-`global` (`ask` no longer exists). **Default:** the returned `.mode` (recorded when configured,
-else the lib's provisional default). **Disclosure (provisional storage).** When `.provisional` is
-`true`, write into the **profile provenance block**: the storage location taken, that it is a
-provisional default rather than an owner choice, and that `/superheroes:configure` changes it.
-**Follow-up:** `/superheroes:configure`. The minted `$PROFILE` is the path Step 4 writes to.
+`global` (`ask` no longer exists); `.source` is where the decision came from (e.g. `recorded`,
+`default`, `env`); `.provisional` is `true` when the mode was not owner-recorded. **Default:**
+the returned `.mode` (recorded when configured, else the lib's provisional default). Bootstrap
+blocks never record — an unrecorded mode is re-taken next run. **Disclosure.** Write into the
+**review-crew layer body** (`$REVIEW_LAYER_BODY`, written through `core_md.py write-layer` in Step
+4b — a `## Setup disclosures` section, not the generated provenance block): the storage mode
+taken, its source, whether it is provisional, and that `/superheroes:configure` changes it. When
+`.provisional` is `true`, also state that it is a provisional default rather than an owner choice
+and will be re-taken on the next run when not recorded. **Follow-up:** `/superheroes:configure`.
+The minted `$PROFILE` is the path Step 4 writes to.
 
 ## Step 3 — Create: detection + defaults (no interview)
 
@@ -132,8 +132,10 @@ file; clobbering it breaks dispatch):
 
 - `$CORE_FACTS_JSON` — JSON for `core_md.py write`: `verifyCommand`, `stackTags`, `threatModel`,
   `patterns` (canonical patterns block as a string).
-- `$REVIEW_LAYER_BODY` — markdown body for `core_md.py write-layer`: `## Scope exclusions`,
-  `## Focus hints`, `## Conventions` (hero-owned sections only; no provenance block).
+- `$REVIEW_LAYER_BODY` — markdown body for `core_md.py write-layer`: `## Setup disclosures`
+  (storage mode, source, provisional status, and `/superheroes:configure` follow-up from Step 2
+  when bootstrap ran), `## Scope exclusions`, `## Focus hints`, `## Conventions` (hero-owned
+  sections only; no provenance block).
 
 Proceed to Step 4b to write both files. When the layer path is in-repo (under
 `./.claude/superheroes/`), **do not commit** — write the files and leave them **uncommitted and

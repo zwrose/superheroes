@@ -127,20 +127,20 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
   DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
+  SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
   PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
   [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
-  if [ "$PROVISIONAL" != "true" ]; then
-    REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
-    if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
-      echo "note: couldn't record the band storage mode this run — the provisional default will be taken again next run; change via /superheroes:configure."
-    fi
-  fi
   PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
 fi
 ```
 
-**Storage location.** `decide-location` JSON: `.mode` is `in-repo`|`global` (`ask` gone). **Default:** the returned `.mode` (recorded when configured, else the lib's provisional default). **Disclosure (provisional storage).** When `.provisional` is `true`, write into the **terminal summary artifact**: the storage location taken, that it is a provisional default rather than an owner choice, and that `/superheroes:configure` changes it. **Follow-up:** `/superheroes:configure`.
+**Storage location.** `decide-location` JSON: `.mode` (`in-repo`|`global`; `ask` gone), `.source`
+(e.g. `recorded`, `default`, `env`), `.provisional` (`true` when not owner-recorded). **Default:**
+returned `.mode`. Bootstrap blocks never record — unrecorded modes re-taken next run.
+**Disclosure.** Write into `$SESSION_DIR/receipt.md` (assembled in §6): mode, source, provisional
+status, and `/superheroes:configure` follow-up; when `.provisional` is `true`, note it is a
+provisional default and will be re-taken next run when not recorded.
 
 When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → defaults → seed canonical patterns → write the profile to `$PROFILE`), then continue. (Staleness, reconcile, and learning-loop steps are out of scope here.)
 
@@ -402,7 +402,9 @@ Each round:
 7. **Interventions — escalate only owner-weighable blockers (per `escalation-base.md`).** For each
    **Critical/Important** effective finding, route its disposition with the shared rubric (modes
    PROCEED/NOTIFY/GATE). **GATE** — durable write-down + hand-back in `$SESSION_DIR/receipt.md`,
-   then stop and proceed to §6 Report. For the rest, **verify and proceed**, recording the disposition so `loop_state` still sees it:
+   then **exit the loop** with §6's park terminal — verdict **REVISE** (blocking finding still
+   open). Do **not** continue to step 8. For the rest, **verify and proceed**, recording the
+   disposition so `loop_state` still sees it:
    - **Fix, one right answer per the project's conventions** → auto-revise `$SPEC_PATH` (a step-6
      auto-revise).
    - **Verifiably-safe skip / believed false-positive** → record a **skip** (add the identity to the
@@ -510,7 +512,8 @@ leaves its receipts on the PR; a doc review must leave them on the issue, or the
 history dies in `$SESSION_DIR` — a multi-round run once had to be reconstructed forensically
 because the only record was the transcript. Assemble `$SESSION_DIR/receipt.md` (appending to any
 GATE write-downs from step 7) — final verdict, per-round schedule, every finding disposition,
-open requirements questions, count summary, and any post-halt-edit violation — then post
+open requirements questions, count summary, any post-halt-edit violation, and (when bootstrap ran)
+storage mode, `.source`, provisional status, and `/superheroes:configure` follow-up — then post
 it to the spec's linked `issue`:
 
 ```bash
