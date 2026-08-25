@@ -242,6 +242,11 @@ def resolve(cwd, root=None):
     return {"mode": GLOBAL, "authoritative": False, "source": "provisional", "evidence": verdict}
 
 
+def _decide_result(mode, source):
+    """Single shape for decide_mode returns; provisional tracks source structurally."""
+    return {"mode": mode, "source": source, "provisional": source == "provisional"}
+
+
 def decide_mode(cwd, env_value, root=None):
     """Band-wide create-time mode decision (CONVENTIONS §2.3/§2.4). The single
     decision both heroes' decide_location delegate to, so review-crew and test-pilot
@@ -253,11 +258,11 @@ def decide_mode(cwd, env_value, root=None):
     (UFR-3). The env path never records (UFR-7); a greenfield returns provisional GLOBAL
     without recording (UFR-5)."""
     if env_value in (IN_REPO, GLOBAL):
-        return {"mode": env_value, "source": "env", "provisional": False}
+        return _decide_result(env_value, "env")
     r = resolve(cwd, root)
     if r["source"] in ("registry", "backfilled"):
-        return {"mode": r["mode"], "source": r["source"], "provisional": False}
-    return {"mode": GLOBAL, "source": "provisional", "provisional": True}
+        return _decide_result(r["mode"], r["source"])
+    return _decide_result(GLOBAL, "provisional")
 
 
 def resolve_artifact(cwd, in_repo_path, global_path, root=None):

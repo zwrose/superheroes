@@ -339,16 +339,6 @@ re-dispatch — the same shape as the over-size route — so quiet-failure surfa
 independent of the vet. Doubt about which side a surface falls on resolves toward the builder, and
 the over-size route is unchanged: a fold past the bound goes to the builder whatever its surface.
 
-**Prose-executed paths are pinned structurally, not driven end-to-end by an executable harness.**
-A skill's prose path is executed by a model reading the prose — there is no process to drive.
-What *can* be pinned is the prose's **structure**: a detector reads the shipped file and asserts
-the shape the contract requires, and that is the instrument this repo uses. This is **not**
-bite-proof vacuity mode 4 (*"delivered through a path the guarded input can never take"*) — for a
-structural pin the path is real and complete: mutate the shipped prose file, the detector reads
-that file, the detector goes red. A structural pin must still satisfy bite-proof **mode 3**: a
-detector guarding N elements owes N separate neutralizations and N reds, not one representative
-(`rubric/bite-proof.md`).
-
 ### Mechanical guards over prose — the byte-literal floor
 
 Mechanical guards over prose are scoped to the **byte-literal floor** — four kept classes and nothing
@@ -363,6 +353,21 @@ agrees on is the pin's **source half**, in class (owner-ruled 2026-08-23). What 
 out of class is an extractor that parses document structure or judges what prose means. **Structural
 parsers**, **table checks**, and **message/meaning guards** are **out of class** — permanently.
 Prose *meaning* and *structure* are review's job, not CI's.
+
+**Prose-executed paths are pinned structurally, not driven end-to-end by an executable harness.**
+A skill's prose path is executed by a model reading the prose — there is no process to drive.
+What *can* be pinned — within the byte-literal floor above — is the prose file itself through
+**the four kept classes** (cross-doc literal-agreement pins, hard-line sentence pins,
+register-quote checks, and cardinality floors over those censuses, plus the in-class extractor
+that bounds a pin to its home block). "Pinned structurally" means exactly that application to a
+shipped prose file — not structural parsers, table checks, or message/meaning guards, which
+stay out of class, permanently, per the owner ruling 2026-08-17 recorded on issue #695. This
+does **not** reopen those out-of-class guards. This is **not**
+bite-proof vacuity mode 4 (*"delivered through a path the guarded input can never take"*) — for a
+structural pin the path is real and complete: mutate the shipped prose file, the detector reads
+that file, the detector goes red. A structural pin must still satisfy bite-proof **mode 3**: a
+detector guarding N elements owes N separate neutralizations and N reds, not one representative
+(`rubric/bite-proof.md`).
 
 That line is where the ruling lands: out-of-class guards burned review rounds the real findings needed
 (owner ruling 2026-08-17, recorded on issue #695 — [comment

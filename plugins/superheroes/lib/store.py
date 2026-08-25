@@ -461,7 +461,8 @@ def main(argv):
                 json.dumps(create(os.getcwd(), location, store_root())) + "\n")
             return 0
         if cmd == "decide-location":
-            if "--interactive" in args:
+            if "--interactive" in args or any(
+                    a.startswith("--interactive=") for a in args):
                 sys.stderr.write(
                     "decide-location: --interactive was removed (#1136); omit the flag\n")
                 return 2

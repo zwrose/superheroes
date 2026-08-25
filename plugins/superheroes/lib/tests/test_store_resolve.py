@@ -241,12 +241,12 @@ def test_cli_decide_location_rejects_stale_interactive_flag(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     env = dict(os.environ, TEST_PILOT_STORE_ROOT=str(tmp_path / "store"))
     lib = os.path.dirname(os.path.abspath(store.__file__))
-    out = subprocess.run(
-        ["/usr/bin/python3", os.path.join(lib, "store.py"), "decide-location",
-         "--interactive", "true"],
-        capture_output=True, text=True, cwd=repo, env=env)
-    assert out.returncode != 0
-    assert "1136" in out.stderr
+    for extra in (["--interactive", "true"], ["--interactive=true"]):
+        out = subprocess.run(
+            ["/usr/bin/python3", os.path.join(lib, "store.py"), "decide-location"] + extra,
+            capture_output=True, text=True, cwd=repo, env=env)
+        assert out.returncode != 0
+        assert "1136" in out.stderr
 
 
 def test_resolve_global_self_heals_dangling_remote_pointer(tmp_path):

@@ -441,9 +441,10 @@ def test_cli_decide_location(tmp_path):
 def test_cli_decide_location_rejects_stale_interactive_flag(tmp_path):
     repo = _init_repo(tmp_path / "r")
     home = tmp_path / "home"
-    out = _run_cli(["decide-location", "--interactive", "true"], repo, home)
-    assert out.returncode != 0
-    assert "1136" in out.stderr
+    for extra in (["--interactive", "true"], ["--interactive=true"]):
+        out = _run_cli(["decide-location"] + extra, repo, home)
+        assert out.returncode != 0
+        assert "1136" in out.stderr
 
 
 def test_create_and_resolve_from_subdirectory(tmp_path):

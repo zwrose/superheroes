@@ -43,6 +43,20 @@ _PRESENCE_FLAG_SURFACE = (
     _VERIFICATION_MD,
 )
 
+# Literal census: every line carrying AskUserQuestion must match one pinned line byte-for-byte.
+_ASK_USER_QUESTION_ALLOWED_LINES = frozenset({
+    # skills/review-code/SKILL.md § --review-only
+    "**Write the presentation artifact — the only path.** Follow "
+    "`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/headless-presentation.md`. "
+    "Presence is an event, not a state a run can detect — the run never branches on whether a "
+    "human is present and never opens a question that could block waiting for an answer. Never "
+    "open `AskUserQuestion` on this path or any review-code path.",
+    # skills/review-code/reference/headless-presentation.md
+    "Open no `AskUserQuestion` on any review-code path, for any purpose.",
+    "which posted to GitHub and kept its own `AskUserQuestion` review-event gate, was removed "
+    "(#1121).",
+})
+
 # Branching prose that would reintroduce a second presentation channel.
 _CHANNEL_BRANCH_PATTERNS = [
     re.compile(r"interactive\s+presentation", re.IGNORECASE),
@@ -69,6 +83,17 @@ def _section(text, heading):
     return text[body_start:m.start()] if m else text[body_start:]
 
 
+def _ask_user_question_violations(text, label):
+    """Every AskUserQuestion occurrence must be on an allowlisted line — no verb heuristic."""
+    hits = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if _QUESTION not in line:
+            continue
+        if line not in _ASK_USER_QUESTION_ALLOWED_LINES:
+            hits.append(f"{label} line {lineno}: {line}")
+    return hits
+
+
 @pytest.fixture(scope="module")
 def review_only():
     """The shipped `### --review-only` section of review-code's SKILL.md."""
@@ -78,6 +103,11 @@ def review_only():
 @pytest.fixture(scope="module")
 def skill_md():
     return _read(_SKILL_MD)
+
+
+@pytest.fixture(scope="module")
+def headless_contract():
+    return _read(_HEADLESS_MD)
 
 
 # axis: no retired presence-flag premise anywhere on review-code's surface — not merely absent
@@ -103,32 +133,14 @@ def test_no_presence_flag_on_review_code_surface():
     )
 
 
-# axis: `--review-only` is one path — no AskUserQuestion formed and no branch selecting interactive
-# vs headless presentation. Prohibition lines ("Never open AskUserQuestion") are allowed.
-def test_review_only_is_a_single_path(review_only):
+# axis: `--review-only` is one path — literal AskUserQuestion census plus no presentation branch.
+def test_review_only_is_a_single_path(review_only, headless_contract):
     """#1136: `--review-only` must not stall on or branch for owner presence."""
-    forming = []
-    for lineno, line in enumerate(review_only.splitlines(), 1):
-        if _QUESTION not in line:
-            continue
-        # Prohibition must be adjacent to the tool name — a distant "never" on the same line
-        # must not mask a separate forming mention later in the line.
-        if re.search(
-            r"(never|do not|don't|no)\s+(open\s+)?`?" + _QUESTION,
-            line,
-            re.IGNORECASE,
-        ):
-            continue
-        if re.search(
-            r"(open|use|ask|via|run)\s+`?" + _QUESTION,
-            line,
-            re.IGNORECASE,
-        ):
-            forming.append(f"line {lineno}: {line.strip()}")
-    assert not forming, (
-        "the `--review-only` section still forms %s — this path must not open a question "
-        "that blocks waiting for an answer (#1136). Hits:\n%s"
-        % (_QUESTION, "\n".join(forming))
+    hits = _ask_user_question_violations(review_only, "`--review-only` section")
+    hits.extend(_ask_user_question_violations(headless_contract, "headless-presentation.md"))
+    assert not hits, (
+        "an `AskUserQuestion` occurrence is not one of the pinned prohibition lines — a positive "
+        "instruction or evasion would pass a verb heuristic (#1136). Hits:\n" + "\n".join(hits)
     )
     branch_hits = []
     for lineno, line in enumerate(review_only.splitlines(), 1):

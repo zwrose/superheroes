@@ -505,13 +505,16 @@ def test_decide_mode_provenance_honest_per_rung(tmp_path, monkeypatch):
 
     d = mr.decide_mode(str(tmp_path), mr.IN_REPO, root=root)
     assert d["source"] == "env" and d["provisional"] is False
+    assert d["provisional"] == (d["source"] == "provisional")
 
     d = mr.decide_mode(str(tmp_path), None, root=root)
     assert d["source"] == "provisional" and d["provisional"] is True
+    assert d["provisional"] == (d["source"] == "provisional")
 
     mr.write_registry(str(tmp_path), mr.GLOBAL, "rk", root=root)
     d = mr.decide_mode(str(tmp_path), None, root=root)
     assert d["source"] == "registry" and d["provisional"] is False
+    assert d["provisional"] == (d["source"] == "provisional")
 
     repo2 = tmp_path / "repo2"
     repo2.mkdir()
@@ -520,6 +523,7 @@ def test_decide_mode_provenance_honest_per_rung(tmp_path, monkeypatch):
     (repo2 / ".claude" / "review-profile.md").write_text("x")
     d = mr.decide_mode(str(repo2), None, root=root)
     assert d["source"] == "backfilled" and d["provisional"] is False
+    assert d["provisional"] == (d["source"] == "provisional")
 
 
 def test_decide_mode_propagates_unknown_schema_version(tmp_path):
