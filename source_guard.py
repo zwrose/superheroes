@@ -11,6 +11,8 @@ can promise anything about a ``SIGKILL`` landing mid-write.
 """
 from __future__ import annotations
 
+import ast
+import configparser
 import hashlib
 import os
 import stat
@@ -25,6 +27,88 @@ REPO_ROOT_ENV = "SUPERHEROES_SOURCE_GUARD_ROOT"
 
 class ShippedSourceWrite(RuntimeError):
     """Raised when a watched shipped-source path is opened for writing."""
+
+
+def wiring_defects(root):
+    """Return sorted wiring defect strings for ``root``; empty means correctly wired."""
+    defects = []
+    root = os.path.realpath(root)
+
+    pytest_ini_path = os.path.join(root, "pytest.ini")
+    if not os.path.isfile(pytest_ini_path):
+        defects.append("pytest.ini is missing at the repository root")
+    else:
+        parser = configparser.ConfigParser()
+        try:
+            with open(pytest_ini_path, encoding="utf-8") as fh:
+                parser.read_file(fh)
+        except configparser.Error:
+            defects.append("pytest.ini could not be parsed")
+        else:
+            if not parser.has_section("pytest"):
+                defects.append("pytest.ini has no [pytest] section")
+
+    conftest_path = os.path.join(root, "conftest.py")
+    if not os.path.isfile(conftest_path):
+        defects.append("conftest.py is missing at the repository root")
+    else:
+        try:
+            with open(conftest_path, encoding="utf-8") as fh:
+                conftest_source = fh.read()
+            tree = ast.parse(conftest_source, filename=conftest_path)
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            defects.append(
+                "conftest.py has no effective module-level pytest_plugins assignment"
+            )
+        else:
+            last_plugins_assign = None
+            for node in tree.body:
+                if isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name) and target.id == "pytest_plugins":
+                            last_plugins_assign = node
+                elif isinstance(node, ast.AnnAssign):
+                    if (
+                        isinstance(node.target, ast.Name)
+                        and node.target.id == "pytest_plugins"
+                    ):
+                        last_plugins_assign = node
+
+            if last_plugins_assign is None:
+                defects.append(
+                    "conftest.py has no effective module-level pytest_plugins assignment"
+                )
+            else:
+                if isinstance(last_plugins_assign, ast.Assign):
+                    value_node = last_plugins_assign.value
+                else:
+                    value_node = last_plugins_assign.value
+                try:
+                    value = ast.literal_eval(value_node)
+                except (ValueError, SyntaxError):
+                    defects.append(
+                        "conftest.py pytest_plugins does not include source_guard"
+                    )
+                else:
+                    if isinstance(value, str):
+                        plugins = (value,)
+                    elif isinstance(value, (list, tuple)):
+                        plugins = value
+                    else:
+                        defects.append(
+                            "conftest.py pytest_plugins does not include source_guard"
+                        )
+                        plugins = None
+                    if plugins is not None and "source_guard" not in plugins:
+                        defects.append(
+                            "conftest.py pytest_plugins does not include source_guard"
+                        )
+
+    source_guard_path = os.path.join(root, "source_guard.py")
+    if not os.path.isfile(source_guard_path):
+        defects.append("source_guard.py is missing at the repository root")
+
+    return sorted(defects)
 
 
 def watched_paths(repo_root):

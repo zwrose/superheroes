@@ -2,6 +2,7 @@
 import ast
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -975,4 +976,259 @@ def test_plugin_loads_with_xdist_disabled():
     assert proc.returncode == 0, combined
     assert "INTERNALERROR" not in combined
     assert "PluginValidationError" not in combined
+
+
+# --- Group 4: structural wiring pin (real root files) ------------------------
+
+
+_REAL_WIRING_FILES = ("pytest.ini", "conftest.py", "source_guard.py")
+
+
+def _copy_real_root_wiring(root):
+    root.mkdir(parents=True, exist_ok=True)
+    for name in _REAL_WIRING_FILES:
+        shutil.copy2(os.path.join(_REPO_ROOT, name), root / name)
+
+
+def _write_wiring_root(tmp_path, name, pytest_ini=None, conftest=None, source_guard=True):
+    root = tmp_path / name
+    root.mkdir()
+    if pytest_ini is not None:
+        (root / "pytest.ini").write_text(pytest_ini, encoding="utf-8")
+    if conftest is not None:
+        (root / "conftest.py").write_text(conftest, encoding="utf-8")
+    if source_guard:
+        shutil.copy2(os.path.join(_REPO_ROOT, "source_guard.py"), root / "source_guard.py")
+    return root
+
+
+def test_real_repository_wiring_pin():
+    assert sg.wiring_defects(_REPO_ROOT) == []
+
+
+def test_wiring_defects_accepts_real_content_copy(tmp_path):
+    root = tmp_path / "real_copy"
+    _copy_real_root_wiring(root)
+    assert sg.wiring_defects(str(root)) == []
+
+
+def test_wiring_defects_missing_pytest_ini(tmp_path):
+    root = tmp_path / "no_ini"
+    _copy_real_root_wiring(root)
+    (root / "pytest.ini").unlink()
+    defects = sg.wiring_defects(str(root))
+    assert "pytest.ini is missing at the repository root" in defects
+
+
+def test_wiring_defects_missing_conftest(tmp_path):
+    root = tmp_path / "no_conftest"
+    _copy_real_root_wiring(root)
+    (root / "conftest.py").unlink()
+    defects = sg.wiring_defects(str(root))
+    assert "conftest.py is missing at the repository root" in defects
+
+
+def test_wiring_defects_missing_source_guard(tmp_path):
+    root = tmp_path / "no_guard"
+    _copy_real_root_wiring(root)
+    (root / "source_guard.py").unlink()
+    defects = sg.wiring_defects(str(root))
+    assert "source_guard.py is missing at the repository root" in defects
+
+
+def test_wiring_defects_pytest_ini_no_section(tmp_path):
+    root = _write_wiring_root(
+        tmp_path,
+        "no_pytest_section",
+        pytest_ini="[other]\nkey = value\n",
+        conftest='pytest_plugins = ("source_guard",)\n',
+    )
+    defects = sg.wiring_defects(str(root))
+    assert "pytest.ini has no [pytest] section" in defects
+
+
+def test_wiring_defects_nested_pytest_plugins_assignment(tmp_path):
+    root = _write_wiring_root(
+        tmp_path,
+        "nested_plugins",
+        pytest_ini="[pytest]\n",
+        conftest=(
+            "if False:\n"
+            '    pytest_plugins = ("source_guard",)\n'
+        ),
+    )
+    defects = sg.wiring_defects(str(root))
+    assert "conftest.py has no effective module-level pytest_plugins assignment" in defects
+
+
+def test_wiring_defects_good_then_empty_overwrite(tmp_path):
+    root = _write_wiring_root(
+        tmp_path,
+        "empty_overwrite",
+        pytest_ini="[pytest]\n",
+        conftest=(
+            'pytest_plugins = ("source_guard",)\n'
+            "pytest_plugins = ()\n"
+        ),
+    )
+    defects = sg.wiring_defects(str(root))
+    assert "conftest.py pytest_plugins does not include source_guard" in defects
+
+
+def _build_real_wiring_micro_suite(root):
+    _copy_real_root_wiring(root)
+    shipped = root / "lib" / "shipped.py"
+    shipped.parent.mkdir(parents=True)
+    shipped.write_text("VALUE = 1\n")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-q", "-m", "init"],
+        cwd=root,
+        check=True,
+    )
+    conftest = root / "conftest.py"
+    with open(conftest, "a", encoding="utf-8") as fh:
+        fh.write(
+            "\nimport pytest\n\n"
+            "@pytest.fixture\n"
+            "def shipped_path():\n"
+            "    import pathlib\n"
+            "    return pathlib.Path(__file__).resolve().parent / 'lib' / 'shipped.py'\n"
+        )
+    (root / "test_violator.py").write_text(
+        "def test_rewrite_shipped(shipped_path):\n"
+        "    path = str(shipped_path)\n"
+        "    with open(path, encoding='utf-8') as fh:\n"
+        "        orig = fh.read()\n"
+        "    try:\n"
+        "        with open(path, 'w', encoding='utf-8') as fh:\n"
+        "            fh.write(orig.replace('1', '2'))\n"
+        "    finally:\n"
+        "        with open(path, 'w', encoding='utf-8') as fh:\n"
+        "            fh.write(orig)\n"
+    )
+    subprocess.run(["git", "add", "conftest.py", "test_violator.py"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-q", "-m", "tests"],
+        cwd=root,
+        check=True,
+    )
+
+
+def _run_real_wiring_pytest(root):
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(root)
+    env[sg.REPO_ROOT_ENV] = str(root)
+    return subprocess.run(
+        [sys.executable, "-B", "-m", "pytest", "test_violator.py", "-q"],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_real_wiring_behavioural_with_assignment(tmp_path):
+    root = tmp_path / "real_wiring"
+    root.mkdir()
+    _build_real_wiring_micro_suite(root)
+    proc = _run_real_wiring_pytest(root)
+    _assert_wiring_failure(proc, root)
+
+
+def test_real_wiring_behavioural_without_assignment(tmp_path):
+    root = tmp_path / "real_wiring_unwired"
+    root.mkdir()
+    _build_real_wiring_micro_suite(root)
+    conftest = root / "conftest.py"
+    lines = [
+        line
+        for line in conftest.read_text(encoding="utf-8").splitlines()
+        if not line.strip().startswith("pytest_plugins")
+    ]
+    conftest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    proc = _run_real_wiring_pytest(root)
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode == 0, combined
+
+
+def test_bite_wiring_defects_last_assignment_wins(tmp_path):
+    root = _write_wiring_root(
+        tmp_path,
+        "bite_e13",
+        pytest_ini="[pytest]\n",
+        conftest=(
+            'pytest_plugins = ("source_guard",)\n'
+            "pytest_plugins = ()\n"
+        ),
+    )
+    target = (
+        "conftest.py pytest_plugins does not include source_guard"
+    )
+
+    def detects_overwrite(mod):
+        return target in mod.wiring_defects(str(root))
+
+    _bite_red_green(
+        "last_assignment_wins",
+        (
+            "                            last_plugins_assign = node",
+            "                            if last_plugins_assign is None:\n"
+            "                                last_plugins_assign = node",
+        ),
+        lambda m: detects_overwrite(m),
+        lambda m: detects_overwrite(m),
+    )
+
+
+def test_bite_wiring_defects_module_level_only(tmp_path):
+    root = _write_wiring_root(
+        tmp_path,
+        "bite_e14",
+        pytest_ini="[pytest]\n",
+        conftest=(
+            "if False:\n"
+            '    pytest_plugins = ("source_guard",)\n'
+        ),
+    )
+    target = (
+        "conftest.py has no effective module-level pytest_plugins assignment"
+    )
+
+    def detects_nested(mod):
+        return target in mod.wiring_defects(str(root))
+
+    _bite_red_green(
+        "module_level_only",
+        (
+            "            for node in tree.body:",
+            "            for node in ast.walk(tree):",
+        ),
+        lambda m: detects_nested(m),
+        lambda m: detects_nested(m),
+    )
+
+
+def test_bite_wiring_defects_pytest_ini_section(tmp_path):
+    root = _write_wiring_root(
+        tmp_path,
+        "bite_e15",
+        pytest_ini="[other]\nkey = value\n",
+        conftest='pytest_plugins = ("source_guard",)\n',
+    )
+    target = "pytest.ini has no [pytest] section"
+
+    def detects_missing_section(mod):
+        return target in mod.wiring_defects(str(root))
+
+    _bite_red_green(
+        "pytest_ini_section",
+        (
+            "            if not parser.has_section(\"pytest\"):",
+            "            if False and not parser.has_section(\"pytest\"):",
+        ),
+        lambda m: detects_missing_section(m),
+        lambda m: detects_missing_section(m),
+    )
 
