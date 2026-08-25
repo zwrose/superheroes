@@ -6111,6 +6111,148 @@ def test_probe_git_fake_flag_flip_bypass_dead(monkeypatch):
         monkeypatch.setattr(ED, "_git_scrubbed_bytes", lambda *a, **k: None)
 
 
+def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source):
+    """Run a single child pytest case out-of-process with the real autouse fixture."""
+    tests_dir = _HERE
+    conftest_path = os.path.join(tmp_path, "conftest.py")
+    with open(conftest_path, "w", encoding="utf-8") as fh:
+        fh.write(
+            "import sys\n"
+            "sys.path.insert(0, %s)\n"
+            "\n"
+            "import test_engine_dispatch as TED\n"
+            "\n"
+            "_probe_git_fake_route_registry = TED._probe_git_fake_route_registry\n"
+            % repr(tests_dir)
+        )
+
+    module_name = "test_probe_guard_child"
+    body_lines = child_body_source.strip("\n").splitlines()
+    indented_body = "".join("    " + line + "\n" for line in body_lines)
+    module_path = os.path.join(tmp_path, module_name + ".py")
+    with open(module_path, "w", encoding="utf-8") as fh:
+        fh.write(
+            "import sys\n"
+            "sys.path.insert(0, %s)\n"
+            "\n"
+            "import test_engine_dispatch as TED\n"
+            "\n"
+            "def %s(tmp_path, monkeypatch):\n"
+            "%s"
+            % (repr(tests_dir), child_test_name, indented_body)
+        )
+
+    env = dict(os.environ)
+    for key in list(env):
+        if (
+            key == "PYTEST_ADDOPTS"
+            or key == "PYTEST_CURRENT_TEST"
+            or key.startswith("PYTEST_XDIST")
+        ):
+            del env[key]
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "--color=no",
+            "%s.py::%s" % (module_name, child_test_name),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+    )
+
+
+# Accepted residuals, not closed by these detectors:
+# 1. An install that is never called is invisible — routes are recorded at call
+#    time, so a registered fake that is never reached leaves the observed set
+#    empty and the route check never runs.
+# 2. A re-entrant call on a different route is never observed — the chokepoint
+#    wrapper records only at invocation depth 0.
+
+
+def test_probe_git_fake_teardown_raises_on_undeclared_route_end_to_end(tmp_path):
+    """Prove G2b (line 5902): fixture teardown raises on undeclared routes.
+
+    Does not prove: (1) an install that is never called is invisible;
+    (2) a re-entrant call on a different route is never observed.
+    """
+    child_body = """
+def fake_scrubbed_bytes(cwd_real, *args, timeout=None, **kwargs):
+    return b""
+TED._register_probe_git_fake(monkeypatch, "_git_scrubbed_bytes", fake_scrubbed_bytes)
+TED.ED._git_scrubbed_bytes(str(tmp_path), "status", timeout=5)
+"""
+    child = _run_probe_guard_selftest_child(
+        tmp_path,
+        "test_probe_guard_child_undeclared_route",
+        child_body,
+    )
+    combined = child.stdout + child.stderr
+    msg = "stdout=%r stderr=%r" % (child.stdout, child.stderr)
+    assert child.returncode != 0, msg
+    assert "1 passed" in child.stdout, msg
+    assert "undeclared probe git fake routes installed" in combined, msg
+
+
+def test_probe_git_fake_teardown_raises_on_declared_route_mismatch_end_to_end(
+    tmp_path,
+):
+    """Prove G2a (line 5896): fixture teardown raises on declared route mismatch.
+
+    Does not prove: (1) an install that is never called is invisible;
+    (2) a re-entrant call on a different route is never observed.
+    """
+    child_body = """
+def fake_scrubbed_bytes(cwd_real, *args, timeout=None, **kwargs):
+    return b""
+TED._register_probe_git_fake(monkeypatch, "_git_scrubbed_bytes", fake_scrubbed_bytes)
+TED.ED._git_scrubbed_bytes(str(tmp_path), "worktree", timeout=5)
+"""
+    child = _run_probe_guard_selftest_child(
+        tmp_path,
+        "test_worktree_entry_set_fail_closed_on_timeout_and_nonzero_exit",
+        child_body,
+    )
+    combined = child.stdout + child.stderr
+    msg = "stdout=%r stderr=%r" % (child.stdout, child.stderr)
+    assert child.returncode != 0, msg
+    assert "1 passed" in child.stdout, msg
+    assert "installed probe git fake routes" in combined, msg
+    assert "!= declared" in combined, msg
+
+
+def test_probe_git_fake_teardown_raises_on_unregistered_helper_value_end_to_end(
+    tmp_path,
+):
+    """Prove G3 (line 5920): fixture teardown raises on unregistered helper value.
+
+    Does not prove: (1) an install that is never called is invisible;
+    (2) a re-entrant call on a different route is never observed.
+    """
+    child_body = """
+setattr(TED.ED, "_git_scrubbed_bytes", lambda *a, **k: None)
+"""
+    child = _run_probe_guard_selftest_child(
+        tmp_path,
+        "test_probe_guard_child_unregistered_value",
+        child_body,
+    )
+    combined = child.stdout + child.stderr
+    msg = "stdout=%r stderr=%r" % (child.stdout, child.stderr)
+    assert child.returncode != 0, msg
+    assert "1 passed" in child.stdout, msg
+    assert "has unregistered value" in combined, msg
+
+
 def _nested_sibling_worktree(main, cwd, name="sib"):
     sib = os.path.join(cwd, ".claude", "worktrees", name)
     os.makedirs(os.path.dirname(sib), exist_ok=True)
