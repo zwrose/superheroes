@@ -1,7 +1,9 @@
 """Interim receipt at non-terminal stops — per-pass verdict totals (#1107 WO-C)."""
+import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 
 import pytest
 
@@ -240,9 +242,257 @@ def test_checkpoint_calls_commit_recover_before_write(tmp_path, monkeypatch):
 
 # --- handback_gate ---------------------------------------------------------------------------
 
+_REMOTE = "git@github.com:org/repo.git"
+_REPO_ID = "github.com/org/repo"
+
+
+def _git(cwd, *args):
+    subprocess.run(
+        ["git", "-C", cwd, *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _init_repo(path, remote=_REMOTE):
+    path = str(path)
+    subprocess.run(["git", "init", "-q", "-b", "main", path], check=True,
+                   capture_output=True, text=True)
+    _git(path, "config", "user.email", "t@example.com")
+    _git(path, "config", "user.name", "Test")
+    if remote:
+        _git(path, "remote", "add", "origin", remote)
+    return path
+
+
+def _commit_file(repo, name, content, msg="init"):
+    p = os.path.join(repo, name)
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    _git(repo, "add", name)
+    _git(repo, "commit", "-q", "-m", msg)
+    return p
+
+
+def _gitdir(repo):
+    store = _load("store_core")
+    return store.get_worktree_gitdir(repo)
+
+
+def _superheroes_dir(repo):
+    d = os.path.join(_gitdir(repo), HG._SIDECAR_DIR)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _diff_sha256(repo, base_sha):
+    r = subprocess.run(
+        ["git", "-C", repo, "diff", "%s...HEAD" % base_sha],
+        capture_output=True,
+        timeout=10,
+    )
+    assert r.returncode == 0, r.stderr
+    return hashlib.sha256(r.stdout).hexdigest()
+
+
+def _certified_receipt(verdict="converged"):
+    return {
+        "schema": RD.RECEIPT_CERTIFIED_SCHEMA % 3,
+        "schemaVersion": 3,
+        "verdict": verdict,
+        "certificationShape": "audited-chain",
+        "certification": {"shape": "audited-chain"},
+        "scriptRan": {"byPhase": {}},
+        "seatMap": {},
+        "rounds": [],
+        "findings": [],
+        "decisions": [],
+        "degraded": [],
+        "skippedBlockers": [],
+    }
+
+
+def _write_build_lane(repo, **over):
+    d = _superheroes_dir(repo)
+    store = _load("store_core")
+    obj = {
+        "schema": HG.BUILD_LANE_SCHEMA,
+        "lane": "full",
+        "issue": "#1107",
+        "declaredAt": "2026-08-09T00:00:00Z",
+        "repoRoot": os.path.realpath(repo),
+        "branch": store.run_git(repo, "rev-parse", "--abbrev-ref", "HEAD") or "main",
+    }
+    obj.update(over)
+    with open(os.path.join(d, HG.BUILD_LANE_FILE), "w", encoding="utf-8") as fh:
+        json.dump(obj, fh)
+
+
+def _write_sidecar(repo, session_dir, receipt_obj, *, verdict="converged", base_ref="main",
+                   base_sha=None):
+    store = _load("store_core")
+    head_sha = store.run_git(repo, "rev-parse", "HEAD")
+    if base_sha is None:
+        base_sha = store.run_git(repo, "rev-parse", "--verify", "--quiet",
+                                 "%s^{commit}" % base_ref)
+    diff_sha = _diff_sha256(repo, base_sha)
+    receipt_path = os.path.join(session_dir, RD.RECEIPT_FILE)
+    os.makedirs(session_dir, exist_ok=True)
+    receipt_bytes = json.dumps(receipt_obj).encode("utf-8")
+    with open(receipt_path, "wb") as fh:
+        fh.write(receipt_bytes)
+    sidecar = RR.build_sidecar(
+        repoId=_REPO_ID,
+        branch=store.run_git(repo, "rev-parse", "--abbrev-ref", "HEAD") or "main",
+        headSha=head_sha,
+        baseRef=base_ref,
+        baseSha=base_sha,
+        diffSha256=diff_sha,
+        verdict=verdict,
+        certificationShape="audited-chain" if verdict == "converged" else "attested",
+        receiptPath=receipt_path,
+        receiptSha256=hashlib.sha256(receipt_bytes).hexdigest(),
+        policySha256="policy",
+        sessionDir=session_dir,
+    )
+    path = os.path.join(_superheroes_dir(repo), HG._SIDECAR_FILE)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(sidecar, fh)
+    return sidecar
+
+
+def _scoped_handback_repo(tmp_path, receipt_obj, *, verdict="converged"):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "base.txt", "base\n", msg="base")
+    base_sha = _load("store_core").run_git(repo, "rev-parse", "HEAD")
+    _commit_file(repo, "feature.txt", "feature\n", msg="feature")
+    session = str(tmp_path / "session")
+    _write_build_lane(repo)
+    _write_sidecar(repo, session, receipt_obj, verdict=verdict, base_ref="main", base_sha=base_sha)
+    return repo, session, base_sha
+
+
+def _reload_handback_gate():
+    return _load("handback_gate")
+
+
 def test_handback_gate_rejects_interim_receipt():
     interim = RD.build_interim_receipt(RD.new_state(_cfg()), None, "tripwire")
     sidecar = {"verdict": "converged"}
     ok, why = HG._receipt_bindings_ok(sidecar, interim)
     assert ok is False
     assert why == "receipt-interim-not-handback-evidence"
+
+
+def test_public_handback_rejects_interim_receipt(tmp_path):
+    # axis: interim token must survive validate_handback — not collapse to verdict-not-allowlisted.
+    interim = RD.build_interim_receipt(RD.new_state(_cfg()), None, "tripwire")
+    repo, _, _ = _scoped_handback_repo(tmp_path, interim, verdict="converged")
+    result = HG.validate_handback("gh pr ready", repo)
+    assert result["decision"] == "refuse"
+    assert result["reason"] == "receipt-interim-not-handback-evidence"
+
+
+def test_public_handback_rejects_non_object_receipt(tmp_path):
+    # axis: scalar/list JSON must refuse cleanly — never AttributeError on .get.
+    repo, _, _ = _scoped_handback_repo(tmp_path, [1, 2, 3], verdict="converged")
+    result = HG.validate_handback("gh pr ready", repo)
+    assert result["decision"] == "refuse"
+    assert result["reason"] == "handback-receipt-unreadable"
+    assert "not an object" in result["detail"]
+
+
+def test_public_handback_rejects_non_allowlisted_verdict(tmp_path):
+    # axis: genuine verdict-not-allowlisted path stays accurate through validate_handback.
+    repo, _, _ = _scoped_handback_repo(
+        tmp_path, _certified_receipt(verdict="halted"), verdict="halted")
+    result = HG.validate_handback("gh pr ready", repo)
+    assert result["decision"] == "refuse"
+    assert result["reason"] == "handback-verdict-not-allowlisted"
+
+
+def test_bite_public_handback_interim_token(tmp_path):
+    interim = RD.build_interim_receipt(RD.new_state(_cfg()), None, "tripwire")
+    repo, _, _ = _scoped_handback_repo(tmp_path, interim, verdict="converged")
+    red = HG.validate_handback("gh pr ready", repo)
+    assert red["reason"] == "receipt-interim-not-handback-evidence"
+    path = os.path.join(_LIB, "handback_gate.py")
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    patched = src.replace(
+        '        if bind_why == "verdict-not-allowlisted":\n'
+        '            return _refuse("handback-verdict-not-allowlisted", "",\n'
+        '                            subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)\n'
+        '        return _refuse(bind_why, "",\n'
+        '                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)',
+        '        return _refuse("handback-verdict-not-allowlisted", "",\n'
+        '                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)',
+        1,
+    )
+    assert patched != src
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(patched)
+    try:
+        mod = _reload_handback_gate()
+        green = mod.validate_handback("gh pr ready", repo)
+        assert green["reason"] != "receipt-interim-not-handback-evidence"
+        assert green["reason"] == "handback-verdict-not-allowlisted"
+    finally:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(src)
+        _reload_handback_gate()
+
+
+def test_bite_public_handback_non_object_receipt(tmp_path):
+    repo, _, _ = _scoped_handback_repo(tmp_path, [1, 2, 3], verdict="converged")
+    red = HG.validate_handback("gh pr ready", repo)
+    assert red["reason"] == "handback-receipt-unreadable"
+    path = os.path.join(_LIB, "handback_gate.py")
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    patched = src.replace(
+        '    if not isinstance(receipt, dict):\n'
+        '        return False, "receipt-invalid:receipt is not an object"\n',
+        '',
+        1,
+    )
+    assert patched != src
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(patched)
+    try:
+        mod = _reload_handback_gate()
+        with pytest.raises(AttributeError):
+            mod.validate_handback("gh pr ready", repo)
+    finally:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(src)
+        _reload_handback_gate()
+
+
+def test_bite_public_handback_verdict_allowlist(tmp_path):
+    repo, _, _ = _scoped_handback_repo(
+        tmp_path, _certified_receipt(verdict="halted"), verdict="halted")
+    red = HG.validate_handback("gh pr ready", repo)
+    assert red["reason"] == "handback-verdict-not-allowlisted"
+    path = os.path.join(_LIB, "handback_gate.py")
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    patched = src.replace(
+        '    if verdict not in HANDBACK_VERDICT_ALLOWLIST:\n'
+        '        return False, "verdict-not-allowlisted"',
+        '    if False and verdict not in HANDBACK_VERDICT_ALLOWLIST:\n'
+        '        return False, "verdict-not-allowlisted"',
+        1,
+    )
+    assert patched != src
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(patched)
+    try:
+        mod = _reload_handback_gate()
+        green = mod.validate_handback("gh pr ready", repo)
+        assert green["decision"] == "allow"
+    finally:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(src)
+        _reload_handback_gate()
