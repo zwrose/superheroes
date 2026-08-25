@@ -40,7 +40,13 @@ emphatic its name.
 
 4. **It is delivered through a path the guarded input can never take.** If the mutation cannot
    reach the detector through the path the test uses, the red you saw came from something else —
-   or never came at all. See `## When the proof cannot be produced`.
+   or never came at all. **The same failure wears a second face:** the mutation *does* reach the
+   mutated branch, but the **fixture never creates the condition the assertion discriminates on** —
+   so the probe stays green for every implementation, and the assertion is measuring nothing. The
+   tell is **a probe green where your own reasoning says it should be red**; when you see it, the
+   defect is in the fixture and **the cure is fixing the fixture, never relaxing the assertion**
+   (observed twice in one build — PR #1134's freshness leg). See
+   `## When the proof cannot be produced`.
 
 ## The record
 
