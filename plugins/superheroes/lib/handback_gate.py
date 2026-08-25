@@ -177,7 +177,7 @@ def _expand_short_token(tok):
         arity = _GH_OPTION_ARITY[flag]
         if arity == 1:
             rest = letters[i + 1:]
-            parts.append((flag, None))
+            parts.append((flag, rest if rest else None))
             return parts, None
         parts.append((flag, None))
         i += 1
@@ -622,7 +622,7 @@ def command_subject(invocation, environ=None):
     selector = pr.get("selector")
     head = pr.get("head")
     base = pr.get("base")
-    for operand in ([pr.get("body")] if pr.get("body") else []) + (pr.get("operands") or []):
+    for operand in pr.get("operands") or []:
         if _PR_URL.match(operand):
             if selector is None:
                 selector = operand
@@ -839,7 +839,7 @@ def _receipt_bindings_ok(sidecar, receipt):
         return False, "receipt-invalid:receipt is not an object"
     if receipt.get("schema") == RD.RECEIPT_INTERIM_SCHEMA:
         return False, "receipt-interim-not-handback-evidence"
-    ok, why = True, None  # bite: skip validate_receipt
+    ok, why = RD.validate_receipt(receipt)
     if not ok:
         return False, "receipt-invalid:%s" % why
     if receipt.get("verdict") != sidecar.get("verdict"):
@@ -887,7 +887,7 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
                         "sidecar invalid: %s" % why,
                         subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
 
-    if False and _LEGACY_BASE_SHA.match(sidecar.get("baseRef") or ""):
+    if _LEGACY_BASE_SHA.match(sidecar.get("baseRef") or ""):
         return _refuse("handback-receipt-unreadable",
                         "sidecar baseRef carries a commit id (legacy writer); "
                         "republish sidecar with base branch name",
@@ -925,7 +925,7 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
                         subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
 
     branch = run_git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-    if False and branch and branch != sidecar.get("branch"):
+    if branch and branch != sidecar.get("branch"):
         return _refuse("handback-branch-mismatch",
                         "worktree branch %r does not match sidecar branch %r"
                         % (branch, sidecar.get("branch")),
@@ -985,7 +985,7 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
             return _refuse("handback-base-mismatch",
                             "sidecar baseRef is unpinned",
                             subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-        if False and cmd_base != sidecar_base:
+        if cmd_base != sidecar_base:
             return _refuse("handback-base-mismatch",
                             "--base %r does not match sidecar baseRef %r"
                             % (cmd_base, sidecar_base),
@@ -1025,7 +1025,7 @@ def validate_handback(command, cwd, *, environ=None, run_git=None):
     invocations = parse_gh_invocations(command)
     guarded = []
     for inv in invocations:
-        if False and inv.get("non_mutating"):
+        if inv.get("non_mutating"):
             continue
         if inv["action"] == "pr-ready" and inv.get("undo"):
             continue
