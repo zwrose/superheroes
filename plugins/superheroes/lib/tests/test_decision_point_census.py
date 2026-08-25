@@ -616,7 +616,7 @@ def test_fixture_waiting_token_in_block_fails(tmp_path, monkeypatch):
     assert hits, "waiting-token fixture must be detected inside block"
 
 
-# axis: storage-location block without fenced bash — bite-proof element for B1 fenced-bash leg.
+# axis: storage-location block without fenced bash — exercises the shipped B1 fenced-bash check.
 def test_fixture_storage_block_without_bash_fails(tmp_path, monkeypatch):
     """#1144 bite-proof: storage-location block without fenced bash must fail B1."""
     monkeypatch.setattr(
@@ -631,20 +631,8 @@ def test_fixture_storage_block_without_bash_fails(tmp_path, monkeypatch):
         "<!-- /decision-point: id=storage-no-bash -->\n"
     )
     (skills / "SKILL.md").write_text(content, encoding="utf-8")
-    blocks, _ = _collect_all_blocks(str(tmp_path / "skills"))
-    hits = []
-    for block in blocks:
-        if block["kind"] != "storage-location":
-            continue
-        rel = block["rel"]
-        line = block["open_line"]
-        prose = block["prose"]
-        bash_blocks = _fenced_bash_blocks(prose)
-        if not bash_blocks:
-            hits.append(
-                f"{rel}:{line}: storage-location block requires a fenced bash block"
-            )
-    assert hits, "storage block without bash fixture must produce fenced-bash violation"
+    with pytest.raises(AssertionError, match="requires a fenced bash block"):
+        test_storage_decision_blocks_capture_source()
 
 
 # axis: E3 empty walk — bite-proof element (monkeypatch skills root to empty dir).
