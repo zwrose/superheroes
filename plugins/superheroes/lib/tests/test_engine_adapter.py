@@ -2806,16 +2806,17 @@ def test_sanitized_view_receipt_binds_producer_diff_keys(tmp_path):
 # #763: review parse layer — verdicts result kind + normalize_review_stdout
 
 
-def _load_verification_verdicts():
-    spec = importlib.util.spec_from_file_location(
-        "verification", os.path.join(_HERE, "..", "verification.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.VERDICTS
-
-
-def test_verdicts_constant_matches_verification_module():
-    assert EA.VERDICTS == _load_verification_verdicts()
+# RETIRED (#1147): `test_verdicts_constant_matches_verification_module` asserted
+# `EA.VERDICTS == verification.VERDICTS`. It was written when the two modules each held their own
+# literal tuple, so the comparison could catch a drift. Since #1123 collapsed the definition,
+# BOTH names are bindings of the SAME object — `engine_adapter.VERDICTS = round_phases.VERDICTS`
+# and `verification.VERDICTS = round_phases.VERDICTS` — so the assertion compared a value against
+# itself and could not fail for any edit to either module. A guard that cannot fail is worse than
+# no guard: it reads as coverage in the suite while pinning nothing, so the surface looks watched
+# when it is not. Retired rather than repaired — the drift it was written for cannot exist while a
+# single definition is aliased, and if a future change re-introduces independent literals, the pin
+# belongs at that new definition, not here. The single definition itself lives in
+# `round_phases.py`, which is pinned in `escalation.SAFETY_MACHINERY`.
 
 
 def _review_base_template_literals():
