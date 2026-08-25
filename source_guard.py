@@ -22,18 +22,6 @@ import pytest
 # Injection seam for subprocess wiring proofs (defaults to repo root).
 REPO_ROOT_ENV = "SUPERHEROES_SOURCE_GUARD_ROOT"
 
-# Module-level mutable watched set — tests may replace without reinstalling hooks.
-_WATCHED_PATHS = set()
-
-_BASELINE_SIGNATURES = {}
-_BASELINE_HASHES = {}
-_CURRENT_SIGNATURES = {}
-
-_SESSION_START_DIRTY = set()
-_REPO_ROOT = None
-_CURRENT_TEST_NODEID = None
-_AUDIT_HOOK_INSTALLED = False
-
 
 class ShippedSourceWrite(RuntimeError):
     """Raised when a watched shipped-source path is opened for writing."""
@@ -90,13 +78,6 @@ def _capture_baseline(paths):
     return {"signatures": sigs, "hashes": hashes}
 
 
-def _apply_baseline(baseline):
-    global _BASELINE_SIGNATURES, _BASELINE_HASHES, _CURRENT_SIGNATURES
-    _BASELINE_SIGNATURES = dict(baseline["signatures"])
-    _BASELINE_HASHES = dict(baseline["hashes"])
-    _CURRENT_SIGNATURES = dict(baseline["signatures"])
-
-
 def _git_dirty_paths(repo_root):
     proc = subprocess.run(
         ["git", "-c", "core.quotepath=false", "status", "--porcelain", "-z"],
@@ -145,39 +126,6 @@ def _is_write_open(mode, flags):
     return False
 
 
-def _path_hits_watched(path):
-    if not isinstance(path, (str, bytes)):
-        return False
-    if isinstance(path, bytes):
-        path = path.decode("utf-8", "replace")
-    real = os.path.realpath(path)
-    return real in _WATCHED_PATHS
-
-
-def audit_hook(event, args):
-    """Raise ShippedSourceWrite when a watched path is opened for writing or replaced."""
-    if event == "open":
-        path, mode, flags = args
-        if not _is_write_open(mode, flags):
-            return
-        if _path_hits_watched(path):
-            node = _CURRENT_TEST_NODEID or "<unknown test>"
-            raise ShippedSourceWrite(
-                "write to shipped source %r blocked — see %s"
-                % (path, node)
-            )
-        return
-
-    if event in ("os.rename", "os.replace", "os.remove", "os.truncate"):
-        for arg in args:
-            if _path_hits_watched(arg):
-                node = _CURRENT_TEST_NODEID or "<unknown test>"
-                raise ShippedSourceWrite(
-                    "%s on shipped source %r blocked — see %s"
-                    % (event, arg, node)
-                )
-
-
 def _resolve_repo_root(config):
     candidate = os.environ.get(REPO_ROOT_ENV)
     if candidate is None:
@@ -196,91 +144,156 @@ def _resolve_repo_root(config):
     return os.path.realpath(proc.stdout.strip())
 
 
+class GuardState:
+    def __init__(self, addaudithook):
+        self._addaudithook = addaudithook
+        self.repo_root = None
+        self.watched = frozenset()
+        self.baseline_signatures = {}
+        self.baseline_hashes = {}
+        self.current_signatures = {}
+        self.session_start_dirty = frozenset()
+        self.current_test_nodeid = None
+        self.audit_hook_installed = False
+        self.configured = False
+
+    def configure(self, config):
+        if self.configured:
+            return False
+        self.repo_root = _resolve_repo_root(config)
+
+        workerinput = getattr(config, "workerinput", None)
+        if workerinput is None:
+            paths = watched_paths(self.repo_root)
+            self.watched = frozenset(paths)
+            baseline = _capture_baseline(paths)
+            self.baseline_signatures = dict(baseline["signatures"])
+            self.baseline_hashes = dict(baseline["hashes"])
+            self.current_signatures = dict(baseline["signatures"])
+            self.session_start_dirty = frozenset(_git_dirty_paths(self.repo_root))
+        else:
+            baseline = workerinput["source_guard_baseline"]
+            paths = workerinput["source_guard_watched"]
+            self.watched = frozenset(paths)
+            self.baseline_signatures = dict(baseline["signatures"])
+            self.baseline_hashes = dict(baseline["hashes"])
+            self.current_signatures = dict(baseline["signatures"])
+
+        self.install_audit_hook()
+        self.configured = True
+        return True
+
+    def install_audit_hook(self):
+        if self.audit_hook_installed:
+            return
+        self._addaudithook(self.audit)
+        self.audit_hook_installed = True
+
+    def _path_hits_watched(self, path):
+        if not isinstance(path, (str, bytes)):
+            return False
+        if isinstance(path, bytes):
+            path = path.decode("utf-8", "replace")
+        real = os.path.realpath(path)
+        return real in self.watched
+
+    def audit(self, event, args):
+        """Raise ShippedSourceWrite when a watched path is opened for writing or replaced."""
+        if event == "open":
+            path, mode, flags = args
+            if not _is_write_open(mode, flags):
+                return
+            if self._path_hits_watched(path):
+                node = self.current_test_nodeid or "<unknown test>"
+                raise ShippedSourceWrite(
+                    "write to shipped source %r blocked — see %s"
+                    % (path, node)
+                )
+            return
+
+        if event in ("os.rename", "os.replace", "os.remove", "os.truncate"):
+            for arg in args:
+                if self._path_hits_watched(arg):
+                    node = self.current_test_nodeid or "<unknown test>"
+                    raise ShippedSourceWrite(
+                        "%s on shipped source %r blocked — see %s"
+                        % (event, arg, node)
+                    )
+
+    def check_residue(self, test_nodeid):
+        changed = []
+        for path in self.watched:
+            if path not in self.baseline_hashes:
+                continue
+            try:
+                current_sig = _lstat_signature(path)
+            except OSError as exc:
+                pytest.fail(
+                    "source_guard: cannot lstat watched file %r after %s: %s"
+                    % (path, test_nodeid, exc)
+                )
+            baseline_sig = self.baseline_signatures.get(path)
+            cached_sig = self.current_signatures.get(path, baseline_sig)
+            if current_sig == cached_sig:
+                continue
+            current_hash = _file_hash(path)
+            baseline_hash = self.baseline_hashes[path]
+            if current_hash == baseline_hash:
+                self.current_signatures[path] = current_sig
+                continue
+            changed.append(path)
+            self.current_signatures[path] = current_sig
+            self.baseline_hashes[path] = current_hash
+        if changed:
+            pytest.fail(
+                "source_guard: shipped source mutated by %s: %s"
+                % (test_nodeid, ", ".join(sorted(changed)))
+            )
+
+    def export_to(self, node):
+        node.workerinput["source_guard_baseline"] = {
+            "signatures": dict(self.baseline_signatures),
+            "hashes": dict(self.baseline_hashes),
+        }
+        node.workerinput["source_guard_watched"] = sorted(self.watched)
+
+    def session_finish(self, session):
+        if getattr(session.config, "workerinput", None) is not None:
+            return
+        end_dirty = _git_dirty_paths(self.repo_root)
+        new_dirty = end_dirty - self.session_start_dirty
+        watched_dirty = new_dirty & set(self.watched)
+        if watched_dirty:
+            if session.exitstatus == 0:
+                session.exitstatus = 1
+            paths = ", ".join(sorted(watched_dirty))
+            session.config._source_guard_session_failure = (
+                "source_guard: session left shipped source dirty: %s" % paths
+            )
+            tw = session.config.pluginmanager.getplugin("terminalreporter")
+            if tw is not None:
+                tw.write_line(session.config._source_guard_session_failure, red=True)
+
+
+_LIVE = GuardState(sys.addaudithook)
+
+
 def pytest_configure(config):
-    global _REPO_ROOT, _SESSION_START_DIRTY, _AUDIT_HOOK_INSTALLED
-    _REPO_ROOT = _resolve_repo_root(config)
-
-    workerinput = getattr(config, "workerinput", None)
-    if workerinput is None:
-        paths = watched_paths(_REPO_ROOT)
-        _WATCHED_PATHS.clear()
-        _WATCHED_PATHS.update(paths)
-        baseline = _capture_baseline(paths)
-        config._source_guard_baseline = baseline
-        _apply_baseline(baseline)
-        _SESSION_START_DIRTY = _git_dirty_paths(_REPO_ROOT)
-    else:
-        baseline = workerinput["source_guard_baseline"]
-        paths = workerinput["source_guard_watched"]
-        _WATCHED_PATHS.clear()
-        _WATCHED_PATHS.update(paths)
-        _apply_baseline(baseline)
-
-    if not _AUDIT_HOOK_INSTALLED:
-        sys.addaudithook(audit_hook)
-        _AUDIT_HOOK_INSTALLED = True
+    return _LIVE.configure(config)
 
 
 @pytest.hookimpl(optionalhook=True)
 def pytest_configure_node(node):
-    baseline = node.config._source_guard_baseline
-    node.workerinput["source_guard_baseline"] = baseline
-    node.workerinput["source_guard_watched"] = list(_WATCHED_PATHS)
+    return _LIVE.export_to(node)
 
 
 @pytest.fixture(autouse=True, scope="function")
 def _source_guard_test_context(request):
-    global _CURRENT_TEST_NODEID
-    _CURRENT_TEST_NODEID = request.node.nodeid
+    _LIVE.current_test_nodeid = request.node.nodeid
     yield
-    _CURRENT_TEST_NODEID = None
-    _check_residue(request.node.nodeid)
-
-
-def _check_residue(test_nodeid):
-    changed = []
-    for path in _WATCHED_PATHS:
-        if path not in _BASELINE_HASHES:
-            continue
-        try:
-            current_sig = _lstat_signature(path)
-        except OSError as exc:
-            pytest.fail(
-                "source_guard: cannot lstat watched file %r after %s: %s"
-                % (path, test_nodeid, exc)
-            )
-        baseline_sig = _BASELINE_SIGNATURES.get(path)
-        cached_sig = _CURRENT_SIGNATURES.get(path, baseline_sig)
-        if current_sig == cached_sig:
-            continue
-        current_hash = _file_hash(path)
-        baseline_hash = _BASELINE_HASHES[path]
-        if current_hash == baseline_hash:
-            _CURRENT_SIGNATURES[path] = current_sig
-            continue
-        changed.append(path)
-        _CURRENT_SIGNATURES[path] = current_sig
-        _BASELINE_HASHES[path] = current_hash
-    if changed:
-        pytest.fail(
-            "source_guard: shipped source mutated by %s: %s"
-            % (test_nodeid, ", ".join(sorted(changed)))
-        )
+    _LIVE.current_test_nodeid = None
+    _LIVE.check_residue(request.node.nodeid)
 
 
 def pytest_sessionfinish(session, exitstatus):
-    if getattr(session.config, "workerinput", None) is not None:
-        return
-    end_dirty = _git_dirty_paths(_REPO_ROOT)
-    new_dirty = end_dirty - _SESSION_START_DIRTY
-    watched_dirty = new_dirty & set(_WATCHED_PATHS)
-    if watched_dirty:
-        if session.exitstatus == 0:
-            session.exitstatus = 1
-        paths = ", ".join(sorted(watched_dirty))
-        session.config._source_guard_session_failure = (
-            "source_guard: session left shipped source dirty: %s" % paths
-        )
-        tw = session.config.pluginmanager.getplugin("terminalreporter")
-        if tw is not None:
-            tw.write_line(session.config._source_guard_session_failure, red=True)
+    return _LIVE.session_finish(session)

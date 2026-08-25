@@ -1,5 +1,7 @@
 """Tests for source_guard pytest plugin and bite_support helper."""
+import ast
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -14,14 +16,35 @@ _REPO_ROOT = os.path.realpath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
 )
 
+_CENSUS_LIVE_WRAPPER_TESTS = frozenset({
+    "test_live_guard_survives_empty_worker_reconfigure",
+})
+
+_CENSUS_FORBIDDEN_TOKENS = (
+    "_LIVE",
+    "pytest_configure",
+    "pytest_configure_node",
+    "pytest_sessionfinish",
+)
+
+_CENSUS_TEST_ROOTS = (
+    os.path.join(_REPO_ROOT, ".github", "scripts", "tests"),
+    os.path.join(_REPO_ROOT, "plugins", "superheroes", "lib", "tests"),
+    os.path.join(_REPO_ROOT, "plugins", "superheroes", "eval", "tests"),
+    os.path.join(_REPO_ROOT, "eval", "lib", "tests"),
+)
+
+_CENSUS_FORBIDDEN_TOKEN_PATTERNS = tuple(
+    re.compile(r"\b%s\b" % re.escape(token))
+    for token in _CENSUS_FORBIDDEN_TOKENS
+)
+
 
 @pytest.fixture
-def isolated_watched():
-    saved = set(sg._WATCHED_PATHS)
-    sg._WATCHED_PATHS.clear()
-    yield sg._WATCHED_PATHS
-    sg._WATCHED_PATHS.clear()
-    sg._WATCHED_PATHS.update(saved)
+def throwaway_guard_state():
+    calls = []
+    state = sg.GuardState(lambda hook: calls.append(hook))
+    yield state
 
 
 # --- Group 1: unit behaviour -------------------------------------------------
@@ -50,41 +73,41 @@ def test_watched_paths_failed_git_raises(tmp_path, monkeypatch):
         sg.watched_paths(str(tmp_path))
 
 
-def test_audit_hook_allows_read_of_watched(tmp_path, isolated_watched):
+def test_audit_hook_allows_read_of_watched(tmp_path, throwaway_guard_state):
     path = tmp_path / "watched.py"
     path.write_text("x\n")
     real = os.path.realpath(str(path))
-    isolated_watched.add(real)
-    sg.audit_hook("open", (real, "r", 0))
+    throwaway_guard_state.watched = frozenset({real})
+    throwaway_guard_state.audit("open", (real, "r", 0))
 
 
-def test_audit_hook_blocks_open_write_watched(tmp_path, isolated_watched):
+def test_audit_hook_blocks_open_write_watched(tmp_path, throwaway_guard_state):
     path = tmp_path / "watched.py"
     path.write_text("x\n")
     real = os.path.realpath(str(path))
-    isolated_watched.add(real)
+    throwaway_guard_state.watched = frozenset({real})
     with pytest.raises(sg.ShippedSourceWrite):
-        sg.audit_hook("open", (real, "w", 0))
+        throwaway_guard_state.audit("open", (real, "w", 0))
 
 
-def test_audit_hook_blocks_os_open_write_watched(tmp_path, isolated_watched):
+def test_audit_hook_blocks_os_open_write_watched(tmp_path, throwaway_guard_state):
     path = tmp_path / "watched.py"
     path.write_text("x\n")
     real = os.path.realpath(str(path))
-    isolated_watched.add(real)
+    throwaway_guard_state.watched = frozenset({real})
     with pytest.raises(sg.ShippedSourceWrite):
-        sg.audit_hook(
+        throwaway_guard_state.audit(
             "open",
             (real, None, os.O_WRONLY | os.O_CREAT),
         )
 
 
-def test_audit_hook_blocks_rename_replace_remove_truncate(tmp_path, isolated_watched):
+def test_audit_hook_blocks_rename_replace_remove_truncate(tmp_path, throwaway_guard_state):
     path = tmp_path / "watched.py"
     path.write_text("x\n")
     real = os.path.realpath(str(path))
     other = os.path.realpath(str(tmp_path / "other.py"))
-    isolated_watched.add(real)
+    throwaway_guard_state.watched = frozenset({real})
     for event, args in (
         ("os.rename", (other, real)),
         ("os.replace", (other, real)),
@@ -92,14 +115,14 @@ def test_audit_hook_blocks_rename_replace_remove_truncate(tmp_path, isolated_wat
         ("os.truncate", (real, 0)),
     ):
         with pytest.raises(sg.ShippedSourceWrite):
-            sg.audit_hook(event, args)
+            throwaway_guard_state.audit(event, args)
 
 
-def test_audit_hook_allows_write_unwatched(tmp_path, isolated_watched):
+def test_audit_hook_allows_write_unwatched(tmp_path, throwaway_guard_state):
     path = tmp_path / "free.py"
     path.write_text("x\n")
     real = os.path.realpath(str(path))
-    sg.audit_hook("open", (real, "w", 0))
+    throwaway_guard_state.audit("open", (real, "w", 0))
 
 
 def test_lstat_signature_differs_on_chmod(tmp_path):
@@ -198,16 +221,16 @@ def _bite_red_green(label, neutralize_edits, red_fn, green_fn):
     assert green_fn(sg) is True, "%s: real module must fire (green half)" % label
 
 
-def test_bite_audit_hook_write_mode_detection(tmp_path, isolated_watched):
+def test_bite_audit_hook_write_mode_detection(tmp_path):
     path = tmp_path / "w.py"
     path.write_text("z\n")
     real = os.path.realpath(str(path))
-    isolated_watched.add(real)
 
     def fires(mod):
-        mod._WATCHED_PATHS.add(real)
+        state = mod.GuardState(lambda hook: None)
+        state.watched = frozenset({real})
         try:
-            mod.audit_hook("open", (real, "w", 0))
+            state.audit("open", (real, "w", 0))
             return False
         except mod.ShippedSourceWrite:
             return True
@@ -223,17 +246,17 @@ def test_bite_audit_hook_write_mode_detection(tmp_path, isolated_watched):
     )
 
 
-def test_bite_audit_hook_rename_branch(tmp_path, isolated_watched):
+def test_bite_audit_hook_rename_branch(tmp_path):
     path = tmp_path / "w.py"
     path.write_text("z\n")
     real = os.path.realpath(str(path))
     other = os.path.realpath(str(tmp_path / "o.py"))
-    isolated_watched.add(real)
 
     def fires(mod):
-        mod._WATCHED_PATHS.add(real)
+        state = mod.GuardState(lambda hook: None)
+        state.watched = frozenset({real})
         try:
-            mod.audit_hook("os.rename", (other, real))
+            state.audit("os.rename", (other, real))
             return False
         except mod.ShippedSourceWrite:
             return True
@@ -241,24 +264,24 @@ def test_bite_audit_hook_rename_branch(tmp_path, isolated_watched):
     _bite_red_green(
         "rename_branch",
         (
-            '    if event in ("os.rename", "os.replace", "os.remove", "os.truncate"):',
-            '    if False and event in ("os.rename", "os.replace", "os.remove", "os.truncate"):',
+            '        if event in ("os.rename", "os.replace", "os.remove", "os.truncate"):',
+            '        if False and event in ("os.rename", "os.replace", "os.remove", "os.truncate"):',
         ),
         lambda m: fires(m),
         lambda m: fires(m),
     )
 
 
-def test_bite_watched_set_membership(tmp_path, isolated_watched):
+def test_bite_watched_set_membership(tmp_path):
     path = tmp_path / "w.py"
     path.write_text("z\n")
     real = os.path.realpath(str(path))
-    isolated_watched.add(real)
 
     def fires(mod):
-        mod._WATCHED_PATHS.add(real)
+        state = mod.GuardState(lambda hook: None)
+        state.watched = frozenset({real})
         try:
-            mod.audit_hook("open", (real, "w", 0))
+            state.audit("open", (real, "w", 0))
             return False
         except mod.ShippedSourceWrite:
             return True
@@ -266,8 +289,8 @@ def test_bite_watched_set_membership(tmp_path, isolated_watched):
     _bite_red_green(
         "watched_membership",
         (
-            "    return real in _WATCHED_PATHS",
-            "    return False",
+            "        return real in self.watched",
+            "        return False",
         ),
         lambda m: fires(m),
         lambda m: fires(m),
@@ -393,6 +416,258 @@ def test_bite_patched_module_count_two(tmp_path):
     )
     assert raises_dup(patched) is False
     assert raises_dup(bs) is True
+
+
+def _workerinput_config(baseline, watched):
+    return types.SimpleNamespace(
+        rootpath=_REPO_ROOT,
+        workerinput={
+            "source_guard_baseline": baseline,
+            "source_guard_watched": watched,
+        },
+    )
+
+
+def test_configure_copies_workerinput_payload():
+    payload_baseline = {
+        "signatures": {"/p.py": (1, 2, 3, 4)},
+        "hashes": {"/p.py": "abc"},
+    }
+    payload_watched = ["/p.py"]
+    state = sg.GuardState(lambda hook: None)
+    state.configure(_workerinput_config(payload_baseline, payload_watched))
+    payload_baseline["hashes"].clear()
+    payload_baseline["signatures"].clear()
+    payload_watched.clear()
+    assert state.baseline_hashes == {"/p.py": "abc"}
+    assert state.baseline_signatures == {"/p.py": (1, 2, 3, 4)}
+    assert state.watched == frozenset({"/p.py"})
+
+
+def test_export_to_copies_instance_state():
+    state = sg.GuardState(lambda hook: None)
+    state.baseline_hashes = {"/p.py": "abc"}
+    state.baseline_signatures = {"/p.py": (1, 2, 3, 4)}
+    state.watched = frozenset({"/p.py"})
+    node = types.SimpleNamespace(workerinput={})
+    state.export_to(node)
+    published_baseline = node.workerinput["source_guard_baseline"]
+    node.workerinput["source_guard_watched"].clear()
+    published_baseline["hashes"].clear()
+    published_baseline["signatures"].clear()
+    assert state.baseline_hashes == {"/p.py": "abc"}
+    assert state.baseline_signatures == {"/p.py": (1, 2, 3, 4)}
+    assert state.watched == frozenset({"/p.py"})
+
+
+def test_throwaways_never_call_sys_addaudithook(monkeypatch):
+    real_calls = []
+    monkeypatch.setattr(sg.sys, "addaudithook", real_calls.append)
+    for _ in range(3):
+        state = sg.GuardState(lambda hook: None)
+        state.configure(
+            _workerinput_config({"signatures": {}, "hashes": {}}, [])
+        )
+    assert real_calls == []
+    with pytest.raises(TypeError):
+        sg.GuardState()
+
+
+def test_pytest_configure_installs_audit_hook_once():
+    calls = []
+    state = sg.GuardState(lambda hook: calls.append(hook))
+    config = _workerinput_config({"signatures": {}, "hashes": {}}, [])
+    assert state.configure(config) is True
+    assert len(calls) == 1
+    assert state.configured is True
+    assert state.configure(config) is False
+    assert len(calls) == 1
+
+
+def test_live_guard_survives_empty_worker_reconfigure():
+    watched_before = len(sg._LIVE.watched)
+    baseline_before = len(sg._LIVE.baseline_hashes)
+    assert watched_before > 0
+    assert baseline_before > 0
+    config = _workerinput_config({"signatures": {}, "hashes": {}}, [])
+    result = sg.pytest_configure(config)
+    assert result is False
+    assert len(sg._LIVE.watched) == watched_before
+    assert len(sg._LIVE.baseline_hashes) == baseline_before
+
+
+def _configured_state_for_idempotent_bite(mod):
+    state = mod.GuardState(lambda hook: None)
+    state.watched = frozenset({"/a.py"})
+    state.baseline_hashes = {"/a.py": "hash"}
+    state.configured = True
+    config = types.SimpleNamespace(
+        rootpath=_REPO_ROOT,
+        workerinput={
+            "source_guard_baseline": {"signatures": {}, "hashes": {}},
+            "source_guard_watched": [],
+        },
+    )
+    state.configure(config)
+    return len(state.watched) > 0 and len(state.baseline_hashes) > 0
+
+
+def test_bite_configure_idempotent_early_return():
+    _bite_red_green(
+        "configure_idempotent",
+        (
+            "        if self.configured:\n            return False",
+            "        if False and self.configured:\n            return False",
+        ),
+        lambda m: _configured_state_for_idempotent_bite(m),
+        lambda m: _configured_state_for_idempotent_bite(m),
+    )
+
+
+def test_bite_install_audit_hook_once_flag():
+    def install_once(mod):
+        calls = []
+        state = mod.GuardState(lambda hook: calls.append(hook))
+        state.install_audit_hook()
+        state.install_audit_hook()
+        return len(calls) == 1
+
+    _bite_red_green(
+        "install_once",
+        (
+            "        if self.audit_hook_installed:",
+            "        if False and self.audit_hook_installed:",
+        ),
+        lambda m: install_once(m),
+        lambda m: install_once(m),
+    )
+
+
+def test_bite_configure_copies_baseline_hashes():
+    def copies_hashes(mod):
+        payload = {"signatures": {}, "hashes": {"k": "v"}}
+        state = mod.GuardState(lambda hook: None)
+        state.configure(
+            types.SimpleNamespace(
+                rootpath=_REPO_ROOT,
+                workerinput={
+                    "source_guard_baseline": payload,
+                    "source_guard_watched": [],
+                },
+            )
+        )
+        payload["hashes"].clear()
+        return "k" in state.baseline_hashes
+
+    _bite_red_green(
+        "configure_copy_hashes",
+        (
+            '            paths = workerinput["source_guard_watched"]\n'
+            '            self.watched = frozenset(paths)\n'
+            '            self.baseline_signatures = dict(baseline["signatures"])\n'
+            '            self.baseline_hashes = dict(baseline["hashes"])',
+            '            paths = workerinput["source_guard_watched"]\n'
+            '            self.watched = frozenset(paths)\n'
+            '            self.baseline_signatures = dict(baseline["signatures"])\n'
+            '            self.baseline_hashes = baseline["hashes"]',
+        ),
+        lambda m: copies_hashes(m),
+        lambda m: copies_hashes(m),
+    )
+
+
+def test_bite_export_to_copies_baseline_hashes():
+    def copies_on_export(mod):
+        state = mod.GuardState(lambda hook: None)
+        state.baseline_hashes = {"k": "v"}
+        state.baseline_signatures = {}
+        state.watched = frozenset()
+        node = types.SimpleNamespace(workerinput={})
+        state.export_to(node)
+        published = node.workerinput["source_guard_baseline"]
+        published["hashes"].clear()
+        return "k" in state.baseline_hashes
+
+    _bite_red_green(
+        "export_copy_hashes",
+        (
+            '            "hashes": dict(self.baseline_hashes),',
+            '            "hashes": self.baseline_hashes,',
+        ),
+        lambda m: copies_on_export(m),
+        lambda m: copies_on_export(m),
+    )
+
+
+def test_bite_guard_state_requires_addaudithook():
+    def requires_argument(mod):
+        try:
+            mod.GuardState()
+            return False
+        except TypeError:
+            return True
+
+    _bite_red_green(
+        "required_addaudithook",
+        (
+            "    def __init__(self, addaudithook):",
+            "    def __init__(self, addaudithook=sys.addaudithook):",
+        ),
+        lambda m: requires_argument(m),
+        lambda m: requires_argument(m),
+    )
+
+
+def _top_level_function_at_line(tree, lineno):
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = getattr(node, "end_lineno", node.lineno)
+            if node.lineno <= lineno <= end:
+                return node.name
+    return None
+
+
+def _census_constant_assignment_line(tree, lineno):
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in (
+                "_CENSUS_FORBIDDEN_TOKENS",
+                "_CENSUS_LIVE_WRAPPER_TESTS",
+            ):
+                end = getattr(node, "end_lineno", node.lineno)
+                if node.lineno <= lineno <= end:
+                    return True
+    return False
+
+
+def test_census_no_test_source_touches_live_guard_wrapper():
+    violations = []
+    for root in _CENSUS_TEST_ROOTS:
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for filename in filenames:
+                if not filename.endswith(".py"):
+                    continue
+                path = os.path.join(dirpath, filename)
+                with open(path, encoding="utf-8") as fh:
+                    source = fh.read()
+                try:
+                    tree = ast.parse(source, filename=path)
+                except SyntaxError:
+                    continue
+                for lineno, line in enumerate(source.splitlines(), start=1):
+                    if _census_constant_assignment_line(tree, lineno):
+                        continue
+                    func_name = _top_level_function_at_line(tree, lineno)
+                    if func_name in _CENSUS_LIVE_WRAPPER_TESTS:
+                        continue
+                    for pattern in _CENSUS_FORBIDDEN_TOKEN_PATTERNS:
+                        if pattern.search(line):
+                            violations.append(
+                                "%s:%d:%s" % (path, lineno, pattern.pattern)
+                            )
+    assert violations == []
 
 
 # --- Group 3: wiring proof (subprocess, real plugin) -------------------------
@@ -701,30 +976,3 @@ def test_plugin_loads_with_xdist_disabled():
     assert "INTERNALERROR" not in combined
     assert "PluginValidationError" not in combined
 
-
-def test_pytest_configure_installs_audit_hook_once(monkeypatch):
-    saved = sg._AUDIT_HOOK_INSTALLED
-    sg._AUDIT_HOOK_INSTALLED = False
-    calls = []
-
-    def counting_addaudithook(hook):
-        calls.append(hook)
-
-    monkeypatch.setattr(sg.sys, "addaudithook", counting_addaudithook)
-    baseline = {"signatures": {}, "hashes": {}}
-    config = types.SimpleNamespace(
-        rootpath=_REPO_ROOT,
-        workerinput={
-            "source_guard_baseline": baseline,
-            "source_guard_watched": [],
-        },
-        _source_guard_baseline=None,
-    )
-    try:
-        sg.pytest_configure(config)
-        assert sg._AUDIT_HOOK_INSTALLED is True
-        assert len(calls) == 1
-        sg.pytest_configure(config)
-        assert len(calls) == 1
-    finally:
-        sg._AUDIT_HOOK_INSTALLED = saved
