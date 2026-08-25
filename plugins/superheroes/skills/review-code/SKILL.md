@@ -30,7 +30,7 @@ The five specialist agents are bundled plugin agents (`architecture-reviewer`, `
 
 **Auto-detection rule.** Run `gh pr list --head "$(git rev-parse --abbrev-ref HEAD)" --json number,headRefOid,headRefName --limit 1`. If the result is non-empty, default to PR mode. Otherwise default to branch mode. If the user passed `branch` explicitly, skip the lookup. If the user passed `pr <N>` explicitly, use `<N>` and don't auto-detect.
 
-**`--post` was removed (#1121) and is not a flag.** It posted a review pass to GitHub as inline comments and had zero recorded invocations. If the user passes `--post`, stop and point them at `--review-only` — one read-only pass with no writes anywhere — rather than silently running the auto-fix loop, which commits.
+**`--post` was removed (#1121) and is not a flag.** It posted a review pass to GitHub as inline comments and had zero recorded invocations. If the user passes `--post`, stop and point them at `--review-only` — one read-only pass with no commits, no working-tree changes, and no GitHub writes (it still creates its own session directory, and in PR mode a detached worktree at the PR head) — rather than silently running the auto-fix loop, which commits.
 
 ## Session Directory
 
