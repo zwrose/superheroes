@@ -680,17 +680,24 @@ def test_placeholder_fixture_known_table_covers_every_template_placeholder():
     without touching the fixture builder — the mirror is derived from the template, not hand-typed.
     """
     gaps = []
+    stub_values = []
     for phase in sorted(RD._READ_ONLY_CHANNEL_PHASES):
         declared, reason = _template_declared_placeholders(phase)
         assert reason is None, (phase, reason)
         direct = declared - _DERIVED_PLACEHOLDER_NAMES
         known = _KNOWN_REALISTIC_VALUES.get(phase, {})
+        ph = _phase_placeholders(phase, RD.CHANNEL_FILE)
         for name in sorted(direct):
             if name == "CHANNEL":
                 continue
             if name not in known:
                 gaps.append("%s:%s" % (phase, name))
+                continue
+            value = ph[name]
+            if not isinstance(value, str) or not value or value.startswith("STUB:"):
+                stub_values.append("%s:%s=%r" % (phase, name, value))
     assert not gaps, "template placeholder(s) missing realistic fixture value: %s" % gaps
+    assert not stub_values, "template placeholder(s) with stub or empty fixture value: %s" % stub_values
 
 
 def _render_phase(phase, host_seat):

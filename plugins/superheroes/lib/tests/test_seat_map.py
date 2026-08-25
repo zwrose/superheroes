@@ -2138,13 +2138,21 @@ def test_cli_compose_repo_root_not_superheroes_emits_no_plugin_version_skew(tmp_
     assert receipt["pluginVersionSkew"]["detail"] == version_skew.DETAIL_NOT_SOURCE_REPO
 
 
+_COMPOSE_SKEW_APPEND_CASES = [
+    (version_skew.STATUS_CHECKED_CLEAN, version_skew.DETAIL_NO_DIVERGENCE, False),
+    (version_skew.STATUS_NOT_CHECKED, version_skew.DETAIL_NOT_SOURCE_REPO, False),
+] + [
+    (version_skew.STATUS_CHECKED_DEGRADED, degrading_detail, True)
+    for degrading_detail in sorted(version_skew.DEGRADING_DETAILS)
+]
+assert frozenset(
+    case_detail for _, case_detail, should_append in _COMPOSE_SKEW_APPEND_CASES if should_append
+) == version_skew.DEGRADING_DETAILS
+
+
 @pytest.mark.parametrize(
     "status,detail,should_append",
-    [
-        (version_skew.STATUS_CHECKED_CLEAN, version_skew.DETAIL_NO_DIVERGENCE, False),
-        (version_skew.STATUS_NOT_CHECKED, version_skew.DETAIL_NOT_SOURCE_REPO, False),
-        (version_skew.STATUS_CHECKED_DEGRADED, version_skew.DETAIL_SEMANTICS_DIVERGENT, True),
-    ],
+    _COMPOSE_SKEW_APPEND_CASES,
 )
 def test_compose_skew_record_appends_degradation_only_when_degraded(
     monkeypatch, tmp_path, capsys, status, detail, should_append,
@@ -2183,5 +2191,6 @@ def test_compose_skew_record_appends_degradation_only_when_degraded(
     if should_append:
         assert len(skew) == 1
         assert skew[0]["status"] == status
+        assert skew[0]["detail"] == detail
     else:
         assert skew == []
