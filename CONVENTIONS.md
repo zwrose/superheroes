@@ -680,10 +680,10 @@ rides the certification shape (`-degraded`) alongside `independenceDegraded` and
 `baseDegraded` — a single-vendor panel still certifies degraded, it does not halt.
 Compose may also record a disclosed `plugin-version-skew` degradation when the running
 plugin's `lib/model_registry.py`, `lib/seat_map.py`, or `lib/version_skew.py` diverges from
-the superheroes source repository — either watched semantics files content-diverge
-(`semantics-divergent`) or skew evidence is unreadable (`evidence-unreadable`; not a
-version-string compare — throughout the skew window the repo's `version.txt` still matches a
-correctly-updated cache); detection only, never blocks, and resolving it is human (apply
+the superheroes source repository — watched semantics files content-diverge
+(`semantics-divergent`; not a version-string compare — throughout the skew window the repo's
+`version.txt` still matches a correctly-updated cache) or skew evidence is unreadable
+(`evidence-unreadable`); detection only, never blocks, and resolving it is human (apply
 ratified deltas by hand, or wait for the cut).
 The compose receipt always carries a separate `pluginVersionSkew` field (`status`, `detail`,
 `inspectedRoot`) so a receipt distinguishes checked-clean from never-checked — the negative

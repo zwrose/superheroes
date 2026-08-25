@@ -71,10 +71,10 @@ import review_gate_policy  # noqa: E402
 import review_round_policy  # noqa: E402
 import round_commit  # noqa: E402
 import round_orders  # noqa: E402
-import session_mode  # noqa: E402
 import round_records  # noqa: E402
 import round_phases  # noqa: E402
 import seat_map  # noqa: E402
+import session_mode  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
 import version_skew  # noqa: E402

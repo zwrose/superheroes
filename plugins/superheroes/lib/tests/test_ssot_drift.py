@@ -241,9 +241,12 @@ _PLUGIN_VERSION_SKEW_APPEND_RULE_DOCS = (
 
 def _repo_markdown_files():
     root = os.path.normpath(os.path.join(PLUGIN, "..", ".."))
+    tests_root = os.path.normpath(os.path.join(PLUGIN, "lib", "tests"))
     for dirpath, dirnames, filenames in os.walk(root):
         if ".git" in dirnames:
             dirnames.remove(".git")
+        if os.path.commonpath([dirpath, tests_root]) == tests_root:
+            continue
         for name in filenames:
             if name.endswith(".md"):
                 yield os.path.join(dirpath, name)
@@ -251,6 +254,21 @@ def _repo_markdown_files():
 
 def _semantics_files_mentioned_on_line(line, semantics_files):
     return [entry for entry in semantics_files if entry in line]
+
+
+def test_repo_markdown_files_excludes_tests_but_keeps_registered_docs():
+    """Anti-vacuity: lib/tests/*.md bite-proof records must not census; registered docs must."""
+    paths = {os.path.normpath(p) for p in _repo_markdown_files()}
+    assert _PLUGIN_VERSION_SKEW_STATUS_TOKEN_COPY_REGISTER <= paths, (
+        "registered plugin-version-skew status-token copies missing from census: %r"
+        % sorted(_PLUGIN_VERSION_SKEW_STATUS_TOKEN_COPY_REGISTER - paths)
+    )
+    tests_prefix = os.path.normpath(os.path.join(PLUGIN, "lib", "tests")) + os.sep
+    under_tests = [p for p in paths if p.startswith(tests_prefix)]
+    assert not under_tests, (
+        "lib/tests markdown must be excluded from doc census: %r"
+        % sorted(os.path.relpath(p, os.path.join(PLUGIN, "..", "..")) for p in under_tests)
+    )
 
 
 def test_plugin_version_skew_watch_set_doc_census():
