@@ -779,7 +779,7 @@ def test_engine_panel_landing_block_uses_phase_stdout_contract():
     assert '"findings": []' in text
     assert "Delivery section above" in text
     example_json = json.dumps(RFS.example_findings_object(), sort_keys=True)
-    assert f"emit `{example_json}`" not in text.lower()
+    assert f"emit `{example_json}`".lower() not in text.lower()
 
 
 def test_panel_stdout_delivery_never_imperates_literal_example_emit():
@@ -799,12 +799,12 @@ def test_panel_stdout_delivery_never_imperates_literal_example_emit():
 
     assert format_only in text
     assert sentinel in text
-    assert f"emit `{example_json}`" not in text.lower()
-    assert f"emit `{example_json}` as your final stdout" not in text.lower()
+    assert f"emit `{example_json}`".lower() not in text.lower()
+    assert f"emit `{example_json}` as your final stdout".lower() not in text.lower()
 
     channel_block = RO._panel_derived_placeholders(ctx)["OUTPUT_CHANNEL_BLOCK"]
     assert format_only in channel_block
-    assert f"emit `{example_json}`" not in channel_block.lower()
+    assert f"emit `{example_json}`".lower() not in channel_block.lower()
 
 
 # --- FX-4A: core path drift guard ------------------------------------------------
