@@ -226,8 +226,14 @@ def test_critical_not_discharged_rearms_confirmation():
 
 # --- D5.2/D5.3: alias-based stall selection -----------------------------------
 
-def test_handle_stall_selects_only_alias_matching_target():
-    # axis: stall self-recovery must match stalled alias, not every target in the batch
+def test_handle_stall_unions_stalled_alias_with_not_discharged_targets():
+    # axis (AMENDED #1165, was PR #924 / issue #915 "stall self-recovery must match stalled alias,
+    # not every target in the batch", len(batch) == 1): stalled alias PLUS not-discharged audit
+    # targets; never new blocking findings.
+    # What #915 protected: self-recovery must not re-dispatch every member of the prior fix batch —
+    # in particular not a target the audit already DISCHARGED. The widening preserves that intent
+    # because it admits only targets the audit itself left not-discharged; discharged siblings stay
+    # excluded (pinned by test_handle_stall_excludes_discharged_sibling_same_identity).
     class_key = "Security::CWE-401::orig"
     stalled_target = {
         "id": "f.py::old title@L1", "identity": "f.py::old title",
@@ -248,8 +254,102 @@ def test_handle_stall_selects_only_alias_matching_target():
                "stalledIdentities": [class_key]}
     RD._handle_stall(state, state["config"], breaker)
     batch = state.get("_fixBatch") or []
-    assert len(batch) == 1
-    assert batch[0]["id"] == stalled_target["id"]
+    assert len(batch) == 2
+    assert {b["id"] for b in batch} == {stalled_target["id"], other["id"]}
+
+
+def test_handle_stall_unions_exclude_new_blocking_findings():
+    # axis: stall self-recovery union admits stalled and not-discharged audit targets only
+    class_key = "Security::CWE-401::orig"
+    stalled_target = {
+        "id": "f.py::old title@L1", "identity": "f.py::old title",
+        "file": "f.py", "line": 1, "title": "new title", "severity": "Important",
+        "classKey": class_key, "dimension": "Security", "taxonomy": "CWE-401",
+    }
+    other = {
+        "id": "g.py::other@L2", "identity": "g.py::other",
+        "file": "g.py", "line": 2, "title": "other", "severity": "Important",
+        "classKey": "Code::misc::other", "dimension": "Code", "taxonomy": "misc",
+    }
+    new_blocker = _finding(file="h.py", line=9, title="fresh blocker", severity="Critical")
+    state = RD.new_state(_cfg())
+    state["_auditTargets"] = [stalled_target, other]
+    state["fixBatch"] = [dict(stalled_target), dict(other)]
+    state["_auditOutcome"] = {"notDischarged": [stalled_target["id"], other["id"]],
+                              "discharged": []}
+    state["findings"] = [dict(new_blocker)]
+    breaker = {"reason": "audit-stall", "detail": "x",
+               "stalledIdentities": [class_key]}
+    RD._handle_stall(state, state["config"], breaker)
+    batch = state.get("_fixBatch") or []
+    assert len(batch) == 2
+    assert {b["id"] for b in batch} == {stalled_target["id"], other["id"]}
+    batch_files = {b.get("file") for b in batch}
+    assert new_blocker["file"] not in batch_files
+
+
+def test_stall_batch_never_drops_a_second_open_target_regression_1165():
+    # axis: before #1165 a second open not-discharged target was dropped (batch was ['a@L1'] only)
+    target_a = {
+        "id": "a.py::first@L1", "identity": "a.py::first",
+        "file": "a.py", "line": 1, "title": "first", "severity": "Important",
+        "classKey": "Code::a::first", "dimension": "Code", "taxonomy": "a",
+    }
+    target_b = {
+        "id": "b.py::second@L2", "identity": "b.py::second",
+        "file": "b.py", "line": 2, "title": "second", "severity": "Important",
+        "classKey": "Code::b::second", "dimension": "Code", "taxonomy": "b",
+    }
+    state = RD.new_state(_cfg())
+    state["_auditTargets"] = [target_a, target_b]
+    state["fixBatch"] = [dict(target_a), dict(target_b)]
+    state["_auditOutcome"] = {"notDischarged": [target_a["id"], target_b["id"]],
+                              "discharged": []}
+    breaker = {"reason": "audit-stall", "detail": "x",
+               "stalledIdentities": [target_a["classKey"]]}
+    RD._handle_stall(state, state["config"], breaker)
+    assert state["step"] == RD.P_FIXER
+    batch = state.get("_fixBatch") or []
+    assert {b["id"] for b in batch} == {target_a["id"], target_b["id"]}
+
+
+def test_handle_stall_malformed_not_discharged_parks_with_stalled_target():
+    # axis: present-but-unreadable open set must fail closed, never dispatch a partial batch
+    stalled_target = {
+        "id": "f.py::old title@L1", "identity": "f.py::old title",
+        "file": "f.py", "line": 1, "title": "new title", "severity": "Important",
+        "classKey": "Security::CWE-401::orig", "dimension": "Security", "taxonomy": "CWE-401",
+    }
+    ident = FI.finding_identity(stalled_target)
+    state = RD.new_state(_cfg())
+    state["_auditTargets"] = [stalled_target]
+    state["fixBatch"] = [dict(stalled_target)]
+    state["_auditOutcome"] = {"notDischarged": [{}]}
+    breaker = {"reason": "audit-stall", "detail": "x",
+               "stalledIdentities": [ident]}
+    RD._handle_stall(state, state["config"], breaker)
+    assert state["step"] == RD.P_TERMINAL
+    assert state["terminal"] == "cannot-certify"
+
+
+def test_handle_stall_uncomposable_open_id_refuses():
+    # axis: an open target that cannot be composed into the batch must refuse, never partial dispatch
+    class_key = "Security::CWE-401::orig"
+    stalled_target = {
+        "id": "f.py::old title@L1", "identity": "f.py::old title",
+        "file": "f.py", "line": 1, "title": "new title", "severity": "Important",
+        "classKey": class_key, "dimension": "Security", "taxonomy": "CWE-401",
+    }
+    phantom_id = "z.py::missing@L99"
+    state = RD.new_state(_cfg())
+    state["_auditTargets"] = [stalled_target]
+    state["fixBatch"] = [dict(stalled_target)]
+    state["_auditOutcome"] = {"notDischarged": [stalled_target["id"], phantom_id]}
+    breaker = {"reason": "audit-stall", "detail": "x",
+               "stalledIdentities": [class_key]}
+    RD._handle_stall(state, state["config"], breaker)
+    assert state["step"] == RD.P_TERMINAL
+    assert state["terminal"] == "cannot-certify"
 
 
 def test_stalled_critical_uses_alias_not_line_less_identity():

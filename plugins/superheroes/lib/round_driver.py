@@ -3288,28 +3288,44 @@ def _union_open_blockers(*groups):
 def _compose_stall_fix_batch(state, breaker):
     """Compose the stall self-recovery fix batch and any refusal token (#1107).
 
-    Open owner question (#1107, review round 1, finding code-001): whether the union should run
-    unconditionally when stalled targets are present is parked — ratified behavior matches only
-    the stalled alias (test_handle_stall_selects_only_alias_matching_target).
+    #1165 (option c): on audit stall, self-recovery dispatches the union of stalled
+    alias-matching targets and not-discharged audit targets — never new blocking
+    findings — or returns a refusal token (no partial batch).
     """
-    batch = [dict(t) for t in _stalled_open_targets(state, breaker)]
-    open_set = _resolve_open_audit_targets(state)
-    if open_set.kind == "unresolvable" and not batch:
-        return [], REFUSAL_UNRESOLVABLE_OPEN_SET
+    stalled = [dict(t) for t in _stalled_open_targets(state, breaker)]
     outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
     nd_raw = outcome.get("notDischarged")
+    if nd_raw is not None:
+        if _open_audit_ids_from_not_discharged(nd_raw) is None:
+            return [], REFUSAL_UNRESOLVABLE_OPEN_SET
+    open_set = _resolve_open_audit_targets(state)
+    if open_set.kind == "unresolvable" and not stalled:
+        return [], REFUSAL_UNRESOLVABLE_OPEN_SET
+    if stalled:
+        nd_ids = (_open_audit_ids_from_not_discharged(nd_raw)
+                  if nd_raw is not None else None)
+        if nd_ids is not None:
+            nd_targets = [dict(t) for t in (state.get("_auditTargets") or [])
+                          if t.get("id") in nd_ids]
+            matched_ids = {t.get("id") for t in nd_targets}
+            if nd_ids - matched_ids:
+                return [], REFUSAL_UNRESOLVABLE_OPEN_SET
+        else:
+            nd_targets = []
+        batch = _union_open_blockers(stalled, nd_targets)
+        return batch, None
+    batch = []
     nd_ids = (_open_audit_ids_from_not_discharged(nd_raw)
               if isinstance(nd_raw, list) else None)
     new_blocking = _blocking(state.get("findings") or [])
-    if not batch:
-        nd_members = nd_ids if nd_ids is not None else set()
-        if nd_members or new_blocking:
-            nd_targets = ([dict(t) for t in (state.get("_auditTargets") or [])
-                           if t.get("id") in nd_ids]
-                          if nd_ids is not None else [])
-            batch = _union_open_blockers(new_blocking, nd_targets)
-            if not batch:
-                return [], REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE
+    nd_members = nd_ids if nd_ids is not None else set()
+    if nd_members or new_blocking:
+        nd_targets = ([dict(t) for t in (state.get("_auditTargets") or [])
+                       if t.get("id") in nd_ids]
+                      if nd_ids is not None else [])
+        batch = _union_open_blockers(new_blocking, nd_targets)
+        if not batch:
+            return [], REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE
     return batch, None
 
 
