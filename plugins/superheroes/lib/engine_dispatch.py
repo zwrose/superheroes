@@ -3655,9 +3655,10 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             fed_prompt = ANTIHIJACK_PREAMBLE + notice + base_prompt
             echo_nonce = secrets.token_hex(16)
             # Example gate and fold-time kind check share expected_result_kind (#1145 WO-B).
+            _prompt_section_sep = "\n\n"
             if expected_result_kind == "findings":
-                fed_prompt += review_findings_schema.example_prompt_block(echo_nonce)
-            fed_prompt += engine_adapter.REVIEW_RESULT_CONTRACT(expected_result_kind)
+                fed_prompt += _prompt_section_sep + review_findings_schema.example_prompt_block(echo_nonce)
+            fed_prompt += _prompt_section_sep + engine_adapter.REVIEW_RESULT_CONTRACT(expected_result_kind)
 
             if run_dir_real is None:
                 run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")

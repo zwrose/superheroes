@@ -160,15 +160,13 @@ def REVIEW_RESULT_CONTRACT(expected_result_kind=None):
         return (
             "Review result contract (your graded stdout must match this shape):\n"
             "Emit %s as your final stdout with nothing after it.\n"
-            "The graded result must carry `resultKind`: \"%s\" naming exactly this payload.\n"
-            % (_REVIEW_RESULT_KIND_DESCRIPTIONS[kind], kind)
+            % _REVIEW_RESULT_KIND_DESCRIPTIONS[kind]
         )
     kinds_enumerated = ", ".join("`%s`" % k for k in REVIEW_RESULT_KINDS)
     lines = [
         "Review result contract (your graded stdout must match exactly one of these shapes):",
         "The runner accepts these result kinds (%d): %s." % (len(REVIEW_RESULT_KINDS), kinds_enumerated),
         "Emit exactly one matching JSON object as your final stdout with nothing after it.",
-        "The graded result must carry `resultKind` naming exactly one payload key of that name.",
     ]
     for kind in REVIEW_RESULT_KINDS:
         lines.append("  - `%s`: %s" % (kind, _REVIEW_RESULT_KIND_DESCRIPTIONS[kind]))

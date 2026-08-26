@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -2880,8 +2881,35 @@ def test_review_dispatch_fed_prompt_result_contract_pinned_non_findings(
     contract = EA.REVIEW_RESULT_CONTRACT(expected_result_kind)
     assert contract in prompt_text
     assert prompt_text.endswith(contract)
-    assert '`resultKind`: "%s"' % expected_result_kind in contract
+    assert "`%s`" % expected_result_kind in contract
     assert RFS.example_prompt_block() not in prompt_text
+
+
+def test_review_dispatch_fed_prompt_blocks_never_abut(tmp_path):
+    """#1145 WO-F: composed fedPrompt sections must not run together."""
+    # axis: example JSON closing brace must never abut the contract heading
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo_f_1145c3.md (BP2)
+    repo_root = _repo(tmp_path)
+    cases = [
+        (None, _VALID_FINDINGS_STDOUT),
+        ("findings", _VALID_FINDINGS_STDOUT),
+    ]
+    for expected_result_kind, stdout in cases:
+        fake = FakeRunner([(stdout, False, 0, "")])
+        dispatch_kwargs = dict(
+            engine="codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path, "Review this code.\n"),
+            repo_root=repo_root, run_engine=fake,
+            build_view=_fake_build_view(tmp_path),
+        )
+        if expected_result_kind is not None:
+            dispatch_kwargs["expected_result_kind"] = expected_result_kind
+        ED.dispatch_review(**dispatch_kwargs)
+        prompt_text = fake.calls[0]["prompt_bytes"].decode("utf-8")
+        assert "}Review result contract" not in prompt_text
+        for match in re.finditer("Review result contract", prompt_text):
+            pos = match.start()
+            assert pos >= 2 and prompt_text[pos - 2:pos] == "\n\n"
 
 
 def test_review_result_contract_kind_names_derive_from_review_result_kinds():
@@ -2904,7 +2932,7 @@ def test_review_result_contract_unknown_kind_renders_unpinned():
     contract = EA.REVIEW_RESULT_CONTRACT("not-a-kind")
     for kind in EA.REVIEW_RESULT_KINDS:
         assert "`%s`" % kind in contract
-    assert '`resultKind`: "findings"' not in contract
+    assert "resultKind" not in contract
 
 
 # --- #1145 WO-C: per-dispatch echo nonce lifecycle ---
