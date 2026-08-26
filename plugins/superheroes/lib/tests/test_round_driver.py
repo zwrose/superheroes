@@ -6230,3 +6230,18 @@ def test_settle_delta_unregistered_halt_reason_parks_fail_closed(monkeypatch):
     assert state["step"] != RD.P_FIXER
     detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
     assert "synthetic-unregistered-reason" in detail
+
+
+# --- on-disk receipt trust (#1107 WO-c4A A1) -----------------------------------------------
+
+
+def test_on_disk_receipt_class_rejects_invalid_known_schema(tmp_path):
+    # axis: receipt_kind match without validate_receipt must classify as untrusted
+    d = str(tmp_path / "invalid-interim")
+    os.makedirs(d)
+    with open(os.path.join(d, RD.RECEIPT_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"schema": RD.RECEIPT_INTERIM_SCHEMA}, fh)
+    assert RD._on_disk_receipt_class(d) == "untrusted"
+    assert RD._receipt_write_refusal(
+        d, terminal_reason="terminal-receipt-exists",
+        untrusted_reason="terminal-receipt-unreadable") == "terminal-receipt-unreadable"
