@@ -2782,6 +2782,18 @@ def _write_terminal_forfeit(engine, attempts, *, run_dir_real=None, state=None):
 
 
 def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts=1):
+    if attempts < MAX_ATTEMPTS:
+        reason_clause = (
+            "the retry was refused because a second attempt on a dirtied tree can contaminate or commit "
+            "partial work. "
+        )
+    else:
+        reason_clause = "the attempt budget was exhausted. "
+    disclosure = (
+        "%s attempt %d report was not gradeable; %s"
+        "The worktree is left exactly as the engine left it — inspect "
+        "and clean it yourself." % (engine, int(attempts), reason_clause)
+    )
     terminal = {
         "ok": False,
         "terminal": True,
@@ -2789,12 +2801,7 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
         "detail": "worktree-dirtied-by-attempt",
         "attempts": attempts,
         "forfeited": True,
-        "disclosure": (
-            "%s attempt 1 report was not gradeable; the retry was "
-            "refused because a second attempt on a dirtied tree can contaminate or commit "
-            "partial work. The worktree is left exactly as the engine left it — inspect "
-            "and clean it yourself." % engine
-        ),
+        "disclosure": disclosure,
     }
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
