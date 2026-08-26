@@ -333,7 +333,10 @@ def test_dispatch_review_prompt_has_new_preamble(tmp_path):
     assert notice_at > 0
     assert body_at > notice_at
     assert "abc123fake" in text[notice_at:body_at]
-    assert text.endswith(RFS.example_prompt_block())
+    contract = EA.REVIEW_RESULT_CONTRACT(None)
+    assert contract in text
+    assert text.endswith(contract)
+    assert RFS.example_prompt_block() not in text
 
 
 def test_dispatch_review_repo_survives_success(tmp_path):
@@ -2789,7 +2792,7 @@ def test_grade_review_attempt_prompt_echo_payload_shape_prompt_echo_only(tmp_pat
 @pytest.mark.parametrize(
     "expected_result_kind,expect_findings_block",
     [
-        (None, True),
+        (None, False),
         ("findings", True),
         ("verdicts", False),
         ("grouping", False),
@@ -2800,8 +2803,8 @@ def test_grade_review_attempt_prompt_echo_payload_shape_prompt_echo_only(tmp_pat
 def test_review_dispatch_fed_prompt_includes_schema_example_block(
     tmp_path, expected_result_kind, expect_findings_block,
 ):
-    """#1145 WO-C: findings example block only when dispatch is findings-kind."""
-    # axis: composed fedPrompt must include schema example only for findings seats
+    """#1145 WO-C/WO-B: findings example block only when dispatch pins findings kind."""
+    # axis: composed fedPrompt must include schema example only for explicit findings pin
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
     stdout = _census_review_stdout(expected_result_kind or "findings")
@@ -2817,13 +2820,89 @@ def test_review_dispatch_fed_prompt_includes_schema_example_block(
     records, _ = ED._journal_read(res["runDir"])
     opened = next(r for r in records if r.get("kind") == "run-opened")
     block = RFS.example_prompt_block()
+    contract = EA.REVIEW_RESULT_CONTRACT(expected_result_kind)
     prompt_text = fake.calls[0]["prompt_bytes"].decode("utf-8")
     if expect_findings_block:
         assert block in opened["fedPrompt"]
         assert block in prompt_text
+        assert prompt_text.endswith(contract)
+        assert prompt_text.index(block) < prompt_text.index(contract)
     else:
         assert block not in opened["fedPrompt"]
         assert block not in prompt_text
+    assert contract in opened["fedPrompt"]
+    assert contract in prompt_text
+    assert prompt_text.endswith(contract)
+
+
+def test_review_dispatch_fed_prompt_result_contract_unpinned_lists_all_kinds(tmp_path):
+    """#1145 WO-B: unpinned dispatch fedPrompt carries all-four-kinds contract."""
+    # axis: unpinned fedPrompt must name every REVIEW_RESULT_KINDS member, never findings example
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    records, _ = ED._journal_read(res["runDir"])
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    prompt_text = opened["fedPrompt"]
+    contract = EA.REVIEW_RESULT_CONTRACT(None)
+    assert contract in prompt_text
+    assert prompt_text.endswith(contract)
+    assert RFS.example_prompt_block() not in prompt_text
+    for kind in EA.REVIEW_RESULT_KINDS:
+        assert "`%s`" % kind in contract
+        assert "`%s`" % kind in prompt_text
+
+
+@pytest.mark.parametrize("expected_result_kind", ["verdicts", "grouping", "ruling"])
+def test_review_dispatch_fed_prompt_result_contract_pinned_non_findings(
+    tmp_path, expected_result_kind,
+):
+    """#1145 WO-B: non-findings pin gets kind-specific contract, no findings example."""
+    # axis: pinned non-findings seat must not receive findings example block
+    repo_root = _repo(tmp_path)
+    stdout = _census_review_stdout(expected_result_kind)
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        expected_result_kind=expected_result_kind,
+    )
+    records, _ = ED._journal_read(res["runDir"])
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    prompt_text = opened["fedPrompt"]
+    contract = EA.REVIEW_RESULT_CONTRACT(expected_result_kind)
+    assert contract in prompt_text
+    assert prompt_text.endswith(contract)
+    assert '`resultKind`: "%s"' % expected_result_kind in contract
+    assert RFS.example_prompt_block() not in prompt_text
+
+
+def test_review_result_contract_kind_names_derive_from_review_result_kinds():
+    """#1145 WO-B: contract renderer enumerates REVIEW_RESULT_KINDS, not a hand-written list."""
+    # axis: unpinned contract text must cite every tuple member so a fifth kind cannot drift stale
+    unpinned = EA.REVIEW_RESULT_CONTRACT(None)
+    for kind in EA.REVIEW_RESULT_KINDS:
+        assert "`%s`" % kind in unpinned
+    pinned = EA.REVIEW_RESULT_CONTRACT("findings")
+    assert "`findings`" in pinned
+    for other in EA.REVIEW_RESULT_KINDS:
+        if other == "findings":
+            continue
+        assert "`%s`" % other not in pinned
+
+
+def test_review_result_contract_unknown_kind_renders_unpinned():
+    """#1145 WO-B: invalid expected_result_kind never normalizes to findings-specific text."""
+    # axis: unexpected kind values render all-four contract, never findings-only branch
+    contract = EA.REVIEW_RESULT_CONTRACT("not-a-kind")
+    for kind in EA.REVIEW_RESULT_KINDS:
+        assert "`%s`" % kind in contract
+    assert '`resultKind`: "findings"' not in contract
 
 
 def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):

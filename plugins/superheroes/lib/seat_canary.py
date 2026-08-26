@@ -136,6 +136,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
                 prompt_path=prompt_path,
                 repo_root=repo_root,
                 timeout=timeout,
+                expected_result_kind="findings",
             )
         except Exception as exc:
             return {
