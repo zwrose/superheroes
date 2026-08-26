@@ -5218,22 +5218,6 @@ def _session_pr_checkout_path(session_dir):
     return path if os.path.isdir(path) else ""
 
 
-def _session_in_pr_mode(session_dir, config=None):
-    """True when the session's recorded mode is PR.
-
-    Reads ``meta.json`` first, then optional ``config`` — same precedence as the
-    ``MODE`` order placeholder. Fail-closed: absent, unreadable, or unrecognized
-    mode values resolve True so prior-comments absence discloses rather than
-    defaulting to branch silence.
-    """
-    meta = _session_meta(session_dir)
-    cfg = config if isinstance(config, dict) else {}
-    mode = meta.get("mode") or cfg.get("mode")
-    if mode == "branch":
-        return False
-    return True
-
-
 def _label(value):
     return value if isinstance(value, str) else repr(value)
 
@@ -5343,6 +5327,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "PRIOR_COMMENTS_CONTEXT_LINE",
     "FOCUS_CONTEXT_LINE",
     "MODE",
+    "MODE_EVIDENCE",
     "REPO",
     "TARGET",
     "DIMENSION",
@@ -5495,17 +5480,36 @@ def _prior_comments_unavailable_marker():
 def _resolve_prior_comments_path(session_dir, state):
     """Panel prior-comments path — never fabricates ``[]``.
 
+    Mode comes from ``session_mode.resolve`` — the ONE owner of PR-vs-branch (#1107).
+    No re-derivation from ``meta``/``config`` here.
+
     Branch mode: empty path — legitimately no prior comments.
-    PR mode (or fail-closed unknown/absent mode): real file when present; otherwise a
-    prose marker plus a round disclosure."""
+    PR mode (or fail-closed unresolved mode, which ``session_mode.resolve`` treats as PR):
+    real file when present; otherwise a prose marker plus a round disclosure.
+
+    Render-only contract: a ``state`` that carries NO round bookkeeping at all — neither
+    ``"rounds"`` nor ``"round"`` — is a read/render-layer caller (order-placeholder
+    rendering must not raise for a state shape it was never handed round mutation
+    responsibility over). That shape gets the rendered marker with no disclosure
+    recorded, since there is nowhere honest to record it. A ``state`` that carries
+    partial/malformed round bookkeeping (e.g. ``"rounds"`` present but ``"round"``
+    absent) is a genuine driver-state bug, not a render-only context, and still raises —
+    this is a narrow, documented tolerance, never a bare try/except.
+    """
     path = os.path.join(session_dir, "prior-comments.json")
     if os.path.isfile(path):
         return path
     cfg = state.get("config") if isinstance(state, dict) else {}
-    if _session_in_pr_mode(session_dir, cfg):
+    meta = _session_meta(session_dir)
+    mode_resolved = session_mode.resolve(meta, cfg)
+    if mode_resolved["mode"] == session_mode.MODE_BRANCH:
+        return ""
+    render_only = (
+        isinstance(state, dict) and "rounds" not in state and "round" not in state
+    )
+    if not render_only:
         _record_round(state, "priorCommentsUnavailable", True)
-        return _prior_comments_unavailable_marker()
-    return ""
+    return _prior_comments_unavailable_marker()
 
 
 def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat):
