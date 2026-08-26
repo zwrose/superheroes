@@ -403,6 +403,25 @@ def test_member_carries_sentinel_false_for_empty_substance_field_set():
     assert RFS.member_carries_sentinel(member) is False
 
 
+def test_member_carries_sentinel_true_for_uniform_retype_with_null_substance_field():
+    # axis: schema types suggestion/evidence as ["string","null"] and requires them — null must not disarm echo leg
+    member = _uniform_retype_strings(RFS.example_findings_object()["findings"][0])
+    member["suggestion"] = None
+    assert RFS.member_carries_sentinel(member) is True
+
+
+def test_member_carries_sentinel_false_for_all_null_substance_fields():
+    # axis: all-quantifier over empty content-bearing set must not echo-verdict
+    member = {
+        "severity": "Critical",
+        "title": None,
+        "body": None,
+        "evidence": None,
+        "suggestion": None,
+    }
+    assert RFS.member_carries_sentinel(member) is False
+
+
 def test_substance_key_synonym_targets_are_canonical():
     # axis: every synonym maps to a declared canonical member key
     canonical = set(RFS.CANONICAL_MEMBER_KEYS)
