@@ -228,6 +228,403 @@ def _plugin_version_skew_statuses_from_home():
     return set(version_skew.STATUSES)
 
 
+_PLUGIN_VERSION_SKEW_SKEW_CONTEXT_MARKERS = (
+    "plugin-version-skew",
+    "pluginVersionSkew",
+)
+
+_PLUGIN_VERSION_SKEW_STATUS_TOKEN_COPY_REGISTER = {
+    os.path.normpath(os.path.join(PLUGIN, "..", "..", "CONVENTIONS.md")): frozenset({
+        "checked-clean",
+        "checked-degraded",
+    }),
+    os.path.normpath(os.path.join(PLUGIN, "..", "..", "LEDGERS.md")): frozenset({
+        "checked-degraded",
+    }),
+    os.path.normpath(os.path.join(PLUGIN, "skills/review-code/reference/setup.md")): frozenset({
+        "checked-clean",
+        "checked-degraded",
+        "not-checked",
+    }),
+    os.path.normpath(os.path.join(PLUGIN, "skills/review-code/reference/round-driver.md")): frozenset({
+        "checked-clean",
+        "checked-degraded",
+        "not-checked",
+    }),
+}
+
+_PLUGIN_VERSION_SKEW_DETAIL_TOKEN_COPY_REGISTER = {
+    os.path.normpath(os.path.join(PLUGIN, "..", "..", "CONVENTIONS.md")): frozenset({
+        "semantics-divergent",
+        "evidence-unreadable",
+    }),
+    os.path.normpath(os.path.join(PLUGIN, "..", "..", "LEDGERS.md")): frozenset({
+        "semantics-divergent",
+        "evidence-unreadable",
+    }),
+    os.path.normpath(os.path.join(PLUGIN, "skills/review-code/reference/round-driver.md")): frozenset({
+        "semantics-divergent",
+        "evidence-unreadable",
+    }),
+    os.path.normpath(os.path.join(
+        PLUGIN, "skills/review-code/reference/auto-fix-loop.md",
+    )): frozenset({
+        "semantics-divergent",
+        "evidence-unreadable",
+    }),
+}
+
+_PLUGIN_VERSION_SKEW_APPEND_RULE_DOCS = (
+    os.path.normpath(os.path.join(PLUGIN, "..", "..", "CONVENTIONS.md")),
+    os.path.normpath(os.path.join(PLUGIN, "skills/review-code/reference/setup.md")),
+)
+
+
+def _repo_markdown_files():
+    root = os.path.normpath(os.path.join(PLUGIN, "..", ".."))
+    tests_root = os.path.normpath(os.path.join(PLUGIN, "lib", "tests"))
+    for dirpath, dirnames, filenames in os.walk(root):
+        if ".git" in dirnames:
+            dirnames.remove(".git")
+        if os.path.commonpath([dirpath, tests_root]) == tests_root:
+            continue
+        for name in filenames:
+            if name.endswith(".md"):
+                yield os.path.join(dirpath, name)
+
+
+def _semantics_files_mentioned_on_line(line, semantics_files):
+    return [entry for entry in semantics_files if entry in line]
+
+
+def _skew_context_blocks(text):
+    blocks = []
+    current = []
+    for line in text.splitlines():
+        if line.strip() == "":
+            if current:
+                blocks.append("\n".join(current))
+                current = []
+        else:
+            current.append(line)
+    if current:
+        blocks.append("\n".join(current))
+    return blocks
+
+
+_PLUGIN_VERSION_SKEW_STATUS_EXTRACTION_ANCHORS = (
+    "tri-state skew",
+    "`status` one of",
+)
+
+
+def _skew_status_scan_text(block):
+    for anchor in _PLUGIN_VERSION_SKEW_STATUS_EXTRACTION_ANCHORS:
+        idx = block.find(anchor)
+        if idx != -1:
+            return block[idx:]
+    return block
+
+
+def _skew_token_present_in_block(block, token):
+    if ("`%s`" % token) in block:
+        return True
+    return re.search(
+        r'(?<![\w-])%s(?![\w-])' % re.escape(token),
+        block,
+    ) is not None
+
+
+def _skew_status_tokens_in_text(text, home_statuses):
+    found = set()
+    for block in _skew_context_blocks(text):
+        if not any(marker in block for marker in _PLUGIN_VERSION_SKEW_SKEW_CONTEXT_MARKERS):
+            continue
+        scan = _skew_status_scan_text(block)
+        for token in home_statuses:
+            if _skew_token_present_in_block(scan, token):
+                found.add(token)
+    return found
+
+
+def _skew_detail_tokens_in_text(text, home_details):
+    found = set()
+    for block in _skew_context_blocks(text):
+        if not any(marker in block for marker in _PLUGIN_VERSION_SKEW_SKEW_CONTEXT_MARKERS):
+            continue
+        for token in home_details:
+            if _skew_token_present_in_block(block, token):
+                found.add(token)
+    return found
+
+
+def test_repo_markdown_files_excludes_tests_but_keeps_registered_docs():
+    """Anti-vacuity: lib/tests/*.md bite-proof records must not census; registered docs must."""
+    paths = {os.path.normpath(p) for p in _repo_markdown_files()}
+    register_paths = set(_PLUGIN_VERSION_SKEW_STATUS_TOKEN_COPY_REGISTER)
+    assert register_paths <= paths, (
+        "registered plugin-version-skew status-token copies missing from census: %r"
+        % sorted(register_paths - paths)
+    )
+    detail_register_paths = set(_PLUGIN_VERSION_SKEW_DETAIL_TOKEN_COPY_REGISTER)
+    assert detail_register_paths <= paths, (
+        "registered plugin-version-skew detail-token copies missing from census: %r"
+        % sorted(detail_register_paths - paths)
+    )
+    tests_prefix = os.path.normpath(os.path.join(PLUGIN, "lib", "tests")) + os.sep
+    under_tests = [p for p in paths if p.startswith(tests_prefix)]
+    assert not under_tests, (
+        "lib/tests markdown must be excluded from doc census: %r"
+        % sorted(os.path.relpath(p, os.path.join(PLUGIN, "..", "..")) for p in under_tests)
+    )
+
+
+def test_plugin_version_skew_watch_set_doc_census():
+    """§11: any doc line naming two+ SEMANTICS_FILES must name all of them."""
+    import version_skew
+
+    semantics_files = tuple(version_skew.SEMANTICS_FILES)
+    violations = []
+    for path in _repo_markdown_files():
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                mentioned = _semantics_files_mentioned_on_line(line, semantics_files)
+                if len(mentioned) < 2:
+                    continue
+                missing = sorted(set(semantics_files) - set(mentioned))
+                if missing:
+                    rel = os.path.relpath(path, os.path.join(PLUGIN, "..", ".."))
+                    violations.append((rel, lineno, missing))
+    assert not violations, (
+        "watch-set restatement missing SEMANTICS_FILES entries — "
+        "file, line, missing: %r" % violations
+    )
+
+
+def test_plugin_version_skew_status_token_copy_register_census():
+    """§11: every .md carrying a skew-scoped STATUSES token must be in the copy register."""
+    import version_skew
+
+    home = _plugin_version_skew_statuses_from_home()
+    examined = 0
+    unregistered = []
+    for path in _repo_markdown_files():
+        examined += 1
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        if not _skew_status_tokens_in_text(text, home):
+            continue
+        norm = os.path.normpath(path)
+        if norm not in _PLUGIN_VERSION_SKEW_STATUS_TOKEN_COPY_REGISTER:
+            rel = os.path.relpath(path, os.path.join(PLUGIN, "..", ".."))
+            unregistered.append(rel)
+    assert examined > 0, (
+        "plugin-version-skew status-token census examined zero markdown files (vacuous)"
+    )
+    assert not unregistered, (
+        "unregistered plugin-version-skew status-token copy — add to "
+        "_PLUGIN_VERSION_SKEW_STATUS_TOKEN_COPY_REGISTER: %r" % sorted(unregistered)
+    )
+
+
+def test_plugin_version_skew_status_token_copy_register_content():
+    """§11: each registered STATUSES holder's skew-scoped tokens match the register contract."""
+    import version_skew
+
+    home = _plugin_version_skew_statuses_from_home()
+    violations = []
+    for path, expected in _PLUGIN_VERSION_SKEW_STATUS_TOKEN_COPY_REGISTER.items():
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        actual = _skew_status_tokens_in_text(text, home)
+        if actual != expected:
+            rel = os.path.relpath(path, os.path.join(PLUGIN, "..", ".."))
+            violations.append((rel, sorted(expected), sorted(actual)))
+    assert not violations, (
+        "plugin-version-skew status-token copy content drift — "
+        "path, expected, actual: %r" % violations
+    )
+
+
+def test_plugin_version_skew_detail_token_copy_register_census():
+    """§11: every .md carrying a skew-scoped DETAILS token must be in the detail register."""
+    import version_skew
+
+    home = set(version_skew.DETAILS)
+    examined = 0
+    unregistered = []
+    for path in _repo_markdown_files():
+        examined += 1
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        if not _skew_detail_tokens_in_text(text, home):
+            continue
+        norm = os.path.normpath(path)
+        if norm not in _PLUGIN_VERSION_SKEW_DETAIL_TOKEN_COPY_REGISTER:
+            rel = os.path.relpath(path, os.path.join(PLUGIN, "..", ".."))
+            unregistered.append(rel)
+    assert examined > 0, (
+        "plugin-version-skew detail-token census examined zero markdown files (vacuous)"
+    )
+    assert not unregistered, (
+        "unregistered plugin-version-skew detail-token copy — add to "
+        "_PLUGIN_VERSION_SKEW_DETAIL_TOKEN_COPY_REGISTER: %r" % sorted(unregistered)
+    )
+
+
+def test_plugin_version_skew_detail_token_copy_register_content():
+    """§11: each registered DETAILS holder's skew-scoped tokens match the register contract."""
+    import version_skew
+
+    home = set(version_skew.DETAILS)
+    violations = []
+    for path, expected in _PLUGIN_VERSION_SKEW_DETAIL_TOKEN_COPY_REGISTER.items():
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        actual = _skew_detail_tokens_in_text(text, home)
+        if actual != expected:
+            rel = os.path.relpath(path, os.path.join(PLUGIN, "..", ".."))
+            violations.append((rel, sorted(expected), sorted(actual)))
+    assert not violations, (
+        "plugin-version-skew detail-token copy content drift — "
+        "path, expected, actual: %r" % violations
+    )
+
+
+def test_plugin_version_skew_degrading_details_consumer(tmp_path):
+    """§11: DEGRADING_DETAILS is the set of detail values detect() returns on degrading paths."""
+    import version_skew
+
+    assert version_skew.DEGRADING_DETAILS <= version_skew.DETAILS
+    degrading_details = set()
+
+    repo = tmp_path / "repo"
+    _write_skew_manifest(repo)
+    _write_skew_version_txt(repo)
+    _copy_skew_semantics_to(repo)
+    plugin_root = tmp_path / "plugin"
+    _write_skew_plugin_tree(plugin_root, model_registry_suffix="# divergent\n")
+    semantics_record = version_skew.detect(str(repo), str(plugin_root))
+    assert semantics_record["status"] == version_skew.STATUS_CHECKED_DEGRADED
+    degrading_details.add(semantics_record["detail"])
+
+    unreadable_repo = tmp_path / "repo-unreadable"
+    _write_skew_manifest(unreadable_repo)
+    _write_skew_version_txt(unreadable_repo)
+    _copy_skew_semantics_to(unreadable_repo)
+    unreadable_plugin = tmp_path / "plugin-unreadable"
+    _write_skew_plugin_tree(unreadable_plugin)
+    seat_map_path = unreadable_repo / "plugins" / "superheroes" / "lib" / "seat_map.py"
+    seat_map_path.unlink()
+    unreadable_record = version_skew.detect(str(unreadable_repo), str(unreadable_plugin))
+    assert unreadable_record["status"] == version_skew.STATUS_CHECKED_DEGRADED
+    degrading_details.add(unreadable_record["detail"])
+
+    assert degrading_details == version_skew.DEGRADING_DETAILS, (
+        "detect() degrading-path details %r != version_skew.DEGRADING_DETAILS %r"
+        % (sorted(degrading_details), sorted(version_skew.DEGRADING_DETAILS))
+    )
+
+
+def _write_skew_manifest(base, name="superheroes"):
+    path = base / "plugins" / "superheroes" / ".claude-plugin" / "plugin.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"name": name, "version": "0.30.0"}), encoding="utf-8")
+
+
+def _write_skew_version_txt(base, version="0.31.0"):
+    path = base / "plugins" / "superheroes" / "version.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(version + "\n", encoding="utf-8")
+
+
+def _copy_skew_semantics_to(base):
+    import version_skew
+
+    lib = base / "plugins" / "superheroes" / "lib"
+    lib.mkdir(parents=True, exist_ok=True)
+    for entry in version_skew.SEMANTICS_FILES:
+        src = os.path.join(PLUGIN, entry)
+        dst = lib / os.path.basename(entry)
+        dst.write_text(open(src, encoding="utf-8").read(), encoding="utf-8")
+
+
+def _write_skew_plugin_tree(plugin_root, model_registry_suffix=""):
+    import version_skew
+
+    manifest = plugin_root / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({"name": "superheroes", "version": "0.29.0"}), encoding="utf-8")
+    lib = plugin_root / "lib"
+    lib.mkdir(parents=True, exist_ok=True)
+    for entry in version_skew.SEMANTICS_FILES:
+        src = os.path.join(PLUGIN, entry)
+        content = open(src, encoding="utf-8").read()
+        if model_registry_suffix and entry == "lib/model_registry.py":
+            content = content + model_registry_suffix
+        (lib / os.path.basename(entry)).write_text(content, encoding="utf-8")
+
+
+def test_plugin_version_skew_append_rule_phrase_pin():
+    """§11: append-rule prose is generated from version_skew.APPENDS_DEGRADATION."""
+    import version_skew
+
+    appends = version_skew.APPENDS_DEGRADATION
+    assert len(appends) == 1, (
+        "APPENDS_DEGRADATION changed (%r) — update the doc phrasing contract in this test"
+        % sorted(appends)
+    )
+    status = next(iter(appends))
+    required_phrase = "only `%s` appends" % status
+    missing = []
+    for path in _PLUGIN_VERSION_SKEW_APPEND_RULE_DOCS:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        if required_phrase not in text:
+            rel = os.path.relpath(path, os.path.join(PLUGIN, "..", ".."))
+            missing.append(rel)
+    assert not missing, (
+        "append-rule phrase %r missing from: %r" % (required_phrase, missing)
+    )
+
+
+def _plugin_python_sources_excluding_tests():
+    paths = []
+    for dirpath, dirnames, filenames in os.walk(PLUGIN):
+        if os.path.basename(dirpath) == "tests" or "tests" in dirpath.split(os.sep):
+            continue
+        dirnames[:] = [d for d in dirnames if d != "__pycache__" and d != "tests"]
+        for name in filenames:
+            if name.endswith(".py"):
+                paths.append(os.path.join(dirpath, name))
+    return paths
+
+
+def test_plugin_version_skew_chokepoint_census():
+    """§11: only version_skew.py may reference STATUS_CHECKED_DEGRADED or checked-degraded."""
+    import version_skew
+
+    home = os.path.join(PLUGIN, "lib", "version_skew.py")
+    violations = []
+    for path in _plugin_python_sources_excluding_tests():
+        if os.path.normpath(path) == os.path.normpath(home):
+            continue
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        rel = os.path.relpath(path, PLUGIN)
+        if "STATUS_CHECKED_DEGRADED" in text:
+            violations.append((rel, "STATUS_CHECKED_DEGRADED"))
+        if '"checked-degraded"' in text or "'checked-degraded'" in text:
+            violations.append((rel, "checked-degraded literal"))
+    assert not violations, (
+        "plugin-version-skew chokepoint violation outside version_skew.py: %r" % violations
+    )
+    seat_map_text = _read("lib/seat_map.py")
+    assert "appends_degradation(" in seat_map_text, (
+        "seat_map.py must call version_skew.appends_degradation("
+    )
+
+
 def test_plugin_version_skew_status_vocabulary_in_docs():
     """§11: setup.md and CONVENTIONS.md restate version_skew.STATUSES."""
     import version_skew
@@ -1768,7 +2165,7 @@ def test_grounding_stage_region_markers_match_conventions_10_7():
 
 
 def test_grounding_stage_session_modes_match_review_base_guard():
-    """§11: grounding_stage consumes review_base_guard.SESSION_MODES as the mode SSOT."""
+    """§11: grounding_stage derives session mode through session_mode.resolve."""
     import inspect
 
     import grounding_stage
@@ -1776,8 +2173,8 @@ def test_grounding_stage_session_modes_match_review_base_guard():
 
     assert review_base_guard.SESSION_MODES == frozenset({"pr", "branch"})
     read_meta_source = inspect.getsource(grounding_stage._read_meta)
-    assert "review_base_guard.SESSION_MODES" in read_meta_source, (
-        "grounding_stage._read_meta must reference review_base_guard.SESSION_MODES"
+    assert "session_mode.resolve" in read_meta_source, (
+        "grounding_stage._read_meta must derive through session_mode.resolve"
     )
     gs_source = _read("lib/grounding_stage.py")
     assert not re.search(
@@ -5419,3 +5816,92 @@ def test_r8_in_repo_copy_holder_census_drift_missing_paths():
         "R8 in-repo copy-holder census drift: missing path(s): %s"
         % ", ".join(missing)
     )
+
+
+# --- Cluster: session-mode vocabulary (#1151) -----------------------------------
+
+
+def test_session_mode_modes_match_review_base_guard():
+    """§11: review_base_guard.SESSION_MODES derives from session_mode.MODES."""
+    import review_base_guard
+    import session_mode
+
+    assert review_base_guard.SESSION_MODES == session_mode.MODES
+    assert review_base_guard.SESSION_MODES == frozenset({"pr", "branch"})
+
+
+def test_round_driver_no_fail_open_branch_default_for_session_mode():
+    """Chokepoint census: round_driver must not default session mode to branch."""
+    text = _read("lib/round_driver.py")
+    assert 'or "branch"' not in text
+    assert "or 'branch'" not in text
+
+
+_REVIEW_CODE_SKILL_MODE_DOC = "skills/review-code/SKILL.md"
+
+
+def _review_code_skill_shell_mode_assignments(doc_path=_REVIEW_CODE_SKILL_MODE_DOC):
+    """Parse MODE=<value> from bash fences in review-code SKILL.md (session-mode pin)."""
+    text = _read(doc_path)
+    assignments = []
+    for fence in re.findall(r"```bash\n(.*?)```", text, re.DOTALL):
+        assignments.extend(re.findall(r"\bMODE=([^\s;]+)", fence))
+    return assignments
+
+
+def test_review_code_skill_shell_mode_assignments_match_session_mode_modes():
+    """T1: shell-fence MODE= assignments equal session_mode.MODES exactly."""
+    import session_mode
+
+    assignments = _review_code_skill_shell_mode_assignments()
+    assert len(assignments) >= 2, (
+        "review-code SKILL.md: expected at least two MODE= assignments in bash fences, "
+        "found %d (anti-vacuity)" % len(assignments)
+    )
+    assert set(assignments) == set(session_mode.MODES), (
+        "review-code SKILL.md MODE= assignments %r must equal session_mode.MODES %r"
+        % (sorted(set(assignments)), sorted(session_mode.MODES))
+    )
+
+
+def test_review_code_skill_shell_mode_assignments_anti_vacuity():
+    """T2: shell-fence pin must find at least two MODE= assignments."""
+    assignments = _review_code_skill_shell_mode_assignments()
+    assert len(assignments) >= 2, (
+        "review-code SKILL.md: MODE= parse found %d assignment(s); need >= 2"
+        % len(assignments)
+    )
+
+
+def test_session_mode_guards_derive_through_resolve():
+    """T3: check_base and _read_meta derive through session_mode.resolve."""
+    import inspect
+
+    import grounding_stage
+    import review_base_guard
+
+    check_base_source = inspect.getsource(review_base_guard.check_base)
+    read_meta_source = inspect.getsource(grounding_stage._read_meta)
+    assert "session_mode.resolve" in check_base_source
+    assert "session_mode.resolve" in read_meta_source
+    assert "not in SESSION_MODES" not in check_base_source
+    assert "not in SESSION_MODES" not in read_meta_source
+
+
+def test_grounding_stage_branch_disposition_uses_mode_branch_constant():
+    """Branch-mode disposition compares against session_mode.MODE_BRANCH."""
+    import inspect
+
+    import grounding_stage
+
+    for label, func in (
+        ("stage", grounding_stage.stage),
+        ("_trust_boundary", grounding_stage._trust_boundary),
+    ):
+        src = inspect.getsource(func)
+        assert "session_mode.MODE_BRANCH" in src, (
+            "grounding_stage.%s must compare against session_mode.MODE_BRANCH" % label
+        )
+        assert '== "branch"' not in src and "== 'branch'" not in src, (
+            "grounding_stage.%s must not compare against bare branch literal" % label
+        )

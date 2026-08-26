@@ -1083,10 +1083,10 @@ def main(argv):
             "detail": skew_record["detail"],
             "inspectedRoot": skew_record["inspectedRoot"],
         }
-        # bite-axis: only checked-degraded records reach degradations — checked-clean and
-        # not-checked stay off the list so a clean or skipped check never reads as degraded
-        # (#677; if-and-only-if with the consumer rule in CONVENTIONS §6).
-        if skew_record.get("status") == version_skew.STATUS_CHECKED_DEGRADED:
+        # bite-axis: only statuses version_skew.appends_degradation declares reach degradations —
+        # checked-clean and not-checked stay off the list so a clean or skipped check never reads
+        # as degraded (#677; rule lives in version_skew.py; if-and-only-if with CONVENTIONS §6).
+        if version_skew.appends_degradation(skew_record.get("status")):
             extra_degradations.append(skew_record)
         if notes:
             extra_degradations.extend(notes)
