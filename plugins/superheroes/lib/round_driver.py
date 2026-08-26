@@ -3712,9 +3712,19 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                     % (rkey, phase_name, "; ".join(parts)))
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
-    base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "mode", "baseRepo",
+    base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "baseRepo",
                                     "baseRepoCheck", "repoRoot", "diffBinding")
             if cfg.get(k) is not None}
+    # "mode" is deliberately NOT part of the generic cfg-echo tuple above (#1107 WO-rc1): under
+    # meta-wins precedence, the driver config's raw mode value is not necessarily the mode the
+    # driver actually resolved and acted on — a receipt echoing it raw would be a false receipt.
+    # Route it through the same session_mode.resolve the driver used elsewhere, and record it only
+    # when the resolution is GROUNDED (never the UNRESOLVED_MODE default — that fail-closed "pr"
+    # was never chosen by anything, so the receipt must not claim it was).
+    _meta_for_mode = _session_meta(session_dir) if session_dir else {}
+    _mode_resolved = session_mode.resolve(_meta_for_mode, cfg)
+    if _mode_resolved["resolved"]:
+        base["mode"] = _mode_resolved["mode"]
     receipt = {
         # The STATE's version drives the receipt's (#723): an in-flight v2 session still emits
         # today's `receipt-certified/2` shape, unchanged and with no added key.

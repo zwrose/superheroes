@@ -3802,6 +3802,62 @@ def test_certification_shape_drivers_lists_every_fired_channel():
     assert state["certification"]["shape"].count("-degraded") == 0
 
 
+def _write_meta_json(session_dir, payload):
+    os.makedirs(session_dir, exist_ok=True)
+    with open(os.path.join(session_dir, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+
+
+def test_receipt_base_mode_routes_through_session_mode_meta_wins(tmp_path):
+    """I2 (#1107 WO-rc1): the receipt's base.mode is the DRIVER-RESOLVED mode, never a raw
+    cfg echo. Under meta-wins precedence, session metadata overrides a disagreeing driver
+    config value in the receipt too — the same precedence `session_mode.resolve` already
+    applies everywhere else."""
+    session_dir = str(tmp_path / "sess")
+    _write_meta_json(session_dir, {"mode": "branch"})
+    state = RD.new_state(_cfg(mode="pr"))
+    receipt = RD.build_receipt(state, session_dir)
+    assert receipt["base"]["mode"] == "branch"
+
+
+def test_receipt_base_mode_edge_no_session_dir_grounds_from_config(tmp_path):
+    """Fail-closed edge 1: session_dir is None (the run_loop receipt paths) — no metadata
+    exists; resolve({}, cfg) is grounded iff cfg carried a valid mode."""
+    state = RD.new_state(_cfg(mode="pr"))
+    receipt = RD.build_receipt(state)
+    assert receipt["base"]["mode"] == "pr"
+
+
+def test_receipt_base_mode_edge_missing_meta_file_does_not_raise(tmp_path):
+    """Fail-closed edge 2: session_dir set but meta.json missing — _session_meta already
+    returns {}; must not raise, and (with no cfg mode either) base.mode is simply absent."""
+    session_dir = str(tmp_path / "sess-no-meta")
+    os.makedirs(session_dir)
+    state = RD.new_state(_cfg())
+    receipt = RD.build_receipt(state, session_dir)
+    assert "base" not in receipt or "mode" not in receipt.get("base", {})
+
+
+def test_receipt_base_mode_edge_invalid_meta_is_absent_not_config_fallthrough(tmp_path):
+    """Fail-closed edge 3: meta carries a present-but-invalid mode — resolve is unresolved,
+    so base.mode is ABSENT — it must not fall through to cfg's disagreeing valid value
+    (I1's whole point, now reaching the receipt)."""
+    session_dir = str(tmp_path / "sess-invalid")
+    _write_meta_json(session_dir, {"mode": "bogus"})
+    state = RD.new_state(_cfg(mode="pr"))
+    receipt = RD.build_receipt(state, session_dir)
+    assert "mode" not in receipt.get("base", {})
+
+
+def test_receipt_base_mode_edge_neither_source_has_mode_is_absent(tmp_path):
+    """Fail-closed edge 4: neither meta nor cfg carries a mode — base.mode absent."""
+    session_dir = str(tmp_path / "sess-empty")
+    os.makedirs(session_dir)
+    state = RD.new_state(_cfg())
+    receipt = RD.build_receipt(state, session_dir)
+    assert "base" not in receipt or "mode" not in receipt.get("base", {})
+
+
 def test_seat_map_violations_round_field_and_degraded_disclosure():
     seat_map = _seat_map_receipt_with_unexcused_maker_family()
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])

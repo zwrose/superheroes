@@ -2201,6 +2201,49 @@ def test_grounding_stage_session_modes_match_review_base_guard():
     ), "grounding_stage.py must not re-inline a local mode tuple"
 
 
+# --- Cluster: raw session-mode reads in round_driver.py / review_base_guard.py (#1107 WO-rc1) --
+
+_RAW_MODE_READ_PATTERN = re.compile(r'get\("mode"\)|\["mode"\]|"mode":')
+
+# The pinned census (I2/I3, #1107 WO-rc1): every remaining raw-mode-read-shaped site in these two
+# modules, after `round_driver.build_receipt`'s "mode" was routed through `session_mode.resolve`
+# (I2) and `review_base_guard.check_base`'s returned "mode" was single-sourced from
+# `mode_resolved["mode"]` (I3). Every entry below reads an ALREADY-RESOLVED value (a
+# `mode_resolved`/`_mode_resolved` dict produced by `session_mode.resolve` a few lines earlier) or
+# is the raw `meta.get("mode")` local kept only for a refusal's diagnostic `detail` text — never a
+# second decision path. A genuinely NEW raw read (e.g. a fresh `cfg.get("mode")` or
+# `meta.get("mode")` feeding a decision) changes this set and must fail here first.
+_EXPECTED_RAW_MODE_READS = {
+    "lib/round_driver.py": {
+        'base["mode"] = _mode_resolved["mode"]',
+        'if mode_resolved["mode"] == session_mode.MODE_BRANCH:',
+        '"MODE": mode_resolved["mode"],',
+    },
+    "lib/review_base_guard.py": {
+        'mode = meta.get("mode")',
+        'if mode_resolved["mode"] == session_mode.MODE_PR:',
+        '"mode": mode_resolved["mode"],',
+    },
+}
+
+
+def test_round_driver_and_review_base_guard_raw_mode_read_census():
+    """#1107 WO-rc1 census: pins the enumerated set of session-mode-shaped reads in the two
+    modules this order's invariants (I2, I3) touch, so a NEW raw-mode-read site cannot appear
+    silently — it must show up as a set diff here and get classified (decision / pass-through /
+    unrelated) the way this order's own census was."""
+    for rel, expected in _EXPECTED_RAW_MODE_READS.items():
+        text = _read(rel)
+        found = {
+            line.strip() for line in text.splitlines() if _RAW_MODE_READ_PATTERN.search(line)
+        }
+        assert found == expected, (
+            "%s: raw-mode-read census drift — expected %r, found %r (a new or removed site "
+            "changes this order's I1/I2/I3 analysis and must be reclassified)"
+            % (rel, sorted(expected), sorted(found))
+        )
+
+
 def test_vet_receipt_markers_match_conventions_10_7():
     """§11 + §12.3: the vet-receipt marker literals agree across every hand-maintained copy.
 
