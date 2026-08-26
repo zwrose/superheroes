@@ -72,6 +72,7 @@ _AUX_PLACEHOLDER_INPUTS = frozenset({
     "FINDINGS_OUTPUT_PATH",
     "GROUPING_OUTPUT_PATH",
     "PR_CHECKOUT_PATH",
+    "PRIOR_COMMENTS_PATH",
 })
 
 _COMMON_CONTEXT_KEYS = (
@@ -335,6 +336,20 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     ph["PRIOR_COMMENTS_CONTEXT_LINE"] = (
         "- Prior comments + author justifications: %s" % prior if prior else ""
     )
+    prior_instr = ph.get("PRIOR_COMMENTS_PATH", "")
+    if not isinstance(prior_instr, str):
+        prior_instr = ""
+    if prior_instr and not prior_instr.startswith("("):
+        ph["PRIOR_COMMENTS_INSTRUCTION_BLOCK"] = (
+            "%s contains prior review comments and their\nthreads." % prior_instr
+        )
+    elif prior_instr.startswith("("):
+        ph["PRIOR_COMMENTS_INSTRUCTION_BLOCK"] = (
+            "No prior-comments.json was supplied for this PR — there are no prior review "
+            "comments or author justifications to consult."
+        )
+    else:
+        ph["PRIOR_COMMENTS_INSTRUCTION_BLOCK"] = ""
     focus = ph.get("FOCUS_NOTES", "").strip()
     ph["FOCUS_CONTEXT_LINE"] = (
         "- Focus: %s" % focus if focus else ""

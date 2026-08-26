@@ -219,6 +219,25 @@ def test_base_guard_reason_tokens_in_round_driver_doc():
         % [(n, reasons[n]) for n in missing])
 
 
+# --- Cluster: gap-sweep re-emission unknown-seat token (round_records → round-driver.md) -
+
+def test_unknown_seat_refusal_token_in_round_driver_doc():
+    """§11: round-driver.md's gap-sweep re-emission trap restates round_records.py's own
+    `unknown-seat` sweep refusal literally — a rename of that refusal reason would silently
+    strand the doc's recovery guidance behind a token `record-result --sweep` no longer emits."""
+    home = _read(os.path.join("lib", "round_records.py"))
+    assert '_refuse("unknown-seat"' in home, (
+        "round_records.py: expected literal `_refuse(\"unknown-seat\", ...)` call not found "
+        "(renamed/refactored? update this pin's home check along with the rename)"
+    )
+    doc = _read("skills/review-code/reference/round-driver.md")
+    assert "unknown-seat" in doc, (
+        "round-driver.md: gap-sweep re-emission trap must name the `unknown-seat` refusal "
+        "that round_records.sweep_landing raises when a stray landing file maps to no roster "
+        "slot in the current manifest"
+    )
+
+
 # --- Cluster: plugin-version-skew status vocabulary (version_skew → setup.md, CONVENTIONS.md) -
 
 
@@ -226,6 +245,50 @@ def _plugin_version_skew_statuses_from_home():
     import version_skew
 
     return set(version_skew.STATUSES)
+
+
+def _plugin_version_skew_certification_statuses_from_home():
+    """Values ``_plugin_version_skew_status`` can project into certification disclosure."""
+    import inspect
+    import re
+
+    import round_driver
+    import version_skew
+
+    src = inspect.getsource(round_driver._plugin_version_skew_status)
+    literals = set(re.findall(r'return "([^"]+)"', src))
+    assert literals, (
+        "_plugin_version_skew_status: no string-literal return values discovered"
+    )
+    if "return status" in src and "version_skew.STATUSES" in src:
+        literals |= set(version_skew.STATUSES)
+    return literals
+
+
+def _certification_plugin_version_skew_disclosure_block(doc):
+    m = re.search(
+        r"`pluginVersionSkew`\s*—\s*tri-state skew\s*disclosure:\s*(.*?),\s*`shapeDrivers`",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "round-driver.md: certification pluginVersionSkew disclosure block not found "
+        "(moved or reworded?)"
+    )
+    return m.group(1)
+
+
+def _certification_plugin_version_skew_enumeration_tokens(doc):
+    block = _certification_plugin_version_skew_disclosure_block(doc)
+    candidates = set(re.findall(r"`([^`]+)`", block))
+    structural = {
+        "pluginVersionSkew",
+        "seatMap.pluginVersionSkew",
+        "status",
+        "detail",
+        "inspectedRoot",
+    }
+    return {t for t in candidates if t not in structural and "." not in t}
 
 
 _PLUGIN_VERSION_SKEW_SKEW_CONTEXT_MARKERS = (
@@ -626,10 +689,12 @@ def test_plugin_version_skew_chokepoint_census():
 
 
 def test_plugin_version_skew_status_vocabulary_in_docs():
-    """§11: setup.md and CONVENTIONS.md restate version_skew.STATUSES."""
+    """§11: setup.md and CONVENTIONS.md restate version_skew.STATUSES; round-driver.md
+    restates the certification ``pluginVersionSkew`` projection vocabulary."""
     import version_skew
 
     home = _plugin_version_skew_statuses_from_home()
+    cert_home = _plugin_version_skew_certification_statuses_from_home()
     setup = _read("skills/review-code/reference/setup.md")
     missing_setup = sorted(token for token in home if token not in setup)
     assert not missing_setup, (
@@ -651,6 +716,13 @@ def test_plugin_version_skew_status_vocabulary_in_docs():
     assert not missing_conventions, (
         "CONVENTIONS.md missing plugin-version-skew status vocabulary from "
         "version_skew.STATUSES: %r" % missing_conventions
+    )
+    round_driver_doc = _read("skills/review-code/reference/round-driver.md")
+    doc_tokens = _certification_plugin_version_skew_enumeration_tokens(round_driver_doc)
+    assert doc_tokens == cert_home, (
+        "round-driver.md certification pluginVersionSkew enumeration drift — "
+        "expected %r, doc enumerates %r"
+        % (sorted(cert_home), sorted(doc_tokens))
     )
 
 
@@ -2180,6 +2252,49 @@ def test_grounding_stage_session_modes_match_review_base_guard():
     assert not re.search(
         r'\(\s*["\']pr["\']\s*,\s*["\']branch["\']\s*\)', gs_source
     ), "grounding_stage.py must not re-inline a local mode tuple"
+
+
+# --- Cluster: raw session-mode reads in round_driver.py / review_base_guard.py (#1107 WO-rc1) --
+
+_RAW_MODE_READ_PATTERN = re.compile(r'get\("mode"\)|\["mode"\]|"mode":')
+
+# The pinned census (I2/I3, #1107 WO-rc1): every remaining raw-mode-read-shaped site in these two
+# modules, after `round_driver.build_receipt`'s "mode" was routed through `session_mode.resolve`
+# (I2) and `review_base_guard.check_base`'s returned "mode" was single-sourced from
+# `mode_resolved["mode"]` (I3). Every entry below reads an ALREADY-RESOLVED value (a
+# `mode_resolved`/`_mode_resolved` dict produced by `session_mode.resolve` a few lines earlier) or
+# is the raw `meta.get("mode")` local kept only for a refusal's diagnostic `detail` text — never a
+# second decision path. A genuinely NEW raw read (e.g. a fresh `cfg.get("mode")` or
+# `meta.get("mode")` feeding a decision) changes this set and must fail here first.
+_EXPECTED_RAW_MODE_READS = {
+    "lib/round_driver.py": {
+        'base["mode"] = _mode_resolved["mode"]',
+        'if mode_resolved["mode"] == session_mode.MODE_BRANCH:',
+        '"MODE": mode_resolved["mode"],',
+    },
+    "lib/review_base_guard.py": {
+        'mode = meta.get("mode")',
+        'if mode_resolved["mode"] == session_mode.MODE_PR:',
+        '"mode": mode_resolved["mode"],',
+    },
+}
+
+
+def test_round_driver_and_review_base_guard_raw_mode_read_census():
+    """#1107 WO-rc1 census: pins the enumerated set of session-mode-shaped reads in the two
+    modules this order's invariants (I2, I3) touch, so a NEW raw-mode-read site cannot appear
+    silently — it must show up as a set diff here and get classified (decision / pass-through /
+    unrelated) the way this order's own census was."""
+    for rel, expected in _EXPECTED_RAW_MODE_READS.items():
+        text = _read(rel)
+        found = {
+            line.strip() for line in text.splitlines() if _RAW_MODE_READ_PATTERN.search(line)
+        }
+        assert found == expected, (
+            "%s: raw-mode-read census drift — expected %r, found %r (a new or removed site "
+            "changes this order's I1/I2/I3 analysis and must be reclassified)"
+            % (rel, sorted(expected), sorted(found))
+        )
 
 
 def test_vet_receipt_markers_match_conventions_10_7():

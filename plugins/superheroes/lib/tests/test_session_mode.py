@@ -94,6 +94,18 @@ def test_resolve_invalid_meta_does_not_fall_through_to_config():
     )
 
 
+def test_resolve_valid_meta_wins_over_disagreeing_valid_config():
+    """I1 (#1107 WO-rc1): meta-wins precedence is ratified, not incidental. A VALID
+    session-metadata mode wins even when driver config carries a different VALID mode —
+    `resolve` never arbitrates disagreement, it always prefers the higher-authority source."""
+    _assert_resolved(
+        sm.resolve({"mode": "branch"}, {"mode": "pr"}), "branch", sm.EVIDENCE_SESSION_META,
+    )
+    _assert_resolved(
+        sm.resolve({"mode": "pr"}, {"mode": "branch"}), "pr", sm.EVIDENCE_SESSION_META,
+    )
+
+
 @pytest.mark.parametrize("meta", [{"mode": ""}, {"mode": None}])
 def test_resolve_present_but_invalid_empty_meta(meta):
     _assert_unresolved(sm.resolve(meta, {"mode": "branch"}), "session metadata")

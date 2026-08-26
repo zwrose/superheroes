@@ -769,7 +769,7 @@ These are the base rubric's binding verification rules, restated in every subage
 | Exiting the loop early because a fix "looks done"       | Obey `round_driver.py` `next`/`submit` — never `code_loop_plan` or manual continuation. "Trivial fix / save tokens / offer optional round" are the rationalizations it overrides. |
 | Pushing automatically at loop end                       | The loop commits locally only. Pushing is always a separate, user-confirmed step.                                                                                 |
 | Dispatching reviewers by reading an agent file          | The five reviewers are bundled plugin agents — dispatch the `<name>` reviewer with its methodology (resolve dispatch via the host tool map (`hosts/<host>-tools.md` at the plugin root)).                  |
-| Skipping the profile bootstrap                           | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                         |
+| Skipping the profile bootstrap                           | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. When no profile resolves, every run gets a provisional strict profile. |
 
 ---
 

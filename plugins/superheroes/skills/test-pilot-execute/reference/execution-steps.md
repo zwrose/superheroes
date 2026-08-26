@@ -54,7 +54,11 @@ frozen: any problem you hit is a finding, never a re-provisioning.
    data.
 3. **App up.** Per the profile: if `mayManageServer`, start `devCommand` in
    the background and poll `readinessUrl` until it answers; else verify it
-   answers and ask the user to start it if not.
+   answers — when it does not, ABORT with remediation: "start the dev server
+   (`devCommand` from profile) and re-run execute" (or set `mayManageServer`
+   via `/superheroes:configure`). Post a **partial** results comment naming
+   the blocked/unprovisioned state (same shape as step 2 seed refusal). Never
+   continue without an answering app.
 4. **Browser tool.** Profile `browserTools` order ∩ currently connected
    (ToolSearch). Empty intersection → ABORT with remediation: "run
    test-pilot-init to install/record a browser tool". Never continue

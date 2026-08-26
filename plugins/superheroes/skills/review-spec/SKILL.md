@@ -122,6 +122,7 @@ Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile 
 
 **Profile bootstrap (run before locating the spec or dispatching anything).** The review engine reads its per-project calibration from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
+<!-- decision-point: id=review-spec-storage-location mode=notify kind=storage-location default="returned .mode (recorded when configured, else the lib's provisional default)" carrier=review-spec-receipt -->
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
@@ -129,18 +130,19 @@ if [ "$LOCATION" = "none" ]; then
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
   SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
   PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
-  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
+  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] && [ -n "$SOURCE" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
   PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
 fi
 ```
-
 **Storage location.** `decide-location` JSON: `.mode` (`in-repo`|`global`; `ask` gone), `.source`
 (`env` — `REVIEW_CREW_STORAGE` override this run, never recorded; `registry` — owner-recorded; `backfilled` — inferred then recorded; `provisional` — lib default, re-taken next run), `.provisional` (`true` when not owner-recorded). **Default:**
 returned `.mode`. Bootstrap blocks never record — unrecorded modes re-taken next run.
 **Disclosure.** Write into `$SESSION_DIR/receipt.md` (assembled in §6): mode, source, provisional
 status, and `/superheroes:configure` follow-up; when `.provisional` is `true`, note it is a
 provisional default and will be re-taken next run when not recorded.
+NOTIFY: take the returned `.mode` from `decide-location`, disclose in `$SESSION_DIR/receipt.md`, and the run continues. Follow-up: `/superheroes:configure`.
+<!-- /decision-point: id=review-spec-storage-location -->
 
 When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → defaults → seed canonical patterns → write the profile to `$PROFILE`), then continue. (Staleness, reconcile, and learning-loop steps are out of scope here.)
 
@@ -491,8 +493,8 @@ fi
 After the loop exits, print a terminal summary in chat:
 
 - Lead with the final verdict label in bold (`SPEC READY` = ready for the owner to review,
-  **not** approved). If the loop hit the 7-round cap with Critical/Important unresolved, the
-  verdict is **REVISE** — do **not** declare SPEC READY.
+  **not** approved). Step-7 **GATE** or the 7-round cap with Critical/Important still open →
+  verdict **REVISE** — do **not** declare SPEC READY.
 - List, grouped by spec section, the revisions applied (auto + owner-answered) and the
   findings skipped — each with its POV line. Surface any **open requirements question** the
   owner still needs to answer (a `judgment` finding not yet resolved).
@@ -500,33 +502,31 @@ After the loop exits, print a terminal summary in chat:
   READY for owner review"`) and a one-line reminder that **the owner's approval is the gate**
   (Discovery records it).
 
-**Post-halt edits are a named violation (#518).** review-spec's cap terminal, **when any blocking finding is still open, is always a park** — verdict **REVISE**, not SPEC READY — because a spec has no stronger downstream reviewer than the owner (the next gate); a cap round that comes back a clean full-deep confirmation still certifies (§5's `halt` is the park case). That park is a whistle: **after it, any edit to
+**Post-halt edits are a named violation (#518).** review-spec's cap terminal and step-7 **GATE** exit, when any blocking finding is still open, are always a park — verdict **REVISE**, not SPEC READY — because a spec has no stronger downstream reviewer than the owner (the next gate); a cap round that comes back a clean full-deep confirmation still certifies (§5's `halt` and step-7 GATE are the park cases). That park is a whistle: **after it, any edit to
 `$SPEC_PATH` invalidates the terminal claim.** The reviewed verdict covered the pre-halt spec; an
 edit after the whistle is an unreviewed change wearing a reviewed spec's clothes. So **never
 revise the spec after the halt and still present the prior terminal as valid** — if the spec is
 written post-halt, the receipt records the violation (the READY/REVISE claim is void, the spec is
 unreviewed again) and the loop must re-run before any terminal is claimed.
 
-**Durable receipt — post the round history to the linked issue (non-blocking).** Code review
-leaves its receipts on the PR; a doc review must leave them on the issue, or the loop's whole
-history dies in `$SESSION_DIR` — a multi-round run once had to be reconstructed forensically
-because the only record was the transcript. Assemble `$SESSION_DIR/receipt.md` (appending to any
-GATE write-downs from step 7) — final verdict, per-round schedule, every finding disposition,
-open requirements questions, count summary, any post-halt-edit violation, and (when bootstrap ran)
-storage mode, `.source`, provisional status, and `/superheroes:configure` follow-up — then post
-it to the spec's linked `issue`:
+**Durable receipt (non-blocking).** Post assembled `$SESSION_DIR/receipt.md` (verdict, schedules,
+dispositions, bootstrap disclosure when applicable) to the linked `issue`; on failure copy to
+`<project store>/review-spec-receipts/${LEASE}.md` (unique per run):
 
 ```bash
 ISSUE=$(sed -n 's/^issue:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$SPEC_PATH" | head -1)
-if [ -n "$ISSUE" ] && command -v gh >/dev/null 2>&1; then
-  gh issue comment "$ISSUE" --body-file "$SESSION_DIR/receipt.md" \
-    && echo "receipt posted to issue #$ISSUE" || echo "note: receipt post failed — it stays in chat."
+POSTED=
+[ -n "$ISSUE" ] && command -v gh >/dev/null 2>&1 && \
+  gh issue comment "$ISSUE" --body-file "$SESSION_DIR/receipt.md" && POSTED=yes
+if [ -z "$POSTED" ]; then
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  STORE_DIR=$(python3 -B -c "import sys, os; sys.path.insert(0, '$ROOT_DIR/lib'); import mode_registry; print(mode_registry.project_store_dir(os.getcwd()))")
+  DURABLE_RECEIPT="$STORE_DIR/review-spec-receipts/${LEASE}.md"
+  mkdir -p "$(dirname "$DURABLE_RECEIPT")" && cp "$SESSION_DIR/receipt.md" "$DURABLE_RECEIPT"
 fi
 ```
 
-No linked `issue` (or no `gh`) → say so in chat and continue; the revised `$SPEC_PATH` plus the
-chat summary still stand. The receipt carries only the review summary of an owner-facing spec —
-no secret to scrub.
+Issue post or project-store copy must succeed for a durable receipt; chat + `$SPEC_PATH` still stand.
 
 **Then, after the terminal summary**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge**, (2) the **learning-loop proposal**, then (3) the **provisional-profile confirmation**. All three are placed after the review output and none blocks.
 

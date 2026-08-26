@@ -289,8 +289,8 @@ def build_argv_result(engine, role_kind, effort, opts):
         # cursor-agent has no cwd flag; a cursor read dispatch is pinned by the runner's subprocess
         # cwd (#665), not by argv.
         # cursor-agent 2026.06.26: model flag is --model (not -m); -p/--print is REQUIRED for a
-        # headless run (without it it goes interactive and --output-format is a no-op); --trust
-        # clears the workspace-trust gate that otherwise HANGS a headless run (needed for the
+        # non-interactive CLI invocation (without it it goes interactive and --output-format is a no-op); --trust
+        # clears the workspace-trust gate that otherwise HANGS a non-interactive CLI invocation (needed for the
         # read/--mode-plan role — the write role's -f also trusts, but --trust covers both).
         argv = ["cursor-agent", "--model", model, "-p", "--trust"]
         if is_read:

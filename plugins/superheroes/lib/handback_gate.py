@@ -835,6 +835,10 @@ def _read_receipt(path):
 
 def _receipt_bindings_ok(sidecar, receipt):
     """Delegate receipt shape to ``round_driver.validate_receipt``; layer verdict allowlist on top."""
+    if not isinstance(receipt, dict):
+        return False, "receipt-invalid:receipt is not an object"
+    if RD.receipt_kind(receipt) == RD.RECEIPT_INTERIM_SCHEMA:
+        return False, "receipt-interim-not-handback-evidence"
     ok, why = RD.validate_receipt(receipt)
     if not ok:
         return False, "receipt-invalid:%s" % why
@@ -909,6 +913,9 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
         if bind_why and bind_why.startswith("receipt-invalid:"):
             return _refuse("handback-receipt-unreadable",
                             "receipt invalid: %s" % bind_why[len("receipt-invalid:"):],
+                            subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
+        if bind_why == "receipt-interim-not-handback-evidence":
+            return _refuse("receipt-interim-not-handback-evidence", "",
                             subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
         return _refuse("handback-verdict-not-allowlisted", "",
                         subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)

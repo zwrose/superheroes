@@ -43,7 +43,8 @@ print(json.dumps(p) if p else 'null')
 **FR-11 idempotency (CONVENTIONS `§2.3`):**
 
 - Policy is absent or `"confirmed": false` (provisional) → proceed to Step 3
-  (run the analysis + interview).
+  (analysis + provisional default). Confirmation or change happens only through
+  `/superheroes:configure`.
 - Policy is `"confirmed": true` → report the current policy (location +
   visibility) and exit unchanged. To change it the owner must explicitly request
   a policy reset.
@@ -62,33 +63,68 @@ print(json.dumps(architect_config.analyze_repo(os.getcwd())))
 "
 ```
 
-Apply the analysis-informed default directly with `confirmed: false` (provisional). Every run takes
-this path — no branch on human presence:
+Apply the analysis-informed default directly with `confirmed: false` (provisional). Every
+non-interactive CLI invocation takes this path — no branch on an unanswered gate:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B -c "
-import sys, os; sys.path.insert(0, '$ROOT_DIR/lib')
+import sys, json, os; sys.path.insert(0, '$ROOT_DIR/lib')
 import architect_config
 rec = architect_config.analyze_repo(os.getcwd())
-architect_config.write_policy(os.getcwd(),
-    {'location': rec['location'], 'visibility': rec['visibility'], 'confirmed': False})
+disclosure = (
+    'Recommended location: %s; visibility: %s; confirmed: false (provisional). '
+    '/superheroes:configure confirms or changes it. '
+    'Committed shares definition-docs with collaborators; gitignored keeps the repo pristine.'
+) % (rec['location'], rec['visibility'])
+result = architect_config.write_policy(os.getcwd(), {
+    'location': rec['location'],
+    'visibility': rec['visibility'],
+    'confirmed': False,
+    'disclosures': [disclosure],
+})
+if result is None:
+    print('WRITE_POLICY_REFUSED')
+else:
+    print(json.dumps(result))
 "
 ```
 
-**Disclosure (write into the run output and Step 4 report):** state the recommendation applied
-(location + visibility), that `confirmed: false` means provisional, and that `/superheroes:configure`
-confirms or changes it. Include the trade-offs — committed shares definition-docs with collaborators;
-gitignored keeps the repo pristine — so the owner reading the artifact learns what they would have
-been told interactively.
+<!-- decision-point: id=architect-doc-policy-default mode=proceed kind=owner-gate default="analysis-informed provisional policy" carrier=doc-policy-disclosures -->
+**Disclosure (doc-policy `disclosures` via `write_policy`).** When the shell block above succeeds,
+it persists the recommendation applied (location + visibility), that `confirmed: false` means
+provisional, and that `/superheroes:configure` confirms or changes it — plus the trade-offs
+(committed shares definition-docs with collaborators; gitignored keeps the repo pristine) — in the
+`disclosures` field of `doc-policy.json`. The run continues after a successful write.
+<!-- /decision-point: id=architect-doc-policy-default -->
 
-If `write_policy` returns `None` (config lock contended), surface a notice
-and exit without writing — the caller retries (CONVENTIONS `§4.4`).
+**`write_policy` refusal.** The block prints `WRITE_POLICY_REFUSED` when `write_policy` returns
+`None`; otherwise it prints the written record as JSON. `read_policy` returns only the four known
+fields and cannot distinguish which refusal cause applied — branch on the block's output, not on
+`read_policy`.
+
+`WRITE_POLICY_REFUSED` is a **single token that does not identify which cause applied**. When the
+block prints it, the write did **not** apply and nothing was persisted. Surface a notice that the doc
+policy could not be written and **stop** — do not proceed as if the policy had been written, and do
+not spin-wait.
+
+Because the causes are **not distinguishable from the token**, a run **cannot** choose between
+retrying and reporting that the plugin must be upgraded; a retry may simply refuse again.
+
+`write_policy` returns `None` for four possible reasons (see its docstring in
+`lib/architect_config.py`):
+
+1. **Config lock contended** — another holder has the config lock.
+2. **Project store cannot be ensured** — the project store is not available.
+3. **Repository root unavailable** — the repository root cannot be resolved.
+4. **Persisted record declares a `schemaVersion` newer than this module supports** — a newer plugin
+   wrote the record, and this one refuses to overwrite what it cannot read in full.
 
 ## Step 4 — Report
 
 Tell the owner what was written (or preserved): location, visibility, confirmed
-or provisional, and the disclosure above when `confirmed` is false. Remind the owner that
+or provisional, and the disclosure strings in `doc-policy.json`'s `disclosures` field when
+`confirmed` is false. Remind the owner that
 `architect-discovery` picks up the policy from here and that `/superheroes:configure` confirms
 or changes it.
 
@@ -98,5 +134,5 @@ or changes it.
 | --- | --- |
 | Re-deciding the policy when one is already confirmed | Honor FR-11: report and exit; only proceed on an explicit owner reset. |
 | Running Step 3 in `global` mode | `global` mode keeps docs in the project store — no in-repo policy to set. Exit after Step 1. |
-| Blocking on a contended config lock | Return `None` is the signal — surface a notice; never spin-wait. |
+| Blocking on a contended config lock | `WRITE_POLICY_REFUSED` is the signal — surface a notice; never spin-wait. |
 | Setting `confirmed: true` without owner confirmation via configure | Every init run is provisional (`confirmed: false`); the owner confirms through `/superheroes:configure`. |
