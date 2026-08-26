@@ -368,8 +368,8 @@ def test_member_carries_sentinel_false_for_ordinary_prose():
     ) is False
 
 
-def test_member_carries_sentinel_false_for_prose_quoting_sentinel():
-    # axis: embedded sentinel in real prose is not a placeholder-echo field value
+def test_member_carries_sentinel_false_for_title_plus_body_quoting_sentinel():
+    # axis: sentinel-free title blocks all-quantifier leg even when body embeds EXAMPLE_SENTINEL
     sentinel = RFS.EXAMPLE_SENTINEL
     assert RFS.member_carries_sentinel(
         {
@@ -378,6 +378,50 @@ def test_member_carries_sentinel_false_for_prose_quoting_sentinel():
             "body": "context:\n" + sentinel + " appears inside prose",
         }
     ) is False
+
+
+def test_member_carries_sentinel_true_for_body_only_quoting_sentinel():
+    # axis: all-quantifier leg when sole content-bearing substance field is body quoting example
+    sentinel = RFS.EXAMPLE_SENTINEL
+    assert RFS.member_carries_sentinel(
+        {
+            "severity": "Important",
+            "body": "context:\n" + sentinel + " appears inside prose",
+        }
+    ) is True
+
+
+def test_member_carries_sentinel_false_for_body_only_ordinary_prose():
+    # axis: body-only member without sentinel must not echo-verdict
+    assert RFS.member_carries_sentinel(
+        {"severity": "Minor", "body": "Ordinary review prose."}
+    ) is False
+
+
+def test_member_carries_sentinel_true_for_body_only_exact_placeholder():
+    # axis: lone exact placeholder in body — placeholder_count==1 leg (no non-placeholder substance)
+    body_placeholder = RFS._placeholder_string("body")
+    assert RFS.member_carries_sentinel(
+        {"severity": "Critical", "body": body_placeholder}
+    ) is True
+
+
+def test_parse_result_review_title_plus_body_quoting_sentinel_survives():
+    # axis: genuine finding with sentinel-free title plus quoting body survives parse_result
+    import engine_adapter as EA
+
+    sentinel = RFS.EXAMPLE_SENTINEL
+    member = {
+        "severity": "Important",
+        "title": "quoted example in body",
+        "body": "context:\n" + sentinel + " appears inside prose",
+    }
+    stdout = json.dumps({"findings": [member]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["title"] == member["title"]
+    assert res["findings"][0]["body"] == member["body"]
 
 
 def _uniform_retype_strings(value):
