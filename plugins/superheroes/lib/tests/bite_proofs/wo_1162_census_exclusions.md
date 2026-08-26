@@ -8,6 +8,24 @@ secret, token, private URL, or PII — nothing was elided.
 is only safe because the exclusion under proof exists. Neutralize the exclusion and this file is
 what turns the census red.
 
+**Fixed-point normalization, disclosed.** Two of the three guarded literals are scanned
+**line by line** by the censuses under proof, so a transcript pasted into this file becomes new
+ammunition and the next run reports different lines — the record would never converge. So this
+file carries **exactly one unescaped occurrence of each**, in the ammunition block immediately
+below, and every later mention — including inside pasted transcripts — is written as the
+placeholder `<RETIRED-JUDGE-ID>` or `<RETIRED-ROUTE-NAME>`. That substitution is the **only**
+edit made to any pasted output; exit codes, hit paths, hit line numbers, and counts are raw. The
+ammunition block sits above every transcript, so its line numbers do not move when a transcript
+is pasted — which is what makes the recorded red output reproducible on this head.
+
+## Ammunition — the guarded literals, one unescaped occurrence each
+
+- retired cursor judge id (guarded by `test_retired_cursor_grok_4_5_literal_census`): cursor-grok-4.5
+- retired route name (guarded by `test_retired_discovery_route_name_census`): needs-discovery
+
+The R8 element sentence — the third guarded literal — is quoted once inside BP-1 below; the
+closure census reports a **count**, not a line number, so it needs no placeholder treatment.
+
 ---
 
 ## BP-1 — `test_closure_doctrine.py` R8 element-sentence walk
@@ -106,10 +124,9 @@ neither the retired-grok census nor the routing census reads a path under `lib/t
 One predicate, one neutralization, **two** census tests red — the two walks share the collector,
 so the guarded element is one, not two, and both consumers are named in the command below.
 
-**Guarded literals quoted in this record (the neutralization's ammunition):**
-
-- retired cursor judge id: `cursor-grok-4.5`
-- retired route name: `needs-discovery`
+**Guarded literals:** the two unescaped occurrences in the **Ammunition** block at the top of this
+file (`<RETIRED-JUDGE-ID>` and `<RETIRED-ROUTE-NAME>` there). They are what the neutralized census
+finds; every mention below is the placeholder form.
 
 **Neutralization:**
 
@@ -138,8 +155,8 @@ _________________ test_retired_cursor_grok_4_5_literal_census __________________
             "retired literal %r outside intentional declaration sites %r — stale hits: %r"
             % (_retired_grok_literal(), sorted(allowed), unexpected)
         )
-E       AssertionError: retired literal 'cursor-grok-4.5' outside intentional declaration sites [('lib/tests/test_ssot_drift.py', 1584), ('lib/tests/test_ssot_drift.py', 1600)] — stale hits: [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 74)]
-E       assert not [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 74)]
+E       AssertionError: retired literal '<RETIRED-JUDGE-ID>' outside intentional declaration sites [('lib/tests/test_ssot_drift.py', 1584), ('lib/tests/test_ssot_drift.py', 1600)] — stale hits: [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 23)]
+E       assert not [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 23)]
 plugins/superheroes/lib/tests/test_ssot_drift.py:1923: AssertionError
 ___________________ test_retired_discovery_route_name_census ___________________
     def test_retired_discovery_route_name_census():
@@ -152,13 +169,27 @@ ___________________ test_retired_discovery_route_name_census ___________________
             "retired route name %r found outside allowed history-only docs — hits: %r"
             % (literal, hits)
         )
-E       AssertionError: retired route name 'needs-discovery' found outside allowed history-only docs — hits: [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 75)]
-E       assert not [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 75)]
+E       AssertionError: retired route name '<RETIRED-ROUTE-NAME>' found outside allowed history-only docs — hits: [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 24)]
+E       assert not [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 24)]
 plugins/superheroes/lib/tests/test_ssot_drift.py:5553: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_ssot_drift.py::test_retired_cursor_grok_4_5_literal_census
 FAILED plugins/superheroes/lib/tests/test_ssot_drift.py::test_retired_discovery_route_name_census
-2 failed in 1.39s
+2 failed in 1.29s
+Error in atexit._run_exitfuncs:
+Traceback (most recent call last):
+    shutil.rmtree(str(path), onerror=onerror)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/shutil.py", line 718, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/shutil.py", line 655, in _rmtree_safe_fd
+    _rmtree_safe_fd(dirfd, fullname, onerror)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/shutil.py", line 655, in _rmtree_safe_fd
+    _rmtree_safe_fd(dirfd, fullname, onerror)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/shutil.py", line 673, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+  File "/Users/zwrose/.superheroes-worktrees/superheroes/issue-1162-50434cad4344faff/source_guard.py", line 261, in audit
+    raise ShippedSourceWrite(
+source_guard.ShippedSourceWrite: os.remove on shipped source 'conftest.py' blocked — see <unknown test>
 ```
 
 **Restore:** inverse edit — `_CENSUS_EXCLUDED_DIRS` restored to `("lib/tests/bite_proofs",)`.
@@ -169,7 +200,21 @@ FAILED plugins/superheroes/lib/tests/test_ssot_drift.py::test_retired_discovery_
 **Green run (exit 0):**
 ```
 ..                                                                       [100%]
-2 passed in 2.13s
+2 passed in 1.04s
+Error in atexit._run_exitfuncs:
+Traceback (most recent call last):
+    shutil.rmtree(str(path), onerror=onerror)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/shutil.py", line 718, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/shutil.py", line 655, in _rmtree_safe_fd
+    _rmtree_safe_fd(dirfd, fullname, onerror)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/shutil.py", line 655, in _rmtree_safe_fd
+    _rmtree_safe_fd(dirfd, fullname, onerror)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/shutil.py", line 673, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+  File "/Users/zwrose/.superheroes-worktrees/superheroes/issue-1162-50434cad4344faff/source_guard.py", line 261, in audit
+    raise ShippedSourceWrite(
+source_guard.ShippedSourceWrite: os.remove on shipped source 'conftest.py' blocked — see <unknown test>
 ```
 
 **The censuses still bite (consumer surface outside `bite_proofs/`).** Each retired literal planted
@@ -191,7 +236,7 @@ _________________ test_retired_cursor_grok_4_5_literal_census __________________
             "retired literal %r outside intentional declaration sites %r — stale hits: %r"
             % (_retired_grok_literal(), sorted(allowed), unexpected)
         )
-E       AssertionError: retired literal 'cursor-grok-4.5' outside intentional declaration sites [('lib/tests/test_ssot_drift.py', 1584), ('lib/tests/test_ssot_drift.py', 1600)] — stale hits: [('rubric/covenant.md', 63)]
+E       AssertionError: retired literal '<RETIRED-JUDGE-ID>' outside intentional declaration sites [('lib/tests/test_ssot_drift.py', 1584), ('lib/tests/test_ssot_drift.py', 1600)] — stale hits: [('rubric/covenant.md', 63)]
 E       assert not [('rubric/covenant.md', 63)]
 plugins/superheroes/lib/tests/test_ssot_drift.py:1923: AssertionError
 ___________________ test_retired_discovery_route_name_census ___________________
@@ -205,7 +250,7 @@ ___________________ test_retired_discovery_route_name_census ___________________
             "retired route name %r found outside allowed history-only docs — hits: %r"
             % (literal, hits)
         )
-E       AssertionError: retired route name 'needs-discovery' found outside allowed history-only docs — hits: [('rubric/covenant.md', 63)]
+E       AssertionError: retired route name '<RETIRED-ROUTE-NAME>' found outside allowed history-only docs — hits: [('rubric/covenant.md', 63)]
 E       assert not [('rubric/covenant.md', 63)]
 plugins/superheroes/lib/tests/test_ssot_drift.py:5553: AssertionError
 =========================== short test summary info ============================
