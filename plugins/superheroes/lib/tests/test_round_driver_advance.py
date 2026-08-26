@@ -1009,6 +1009,51 @@ def test_record_result_sweep_supersede_recovery_is_occurrence_safe(tmp_path, ada
     assert open(spath1, "rb").read() != before1
 
 
+def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path, adapters):
+    """End-to-end: stale seat-missing must not survive sweep-supersede false-success; sanctioned
+    per-slot supersede leaves fold reading CONFIRMED, not PLAUSIBLE."""
+    verifier_seat = "verifier:f.py:0"
+    adapters.rosters[RD.P_VERIFIERS] = [verifier_seat]
+    d = _session(tmp_path)
+    _record_panel_with_verifier_cluster(d)
+    assert _advance(d, tmp_path)["ok"] is True
+    pend = _pending(d)
+    assert pend["phase"] == RD.P_VERIFIERS
+
+    missing_out = RD.cmd_record_missing(d, verifier_seat, pend["attempt"], "forfeit")
+    assert missing_out["ok"] is True
+    spath = RR.store_path(d, pend["round"], pend["phase"], RR.storage_key(verifier_seat),
+                          pend["attempt"])
+    stored_missing, err = RR.read_json(spath)
+    assert err is None and stored_missing["schema"] == RR.SEAT_MISSING_SCHEMA
+
+    verdict_payload = {"verdicts": [{"id": "v0", "verdict": "CONFIRMED",
+                                     "evidence": "reproduced the cited line"}]}
+    _land(d, verifier_seat, payload=verdict_payload)
+
+    sweep_out = RD.cmd_record_result(d, sweep=True, supersede=True,
+                                     expect_sha256=RR.MISSING_CAS_TOKEN)
+    assert sweep_out["ok"] is False
+    assert sweep_out["reason"] == "sweep-supersede-unsupported"
+    assert not (sweep_out.get("ok") is True and sweep_out.get("recorded") == [])
+
+    supersede_out = RD.cmd_record_result(d, seat=verifier_seat, supersede=True,
+                                         expect_sha256=RR.MISSING_CAS_TOKEN)
+    assert supersede_out["ok"] is True and supersede_out["superseded"] is True
+    stored_result, err = RR.read_json(spath)
+    assert err is None
+    assert stored_result["schema"] == RR.SEAT_RESULT_SCHEMA
+    assert stored_result["payload"]["verdicts"][0]["verdict"] == "CONFIRMED"
+
+    # axis: fold applies CONFIRMED from superseded seat-result, not PLAUSIBLE from silent cluster
+    state = _state(d)
+    RD._fold_verifiers(state, state["config"],
+                       {"verdicts": stored_result["payload"]["verdicts"]})
+    assert state["_verified"][0]["verdict"] == "CONFIRMED"
+    verify_passes = state["rounds"]["1"]["verifyPasses"][-1]
+    assert verify_passes["CONFIRMED"] == 1 and verify_passes["PLAUSIBLE"] == 0
+
+
 def test_record_result_sweep_stray_refusal_carries_recorded(tmp_path, adapters):
     """T5 — a mid-sweep refusal reports slots ingested before the refusing result."""
     adapters.rosters[RD.P_PANEL] = ["code-reviewer", "test-reviewer"]

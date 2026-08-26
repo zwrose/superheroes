@@ -5991,9 +5991,11 @@ def _slot_label(seat_key, occurrence):
 def _record_result_recovery_cmd(session_dir, seat_key, occurrence, cas_token):
     """Shell-ready per-slot supersede command — matches round-driver.md invocation spelling."""
     token = cas_token if isinstance(cas_token, str) else ""
-    return ("python3 -B lib/round_driver.py record-result --session-dir %s --seat %s "
+    driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "round_driver.py")
+    return ("python3 -B %s record-result --session-dir %s --seat %s "
             "--occurrence %d --supersede --expect-sha256 %s"
-            % (shlex.quote(session_dir), shlex.quote(seat_key), occurrence, shlex.quote(token)))
+            % (shlex.quote(driver_path), shlex.quote(session_dir), shlex.quote(seat_key),
+               occurrence, shlex.quote(token)))
 
 
 def _store_file_exists(spath):
