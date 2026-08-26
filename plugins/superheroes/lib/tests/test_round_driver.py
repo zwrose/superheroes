@@ -107,8 +107,7 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
     io_out = dict(io or {})
     if vendors is not None:
         io_out.setdefault("seatMap", _verified_clean_seat_map(vendors))
-        io_out.setdefault("canaryResult", _run_loop_io_canary_result(
-            _canary_probes_for(io_out["seatMap"])))
+        io_out.setdefault("canaryResult", _canary_probes_for(io_out["seatMap"]))
 
     return {
         "reviewer": reviewer or default_reviewer,
@@ -4429,13 +4428,6 @@ def _seat_map_vendors(vendors):
     return {"seats": {d: {"vendor": v} for d, v in vendors.items()}}
 
 
-def _run_loop_io_canary_result(probes):
-    """``run_loop``'s scripted io seam forwards ``canaryResult`` only when it is a dict."""
-    if len(probes) == 1:
-        return probes[0]
-    return probes
-
-
 def _canary_probes_for(seat_map):
     """Canary probes the cross-vendor liveness check recognizes for a submitted seat map."""
     seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
@@ -5040,6 +5032,25 @@ def test_canary_mixed_panel_only_codex_probed_cursor_unverified():
     assert len(cu) == 1
     assert "security-reviewer" in cu[0]
     assert not any(d.startswith("canary-failed") for d in receipt["degraded"])
+
+
+def test_io_seam_forwards_multi_probe_canary_result_list():
+    """axis: ``_run_seam`` forwards ``canaryResult`` when it is a list (two cross-vendor probes)."""
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    seat_map["seats"]["security-reviewer"] = {"vendor": "cursor"}
+    probes = _canary_probes_for(seat_map)
+    assert probes == [
+        {"engine": "codex", "engaged": True},
+        {"engine": "cursor", "engaged": True},
+    ]
+    seams = _seams(io={"seatMap": seat_map, "canaryResult": probes})
+    receipt = RD.run_loop(seams, _cfg(leg="panel", vendors=["codex", "cursor"]))
+    r1 = receipt["rounds"][0]
+    assert "canaryUnverified" not in r1
+    assert "canaryFailed" not in r1
+    assert set(r1["canaryVerified"].keys()) == {"codex", "cursor"}
+    assert receipt["verdict"] == "converged"
 
 
 def test_canary_list_two_engaged_probes_full_panel():

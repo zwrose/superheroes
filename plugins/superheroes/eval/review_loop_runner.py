@@ -210,23 +210,18 @@ def _eval_clean_seat_map():
 
 
 def _canary_probes_for(seat_map):
-    """Delegate to the test harness helper (single definition in test_round_driver)."""
-    if not hasattr(_canary_probes_for, "_impl"):
-        import importlib.util
-        path = LIB / "tests" / "test_round_driver.py"
-        spec = importlib.util.spec_from_file_location("_rd_test_harness", path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        _canary_probes_for._impl = mod._canary_probes_for
-        _canary_probes_for._io = mod._run_loop_io_canary_result
-    return _canary_probes_for._impl(seat_map)
-
-
-def _run_loop_io_canary_result(probes):
-    if not hasattr(_run_loop_io_canary_result, "_impl"):
-        _canary_probes_for({})  # ensure delegate cache is warm
-        _run_loop_io_canary_result._impl = _canary_probes_for._io
-    return _run_loop_io_canary_result._impl(probes)
+    """Canary probes the cross-vendor liveness check recognizes for a submitted seat map."""
+    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
+    if not isinstance(seats, dict):
+        return []
+    vendors = set()
+    for cell in seats.values():
+        if not isinstance(cell, dict):
+            continue
+        vendor = cell.get("vendor")
+        if isinstance(vendor, str) and vendor and vendor != "claude":
+            vendors.add(vendor)
+    return [{"engine": v, "engaged": True} for v in sorted(vendors)]
 
 
 def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=False):
@@ -574,7 +569,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             "io": {
                 "stall_menu": lambda payload: "hold",
                 "seatMap": eval_seat_map,
-                "canaryResult": _run_loop_io_canary_result(_canary_probes_for(eval_seat_map)),
+                "canaryResult": _canary_probes_for(eval_seat_map),
             },
         }
         config = {
