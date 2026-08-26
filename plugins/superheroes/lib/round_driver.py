@@ -5504,6 +5504,35 @@ ROUND_MATERIALIZER_REGISTRY = {
 }
 
 
+def _prior_comments_canonical_path(session_dir):
+    return os.path.join(session_dir, "prior-comments.json")
+
+
+def _materialize_prior_comments(session_dir, source_path, comments):
+    """Write validated prior comments to the canonical session path.
+
+    The CLI ``--prior-comments`` chokepoint calls this after validation so
+    ``config["priorComments"]`` and ``_resolve_prior_comments_path`` read one file.
+    Explicit ``--prior-comments`` wins over any pre-existing canonical file.
+    When ``source_path`` already is the canonical file, skip rewrite to avoid
+    truncating a file we are reading from.
+
+    Returns True when the canonical file is present with ``comments``; False on
+    write failure (caller must not set ``config["priorComments"]`` when False).
+    """
+    canonical = _prior_comments_canonical_path(session_dir)
+    try:
+        if os.path.samefile(source_path, canonical):
+            return True
+    except OSError:
+        pass
+    try:
+        round_commit.atomic_write_json(canonical, comments)
+        return True
+    except OSError:
+        return False
+
+
 def _prior_comments_unavailable_marker():
     return "(prior-comments-unavailable — orchestrator did not supply prior-comments.json)"
 
@@ -5527,7 +5556,7 @@ def _resolve_prior_comments_path(session_dir, state):
     absent) is a genuine driver-state bug, not a render-only context, and still raises —
     this is a narrow, documented tolerance, never a bare try/except.
     """
-    path = os.path.join(session_dir, "prior-comments.json")
+    path = _prior_comments_canonical_path(session_dir)
     if os.path.isfile(path):
         return path
     cfg = state.get("config") if isinstance(state, dict) else {}
@@ -7982,11 +8011,16 @@ def _dispatch(args):
             # author-justification post-filter is actually reachable (#507 v7). A missing / unreadable
             # / non-list file leaves priorComments unset (the filter simply does not fire) — never a
             # crash and never a silent drop.
+            # One source of truth (#1107 WO-c6A): validated comments are materialized to
+            # $SESSION_DIR/prior-comments.json before priorComments is set, so the filter and
+            # _resolve_prior_comments_path cannot disagree. Explicit --prior-comments wins over
+            # any pre-existing canonical file.
             try:
                 with open(args.prior_comments, encoding="utf-8") as fh:
                     loaded = json.load(fh)
                 if isinstance(loaded, list):
-                    overrides["priorComments"] = loaded
+                    if _materialize_prior_comments(args.session_dir, args.prior_comments, loaded):
+                        overrides["priorComments"] = loaded
             except (OSError, ValueError):
                 pass
         out = cmd_next(args.session_dir, overrides or None)
