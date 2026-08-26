@@ -8007,6 +8007,14 @@ def _dispatch(args):
                                           value=args.diff_path)
         # A v1 state file must surface refused-v1 from cmd_next — do not mask it with a base refusal.
         if args.prior_comments:
+            # Same fresh-state-only discipline as `--vendors`: priorComments is read ONCE at
+            # new_state, and materializing to the canonical file on existing state would disagree
+            # with persisted config (#1107 WO-c6C).
+            st_ok, st = load_state(args.session_dir)
+            if not (st_ok and st is None):
+                sys.stdout.write(json.dumps({"ok": False, "reason": "prior-comments-not-fresh-state",
+                                             "value": args.prior_comments}) + "\n")
+                return 1
             # Load + validate the PR-mode prior comments into `priorComments` so the
             # author-justification post-filter is actually reachable (#507 v7). A missing / unreadable
             # / non-list file leaves priorComments unset (the filter simply does not fire) — never a
