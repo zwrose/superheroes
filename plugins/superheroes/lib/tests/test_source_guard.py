@@ -1612,7 +1612,7 @@ def test_bite_dir_fd_directory_identity(tmp_path):
     _bite_red_green(
         "dir_fd_directory_identity",
         (
-            "            if (parent.st_dev, parent.st_ino) == anchor_key:",
+            "            if parent_key == anchor_key:",
             "            if True:",
         ),
         lambda m: _no_false_positive_on_tmp_namesake(m, victim),
@@ -1672,4 +1672,131 @@ def test_bite_write_target_pairing(tmp_path):
         ),
         lambda m: pairs_correctly(m),
         lambda m: pairs_correctly(m),
+    )
+
+
+# --- Group 5d: review-round hardening (#1167 code-001 / code-002) ------------
+
+
+def _git_repo_with_tracked_symlink(root):
+    """A git repo tracking ``alias.py`` as a symlink to ``shared/target.py``."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "shared").mkdir()
+    (root / "shared" / "target.py").write_text("VALUE = 1\n")
+    os.symlink(os.path.join("shared", "target.py"), str(root / "alias.py"))
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-q", "-m", "init"],
+        cwd=root,
+        check=True,
+    )
+    return root
+
+
+def test_watched_paths_keeps_tracked_symlink_and_its_target(tmp_path):
+    """A realpath-only watched set would name only the target, losing the link."""
+    root = _git_repo_with_tracked_symlink(tmp_path / "symrepo")
+    watched = sg.watched_paths(str(root))
+    assert os.path.join(str(root), "alias.py") in watched
+    assert os.path.realpath(str(root / "alias.py")) in watched
+
+
+def test_dir_fd_delete_of_tracked_symlink_still_fires(tmp_path):
+    """code-001: an fd-relative delete of a tracked symlink must not fall open."""
+    root = _git_repo_with_tracked_symlink(tmp_path / "symrepo2")
+    watched = sg.watched_paths(str(root))
+    assert _fires_on_dir_fd_remove(sg, watched, "alias.py", root) is True
+
+
+def test_audit_hook_survives_hostile_monkeypatched_os_stat(tmp_path, monkeypatch):
+    """code-002: a monkeypatched os.stat must neither fall open nor raise out."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shipped = repo / "conftest.py"
+    shipped.write_text("x\n")
+    watched = {os.path.realpath(str(shipped))}
+
+    class _Useless:
+        pass
+
+    def hostile(name, *args, **kwargs):
+        # No dir_fd support, and a result carrying no st_dev -- the two shapes that
+        # respectively fell open and raised out of the hook before the fix.
+        if kwargs.get("dir_fd") is not None:
+            raise TypeError("stat() got an unexpected keyword argument 'dir_fd'")
+        return _Useless()
+
+    monkeypatch.setattr(os, "stat", hostile)
+    # Still bites: the hook holds its own reference to the real primitive.
+    assert _fires_on_dir_fd_remove(sg, watched, "conftest.py", repo) is True
+
+
+def test_relative_match_never_raises_out_of_the_hook(tmp_path, monkeypatch):
+    """Whatever _REAL_STAT does, the audit hook must not propagate an exception."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "conftest.py").write_text("x\n")
+    watched = {os.path.realpath(str(repo / "conftest.py"))}
+
+    class _NoAttrs:
+        pass
+
+    monkeypatch.setattr(sg, "_REAL_STAT", lambda *a, **k: _NoAttrs())
+    state = sg.GuardState(lambda hook: None)
+    state.watched = frozenset(watched)
+    dir_fd = os.open(str(repo), os.O_RDONLY)
+    try:
+        # Declines the match rather than raising AttributeError into the caller.
+        state.audit("os.remove", ("conftest.py", dir_fd))
+    finally:
+        os.close(dir_fd)
+
+
+def test_bite_tracked_symlink_lexical_entry(tmp_path):
+    """Axis: the watched set keeps the TRACKED entry, not only its resolved target."""
+    root = _git_repo_with_tracked_symlink(tmp_path / "symrepo3")
+
+    def symlink_delete_bites(mod):
+        return _fires_on_dir_fd_remove(mod, mod.watched_paths(str(root)), "alias.py", root)
+
+    _bite_red_green(
+        "tracked_symlink_lexical_entry",
+        (
+            "        paths.append(lexical)\n        paths.append(os.path.realpath(lexical))",
+            "        paths.append(os.path.realpath(lexical))",
+        ),
+        lambda m: symlink_delete_bites(m),
+        lambda m: symlink_delete_bites(m),
+    )
+
+
+def test_bite_audit_hook_uses_captured_stat(tmp_path, monkeypatch):
+    """Axis: anchor resolution goes through the captured primitive, not global os.stat."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "conftest.py").write_text("x\n")
+    watched = {os.path.realpath(str(repo / "conftest.py"))}
+    real_stat = os.stat
+
+    def hostile(name, *args, **kwargs):
+        if kwargs.get("dir_fd") is not None:
+            raise TypeError("stat() got an unexpected keyword argument 'dir_fd'")
+        return real_stat(name, *args, **kwargs)
+
+    def bites_under_hostile_global(mod):
+        monkeypatch.setattr(os, "stat", hostile)
+        try:
+            return _fires_on_dir_fd_remove(mod, watched, "conftest.py", repo)
+        finally:
+            monkeypatch.undo()
+
+    _bite_red_green(
+        "audit_hook_captured_stat",
+        (
+            "            anchor = _REAL_STAT(head or os.curdir, dir_fd=dir_fd)",
+            "            anchor = os.stat(head or os.curdir, dir_fd=dir_fd)",
+        ),
+        lambda m: bites_under_hostile_global(m),
+        lambda m: bites_under_hostile_global(m),
     )

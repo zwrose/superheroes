@@ -100,7 +100,15 @@ def watched_paths(repo_root):
         rel_str = rel.decode("utf-8", "replace")
         if "/tests/" in rel_str or rel_str.startswith("tests/"):
             continue
-        paths.append(os.path.realpath(os.path.join(repo_root, rel_str)))
+        # Track BOTH the lexical path git reports and its realpath. They differ only
+        # for a tracked symlink (or a path under one), where the realpath names the
+        # TARGET while the tracked entry is the link itself. The descriptor-anchored
+        # matcher compares lexical parents, so a realpath-only set would let an
+        # fd-relative delete of the tracked symlink fall open. Where they coincide --
+        # every entry in a repository with no tracked symlinks -- the frozenset dedupes.
+        lexical = os.path.join(repo_root, rel_str)
+        paths.append(lexical)
+        paths.append(os.path.realpath(lexical))
     if not paths:
         raise RuntimeError("source_guard: watched set is empty after excluding tests/")
     return frozenset(paths)
@@ -174,6 +182,13 @@ def _is_write_open(mode, flags):
     if isinstance(mode, str):
         return any(ch in mode for ch in "wax+")
     return False
+
+
+# Captured at import so the audit hook never resolves anchors through a mutable
+# global. This repository replaces os.stat during tests (test_cache_markers.py):
+# a fake lacking dir_fd support would make the guard fall open, and one lacking
+# st_dev would raise out of the audit hook and break an unrelated operation.
+_REAL_STAT = os.stat
 
 
 def _is_real_dir_fd(dir_fd):
@@ -289,19 +304,22 @@ class GuardState:
         # bite-axis: directory identity — a basename match counts only when the
         # anchored directory IS the watched file's parent, not merely same-named.
         head, tail = os.path.split(path)
+        # Every stat result is unpacked INSIDE its try: an attribute read left outside
+        # would raise out of the audit hook and break the operation being audited.
         try:
-            anchor = os.stat(head or os.curdir, dir_fd=dir_fd)
-        except (OSError, ValueError, TypeError, NotImplementedError):
+            anchor = _REAL_STAT(head or os.curdir, dir_fd=dir_fd)
+            anchor_key = (anchor.st_dev, anchor.st_ino)
+        except (OSError, ValueError, TypeError, NotImplementedError, AttributeError):
             return False
-        anchor_key = (anchor.st_dev, anchor.st_ino)
         for watched in self.watched:
             if os.path.basename(watched) != tail:
                 continue
             try:
-                parent = os.stat(os.path.dirname(watched))
-            except OSError:
+                parent = _REAL_STAT(os.path.dirname(watched))
+                parent_key = (parent.st_dev, parent.st_ino)
+            except (OSError, ValueError, TypeError, AttributeError):
                 continue
-            if (parent.st_dev, parent.st_ino) == anchor_key:
+            if parent_key == anchor_key:
                 return True
         return False
 
