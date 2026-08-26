@@ -3787,11 +3787,14 @@ def _on_disk_receipt_class(session_dir):
     if receipt is None:
         return "untrusted"
     kind = receipt_kind(receipt)
+    if kind is None:
+        return "untrusted"
+    ok, _reason = validate_receipt(receipt)
+    if not ok:
+        return "untrusted"
     if kind == RECEIPT_INTERIM_SCHEMA:
         return "interim"
-    if kind is not None:
-        return "terminal"
-    return "untrusted"
+    return "terminal"
 
 
 def _receipt_write_refusal(session_dir, *, terminal_reason, untrusted_reason):
@@ -5335,6 +5338,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "PR_CHECKOUT_CONTEXT_LINE",
     "PR_CHECKOUT_INSTRUCTION_BLOCK",
     "PRIOR_COMMENTS_CONTEXT_LINE",
+    "PRIOR_COMMENTS_INSTRUCTION_BLOCK",
     "FOCUS_CONTEXT_LINE",
     "MODE",
     "MODE_EVIDENCE",
@@ -5456,7 +5460,7 @@ def _ensure_round_diff(session_dir, rnd, state):
 def _ensure_round_head_diff(session_dir, rnd, state):
     """Write `round-<N>/head.diff` from state when absent or untrusted."""
     head_text = state.get("headDiff")
-    if not isinstance(head_text, str) or not head_text:
+    if not isinstance(head_text, str):
         raise ValueError("order-render-refused:head-diff-unavailable")
     rdir = round_records.round_dir(session_dir, rnd)
     head_path = os.path.join(rdir, "head.diff")
@@ -5485,6 +5489,17 @@ ROUND_MATERIALIZER_REGISTRY = {
 
 def _prior_comments_unavailable_marker():
     return "(prior-comments-unavailable — orchestrator did not supply prior-comments.json)"
+
+
+def _prior_comments_instruction_block(prior_path):
+    """Honest author-justification intro — never cite a path that is not a real file."""
+    prior = (prior_path or "").strip()
+    if prior and not prior.startswith("(") and os.path.isfile(prior):
+        return ("%s contains prior review comments and their\nthreads." % prior)
+    if prior.startswith("("):
+        return ("No prior-comments.json was supplied for this PR — there are no prior review "
+                "comments or author justifications to consult.")
+    return ""
 
 
 def _resolve_prior_comments_path(session_dir, state):
@@ -5566,6 +5581,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             raise ValueError("order-render-refused:no-dimension-label:%s" % seat_key)
         pr_checkout = _session_pr_checkout_path(session_dir)
         mode_resolved = session_mode.resolve(meta, cfg)
+        prior_comments_path = _resolve_prior_comments_path(session_dir, state)
         ph = {
             "MODE": mode_resolved["mode"],
             "MODE_EVIDENCE": session_mode.evidence_line(mode_resolved),
@@ -5576,7 +5592,9 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
             "PR_CHECKOUT_PATH": pr_checkout,
-            "PRIOR_COMMENTS_PATH": _resolve_prior_comments_path(session_dir, state),
+            "PRIOR_COMMENTS_PATH": prior_comments_path,
+            "PRIOR_COMMENTS_INSTRUCTION_BLOCK": _prior_comments_instruction_block(
+                prior_comments_path),
             "FOCUS_NOTES": _normalize_focus_notes(meta.get("focusNotes") or cfg.get("focusNotes")),
             "DIMENSION": dim_label,
             "CHANNEL": channel,

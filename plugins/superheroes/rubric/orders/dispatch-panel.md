@@ -46,8 +46,9 @@ positives.
   error types, file paths) against actual source.
 
 ## Author-justification rule (PR mode only)
-{{PRIOR_COMMENTS_PATH}} contains prior review comments and their
-threads. If a previous review flagged a finding and the author replied
+{{PRIOR_COMMENTS_INSTRUCTION_BLOCK}}
+<!-- render-input:{{PRIOR_COMMENTS_PATH}} -->
+If a previous review flagged a finding and the author replied
 with substantive explanatory text (not just "ok" or an emoji) explaining
 why it's intentional, **raise the finding AND note the prior justification**
 in the body — do NOT silently omit it. The **post-verification**

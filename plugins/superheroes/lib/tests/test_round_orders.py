@@ -50,6 +50,7 @@ def _base_context(**over):
 
 
 def _panel_placeholders(channel="file", pr_checkout=False):
+    prior_path = os.path.join(_SESSION, "prior-comments.json")
     ph = {
         "MODE": "branch",
         "MODE_EVIDENCE": "Review session mode branch (from session metadata).",
@@ -60,7 +61,9 @@ def _panel_placeholders(channel="file", pr_checkout=False):
         "CORE_PATH": _CORE_UNRESOLVED,
         "LAYER_PATH": _LAYER_UNRESOLVED,
         "PR_CHECKOUT_PATH": os.path.join(_SESSION, "repo") if pr_checkout else "",
-        "PRIOR_COMMENTS_PATH": os.path.join(_SESSION, "prior-comments.json"),
+        "PRIOR_COMMENTS_PATH": prior_path,
+        "PRIOR_COMMENTS_INSTRUCTION_BLOCK": (
+            "%s contains prior review comments and their\nthreads." % prior_path),
         "FOCUS_NOTES": "touch auth paths carefully",
         "DIMENSION": "Code",
         "CHANNEL": channel,

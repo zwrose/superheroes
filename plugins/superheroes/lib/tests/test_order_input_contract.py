@@ -121,6 +121,36 @@ def test_ensure_round_head_diff_writes_when_cited(tmp_path):
         assert fh.read() == head
 
 
+def test_ensure_round_head_diff_materializes_empty_post_fix_diff(tmp_path):
+    # axis: an authoritative empty inline headDiff is a real state — materialize, never wedge
+    session_dir = str(tmp_path / "empty-head-session")
+    os.makedirs(session_dir)
+    state = {"headDiff": ""}
+    path = RD._ensure_round_head_diff(session_dir, 2, state)
+    assert path == os.path.join(session_dir, "round-2", "head.diff")
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == ""
+
+
+def test_empty_head_diff_audits_placeholders_do_not_refuse(tmp_path):
+    # axis: empty post-fix head diff must not refuse audits order render before save_state
+    session_dir = str(tmp_path / "empty-head-audits")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": str(tmp_path)},
+        "reviewedDiff": "diff --git a/f b/f\n",
+        "headDiff": "",
+    }
+    paths = _minimal_paths(session_dir)
+    payload = {"targets": [{"id": "finding::auth.py::12"}]}
+    ph = RD._order_placeholders(
+        RP.P_AUDITS, "finding::auth.py::12", 0, state, state["config"],
+        payload, session_dir, 2, paths, RD.CHANNEL_FILE,
+    )
+    assert ph["HEAD_DIFF_PATH"] == os.path.join(session_dir, "round-2", "head.diff")
+    assert os.path.isfile(ph["HEAD_DIFF_PATH"])
+
+
 def test_head_diff_unavailable_refuses_emit(tmp_path):
     # axis: missing headDiff refuses before citing HEAD_DIFF_PATH
     session_dir = str(tmp_path / "head-refuse")
@@ -171,6 +201,9 @@ def test_prior_comments_pr_mode_absent_disclosed_not_fabricated(tmp_path):
     assert state["rounds"]["1"]["priorCommentsUnavailable"] is True
     ph = {"PRIOR_COMMENTS_PATH": path, "RUBRIC_PATH": RD._shipped_rubric_path()}
     assert RD._readable_file_input_refusal(ph) is None
+    block = RD._prior_comments_instruction_block(path)
+    assert "No prior-comments.json was supplied" in block
+    assert path not in block
 
 
 def test_prior_comments_branch_mode_absent_is_empty_not_refusal(tmp_path):

@@ -54,6 +54,49 @@ def test_receipt_key_forms_cover_every_declared_key():
         assert required | optional | forbidden == declared
 
 
+def _representative_receipt_state(session_dir="/tmp"):
+    state = RD.new_state(_cfg(repoRoot=session_dir))
+    state["terminal"] = "converged"
+    state["certification"] = {"shape": "audited-chain"}
+    state["rounds"] = {
+        "1": {
+            "roundKind": "panel",
+            "seatStatus": {},
+            "blockingCount": 0,
+            "verifyResult": "pass",
+            "verifyPasses": [{"cluster": "c0"}],
+            "lensCoverage": {"ran": 5, "expected": 5, "floor": 5},
+        },
+    }
+    state["findings"] = [{"id": "f1", "file": "a.py", "line": 1, "title": "t",
+                          "severity": "Nit", "verdict": "open"}]
+    state["decisions"] = [{"kind": "test"}]
+    state["seatMap"] = {"code-reviewer": "claude"}
+    state["_policyApplied"] = [{"policy": "stall-accept-risk"}]
+    cfg = state["config"]
+    cfg["baseRef"] = "abc123"
+    cfg["baseGuard"] = RD.BASE_GUARD_CHECKED
+    return state
+
+
+def test_receipt_key_forms_match_builder_emission():
+    """BP-A2: every builder-emitted top-level key is declared, and every certified/interim key is emitted."""
+    state = _representative_receipt_state()
+    declared = set(RD.RECEIPT_KEY_FORMS)
+    certified = set(RD.build_receipt(state, "/tmp").keys())
+    interim = set(RD.build_interim_receipt(state, "/tmp", "park").keys())
+    emitted = certified | interim
+    assert certified <= declared, "certified keys not declared: %s" % sorted(certified - declared)
+    assert interim <= declared, "interim keys not declared: %s" % sorted(interim - declared)
+    certified_interim_declared = {
+        key for key, forms in RD.RECEIPT_KEY_FORMS.items()
+        if RD.RECEIPT_FORM_CERTIFIED in forms or RD.RECEIPT_FORM_INTERIM in forms
+    }
+    assert emitted == certified_interim_declared, (
+        "certified/interim declared/ emitted mismatch — only in declared: %s; only in emitted: %s"
+        % (sorted(certified_interim_declared - emitted), sorted(emitted - certified_interim_declared)))
+
+
 def test_certified_receipt_with_schema_validates():
     """BP-R1-A pin: certified receipts carrying schema (legacy shape) must pass validate_receipt."""
     receipt = dict(_certified_spine())
