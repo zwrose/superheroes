@@ -296,6 +296,18 @@ Paths (round `N`, phase `P`, attempt `K`, storage key `skey`):
 Both shapes present → `landing-ambiguous`. The order's landing block names the paths; seats copy
 stub header fields verbatim and never recompute hashes.
 
+**Gap-sweep re-emission trap.** A live build lost a debugging cycle to this exact sequence: (1)
+`dispatch-gap-sweep` produces a new finding; (2) the driver **re-opens an already-folded phase
+with a different roster**, rewriting `orders/<phase>/manifest.a0.json` **in place at the same
+`attempt: 0`**; (3) the **prior wave's landing files are still on disk** from the first fold; (4)
+`record-result --sweep` (`round_records.sweep_landing`) walks the **landing directory**, not the
+manifest, so it finds those stale files, finds they map to no slot in the *current* roster, and
+hard-refuses `unknown-seat` for each one; (5) `advance` then refuses too, and the phase is left
+**pending** — a stuck session with no obvious cause, because the failure reads as a driver bug
+when it is really a directory-vs-manifest mismatch. **Recovery, proven in that build:** move the
+prior wave's landing files aside — never delete — keeping only the file(s) that match the current
+manifest, then re-run the sweep.
+
 **`seat-result/1` envelope fields** (engine-seat full envelope — the orchestrator writes every field
 below when landing a `dispatch-review` stdout result):
 
