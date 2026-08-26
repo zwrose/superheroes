@@ -25,6 +25,7 @@ if _LIB_DIR not in sys.path:
 
 import md_fence  # noqa: E402
 import review_base_guard  # noqa: E402
+import session_mode  # noqa: E402
 import stub_markers  # noqa: E402
 from guardian_tools import path_is_confidently_under  # noqa: E402
 
@@ -245,7 +246,8 @@ def _read_meta(session_dir):
             return _refuse("meta-mode-unknown", detail)
         return _refuse("meta-unreadable", detail)
     mode = data.get("mode")
-    if mode not in review_base_guard.SESSION_MODES:
+    mode_resolved = session_mode.resolve(data, None)
+    if not mode_resolved["resolved"]:
         return _refuse("meta-mode-unknown", "mode absent or unknown: %r" % mode)
     return {"ok": True, "mode": mode}
 
@@ -911,7 +913,7 @@ def stage(session_dir):
     meta = _read_meta(session_dir)
     if not meta.get("ok"):
         return meta
-    if meta["mode"] == "branch":
+    if meta["mode"] == session_mode.MODE_BRANCH:
         return _branch_mode_result()
     pr_path = os.path.join(session_dir, "pr.json")
     try:
@@ -1109,7 +1111,7 @@ def _trust_boundary(session_dir, *, vendor_path, result_path=None):
     meta = _read_meta(session_dir)
     if not meta.get("ok"):
         return meta
-    if meta["mode"] == "branch":
+    if meta["mode"] == session_mode.MODE_BRANCH:
         return _branch_mode_result()
     if vendor_path not in VENDOR_PATHS:
         return _refuse("stage-unreachable-for-vendor", repr(vendor_path))

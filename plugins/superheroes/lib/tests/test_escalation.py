@@ -109,6 +109,7 @@ def test_safety_machinery_set_members_are_pinned():
         "engine_adapter.py",
         "hooks.json",
         "session_start.py",
+        "session_mode.py", "version_skew.py",
         "escalation-base.md", "review-base.md",
         # shared review-and-fix loop (#104): deciders, durable record, and the orchestration shell
         "panel_tally.py", "loop_synthesis.py", "verification.py", "round_phases.py",
