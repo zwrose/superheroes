@@ -472,6 +472,7 @@ def test_r8_element_sentence_has_exactly_one_plugin_home():
 
 
 def test_r8_census_skips_bite_proof_records_but_still_bites_elsewhere(tmp_path):
+    # axis: the R8 walk reads no lib/tests/bite_proofs/ path, and still reports ordinary surfaces
     """Receipts are outside the census; an ordinary plugin surface still reports.
 
     Both halves in one fixture tree: the same sentence is planted twice — once in a
@@ -494,6 +495,7 @@ def test_r8_census_skips_bite_proof_records_but_still_bites_elsewhere(tmp_path):
 
 
 def test_r8_census_excluded_predicate_is_scoped_to_the_records_directory():
+    # axis: the exclusion predicate covers the records directory only — not adjacent names
     """The chokepoint predicate excludes the records directory and nothing adjacent."""
     assert _census_excluded(os.path.join("lib", "tests", "bite_proofs", "wo_a_1151.md"))
     assert _census_excluded(os.path.join("lib", "tests", "bite_proofs", "nested", "x.md"))

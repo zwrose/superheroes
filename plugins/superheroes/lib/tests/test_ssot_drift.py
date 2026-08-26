@@ -1849,6 +1849,7 @@ def test_census_excludes_pycache_but_catches_source_literal(tmp_path):
 
 
 def test_grok_census_skips_bite_proof_records_but_still_bites_elsewhere(tmp_path):
+    # axis: the retired-grok census reads no lib/tests/bite_proofs/ path, and still reports source
     """Receipts are outside the census; an ordinary plugin source file still reports.
 
     Both halves in one fixture tree: the retired literal is planted twice — once in a
@@ -1880,6 +1881,7 @@ def test_grok_census_skips_bite_proof_records_but_still_bites_elsewhere(tmp_path
 
 
 def test_plugin_source_census_excluded_predicate_is_scoped_to_the_records_directory(tmp_path):
+    # axis: the shared exclusion predicate covers the records directory only — not adjacent names
     """The shared chokepoint predicate excludes the records directory and nothing adjacent."""
     root = str(tmp_path)
     assert _census_excluded(root, os.path.join(root, "lib", "tests", "bite_proofs"))
@@ -1893,6 +1895,7 @@ def test_plugin_source_census_excluded_predicate_is_scoped_to_the_records_direct
 
 
 def test_both_plugin_source_censuses_read_no_bite_proof_record_on_the_real_tree():
+    # axis: on the real plugin tree, neither census path set includes a bite-proof record
     """Real-tree pin: neither census's path set reaches lib/tests/bite_proofs/ — and both are non-empty."""
     records_dir = os.path.normpath(os.path.join(PLUGIN, "lib", "tests", "bite_proofs"))
     assert os.path.isdir(records_dir), "the records directory must exist for this pin to mean anything"
@@ -5519,6 +5522,7 @@ def test_census_excludes_pycache_but_catches_retired_route_literal(tmp_path):
 
 
 def test_routing_census_skips_bite_proof_records_but_still_bites_elsewhere(tmp_path):
+    # axis: the routing census reads no lib/tests/bite_proofs/ path, and still reports source
     """Receipts are outside the census; an ordinary plugin source file still reports."""
     literal = _retired_discovery_route_literal()
     root = tmp_path / "plugin"
