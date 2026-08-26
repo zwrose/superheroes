@@ -635,9 +635,11 @@ is the home for the driver-or-park valve.
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
   `degraded` | `not-checked`, optional `note`/`reason`, `pluginVersionSkew` — tri-state skew
-  disclosure: `checked-clean`, `checked-degraded`, `not-checked`, or `absent` when the seat map
-  carries no usable `pluginVersionSkew` receipt (distinct from `seatMap.pluginVersionSkew`, the
-  compose receipt object with `status`, `detail`, and `inspectedRoot`), `shapeDrivers` — sorted
+  disclosure: `checked-clean`, `checked-degraded`, `not-checked`, `absent` when the seat map
+  carries no `pluginVersionSkew` receipt (older map or missing field — distinct from
+  `seatMap.pluginVersionSkew`, the compose receipt object with `status`, `detail`, and
+  `inspectedRoot`), or `unknown` when a receipt is present but its `status` is not one this
+  build recognizes (degrading — not `absent`), `shapeDrivers` — sorted
   channel names that fired for the certification shape (`independence`, `base`, `same-family`,
   `plugin-version-skew`, `seat-map-violation`, `unproven-liveness`, `seat-pin`))
 - `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapViolations`, `vacuousSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `orderVendorProvenanceGaps`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`

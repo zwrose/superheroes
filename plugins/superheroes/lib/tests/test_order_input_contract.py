@@ -184,6 +184,8 @@ def test_fix_batch_unavailable_refuses_materialize(tmp_path):
     # axis: absent/non-list fix batch refuses before writing fix-batch.json
     session_dir = str(tmp_path / "batch-refuse")
     os.makedirs(session_dir)
+    with pytest.raises(ValueError, match="order-render-refused:fix-batch-unavailable"):
+        RD._ensure_fix_batch_file(session_dir, 2, {})
     state = {"_fixBatch": None, "fixBatch": "not-a-list"}
     with pytest.raises(ValueError, match="order-render-refused:fix-batch-unavailable"):
         RD._ensure_fix_batch_file(session_dir, 2, state)

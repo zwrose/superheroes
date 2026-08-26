@@ -5482,19 +5482,15 @@ def _ensure_round_head_diff(session_dir, rnd, state):
 def _ensure_fix_batch_file(session_dir, rnd, state):
     """Materialize fix-batch.json from state for fixer orders.
 
-    Render-only contract: a state carrying neither ``_fixBatch`` nor ``fixBatch`` is a
-    read/render-layer caller and materializes ``[]``. A state carrying a batch key whose
-    value is present but not a list is a genuine driver-state bug and refuses.
+    Sibling parity with ``_ensure_round_diff`` and ``_ensure_round_head_diff``: unknown input
+    (absent, ``None``, or wrong type) refuses before any path computation or write. A known
+    batch — including a known-empty list — still materializes.
     """
-    has_batch_key = "_fixBatch" in state or "fixBatch" in state
     batch = state.get("_fixBatch")
     if not isinstance(batch, list):
         batch = state.get("fixBatch")
     if not isinstance(batch, list):
-        if not has_batch_key:
-            batch = []
-        else:
-            raise ValueError("order-render-refused:fix-batch-unavailable")
+        raise ValueError("order-render-refused:fix-batch-unavailable")
     rdir = round_records.round_dir(session_dir, rnd)
     path = os.path.join(rdir, "fix-batch.json")
     return _ensure_bytes_at_path(session_dir, path, round_records.canonical(batch).encode("utf-8"))

@@ -739,6 +739,7 @@ def test_fixer_order_shell_paths_are_quoted_for_metacharacters(tmp_path):
     state = {
         "config": {"repoRoot": repo, "fixerVendor": "claude"},
         "reviewedDiff": "diff --git a/f b/f\n",
+        "fixBatch": [],  # fixer-order render path requires a known batch
     }
     paths = {
         "storage_key": "fixer.a0",
@@ -1158,6 +1159,7 @@ def test_fixer_escalation_wrapper_path_quoted_through_renderer(tmp_path, monkeyp
     state = {
         "config": {"repoRoot": repo, "fixerVendor": "claude"},
         "reviewedDiff": "diff --git a/f b/f\n",
+        "fixBatch": [],  # fixer-order render path requires a known batch
     }
     paths = {
         "storage_key": "fixer.a0",
@@ -1275,6 +1277,7 @@ def test_engine_fixer_order_landing_block_uses_fixes_stdout_contract(tmp_path, m
     state = {
         "config": {"repoRoot": repo, "fixerVendor": "codex"},
         "reviewedDiff": "diff --git a/f b/f\n",
+        "fixBatch": [],  # fixer-order render path requires a known batch
     }
     paths = {
         "storage_key": "fixer.a0",
@@ -1364,6 +1367,7 @@ def test_fixer_guard_command_uses_stdin_not_shell_path_interpolation(tmp_path):
     state = {
         "config": {"repoRoot": repo, "fixerVendor": "claude"},
         "reviewedDiff": "diff --git a/f b/f\n",
+        "fixBatch": [],  # fixer-order render path requires a known batch
     }
     paths = {
         "storage_key": "fixer.a0",

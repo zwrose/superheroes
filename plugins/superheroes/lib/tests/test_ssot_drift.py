@@ -247,6 +247,50 @@ def _plugin_version_skew_statuses_from_home():
     return set(version_skew.STATUSES)
 
 
+def _plugin_version_skew_certification_statuses_from_home():
+    """Values ``_plugin_version_skew_status`` can project into certification disclosure."""
+    import inspect
+    import re
+
+    import round_driver
+    import version_skew
+
+    src = inspect.getsource(round_driver._plugin_version_skew_status)
+    literals = set(re.findall(r'return "([^"]+)"', src))
+    assert literals, (
+        "_plugin_version_skew_status: no string-literal return values discovered"
+    )
+    if "return status" in src and "version_skew.STATUSES" in src:
+        literals |= set(version_skew.STATUSES)
+    return literals
+
+
+def _certification_plugin_version_skew_disclosure_block(doc):
+    m = re.search(
+        r"`pluginVersionSkew`\s*—\s*tri-state skew\s*disclosure:\s*(.*?),\s*`shapeDrivers`",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "round-driver.md: certification pluginVersionSkew disclosure block not found "
+        "(moved or reworded?)"
+    )
+    return m.group(1)
+
+
+def _certification_plugin_version_skew_enumeration_tokens(doc):
+    block = _certification_plugin_version_skew_disclosure_block(doc)
+    candidates = set(re.findall(r"`([^`]+)`", block))
+    structural = {
+        "pluginVersionSkew",
+        "seatMap.pluginVersionSkew",
+        "status",
+        "detail",
+        "inspectedRoot",
+    }
+    return {t for t in candidates if t not in structural and "." not in t}
+
+
 _PLUGIN_VERSION_SKEW_SKEW_CONTEXT_MARKERS = (
     "plugin-version-skew",
     "pluginVersionSkew",
@@ -645,10 +689,12 @@ def test_plugin_version_skew_chokepoint_census():
 
 
 def test_plugin_version_skew_status_vocabulary_in_docs():
-    """§11: setup.md and CONVENTIONS.md restate version_skew.STATUSES."""
+    """§11: setup.md and CONVENTIONS.md restate version_skew.STATUSES; round-driver.md
+    restates the certification ``pluginVersionSkew`` projection vocabulary."""
     import version_skew
 
     home = _plugin_version_skew_statuses_from_home()
+    cert_home = _plugin_version_skew_certification_statuses_from_home()
     setup = _read("skills/review-code/reference/setup.md")
     missing_setup = sorted(token for token in home if token not in setup)
     assert not missing_setup, (
@@ -670,6 +716,13 @@ def test_plugin_version_skew_status_vocabulary_in_docs():
     assert not missing_conventions, (
         "CONVENTIONS.md missing plugin-version-skew status vocabulary from "
         "version_skew.STATUSES: %r" % missing_conventions
+    )
+    round_driver_doc = _read("skills/review-code/reference/round-driver.md")
+    doc_tokens = _certification_plugin_version_skew_enumeration_tokens(round_driver_doc)
+    assert doc_tokens == cert_home, (
+        "round-driver.md certification pluginVersionSkew enumeration drift — "
+        "expected %r, doc enumerates %r"
+        % (sorted(cert_home), sorted(doc_tokens))
     )
 
 
