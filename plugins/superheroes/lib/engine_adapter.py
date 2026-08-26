@@ -1218,14 +1218,14 @@ def _bound_top_level_keys(obj):
 
 def _review_payload_shape_findings_obj(obj):
     """Findings-kind shape diagnostic for a recognised review object. Never raises."""
-    findings = obj.get("findings")
-    if findings is None:
+    if "findings" not in obj:
         investigated = obj.get("investigated")
         if isinstance(investigated, list) and investigated:
             return None
         top_keys, keys_truncated = _bound_top_level_keys(obj)
         return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
                 "topLevelKeys": top_keys, "keysTruncated": keys_truncated}
+    findings = obj.get("findings")
     if not isinstance(findings, list):
         return {"parsed": SHAPE_OBJECT_FINDINGS_NOT_A_LIST,
                 "topLevelKeys": [], "keysTruncated": False}

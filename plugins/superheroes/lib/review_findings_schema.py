@@ -129,6 +129,28 @@ def _member_has_non_placeholder_substance(value, placeholders):
     return value is not None
 
 
+_ECHO_SUBSTANCE_KEYS = (
+    SUBSTANCE_KEYS_CANONICAL | SUBSTANCE_KEYS_LEGACY | SUBSTANCE_KEYS_CENSUSED
+)
+
+
+def _member_has_non_placeholder_substance_fields(member, placeholders):
+    """True when substance (not structural) fields carry non-placeholder content."""
+    if not isinstance(member, dict):
+        return False
+    for key in _ECHO_SUBSTANCE_KEYS:
+        if key not in member:
+            continue
+        value = member[key]
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped != "" and stripped not in placeholders:
+                return True
+        elif value is not None and not isinstance(value, (dict, list)):
+            return True
+    return False
+
+
 def member_carries_sentinel(member):
     # axis: placeholder field-value equality (not substring sentinel) refuses verbatim/near-copy echo
     """True when field values are example placeholders (verbatim/near-copy echo).
@@ -141,7 +163,7 @@ def member_carries_sentinel(member):
     placeholder_count = _placeholder_field_value_count(member, placeholders)
     if placeholder_count >= 2:
         return True
-    if placeholder_count == 1 and not _member_has_non_placeholder_substance(
+    if placeholder_count == 1 and not _member_has_non_placeholder_substance_fields(
         member, placeholders
     ):
         return True
@@ -219,16 +241,35 @@ def example_member_values():
     return frozenset(values)
 
 
+def _shipped_finding_property_schemas():
+    with open(REVIEW_FINDINGS_SCHEMA_PATH, encoding="utf-8") as fh:
+        schema = json.load(fh)
+    return schema["properties"]["findings"]["items"]["properties"]
+
+
+def _first_schema_enum_member(field_schema):
+    for member in field_schema.get("enum", ()):
+        if member is not None:
+            return member
+    return None
+
+
+def _example_value_for_field(key, field_schema):
+    if key == "line":
+        return None  # integer|null schema field — null placeholder
+    if key == "tradeoff":
+        return None  # boolean|null schema field — null placeholder
+    if "enum" in field_schema:
+        return _first_schema_enum_member(field_schema)
+    return _placeholder_string(key)
+
+
 def example_findings_object():
     """Format-only example object with exactly the canonical member keys."""
+    field_schemas = _shipped_finding_property_schemas()
     member = {}
     for key in CANONICAL_MEMBER_KEYS:
-        if key == "line":
-            member[key] = None  # integer|null schema field — null placeholder
-        elif key == "tradeoff":
-            member[key] = None  # boolean|null schema field — null placeholder
-        else:
-            member[key] = _placeholder_string(key)
+        member[key] = _example_value_for_field(key, field_schemas[key])
     return {
         "findings": [member],
         "investigated": [_placeholder_string("investigated-path")],
