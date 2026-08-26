@@ -107,7 +107,8 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
     io_out = dict(io or {})
     if vendors is not None:
         io_out.setdefault("seatMap", _verified_clean_seat_map(vendors))
-        io_out.setdefault("canaryResult", {"engaged": True, "evidence": {"probe": "test"}})
+        io_out.setdefault("canaryResult", _run_loop_io_canary_result(
+            _canary_probes_for(io_out["seatMap"])))
 
     return {
         "reviewer": reviewer or default_reviewer,
@@ -391,10 +392,10 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
             art = {"seats": seats}
             if seat_map is not None:
                 art["seatMap"] = seat_map
-                art["canaryResult"] = {"engaged": True, "evidence": {"probe": "test"}}
+                art["canaryResult"] = _canary_probes_for(seat_map)
             elif vendors is not None:
                 art["seatMap"] = _verified_clean_seat_map(vendors)
-                art["canaryResult"] = {"engaged": True, "evidence": {"probe": "test"}}
+                art["canaryResult"] = _canary_probes_for(art["seatMap"])
             return art
         if phase == RD.P_VERIFIERS:
             out = []
@@ -4428,6 +4429,42 @@ def _seat_map_vendors(vendors):
     return {"seats": {d: {"vendor": v} for d, v in vendors.items()}}
 
 
+def _run_loop_io_canary_result(probes):
+    """``run_loop``'s scripted io seam forwards ``canaryResult`` only when it is a dict."""
+    if len(probes) == 1:
+        return probes[0]
+    return probes
+
+
+def _canary_probes_for(seat_map):
+    """Canary probes the cross-vendor liveness check recognizes for a submitted seat map."""
+    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
+    if not isinstance(seats, dict):
+        return []
+    vendors = set()
+    for cell in seats.values():
+        if not isinstance(cell, dict):
+            continue
+        vendor = cell.get("vendor")
+        if isinstance(vendor, str) and vendor and vendor != "claude":
+            vendors.add(vendor)
+    return [{"engine": v, "engaged": True} for v in sorted(vendors)]
+
+
+def test_canary_probes_for_all_claude_empty():
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    assert _canary_probes_for(seat_map) == []
+
+
+def test_canary_probes_for_duplicate_vendor_single_probe():
+    seat_map = _seat_map_vendors({
+        "code-reviewer": "codex",
+        "security-reviewer": "codex",
+        "architecture-reviewer": "claude",
+    })
+    assert _canary_probes_for(seat_map) == [{"engine": "codex", "engaged": True}]
+
+
 def _verified_clean_seat_map(vendors):
     """Build a seat map through seat_map's API; assert it verifies clean for vendors."""
     SM = _load("seat_map")
@@ -4606,7 +4643,7 @@ def test_seat_map_unavailable_round1_map_round2_absent():
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     RD._fold_panel(state, state["config"], {
         "seats": seats, "seatMap": seat_map,
-        "canaryResult": {"engaged": True, "evidence": {"probe": "test"}},
+        "canaryResult": _canary_probes_for(seat_map),
     })
     assert "seatMapUnavailable" not in state["rounds"]["1"]
     state["round"] = 2

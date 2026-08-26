@@ -209,6 +209,26 @@ def _eval_clean_seat_map():
     raise RuntimeError("eval harness seat map must verify clean for claude+codex")
 
 
+def _canary_probes_for(seat_map):
+    """Delegate to the test harness helper (single definition in test_round_driver)."""
+    if not hasattr(_canary_probes_for, "_impl"):
+        import importlib.util
+        path = LIB / "tests" / "test_round_driver.py"
+        spec = importlib.util.spec_from_file_location("_rd_test_harness", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _canary_probes_for._impl = mod._canary_probes_for
+        _canary_probes_for._io = mod._run_loop_io_canary_result
+    return _canary_probes_for._impl(seat_map)
+
+
+def _run_loop_io_canary_result(probes):
+    if not hasattr(_run_loop_io_canary_result, "_impl"):
+        _canary_probes_for({})  # ensure delegate cache is warm
+        _run_loop_io_canary_result._impl = _canary_probes_for._io
+    return _run_loop_io_canary_result._impl(probes)
+
+
 def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=False):
     """Drive ``round_driver.run_loop`` for one fixture; return the observational JSON dict.
 
@@ -542,6 +562,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
 
     RD._fold_panel = _fold_panel_persist
     try:
+        eval_seat_map = _eval_clean_seat_map()
         seams = {
             "reviewer": reviewer,
             "synthesis": synthesis,
@@ -552,8 +573,8 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             "changed_subjects": changed_subjects,
             "io": {
                 "stall_menu": lambda payload: "hold",
-                "seatMap": _eval_clean_seat_map(),
-                "canaryResult": {"engaged": True, "evidence": {"probe": "eval"}},
+                "seatMap": eval_seat_map,
+                "canaryResult": _run_loop_io_canary_result(_canary_probes_for(eval_seat_map)),
             },
         }
         config = {
