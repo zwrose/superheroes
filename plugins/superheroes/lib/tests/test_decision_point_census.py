@@ -376,8 +376,11 @@ _SOURCE_CAPTURE_RE = re.compile(
 _SOURCE_GUARD_RE = re.compile(r'\[\s*-n\s+"\$SOURCE"\s*\]')
 
 
-def _has_uncommented_source_guard(bash_text):
-    """True when an uncommented `[ -n "$SOURCE" ]` guard appears in fenced bash."""
+def _has_source_guard_outside_full_line_comment(bash_text):
+    """True when ``[ -n "$SOURCE" ]`` appears on a line whose stripped form does not start with ``#``.
+
+    Does not exclude a trailing inline comment or a quoted occurrence on the same line.
+    """
     for line in bash_text.splitlines():
         stripped = line.strip()
         if stripped.startswith("#"):
@@ -505,14 +508,14 @@ def test_decision_block_mode_structure():
     )
 
 
-# axis: storage-location blocks must lexically contain SOURCE=$(… .source and an uncommented
-# [ -n "$SOURCE" ] in block bash — text only, not decide-location output flow. Not follow-up prose.
+# axis: storage-location blocks must lexically contain SOURCE=$(… .source and [ -n "$SOURCE" ]
+# on a line not beginning with # — text only, not decide-location output flow. Not follow-up prose.
 def test_storage_decision_blocks_capture_source():
     """#1144: storage-location block bash must lexically contain SOURCE capture and guard.
 
-    Lexical only: the text ``SOURCE=$(… .source`` must appear in fenced bash, and an
-    uncommented ``[ -n "$SOURCE" ]`` guard expression must appear. Does not prove the value
-    flows from decide-location's output.
+    Lexical only: the text ``SOURCE=$(… .source`` must appear in fenced bash, and ``[ -n "$SOURCE" ]``
+    must appear on a line that does not begin with ``#``. Trailing inline comments and quoted
+    occurrences also satisfy the guard check. Text match only; does not prove decide-location output.
     """
     hits = []
     blocks, _ = _collect_all_blocks()
@@ -533,10 +536,11 @@ def test_storage_decision_blocks_capture_source():
                 f"{rel}:{line}: storage-location block bash must lexically contain "
                 "SOURCE=$(… .source (text match only; does not prove decide-location output)"
             )
-        if not any(_has_uncommented_source_guard(b) for b in bash_blocks):
+        if not any(_has_source_guard_outside_full_line_comment(b) for b in bash_blocks):
             hits.append(
-                f"{rel}:{line}: storage-location block bash must contain an uncommented "
-                '[ -n "$SOURCE" ] guard expression (text match only)'
+                f"{rel}:{line}: storage-location block bash must contain "
+                '[ -n "$SOURCE" ] on a line that does not begin with # (text match only; '
+                "a trailing inline comment or quoted occurrence also satisfies it)"
             )
     assert not hits, (
         "#1144 storage-location SOURCE capture/guard violations. Every hit:\n"
@@ -671,7 +675,7 @@ def test_fixture_fabricated_source_capture_passes_lexically(tmp_path, monkeypatc
     test_storage_decision_blocks_capture_source()
 
 
-# axis: uncommented SOURCE guard — commented guard must fail the shipped check.
+# axis: SOURCE guard — full-line comment must fail the shipped check; inline comment satisfies it.
 def test_fixture_commented_source_guard_fails(tmp_path, monkeypatch):
     """#1144 bite-proof: commented-out [ -n "$SOURCE" ] must fail the guard leg."""
     monkeypatch.setattr(
@@ -692,7 +696,7 @@ def test_fixture_commented_source_guard_fails(tmp_path, monkeypatch):
     (skills / "SKILL.md").write_text(content, encoding="utf-8")
     with pytest.raises(
         AssertionError,
-        match='uncommented \\[ -n "\\$SOURCE" \\] guard expression',
+        match='on a line that does not begin with #',
     ):
         test_storage_decision_blocks_capture_source()
 

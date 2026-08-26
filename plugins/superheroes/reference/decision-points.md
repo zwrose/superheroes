@@ -37,7 +37,8 @@ A decision block is a bounded pair of HTML comments:
 
 The census enforces:
 
-- **`id`** is unique across the whole `skills/` tree. Duplicates are an error.
+- **`id`** is unique within each file. Duplicates in the same file are an error; ids are not
+  compared across files.
 - Every open has a matching close with the **identical** `id`; an orphan close or unmatched open
   is an error. Blocks **do not nest**.
 - **`mode`** is exactly one of `proceed`, `notify`, or `gate` (the three rubric modes).
@@ -48,27 +49,32 @@ The census enforces:
   intended durable home of the disclosure (a declaration, not a verified delivery guarantee — see
   §1c).
 - For blocks with **`kind=storage-location`**, the block's own fenced bash must contain a lexical
-  `SOURCE=$(… .source` assignment and an uncommented `[ -n "$SOURCE" ]` guard expression — shell
-  text inside the block, not a proof that the value flows from `decide-location`'s output.
+  `SOURCE=$(… .source` assignment and `[ -n "$SOURCE" ]` on a line that does not begin with `#`
+  (trailing inline comments and quoted occurrences also satisfy the guard check) — shell text
+  inside the block, not a proof that the value flows from `decide-location`'s output.
 - The prose inside the block must name **`/superheroes:configure`** as the follow-up.
 
-**Mode-specific structure** (enforced inside the block prose, every mode):
+**Mode-specific structure** (substring checks inside the block prose, every mode — prose that
+*negates* a requirement can still satisfy it):
 
-| mode | required prose |
+| mode | substring checks |
 | --- | --- |
-| `gate` | states that the decision is **written down** and the run **hands back**; must not contain a waiting token (§1b) |
-| `notify` | names the **action taken** and states that the **run continues**; must not contain a waiting token |
-| `proceed` | records the default taken and continues; must not contain a waiting token |
+| `gate` | prose contains `write` or `written`, and `hand back` or `hands back`; must not contain a waiting token (§1b) |
+| `notify` | prose contains `continu`; must not contain a waiting token (§1b) |
+| `proceed` | prose contains `continu` or `record`; must not contain a waiting token (§1b) |
 
 **No block of any mode may contain a waiting token** (§1b).
 
 ## 1b — Forbidden primitives and waiting tokens
 
-Two fixed sets — primitive and waiting-token matching is **case-insensitive** (the census uses
-`casefold()` on both sides), after `*` emphasis is normalized away and lines are joined for
-multi-word literals; backticks and underscores are **not** normalized (a backtick distinguishes a
-mention from an invocation; underscore-emphasis is a stated limitation — see the census module
-docstring).
+Two fixed sets — matching is **case-insensitive** (`casefold()` on both sides) after `*` emphasis
+is normalized away; backticks and underscores are **not** normalized (underscore-emphasis is a
+stated limitation — see the census module docstring). **Forbidden-primitive** matching also joins
+lines (`_match_search_text`) so multi-word literals can match across a line break. **Waiting-token**
+matching searches normalized prose with newlines intact, so a token split across a line break is
+not found. A backtick only affects matching when it interrupts the exact literal — as in
+`decide-location)` — not as a general mention-vs-invocation rule; a backticked `AskUserQuestion`
+still contains the forbidden literal.
 
 **Forbidden outside a decision block** (unless byte-pinned or rubric-excluded per §1d):
 
