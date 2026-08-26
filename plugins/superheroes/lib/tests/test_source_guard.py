@@ -1021,7 +1021,7 @@ def test_plugin_loads_with_xdist_disabled():
     assert "PluginValidationError" not in combined
 
 
-# --- Group 4: structural wiring pin (real root files) ------------------------
+# --- Group 4: presence checks plus behavioural effective-wiring proof --------
 
 
 _REAL_WIRING_FILES = ("pytest.ini", "conftest.py", "source_guard.py")
@@ -1064,6 +1064,14 @@ def test_missing_wiring_files_reports_missing_source_guard(tmp_path):
     _copy_real_root_wiring(root)
     (root / "source_guard.py").unlink()
     missing = sg.missing_wiring_files(str(root))
+    assert "source_guard.py is missing at the repository root" in missing
+
+
+def test_missing_wiring_files_fails_closed_for_empty_root(monkeypatch):
+    monkeypatch.chdir(_REPO_ROOT)
+    missing = sg.missing_wiring_files("")
+    assert "pytest.ini is missing at the repository root" in missing
+    assert "conftest.py is missing at the repository root" in missing
     assert "source_guard.py is missing at the repository root" in missing
 
 
@@ -1200,6 +1208,8 @@ def _run_real_nested_wiring_pytest(root, test_dir):
     )
 
 
+# bite-axis: root pytest.ini anchors rootdir for a run started from a nested test
+# directory, so root conftest.py is collected and the guard engages.
 def test_real_wiring_behavioural_nested_cwd(tmp_path):
     root = tmp_path / "real_nested_wiring"
     root.mkdir()
@@ -1208,6 +1218,9 @@ def test_real_wiring_behavioural_nested_cwd(tmp_path):
     _assert_wiring_failure(proc, root)
 
 
+# bite-axis: standing discriminator for test_real_wiring_behavioural_nested_cwd —
+# without root pytest.ini, rootdir drops to the nested directory, root conftest.py is
+# never collected, and the guard never loads.
 def test_real_wiring_behavioural_nested_cwd_without_pytest_ini(tmp_path):
     root = tmp_path / "real_nested_wiring_no_ini"
     root.mkdir()
@@ -1219,6 +1232,7 @@ def test_real_wiring_behavioural_nested_cwd_without_pytest_ini(tmp_path):
     assert "ShippedSourceWrite" not in combined
 
 
+# bite-axis: the pytest.ini presence check reports its own file as missing.
 def test_bite_missing_wiring_files_reports_pytest_ini(tmp_path):
     root = tmp_path / "bite_pytest_ini"
     _copy_real_root_wiring(root)
@@ -1241,6 +1255,7 @@ def test_bite_missing_wiring_files_reports_pytest_ini(tmp_path):
     )
 
 
+# bite-axis: the conftest.py presence check reports its own file as missing.
 def test_bite_missing_wiring_files_reports_conftest(tmp_path):
     root = tmp_path / "bite_conftest"
     _copy_real_root_wiring(root)
@@ -1263,6 +1278,7 @@ def test_bite_missing_wiring_files_reports_conftest(tmp_path):
     )
 
 
+# bite-axis: the source_guard.py presence check reports its own file as missing.
 def test_bite_missing_wiring_files_reports_source_guard(tmp_path):
     root = tmp_path / "bite_source_guard"
     _copy_real_root_wiring(root)
@@ -1282,6 +1298,28 @@ def test_bite_missing_wiring_files_reports_source_guard(tmp_path):
         ),
         lambda m: detects_missing(m),
         lambda m: detects_missing(m),
+    )
+
+
+def test_bite_missing_wiring_files_fails_closed_for_empty_root(monkeypatch):
+    monkeypatch.chdir(_REPO_ROOT)
+
+    def all_three_missing(mod):
+        missing = mod.missing_wiring_files("")
+        return (
+            "pytest.ini is missing at the repository root" in missing
+            and "conftest.py is missing at the repository root" in missing
+            and "source_guard.py is missing at the repository root" in missing
+        )
+
+    _bite_red_green(
+        "empty_root_isdir",
+        (
+            "    if not os.path.isdir(root):",
+            "    if False and not os.path.isdir(root):",
+        ),
+        lambda m: all_three_missing(m),
+        lambda m: all_three_missing(m),
     )
 
 

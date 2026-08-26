@@ -27,6 +27,17 @@ class ShippedSourceWrite(RuntimeError):
     """Raised when a watched shipped-source path is opened for writing."""
 
 
+_REQUIRED_ROOT_FILES = ("pytest.ini", "conftest.py", "source_guard.py")
+
+
+def _missing_wiring_file_message(name):
+    return "%s is missing at the repository root" % name
+
+
+def _all_missing_wiring_messages():
+    return [_missing_wiring_file_message(name) for name in _REQUIRED_ROOT_FILES]
+
+
 def missing_wiring_files(root):
     """Return the sorted subset of required root files that are missing under ``root``.
 
@@ -35,30 +46,26 @@ def missing_wiring_files(root):
     loads; see the behavioural wiring tests in ``test_source_guard`` for effective
     wiring.
     """
+    # bite-axis: presence only — the three required root files must exist as regular
+    # files; presence is not effective wiring.
     missing = []
     if not os.path.isdir(root):
-        missing.extend(
-            [
-                "pytest.ini is missing at the repository root",
-                "conftest.py is missing at the repository root",
-                "source_guard.py is missing at the repository root",
-            ]
-        )
+        missing.extend(_all_missing_wiring_messages())
         return sorted(missing)
 
     root = os.path.realpath(root)
 
     pytest_ini_path = os.path.join(root, "pytest.ini")
     if not os.path.isfile(pytest_ini_path):
-        missing.append("pytest.ini is missing at the repository root")
+        missing.append(_missing_wiring_file_message("pytest.ini"))
 
     conftest_path = os.path.join(root, "conftest.py")
     if not os.path.isfile(conftest_path):
-        missing.append("conftest.py is missing at the repository root")
+        missing.append(_missing_wiring_file_message("conftest.py"))
 
     source_guard_path = os.path.join(root, "source_guard.py")
     if not os.path.isfile(source_guard_path):
-        missing.append("source_guard.py is missing at the repository root")
+        missing.append(_missing_wiring_file_message("source_guard.py"))
 
     return sorted(missing)
 
