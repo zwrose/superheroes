@@ -6,6 +6,9 @@ normalizer, and rendered example object — single source; consumers import, nev
 import json
 import os
 
+import audits
+import round_phases
+
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 REVIEW_FINDINGS_SCHEMA_REL = os.path.join("schemas", "review-findings.schema.json")
 REVIEW_FINDINGS_SCHEMA_PATH = os.path.join(_LIB_DIR, REVIEW_FINDINGS_SCHEMA_REL)
@@ -57,6 +60,9 @@ EXAMPLE_SENTINEL = "[RFS-EXAMPLE-SENTINEL-1145]"
 CANONICAL_MEMBER_KEYS = ()
 SEVERITY_TIERS = frozenset()
 SCHEMA_READ_USED_FALLBACK = False
+
+_VERDICT_ENUM = frozenset(round_phases.VERDICTS)
+_RULING_ENUM = frozenset(audits.AUDIT_RULINGS)
 
 
 def review_findings_schema_path():
@@ -142,6 +148,27 @@ def member_carries_sentinel(member):
     return False
 
 
+def _member_has_censused_substance(member):
+    for key in SUBSTANCE_KEYS_CENSUSED:
+        if key in member and _non_trivial_string(member[key]):
+            return True
+    return False
+
+
+def _member_has_id_enum_credential(member):
+    """True when member carries non-empty id plus a schema-home verdict or ruling enum."""
+    member_id = member.get("id")
+    if not isinstance(member_id, str) or member_id.strip() == "":
+        return False
+    verdict = member.get("verdict")
+    if isinstance(verdict, str) and verdict in _VERDICT_ENUM:
+        return True
+    ruling = member.get("ruling")
+    if isinstance(ruling, str) and ruling in _RULING_ENUM:
+        return True
+    return False
+
+
 def member_is_engaged(member):
     """True when a findings member carries substantive review content (not a hollow echo)."""
     if not isinstance(member, dict):
@@ -157,9 +184,11 @@ def member_is_engaged(member):
 
     severity = member.get("severity")
     if isinstance(severity, str) and severity in SEVERITY_TIERS:
-        for key in SUBSTANCE_KEYS_CENSUSED:
-            if key in member and _non_trivial_string(member[key]):
-                return True
+        if _member_has_censused_substance(member):
+            return True
+
+    if _member_has_id_enum_credential(member) and _member_has_censused_substance(member):
+        return True
 
     return False
 

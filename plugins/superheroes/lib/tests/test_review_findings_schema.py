@@ -387,6 +387,33 @@ def test_member_is_engaged_table(member, expected):
     assert RFS.member_is_engaged(member) is expected
 
 
+@pytest.mark.parametrize(
+    "member",
+    [
+        {"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in diff"},
+        {"id": "f1", "ruling": "discharged", "reason": "resolved in diff"},
+    ],
+    ids=["verifier-without-severity", "ruling-without-severity"],
+)
+def test_member_is_engaged_id_enum_credential_without_severity(member):
+    # axis: leg (c) — id + verdict/ruling enum + censused body engages without severity
+    assert RFS.member_is_engaged(member) is True
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        {"id": "v1", "verdict": "BOGUS", "reason": "reproduced in diff"},
+        {"id": "v1"},
+        {"id": "v1", "verdict": "CONFIRMED"},
+    ],
+    ids=["off-scale-verdict", "id-alone", "id-verdict-without-body"],
+)
+def test_member_is_engaged_id_enum_credential_fail_closed(member):
+    # axis: leg (c) stays fail-closed — off-scale enum or missing censused body
+    assert RFS.member_is_engaged(member) is False
+
+
 def test_normalize_member_adds_canonical_for_synonym():
     member = {"message": "Body text"}
     out = RFS.normalize_member(member)

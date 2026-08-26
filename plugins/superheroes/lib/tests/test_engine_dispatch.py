@@ -2786,23 +2786,44 @@ def test_grade_review_attempt_prompt_echo_payload_shape_prompt_echo_only(tmp_pat
     assert shape["parsed"] == ED.engine_adapter.SHAPE_PROMPT_ECHO_ONLY
 
 
-def test_review_dispatch_fed_prompt_includes_schema_example_block(tmp_path):
-    """#1145 WO-C: runner chokepoint appends review_findings_schema.example_prompt_block()."""
-    # axis: composed fedPrompt must include schema-rendered example block (C1 append)
+@pytest.mark.parametrize(
+    "expected_result_kind,expect_findings_block",
+    [
+        (None, True),
+        ("findings", True),
+        ("verdicts", False),
+        ("grouping", False),
+        ("ruling", False),
+    ],
+    ids=["unpinned", "findings", "verdicts", "grouping", "ruling"],
+)
+def test_review_dispatch_fed_prompt_includes_schema_example_block(
+    tmp_path, expected_result_kind, expect_findings_block,
+):
+    """#1145 WO-C: findings example block only when dispatch is findings-kind."""
+    # axis: composed fedPrompt must include schema example only for findings seats
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
-    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+    stdout = _census_review_stdout(expected_result_kind or "findings")
+    fake = FakeRunner([(stdout, False, 0, "")])
+    dispatch_kwargs = dict(
+        engine="codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
+    if expected_result_kind is not None:
+        dispatch_kwargs["expected_result_kind"] = expected_result_kind
+    res = ED.dispatch_review(**dispatch_kwargs)
     records, _ = ED._journal_read(res["runDir"])
     opened = next(r for r in records if r.get("kind") == "run-opened")
     block = RFS.example_prompt_block()
-    assert block in opened["fedPrompt"]
     prompt_text = fake.calls[0]["prompt_bytes"].decode("utf-8")
-    assert block in prompt_text
+    if expect_findings_block:
+        assert block in opened["fedPrompt"]
+        assert block in prompt_text
+    else:
+        assert block not in opened["fedPrompt"]
+        assert block not in prompt_text
 
 
 def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
