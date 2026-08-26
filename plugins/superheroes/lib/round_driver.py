@@ -1026,7 +1026,9 @@ def _skew_degraded(state):
 def _plugin_version_skew_status(state):
     """Seat-map tri-state status for certification disclosure (#677). ``absent`` when the seat map
     carries no ``pluginVersionSkew`` receipt — an older map or one built without the field — so the
-    certification block never claims a skew check ran."""
+    certification block never claims a skew check ran. A receipt with an unrecognized ``status`` is
+    ``unknown``, not ``absent`` — unknown skew receipts degrade via ``version_skew.appends_degradation``
+    (#1107)."""
     sm = state.get("seatMap")
     if not isinstance(sm, dict):
         return "absent"
@@ -1034,9 +1036,12 @@ def _plugin_version_skew_status(state):
     if not isinstance(pvs, dict):
         return "absent"
     status = pvs.get("status")
-    if status in version_skew.STATUSES:
-        return status
-    return "absent"
+    try:
+        if status in version_skew.STATUSES:
+            return status
+    except TypeError:
+        pass
+    return "unknown"
 
 
 def _seat_map_violations(state):
@@ -3033,17 +3038,7 @@ def _settle_delta(state, config):
                 "malformed _auditOutcome.notDischarged — cannot dispatch fix batch")
             return
         nd_targets = [dict(t) for t in (state.get("_auditTargets") or []) if t.get("id") in nd_ids]
-        batch = [dict(f) for f in new_blocking]
-        # Dedupe on the per-LOCATION key (line-less identity + line), NOT the line-less identity alone:
-        # a new blocker sharing a target's file+title at a DIFFERENT line is a DISTINCT finding, so
-        # keying on identity alone would silently drop the unresolved audit target (#507 R2 residual-3).
-        seen = {(finding_identity(f), f.get("line")) for f in batch}
-        for t in nd_targets:
-            ident = t.get("identity") or finding_identity(t)
-            key = (ident, t.get("line"))
-            if ident is not None and key not in seen:
-                batch.append(t)
-                seen.add(key)
+        batch = _union_open_blockers(new_blocking, nd_targets)
         if _route_judgment_blockers(state, batch):
             return
         state["_fixBatch"] = batch
@@ -3271,33 +3266,43 @@ def _commit_stall_self_recovery(state, config, breaker):
     _record_round(state, "selfRecovery", {"rung": rung, "reason": breaker.get("detail")})
 
 
+def _union_open_blockers(*groups):
+    """Union open blockers into one fix batch — deduped on the per-location key (#507 R2 residual-3).
+
+    Dedupe on the per-LOCATION key (line-less identity + line), NOT the line-less identity alone:
+    a new blocker sharing a target's file+title at a DIFFERENT line is a DISTINCT finding, so
+    keying on identity alone would silently drop the unresolved audit target."""
+    batch = []
+    seen = set()
+    for group in groups:
+        for item in group:
+            f = dict(item)
+            key = (finding_identity(f), f.get("line"))
+            if key[0] is not None and key not in seen:
+                batch.append(f)
+                seen.add(key)
+    return batch
+
+
 def _compose_stall_fix_batch(state, breaker):
     """Compose the stall self-recovery fix batch and any refusal token (#1107)."""
-    batch = [dict(t) for t in _stalled_open_targets(state, breaker)]
+    stalled = [dict(t) for t in _stalled_open_targets(state, breaker)]
     open_set = _resolve_open_audit_targets(state)
-    if open_set.kind == "unresolvable" and not batch:
-        return [], REFUSAL_UNRESOLVABLE_OPEN_SET
     outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
     nd_raw = outcome.get("notDischarged")
     nd_ids = (_open_audit_ids_from_not_discharged(nd_raw)
               if isinstance(nd_raw, list) else None)
     new_blocking = _blocking(state.get("findings") or [])
+    nd_targets = ([dict(t) for t in (state.get("_auditTargets") or [])
+                   if t.get("id") in nd_ids]
+                  if nd_ids is not None else [])
+    batch = _union_open_blockers(stalled, new_blocking, nd_targets)
     if not batch:
+        if open_set.kind == "unresolvable":
+            return [], REFUSAL_UNRESOLVABLE_OPEN_SET
         nd_members = nd_ids if nd_ids is not None else set()
         if nd_members or new_blocking:
-            nd_targets = ([dict(t) for t in (state.get("_auditTargets") or [])
-                           if t.get("id") in nd_ids]
-                          if nd_ids is not None else [])
-            batch = [dict(f) for f in new_blocking]
-            seen = {(finding_identity(f), f.get("line")) for f in batch}
-            for t in nd_targets:
-                ident = t.get("identity") or finding_identity(t)
-                key = (ident, t.get("line"))
-                if ident is not None and key not in seen:
-                    batch.append(t)
-                    seen.add(key)
-            if not batch:
-                return [], REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE
+            return [], REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE
     return batch, None
 
 
@@ -5469,13 +5474,13 @@ def _ensure_round_head_diff(session_dir, rnd, state):
 
 def _ensure_fix_batch_file(session_dir, rnd, state):
     """Materialize fix-batch.json from state for fixer orders."""
-    rdir = round_records.round_dir(session_dir, rnd)
-    path = os.path.join(rdir, "fix-batch.json")
     batch = state.get("_fixBatch")
     if not isinstance(batch, list):
         batch = state.get("fixBatch")
     if not isinstance(batch, list):
-        batch = []
+        raise ValueError("order-render-refused:fix-batch-unavailable")
+    rdir = round_records.round_dir(session_dir, rnd)
+    path = os.path.join(rdir, "fix-batch.json")
     return _ensure_bytes_at_path(session_dir, path, round_records.canonical(batch).encode("utf-8"))
 
 

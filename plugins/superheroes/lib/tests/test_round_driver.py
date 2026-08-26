@@ -5381,7 +5381,35 @@ def test_certification_plugin_version_skew_status_absent_when_status_invalid():
         },
     }
     RD._terminal_converged(state, state["config"], full_panel=True)
-    assert state["certification"]["pluginVersionSkew"] == "absent"
+    assert state["certification"]["pluginVersionSkew"] == "unknown"
+
+
+def test_certification_plugin_version_skew_unknown_status_agrees_with_degradation():
+    # axis: unrecognized skew receipt status must not certify as absent — degradation agrees
+    reason = "plugin-version-skew: future build persisted unrecognized status"
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    state = RD.new_state(cfg)
+    state["seatMap"] = {
+        "pluginVersionSkew": {
+            "status": "future-status",
+            "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
+            "inspectedRoot": "/tmp/repo",
+        },
+        "degradations": [{
+            "constraint": version_skew.CONSTRAINT,
+            "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
+            "reason": reason,
+        }],
+    }
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    cert = state["certification"]
+    assert cert["pluginVersionSkew"] != "absent"
+    assert cert["pluginVersionSkew"] == "unknown"
+    assert "plugin-version-skew" in cert["shapeDrivers"]
+    receipt = RD.build_receipt(state)
+    skew_lines = [d for d in receipt["degraded"] if "plugin-version-skew" in d]
+    assert len(skew_lines) == 1
+    assert reason in skew_lines[0]
 
 
 _RETIRED_RUN_CONFIG_KEYS = ("docMode", "fixerModel", "fixerEffort")

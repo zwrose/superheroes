@@ -1,5 +1,6 @@
 """#915: per-location audit target ids, line-less stall identity, and fail-closed duplicates."""
 import importlib.util
+import inspect
 import os
 
 import pytest
@@ -423,6 +424,41 @@ def test_settle_delta_same_location_does_not_double_add():
     keys = [(b.get("identity") or FI.finding_identity(b), b.get("line"))
             for b in batch if isinstance(b, dict)]
     assert keys.count((ident, 4)) == 1
+
+
+def test_compose_stall_fix_batch_retains_other_open_targets_when_one_stalled():
+    # axis: stalled identity matching one audit target must not drop other not-discharged targets
+    ident_a = FI.finding_identity(_finding(title="stall-me", line=1))
+    ident_b = FI.finding_identity(_finding(title="also-open", line=2))
+    target_a = {"id": "%s@L1" % ident_a, "identity": ident_a, "file": "f.py", "line": 1,
+                "title": "stall-me", "severity": "Important"}
+    target_b = {"id": "%s@L2" % ident_b, "identity": ident_b, "file": "f.py", "line": 2,
+                "title": "also-open", "severity": "Important"}
+    state = RD.new_state(_cfg())
+    state["_auditTargets"] = [target_a, target_b]
+    state["_auditOutcome"] = {
+        "notDischarged": [target_a["id"], target_b["id"]],
+        "discharged": [],
+    }
+    breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": [ident_a]}
+    batch, refusal = RD._compose_stall_fix_batch(state, breaker)
+    ids = {b.get("id") for b in batch}
+    assert target_a["id"] in ids
+    assert target_b["id"] in ids
+    assert refusal is None
+
+
+def test_union_open_blockers_dedupe_rule_single_home():
+    # axis: per-location dedupe rule has exactly one home in round_driver
+    rd_path = os.path.join(_LIB, "round_driver.py")
+    with open(rd_path, encoding="utf-8") as fh:
+        source = fh.read()
+    assert source.count('finding_identity(f), f.get("line")') == 1
+    assert "_union_open_blockers" in source
+    settle_src = inspect.getsource(RD._settle_delta)
+    compose_src = inspect.getsource(RD._compose_stall_fix_batch)
+    assert "_union_open_blockers" in settle_src
+    assert "_union_open_blockers" in compose_src
 
 
 # --- circuit_breaker audit_target_aliases -------------------------------------

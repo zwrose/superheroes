@@ -169,6 +169,26 @@ def test_head_diff_unavailable_refuses_emit(tmp_path):
         )
 
 
+def test_ensure_fix_batch_file_materializes_empty_batch(tmp_path):
+    # axis: authoritative empty fix batch is real state — materialize [], never wedge
+    session_dir = str(tmp_path / "empty-batch-session")
+    os.makedirs(session_dir)
+    state = {"_fixBatch": []}
+    path = RD._ensure_fix_batch_file(session_dir, 2, state)
+    assert path == os.path.join(session_dir, "round-2", "fix-batch.json")
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == "[]"
+
+
+def test_fix_batch_unavailable_refuses_materialize(tmp_path):
+    # axis: absent/non-list fix batch refuses before writing fix-batch.json
+    session_dir = str(tmp_path / "batch-refuse")
+    os.makedirs(session_dir)
+    state = {"_fixBatch": None, "fixBatch": "not-a-list"}
+    with pytest.raises(ValueError, match="order-render-refused:fix-batch-unavailable"):
+        RD._ensure_fix_batch_file(session_dir, 2, state)
+
+
 def test_readable_input_refusal_when_registered_path_missing(tmp_path):
     # axis: unregistered readable input on disk refuses with order-input-missing
     ph = {
