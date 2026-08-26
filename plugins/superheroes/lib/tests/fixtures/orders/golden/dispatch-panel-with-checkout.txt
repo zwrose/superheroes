@@ -54,7 +54,6 @@ positives.
 ## Author-justification rule (PR mode only)
 /tmp/superheroes-session-wo4-golden/prior-comments.json contains prior review comments and their
 threads.
-<!-- render-input:/tmp/superheroes-session-wo4-golden/prior-comments.json -->
 If a previous review flagged a finding and the author replied
 with substantive explanatory text (not just "ok" or an emoji) explaining
 why it's intentional, **raise the finding AND note the prior justification**

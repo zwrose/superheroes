@@ -201,7 +201,11 @@ def test_prior_comments_pr_mode_absent_disclosed_not_fabricated(tmp_path):
     assert state["rounds"]["1"]["priorCommentsUnavailable"] is True
     ph = {"PRIOR_COMMENTS_PATH": path, "RUBRIC_PATH": RD._shipped_rubric_path()}
     assert RD._readable_file_input_refusal(ph) is None
-    block = RD._prior_comments_instruction_block(path)
+    derived = RO._derived_placeholders(
+        RP.P_PANEL,
+        {"placeholders": ph, "landing_path": ""},
+    )
+    block = derived["PRIOR_COMMENTS_INSTRUCTION_BLOCK"]
     assert "No prior-comments.json was supplied" in block
     assert path not in block
 

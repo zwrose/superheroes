@@ -47,7 +47,6 @@ positives.
 
 ## Author-justification rule (PR mode only)
 {{PRIOR_COMMENTS_INSTRUCTION_BLOCK}}
-<!-- render-input:{{PRIOR_COMMENTS_PATH}} -->
 If a previous review flagged a finding and the author replied
 with substantive explanatory text (not just "ok" or an emoji) explaining
 why it's intentional, **raise the finding AND note the prior justification**

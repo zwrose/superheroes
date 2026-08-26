@@ -5491,17 +5491,6 @@ def _prior_comments_unavailable_marker():
     return "(prior-comments-unavailable — orchestrator did not supply prior-comments.json)"
 
 
-def _prior_comments_instruction_block(prior_path):
-    """Honest author-justification intro — never cite a path that is not a real file."""
-    prior = (prior_path or "").strip()
-    if prior and not prior.startswith("(") and os.path.isfile(prior):
-        return ("%s contains prior review comments and their\nthreads." % prior)
-    if prior.startswith("("):
-        return ("No prior-comments.json was supplied for this PR — there are no prior review "
-                "comments or author justifications to consult.")
-    return ""
-
-
 def _resolve_prior_comments_path(session_dir, state):
     """Panel prior-comments path — never fabricates ``[]``.
 
@@ -5593,8 +5582,6 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "LAYER_PATH": layer_path,
             "PR_CHECKOUT_PATH": pr_checkout,
             "PRIOR_COMMENTS_PATH": prior_comments_path,
-            "PRIOR_COMMENTS_INSTRUCTION_BLOCK": _prior_comments_instruction_block(
-                prior_comments_path),
             "FOCUS_NOTES": _normalize_focus_notes(meta.get("focusNotes") or cfg.get("focusNotes")),
             "DIMENSION": dim_label,
             "CHANNEL": channel,

@@ -546,7 +546,7 @@ _DERIVED_PLACEHOLDER_NAMES = frozenset({
 
 # Auxiliary inputs consumed by derivation but not declared in the template body.
 _FIXTURE_AUX_INPUTS = {
-    RD.P_PANEL: frozenset({"CHANNEL", "FOCUS_NOTES", "FINDINGS_OUTPUT_PATH", "PR_CHECKOUT_PATH"}),
+    RD.P_PANEL: frozenset({"CHANNEL", "FOCUS_NOTES", "FINDINGS_OUTPUT_PATH", "PR_CHECKOUT_PATH", "PRIOR_COMMENTS_PATH"}),
     RD.P_VERIFIERS: frozenset({"CHANNEL"}),
     RD.P_SYNTHESIS: frozenset({"CHANNEL", "GROUPING_OUTPUT_PATH"}),
     RD.P_GAPSWEEP: frozenset({"CHANNEL", "FINDINGS_OUTPUT_PATH"}),
@@ -713,6 +713,50 @@ def test_placeholder_fixture_known_table_covers_every_template_placeholder():
     assert not gaps, "template placeholder(s) missing realistic fixture value: %s" % gaps
     assert not stub_values, "template placeholder(s) with stub or empty fixture value: %s" % stub_values
     assert not stale_keys, "stale fixture key(s) not declared in template or aux inputs: %s" % stale_keys
+
+
+def test_derived_placeholder_names_match_production_derivation():
+    """`_DERIVED_PLACEHOLDER_NAMES` must equal the union of names production `_derived_placeholders`
+    adds beyond the placeholders it was handed, computed per phase from the fixture's direct names.
+
+    Bite axis: registry drift — a name registered as derived that no derivation produces, or a name
+    production derives that nobody registered — not render behaviour, which the phase-census tests
+    above already cover.
+    """
+    produced_union = set()
+    for phase in RO.ORDER_PHASES:
+        ph = _phase_placeholders(phase, RD.CHANNEL_FILE)
+        context = {
+            "session_dir": SESSION,
+            "round": 1,
+            "attempt": 1,
+            "diff_path": _DIFF,
+            "rubric_path": "/plugin/rubric/review-base.md",
+            "core_path": "/proj/core.md",
+            "layer_path": "/proj/layer.md",
+            "repo_root": "/proj",
+            "landing_path": BARE,
+            "envelope_stub_path": SESSION + "/round-1/landing/p/skey.a1.stub.json",
+            "ratified_residuals": "",
+            "residuals_provenance": "prov",
+            "residuals_read_failure": None,
+            "payload": {},
+            "host_seat": True,
+            "placeholders": ph,
+        }
+        derived = RO._derived_placeholders(phase, context)
+        produced_union |= set(derived.keys()) - set(ph.keys())
+    registered = set(_DERIVED_PLACEHOLDER_NAMES)
+    missing_from_production = registered - produced_union
+    assert not missing_from_production, (
+        "registered derived name(s) production does not produce: %s"
+        % sorted(missing_from_production)
+    )
+    unregistered = produced_union - registered
+    assert not unregistered, (
+        "production-derived name(s) not registered in _DERIVED_PLACEHOLDER_NAMES: %s"
+        % sorted(unregistered)
+    )
 
 
 def _render_phase(phase, host_seat):

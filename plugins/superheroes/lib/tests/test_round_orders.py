@@ -62,8 +62,6 @@ def _panel_placeholders(channel="file", pr_checkout=False):
         "LAYER_PATH": _LAYER_UNRESOLVED,
         "PR_CHECKOUT_PATH": os.path.join(_SESSION, "repo") if pr_checkout else "",
         "PRIOR_COMMENTS_PATH": prior_path,
-        "PRIOR_COMMENTS_INSTRUCTION_BLOCK": (
-            "%s contains prior review comments and their\nthreads." % prior_path),
         "FOCUS_NOTES": "touch auth paths carefully",
         "DIMENSION": "Code",
         "CHANNEL": channel,
