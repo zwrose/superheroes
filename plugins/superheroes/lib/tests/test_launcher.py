@@ -936,7 +936,7 @@ def _reap(result):
 
 
 def test_opus_child_effort_pinned_medium_over_ambient_high(tmp_path, monkeypatch):
-  # axis: resolved opus tier pins CLAUDE_EFFORT=medium in the child even when the launching
+  # axis: resolved opus tier pins the effort input to medium in the child even when the launching
   # env carries high — the inheritance accident #1156 closes
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
@@ -957,6 +957,84 @@ def test_opus_child_effort_pinned_medium_over_ambient_high(tmp_path, monkeypatch
     assert captured[0][L.EFFORT_ENV] == "medium"
     assert result["effort"] == "medium"
     assert result["effortSource"] == "opus-policy"
+    _reap(result)
+
+
+def test_pinned_effort_uses_the_documented_cli_input_variable(tmp_path, monkeypatch):
+  # axis: the pin lands on the variable the CLI actually READS. Every other test in this
+  # family spells the key as `L.EFFORT_ENV`, which stays green under ANY name the constant
+  # happens to hold — including the CLAUDE_EFFORT this branch first shipped, which the CLI
+  # overwrites with its own resolution (a live four-arm probe: injecting CLAUDE_EFFORT=medium
+  # produced a child that resolved `high`). This test names the documented input as a LITERAL,
+  # so a rename of the constant cannot keep it passing. It is the red-on-old proof.
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_EFFORT_LEVEL", "high")
+    captured = []
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_capturing_spawn(captured),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert result["model"] == "opus"
+    assert captured[0]["CLAUDE_CODE_EFFORT_LEVEL"] == "medium"
+    _reap(result)
+
+
+def test_pinned_child_drops_the_stale_effort_reflection(tmp_path, monkeypatch):
+  # axis: CLAUDE_EFFORT is the CLI's own OUTPUT, not an input. Letting the launching session's
+  # stale value ride into a pinned child would leave a forged observable that reads exactly
+  # like a receipt — the placebo shape vet 178 caught — so the pin drops it and lets the child's
+  # own reflection be the honest evidence of what the CLI resolved.
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    captured = []
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_capturing_spawn(captured),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert result["model"] == "opus"
+    assert captured[0]["CLAUDE_CODE_EFFORT_LEVEL"] == "medium"
+    assert "CLAUDE_EFFORT" not in captured[0]
+    _reap(result)
+
+
+def test_inherit_case_touches_neither_effort_variable(tmp_path, monkeypatch):
+  # axis: boundary, both variables at once — the ruling names Opus 5 only, so a non-opus child
+  # inherits the documented input AND keeps the reflection the pin would otherwise have dropped.
+  # Pins the literals so the boundary cannot drift with the constant.
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    monkeypatch.setenv("CLAUDE_CODE_EFFORT_LEVEL", "high")
+    captured = []
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        model="sonnet",
+        spawn_fn=_capturing_spawn(captured),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert result["model"] == "sonnet"
+    assert captured[0]["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
+    assert captured[0]["CLAUDE_EFFORT"] == "high"
+    assert result["effortSource"] == "inherited"
     _reap(result)
 
 
@@ -1061,7 +1139,7 @@ def test_non_opus_tier_keeps_ambient_effort(tmp_path, monkeypatch):
 
 
 def test_non_opus_tier_without_ambient_effort_sets_nothing(tmp_path, monkeypatch):
-  # axis: the inherit case invents no value — an unset CLAUDE_EFFORT stays unset
+  # axis: the inherit case invents no value — an unset effort input stays unset
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     monkeypatch.delenv(L.EFFORT_ENV, raising=False)

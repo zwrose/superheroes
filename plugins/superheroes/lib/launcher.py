@@ -34,7 +34,16 @@ WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
 WORKTREES_DIR_NAME = ".superheroes-worktrees"
 CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
 _DEFAULT_CONFIG_DIR_NAME = ".claude"
-EFFORT_ENV = "CLAUDE_EFFORT"
+# The CLI's documented input for reasoning effort is CLAUDE_CODE_EFFORT_LEVEL, and an
+# environment variable takes precedence over both the `--effort` flag and the `effortLevel`
+# settings key. CLAUDE_EFFORT is NOT an input: the CLI writes its own resolved effort back
+# into the environment under that name, so injecting it is a placebo the CLI overwrites.
+# Demonstrated by a four-arm live probe (#1156, vet 178) — injecting CLAUDE_EFFORT=medium
+# yields a child that resolves `high`, while CLAUDE_CODE_EFFORT_LEVEL=medium yields `medium`
+# even when a stale CLAUDE_EFFORT=high rides along. `ps eww` cannot see this: it shows the
+# exec-time environment, not the live resolution, so a spawn-plumbing check is not a receipt.
+EFFORT_ENV = "CLAUDE_CODE_EFFORT_LEVEL"
+EFFORT_REFLECTION_ENV = "CLAUDE_EFFORT"
 # Owner ruling 2026-08-25 (in-channel, walk-3 sitting): every use of Opus 5 runs at effort
 # `medium` — "opus 5 works better at medium overall". The launcher pins it at the spawn point
 # so a builder can never run at whatever effort the launching session happened to carry;
@@ -414,7 +423,7 @@ def _resolve_effort(effort, tier):
     Three outcomes, and the third is the one that matters: an explicit `--effort` is the
     deliberate exception (a flag, not an env accident); a resolved `opus` tier is pinned to
     `medium` by the owner ruling above; every other tier resolves to None, which the spawn
-    point reads as "leave the ambient CLAUDE_EFFORT alone" — the ruling names Opus 5 only.
+    point reads as "leave the ambient effort variables alone" — the ruling names Opus 5 only.
     """
     if effort is not None:
         resolved, source = effort, "explicit"
@@ -949,7 +958,7 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
             "source": resolution["source"],
             "reason": resolution["reason"],
         },
-        # None means "inherit" — the spawn point leaves CLAUDE_EFFORT untouched. The source
+        # None means "inherit" — the spawn point leaves the effort variables untouched. The source
         # is always a word, so the ledger records WHY a lane ran at the effort it ran at.
         "effort": effort_result["effort"],
         "effortSource": effort_result["source"],
@@ -1067,11 +1076,16 @@ def _spawn_attempt(
     if resolved["ok"]:
         child_env[hb.HEARTBEAT_ROOT_ENV] = resolved["root"]
     child_env["BASH_MAX_TIMEOUT_MS"] = str(bash_max_timeout_ms)
-    # Assignment, not defaulting: the launching session's ambient CLAUDE_EFFORT is already in
-    # `child_env` via `_scrub_env`, so a pinned effort must overwrite it or the accident this
-    # closes survives. A None effort is the inherit case and deliberately touches nothing.
+    # Assignment, not defaulting: the launching session's ambient effort variables are already
+    # in `child_env` via `_scrub_env`, so a pinned effort must overwrite the documented input or
+    # the accident this closes survives. The stale CLAUDE_EFFORT *reflection* is dropped rather
+    # than written: the CLI overwrites it from its own resolution anyway, so writing it would buy
+    # nothing while destroying the one honest observable — a child's reflection is evidence of
+    # what the CLI resolved only for as long as we do not forge it, and a forged one is exactly
+    # the placebo receipt vet 178 caught. A None effort is the inherit case and touches neither.
     if effort is not None:
         child_env[EFFORT_ENV] = effort
+        child_env.pop(EFFORT_REFLECTION_ENV, None)
     try:
         out_fh = open(log_path, "ab")
     except OSError:
