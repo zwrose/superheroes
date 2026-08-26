@@ -39,6 +39,7 @@ derived placeholders (panel channel block, optional context lines) before substi
 ``context["placeholders"]``."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -49,6 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import core_md  # noqa: E402
 import mode_registry  # noqa: E402
 import round_adapters  # noqa: E402
+import review_findings_schema  # noqa: E402
 import round_phases  # noqa: E402
 
 _PLACEHOLDER_RE = re.compile(r"\{\{([A-Z][A-Z0-9_]*)\}\}")
@@ -217,8 +219,12 @@ def _stdout_payload_example(phase: str) -> tuple[str | None, str | None]:
         return None, "payload-contract:%s" % reason
     required = contract.get("required") or []
     if phase == round_phases.P_PANEL:
-        return '{"findings": [...], "investigated": [...]}', None
+        return json.dumps(
+            review_findings_schema.example_findings_object(), sort_keys=True,
+        ), None
     if phase == round_phases.P_AUDITS:
+        # Audits stdout contract (id/ruling/reason) — not the findings-member schema; do not
+        # route through review_findings_schema.example_findings_object().
         return '{"id": "...", "ruling": "...", "reason": "..."}', None
     if not required:
         return '{...}', None
@@ -280,11 +286,15 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     channel = ph.get("CHANNEL", "file")
     landing = context.get("landing_path", "")
     if channel == "stdout":
+        panel_example = json.dumps(
+            review_findings_schema.example_findings_object(), sort_keys=True,
+        )
         ph["OUTPUT_CHANNEL_BLOCK"] = (
-            'Emit `{"findings": [...], "investigated": [...]}` as your final stdout with nothing '
+            "Emit `%s` as your final stdout with nothing "
             "after it; do not write a findings file (read-only sandbox — nothing reads one). "
             "List in `investigated` every repo-relative path you actually read to ground this "
             "review — always, whether or not you found anything."
+            % panel_example
         )
     else:
         ph["OUTPUT_CHANNEL_BLOCK"] = (

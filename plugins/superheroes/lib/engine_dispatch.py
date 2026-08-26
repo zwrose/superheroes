@@ -43,6 +43,7 @@ import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok â€
 import file_lock  # noqa: E402
 import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
+import review_findings_schema  # noqa: E402  findings example renderer (#1145 WO-C)
 import sanitized_view  # noqa: E402
 import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
 from guardian_tools import path_is_confidently_under  # noqa: E402
@@ -2606,6 +2607,20 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     diagnose_stdout = norm_strip["text"]
     envelope_error = norm_strip["rawEnvelopeError"]
 
+    if prompt_echo_only:
+        # axis: echo-only stdout must forfeit before parse accepts embedded example JSON (#1145 WO-C)
+        engagement = _engagement_with_read(engagement)
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "engagement": engagement,
+            "payloadShape": {
+                "parsed": engine_adapter.SHAPE_PROMPT_ECHO_ONLY,
+                "topLevelKeys": [],
+                "keysTruncated": False,
+            },
+        }
+
     res = engine_adapter.parse_result(
         engine, role_kind, stdout, raw_envelope_error=envelope_error)
     if not _parse_review_has_payload(res):
@@ -3619,7 +3634,10 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
             argv = built["argv"]
             notice = sanitized_view.sanitized_view_notice(view, mode=resolved_mode["mode"])
-            fed_prompt = ANTIHIJACK_PREAMBLE + notice + base_prompt
+            fed_prompt = (
+                ANTIHIJACK_PREAMBLE + notice + base_prompt
+                + review_findings_schema.example_prompt_block()
+            )
 
             if run_dir_real is None:
                 run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
