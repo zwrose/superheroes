@@ -4162,7 +4162,7 @@ def _run_seam(seams, action, payload, state, config):
             if isinstance(sm, dict):
                 out["seatMap"] = sm
             cr = io.get("canaryResult")
-            if isinstance(cr, dict):
+            if isinstance(cr, dict) or isinstance(cr, list):
                 out["canaryResult"] = cr
         return out
     if action == P_VERIFIERS:
