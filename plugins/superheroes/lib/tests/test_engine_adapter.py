@@ -1939,6 +1939,14 @@ def test_parse_result_review_near_copy_example_sentinel_is_hollow():
     assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
 
 
+def test_parse_result_review_single_placeholder_structural_only_is_hollow():
+    # axis: lone placeholder with only structural severity must not grade as engaged finding
+    title_placeholder = RFS._placeholder_string("title")
+    member = {"severity": "Critical", "title": title_placeholder}
+    stdout = json.dumps({"findings": [member]})
+    assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
 @pytest.mark.parametrize("bad_severity", [None, "", "critical", 0, True, "bogus-tier"])
 def test_parse_result_review_off_scale_severity_with_censused_body_is_hollow(bad_severity):
     # axis: off-scale severity cannot unlock censused substance keys
@@ -1999,6 +2007,11 @@ def test_findings_member_parse_and_shape_diagnostic_agree(member, expect_hollow)
 def test_review_payload_shape_valid_registered_kind_returns_none(kind, payload):
     # axis: registry-based recognition — valid payloads for all four kinds diagnose as clean
     assert EA.review_payload_shape(json.dumps(payload)) is None
+
+
+def test_review_payload_shape_diagnostics_registry_covers_every_result_kind():
+    # axis: every REVIEW_RESULT_KINDS member must have a shape diagnostic handler
+    assert set(EA._REVIEW_PAYLOAD_SHAPE_DIAGNOSTICS) == set(EA.REVIEW_RESULT_KINDS)
 
 
 @pytest.mark.parametrize("kind,payload,expected_parsed", [
@@ -2410,6 +2423,17 @@ def test_review_payload_shape_object_findings_not_a_list():
     res = EA.review_payload_shape(json.dumps({"findings": "oops"}))
     assert res == {
         "parsed": EA.SHAPE_OBJECT_FINDINGS_NOT_A_LIST, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+def test_review_payload_shape_explicit_null_findings_with_investigated():
+    # axis: explicit findings:null is not conflated with absent key — diagnoses not-a-list
+    payload = {"findings": None, "investigated": ["a.py"]}
+    assert EA.review_payload_shape(json.dumps(payload)) == {
+        "parsed": EA.SHAPE_OBJECT_FINDINGS_NOT_A_LIST, "topLevelKeys": [], "keysTruncated": False,
+    }
+    assert EA.parse_result("codex", "review", json.dumps(payload)) == {
+        "ok": False, "reason": "unreadable",
     }
 
 

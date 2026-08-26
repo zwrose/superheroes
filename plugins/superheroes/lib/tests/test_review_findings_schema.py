@@ -5,6 +5,7 @@ import json
 import os
 import re
 
+import jsonschema
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -321,6 +322,21 @@ def test_member_carries_sentinel_true_for_near_copy():
     assert RFS.member_carries_sentinel(near_copy) is True
 
 
+def test_member_carries_sentinel_true_for_single_placeholder_with_structural_only():
+    # axis: lone placeholder with only structural values (severity) is echo — grades hollow via parse
+    title_placeholder = RFS._placeholder_string("title")
+    member = {"severity": "Critical", "title": title_placeholder}
+    assert RFS.member_carries_sentinel(member) is True
+
+
+def test_member_carries_sentinel_false_for_single_placeholder_plus_real_substance():
+    # axis: lone placeholder beside real prose in another substance field is genuine content
+    title_placeholder = RFS._placeholder_string("title")
+    member = {"severity": "Critical", "title": title_placeholder, "body": "Real finding prose."}
+    assert RFS.member_carries_sentinel(member) is False
+    assert RFS.member_is_engaged(member) is True
+
+
 def test_member_carries_sentinel_false_for_ordinary_prose():
     assert RFS.member_carries_sentinel(
         {"id": "code-001", "severity": "Minor", "body": "Ordinary review prose."}
@@ -447,13 +463,29 @@ def test_example_findings_object_member_keys_are_canonical():
     assert set(member.keys()) == set(RFS.CANONICAL_MEMBER_KEYS)
 
 
+def test_example_findings_object_validates_against_shipped_schema():
+    # axis: rendered example must validate against the schema it is derived from
+    schema = _load_shipped_schema()
+    jsonschema.validate(RFS.example_findings_object(), schema)
+
+
 def test_example_findings_object_is_engaged_and_values_in_set():
     member = RFS.example_findings_object()["findings"][0]
     assert RFS.member_is_engaged(member) is True
     placeholders = RFS.example_member_values()
-    for value in member.values():
+    field_schemas = _schema_finding_properties()
+    for key, value in member.items():
+        if "enum" in field_schemas[key]:
+            continue
         if isinstance(value, str):
             assert value in placeholders
+
+
+def test_fallback_literals_match_shipped_schema():
+    # axis: fallback constants drift-guard against shipped schema keys and severity enum
+    schema_props = _schema_finding_properties()
+    assert tuple(RFS._FALLBACK_CANONICAL_MEMBER_KEYS) == tuple(schema_props.keys())
+    assert RFS._FALLBACK_SEVERITY_TIERS == frozenset(schema_props["severity"]["enum"])
 
 
 def test_example_prompt_block_contains_json_and_format_only_sentence():

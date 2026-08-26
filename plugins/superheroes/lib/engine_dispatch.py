@@ -3641,10 +3641,10 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
             argv = built["argv"]
             notice = sanitized_view.sanitized_view_notice(view, mode=resolved_mode["mode"])
-            fed_prompt = (
-                ANTIHIJACK_PREAMBLE + notice + base_prompt
-                + review_findings_schema.example_prompt_block()
-            )
+            fed_prompt = ANTIHIJACK_PREAMBLE + notice + base_prompt
+            # Findings-shaped example only for findings seats; other kinds out of scope (#1145).
+            if expected_result_kind in (None, "findings"):
+                fed_prompt += review_findings_schema.example_prompt_block()
 
             if run_dir_real is None:
                 run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
