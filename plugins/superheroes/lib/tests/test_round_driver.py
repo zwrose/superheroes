@@ -4643,6 +4643,67 @@ def test_seat_map_unavailable_constraint_violated_supersedes_shape():
     assert not state["certification"]["shape"].endswith("-degraded")
 
 
+# =============================================================================
+# #681 item 3 — evidence-preserving seat map merge (Invariant B)
+# =============================================================================
+
+def test_partial_round2_seat_map_preserves_fell_open_disclosure():
+    """axis: later partial seat map must not wipe round-1 configured seats — fellOpen still fires."""
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    round1_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    round1_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    RD._fold_panel(state, state["config"], {
+        "seats": seats,
+        "seatMap": round1_map,
+        "ranManifest": {"code-reviewer": "codex"},
+    })
+    assert "fellOpen" not in state["rounds"]["1"]
+    state["round"] = 2
+    partial_map = {"seats": {"security-reviewer": {"vendor": "claude"}}}
+    RD._fold_panel(state, state["config"], {
+        "seats": seats,
+        "seatMap": partial_map,
+        "ranManifest": {"code-reviewer": "claude"},
+    })
+    assert state["seatMap"]["seats"]["code-reviewer"] == {"vendor": "codex"}
+    assert state["rounds"]["2"]["fellOpen"] == [
+        {"seat": "code-reviewer", "configured": "codex", "ran": "claude",
+         "reason": "forfeit-fell-open"},
+    ]
+
+
+def test_partial_round2_degradations_preserves_same_family_shape():
+    """axis: later shorter degradations list must not drop same-family disclosure."""
+    state = RD.new_state(_cfg(leg="panel", vendors=["codex", "cursor"]))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    round1_map = _panel_seat_map_with_same_family("security-reviewer")
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round1_map})
+    assert RD._same_family_degraded(state) is True
+    state["round"] = 2
+    round2_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    round2_map["degradations"] = []
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round2_map})
+    assert RD._same_family_degraded(state) is True
+    assert "security-reviewer" in RD._same_family_seats(state)
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["certification"]["shape"].endswith("-degraded")
+    assert "same-family" in state["certification"]["shapeDrivers"]
+
+
+def test_seat_map_merge_later_wins_for_named_seat():
+    """axis: when both rounds name a seat, the later map's vendor wins."""
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    round1_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    round1_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round1_map})
+    state["round"] = 2
+    round2_map = {"seats": {"code-reviewer": {"vendor": "cursor"}}}
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round2_map})
+    assert state["seatMap"]["seats"]["code-reviewer"] == {"vendor": "cursor"}
+
+
 def test_fell_open_in_seat_ran_vendor_echo_ignored_at_fold():
     state = RD.new_state(_cfg(leg="panel"))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
