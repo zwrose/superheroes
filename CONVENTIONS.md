@@ -692,7 +692,8 @@ is on the record, not inferred from silence; only `checked-degraded` appends to
 `verify()` treats a maker-family seat as a **violation** when an alternative family was
 reachable, and as **not** a violation when unavoidable (the degradation path); unusable
 liveness evidence — pin-scoped probes, synthesized liveness defaults, a malformed
-degradations list, or malformed vendor names on **any** receipt; plus, on probed
+degradations list, or malformed vendor names on **any** receipt; an unknown, absent,
+or malformed `liveCellsSource` on **any** receipt; plus, on probed
 receipts (`liveCellsSource: "probed"`), missing or malformed `liveCells`, and on
 synthesized receipts, missing recorded `liveVendors` — **fails closed to violation**,
 and only a well-formed, registry-resolvable receipt authorizes

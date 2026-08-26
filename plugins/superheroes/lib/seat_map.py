@@ -175,24 +175,26 @@ def _resolvable_families_for_seat(
             if fam is not None and is_allowed(tier, "claude", model, effort):
                 families.add(fam)
         return families
-    # synthesized and absent source fall through: synthesized cells derive from the
-    # pessimistic liveVendors rollup, so vendor-level evidence is never less conservative.
-    live = seat_map.get("liveVendors")
-    if not isinstance(live, list) or not live:
-        return None
-    for vendor in live:
-        if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
+    if cells_source == liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED:
+        # synthesized cells derive from the pessimistic liveVendors rollup
+        live = seat_map.get("liveVendors")
+        if not isinstance(live, list) or not live:
             return None
-    for vendor in live:
-        cell = matrix_config(tier, vendor)
-        if cell is None:
-            continue
-        model, effort = cell
-        fam = family_for(tier, vendor)
-        if fam is None or not is_allowed(tier, vendor, model, effort):
-            continue
-        families.add(fam)
-    return families
+        for vendor in live:
+            if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
+                return None
+        for vendor in live:
+            cell = matrix_config(tier, vendor)
+            if cell is None:
+                continue
+            model, effort = cell
+            fam = family_for(tier, vendor)
+            if fam is None or not is_allowed(tier, vendor, model, effort):
+                continue
+            families.add(fam)
+        return families
+    # absent, unrecognized, non-string, or wrong-case liveCellsSource — not evidence
+    return None
 
 
 def _alternative_family_evidence(
@@ -374,7 +376,7 @@ def build(
 
     if live_cells is None:
         live_cells_normalized = _synthesize_live_cells(live, roster, tier_by_seat)
-        resolved_cells_source = live_cells_source
+        resolved_cells_source = live_cells_source or liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED
     else:
         live_cells_normalized = set()
         for entry in live_cells:

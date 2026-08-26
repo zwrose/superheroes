@@ -288,6 +288,13 @@ def _dead_cell_note(vendor, model, effort, detail):
     }
 
 
+def _liveness_read_error_note(detail):
+    return {
+        "constraint": "liveness-read-error",
+        "reason": "liveness read failed: %s" % _bounded_reason(detail),
+    }
+
+
 def _slot_key_from_entry(entry):
     """Return (model, effort) or _UNKEYABLE. Never raises."""
     if not isinstance(entry, (list, tuple)) or len(entry) < 1:
@@ -438,6 +445,7 @@ def live_from(liveness, needed):
 
     inventory = _build_needed_inventory(needed)
 
+    loop_error = None
     try:
         for vendor, slots in inventory.items():
             if slots is None:
@@ -450,8 +458,10 @@ def live_from(liveness, needed):
                 if _cell_is_live(cells_by_key, key):
                     model, effort = key
                     live_cells.append([vendor, model, effort])
-    except Exception:
-        pass
+    except Exception as exc:
+        loop_error = exc
+    if loop_error is not None:
+        dead_notes.append(_liveness_read_error_note(str(loop_error)))
     _reconcile_inventory(inventory, live_cells, liveness, dead_notes, live)
 
     if "claude" not in live:
