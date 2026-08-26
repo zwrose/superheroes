@@ -5,6 +5,7 @@ normalizer, and rendered example object — single source; consumers import, nev
 """
 import json
 import os
+import re
 
 import audits
 import round_phases
@@ -122,35 +123,59 @@ def _all_synonym_maps():
     return merged
 
 
-def _placeholder_field_value_count(value, placeholders):
-    """Count string values that exactly equal an example placeholder (stripped)."""
+def _effective_nonce(nonce):
+    """Return nonce when it is a non-empty string; otherwise treat as no nonce."""
+    if not isinstance(nonce, str) or nonce == "":
+        return None
+    return nonce
+
+
+def _near_copy_normalize(value):
+    """Normalize for placeholder near-copy equality: casefold, collapse whitespace, strip.
+
+    No punctuation stripping or token surgery — every increment of aggression buys back
+    the false-positive class where real prose quoting the example was graded as echo.
+    """
+    if not isinstance(value, str):
+        return value
+    return re.sub(r"\s+", " ", value.casefold()).strip()
+
+
+def _normalized_placeholder_set(placeholders):
+    return frozenset(_near_copy_normalize(p) for p in placeholders)
+
+
+def _placeholder_field_value_count(value, normalized_placeholders):
+    """Count string values whose near-copy normalization matches a placeholder."""
     count = 0
     if isinstance(value, dict):
         for item in value.values():
-            count += _placeholder_field_value_count(item, placeholders)
+            count += _placeholder_field_value_count(item, normalized_placeholders)
     elif isinstance(value, list):
         for item in value:
-            count += _placeholder_field_value_count(item, placeholders)
-    elif isinstance(value, str) and value.strip() in placeholders:
-        count += 1
+            count += _placeholder_field_value_count(item, normalized_placeholders)
+    elif isinstance(value, str):
+        normalized = _near_copy_normalize(value)
+        if normalized and normalized in normalized_placeholders:
+            count += 1
     return count
 
 
-def _member_has_non_placeholder_substance(value, placeholders):
-    """True when value carries non-empty content beyond exact placeholder strings."""
+def _member_has_non_placeholder_substance(value, normalized_placeholders):
+    """True when value carries non-empty content beyond near-copy placeholder matches."""
     if isinstance(value, dict):
         return any(
-            _member_has_non_placeholder_substance(item, placeholders)
+            _member_has_non_placeholder_substance(item, normalized_placeholders)
             for item in value.values()
         )
     if isinstance(value, list):
         return any(
-            _member_has_non_placeholder_substance(item, placeholders)
+            _member_has_non_placeholder_substance(item, normalized_placeholders)
             for item in value
         )
     if isinstance(value, str):
-        stripped = value.strip()
-        return stripped != "" and stripped not in placeholders
+        normalized = _near_copy_normalize(value)
+        return normalized != "" and normalized not in normalized_placeholders
     return value is not None
 
 
@@ -159,7 +184,7 @@ _ECHO_SUBSTANCE_KEYS = (
 )
 
 
-def _member_has_non_placeholder_substance_fields(member, placeholders):
+def _member_has_non_placeholder_substance_fields(member, normalized_placeholders):
     """True when substance (not structural) fields carry non-placeholder content."""
     if not isinstance(member, dict):
         return False
@@ -168,69 +193,39 @@ def _member_has_non_placeholder_substance_fields(member, placeholders):
             continue
         value = member[key]
         if isinstance(value, str):
-            stripped = value.strip()
-            if stripped != "" and stripped not in placeholders:
+            normalized = _near_copy_normalize(value)
+            if normalized != "" and normalized not in normalized_placeholders:
                 return True
         elif value is not None and not isinstance(value, (dict, list)):
             return True
     return False
 
 
-def _value_contains_sentinel(value):
-    """True when EXAMPLE_SENTINEL appears in any nested string under value."""
-    if isinstance(value, dict):
-        return any(_value_contains_sentinel(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_value_contains_sentinel(item) for item in value)
-    if isinstance(value, str):
-        return EXAMPLE_SENTINEL in value
-    return False
+def _build_placeholder_set(nonce):
+    """Union of base and nonce-keyed placeholders when nonce is effective; base only otherwise."""
+    base = example_member_values(None)
+    effective = _effective_nonce(nonce)
+    if effective is None:
+        return base
+    return base | example_member_values(effective)
 
 
-def _substance_value_carries_content(value):
-    """True when a substance field value carries inspectable content for the echo leg."""
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return value.strip() != ""
-    if isinstance(value, (dict, list)):
-        return True
-    return False
-
-
-def _all_present_substance_fields_carry_sentinel(member):
-    """True when every content-bearing substance field value contains EXAMPLE_SENTINEL."""
-    if not isinstance(member, dict):
-        return False
-    present_values = []
-    for key in _ECHO_SUBSTANCE_KEYS:
-        if key not in member:
-            continue
-        value = member[key]
-        if _substance_value_carries_content(value):
-            present_values.append(value)
-    if not present_values:
-        return False
-    return all(_value_contains_sentinel(value) for value in present_values)
-
-
-def member_carries_sentinel(member):
-    # axis: placeholder field-value equality (not substring sentinel) refuses verbatim/near-copy echo
+def member_carries_sentinel(member, nonce=None):
+    # axis: near-copy placeholder equality (not substring sentinel) refuses verbatim/near-copy echo
     """True when field values are example placeholders (verbatim/near-copy echo).
 
     Prose that merely embeds EXAMPLE_SENTINEL inside a real sentence is not an echo.
     """
     if not isinstance(member, dict):
         return False
-    placeholders = example_member_values()
-    placeholder_count = _placeholder_field_value_count(member, placeholders)
+    placeholders = _build_placeholder_set(nonce)
+    normalized_placeholders = _normalized_placeholder_set(placeholders)
+    placeholder_count = _placeholder_field_value_count(member, normalized_placeholders)
     if placeholder_count >= 2:
         return True
     if placeholder_count == 1 and not _member_has_non_placeholder_substance_fields(
-        member, placeholders
+        member, normalized_placeholders
     ):
-        return True
-    if _all_present_substance_fields_carry_sentinel(member):
         return True
     return False
 
@@ -291,18 +286,20 @@ def normalize_member(member):
     return out
 
 
-def _placeholder_string(field_name):
-    return "%s placeholder %s" % (field_name, EXAMPLE_SENTINEL)
+def _placeholder_string(field_name, nonce=None):
+    if _effective_nonce(nonce) is None:
+        return "%s placeholder %s" % (field_name, EXAMPLE_SENTINEL)
+    return "%s placeholder %s-%s" % (field_name, EXAMPLE_SENTINEL, nonce)
 
 
-def example_member_values():
+def example_member_values(nonce=None):
     """Placeholder strings emitted by the example renderer (for verbatim-echo detection)."""
     values = set()
     for key in CANONICAL_MEMBER_KEYS:
         if key in ("line", "tradeoff"):
             continue
-        values.add(_placeholder_string(key))
-    values.add(_placeholder_string("investigated-path"))
+        values.add(_placeholder_string(key, nonce))
+    values.add(_placeholder_string("investigated-path", nonce))
     return frozenset(values)
 
 
@@ -317,17 +314,17 @@ def _first_schema_enum_member(field_schema):
     return None
 
 
-def _example_value_for_field(key, field_schema):
+def _example_value_for_field(key, field_schema, nonce=None):
     if key == "line":
         return None  # integer|null schema field — null placeholder
     if key == "tradeoff":
         return None  # boolean|null schema field — null placeholder
     if "enum" in field_schema:
         return _first_schema_enum_member(field_schema)
-    return _placeholder_string(key)
+    return _placeholder_string(key, nonce)
 
 
-def example_findings_object():
+def example_findings_object(nonce=None):
     """Format-only example object with exactly the canonical member keys."""
     field_schemas = _shipped_finding_property_schemas()
     member = {}
@@ -335,20 +332,20 @@ def example_findings_object():
         field_schema = field_schemas.get(key)
         if field_schema is None:
             if SCHEMA_READ_USED_FALLBACK:
-                member[key] = _placeholder_string(key)
+                member[key] = _placeholder_string(key, nonce)
             else:
-                member[key] = _example_value_for_field(key, field_schemas[key])
+                member[key] = _example_value_for_field(key, field_schemas[key], nonce)
         else:
-            member[key] = _example_value_for_field(key, field_schema)
+            member[key] = _example_value_for_field(key, field_schema, nonce)
     return {
         "findings": [member],
-        "investigated": [_placeholder_string("investigated-path")],
+        "investigated": [_placeholder_string("investigated-path", nonce)],
     }
 
 
-def example_prompt_block():
+def example_prompt_block(nonce=None):
     """Rendered format-only prompt block wrapping the example JSON object."""
-    payload = json.dumps(example_findings_object(), indent=2, sort_keys=True)
+    payload = json.dumps(example_findings_object(nonce), indent=2, sort_keys=True)
     return (
         "Format only — your findings replace every value; "
         "an echoed example grades hollow.\n"

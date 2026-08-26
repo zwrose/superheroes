@@ -380,15 +380,15 @@ def test_member_carries_sentinel_false_for_title_plus_body_quoting_sentinel():
     ) is False
 
 
-def test_member_carries_sentinel_true_for_body_only_quoting_sentinel():
-    # axis: all-quantifier leg when sole content-bearing substance field is body quoting example
+def test_member_carries_sentinel_false_for_body_only_quoting_sentinel():
+    # axis: real prose containing EXAMPLE_SENTINEL is not echo — substring leg retired (#1145c3)
     sentinel = RFS.EXAMPLE_SENTINEL
     assert RFS.member_carries_sentinel(
         {
             "severity": "Important",
             "body": "context:\n" + sentinel + " appears inside prose",
         }
-    ) is True
+    ) is False
 
 
 def test_member_carries_sentinel_false_for_body_only_ordinary_prose():
@@ -622,3 +622,58 @@ def test_example_prompt_block_contains_json_and_format_only_sentence():
     assert "Format only" in block
     assert "echoed example grades hollow" in block
     assert json.dumps(RFS.example_findings_object(), indent=2, sort_keys=True) in block
+
+
+_EXPECTED_TITLE_PLACEHOLDER = "title placeholder [RFS-EXAMPLE-SENTINEL-1145]"
+
+
+def test_example_rendering_back_compat_no_nonce():
+    # axis: round_orders and seat_canary call renderers with no argument — output must not drift
+    assert RFS._placeholder_string("title") == _EXPECTED_TITLE_PLACEHOLDER
+    assert RFS.example_findings_object()["findings"][0]["title"] == _EXPECTED_TITLE_PLACEHOLDER
+    expected_payload = json.dumps(RFS.example_findings_object(), indent=2, sort_keys=True)
+    expected_block = (
+        "Format only — your findings replace every value; "
+        "an echoed example grades hollow.\n"
+        + expected_payload
+    )
+    assert RFS.example_prompt_block() == expected_block
+
+
+def test_near_copy_normalization_casefold_and_whitespace():
+    # axis: near-copy matches case/whitespace variants; punctuation differences do not match
+    base = RFS._placeholder_string("title")
+    assert RFS._near_copy_normalize(base) == RFS._near_copy_normalize(
+        "  TITLE   PLACEHOLDER   [RFS-EXAMPLE-SENTINEL-1145]  "
+    )
+    assert RFS.member_carries_sentinel({"title": base.replace("placeholder", "PLACEHOLDER")}) is True
+    assert RFS.member_carries_sentinel({"title": base + "."}) is False
+
+
+def test_member_carries_sentinel_nonce_keyed_echo():
+    # axis: dispatch nonce N grades echo for example rendered under N
+    nonce = "dispatch-abc123"
+    example = RFS.example_findings_object(nonce)["findings"][0]
+    assert RFS.member_carries_sentinel(example, nonce=nonce) is True
+
+
+def test_member_carries_sentinel_different_nonce_not_echo():
+    # axis: same member is not echo when checked with a different nonce and no base-set match
+    nonce_n = "dispatch-n"
+    nonce_m = "dispatch-m"
+    example = RFS.example_findings_object(nonce_n)["findings"][0]
+    assert RFS.member_carries_sentinel(example, nonce=nonce_m) is False
+
+
+def test_member_carries_sentinel_nonceless_order_body_echo_under_any_nonce():
+    # axis: union with base set catches order-body examples rendered before dispatch exists
+    order_body_example = RFS.example_findings_object()["findings"][0]
+    assert RFS.member_carries_sentinel(order_body_example, nonce="any-dispatch-nonce") is True
+
+
+def test_member_carries_sentinel_invalid_nonce_treated_as_base_only():
+    # axis: empty or non-string nonce → base placeholder set only (fail-closed edge 5)
+    nonce_example = RFS.example_findings_object("dispatch-only")["findings"][0]
+    assert RFS.member_carries_sentinel(nonce_example, nonce="") is False
+    assert RFS.member_carries_sentinel(nonce_example, nonce=None) is False
+    assert RFS.member_carries_sentinel(nonce_example, nonce=0) is False
