@@ -43,6 +43,9 @@ _RFS = importlib.util.spec_from_file_location(
 RFS = importlib.util.module_from_spec(_RFS)
 _RFS.loader.exec_module(RFS)
 
+# Nonce-invariant stem present in every findings example block (any echo_nonce).
+_FINDINGS_EXAMPLE_STABLE_MARKER = "an echoed example grades hollow."
+
 
 @pytest.fixture(autouse=True)
 def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
@@ -315,6 +318,7 @@ def test_dispatch_review_codex_argv_has_c_repo_no_skip_git(tmp_path):
 
 
 def test_dispatch_review_prompt_has_new_preamble(tmp_path):
+    # axis: unpinned review dispatch must not append any findings example block (any nonce)
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
     base_body = "Review this code.\n"
@@ -337,7 +341,7 @@ def test_dispatch_review_prompt_has_new_preamble(tmp_path):
     contract = EA.REVIEW_RESULT_CONTRACT(None)
     assert contract in text
     assert text.endswith(contract)
-    assert RFS.example_prompt_block() not in text
+    assert _FINDINGS_EXAMPLE_STABLE_MARKER not in text
 
 
 def test_dispatch_review_repo_survives_success(tmp_path):
@@ -2831,8 +2835,8 @@ def test_review_dispatch_fed_prompt_includes_schema_example_block(
         assert prompt_text.endswith(contract)
         assert prompt_text.index(block) < prompt_text.index(contract)
     else:
-        assert RFS.example_prompt_block() not in opened["fedPrompt"]
-        assert RFS.example_prompt_block() not in prompt_text
+        assert _FINDINGS_EXAMPLE_STABLE_MARKER not in opened["fedPrompt"]
+        assert _FINDINGS_EXAMPLE_STABLE_MARKER not in prompt_text
     assert contract in opened["fedPrompt"]
     assert contract in prompt_text
     assert prompt_text.endswith(contract)
@@ -2854,7 +2858,7 @@ def test_review_dispatch_fed_prompt_result_contract_unpinned_lists_all_kinds(tmp
     contract = EA.REVIEW_RESULT_CONTRACT(None)
     assert contract in prompt_text
     assert prompt_text.endswith(contract)
-    assert RFS.example_prompt_block() not in prompt_text
+    assert _FINDINGS_EXAMPLE_STABLE_MARKER not in prompt_text
     for kind in EA.REVIEW_RESULT_KINDS:
         assert "`%s`" % kind in contract
         assert "`%s`" % kind in prompt_text
@@ -2882,7 +2886,7 @@ def test_review_dispatch_fed_prompt_result_contract_pinned_non_findings(
     assert contract in prompt_text
     assert prompt_text.endswith(contract)
     assert "`%s`" % expected_result_kind in contract
-    assert RFS.example_prompt_block() not in prompt_text
+    assert _FINDINGS_EXAMPLE_STABLE_MARKER not in prompt_text
 
 
 def test_review_dispatch_fed_prompt_blocks_never_abut(tmp_path):

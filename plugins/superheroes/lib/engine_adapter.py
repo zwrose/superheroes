@@ -889,6 +889,28 @@ def _scrub_investigated(investigated):
     return accepted, rejected
 
 
+def _investigated_path_is_placeholder_echo(path_val, *, echo_nonce=None):
+    """True when a whole investigated path string is a verbatim/near-copy example placeholder."""
+    if not isinstance(path_val, str):
+        return False
+    placeholders = review_findings_schema.example_member_values(None)
+    effective = review_findings_schema.effective_nonce(echo_nonce)
+    if effective is not None:
+        placeholders = placeholders | review_findings_schema.example_member_values(effective)
+    normalized_placeholders = review_findings_schema._normalized_placeholder_set(placeholders)
+    normalized = review_findings_schema._near_copy_normalize(path_val)
+    return bool(normalized) and normalized in normalized_placeholders
+
+
+def _investigated_list_all_placeholder_echo(paths, *, echo_nonce=None):
+    """True when every accepted investigated path is an example placeholder echo."""
+    if not paths:
+        return False
+    return all(
+        _investigated_path_is_placeholder_echo(p, echo_nonce=echo_nonce) for p in paths
+    )
+
+
 # Whitelist for the findings-less near-miss: only objects whose keys are exactly this set
 # may be certified clean without a `findings` key. Error/control envelopes are rejected
 # before this check; unknown keys fail closed rather than blacklisting every crash shape.
@@ -1074,6 +1096,8 @@ def _parse_review_findings_object(obj, outer_envelope_error, *, echo_nonce=None)
         investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
         if not investigated:
             return {"ok": False, "reason": "unreadable"}
+        if _investigated_list_all_placeholder_echo(investigated, echo_nonce=echo_nonce):
+            return {"ok": False, "reason": "unreadable"}
         result = {"ok": True, "resultKind": "findings",
                   "findings": [], "investigated": investigated}
         return _attach_investigated_parse_rejections(result, inv_rejected)
@@ -1095,6 +1119,8 @@ def _parse_review_findings_object(obj, outer_envelope_error, *, echo_nonce=None)
     inv_rejected = []
     if "investigated" in obj:
         investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
+        if _investigated_list_all_placeholder_echo(investigated, echo_nonce=echo_nonce):
+            return {"ok": False, "reason": "unreadable"}
     result = {"ok": True, "resultKind": "findings",
               "findings": findings_list, "investigated": investigated}
     result = _attach_findings_parse_rejections(result, findings_rejected)
@@ -1270,6 +1296,9 @@ def _review_payload_shape_findings_obj(obj, *, echo_nonce=None):
         if isinstance(investigated, list) and investigated:
             accepted, _ = _scrub_investigated(investigated)
             if accepted:
+                if _investigated_list_all_placeholder_echo(accepted, echo_nonce=echo_nonce):
+                    return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
+                            "topLevelKeys": [], "keysTruncated": False}
                 return None
         top_keys, keys_truncated = _bound_top_level_keys(obj)
         return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
@@ -1284,6 +1313,13 @@ def _review_payload_shape_findings_obj(obj, *, echo_nonce=None):
     if _findings_list_has_hollow_member(findings, echo_nonce=echo_nonce):
         return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
                 "topLevelKeys": [], "keysTruncated": False}
+    investigated = obj.get("investigated")
+    if isinstance(investigated, list) and investigated:
+        accepted, _ = _scrub_investigated(investigated)
+        if accepted and _investigated_list_all_placeholder_echo(
+                accepted, echo_nonce=echo_nonce):
+            return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
+                    "topLevelKeys": [], "keysTruncated": False}
     return None
 
 
