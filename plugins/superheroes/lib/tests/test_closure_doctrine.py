@@ -25,6 +25,21 @@ _CLOSURE_REF = "skills/showrunner/reference/closure.md"
 _VET_RECEIPT_REF = "skills/showrunner/reference/vet-receipt.md"
 _DECOMPOSITION_REF = "skills/showrunner/reference/decomposition.md"
 
+# Bite-proof records are receipts, not consumed surfaces: they are categorically outside every
+# content census, exactly as detector self-paths are. A proof must be free to quote the literal
+# it proves — a census that polices its own evidence re-fires on every new proof.
+# Standing advisor ruling, 2026-08-25 (#1136 shipped the code half; #1158 the doctrine half).
+_CENSUS_EXCLUDED_DIRS = ("lib/tests/bite_proofs",)
+
+
+def _census_excluded(rel):
+    """The R8 walk's one chokepoint: plugin-relative paths this census must not read."""
+    norm = os.path.normpath(rel)
+    return any(
+        norm.startswith(os.path.normpath(d) + os.sep) for d in _CENSUS_EXCLUDED_DIRS
+    )
+
+
 _DUTY_1_START = "1. **Think at the project level.**"
 _DUTY_2_START = "2. **Board hygiene — file and wire.**"
 _DUTY_4_START = "4. **Vet PRs from artifacts, never narratives.**"
@@ -431,20 +446,60 @@ def test_closure_validation_run_fails_has_two_h3_subheadings():
 # --- R8 element list home ----------------------------------------------------
 
 
-def test_r8_element_sentence_has_exactly_one_plugin_home():
+def _r8_element_hits(root):
+    """Walk ``root`` for the R8 element sentence, skipping the census's excluded paths."""
     hits = []
-    for dirpath, _dirs, files in os.walk(_PLUGIN_ROOT):
+    for dirpath, _dirs, files in os.walk(root):
         for name in files:
             if not name.endswith(".md"):
                 continue
-            rel = os.path.relpath(os.path.join(dirpath, name), _PLUGIN_ROOT)
-            count = _read_plugin(rel).count(R8_CLOSURE_RECEIPT_ELEMENTS)
+            abs_path = os.path.join(dirpath, name)
+            rel = os.path.relpath(abs_path, root)
+            if _census_excluded(rel):
+                continue
+            count = _read_plugin(abs_path).count(R8_CLOSURE_RECEIPT_ELEMENTS)
             if count:
                 hits.append((rel, count))
+    return sorted(hits)
+
+
+def test_r8_element_sentence_has_exactly_one_plugin_home():
+    hits = _r8_element_hits(_PLUGIN_ROOT)
     assert hits == [(_CLOSURE_REF, 1)], (
         "R8 element list must live in closure.md and nowhere else in the plugin; found %r"
         % (hits,)
     )
+
+
+def test_r8_census_skips_bite_proof_records_but_still_bites_elsewhere(tmp_path):
+    """Receipts are outside the census; an ordinary plugin surface still reports.
+
+    Both halves in one fixture tree: the same sentence is planted twice — once in a
+    bite-proof record, once in an ordinary ``.md`` — and only the ordinary one is reported.
+    """
+    root = tmp_path / "plugin"
+    record = root / "lib" / "tests" / "bite_proofs" / "wo_probe.md"
+    record.parent.mkdir(parents=True)
+    record.write_text(R8_CLOSURE_RECEIPT_ELEMENTS + "\n", encoding="utf-8")
+
+    consumer = root / "skills" / "showrunner" / "SKILL.md"
+    consumer.parent.mkdir(parents=True)
+    consumer.write_text(R8_CLOSURE_RECEIPT_ELEMENTS + "\n", encoding="utf-8")
+
+    hits = _r8_element_hits(str(root))
+    assert hits == [(os.path.join("skills", "showrunner", "SKILL.md"), 1)], (
+        "census must skip lib/tests/bite_proofs/ and still report ordinary surfaces; got %r"
+        % (hits,)
+    )
+
+
+def test_r8_census_excluded_predicate_is_scoped_to_the_records_directory():
+    """The chokepoint predicate excludes the records directory and nothing adjacent."""
+    assert _census_excluded(os.path.join("lib", "tests", "bite_proofs", "wo_a_1151.md"))
+    assert _census_excluded(os.path.join("lib", "tests", "bite_proofs", "nested", "x.md"))
+    assert not _census_excluded(os.path.join("lib", "tests", "test_closure_doctrine.py"))
+    assert not _census_excluded(os.path.join("lib", "tests", "bite_proofs_notes.md"))
+    assert not _census_excluded(_CLOSURE_REF)
 
 
 # --- Seam surfaces -----------------------------------------------------------

@@ -1778,11 +1778,33 @@ def _looks_like_binary_file(path):
     return b"\x00" in chunk
 
 
+# Bite-proof records are receipts, not consumed surfaces: they are categorically outside every
+# content census, exactly as detector self-paths are. A proof must be free to quote the literal
+# it proves — a census that polices its own evidence re-fires on every new proof.
+# Standing advisor ruling, 2026-08-25 (#1136 shipped the code half; #1158 the doctrine half).
+# Root-relative so the exclusion holds for the real plugin tree and for tmp_path fixtures alike.
+_CENSUS_EXCLUDED_DIRS = ("lib/tests/bite_proofs",)
+
+
+def _census_excluded(root, path):
+    """Both plugin-source censuses' one chokepoint: paths they must not read."""
+    rel = os.path.normpath(os.path.relpath(path, root))
+    return any(
+        rel == os.path.normpath(d) or rel.startswith(os.path.normpath(d) + os.sep)
+        for d in _CENSUS_EXCLUDED_DIRS
+    )
+
+
 def _collect_plugin_source_paths(root):
-    """Repository source paths under root — build artifacts are pruned, never decoded."""
+    """Repository source paths under root — build artifacts and bite-proof receipts are pruned."""
     paths = []
     for dirpath, _dirs, files in os.walk(root):
-        _dirs[:] = [d for d in _dirs if d != "__pycache__"]
+        _dirs[:] = [
+            d
+            for d in _dirs
+            if d != "__pycache__"
+            and not _census_excluded(root, os.path.join(dirpath, d))
+        ]
         for name in files:
             if _is_binary_build_artifact_filename(name):
                 continue
@@ -1824,6 +1846,69 @@ def test_census_excludes_pycache_but_catches_source_literal(tmp_path):
                 if literal in line:
                     scanned.append((path, lineno))
     assert scanned == [(str(stale_py), 1)]
+
+
+def test_grok_census_skips_bite_proof_records_but_still_bites_elsewhere(tmp_path):
+    """Receipts are outside the census; an ordinary plugin source file still reports.
+
+    Both halves in one fixture tree: the retired literal is planted twice — once in a
+    bite-proof record, once in ordinary source — and only the ordinary one is reported.
+    """
+    literal = _retired_grok_literal()
+    root = tmp_path / "plugin"
+    record = root / "lib" / "tests" / "bite_proofs" / "wo_probe.md"
+    record.parent.mkdir(parents=True)
+    record.write_text("quoting %s in a receipt\n" % literal, encoding="utf-8")
+
+    consumer = root / "lib" / "stale_hit.py"
+    consumer.write_text('token = "%s"\n' % literal, encoding="utf-8")
+
+    paths = _collect_plugin_source_paths(str(root))
+    assert str(record) not in paths, "bite-proof record must be pruned from the walk"
+    assert str(consumer) in paths, "ordinary source must still be walked"
+
+    scanned = []
+    for path in paths:
+        with open(path, encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                if literal in line:
+                    scanned.append((path, lineno))
+    assert scanned == [(str(consumer), 1)], (
+        "census must skip lib/tests/bite_proofs/ and still report ordinary source; got %r"
+        % (scanned,)
+    )
+
+
+def test_plugin_source_census_excluded_predicate_is_scoped_to_the_records_directory(tmp_path):
+    """The shared chokepoint predicate excludes the records directory and nothing adjacent."""
+    root = str(tmp_path)
+    assert _census_excluded(root, os.path.join(root, "lib", "tests", "bite_proofs"))
+    assert _census_excluded(root, os.path.join(root, "lib", "tests", "bite_proofs", "a.md"))
+    assert _census_excluded(
+        root, os.path.join(root, "lib", "tests", "bite_proofs", "nested", "a.md")
+    )
+    assert not _census_excluded(root, os.path.join(root, "lib", "tests", "test_ssot_drift.py"))
+    assert not _census_excluded(root, os.path.join(root, "lib", "tests", "bite_proofs_notes.md"))
+    assert not _census_excluded(root, os.path.join(root, "rubric", "bite-proof.md"))
+
+
+def test_both_plugin_source_censuses_read_no_bite_proof_record_on_the_real_tree():
+    """Real-tree pin: neither census's path set reaches lib/tests/bite_proofs/ — and both are non-empty."""
+    records_dir = os.path.normpath(os.path.join(PLUGIN, "lib", "tests", "bite_proofs"))
+    assert os.path.isdir(records_dir), "the records directory must exist for this pin to mean anything"
+    assert any(
+        name.endswith(".md") for name in os.listdir(records_dir)
+    ), "the records directory must hold records for this pin to mean anything"
+
+    for label, paths in (
+        ("retired-grok", _retired_grok_census_paths()),
+        ("routing", _routing_census_paths()),
+    ):
+        assert paths, "%s census walked zero paths" % label
+        inside = [
+            p for p in paths if os.path.normpath(p).startswith(records_dir + os.sep)
+        ]
+        assert not inside, "%s census read bite-proof records: %r" % (label, inside)
 
 
 def test_retired_cursor_grok_4_5_literal_census():
@@ -5430,6 +5515,28 @@ def test_census_excludes_pycache_but_catches_retired_route_literal(tmp_path):
     )
     assert stale_hits[0][1] == 1, (
         "expected literal on line 1 of stale_hit.py, got %r" % stale_hits
+    )
+
+
+def test_routing_census_skips_bite_proof_records_but_still_bites_elsewhere(tmp_path):
+    """Receipts are outside the census; an ordinary plugin source file still reports."""
+    literal = _retired_discovery_route_literal()
+    root = tmp_path / "plugin"
+    record = root / "lib" / "tests" / "bite_proofs" / "wo_probe.md"
+    record.parent.mkdir(parents=True)
+    record.write_text("quoting %s in a receipt\n" % literal, encoding="utf-8")
+
+    consumer = root / "lib" / "stale_hit.py"
+    consumer.write_text('token = "%s"\n' % literal, encoding="utf-8")
+
+    paths = _collect_plugin_source_paths(str(root))
+    assert str(record) not in paths, "bite-proof record must be pruned from the walk"
+    assert str(consumer) in paths, "ordinary source must still be walked"
+
+    hits = _scan_paths_for_literal(paths, literal)
+    assert len(hits) == 1 and hits[0][0].endswith("stale_hit.py") and hits[0][1] == 1, (
+        "census must skip lib/tests/bite_proofs/ and still report ordinary source; got %r"
+        % (hits,)
     )
 
 
