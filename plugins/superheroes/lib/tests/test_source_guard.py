@@ -265,8 +265,8 @@ def test_bite_audit_hook_rename_branch(tmp_path):
     _bite_red_green(
         "rename_branch",
         (
-            '        if event in ("os.rename", "os.replace", "os.remove", "os.truncate"):',
-            '        if False and event in ("os.rename", "os.replace", "os.remove", "os.truncate"):',
+            "        for target, dir_fd in _write_targets(event, args):",
+            "        for target, dir_fd in ():",
         ),
         lambda m: fires(m),
         lambda m: fires(m),
@@ -1374,3 +1374,302 @@ def test_bite_session_finish_resets_configured(throwaway_guard_state):
     )
 
 
+
+
+# --- Group 5: dir_fd anchoring (#1167) ---------------------------------------
+#
+# CPython's replace-ish audit events carry the operation's own anchor:
+# os.remove(path, dir_fd) and os.rename(src, dst, src_dir_fd, dst_dir_fd) --
+# which os.replace raises too. shutil.rmtree deletes fd-relatively, so pytest's
+# tmpdir GC unlinks a bare "conftest.py" that lives under a temp tree. Resolving
+# that bare name against the process cwd made it collide with the repository's
+# own shipped conftest.py.
+
+
+def _tmp_namesake_dir(tmp_path, name="conftest.py"):
+    """A tmp directory holding a namesake of the cwd-resolved watched file."""
+    victim = tmp_path / "garbage-tree"
+    victim.mkdir()
+    (victim / name).write_text("x\n")
+    return victim
+
+
+def _cwd_namesake_watched(name="conftest.py"):
+    """The path a bare relative ``name`` resolves to against the process cwd.
+
+    Putting exactly this in the watched set makes the false positive reproducible
+    wherever the runner was invoked from, so these proofs need no pinned cwd and
+    no chdir -- nothing about the production cwd is normalized away.
+    """
+    return os.path.realpath(name)
+
+
+def _fires_on_dir_fd_remove(mod, watched, path, directory):
+    """True when ``mod`` raises for ``os.remove(path, dir_fd=<directory>)``."""
+    state = mod.GuardState(lambda hook: None)
+    state.watched = frozenset(watched)
+    dir_fd = os.open(str(directory), os.O_RDONLY)
+    try:
+        state.audit("os.remove", (path, dir_fd))
+        return False
+    except mod.ShippedSourceWrite:
+        return True
+    finally:
+        os.close(dir_fd)
+
+
+def _no_false_positive_on_tmp_namesake(mod, victim):
+    """True when the guard declines a dir_fd-relative delete of a tmp-tree namesake."""
+    return _fires_on_dir_fd_remove(
+        mod, {_cwd_namesake_watched()}, "conftest.py", victim
+    ) is False
+
+
+def test_dir_fd_relative_delete_of_tmp_namesake_does_not_fire(tmp_path):
+    """The #1167 false positive: tmpdir GC unlinks a tmp-tree conftest.py."""
+    victim = _tmp_namesake_dir(tmp_path)
+    watched = {_cwd_namesake_watched()}
+    assert os.path.realpath(str(victim / "conftest.py")) not in watched
+    assert _fires_on_dir_fd_remove(sg, watched, "conftest.py", victim) is False
+
+
+def test_dir_fd_relative_delete_of_watched_file_still_fires(tmp_path):
+    """Counter-direction: a genuine fd-relative delete of shipped source bites."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shipped = repo / "conftest.py"
+    shipped.write_text("x\n")
+    watched = {os.path.realpath(str(shipped))}
+    assert _fires_on_dir_fd_remove(sg, watched, "conftest.py", repo) is True
+
+
+def test_dir_fd_relative_multi_component_path(tmp_path):
+    """A multi-component relative path is anchored through the descriptor too."""
+    repo = tmp_path / "repo"
+    (repo / "lib").mkdir(parents=True)
+    shipped = repo / "lib" / "mod.py"
+    shipped.write_text("x\n")
+    watched = {os.path.realpath(str(shipped))}
+    assert _fires_on_dir_fd_remove(sg, watched, "lib/mod.py", repo) is True
+
+    decoy = tmp_path / "decoy"
+    (decoy / "lib").mkdir(parents=True)
+    (decoy / "lib" / "mod.py").write_text("x\n")
+    assert _fires_on_dir_fd_remove(sg, watched, "lib/mod.py", decoy) is False
+
+
+def test_cwd_anchored_delete_still_fires_on_sentinel():
+    """A negative dir_fd is the "no descriptor" sentinel -- resolve against cwd."""
+    state = sg.GuardState(lambda hook: None)
+    state.watched = frozenset({_cwd_namesake_watched()})
+    for sentinel in (None, -1, -2, -100, True, "nonsense"):
+        with pytest.raises(sg.ShippedSourceWrite):
+            state.audit("os.remove", ("conftest.py", sentinel))
+
+
+def test_absolute_path_ignores_dir_fd(tmp_path):
+    """POSIX ignores dir_fd for an absolute path; so must the guard."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shipped = repo / "conftest.py"
+    shipped.write_text("x\n")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    watched = {os.path.realpath(str(shipped))}
+    assert _fires_on_dir_fd_remove(sg, watched, str(shipped), other) is True
+
+
+def test_rename_pairs_each_path_with_its_own_anchor(tmp_path):
+    """A rename's src and dst never borrow each other's descriptor."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shipped = repo / "conftest.py"
+    shipped.write_text("x\n")
+    garbage = tmp_path / "garbage"
+    garbage.mkdir()
+    (garbage / "conftest.py").write_text("x\n")
+
+    state = sg.GuardState(lambda hook: None)
+    state.watched = frozenset({os.path.realpath(str(shipped))})
+    src_fd = os.open(str(garbage), os.O_RDONLY)
+    dst_fd = os.open(str(repo), os.O_RDONLY)
+    try:
+        # src is the garbage-tree namesake, dst an unwatched name in the repo:
+        # correctly paired, neither is watched.
+        state.audit("os.rename", ("conftest.py", "other.py", src_fd, dst_fd))
+        # dst IS the watched file: correctly paired, it bites.
+        with pytest.raises(sg.ShippedSourceWrite):
+            state.audit("os.rename", ("other.py", "conftest.py", src_fd, dst_fd))
+    finally:
+        os.close(src_fd)
+        os.close(dst_fd)
+
+
+def test_truncate_event_carries_no_dir_fd(tmp_path):
+    """os.truncate(path, length) has no anchor argument; length is never a path."""
+    path = tmp_path / "w.py"
+    path.write_text("z\n")
+    real = os.path.realpath(str(path))
+    state = sg.GuardState(lambda hook: None)
+    state.watched = frozenset({real})
+    with pytest.raises(sg.ShippedSourceWrite):
+        state.audit("os.truncate", (real, 0))
+    # A bare int length must never be mistaken for a path argument.
+    state.audit("os.truncate", (str(tmp_path / "other.py"), 0))
+
+
+def test_write_targets_tolerates_short_arg_tuples():
+    """A signature change degrades to cwd anchoring, never an IndexError in the hook."""
+    assert sg._write_targets("os.remove", ("p",)) == (("p", None),)
+    assert sg._write_targets("os.rename", ("a", "b")) == (("a", None), ("b", None))
+    assert sg._write_targets("os.truncate", ()) == ((None, None),)
+    assert sg._write_targets("unrelated.event", ("a", "b")) == ()
+
+
+# --- Group 5b: real-channel end-to-end (the founding repro) ------------------
+
+
+def _build_dir_fd_gc_suite(root):
+    _copy_real_root_wiring(root)
+    shipped = root / "lib" / "shipped.py"
+    shipped.parent.mkdir(parents=True)
+    shipped.write_text("VALUE = 1\n")
+    (root / "test_gc.py").write_text(
+        "import shutil\n"
+        "\n"
+        "def test_rmtree_of_namesake_tree(tmp_path):\n"
+        "    victim = tmp_path / 'garbage-tree'\n"
+        "    victim.mkdir()\n"
+        "    (victim / 'conftest.py').write_text('x\\n')\n"
+        "    (victim / 'source_guard.py').write_text('x\\n')\n"
+        "    shutil.rmtree(str(victim))\n"
+        "    assert not victim.exists()\n"
+    )
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-q", "-m", "init"],
+        cwd=root,
+        check=True,
+    )
+
+
+def test_real_wiring_dir_fd_gc_does_not_trip_guard(tmp_path):
+    """End-to-end through the live audit hook: rmtree of a namesake tree stays green.
+
+    Delivered through the path the guarded input actually takes -- a real
+    ``shutil.rmtree`` under a real guard-wired pytest run, with cwd at the fake
+    repository root so a cwd-resolved bare "conftest.py" would hit shipped source.
+    """
+    if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+        pytest.skip("rmtree does not delete fd-relatively on this platform")
+    root = tmp_path / "gc_repo"
+    root.mkdir()
+    _build_dir_fd_gc_suite(root)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(root)
+    env[sg.REPO_ROOT_ENV] = str(root)
+    proc = subprocess.run(
+        [sys.executable, "-B", "-m", "pytest", "test_gc.py", "-q"],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    combined = proc.stdout + proc.stderr
+    assert "ShippedSourceWrite" not in combined, combined
+    assert proc.returncode == 0, combined
+
+
+# --- Group 5c: bite-proofs for the dir_fd anchoring elements -----------------
+
+
+def test_bite_dir_fd_sign_discrimination(tmp_path):
+    victim = _tmp_namesake_dir(tmp_path)
+    _bite_red_green(
+        "dir_fd_sign",
+        ("    return dir_fd >= 0", "    return False"),
+        lambda m: _no_false_positive_on_tmp_namesake(m, victim),
+        lambda m: _no_false_positive_on_tmp_namesake(m, victim),
+    )
+
+
+def test_bite_dir_fd_anchor_selection(tmp_path):
+    victim = _tmp_namesake_dir(tmp_path)
+    _bite_red_green(
+        "dir_fd_anchor_selection",
+        (
+            "        if _is_real_dir_fd(dir_fd) and not os.path.isabs(path):",
+            "        if False:",
+        ),
+        lambda m: _no_false_positive_on_tmp_namesake(m, victim),
+        lambda m: _no_false_positive_on_tmp_namesake(m, victim),
+    )
+
+
+def test_bite_dir_fd_directory_identity(tmp_path):
+    victim = _tmp_namesake_dir(tmp_path)
+    _bite_red_green(
+        "dir_fd_directory_identity",
+        (
+            "            if (parent.st_dev, parent.st_ino) == anchor_key:",
+            "            if True:",
+        ),
+        lambda m: _no_false_positive_on_tmp_namesake(m, victim),
+        lambda m: _no_false_positive_on_tmp_namesake(m, victim),
+    )
+
+
+def test_bite_dir_fd_positive_match_arm(tmp_path):
+    """The anchored match must still BITE -- the other direction of the fix."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shipped = repo / "conftest.py"
+    shipped.write_text("x\n")
+    watched = {os.path.realpath(str(shipped))}
+
+    def bites(mod):
+        return _fires_on_dir_fd_remove(mod, watched, "conftest.py", repo)
+
+    _bite_red_green(
+        "dir_fd_positive_match",
+        ("                return True", "                return False"),
+        lambda m: bites(m),
+        lambda m: bites(m),
+    )
+
+
+def test_bite_write_target_pairing(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shipped = repo / "conftest.py"
+    shipped.write_text("x\n")
+    garbage = tmp_path / "garbage"
+    garbage.mkdir()
+    (garbage / "conftest.py").write_text("x\n")
+    watched = frozenset({os.path.realpath(str(shipped))})
+
+    def pairs_correctly(mod):
+        """True when src keeps src_dir_fd and dst keeps dst_dir_fd."""
+        state = mod.GuardState(lambda hook: None)
+        state.watched = watched
+        src_fd = os.open(str(garbage), os.O_RDONLY)
+        dst_fd = os.open(str(repo), os.O_RDONLY)
+        try:
+            state.audit("os.rename", ("conftest.py", "other.py", src_fd, dst_fd))
+            return True
+        except mod.ShippedSourceWrite:
+            return False
+        finally:
+            os.close(src_fd)
+            os.close(dst_fd)
+
+    _bite_red_green(
+        "write_target_pairing",
+        (
+            "        return ((arg(0), arg(2)), (arg(1), arg(3)))",
+            "        return ((arg(0), arg(3)), (arg(1), arg(2)))",
+        ),
+        lambda m: pairs_correctly(m),
+        lambda m: pairs_correctly(m),
+    )
