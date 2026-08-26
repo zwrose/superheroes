@@ -1145,6 +1145,80 @@ def test_real_wiring_behavioural_without_assignment(tmp_path):
     assert proc.returncode == 0, combined
 
 
+def _build_real_nested_wiring_repo(root):
+    _copy_real_root_wiring(root)
+    test_dir = root / "plugins" / "superheroes" / "lib" / "tests"
+    test_dir.mkdir(parents=True)
+    shipped = root / "lib" / "shipped.py"
+    shipped.parent.mkdir(parents=True)
+    shipped.write_text("VALUE = 1\n")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-q", "-m", "init"],
+        cwd=root,
+        check=True,
+    )
+    (test_dir / "conftest.py").write_text(
+        "import pytest\n\n"
+        "@pytest.fixture\n"
+        "def shipped_path():\n"
+        "    import pathlib\n"
+        "    return pathlib.Path(__file__).resolve().parent.parent.parent.parent.parent / 'lib' / 'shipped.py'\n"
+    )
+    (test_dir / "test_violator.py").write_text(
+        "def test_rewrite_shipped(shipped_path):\n"
+        "    path = str(shipped_path)\n"
+        "    with open(path, encoding='utf-8') as fh:\n"
+        "        orig = fh.read()\n"
+        "    try:\n"
+        "        with open(path, 'w', encoding='utf-8') as fh:\n"
+        "            fh.write(orig.replace('1', '2'))\n"
+        "    finally:\n"
+        "        with open(path, 'w', encoding='utf-8') as fh:\n"
+        "            fh.write(orig)\n"
+    )
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-q", "-m", "tests"],
+        cwd=root,
+        check=True,
+    )
+    return test_dir
+
+
+def _run_real_nested_wiring_pytest(root, test_dir):
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(root)
+    env[sg.REPO_ROOT_ENV] = str(root)
+    return subprocess.run(
+        [sys.executable, "-B", "-m", "pytest", "test_violator.py", "-q"],
+        cwd=test_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_real_wiring_behavioural_nested_cwd(tmp_path):
+    root = tmp_path / "real_nested_wiring"
+    root.mkdir()
+    test_dir = _build_real_nested_wiring_repo(root)
+    proc = _run_real_nested_wiring_pytest(root, test_dir)
+    _assert_wiring_failure(proc, root)
+
+
+def test_real_wiring_behavioural_nested_cwd_without_pytest_ini(tmp_path):
+    root = tmp_path / "real_nested_wiring_no_ini"
+    root.mkdir()
+    test_dir = _build_real_nested_wiring_repo(root)
+    (root / "pytest.ini").unlink()
+    proc = _run_real_nested_wiring_pytest(root, test_dir)
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode == 0, combined
+    assert "ShippedSourceWrite" not in combined
+
+
 def test_bite_missing_wiring_files_reports_pytest_ini(tmp_path):
     root = tmp_path / "bite_pytest_ini"
     _copy_real_root_wiring(root)
