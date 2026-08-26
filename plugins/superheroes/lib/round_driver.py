@@ -3277,32 +3277,39 @@ def _union_open_blockers(*groups):
     for group in groups:
         for item in group:
             f = dict(item)
-            key = (finding_identity(f), f.get("line"))
-            if key[0] is not None and key not in seen:
+            ident = f.get("identity") or finding_identity(f)
+            key = (ident, f.get("line"))
+            if ident is not None and key not in seen:
                 batch.append(f)
                 seen.add(key)
     return batch
 
 
 def _compose_stall_fix_batch(state, breaker):
-    """Compose the stall self-recovery fix batch and any refusal token (#1107)."""
-    stalled = [dict(t) for t in _stalled_open_targets(state, breaker)]
+    """Compose the stall self-recovery fix batch and any refusal token (#1107).
+
+    Open owner question (#1107, review round 1, finding code-001): whether the union should run
+    unconditionally when stalled targets are present is parked — ratified behavior matches only
+    the stalled alias (test_handle_stall_selects_only_alias_matching_target).
+    """
+    batch = [dict(t) for t in _stalled_open_targets(state, breaker)]
     open_set = _resolve_open_audit_targets(state)
+    if open_set.kind == "unresolvable" and not batch:
+        return [], REFUSAL_UNRESOLVABLE_OPEN_SET
     outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
     nd_raw = outcome.get("notDischarged")
     nd_ids = (_open_audit_ids_from_not_discharged(nd_raw)
               if isinstance(nd_raw, list) else None)
     new_blocking = _blocking(state.get("findings") or [])
-    nd_targets = ([dict(t) for t in (state.get("_auditTargets") or [])
-                   if t.get("id") in nd_ids]
-                  if nd_ids is not None else [])
-    batch = _union_open_blockers(stalled, new_blocking, nd_targets)
     if not batch:
-        if open_set.kind == "unresolvable":
-            return [], REFUSAL_UNRESOLVABLE_OPEN_SET
         nd_members = nd_ids if nd_ids is not None else set()
         if nd_members or new_blocking:
-            return [], REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE
+            nd_targets = ([dict(t) for t in (state.get("_auditTargets") or [])
+                           if t.get("id") in nd_ids]
+                          if nd_ids is not None else [])
+            batch = _union_open_blockers(new_blocking, nd_targets)
+            if not batch:
+                return [], REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE
     return batch, None
 
 
@@ -5473,12 +5480,21 @@ def _ensure_round_head_diff(session_dir, rnd, state):
 
 
 def _ensure_fix_batch_file(session_dir, rnd, state):
-    """Materialize fix-batch.json from state for fixer orders."""
+    """Materialize fix-batch.json from state for fixer orders.
+
+    Render-only contract: a state carrying neither ``_fixBatch`` nor ``fixBatch`` is a
+    read/render-layer caller and materializes ``[]``. A state carrying a batch key whose
+    value is present but not a list is a genuine driver-state bug and refuses.
+    """
+    has_batch_key = "_fixBatch" in state or "fixBatch" in state
     batch = state.get("_fixBatch")
     if not isinstance(batch, list):
         batch = state.get("fixBatch")
     if not isinstance(batch, list):
-        raise ValueError("order-render-refused:fix-batch-unavailable")
+        if not has_batch_key:
+            batch = []
+        else:
+            raise ValueError("order-render-refused:fix-batch-unavailable")
     rdir = round_records.round_dir(session_dir, rnd)
     path = os.path.join(rdir, "fix-batch.json")
     return _ensure_bytes_at_path(session_dir, path, round_records.canonical(batch).encode("utf-8"))
