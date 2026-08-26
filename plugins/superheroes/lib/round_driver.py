@@ -107,11 +107,15 @@ MAX_CONFIRMATIONS = review_round_policy.MAX_CONFIRMATIONS
 _SELF_RECOVERY_FIXER_MODEL = "sonnet-5"
 _SELF_RECOVERY_FIXER_EFFORT = "high"
 
+# Fix-batch guidance key — single source shared with order templates (dispatch-fixer.md).
+FIX_BATCH_GUIDANCE_KEY = "userGuidance"
+
 SCHEMA_VERSION = 2
 STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"
 JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
 RECEIPT_FILE = "round-receipt.json"
+RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 
 # --- the #723 schema matrix -------------------------------------------------------------------
 # `SCHEMA_VERSION` stays the version a v2 RECEIPT keys off (and the version an in-flight v2 state
@@ -132,7 +136,105 @@ SUPPORTED_STATE_VERSIONS = (2, 3)
 # structurally un-confusable and `validate_receipt` dispatches on that.
 RECEIPT_CERTIFIED_SCHEMA = "receipt-certified/%d"
 RECEIPT_ATTESTED_SCHEMA = "receipt-attested/1"
+RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
+RECEIPT_FORM_CERTIFIED = "certified"
+RECEIPT_FORM_ATTESTED = "attested"
+RECEIPT_FORM_INTERIM = "interim"
+RECEIPT_KEY_REQUIRED = "required"
+RECEIPT_KEY_OPTIONAL = "optional"
+_ALL_RECEIPT_FORMS = (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM)
+# ONE declaration: key → {form: required|optional}. A form absent from a key's mapping is FORBIDDEN
+# for that form. Required, optional, and forbidden sets per form DERIVE from here — no second list.
+RECEIPT_KEY_FORMS = {
+    "rounds": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+               RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+               RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "findings": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                 RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+                 RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "decisions": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                  RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+                  RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "seatMap": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+                RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "scriptRan": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                  RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+                  RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "degraded": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                 RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+                 RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "skippedBlockers": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                        RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+                        RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "schemaVersion": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED},
+    "certification": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED},
+    "certificationShape": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED},
+    "verdict": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED},
+    "schema": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_OPTIONAL,
+               RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+               RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "attestation": {RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED},
+    "artifacts": {RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED},
+    "roster": {RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED},
+    "stop": {RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "base": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_OPTIONAL,
+             RECEIPT_FORM_ATTESTED: RECEIPT_KEY_OPTIONAL,
+             RECEIPT_FORM_INTERIM: RECEIPT_KEY_OPTIONAL},
+    "policyApplied": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_OPTIONAL,
+                      RECEIPT_FORM_ATTESTED: RECEIPT_KEY_OPTIONAL,
+                      RECEIPT_FORM_INTERIM: RECEIPT_KEY_OPTIONAL},
+    "baseGuard": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_OPTIONAL,
+                  RECEIPT_FORM_ATTESTED: RECEIPT_KEY_OPTIONAL,
+                  RECEIPT_FORM_INTERIM: RECEIPT_KEY_OPTIONAL},
+}
+
+
+def _receipt_required_keys(form):
+    return tuple(key for key, forms in RECEIPT_KEY_FORMS.items()
+                 if forms.get(form) == RECEIPT_KEY_REQUIRED)
+
+
+def _receipt_optional_keys(form):
+    return tuple(key for key, forms in RECEIPT_KEY_FORMS.items()
+                 if forms.get(form) == RECEIPT_KEY_OPTIONAL)
+
+
+def _receipt_forbidden_keys(form):
+    return tuple(key for key, forms in RECEIPT_KEY_FORMS.items()
+                 if form not in forms)
+
+
+# Per-round receipt entry keys gated by certified schema version (v2 omits `verifyPasses`).
+ROUND_ENTRY_KEY_FORMS = {
+    "verifyPasses": (
+        RECEIPT_CERTIFIED_SCHEMA % 3,
+        RECEIPT_ATTESTED_SCHEMA,
+        RECEIPT_INTERIM_SCHEMA,
+    ),
+}
+
+
+def _round_entry_form_schema(form, state):
+    if form == RECEIPT_FORM_CERTIFIED:
+        return RECEIPT_CERTIFIED_SCHEMA % _receipt_version(state)
+    if form == RECEIPT_FORM_ATTESTED:
+        return RECEIPT_ATTESTED_SCHEMA
+    if form == RECEIPT_FORM_INTERIM:
+        return RECEIPT_INTERIM_SCHEMA
+    raise ValueError("unknown receipt form %r" % form)
+
+
+def _round_entry_key_allowed(key, form, state):
+    allowed = ROUND_ENTRY_KEY_FORMS.get(key)
+    if allowed is None:
+        return True
+    return _round_entry_form_schema(form, state) in allowed
+
+
 ATTESTED_VERDICT = "uncertified-manual"
+CHECKPOINT_STOP_REASONS = ("tripwire", "park", "held")
 # The verdicts a CERTIFIED receipt may carry — every `state["terminal"]` the folds can set. An
 # unlisted verdict is a receipt nobody in this module produced.
 CERTIFIED_VERDICTS = ("converged", "halted", "held", "stalled", "cannot-certify",
@@ -213,6 +315,10 @@ def _dict_list(value):
     return isinstance(value, list) and all(isinstance(x, dict) for x in value)
 
 
+def _bool_value(value):
+    return isinstance(value, bool)
+
+
 def _canary_failed_shape(value):
     # build_receipt joins cf["seats"] into prose, so the seat names must be strings.
     return isinstance(value, dict) and _str_list(value.get("seats") or [])
@@ -248,6 +354,18 @@ def _order_vendor_provenance_gaps_shape(value):
     return True
 
 
+def _plugin_version_skew_shape(value):
+    # build_receipt reads constraint/status/detail/inspectedRoot/reason off each skew row.
+    if not _dict_list(value):
+        return False
+    for row in value:
+        if row.get("constraint") != version_skew.CONSTRAINT:
+            return False
+        if not isinstance(row.get("status"), str):
+            return False
+    return True
+
+
 def _normalize_adapter_provenance(prov):
     """Return {phase: disclosures} for either the per-phase `byPhase` shape or the legacy flat
     value (keyed as `unknown-phase`). Non-dict / corrupt `byPhase` → empty."""
@@ -275,6 +393,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "fellOpenProvenanceMissing": _str_list,
     "seatMapUnavailable": _str_list,
     "seatMapViolations": _dict_list,
+    "pluginVersionSkew": _plugin_version_skew_shape,
     "vacuousSeats": _str_list,
     "engagedArtifactSeats": _str_list,
     "canaryUnverified": _str_list,
@@ -283,6 +402,8 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "adapterProvenance": _adapter_provenance_shape,
     "recordOrphansIgnored": _str_list,
     "orderVendorProvenanceGaps": _order_vendor_provenance_gaps_shape,
+    "priorCommentsUnavailable": _bool_value,
+    "verifyPasses": _dict_list,
 }
 
 # Per-round disclosure channels recorded during hand `submit` (not `_fold_panel`). Each name here
@@ -293,20 +414,29 @@ SUBMIT_DISCLOSURE_CHANNELS = ("recordOrphansIgnored",)
 # Per-round disclosure channels recorded during order emission (`orders-emit`, not `_fold_panel`).
 # Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt`
 # share the same one home.
-ORDER_EMISSION_DISCLOSURE_CHANNELS = ("orderVendorProvenanceGaps",)
+ORDER_EMISSION_DISCLOSURE_CHANNELS = ("orderVendorProvenanceGaps", "priorCommentsUnavailable")
+
+# Per-round disclosure channels `_fold_verifiers` records (not `_fold_panel`). Each name here must
+# also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
+VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses",)
 
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
 # not `_fold_panel`). Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume
 # and `build_receipt` share the same one home.
 FOLD_PROVENANCE_DISCLOSURE_CHANNELS = ("adapterProvenance",)
 
-# Every OTHER per-round key `_fold_panel` records, named here so the census can close the set: a new
-# `_record_round` key lands in one home or the other, deliberately, or the census fails. None of
-# these is restorable on resume — `compileDrops` and `unverified` carry finding-shaped EVIDENCE rows
-# that round-records.json deliberately never stores (review_memory's persist-skeleton contract), and
-# `seatStatus` / `missingSeats` are the panel's own coverage bookkeeping, owned by the round that
-# actually ran its seats (`seatStatus` is emitted unconditionally, not as a disclosure).
-UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "unverified", "missingSeats")
+# Every OTHER per-round key `_fold_panel` or `_fold_verifiers` records, named here so the census can
+# close the set: a new `_record_round` key lands in one home or the other, deliberately, or the
+# census fails. None of these is restorable on resume — `compileDrops` and `unverified` carry
+# finding-shaped EVIDENCE rows that round-records.json deliberately never stores (review_memory's
+# persist-skeleton contract); `seatStatus` / `missingSeats` are the panel's own coverage
+# bookkeeping, owned by the round that actually ran its seats (`seatStatus` is emitted
+# unconditionally, not as a disclosure); `lensCoverage` is the panel's per-round coverage anchor
+# owned by the round that ran the panel; `verify` carries finding-shaped verifier evidence (drops,
+# downgrades, unverified, ambiguous) that round-records.json never stores — the receipt gets
+# `verifyPasses` instead (restorable via `VERIFIER_FOLD_DISCLOSURE_CHANNELS`).
+UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "unverified", "missingSeats",
+                               "verify")
 
 # `canaryVerified` is the one channel whose EMPTY value still belongs in the receipt (a control probe
 # that ran and carried an empty evidence object is still a probe that ran), so it emits on PRESENCE.
@@ -514,11 +644,14 @@ def _receipt_version(state):
 
 
 def receipt_kind(receipt):
-    """The receipt's shape name — `receipt-certified/<v>`, `receipt-attested/1`, or None."""
+    """The receipt's shape name — `receipt-certified/<v>`, `receipt-attested/1`,
+    `receipt-interim/1`, or None."""
     if not isinstance(receipt, dict):
         return None
     if receipt.get("schema") == RECEIPT_ATTESTED_SCHEMA:
         return RECEIPT_ATTESTED_SCHEMA
+    if receipt.get("schema") == RECEIPT_INTERIM_SCHEMA:
+        return RECEIPT_INTERIM_SCHEMA
     version = receipt.get("schemaVersion")
     if isinstance(version, bool) or not isinstance(version, int):
         return None
@@ -768,19 +901,122 @@ def _same_family_degraded(state):
     return bool(_same_family_seats(state))
 
 
-def _skew_records(state):
-    """Plugin-version-skew degradations from the seat map's own receipt (#677). A disclosed
-    degradation when the running plugin's review semantics differ from the repository's own —
-    never recomputed here."""
-    sm = state.get("seatMap")
-    degradations = sm.get("degradations") if isinstance(sm, dict) else None
+def _skew_record_identity(rec):
+    """Union key for plugin-version-skew disclosures — (constraint, status, detail, inspectedRoot).
+    All skew records share one constraint and carry no seat, so the breach channel's (constraint,
+    seat) key would collapse distinct disclosures (#1107)."""
+    if not isinstance(rec, dict):
+        return None
+    if rec.get("constraint") != version_skew.CONSTRAINT:
+        return None
+    return (
+        str(rec.get("constraint", "")),
+        str(rec.get("status", "")),
+        str(rec.get("detail", "")),
+        str(rec.get("inspectedRoot", "")),
+    )
+
+
+def _enrich_skew_degradation(deg, seat_map):
+    """One seat-map skew degradation row, with tri-state fields filled from ``pluginVersionSkew``."""
+    if not isinstance(deg, dict) or deg.get("constraint") != version_skew.CONSTRAINT:
+        return None
+    rec = dict(deg)
+    pvs = seat_map.get("pluginVersionSkew") if isinstance(seat_map, dict) else None
+    if not isinstance(pvs, dict):
+        pvs = {}
+    for field, pvs_key in (("status", "status"), ("detail", "detail"),
+                           ("inspectedRoot", "inspectedRoot")):
+        if rec.get(field) in (None, ""):
+            val = pvs.get(pvs_key)
+            if val not in (None, ""):
+                rec[field] = val
+    status = rec.get("status")
+    if status in (None, ""):
+        rec["status"] = version_skew.default_missing_status()
+        status = rec["status"]
+    if not version_skew.appends_degradation(status):
+        return None
+    return rec
+
+
+def _skew_records_from_seat_map(seat_map):
+    """Plugin-version-skew degradations from one seat map's degradations list."""
+    degradations = seat_map.get("degradations") if isinstance(seat_map, dict) else None
     if not isinstance(degradations, list):
         return []
     records = []
     for deg in degradations:
-        if isinstance(deg, dict) and deg.get("constraint") == version_skew.CONSTRAINT:
-            records.append(deg)
+        rec = _enrich_skew_degradation(deg, seat_map)
+        if rec is None:
+            continue
+        records.append(rec)
     return records
+
+
+def _union_skew_disclosures(existing, new):
+    """Deduped union of skew disclosure lists, keyed on ``_skew_record_identity``."""
+    seen: set[tuple] = set()
+    merged: list[dict] = []
+    for source in (existing or []), (new or []):
+        for rec in source:
+            key = _skew_record_identity(rec)
+            if key is None:
+                continue
+            status = rec.get("status")
+            if not version_skew.appends_degradation(status):
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(rec)
+    merged.sort(
+        key=lambda item: (
+            str(item.get("constraint", "")),
+            str(item.get("status", "")),
+            str(item.get("detail", "")),
+            str(item.get("inspectedRoot", "")),
+        ),
+    )
+    return merged
+
+
+def _skew_records(state):
+    """Plugin-version-skew degradations — the UNION of what each round recorded and what the live
+    merged seat map carries, so neither channel alone is load-bearing: ``state["rounds"]`` is lost
+    across a ``recordsPath`` resume, and ``state["seatMap"].update()`` lets a later round's map
+    overwrite an earlier one. Deduped by (constraint, status, detail, inspectedRoot), sorted."""
+    seen: set[tuple] = set()
+    merged: list[dict] = []
+    for rec in (state.get("rounds") or {}).values():
+        if not isinstance(rec, dict):
+            continue
+        for row in rec.get("pluginVersionSkew") or []:
+            key = _skew_record_identity(row)
+            if key is None:
+                continue
+            status = row.get("status")
+            if not version_skew.appends_degradation(status):
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(row)
+    for row in _skew_records_from_seat_map(state.get("seatMap") or {}):
+        key = _skew_record_identity(row)
+        if key is None or key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+    merged.sort(
+        key=lambda item: (
+            str(item.get("constraint", "")),
+            str(item.get("status", "")),
+            str(item.get("detail", "")),
+            str(item.get("inspectedRoot", "")),
+        ),
+    )
+    return merged
 
 
 def _skew_degraded(state):
@@ -790,7 +1026,9 @@ def _skew_degraded(state):
 def _plugin_version_skew_status(state):
     """Seat-map tri-state status for certification disclosure (#677). ``absent`` when the seat map
     carries no ``pluginVersionSkew`` receipt — an older map or one built without the field — so the
-    certification block never claims a skew check ran."""
+    certification block never claims a skew check ran. A receipt with an unrecognized ``status`` is
+    ``unknown``, not ``absent`` — unknown skew receipts degrade via ``version_skew.appends_degradation``
+    (#1107)."""
     sm = state.get("seatMap")
     if not isinstance(sm, dict):
         return "absent"
@@ -798,9 +1036,12 @@ def _plugin_version_skew_status(state):
     if not isinstance(pvs, dict):
         return "absent"
     status = pvs.get("status")
-    if status in version_skew.STATUSES:
-        return status
-    return "absent"
+    try:
+        if status in version_skew.STATUSES:
+            return status
+    except TypeError:
+        pass
+    return "unknown"
 
 
 def _seat_map_violations(state):
@@ -1339,6 +1580,18 @@ def _record_round(state, key, value):
     rec[key] = value
 
 
+def _record_round_append(state, key, value):
+    """Append one value to a per-round list without disturbing `_record_round`'s overwrite semantics."""
+    rec = state["rounds"].setdefault(str(state["round"]), {})
+    existing = rec.get(key)
+    if existing is None:
+        rec[key] = [value]
+    elif isinstance(existing, list):
+        existing.append(value)
+    else:
+        rec[key] = [existing, value]
+
+
 def _decision(state, kind, detail):
     state["decisions"].append({"round": state["round"], "kind": kind, "detail": detail})
 
@@ -1815,6 +2068,14 @@ def _fold_panel(state, config, artifact):
             _parts.append("%s@%s" % (c, s) if s else c)
         _decision(state, "seat-map-constraint-violated",
                   "unexcused seat-map constraint violation(s): %s" % ", ".join(_parts))
+    _sm_skew = _skew_records_from_seat_map(state.get("seatMap") or {})
+    if _sm_skew:
+        rnd_rec = state["rounds"].setdefault(str(state["round"]), {})
+        _record_round(
+            state,
+            "pluginVersionSkew",
+            _union_skew_disclosures(rnd_rec.get("pluginVersionSkew"), _sm_skew),
+        )
     _record_round(state, "compileDrops", drops)
     if unverified:
         _record_round(state, "unverified", unverified)
@@ -1885,6 +2146,16 @@ def _fold_verifiers(state, config, artifact):
     state["_verified"] = applied["findings"]
     _record_round(state, "verify", {"drops": applied["drops"], "downgrades": applied["downgrades"],
                                     "unverified": applied["unverified"], "ambiguous": applied["ambiguous"]})
+    # axis: each verifier fold appends one verifyPasses entry; a second wave must not overwrite.
+    _record_round_append(state, "verifyPasses", {
+        "CONFIRMED": sum(1 for f in applied["findings"] if f.get("verdict") == "CONFIRMED"),
+        "PLAUSIBLE": sum(1 for f in applied["findings"] if f.get("verdict") == "PLAUSIBLE"),
+        "REFUTED": len(applied["drops"]),
+        "drops": len(applied["drops"]),
+        "downgrades": len(applied["downgrades"]),
+        "unverified": len(applied["unverified"]),
+        "ambiguous": len(applied["ambiguous"]),
+    })
     for d in applied["drops"]:
         _decision(state, "verifier-refuted", d.get("reason"))
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
@@ -2051,7 +2322,7 @@ def _fold_judgment(state, config, artifact):
             g["judgmentDisposition"] = "fix-with-guidance"
             guidance = d.get("guidance")
             if isinstance(guidance, str) and guidance.strip():
-                g["guidance"] = guidance.strip()
+                g[FIX_BATCH_GUIDANCE_KEY] = guidance.strip()
             disposition_log.append({"id": fid, "title": f.get("title"),
                                     "disposition": "fix-with-guidance"})
         elif disposition == "fix-as-suggested":
@@ -2759,34 +3030,28 @@ def _settle_delta(state, config):
     # dropped when a new blocker arrives in the same round. Targets carry file/line/severity so the
     # next round's split_fix_surface can re-derive its surface.
     if bool(outcome.get("notDischarged")) or bool(new_blocking):
-        nd = set(outcome.get("notDischarged", []))
-        nd_targets = [dict(t) for t in (state.get("_auditTargets") or []) if t.get("id") in nd]
-        batch = [dict(f) for f in new_blocking]
-        # Dedupe on the per-LOCATION key (line-less identity + line), NOT the line-less identity alone:
-        # a new blocker sharing a target's file+title at a DIFFERENT line is a DISTINCT finding, so
-        # keying on identity alone would silently drop the unresolved audit target (#507 R2 residual-3).
-        seen = {(finding_identity(f), f.get("line")) for f in batch}
-        for t in nd_targets:
-            ident = t.get("identity") or finding_identity(t)
-            key = (ident, t.get("line"))
-            if ident is not None and key not in seen:
-                batch.append(t)
-                seen.add(key)
+        nd_raw = outcome.get("notDischarged", [])
+        nd_ids = _open_audit_ids_from_not_discharged(nd_raw)
+        if nd_ids is None:
+            _park_cannot_certify(
+                state,
+                "malformed _auditOutcome.notDischarged — cannot dispatch fix batch")
+            return
+        nd_targets = [dict(t) for t in (state.get("_auditTargets") or []) if t.get("id") in nd_ids]
+        batch = _union_open_blockers(new_blocking, nd_targets)
         if _route_judgment_blockers(state, batch):
             return
         state["_fixBatch"] = batch
         state["step"] = P_FIXER
         return
 
-    # converged candidate: last round's fixes all discharged + verify pass. Apply the #174
-    # confirmation economics before certifying — a Critical surfaced since the last qualifying
-    # panel, or cross-cutting rework, owes one more full confirmation panel (budget 2).
+    _settle_delta_converged(state, config)
+
+
+def _settle_delta_converged(state, config):
+    """Converged candidate tail shared by `_settle_delta` and stall self-recovery when no open work
+    remains — confirmation economics, then terminal converged or re-arm."""
     surfaced = list(state.get("surfacedSinceLastPanel") or [])
-    # Cross-cutting fires when EITHER the round's own resolving fix is cross-cutting (the single-round
-    # signal) OR the UNION of delta rework since the last full panel is (reset in _fold_panel,
-    # accumulated in _fold_fixer). The union disjunct is additive — it catches rework that spreads
-    # across MULTIPLE post-confirmation fixes where no single fix is broad (#507 R2 residual-5),
-    # without ever suppressing a re-arm the single-round signal already earns.
     cross = (review_round_policy.is_cross_cutting(state.get("_changedSubjects"))
              or review_round_policy.is_cross_cutting(state.get("_changedSubjectsSincePanel")))
     followup = review_round_policy.confirmation_followup(
@@ -2898,16 +3163,49 @@ def _park_capped_open(state, detail):
     state["step"] = P_TERMINAL
 
 
-def _open_audit_target_ids(state):
-    """Per-location ids still open this round, or None when the open set cannot be determined
-    (legacy persisted session without ``_auditOutcome``)."""
+# Stall self-recovery fix-batch refusal tokens — shared by composition and routing (#1107).
+REFUSAL_UNRESOLVABLE_OPEN_SET = "unresolvable-open-set"
+REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE = "open-blocking-uncomposable"
+
+
+class _OpenAuditTargets:
+    """Tri-state open-audit-target resolution for stall self-recovery (#1107)."""
+
+    __slots__ = ("kind", "ids")
+
+    def __init__(self, kind, ids=None):
+        self.kind = kind  # "resolved", "empty", or "unresolvable"
+        self.ids = ids
+
+
+def _open_audit_ids_from_not_discharged(not_discharged):
+    """Validated boundary: _auditOutcome.notDischarged list → open-id set (#1107).
+
+    Returns a set of str ids when every member is a usable id; None when unresolvable."""
+    if not isinstance(not_discharged, list):
+        return None
+    for member in not_discharged:
+        if not isinstance(member, str):
+            return None
+    return set(not_discharged)
+
+
+def _resolve_open_audit_targets(state):
+    """Report whether the per-location open-id set is resolved, genuinely empty, or unresolvable."""
     outcome = state.get("_auditOutcome")
-    if not isinstance(outcome, dict):
-        return None
-    nd = outcome.get("notDischarged")
-    if not isinstance(nd, list):
-        return None
-    return set(nd)
+    if isinstance(outcome, dict):
+        nd = outcome.get("notDischarged")
+        if isinstance(nd, list):
+            ids = _open_audit_ids_from_not_discharged(nd)
+            if ids is not None:
+                return _OpenAuditTargets("resolved", ids)
+            return _OpenAuditTargets("unresolvable")
+    audit_targets = state.get("_auditTargets") or []
+    audit_rounds = state.get("auditRounds") or []
+    fix_batch = state.get("fixBatch") or []
+    if not audit_targets and not audit_rounds and not fix_batch:
+        return _OpenAuditTargets("empty")
+    return _OpenAuditTargets("unresolvable")
 
 
 def _stalled_open_targets(state, breaker):
@@ -2916,9 +3214,12 @@ def _stalled_open_targets(state, breaker):
     stalled = set(breaker.get("stalledIdentities") or [])
     if not stalled:
         return []
-    open_ids = _open_audit_target_ids(state)
+    open_set = _resolve_open_audit_targets(state)
+    if open_set.kind == "empty":
+        return []
     matched = []
-    if open_ids is not None:
+    if open_set.kind == "resolved":
+        open_ids = open_set.ids
         for t in state.get("_auditTargets") or []:
             if not isinstance(t, dict):
                 continue
@@ -2947,28 +3248,110 @@ def _stalled_critical(state, config, breaker):
 
 # ---- stall self-recovery + menu -------------------------------------------------------------
 
+def _commit_stall_self_recovery(state, config, breaker):
+    """One-shot guard + escalation record — single owner for both (#1107)."""
+    state["selfRecovered"] = True
+    fixer_vendor = config.get("fixerVendor")
+    rung = model_registry.escalate(
+        fixer_vendor, _SELF_RECOVERY_FIXER_MODEL, _SELF_RECOVERY_FIXER_EFFORT)
+    if rung is not None:
+        # A null escalation (unknown fixer vendor, or already top-of-ladder) is NOT recorded as an
+        # escalation — leaving _escalatedRung unset keeps the P_FIXER payload and the fix record
+        # honest (escalated:false), never a null-rung mislabeled escalated:true (#608 review).
+        state["_escalatedRung"] = {"rung": rung, "vendor": fixer_vendor}
+    _decision(state, "self-recovery",
+              "audit-stall — one invisible self-recovery (%s)"
+              % ("fixer escalated to %r" % (rung,) if rung is not None
+                 else "no escalation rung available — fixer unchanged, escalated:false"))
+    _record_round(state, "selfRecovery", {"rung": rung, "reason": breaker.get("detail")})
+
+
+def _union_open_blockers(*groups):
+    """Union open blockers into one fix batch — deduped on the per-location key (#507 R2 residual-3).
+
+    Dedupe on the per-LOCATION key (line-less identity + line), NOT the line-less identity alone:
+    a new blocker sharing a target's file+title at a DIFFERENT line is a DISTINCT finding, so
+    keying on identity alone would silently drop the unresolved audit target."""
+    batch = []
+    seen = set()
+    for group in groups:
+        for item in group:
+            f = dict(item)
+            ident = f.get("identity") or finding_identity(f)
+            key = (ident, f.get("line"))
+            if ident is not None and key not in seen:
+                batch.append(f)
+                seen.add(key)
+    return batch
+
+
+def _compose_stall_fix_batch(state, breaker):
+    """Compose the stall self-recovery fix batch and any refusal token (#1107).
+
+    Open owner question (#1107, review round 1, finding code-001): whether the union should run
+    unconditionally when stalled targets are present is parked — ratified behavior matches only
+    the stalled alias (test_handle_stall_selects_only_alias_matching_target).
+    """
+    batch = [dict(t) for t in _stalled_open_targets(state, breaker)]
+    open_set = _resolve_open_audit_targets(state)
+    if open_set.kind == "unresolvable" and not batch:
+        return [], REFUSAL_UNRESOLVABLE_OPEN_SET
+    outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
+    nd_raw = outcome.get("notDischarged")
+    nd_ids = (_open_audit_ids_from_not_discharged(nd_raw)
+              if isinstance(nd_raw, list) else None)
+    new_blocking = _blocking(state.get("findings") or [])
+    if not batch:
+        nd_members = nd_ids if nd_ids is not None else set()
+        if nd_members or new_blocking:
+            nd_targets = ([dict(t) for t in (state.get("_auditTargets") or [])
+                           if t.get("id") in nd_ids]
+                          if nd_ids is not None else [])
+            batch = _union_open_blockers(new_blocking, nd_targets)
+            if not batch:
+                return [], REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE
+    return batch, None
+
+
+def _route_stall_self_recovery(state, config, batch, refusal, breaker):
+    """Terminal routing for stall self-recovery — exhaustive over batch/refusal (#1107)."""
+    if batch:
+        if _route_judgment_blockers(state, batch):
+            return
+        state["_fixBatch"] = batch
+        state["step"] = P_FIXER
+    elif refusal == REFUSAL_UNRESOLVABLE_OPEN_SET:
+        _park_cannot_certify(
+            state,
+            "audit-stall self-recovery — open audit target set unresolvable "
+            "(missing or malformed _auditOutcome); cannot dispatch fix batch")
+    elif refusal == REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE:
+        _park_capped_open(
+            state,
+            (breaker.get("detail") or "audit-stall self-recovery")
+            + " — blocking finding(s) remain not-discharged; certification withheld")
+    else:
+        open_set = _resolve_open_audit_targets(state)
+        # Empty resolution: no audit has ever produced targets in this session, so there is
+        # nothing for a confirmation round to confirm — re-arming would loop a panel over an
+        # empty set. Resolved/unresolvable paths keep full confirmation economics via
+        # _settle_delta_converged. Certification shape is carried from state["fullPanelRan"],
+        # never asserted here: this branch cannot manufacture a full-panel claim (pinned by
+        # test_empty_resolution_converge_never_claims_an_unrun_panel).
+        if open_set.kind == "empty":
+            _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
+        else:
+            _settle_delta_converged(state, config)
+
+
 def _handle_stall(state, config, breaker):
     """audit-stall → ONE invisible self-recovery (fixer re-dispatched one rung up via
     model_registry.escalate and/or another vendor, once, journaled). Still stalled → the stall
     menu."""
     if not state.get("selfRecovered"):
-        state["selfRecovered"] = True
-        fixer_vendor = config.get("fixerVendor")
-        rung = model_registry.escalate(
-            fixer_vendor, _SELF_RECOVERY_FIXER_MODEL, _SELF_RECOVERY_FIXER_EFFORT)
-        if rung is not None:
-            # A null escalation (unknown fixer vendor, or already top-of-ladder) is NOT recorded as an
-            # escalation — leaving _escalatedRung unset keeps the P_FIXER payload and the fix record
-            # honest (escalated:false), never a null-rung mislabeled escalated:true (#608 review).
-            state["_escalatedRung"] = {"rung": rung, "vendor": fixer_vendor}
-        _decision(state, "self-recovery",
-                  "audit-stall — one invisible self-recovery (%s)"
-                  % ("fixer escalated to %r" % (rung,) if rung is not None
-                     else "no escalation rung available — fixer unchanged, escalated:false"))
-        _record_round(state, "selfRecovery", {"rung": rung, "reason": breaker.get("detail")})
-        batch = [dict(t) for t in _stalled_open_targets(state, breaker)]
-        state["_fixBatch"] = batch or [dict(f) for f in (state.get("fixBatch") or [])]
-        state["step"] = P_FIXER
+        _commit_stall_self_recovery(state, config, breaker)
+        batch, refusal = _compose_stall_fix_batch(state, breaker)
+        _route_stall_self_recovery(state, config, batch, refusal, breaker)
         return
     # already self-recovered and still stalled → present the stall menu (never judge the dispute).
     accept_eligible = _accept_risk_eligible(state, breaker)
@@ -3097,7 +3480,7 @@ def _terminal_converged(state, config, full_panel, note=None):
 # the driver receipt + its validator
 # =============================================================================================
 
-def build_receipt(state, session_dir=None):
+def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
     """The terminal driver receipt. Per-round schedule (planned vs executed), every finding's
     outcome, the decision ledger, the seat map, the scriptRan summary from the journal, and the
     degraded disclosures. Written to round-receipt.json at the terminal.
@@ -3129,11 +3512,20 @@ def build_receipt(state, session_dir=None):
               "stallChoice": rec.get("stallChoice")}
         if rec.get("lensCoverage") is not None:
             rd["lensCoverage"] = rec.get("lensCoverage")
+        # Fossil-channel census requires a literal per-channel round-record read — not a variable
+        # key through the generic loop — so this channel is consumed here (form-gated).
+        verify_passes = rec.get("verifyPasses")
+        if verify_passes and _round_entry_key_allowed("verifyPasses", form, state):
+            rd["verifyPasses"] = verify_passes
         # The per-round disclosure channels ride their ONE home (#720) — the same set a
         # `recordsPath` resume restores, so a resumed round's receipt discloses what its round
         # actually recorded. Emission is unchanged: truthiness, except the presence-emitting
-        # channels named by `_DISCLOSE_ON_PRESENCE`.
+        # channels named by `_DISCLOSE_ON_PRESENCE`. `verifyPasses` emits above (form-gated).
         for chan in RESUMABLE_DISCLOSURE_CHANNELS:
+            if chan == "verifyPasses":
+                continue
+            if not _round_entry_key_allowed(chan, form, state):
+                continue
             value = rec.get(chan)
             if value or (value is not None and chan in _DISCLOSE_ON_PRESENCE):
                 rd[chan] = value
@@ -3283,6 +3675,13 @@ def build_receipt(state, session_dir=None):
                 "record-orphans-ignored (round %s): hand submit folded with durable seat record(s) "
                 "%s still at this slot — records ignored (session already on hand-submit path)"
                 % (rkey, ", ".join(roi)))
+        pcu = rrec.get("priorCommentsUnavailable")
+        if pcu:
+            degraded.append(
+                "prior-comments-unavailable (round %s): orchestrator did not supply "
+                "prior-comments.json in PR mode — panel ran without prior PR comments; any claim "
+                "that prior comments were considered is not supported for this round"
+                % rkey)
         ovg = rrec.get("orderVendorProvenanceGaps")
         if ovg:
             # Provenance-NEUTRAL wording: since the collector spans every read-only phase, a gap
@@ -3325,9 +3724,19 @@ def build_receipt(state, session_dir=None):
                     % (rkey, phase_name, "; ".join(parts)))
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
-    base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "mode", "baseRepo",
+    base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "baseRepo",
                                     "baseRepoCheck", "repoRoot", "diffBinding")
             if cfg.get(k) is not None}
+    # "mode" is deliberately NOT part of the generic cfg-echo tuple above (#1107 WO-rc1): under
+    # meta-wins precedence, the driver config's raw mode value is not necessarily the mode the
+    # driver actually resolved and acted on — a receipt echoing it raw would be a false receipt.
+    # Route it through the same session_mode.resolve the driver used elsewhere, and record it only
+    # when the resolution is GROUNDED (never the UNRESOLVED_MODE default — that fail-closed "pr"
+    # was never chosen by anything, so the receipt must not claim it was).
+    _meta_for_mode = _session_meta(session_dir) if session_dir else {}
+    _mode_resolved = session_mode.resolve(_meta_for_mode, cfg)
+    if _mode_resolved["resolved"]:
+        base["mode"] = _mode_resolved["mode"]
     receipt = {
         # The STATE's version drives the receipt's (#723): an in-flight v2 session still emits
         # today's `receipt-certified/2` shape, unchanged and with no added key.
@@ -3354,12 +3763,74 @@ def build_receipt(state, session_dir=None):
     return receipt
 
 
-_RECEIPT_REQUIRED = ("schemaVersion", "verdict", "certificationShape", "rounds", "findings",
-                     "decisions", "seatMap", "scriptRan", "degraded", "skippedBlockers")
+def build_interim_receipt(state, session_dir, stop_reason):
+    """An interim driver receipt at a non-terminal stop — per-pass verdict totals without certification."""
+    receipt = build_receipt(state, session_dir, form=RECEIPT_FORM_INTERIM)
+    for key in _receipt_forbidden_keys(RECEIPT_FORM_INTERIM):
+        receipt.pop(key, None)
+    receipt["schema"] = RECEIPT_INTERIM_SCHEMA
+    receipt["stop"] = {
+        "reason": stop_reason,
+        "writtenAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    return receipt
 
 
-_ATTESTED_REQUIRED = ("schema", "verdict", "attestation", "rounds", "findings", "decisions",
-                      "seatMap", "scriptRan", "degraded", "skippedBlockers", "artifacts", "roster")
+def _read_on_disk_receipt(session_dir):
+    path = os.path.join(session_dir, RECEIPT_FILE)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _on_disk_receipt_class(session_dir):
+    """Classify the on-disk receipt for overwrite policy.
+
+    Returns ``absent``, ``interim``, ``terminal``, or ``untrusted`` (unreadable, unparseable, or
+    unknown schema). Only ``interim`` and ``absent`` permit a new write."""
+    path = os.path.join(session_dir, RECEIPT_FILE)
+    if not os.path.exists(path):
+        return "absent"
+    receipt = _read_on_disk_receipt(session_dir)
+    if receipt is None:
+        return "untrusted"
+    kind = receipt_kind(receipt)
+    if kind is None:
+        return "untrusted"
+    ok, _reason = validate_receipt(receipt)
+    if not ok:
+        return "untrusted"
+    if kind == RECEIPT_INTERIM_SCHEMA:
+        return "interim"
+    return "terminal"
+
+
+def _receipt_write_refusal(session_dir, *, terminal_reason, untrusted_reason):
+    """Refusal token when an on-disk receipt blocks overwrite, else None."""
+    cls = _on_disk_receipt_class(session_dir)
+    if cls == "terminal":
+        return terminal_reason
+    if cls == "untrusted":
+        return untrusted_reason
+    return None
+
+
+def _terminal_receipt_on_disk(session_dir):
+    """True when a certified or attested receipt sits at the terminal path (not an interim)."""
+    return _on_disk_receipt_class(session_dir) == "terminal"
+
+
+def _write_interim_receipt(session_dir, state, stop_reason):
+    """Write an interim receipt atomically. OSError PROPAGATES — same stance as `_write_receipt`."""
+    receipt = build_interim_receipt(state, session_dir, stop_reason)
+    path = os.path.join(session_dir, RECEIPT_INTERIM_FILE)
+    round_commit.atomic_write_bytes(
+        path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    return receipt
 
 
 def validate_receipt(receipt):
@@ -3377,6 +3848,8 @@ def validate_receipt(receipt):
         return False, "receipt is not an object"
     if receipt.get("schema") == RECEIPT_ATTESTED_SCHEMA:
         return _validate_attested_receipt(receipt)
+    if receipt.get("schema") == RECEIPT_INTERIM_SCHEMA:
+        return _validate_interim_receipt(receipt)
     return _validate_certified_receipt(receipt)
 
 
@@ -3384,10 +3857,10 @@ def _validate_attested_receipt(receipt):
     """The `receipt-attested/1` shape: `attestation` REQUIRED, `certification` FORBIDDEN, verdict
     pinned to `uncertified-manual`. A certification block here would be exactly the confusion the
     split exists to prevent (an attested receipt reading as a certified one)."""
-    for key in _ATTESTED_REQUIRED:
+    for key in _receipt_required_keys(RECEIPT_FORM_ATTESTED):
         if key not in receipt:
             return False, "attested receipt missing required key %r" % key
-    for key in ("certification", "certificationShape"):
+    for key in _receipt_forbidden_keys(RECEIPT_FORM_ATTESTED):
         if key in receipt:
             return False, ("attested receipt must not carry %r — an attestation is NOT a "
                            "certification" % key)
@@ -3410,6 +3883,45 @@ def _validate_attested_receipt(receipt):
     for key in ("rounds", "findings", "decisions", "degraded", "skippedBlockers"):
         if not isinstance(receipt.get(key), list):
             return False, "receipt %s must be a list" % key
+    return True, None
+
+
+def _validate_interim_receipt(receipt):
+    """The `receipt-interim/1` shape: a `stop` block REQUIRED, `certification` FORBIDDEN — an interim
+    is not a certification and must not be read as terminal evidence."""
+    for key in _receipt_required_keys(RECEIPT_FORM_INTERIM):
+        if key not in receipt:
+            return False, "interim receipt missing required key %r" % key
+    for key in _receipt_forbidden_keys(RECEIPT_FORM_INTERIM):
+        if key in receipt:
+            return False, ("interim receipt must not carry %r — an interim is NOT a certification"
+                           % key)
+    if receipt.get("schema") != RECEIPT_INTERIM_SCHEMA:
+        return False, "interim receipt schema must be %r" % RECEIPT_INTERIM_SCHEMA
+    stop = receipt.get("stop")
+    if not isinstance(stop, dict):
+        return False, "interim receipt stop must be an object"
+    reason = stop.get("reason")
+    if reason not in CHECKPOINT_STOP_REASONS:
+        return False, ("interim receipt stop reason %r is not one of: %s"
+                       % (reason, ", ".join(CHECKPOINT_STOP_REASONS)))
+    if not isinstance(stop.get("writtenAt"), str) or not stop.get("writtenAt"):
+        return False, "interim receipt stop must carry writtenAt"
+    if not isinstance(receipt.get("scriptRan"), dict):
+        return False, "receipt scriptRan must be an object (the journal-derived evidence)"
+    if "byPhase" not in receipt["scriptRan"]:
+        return False, "receipt scriptRan must carry byPhase (the per-phase journal counts)"
+    if not isinstance(receipt.get("seatMap"), dict):
+        return False, "receipt seatMap must be an object"
+    for key in ("rounds", "findings", "decisions", "degraded", "skippedBlockers"):
+        if not isinstance(receipt.get(key), list):
+            return False, "receipt %s must be a list" % key
+    for idx, rd in enumerate(receipt.get("rounds") or []):
+        if not isinstance(rd, dict):
+            continue
+        vp = rd.get("verifyPasses")
+        if vp is not None and not isinstance(vp, list):
+            return False, "round %s verifyPasses must be a list" % rd.get("round", idx)
     return True, None
 
 
@@ -3493,9 +4005,12 @@ def _validate_certified_receipt(receipt):
     Returns (ok, reason)."""
     if not isinstance(receipt, dict):
         return False, "receipt is not an object"
-    for key in _RECEIPT_REQUIRED:
+    for key in _receipt_required_keys(RECEIPT_FORM_CERTIFIED):
         if key not in receipt:
             return False, "receipt missing required key %r" % key
+    for key in _receipt_forbidden_keys(RECEIPT_FORM_CERTIFIED):
+        if key in receipt:
+            return False, "certified receipt must not carry %r" % key
     if receipt.get("schemaVersion") not in SUPPORTED_STATE_VERSIONS:
         return False, ("receipt schemaVersion must be one of %s"
                        % ", ".join(str(v) for v in SUPPORTED_STATE_VERSIONS))
@@ -3732,10 +4247,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                 return _receipt_fault_response(fault)
         return _next_response(pend, state_hash(state))
     step = _advance(state, state["config"])
-    attempt = 0
-    prior = state.get("lastAccepted")
-    if prior and prior.get("phase") == step["phase"] and prior.get("round") == step["round"]:
-        attempt = prior.get("attempt", 0) + 1
+    attempt = _next_dispatch_attempt(session_dir, step["round"], step["phase"], state)
     pending = {"action": step["action"], "round": step["round"], "phase": step["phase"],
                "attempt": attempt, "payload": step["payload"]}
     state["pending"] = pending
@@ -4184,6 +4696,8 @@ def _verify_terminal_receipt(session_dir):
             on_disk = json.load(fh)
     except (OSError, ValueError) as exc:
         return "terminal receipt unreadable (%s) — cannot certify; treat as park" % exc
+    if receipt_kind(on_disk) == RECEIPT_INTERIM_SCHEMA:
+        return ("terminal receipt is interim — cannot certify; treat as park")
     ok, why = validate_receipt(on_disk)
     if not ok:
         return "terminal receipt invalid (%s) — cannot certify; treat as park" % why
@@ -4418,6 +4932,50 @@ def _orders_manifest_path(session_dir, rnd, phase, attempt):
         raise ValueError("attempt must be a non-negative int, got %r" % (attempt,))
     return os.path.join(round_records.round_dir(session_dir, rnd), ORDERS_DIRNAME, phase,
                         "manifest.a%d.json" % attempt)
+
+
+def _journal_max_attempt(session_dir, rnd, phase):
+    """Highest **accepted** submit attempt logged for `(rnd, phase)`, or -1 when none."""
+    max_attempt = -1
+    for event in read_journal(session_dir):
+        if event.get("cmd") != "submit" or event.get("outcome") != "accepted":
+            continue
+        if event.get("round") != rnd or event.get("phase") != phase:
+            continue
+        att = event.get("attempt")
+        if isinstance(att, bool) or not isinstance(att, int) or att < 0:
+            continue
+        max_attempt = max(max_attempt, att)
+    return max_attempt
+
+
+def _max_used_attempt(session_dir, rnd, phase):
+    """Durable high-water attempt for ``(rnd, phase)`` from accepted journal entries only.
+
+    The durable seat store is excluded: it records landings, not acceptances, so counting it
+    would advance a re-emitted unaccepted wave and orphan its recorded seats. A lost journal
+    entry therefore surfaces as a loud landing collision at record time rather than silent
+    orphaning (#1107)."""
+    return _journal_max_attempt(session_dir, rnd, phase)
+
+
+def _next_dispatch_attempt(session_dir, rnd, phase, state):
+    """Allocate the next unused attempt for a `(round, phase)` dispatch wave.
+
+    Takes the maximum over accepted submit journal entries and ``lastAccepted`` when its phase
+    and round match — then allocates above that high-water mark."""
+    candidates = [
+        _max_used_attempt(session_dir, rnd, phase),
+    ]
+    prior = state.get("lastAccepted")
+    if prior and prior.get("phase") == phase and prior.get("round") == rnd:
+        att = prior.get("attempt", 0)
+        if not isinstance(att, bool) and isinstance(att, int) and att >= 0:
+            candidates.append(att)
+    max_used = max(candidates)
+    if max_used < 0:
+        return 0
+    return max_used + 1
 
 
 def _plugin_resource_root():
@@ -4715,11 +5273,101 @@ def _shipped_resource_refusal(placeholders):
     return None
 
 
+def _order_profile_path_is_file(value):
+    """True when PROFILE_PATH names a resolved absolute file, not prose refusal/unresolved text."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    stripped = value.strip()
+    if stripped.startswith("("):
+        return False
+    return os.path.isabs(stripped)
+
+
+def _emitted_path_is_file(emitted):
+    """True when ``emitted`` names an existing file — a raw driver-generated path, never shell-parsed."""
+    if not isinstance(emitted, str) or not emitted:
+        return False
+    return os.path.isfile(emitted)
+
+
+def _readable_file_input_refusal(placeholders):
+    """Refuse when a registered readable file input in placeholders does not exist on disk."""
+    if not isinstance(placeholders, dict):
+        return None
+    for name in ORDER_READABLE_FILE_INPUTS:
+        emitted = placeholders.get(name)
+        if emitted is None:
+            continue
+        if name == "PROFILE_PATH" and not _order_profile_path_is_file(emitted):
+            continue
+        if name == "PRIOR_COMMENTS_PATH":
+            if not emitted or (isinstance(emitted, str) and emitted.strip().startswith("(")):
+                continue
+        if not _emitted_path_is_file(emitted):
+            return "order-input-missing:%s" % name
+    return None
+
+
+def _order_input_refusal(placeholders):
+    """Emit-time guard for shipped resources and driver/orchestrator-readable file inputs."""
+    reason = _shipped_resource_refusal(placeholders)
+    if reason is not None:
+        return reason
+    return _readable_file_input_refusal(placeholders)
+
+
 # Order-input sidecar layout — one home for commit writes and order placeholders.
 ORDER_SIDECAR_CLUSTERS_DIR = "clusters"
 ORDER_SIDECAR_AUDIT_TARGETS_DIR = "audit-targets"
 ORDER_SIDECAR_SCOPED_HUNKS_FILE = "scoped-hunks.json"
 ORDER_SIDECAR_VERIFIED_FILE = "verified.json"
+
+# Readable file inputs cited in emitted orders — existence guarded at emit (registry #723).
+ORDER_READABLE_FILE_INPUTS = frozenset({
+    "DIFF_PATH",
+    "HEAD_DIFF_PATH",
+    "CLUSTER_FINDINGS_PATH",
+    "TARGET_SUMMARY_PATH",
+    "HUNKS_PATH",
+    "VERIFIED_FINDINGS_PATH",
+    "FIX_BATCH_PATH",
+    "PRIOR_COMMENTS_PATH",
+    "PROFILE_PATH",
+})
+ORDER_SHIPPED_RESOURCE_INPUTS = frozenset({
+    "RUBRIC_PATH",
+    "ESCALATION_WRAPPER_PATH",
+})
+# Seat/orchestrator output paths — cited but not required to exist before dispatch.
+ORDER_OUTPUT_PLACEHOLDERS = frozenset({
+    "FINDINGS_OUTPUT_PATH",
+    "GROUPING_OUTPUT_PATH",
+    "PR_CHECKOUT_PATH",
+})
+# Substitution values — prose, derived blocks, or directories not file-existence-guarded here.
+ORDER_DERIVED_PLACEHOLDERS = frozenset({
+    "OUTPUT_CHANNEL_BLOCK",
+    "PR_CHECKOUT_CONTEXT_LINE",
+    "PR_CHECKOUT_INSTRUCTION_BLOCK",
+    "PRIOR_COMMENTS_CONTEXT_LINE",
+    "PRIOR_COMMENTS_INSTRUCTION_BLOCK",
+    "FOCUS_CONTEXT_LINE",
+    "MODE",
+    "MODE_EVIDENCE",
+    "REPO",
+    "TARGET",
+    "DIMENSION",
+    "CHANNEL",
+    "FOCUS_NOTES",
+    "CORE_PATH",
+    "LAYER_PATH",
+    "VERIFICATION_ROOT",
+    "CWD",
+    "REPO_ROOT",
+    "VERIFY_COMMAND",
+    "ROUND",
+    "TARGET_ID",
+})
 
 
 def _order_cluster_sidecar_path(rdir, index):
@@ -4778,9 +5426,36 @@ def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
     return writes
 
 
+def _materialize_order_sidecars(session_dir, rnd, phase, roster, pending_payload):
+    """Write every order-input sidecar for ``phase`` from the single ``_order_sidecar_writes`` derivation."""
+    for path, content in _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
+        _ensure_bytes_at_path(session_dir, path, content)
+
+
 def _session_meta(session_dir):
     obj, err = round_records.read_json(os.path.join(session_dir, round_records.META_FILE))
     return obj if (err is None and isinstance(obj, dict)) else {}
+
+
+def _ensure_bytes_at_path(session_dir, path, expected):
+    """Write ``path`` when absent or content differs — atomic tmp+rename."""
+    try:
+        round_records._guard_within(session_dir, path)
+    except ValueError as exc:
+        if "path escapes the session dir" not in str(exc):
+            raise
+        raise ValueError("order-render-refused:path-escapes-session") from exc
+    needs_write = True
+    if os.path.isfile(path):
+        try:
+            with open(path, "rb") as fh:
+                on_disk = fh.read()
+            needs_write = on_disk != expected
+        except OSError:
+            needs_write = True
+    if needs_write:
+        round_commit.atomic_write_bytes(path, expected)
+    return path
 
 
 def _ensure_round_diff(session_dir, rnd, state):
@@ -4791,17 +5466,110 @@ def _ensure_round_diff(session_dir, rnd, state):
     if not isinstance(diff_text, str):
         raise ValueError("reviewed-diff-unavailable")
     expected = diff_text.encode("utf-8")
-    needs_write = True
-    if os.path.isfile(diff_path):
-        try:
-            with open(diff_path, "rb") as fh:
-                on_disk = fh.read()
-            needs_write = on_disk != expected
-        except OSError:
-            needs_write = True
-    if needs_write:
-        round_commit.atomic_write_bytes(diff_path, expected)
-    return diff_path
+    return _ensure_bytes_at_path(session_dir, diff_path, expected)
+
+
+def _ensure_round_head_diff(session_dir, rnd, state):
+    """Write `round-<N>/head.diff` from state when absent or untrusted."""
+    head_text = state.get("headDiff")
+    if not isinstance(head_text, str):
+        raise ValueError("order-render-refused:head-diff-unavailable")
+    rdir = round_records.round_dir(session_dir, rnd)
+    head_path = os.path.join(rdir, "head.diff")
+    return _ensure_bytes_at_path(session_dir, head_path, head_text.encode("utf-8"))
+
+
+def _ensure_fix_batch_file(session_dir, rnd, state):
+    """Materialize fix-batch.json from state for fixer orders.
+
+    Sibling parity with ``_ensure_round_diff`` and ``_ensure_round_head_diff``: unknown input
+    (absent, ``None``, or wrong type) refuses before any path computation or write. A known
+    batch — including a known-empty list — still materializes.
+    """
+    batch = state.get("_fixBatch")
+    if not isinstance(batch, list):
+        batch = state.get("fixBatch")
+    if not isinstance(batch, list):
+        raise ValueError("order-render-refused:fix-batch-unavailable")
+    rdir = round_records.round_dir(session_dir, rnd)
+    path = os.path.join(rdir, "fix-batch.json")
+    return _ensure_bytes_at_path(session_dir, path, round_records.canonical(batch).encode("utf-8"))
+
+
+# Round-relative paths the driver materializes for order templates — production reads this registry.
+ROUND_MATERIALIZER_REGISTRY = {
+    "round_diff": _ensure_round_diff,
+    "round_head_diff": _ensure_round_head_diff,
+    "fix_batch": _ensure_fix_batch_file,
+}
+
+
+def _prior_comments_canonical_path(session_dir):
+    return os.path.join(session_dir, "prior-comments.json")
+
+
+def _materialize_prior_comments(session_dir, source_path, comments):
+    """Write validated prior comments to the canonical session path.
+
+    The CLI ``--prior-comments`` chokepoint calls this after validation so
+    ``config["priorComments"]`` and ``_resolve_prior_comments_path`` read one file.
+    Explicit ``--prior-comments`` wins over any pre-existing canonical file.
+    When ``source_path`` already is the canonical file, skip rewrite to avoid
+    truncating a file we are reading from.
+
+    Returns True when the canonical file is present with ``comments``; False on
+    write failure (caller must not set ``config["priorComments"]`` when False).
+    """
+    canonical = _prior_comments_canonical_path(session_dir)
+    try:
+        if os.path.samefile(source_path, canonical):
+            return True
+    except OSError:
+        pass
+    try:
+        round_commit.atomic_write_json(canonical, comments)
+        return True
+    except OSError:
+        return False
+
+
+def _prior_comments_unavailable_marker():
+    return "(prior-comments-unavailable — orchestrator did not supply prior-comments.json)"
+
+
+def _resolve_prior_comments_path(session_dir, state):
+    """Panel prior-comments path — never fabricates ``[]``.
+
+    Mode comes from ``session_mode.resolve`` — the ONE owner of PR-vs-branch (#1107).
+    No re-derivation from ``meta``/``config`` here.
+
+    Branch mode: empty path — legitimately no prior comments.
+    PR mode (or fail-closed unresolved mode, which ``session_mode.resolve`` treats as PR):
+    real file when present; otherwise a prose marker plus a round disclosure.
+
+    Render-only contract: a ``state`` that carries NO round bookkeeping at all — neither
+    ``"rounds"`` nor ``"round"`` — is a read/render-layer caller (order-placeholder
+    rendering must not raise for a state shape it was never handed round mutation
+    responsibility over). That shape gets the rendered marker with no disclosure
+    recorded, since there is nowhere honest to record it. A ``state`` that carries
+    partial/malformed round bookkeeping (e.g. ``"rounds"`` present but ``"round"``
+    absent) is a genuine driver-state bug, not a render-only context, and still raises —
+    this is a narrow, documented tolerance, never a bare try/except.
+    """
+    path = _prior_comments_canonical_path(session_dir)
+    if os.path.isfile(path):
+        return path
+    cfg = state.get("config") if isinstance(state, dict) else {}
+    meta = _session_meta(session_dir)
+    mode_resolved = session_mode.resolve(meta, cfg)
+    if mode_resolved["mode"] == session_mode.MODE_BRANCH:
+        return ""
+    render_only = (
+        isinstance(state, dict) and "rounds" not in state and "round" not in state
+    )
+    if not render_only:
+        _record_round(state, "priorCommentsUnavailable", True)
+    return _prior_comments_unavailable_marker()
 
 
 def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat):
@@ -4821,7 +5589,7 @@ def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_se
 
 
 def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
-                        session_dir, rnd, paths, channel):
+                        session_dir, rnd, paths, channel, roster=None):
     """Phase-specific placeholder dict for `round_orders.render_order`.
 
     Raises `ValueError("order-render-refused:...")` when a slot cannot be filled truthfully
@@ -4832,13 +5600,14 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
     cfg = config if isinstance(config, dict) else {}
     repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
     rdir = round_records.round_dir(session_dir, rnd)
-    diff_path = _ensure_round_diff(session_dir, rnd, state)
+    diff_path = ROUND_MATERIALIZER_REGISTRY["round_diff"](session_dir, rnd, state)
     rubric_path = _shipped_rubric_path()
     core_resolved, layer_resolved, root_refusal = _resolved_calibration_paths(repo_root)
     core_path = _calibration_path_placeholder(core_resolved, "Core", root_refusal)
     layer_path = _calibration_path_placeholder(layer_resolved, "Review-crew layer",
                                               root_refusal)
     payload = pending_payload if isinstance(pending_payload, dict) else {}
+    sidecar_roster = roster if isinstance(roster, list) else [seat_key]
     ph = {}
 
     if phase == P_PANEL:
@@ -4847,6 +5616,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             raise ValueError("order-render-refused:no-dimension-label:%s" % seat_key)
         pr_checkout = _session_pr_checkout_path(session_dir)
         mode_resolved = session_mode.resolve(meta, cfg)
+        prior_comments_path = _resolve_prior_comments_path(session_dir, state)
         ph = {
             "MODE": mode_resolved["mode"],
             "MODE_EVIDENCE": session_mode.evidence_line(mode_resolved),
@@ -4857,7 +5627,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
             "PR_CHECKOUT_PATH": pr_checkout,
-            "PRIOR_COMMENTS_PATH": os.path.join(session_dir, "prior-comments.json"),
+            "PRIOR_COMMENTS_PATH": prior_comments_path,
             "FOCUS_NOTES": _normalize_focus_notes(meta.get("focusNotes") or cfg.get("focusNotes")),
             "DIMENSION": dim_label,
             "CHANNEL": channel,
@@ -4874,16 +5644,26 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
                 break
         if cluster_index is None:
             raise ValueError("order-render-refused:unmatched-verifier-cluster:%s" % cluster_key)
+        cluster = (payload.get("clusters") or [])[cluster_index]
+        if not isinstance(cluster, dict):
+            cluster = {}
+        _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
+        cluster_path = _order_cluster_sidecar_path(rdir, cluster_index)
         ph = {
-            "CLUSTER_FINDINGS_PATH": _order_cluster_sidecar_path(rdir, cluster_index),
+            "CLUSTER_FINDINGS_PATH": cluster_path,
             "DIFF_PATH": diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
             "CHANNEL": channel,
         }
     elif phase == P_SYNTHESIS:
+        findings = payload.get("findings")
+        if not isinstance(findings, list):
+            findings = []
+        _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
+        verified_path = _order_verified_sidecar_path(rdir)
         ph = {
-            "VERIFIED_FINDINGS_PATH": _order_verified_sidecar_path(rdir),
+            "VERIFIED_FINDINGS_PATH": verified_path,
             "DIFF_PATH": diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
@@ -4906,19 +5686,28 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             targets = []
         if not any(isinstance(t, dict) and t.get("id") == seat_key for t in targets):
             raise ValueError("order-render-refused:unmatched-audit-target:%s" % seat_key)
+        skey = round_records.storage_key(seat_key, occurrence)
+        _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
+        target_path = _order_audit_target_sidecar_path(rdir, skey)
+        head_diff_path = ROUND_MATERIALIZER_REGISTRY["round_head_diff"](session_dir, rnd, state)
         ph = {
-            "TARGET_SUMMARY_PATH": _order_audit_target_sidecar_path(
-                rdir, round_records.storage_key(seat_key, occurrence)),
-            "HEAD_DIFF_PATH": os.path.join(rdir, "head.diff"),
+            "TARGET_SUMMARY_PATH": target_path,
+            "HEAD_DIFF_PATH": head_diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
             "TARGET_ID": seat_key,
             "CHANNEL": channel,
         }
     elif phase == P_SCOPED:
+        hunks = payload.get("hunks")
+        if not isinstance(hunks, dict):
+            hunks = {}
+        _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
+        hunks_path = _order_scoped_hunks_sidecar_path(rdir)
+        head_diff_path = ROUND_MATERIALIZER_REGISTRY["round_head_diff"](session_dir, rnd, state)
         ph = {
-            "HUNKS_PATH": _order_scoped_hunks_sidecar_path(rdir),
-            "HEAD_DIFF_PATH": os.path.join(rdir, "head.diff"),
+            "HUNKS_PATH": hunks_path,
+            "HEAD_DIFF_PATH": head_diff_path,
             "RUBRIC_PATH": rubric_path,
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
@@ -4927,8 +5716,9 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "CHANNEL": channel,
         }
     elif phase == P_FIXER:
+        fix_batch_path = ROUND_MATERIALIZER_REGISTRY["fix_batch"](session_dir, rnd, state)
         ph = {
-            "FIX_BATCH_PATH": os.path.join(rdir, "fix-batch.json"),
+            "FIX_BATCH_PATH": fix_batch_path,
             "PROFILE_PATH": _profile_path_for_orders(repo_root),
             "RUBRIC_PATH": rubric_path,
             "CWD": repo_root,
@@ -4941,7 +5731,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
 
 
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
-                                pending_payload, row):
+                                pending_payload, row, roster=None):
     """Render the order context for one seat/occurrence, using the CALLER's resolved transport row.
 
     `row` is required — never re-resolved here. `_seat_transport_row` is not pure for the
@@ -4972,7 +5762,7 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
         "session_dir": session_dir,
         "round": rnd,
         "attempt": attempt,
-        "diff_path": _ensure_round_diff(session_dir, rnd, state),
+        "diff_path": ROUND_MATERIALIZER_REGISTRY["round_diff"](session_dir, rnd, state),
         "rubric_path": _shipped_rubric_path(),
         "core_path": core_resolved or "",
         "layer_path": layer_resolved or "",
@@ -4986,7 +5776,7 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
         "host_seat": host_seat,
         "placeholders": _order_placeholders(phase, seat_key, occurrence, state,
                                               cfg, pending_payload,
-                                              session_dir, rnd, paths, channel),
+                                              session_dir, rnd, paths, channel, roster=roster),
     }, paths
 
 
@@ -5115,19 +5905,19 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                 vendor_gaps.append({"seat": seat_key, "storeKey": skey, "occurrence": occurrence,
                                     "phase": phase, "vendorSource": row.get("vendorSource")})
         context, paths = _build_order_render_context(session_dir, state, rnd, phase, attempt,
-                                                     seat_key, occurrence, pending_payload, row)
-        resource_reason = _shipped_resource_refusal(context.get("placeholders"))
+                                                     seat_key, occurrence, pending_payload, row,
+                                                     roster=roster)
+        resource_reason = _order_input_refusal(context.get("placeholders"))
         if resource_reason is not None:
             raise ValueError("order-render-refused:%s:%s" % (skey, resource_reason))
         # Order-input ownership at emission (see also round-driver.md §Emitted orders):
         #   driver commits in orders-emit: clusters/<i>.json, audit-targets/<skey>.json,
         #   scoped-hunks.json, verified.json
-        #   driver writes outside orders-emit commit: diff.txt (via _ensure_round_diff when absent
-        #   or untrusted — atomic tmp+rename, content-checked against state)
-        #   orchestrator must supply before dispatch: diff.txt (real git diff), head.diff,
-        #   fix-batch.json (skills/review-code/reference/setup.md session-artifact table).
-        # STUB(#723): order-input existence class not closed — placeholder set and sidecar set
-        # must derive from one source before a fail-closed guard can land here.
+        #   driver materializes before emit: diff.txt, head.diff, fix-batch.json, phase sidecars;
+        #   prior-comments.json only when orchestrator supplied it (PR-mode absence is disclosed)
+        # STUB(#723): readable-input registry + fail-closed existence guard now cover driver-owned
+        # file inputs; sidecar bytes are derived once in ``_order_sidecar_writes`` and materialized
+        # via ``_materialize_order_sidecars`` before render and again at the orders-emit commit.
         order_text, render_reason = round_orders.render_order(phase, seat_key, context)
         if render_reason is not None or not isinstance(order_text, str):
             raise ValueError("order-render-refused:%s:%s" % (skey, render_reason or "empty"))
@@ -6792,8 +7582,8 @@ def build_attestation_receipt(session_dir, state, binding, note, roster=None):
     `loop-state.json` are excluded from the digest set — same contract class as STATE_FILE. The
     receipt file itself is excluded because it is written last and cannot hash itself. `roster` may be supplied when `state` is
     already terminal (pending cleared) but was captured from the failure phase beforehand."""
-    receipt = build_receipt(state, session_dir)
-    for key in ("certification", "certificationShape", "schemaVersion"):
+    receipt = build_receipt(state, session_dir, form=RECEIPT_FORM_ATTESTED)
+    for key in _receipt_forbidden_keys(RECEIPT_FORM_ATTESTED):
         receipt.pop(key, None)
     receipt["schema"] = RECEIPT_ATTESTED_SCHEMA
     receipt["verdict"] = ATTESTED_VERDICT
@@ -6828,13 +7618,20 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
             state, refusal = _load_driver_state(session_dir, "attest")
             if refusal is not None:
                 return refusal
-            if os.path.exists(os.path.join(session_dir, RECEIPT_FILE)) or state.get("terminal"):
-                return _refuse_cmd(session_dir, "attest", "terminal-receipt-exists")
+            receipt_refusal = _receipt_write_refusal(
+                session_dir,
+                terminal_reason="terminal-receipt-exists",
+                untrusted_reason="terminal-receipt-unreadable",
+            )
+            if receipt_refusal or state.get("terminal"):
+                return _refuse_cmd(session_dir, "attest", receipt_refusal or "terminal-receipt-exists")
             binding, why = _resolve_failure_ref(session_dir, failure_ref)
             if why is not None:
                 return _refuse_cmd(session_dir, "attest", why, detail=str(failure_ref))
             artifact_snapshot = _session_artifact_hashes(session_dir,
-                                                         exclude=(RECEIPT_FILE, STATE_FILE,
+                                                         exclude=(RECEIPT_FILE,
+                                                                  RECEIPT_INTERIM_FILE,
+                                                                  STATE_FILE,
                                                                   JOURNAL_FILE,
                                                                   round_records.LOCK_FILE))
             return _cmd_attest_locked(session_dir, failure_ref, note, git=git, state=state,
@@ -6902,6 +7699,60 @@ def _cmd_attest_locked(session_dir, failure_ref, note, git=None, state=None, bin
     return {"ok": True, "verdict": ATTESTED_VERDICT, "receiptPath": path,
             "attestation": receipt["attestation"], "roster": receipt["roster"],
             "sidecar": side_path}
+
+
+def cmd_checkpoint(session_dir, stop_reason):
+    """Write an interim receipt at a non-terminal stop.
+
+    Re-invoking checkpoint after an earlier checkpoint is allowed — a run can stop, resume, and stop
+    again — and each write supersedes the previous interim. The write-once terminal rule applies only
+    to certified/attested receipts, not to interim supersession."""
+    if stop_reason not in CHECKPOINT_STOP_REASONS:
+        return _refuse_cmd(session_dir, "checkpoint", "checkpoint-stop-reason-unknown",
+                           detail=stop_reason)
+    try:
+        with round_records.session_lock(session_dir):
+            refusal = _commit_recover_or_refuse(session_dir, "checkpoint")
+            if refusal is not None:
+                return refusal
+            state, refusal = _load_driver_state(session_dir, "checkpoint")
+            if refusal is not None:
+                return refusal
+            if state.get("terminal"):
+                return _refuse_cmd(session_dir, "checkpoint", "checkpoint-session-terminal")
+            receipt_refusal = _receipt_write_refusal(
+                session_dir,
+                terminal_reason="checkpoint-terminal-receipt-exists",
+                untrusted_reason="checkpoint-terminal-receipt-unreadable",
+            )
+            if receipt_refusal:
+                return _refuse_cmd(session_dir, "checkpoint", receipt_refusal)
+            receipt = build_interim_receipt(state, session_dir, stop_reason)
+            ok, invalid = validate_receipt(receipt)
+            if not ok:
+                return _refuse_cmd(session_dir, "checkpoint", "interim-receipt-invalid",
+                                   fault=FAULT_INTERNAL, detail=invalid)
+            path = os.path.join(session_dir, RECEIPT_INTERIM_FILE)
+            receipt_bytes = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+            checkpoint_entry = _journal_entry_for_commit(
+                session_dir, "checkpoint", "checkpointed", stopReason=stop_reason)
+            try:
+                c = round_commit.begin(session_dir, "checkpoint")
+                c.add_replace_file(path, receipt_bytes)
+                c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), checkpoint_entry)
+                c.run()
+            except OSError as exc:
+                return _refuse_cmd(session_dir, "checkpoint", "interim-receipt-unwritable",
+                                   fault=FAULT_INTERNAL, detail=str(exc))
+            except round_commit.CommitRefused as exc:
+                if exc.reason == "commit-apply-failed":
+                    return _refuse_cmd(session_dir, "checkpoint", "interim-receipt-unwritable",
+                                       fault=FAULT_INTERNAL, detail=exc.detail)
+                return _commit_refused_response(session_dir, "checkpoint", exc)
+            return {"ok": True, "receiptPath": path, "schema": receipt["schema"],
+                    "stop": receipt["stop"]}
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, "checkpoint", held)
 
 
 def _parse_seat_map(raw):
@@ -7037,6 +7888,10 @@ def build_parser():
                                    "journal-degraded fault marker. There is NO issue reference — "
                                    "eligibility is allowlist-only")
     cli_contract.add_argument(pt, "--note", contract="free-text", required=True)
+
+    pc = sub.add_parser("checkpoint")
+    cli_contract.add_argument(pc, "--session-dir", contract="existing-directory", required=True)
+    pc.add_argument("--stop-reason", required=True, choices=list(CHECKPOINT_STOP_REASONS))
     return parser
 
 
@@ -7152,15 +8007,28 @@ def _dispatch(args):
                                           value=args.diff_path)
         # A v1 state file must surface refused-v1 from cmd_next — do not mask it with a base refusal.
         if args.prior_comments:
+            # Same fresh-state-only discipline as `--vendors`: priorComments is read ONCE at
+            # new_state, and materializing to the canonical file on existing state would disagree
+            # with persisted config (#1107 WO-c6C).
+            st_ok, st = load_state(args.session_dir)
+            if not (st_ok and st is None):
+                sys.stdout.write(json.dumps({"ok": False, "reason": "prior-comments-not-fresh-state",
+                                             "value": args.prior_comments}) + "\n")
+                return 1
             # Load + validate the PR-mode prior comments into `priorComments` so the
             # author-justification post-filter is actually reachable (#507 v7). A missing / unreadable
             # / non-list file leaves priorComments unset (the filter simply does not fire) — never a
             # crash and never a silent drop.
+            # One source of truth (#1107 WO-c6A): validated comments are materialized to
+            # $SESSION_DIR/prior-comments.json before priorComments is set, so the filter and
+            # _resolve_prior_comments_path cannot disagree. Explicit --prior-comments wins over
+            # any pre-existing canonical file.
             try:
                 with open(args.prior_comments, encoding="utf-8") as fh:
                     loaded = json.load(fh)
                 if isinstance(loaded, list):
-                    overrides["priorComments"] = loaded
+                    if _materialize_prior_comments(args.session_dir, args.prior_comments, loaded):
+                        overrides["priorComments"] = loaded
             except (OSError, ValueError):
                 pass
         out = cmd_next(args.session_dir, overrides or None)
@@ -7176,6 +8044,8 @@ def _dispatch(args):
                           owner_artifact_path=args.owner_artifact)
     elif args.cmd == "attest":
         out = cmd_attest(args.session_dir, args.failure, args.note)
+    elif args.cmd == "checkpoint":
+        out = cmd_checkpoint(args.session_dir, args.stop_reason)
     else:
         try:
             with open(args.artifact, encoding="utf-8") as fh:
