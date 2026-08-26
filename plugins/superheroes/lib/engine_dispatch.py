@@ -1395,7 +1395,7 @@ def _scan_review_engaged_candidates(run_dir_real, state):
     """
     opened = state.get("opened") or {}
     fed_prompt = opened.get("fedPrompt", "")
-    echo_nonce = review_findings_schema._effective_nonce(opened.get("echoNonce"))
+    echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
     candidates = []
     for att in sorted(state.get("attempts") or {}):
         slot = state["attempts"][att]
@@ -2564,7 +2564,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     role_kind = opened.get("roleKind", RUN_KIND_REVIEW)
     cwd = opened["cwd"]
     fed_prompt = opened.get("fedPrompt", "")
-    echo_nonce = review_findings_schema._effective_nonce(opened.get("echoNonce"))
+    echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
     slot = state["attempts"][attempt]
     ended = slot.get("ended") or {}
     stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
@@ -3398,7 +3398,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     }
     if expected_result_kind in REVIEW_RESULT_KINDS:
         record["expectedResultKind"] = expected_result_kind
-    effective_nonce = review_findings_schema._effective_nonce(echo_nonce)
+    effective_nonce = review_findings_schema.effective_nonce(echo_nonce)
     if effective_nonce is not None:
         record["echoNonce"] = effective_nonce
     if pr_body_source_path is not None:

@@ -1970,14 +1970,17 @@ def test_parse_result_echo_nonce_keyed_example_is_hollow():
 
 
 def test_parse_result_different_echo_nonce_example_not_sentinel_echo():
-    # axis: example under nonce M is not sentinel-echo when graded under nonce N (no base-set match)
+    # axis: example under nonce M is not sentinel-echo under nonce N, and parses clean under N
     nonce_m = "dispatch-m"
     nonce_n = "dispatch-n"
     member = RFS.example_findings_object(nonce_m)["findings"][0]
     assert RFS.member_carries_sentinel(member, nonce=nonce_n) is False
-    assert EA.parse_result(
+    res = EA.parse_result(
         "codex", "review", json.dumps({"findings": [member]}), echo_nonce=nonce_n,
-    ) == _HOLLOW_MEMBER_MALFORMED
+    )
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["severity"] == member["severity"]
 
 
 def test_parse_result_review_title_plus_body_quoting_sentinel_survives_with_echo_nonce():
