@@ -8,6 +8,9 @@ a catalog (`.claude-plugin/marketplace.json`) listing plugins under `plugins/`.
 - `.claude-plugin/marketplace.json` — the catalog. Lists the `superheroes` plugin + its `source`.
 - `plugins/superheroes/.claude-plugin/plugin.json` — the plugin manifest (name, version).
 - `plugins/superheroes/` — the plugin's components (`agents/`, `skills/`, `rubric/`, `eval/`).
+- `pytest.ini` — pins pytest's rootdir to the repo root so `conftest.py` and `source_guard.py` load for every invocation shape.
+- `conftest.py` — repo-root pytest config; loads `source_guard` via `pytest_plugins` for every test tree.
+- `source_guard.py` — pytest plugin that blocks writes to shipped (non-test) Python source during test runs.
 - `.github/workflows/ci.yml` — validation (manifest checks + pytest).
 - `.github/scripts/validate_marketplace.py` — catalog/manifest validator.
 - `docs/` — internal design docs and plans. **Gitignored**, kept local only — **except
@@ -107,6 +110,12 @@ cancelled by the concurrency group.
    measured parity A/B) with `--durations=25` so the slow tail stays visible as
    the suite grows. A parallel-run failure that passes on a re-run is a flake
    observation — record it on an issue with the run link, not a regression.
+
+Every pytest run is guarded against writes to shipped (non-test) Python source: an audit hook
+blocks in-process writes (`ShippedSourceWrite`), per-test residue detection names the offending
+test (`source_guard: shipped source mutated by <nodeid>`), and session-end `git status` ground
+truth reports any watched file left dirty (`source_guard: session left shipped source dirty:
+<paths>`). A green-looking suite that exits non-zero is usually one of these guards firing.
 
 **Job `pr-title`** (**pull-request events only**)
 
