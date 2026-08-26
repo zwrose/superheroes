@@ -260,3 +260,16 @@ FAILED plugins/superheroes/lib/tests/test_ssot_drift.py::test_retired_discovery_
 ```
 
 **Restore receipt:** the planted line removed by the inverse write; `git status --porcelain` over the whole tree → empty output.
+
+---
+
+## Fixed-point re-confirmation (final head, after the review-round-1 restructure)
+
+Both neutralizations were re-executed against this record **as committed** — the record's own final
+shape, not an earlier draft — and reproduce the recorded output exactly:
+
+- BP-2, `_CENSUS_EXCLUDED_DIRS = ()`: `stale hits: [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 23)]`
+  and `hits: [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 24)]` — the two ammunition
+  lines, exit 1; restored → `2 passed`, `git status --porcelain` empty.
+- BP-1, `_CENSUS_EXCLUDED_DIRS = ()`: `found [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 1), ('skills/showrunner/reference/closure.md', 1)]`,
+  exit 1; restored → `1 passed`, `git status --porcelain` empty.
