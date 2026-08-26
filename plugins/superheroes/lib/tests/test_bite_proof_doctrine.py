@@ -27,6 +27,26 @@ REPO_ROOT = os.path.abspath(os.path.join(PLUGIN, "..", ".."))
 _POINTER = "rubric/bite-proof.md"
 _HOME = "rubric/bite-proof.md"
 
+# Bite-proof records are receipts, not consumed surfaces: they are categorically outside every
+# content census, exactly as detector self-paths are. A proof must be free to quote the literal
+# it proves — a census that polices its own evidence re-fires on every new proof.
+# Standing advisor ruling, 2026-08-25 (#1136 shipped the code half; this is the pointer census's).
+_CENSUS_EXCLUDED_DIRS = ("lib/tests/bite_proofs",)
+
+# CHANGELOG quotes historical doctrine paths; it is not a consumer surface.
+_CENSUS_EXCLUDED_FILES = ("CHANGELOG.md",)
+
+
+def _census_excluded(rel):
+    """The walk's one chokepoint: plugin-relative paths the pointer census must not read."""
+    norm = os.path.normpath(rel)
+    if norm in {os.path.normpath(name) for name in _CENSUS_EXCLUDED_FILES}:
+        return True
+    return any(
+        norm.startswith(os.path.normpath(d) + os.sep) for d in _CENSUS_EXCLUDED_DIRS
+    )
+
+
 # Copy-holder disposition (§11.2 — extend roster when adding a pointer; bump expected_count when
 # a section gains a deliberate second pointer):
 # workhorse §6 Decompose — order-template doctrine points at bite-proof home (count=1)
@@ -297,16 +317,27 @@ def _sections_with_pointer(rel, text):
     return found
 
 
-def _walk_pointer_carrying_sections():
+def _walk_plugin_pointer_sections(plugin_root):
+    """Every level-2 section under ``plugin_root`` carrying the pointer, minus the excluded paths.
+
+    Bites on: exclusion breadth. The single ``_census_excluded`` call below is the chokepoint —
+    the walk holds no per-file skip of its own.
+    """
     found = set()
-    for root, _dirs, files in os.walk(PLUGIN):
+    for root, _dirs, files in os.walk(plugin_root):
         for name in files:
-            if name.endswith(".md"):
-                rel = os.path.relpath(os.path.join(root, name), PLUGIN)
-                # CHANGELOG quotes historical doctrine paths; it is not a consumer surface.
-                if rel == "CHANGELOG.md":
-                    continue
-                found |= _sections_with_pointer(rel, _read(rel))
+            if not name.endswith(".md"):
+                continue
+            rel = os.path.relpath(os.path.join(root, name), plugin_root)
+            if _census_excluded(rel):
+                continue
+            with open(os.path.join(plugin_root, rel), encoding="utf-8") as fh:
+                found |= _sections_with_pointer(rel, fh.read())
+    return found
+
+
+def _walk_pointer_carrying_sections():
+    found = _walk_plugin_pointer_sections(PLUGIN)
     with open(os.path.join(REPO_ROOT, "CONVENTIONS.md"), encoding="utf-8") as fh:
         text = fh.read()
         if _POINTER in text:
@@ -321,6 +352,85 @@ def _check_pointer_roster_complete(found_sections):
         raise AssertionError(
             f"pointer roster drift: missing={missing!r}, unrostered={extra!r} — extend roster"
         )
+
+
+# --- census exclusion: bite-proof records are receipts, outside the census (#1155) ---
+
+
+_BITE_PROOF_DIR = "lib/tests/bite_proofs"
+
+
+def _write_md(path, lines):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+def _synthetic_plugin_tree(root):
+    """A miniature plugin tree: a consumer surface, a bite-proof record, and a CHANGELOG — each
+    carrying the pointer *inside* a level-2 section, which is the only shape the walk records."""
+    _write_md(
+        os.path.join(root, "skills", "workhorse", "SKILL.md"),
+        ["## 8. Verify", f"the record shape lives in {_POINTER}."],
+    )
+    _write_md(
+        os.path.join(root, *_BITE_PROOF_DIR.split("/"), "wo_synthetic.md"),
+        ["## Neutralization", f"per {_POINTER}, the detector went red with itself unedited."],
+    )
+    _write_md(
+        os.path.join(root, "CHANGELOG.md"),
+        ["## 0.1.0", f"doctrine moved to {_POINTER}."],
+    )
+
+
+def test_walk_skips_bite_proof_records(tmp_path):
+    """Red on the pre-#1155 shape: without the exclusion the record is returned as a section."""
+    _synthetic_plugin_tree(str(tmp_path))
+    found = _walk_plugin_pointer_sections(str(tmp_path))
+    assert not [rel for rel, _ in found if rel.startswith(_BITE_PROOF_DIR)], (
+        f"bite-proof record surfaced in the census walk: {sorted(found)!r}"
+    )
+
+
+def test_walk_still_bites_outside_bite_proofs(tmp_path):
+    """The census still bites: a consumer surface carrying the pointer is still returned, and the
+    exclusion is not wide enough to swallow it (or to re-admit the CHANGELOG)."""
+    _synthetic_plugin_tree(str(tmp_path))
+    assert _walk_plugin_pointer_sections(str(tmp_path)) == {
+        ("skills/workhorse/SKILL.md", "## 8. Verify"),
+    }
+
+
+def test_census_excludes_every_real_bite_proof_record():
+    """Real-channel: the predicate holds over the repository's actual record paths, not only
+    synthetic ones."""
+    records = sorted(
+        os.path.join(_BITE_PROOF_DIR, name)
+        for name in os.listdir(os.path.join(PLUGIN, _BITE_PROOF_DIR))
+        if name.endswith(".md")
+    )
+    assert records, f"no bite-proof records found under {_BITE_PROOF_DIR}"
+    assert [rel for rel in records if not _census_excluded(rel)] == []
+
+
+def test_census_excludes_changelog():
+    assert _census_excluded("CHANGELOG.md")
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        _HOME,
+        "skills/workhorse/SKILL.md",
+        "agents/implementer.md",
+        # A sibling whose name merely *prefixes* the excluded directory is not excluded.
+        "lib/tests/bite_proofs_notes.md",
+        # A directory of the same name somewhere else is not the rostered exclusion.
+        "docs/bite_proofs/notes.md",
+    ],
+)
+def test_census_does_not_exclude_consumer_surfaces(rel):
+    assert not _census_excluded(rel)
 
 
 # --- _section_span direct tests (synthetic in-memory documents) ---

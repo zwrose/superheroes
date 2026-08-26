@@ -39,6 +39,8 @@
     {"path": "plugins/superheroes/lib/model_registry.py", "allow": false},
     {"path": "plugins/superheroes/hooks/hooks.json", "allow": false},
     {"path": "plugins/superheroes/hooks/session_start.py", "allow": false},
+    {"path": "plugins/superheroes/lib/session_mode.py", "allow": false},
+    {"path": "plugins/superheroes/lib/version_skew.py", "allow": false},
     {"path": "plugins/superheroes/lib/panel_tally.py", "allow": false},
     {"path": "plugins/superheroes/lib/loop_synthesis.py", "allow": false},
     {"path": "plugins/superheroes/lib/verification.py", "allow": false},
