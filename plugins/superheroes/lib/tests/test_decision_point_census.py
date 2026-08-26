@@ -1,8 +1,15 @@
 """Census detector: decision-point contract (#1144).
 
-Mechanical receipt for the invariant that every skill-surface site taking a default or waiting
-for an answer is wrapped in a declared decision block, and owner-decision primitives are
-forbidden outside such blocks (see reference/decision-points.md).
+Mechanical receipt for the invariant that every skill-surface site whose prose matches a
+forbidden-primitive literal in the closed-world ``_FORBIDDEN_PRIMITIVES`` list is wrapped in a
+declared decision block, byte-pinned, or rubric-excluded surface, and owner-decision primitives
+matching that list are forbidden outside such blocks (see reference/decision-points.md).
+
+Closed-world limitation: a decision point phrased entirely outside ``_FORBIDDEN_PRIMITIVES`` is
+not detected — see reference/decision-points.md § Known limitation.
+
+Unreadable or non-UTF-8 skill files are silently skipped by both prohibition and block censuses;
+they are outside this guarantee (see reference/decision-points.md §1d).
 
 Disclosed residual: underscore-emphasis (`_..._`) is not normalized before matching — one file,
 one occurrence on this tree vs 48 files for `**` — so stripping `_` would buy almost nothing and
@@ -402,15 +409,21 @@ def _mode_structure_violations(block):
     hits = []
     if mode == "gate":
         if "write" not in prose_cf and "written" not in prose_cf:
-            hits.append(f"{rel}:{line}: gate block must state the decision is written down")
+            hits.append(
+                f"{rel}:{line}: gate block prose missing write or written substring"
+            )
         if "hand back" not in prose_cf and "hands back" not in prose_cf:
-            hits.append(f"{rel}:{line}: gate block must state the run hands back")
+            hits.append(
+                f"{rel}:{line}: gate block prose missing hand back or hands back substring"
+            )
     elif mode == "notify":
         if "continu" not in prose_cf:
-            hits.append(f"{rel}:{line}: notify block must state the run continues")
+            hits.append(f"{rel}:{line}: notify block prose missing continu substring")
     elif mode == "proceed":
         if "continu" not in prose_cf and "record" not in prose_cf:
-            hits.append(f"{rel}:{line}: proceed block must record and continue")
+            hits.append(
+                f"{rel}:{line}: proceed block prose missing continu or record substring"
+            )
     return hits
 
 
@@ -459,7 +472,7 @@ def test_byte_pin_lines_exist():
 # axis: forbidden primitives under skills/ must live inside a decision block, byte-pin, or
 # rubric-excluded surface — every hit reported. Not waiting tokens.
 def test_forbidden_primitives_outside_decision_blocks():
-    """#1144: owner-decision primitives outside declared blocks must go red until converted."""
+    """#1144: forbidden-primitive literals outside block, byte-pin, or rubric exclusion must fail."""
     violations, file_count = _scan_forbidden_violations()
     assert file_count > 0, "#1144 skills census walk found zero files"
     assert not violations, (
@@ -480,7 +493,7 @@ def test_decision_blocks_well_formed():
 
 # axis: no waiting token inside any decision block, any mode. Not outside-block prohibition.
 def test_no_waiting_tokens_in_decision_blocks():
-    """#1144: waiting tokens inside blocks contradict escalation-base.md v3."""
+    """#1144: waiting-token literals inside block prose are forbidden (substring check)."""
     hits = []
     blocks, _ = _collect_all_blocks()
     for block in blocks:
@@ -498,7 +511,7 @@ def test_no_waiting_tokens_in_decision_blocks():
 
 # axis: mode-specific structure per reference/decision-points.md §1a. Not carrier transport.
 def test_decision_block_mode_structure():
-    """#1144: gate/notify/proceed blocks must carry mode-specific disclosure prose."""
+    """#1144: gate/notify/proceed blocks must satisfy mode-specific prose substring checks."""
     hits = []
     blocks, _ = _collect_all_blocks()
     for block in blocks:
@@ -548,16 +561,17 @@ def test_storage_decision_blocks_capture_source():
     )
 
 
-# axis: every block must name /superheroes:configure follow-up — any kind, any carrier. Not bash
+# axis: every block must contain /superheroes:configure — any kind, any carrier. Not bash
 # shell text or carrier delivery.
 def test_decision_block_names_configure_follow_up():
-    """#1144: block prose must name /superheroes:configure regardless of kind or carrier."""
+    """#1144: block prose must contain /superheroes:configure regardless of kind or carrier."""
     hits = []
     blocks, _ = _collect_all_blocks()
     for block in blocks:
         if "/superheroes:configure" not in block["prose"]:
             hits.append(
-                f"{block['rel']}:{block['open_line']}: block prose must name /superheroes:configure"
+                f"{block['rel']}:{block['open_line']}: block prose must contain "
+                "/superheroes:configure"
             )
     assert not hits, (
         "#1144 decision block follow-up violations. Every hit:\n" + "\n".join(hits)

@@ -22,8 +22,10 @@ converting a skill surface.
 
 A decision point phrased entirely outside the forbidden-primitive vocabulary below is **not**
 detected. There is no runtime chokepoint for skill prose; this closed-world prohibition list is
-the strongest available construction, and the limitation is disclosed rather than hidden. Carrier
-delivery is not checked at all — by owner ruling 2026-08-25 (`a`-and-stop).
+the strongest available construction, and the limitation is disclosed rather than hidden. A skill
+file that cannot be read as UTF-8 text is **silently skipped** by both prohibition and block
+censuses — it is outside this guarantee (see §1d). Carrier delivery is not checked at all — by
+owner ruling 2026-08-25 (`a`-and-stop).
 
 ## 1a — Decision block grammar
 
@@ -52,7 +54,7 @@ The census enforces:
   `SOURCE=$(… .source` assignment and `[ -n "$SOURCE" ]` on a line that does not begin with `#`
   (trailing inline comments and quoted occurrences also satisfy the guard check) — shell text
   inside the block, not a proof that the value flows from `decide-location`'s output.
-- The prose inside the block must name **`/superheroes:configure`** as the follow-up.
+- The prose inside the block must contain the substring **`/superheroes:configure`**.
 
 **Mode-specific structure** (substring checks inside the block prose, every mode — prose that
 *negates* a requirement can still satisfy it):
@@ -128,6 +130,11 @@ a silently-taken provisional default actually costs the owner something reopens 
 ## 1d — Structural exemptions — and nothing else
 
 No rationale is ever accepted. A forbidden primitive outside a block is permitted only if:
+
+**Unreadable file** — a skill file that cannot be read as UTF-8 text is silently skipped by both
+`_scan_forbidden_violations` and `_collect_all_blocks`; neither census sees it. The
+`file_count > 0` guards on the prohibition census still pass when any other readable file exists.
+Sites in unreadable files are outside this guarantee.
 
 **Byte-pinned line** — the exact stripped line text appears in the census pin table
 (`test_decision_point_census.py`). A pin is a *literal*, never a reason; when the line changes the
