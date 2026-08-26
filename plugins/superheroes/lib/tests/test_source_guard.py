@@ -1633,7 +1633,12 @@ def test_bite_dir_fd_positive_match_arm(tmp_path):
 
     _bite_red_green(
         "dir_fd_positive_match",
-        ("                return True", "                return False"),
+        (
+            "            if parent_key == anchor_key:\n"
+            "                return True",
+            "            if parent_key == anchor_key:\n"
+            "                return False",
+        ),
         lambda m: bites(m),
         lambda m: bites(m),
     )
@@ -1799,4 +1804,86 @@ def test_bite_audit_hook_uses_captured_stat(tmp_path, monkeypatch):
         ),
         lambda m: bites_under_hostile_global(m),
         lambda m: bites_under_hostile_global(m),
+    )
+
+
+# --- Group 5e: unstatable watched parent falls closed (round-2 code-001) -----
+
+
+def _unstatable_parent_state(monkeypatch, watched):
+    """A guard whose watched-parent stat always fails, anchor stat still working."""
+    real_stat = sg._REAL_STAT
+
+    def selective(name, *args, **kwargs):
+        if kwargs.get("dir_fd") is None:
+            raise OSError(13, "Permission denied")
+        return real_stat(name, *args, **kwargs)
+
+    monkeypatch.setattr(sg, "_REAL_STAT", selective)
+    state = sg.GuardState(lambda hook: None)
+    state.watched = frozenset(watched)
+    return state
+
+
+def test_unstatable_watched_parent_falls_closed(tmp_path, monkeypatch):
+    """An open descriptor can name a directory whose pathname went unreachable."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "conftest.py").write_text("x\n")
+    watched = {os.path.realpath(str(repo / "conftest.py"))}
+    state = _unstatable_parent_state(monkeypatch, watched)
+    dir_fd = os.open(str(repo), os.O_RDONLY)
+    try:
+        with pytest.raises(sg.ShippedSourceWrite):
+            state.audit("os.remove", ("conftest.py", dir_fd))
+    finally:
+        os.close(dir_fd)
+
+
+def test_unstatable_parent_still_needs_a_basename_match(tmp_path, monkeypatch):
+    """Failing closed is scoped to candidates whose basename already matched."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "conftest.py").write_text("x\n")
+    watched = {os.path.realpath(str(repo / "conftest.py"))}
+    state = _unstatable_parent_state(monkeypatch, watched)
+    dir_fd = os.open(str(repo), os.O_RDONLY)
+    try:
+        # No watched file is named "unrelated.py", so nothing falls closed.
+        state.audit("os.remove", ("unrelated.py", dir_fd))
+    finally:
+        os.close(dir_fd)
+
+
+def test_bite_unstatable_watched_parent_fail_closed(tmp_path, monkeypatch):
+    """Axis: an unconfirmable candidate BLOCKS rather than being skipped."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "conftest.py").write_text("x\n")
+    watched = {os.path.realpath(str(repo / "conftest.py"))}
+    real_stat = sg._REAL_STAT
+
+    def selective(name, *args, **kwargs):
+        if kwargs.get("dir_fd") is None:
+            raise OSError(13, "Permission denied")
+        return real_stat(name, *args, **kwargs)
+
+    def blocks_when_parent_unstatable(mod):
+        monkeypatch.setattr(mod, "_REAL_STAT", selective)
+        try:
+            return _fires_on_dir_fd_remove(mod, watched, "conftest.py", repo)
+        finally:
+            monkeypatch.undo()
+
+    _bite_red_green(
+        "unstatable_parent_fail_closed",
+        (
+            """            except (OSError, ValueError, TypeError, AttributeError):
+                # bite-axis: fail-closed""",
+            """            except (OSError, ValueError, TypeError, AttributeError):
+                return False
+                # bite-axis: fail-closed""",
+        ),
+        lambda m: blocks_when_parent_unstatable(m),
+        lambda m: blocks_when_parent_unstatable(m),
     )

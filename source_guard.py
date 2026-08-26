@@ -15,6 +15,13 @@ anchored from the event alone and stays resolved against the process cwd. The
 replace-ish events (``os.remove``, ``os.rename``/``os.replace``) do carry their
 anchors and are resolved against them. Layers 2 and 3 remain the backstop for
 anything layer 1 declines to match.
+
+Residual (stated): the two stat failures in descriptor-anchored matching resolve
+in OPPOSITE directions, deliberately. A watched parent that cannot be stat'd
+falls CLOSED -- the basename already matched and only confirmation is missing.
+An ANCHOR that cannot be stat'd falls open, because the operation's directory is
+then unidentifiable and blocking every such call would refuse ordinary traffic
+(a stale or closed descriptor during tmpdir GC). Layers 2 and 3 back that case.
 """
 from __future__ import annotations
 
@@ -318,7 +325,13 @@ class GuardState:
                 parent = _REAL_STAT(os.path.dirname(watched))
                 parent_key = (parent.st_dev, parent.st_ino)
             except (OSError, ValueError, TypeError, AttributeError):
-                continue
+                # bite-axis: fail-closed — the basename already matched and the anchor
+                # is known; only CONFIRMATION is missing. An open descriptor can still
+                # name a directory whose absolute pathname has become unreachable (an
+                # ancestor loses search permission), so skipping the candidate here
+                # would let a real mutation through. A check that cannot complete
+                # blocks; it never falls open.
+                return True
             if parent_key == anchor_key:
                 return True
         return False
