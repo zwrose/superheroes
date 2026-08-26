@@ -187,15 +187,28 @@ def _value_contains_sentinel(value):
     return False
 
 
+def _substance_value_carries_content(value):
+    """True when a substance field value carries inspectable content for the echo leg."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip() != ""
+    if isinstance(value, (dict, list)):
+        return True
+    return False
+
+
 def _all_present_substance_fields_carry_sentinel(member):
-    """True when every present substance field value contains EXAMPLE_SENTINEL."""
+    """True when every content-bearing substance field value contains EXAMPLE_SENTINEL."""
     if not isinstance(member, dict):
         return False
     present_values = []
     for key in _ECHO_SUBSTANCE_KEYS:
         if key not in member:
             continue
-        present_values.append(member[key])
+        value = member[key]
+        if _substance_value_carries_content(value):
+            present_values.append(value)
     if not present_values:
         return False
     return all(_value_contains_sentinel(value) for value in present_values)
