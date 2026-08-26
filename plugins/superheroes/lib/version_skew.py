@@ -41,21 +41,6 @@ STATUS_DISPOSITIONS = {
     STATUS_CHECKED_CLEAN: False,
 }
 
-
-def is_degrading(status: object) -> bool:
-    """True when ``status`` is a degrading skew disclosure. Unknown statuses and members with no
-    disposition fail closed (read as degrading) so a future enum member cannot ship silently
-    non-degrading (#1107). Unhashable values (malformed seat maps) fail closed too."""
-    try:
-        known = status in STATUSES
-    except TypeError:
-        return True
-    if not known:
-        return True
-    if status not in STATUS_DISPOSITIONS:
-        return True
-    return STATUS_DISPOSITIONS[status]
-
 DETAIL_NOT_SOURCE_REPO = "not-source-repo"
 DETAIL_SELF = "self"
 DETAIL_NOT_COMPOSED = "not-composed"
@@ -75,17 +60,36 @@ DEGRADING_DETAILS = frozenset({
     DETAIL_SEMANTICS_DIVERGENT,
     DETAIL_EVIDENCE_UNREADABLE,
 })
-APPENDS_DEGRADATION = frozenset({STATUS_CHECKED_DEGRADED})
+# Derived from STATUS_DISPOSITIONS — never hand-maintained beside it, so a status added to one
+# cannot be forgotten in the other (#1107; this is the single owner PR #1160 first introduced).
+APPENDS_DEGRADATION = frozenset(
+    status for status, degrading in STATUS_DISPOSITIONS.items() if degrading
+)
 
 
-# bite-axis: closed membership — a non-string, None, or unhashable argument returns False
-# (only statuses declared here append); a set-membership home beats scattered == at call sites
-# so a future fourth status is decided here, not silently non-appending elsewhere (#1151).
-def appends_degradation(status) -> bool:
+# bite-axis: fail-closed disposition — a status with no STATUS_DISPOSITIONS entry (a future
+# STATUSES member nobody dispositioned yet, an unrecognized string, None, or an unhashable value)
+# returns True (appends/degrading); only a status explicitly dispositioned False in
+# STATUS_DISPOSITIONS returns False. This is the single home for the skew status vocabulary and
+# its disposition — a future STATUSES member cannot ship silently non-degrading (#1107; the
+# new-enum-member fall-open class).
+def appends_degradation(status: object) -> bool:
     try:
-        return status in APPENDS_DEGRADATION
+        known = status in STATUSES
     except TypeError:
-        return False
+        return True
+    if not known:
+        return True
+    if status not in STATUS_DISPOSITIONS:
+        return True
+    return STATUS_DISPOSITIONS[status]
+
+
+def default_missing_status() -> str:
+    """The fail-closed status to fill in when a skew record is missing one — decided here so
+    callers never spell STATUS_CHECKED_DEGRADED themselves (#1107 chokepoint: only this module may
+    reference STATUS_CHECKED_DEGRADED or the ``checked-degraded`` literal)."""
+    return STATUS_CHECKED_DEGRADED
 
 # bite-axis: bounded reads — streamed rather than read-whole so a repo-controlled symlink to an
 # endless device cannot hang compose or exhaust the reviewer (#677).
