@@ -729,7 +729,12 @@ def _scrub_findings(findings):
         if not _finding_is_substantive(f):
             rejected.append({"entry": _render_rejection_entry(f), "reason": FINDING_REJECT_NO_SUBSTANCE})
             continue
-        f = review_findings_schema.normalize_member(f)
+        pre_scrubbed = dict(f)
+        for key, val in pre_scrubbed.items():
+            if key in _FINDING_STRUCTURAL_KEYS:
+                continue
+            pre_scrubbed[key] = _scrub_finding_value(val)
+        f = review_findings_schema.normalize_member(pre_scrubbed)
         g = dict(f)
         for key, val in g.items():
             if key in _FINDING_STRUCTURAL_KEYS:
@@ -1221,7 +1226,9 @@ def _review_payload_shape_findings_obj(obj):
     if "findings" not in obj:
         investigated = obj.get("investigated")
         if isinstance(investigated, list) and investigated:
-            return None
+            accepted, _ = _scrub_investigated(investigated)
+            if accepted:
+                return None
         top_keys, keys_truncated = _bound_top_level_keys(obj)
         return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
                 "topLevelKeys": top_keys, "keysTruncated": keys_truncated}

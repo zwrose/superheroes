@@ -267,6 +267,21 @@ def test_schema_read_failure_uses_literal_fallback(tmp_path):
     assert mod.SEVERITY_TIERS == mod._FALLBACK_SEVERITY_TIERS
 
 
+def test_example_findings_object_works_in_fallback_regime(tmp_path):
+    # axis: example renderer uses cached fallback metadata when shipped schema cannot be read
+    missing = str(tmp_path / "missing-schema.json")
+    mod = _reload_rfs_module(schema_path=missing)
+    assert mod.SCHEMA_READ_USED_FALLBACK is True
+    obj = mod.example_findings_object()
+    member = obj["findings"][0]
+    assert set(member.keys()) == set(mod.CANONICAL_MEMBER_KEYS)
+    assert member["severity"] in mod._FALLBACK_SEVERITY_TIERS
+    assert member["dimension"] in mod._FALLBACK_DIMENSION_ENUM
+    assert member["confidence"] in mod._FALLBACK_CONFIDENCE_ENUM
+    assert member["line"] is None
+    assert member["tradeoff"] is None
+
+
 def test_substance_keys_canonical_subset_of_member_keys():
     assert RFS.SUBSTANCE_KEYS_CANONICAL <= set(RFS.CANONICAL_MEMBER_KEYS)
 

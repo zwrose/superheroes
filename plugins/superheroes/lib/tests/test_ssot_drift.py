@@ -5851,18 +5851,16 @@ def test_review_findings_example_emitting_sites_delegate_to_home():
 
 
 def test_review_findings_renderer_and_grader_census_share_home_objects():
-    """#1145 WO-C: renderer keys and grader census keys are review_findings_schema singletons."""
+    """#1145 WO-C/H: renderer keys and grader census keys are review_findings_schema singletons."""
     # axis: renderer member keys and grader census frozensets are module singletons (identity, not re-typed literals)
+    import engine_adapter as ea
     import review_findings_schema as rfs
-    import review_findings_schema as rfs_reimport
 
     member = rfs.example_findings_object()["findings"][0]
     assert set(member.keys()) == set(rfs.CANONICAL_MEMBER_KEYS)
-    assert rfs.CANONICAL_MEMBER_KEYS is rfs_reimport.CANONICAL_MEMBER_KEYS
-    assert rfs.SUBSTANCE_KEYS_CANONICAL is rfs_reimport.SUBSTANCE_KEYS_CANONICAL
-    assert rfs.SUBSTANCE_KEYS_LEGACY is rfs_reimport.SUBSTANCE_KEYS_LEGACY
-    assert rfs.SUBSTANCE_KEYS_CENSUSED is rfs_reimport.SUBSTANCE_KEYS_CENSUSED
-    assert rfs.SEVERITY_TIERS is rfs_reimport.SEVERITY_TIERS
+    assert ea.REVIEW_SEVERITY_TIERS is rfs.SEVERITY_TIERS
+    assert ea._FINDING_SUBSTANCE_KEYS_CANONICAL is rfs.SUBSTANCE_KEYS_CANONICAL
+    assert ea._FINDING_SUBSTANCE_KEYS_TOLERATED is rfs.SUBSTANCE_KEYS_LEGACY
 
 
 # --- Cluster: session-mode vocabulary (#1151) -----------------------------------
