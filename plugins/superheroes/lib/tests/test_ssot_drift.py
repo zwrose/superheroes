@@ -5830,13 +5830,45 @@ _FINDINGS_EXAMPLE_HAND_LITERALS = (
 _REVIEW_FINDINGS_EXAMPLE_EMITTING_SITES = (
     ("C1", "lib/engine_dispatch.py", "_dispatch_review_impl", "review_findings_schema.example_prompt_block"),
     ("C2a", "lib/round_orders.py", "_stdout_payload_example", "review_findings_schema.example_findings_object"),
-    ("C2b", "lib/round_orders.py", "_panel_derived_placeholders", "review_findings_schema.example_findings_object"),
+    ("C2b", "lib/round_orders.py", "_panel_stdout_delivery_text", "review_findings_schema.example_prompt_block"),
     ("C3", "lib/seat_canary.py", "CANARY_FIXTURE_PROMPT", "review_findings_schema.example_prompt_block"),
 )
 
 
+def _strip_comments(source):
+    """Return source with COMMENT tokens removed; string literals containing '#' are preserved."""
+    import io
+    import tokenize
+
+    tokens = []
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type == tokenize.COMMENT:
+            continue
+        tokens.append(tok)
+    return tokenize.untokenize(tokens)
+
+
+def _strip_function_docstring(region, func_node):
+    """Drop a leading function docstring from region; no-op when absent."""
+    import ast
+
+    if not func_node.body:
+        return region
+    first = func_node.body[0]
+    if not (
+        isinstance(first, ast.Expr)
+        and isinstance(first.value, ast.Constant)
+        and isinstance(first.value.value, str)
+    ):
+        return region
+    region_lines = region.splitlines()
+    start_idx = first.lineno - func_node.lineno
+    end_idx = first.end_lineno - func_node.lineno + 1
+    return "\n".join(region_lines[:start_idx] + region_lines[end_idx:])
+
+
 def _definition_source(rel, definition_name):
-    """Return source text for a function or module-level assignment name in rel."""
+    """Return comment-free, docstring-free source for a function or module-level assignment."""
     import ast
 
     text = _read(rel)
@@ -5847,11 +5879,14 @@ def _definition_source(rel, definition_name):
     lines = text.splitlines()
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == definition_name:
-            return "\n".join(lines[node.lineno - 1:node.end_lineno])
+            region = "\n".join(lines[node.lineno - 1:node.end_lineno])
+            region = _strip_function_docstring(region, node)
+            return _strip_comments(region)
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == definition_name:
-                    return "\n".join(lines[node.lineno - 1:node.end_lineno])
+                    region = "\n".join(lines[node.lineno - 1:node.end_lineno])
+                    return _strip_comments(region)
     raise AssertionError(
         "%s: definition %r not found (census row must name an existing function or assignment)"
         % (rel, definition_name)
