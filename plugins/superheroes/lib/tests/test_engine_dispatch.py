@@ -5938,6 +5938,29 @@ def test_stdout_capped_forfeit_disclosure_attempt2_names_attempt_not_retry_refus
     assert "attempt budget was exhausted" in disclosure
 
 
+def test_worktree_dirtied_forfeit_disclosure_attempt1_names_attempt_and_refused_retry(tmp_path):
+    """axis: disclosure names the real attempt number and retry-refusal reason on attempt 1."""
+    terminal = ED._worktree_dirtied_forfeit(
+        "cursor", run_dir_real=str(tmp_path), attempts=1)
+    disclosure = terminal["disclosure"]
+    assert terminal["detail"] == "worktree-dirtied-by-attempt"
+    assert "attempt 1" in disclosure
+    assert "retry was refused" in disclosure
+    assert "dirtied tree" in disclosure
+    assert "attempt budget was exhausted" not in disclosure
+
+
+def test_worktree_dirtied_forfeit_disclosure_attempt2_names_attempt_not_retry_refused(tmp_path):
+    """axis: disclosure names attempt 2 and cites exhausted budget, not a refused retry."""
+    terminal = ED._worktree_dirtied_forfeit(
+        "cursor", run_dir_real=str(tmp_path), attempts=ED.MAX_ATTEMPTS)
+    disclosure = terminal["disclosure"]
+    assert terminal["detail"] == "worktree-dirtied-by-attempt"
+    assert "attempt %d" % ED.MAX_ATTEMPTS in disclosure
+    assert "retry was refused" not in disclosure
+    assert "attempt budget was exhausted" in disclosure
+
+
 def test_stdout_marker_overruled_journal_on_authoritative_suppression(tmp_path):
     """axis: stamped under-cap count overrules head marker and journals both counts."""
     run_dir = str(tmp_path / "run")
