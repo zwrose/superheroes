@@ -259,6 +259,84 @@ def test_prior_comments_absent_meta_fail_closed_discloses(tmp_path):
     assert state["rounds"]["1"]["priorCommentsUnavailable"] is True
 
 
+def _run_next_prior_comments_cli(capsys, session_dir, prior_path):
+    from test_round_driver import _guard_argv
+
+    argv = ["next", "--session-dir", session_dir, "--prior-comments", prior_path]
+    argv += _guard_argv(session_dir, fresh=False)
+    rc = RD.main(argv)
+    out = capsys.readouterr().out.strip()
+    parsed = json.loads(out.splitlines()[-1]) if out else None
+    return rc, parsed
+
+
+def test_prior_comments_on_non_fresh_state_refused_preserves_canonical(tmp_path, capsys):
+    # axis: non-fresh --prior-comments must refuse before clobbering the canonical file
+    session_dir = _session_with_mode(tmp_path, "branch")
+    prior_a = str(tmp_path / "prior-a.json")
+    prior_b = str(tmp_path / "prior-b.json")
+    with open(prior_a, "w", encoding="utf-8") as fh:
+        json.dump([{"id": "a", "justification": "from A"}], fh)
+    with open(prior_b, "w", encoding="utf-8") as fh:
+        json.dump([{"id": "b", "justification": "from B"}], fh)
+
+    _cli_next_prior_comments(tmp_path, session_dir, prior_a, mode="branch")
+    canonical = _canonical_prior_path(session_dir)
+    with open(canonical, "rb") as fh:
+        before_bytes = fh.read()
+
+    rc, out = _run_next_prior_comments_cli(capsys, session_dir, prior_b)
+    assert rc == 1
+    assert out == {"ok": False, "reason": "prior-comments-not-fresh-state", "value": prior_b}
+
+    with open(canonical, "rb") as fh:
+        assert fh.read() == before_bytes
+    ok, state = RD.load_state(session_dir)
+    assert ok and state["config"]["priorComments"] == [{"id": "a", "justification": "from A"}]
+
+
+def test_prior_comments_on_non_fresh_state_refused_when_canonical_absent(tmp_path, capsys):
+    # axis: refusal must not create a canonical file that was absent
+    from test_round_driver import _guard_argv, _run_main
+
+    session_dir = _session_with_mode(tmp_path, "branch")
+    rc0, _ = _run_main(["next", "--session-dir", session_dir] + _guard_argv(session_dir), capsys)
+    assert rc0 == 0
+    canonical = _canonical_prior_path(session_dir)
+    assert not os.path.isfile(canonical)
+
+    prior_path = str(tmp_path / "prior-new.json")
+    with open(prior_path, "w", encoding="utf-8") as fh:
+        json.dump([{"id": "new"}], fh)
+
+    rc, out = _run_next_prior_comments_cli(capsys, session_dir, prior_path)
+    assert rc == 1
+    assert out == {"ok": False, "reason": "prior-comments-not-fresh-state", "value": prior_path}
+    assert not os.path.isfile(canonical)
+
+
+def test_prior_comments_on_unreadable_state_refused(tmp_path, capsys):
+    # axis: load_state refusal (v1 state) is not fresh — same loud refusal, no materialization
+    from test_round_driver import _guard_argv
+
+    session_dir = str(tmp_path)
+    with open(os.path.join(session_dir, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"schemaVersion": 1, "rounds": {}}, fh)
+    prior_path = str(tmp_path / "prior.json")
+    with open(prior_path, "w", encoding="utf-8") as fh:
+        json.dump([], fh)
+    canonical = _canonical_prior_path(session_dir)
+
+    argv = ["next", "--session-dir", session_dir, "--prior-comments", prior_path]
+    argv += _guard_argv(session_dir)
+    rc = RD.main(argv)
+    out = capsys.readouterr().out.strip()
+    parsed = json.loads(out.splitlines()[-1])
+    assert rc == 1
+    assert parsed == {"ok": False, "reason": "prior-comments-not-fresh-state", "value": prior_path}
+    assert not os.path.isfile(canonical)
+
+
 def test_prior_comments_unavailable_marker_and_disclosure_inseparable(tmp_path):
     # axis: PR-mode unavailable marker must always record priorCommentsUnavailable — never decouple
     session_dir = _session_with_mode(tmp_path, "pr")
