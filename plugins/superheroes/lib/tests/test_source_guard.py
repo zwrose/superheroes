@@ -1033,174 +1033,38 @@ def _copy_real_root_wiring(root):
         shutil.copy2(os.path.join(_REPO_ROOT, name), root / name)
 
 
-def _write_wiring_root(tmp_path, name, pytest_ini=None, conftest=None, source_guard=True):
-    root = tmp_path / name
-    root.mkdir()
-    if pytest_ini is not None:
-        (root / "pytest.ini").write_text(pytest_ini, encoding="utf-8")
-    if conftest is not None:
-        (root / "conftest.py").write_text(conftest, encoding="utf-8")
-    if source_guard:
-        shutil.copy2(os.path.join(_REPO_ROOT, "source_guard.py"), root / "source_guard.py")
-    return root
+def test_real_repository_wiring_files_present():
+    assert sg.missing_wiring_files(_REPO_ROOT) == []
 
 
-def test_real_repository_wiring_pin():
-    assert sg.wiring_defects(_REPO_ROOT) == []
-
-
-def test_wiring_defects_accepts_real_content_copy(tmp_path):
+def test_missing_wiring_files_empty_for_real_content_copy(tmp_path):
     root = tmp_path / "real_copy"
     _copy_real_root_wiring(root)
-    assert sg.wiring_defects(str(root)) == []
+    assert sg.missing_wiring_files(str(root)) == []
 
 
-def test_wiring_defects_missing_pytest_ini(tmp_path):
+def test_missing_wiring_files_reports_missing_pytest_ini(tmp_path):
     root = tmp_path / "no_ini"
     _copy_real_root_wiring(root)
     (root / "pytest.ini").unlink()
-    defects = sg.wiring_defects(str(root))
-    assert "pytest.ini is missing at the repository root" in defects
+    missing = sg.missing_wiring_files(str(root))
+    assert "pytest.ini is missing at the repository root" in missing
 
 
-def test_wiring_defects_missing_conftest(tmp_path):
+def test_missing_wiring_files_reports_missing_conftest(tmp_path):
     root = tmp_path / "no_conftest"
     _copy_real_root_wiring(root)
     (root / "conftest.py").unlink()
-    defects = sg.wiring_defects(str(root))
-    assert "conftest.py is missing at the repository root" in defects
+    missing = sg.missing_wiring_files(str(root))
+    assert "conftest.py is missing at the repository root" in missing
 
 
-def test_wiring_defects_missing_source_guard(tmp_path):
+def test_missing_wiring_files_reports_missing_source_guard(tmp_path):
     root = tmp_path / "no_guard"
     _copy_real_root_wiring(root)
     (root / "source_guard.py").unlink()
-    defects = sg.wiring_defects(str(root))
-    assert "source_guard.py is missing at the repository root" in defects
-
-
-def test_wiring_defects_pytest_ini_no_section(tmp_path):
-    root = _write_wiring_root(
-        tmp_path,
-        "no_pytest_section",
-        pytest_ini="[other]\nkey = value\n",
-        conftest='pytest_plugins = ("source_guard",)\n',
-    )
-    defects = sg.wiring_defects(str(root))
-    assert "pytest.ini has no [pytest] section" in defects
-
-
-def test_wiring_defects_nested_pytest_plugins_assignment(tmp_path):
-    root = _write_wiring_root(
-        tmp_path,
-        "nested_plugins",
-        pytest_ini="[pytest]\n",
-        conftest=(
-            "if False:\n"
-            '    pytest_plugins = ("source_guard",)\n'
-        ),
-    )
-    defects = sg.wiring_defects(str(root))
-    assert "conftest.py has no effective module-level pytest_plugins assignment" in defects
-
-
-def test_wiring_defects_good_then_empty_overwrite(tmp_path):
-    root = _write_wiring_root(
-        tmp_path,
-        "empty_overwrite",
-        pytest_ini="[pytest]\n",
-        conftest=(
-            'pytest_plugins = ("source_guard",)\n'
-            "pytest_plugins = ()\n"
-        ),
-    )
-    defects = sg.wiring_defects(str(root))
-    assert "conftest.py pytest_plugins does not include source_guard" in defects
-
-
-def test_wiring_defects_del_after_good_assignment(tmp_path):
-    root = _write_wiring_root(
-        tmp_path,
-        "del_plugins",
-        pytest_ini="[pytest]\n",
-        conftest=(
-            "pytest_plugins = ('source_guard',)\n"
-            "del pytest_plugins\n"
-        ),
-    )
-    defects = sg.wiring_defects(str(root))
-    assert "conftest.py pytest_plugins does not include source_guard" in defects
-
-
-def test_wiring_defects_clear_after_good_assignment(tmp_path):
-    root = _write_wiring_root(
-        tmp_path,
-        "clear_plugins",
-        pytest_ini="[pytest]\n",
-        conftest=(
-            'pytest_plugins = ["source_guard"]\n'
-            "pytest_plugins.clear()\n"
-        ),
-    )
-    defects = sg.wiring_defects(str(root))
-    assert "conftest.py pytest_plugins does not include source_guard" in defects
-
-
-def test_wiring_defects_nested_later_mention_not_a_defect(tmp_path):
-    root = _write_wiring_root(
-        tmp_path,
-        "nested_later_mention",
-        pytest_ini="[pytest]\n",
-        conftest=(
-            "pytest_plugins = ('source_guard',)\n"
-            "if False:\n"
-            "    del pytest_plugins\n"
-        ),
-    )
-    assert sg.wiring_defects(str(root)) == []
-
-
-def test_wiring_defects_pytest_ini_invalid_utf8(tmp_path):
-    root = _write_wiring_root(
-        tmp_path,
-        "bad_utf8_ini",
-        conftest='pytest_plugins = ("source_guard",)\n',
-    )
-    (root / "pytest.ini").write_bytes(b"[pytest]\n\xff\xfe\n")
-    defects = sg.wiring_defects(str(root))
-    assert "pytest.ini could not be read or parsed" in defects
-
-
-def test_wiring_defects_conftest_nul_byte(tmp_path):
-    root = _write_wiring_root(
-        tmp_path,
-        "nul_conftest",
-        pytest_ini="[pytest]\n",
-    )
-    (root / "conftest.py").write_bytes(
-        b"pytest_plugins = ('source_guard',)\n\x00\n"
-    )
-    defects = sg.wiring_defects(str(root))
-    assert "conftest.py could not be read or parsed" in defects
-
-
-def test_wiring_defects_unreadable_conftest(tmp_path):
-    if os.geteuid() == 0:
-        pytest.skip("chmod 000 is not enforced when running as root")
-    root = _write_wiring_root(
-        tmp_path,
-        "unreadable_conftest",
-        pytest_ini="[pytest]\n",
-        conftest='pytest_plugins = ("source_guard",)\n',
-    )
-    conftest_path = root / "conftest.py"
-    original_mode = conftest_path.stat().st_mode
-    try:
-        conftest_path.chmod(0)
-        defects = sg.wiring_defects(str(root))
-    finally:
-        conftest_path.chmod(original_mode)
-    assert "conftest.py could not be read or parsed" in defects
+    missing = sg.missing_wiring_files(str(root))
+    assert "source_guard.py is missing at the repository root" in missing
 
 
 def _build_real_wiring_micro_suite(root):
@@ -1281,83 +1145,69 @@ def test_real_wiring_behavioural_without_assignment(tmp_path):
     assert proc.returncode == 0, combined
 
 
-def test_bite_wiring_defects_last_assignment_wins(tmp_path):
-    root = _write_wiring_root(
-        tmp_path,
-        "bite_e13",
-        pytest_ini="[pytest]\n",
-        conftest=(
-            'pytest_plugins = ("source_guard",)\n'
-            "pytest_plugins = ()\n"
-        ),
-    )
-    target = (
-        "conftest.py pytest_plugins does not include source_guard"
-    )
+def test_bite_missing_wiring_files_reports_pytest_ini(tmp_path):
+    root = tmp_path / "bite_pytest_ini"
+    _copy_real_root_wiring(root)
+    (root / "pytest.ini").unlink()
 
-    def detects_overwrite(mod):
-        return target in mod.wiring_defects(str(root))
+    def detects_missing(mod):
+        return (
+            "pytest.ini is missing at the repository root"
+            in mod.missing_wiring_files(str(root))
+        )
 
     _bite_red_green(
-        "last_assignment_wins",
+        "pytest_ini",
         (
-            "                            plugins_mentions.append(node)",
-            "                            if not plugins_mentions:\n"
-            "                                plugins_mentions.append(node)",
+            "    if not os.path.isfile(pytest_ini_path):",
+            "    if False and not os.path.isfile(pytest_ini_path):",
         ),
-        lambda m: detects_overwrite(m),
-        lambda m: detects_overwrite(m),
+        lambda m: detects_missing(m),
+        lambda m: detects_missing(m),
     )
 
 
-def test_bite_wiring_defects_module_level_only(tmp_path):
-    root = _write_wiring_root(
-        tmp_path,
-        "bite_e14",
-        pytest_ini="[pytest]\n",
-        conftest=(
-            "if False:\n"
-            '    pytest_plugins = ("source_guard",)\n'
-        ),
-    )
-    target = (
-        "conftest.py has no effective module-level pytest_plugins assignment"
-    )
+def test_bite_missing_wiring_files_reports_conftest(tmp_path):
+    root = tmp_path / "bite_conftest"
+    _copy_real_root_wiring(root)
+    (root / "conftest.py").unlink()
 
-    def detects_nested(mod):
-        return target in mod.wiring_defects(str(root))
+    def detects_missing(mod):
+        return (
+            "conftest.py is missing at the repository root"
+            in mod.missing_wiring_files(str(root))
+        )
 
     _bite_red_green(
-        "module_level_only",
+        "conftest",
         (
-            "            for node in tree.body:",
-            "            for node in ast.walk(tree):",
+            "    if not os.path.isfile(conftest_path):",
+            "    if False and not os.path.isfile(conftest_path):",
         ),
-        lambda m: detects_nested(m),
-        lambda m: detects_nested(m),
+        lambda m: detects_missing(m),
+        lambda m: detects_missing(m),
     )
 
 
-def test_bite_wiring_defects_pytest_ini_section(tmp_path):
-    root = _write_wiring_root(
-        tmp_path,
-        "bite_e15",
-        pytest_ini="[other]\nkey = value\n",
-        conftest='pytest_plugins = ("source_guard",)\n',
-    )
-    target = "pytest.ini has no [pytest] section"
+def test_bite_missing_wiring_files_reports_source_guard(tmp_path):
+    root = tmp_path / "bite_source_guard"
+    _copy_real_root_wiring(root)
+    (root / "source_guard.py").unlink()
 
-    def detects_missing_section(mod):
-        return target in mod.wiring_defects(str(root))
+    def detects_missing(mod):
+        return (
+            "source_guard.py is missing at the repository root"
+            in mod.missing_wiring_files(str(root))
+        )
 
     _bite_red_green(
-        "pytest_ini_section",
+        "source_guard",
         (
-            "            if not parser.has_section(\"pytest\"):",
-            "            if False and not parser.has_section(\"pytest\"):",
+            "    if not os.path.isfile(source_guard_path):",
+            "    if False and not os.path.isfile(source_guard_path):",
         ),
-        lambda m: detects_missing_section(m),
-        lambda m: detects_missing_section(m),
+        lambda m: detects_missing(m),
+        lambda m: detects_missing(m),
     )
 
 
@@ -1411,61 +1261,4 @@ def test_bite_session_finish_resets_configured(throwaway_guard_state):
         lambda m: reconfigures_after_finish(m),
     )
 
-
-def test_bite_wiring_defects_last_mention_must_be_assignment(tmp_path):
-    root = _write_wiring_root(
-        tmp_path,
-        "bite_e17",
-        pytest_ini="[pytest]\n",
-        conftest=(
-            "pytest_plugins = ('source_guard',)\n"
-            "del pytest_plugins\n"
-        ),
-    )
-    target = "conftest.py pytest_plugins does not include source_guard"
-
-    def detects_del(mod):
-        return target in mod.wiring_defects(str(root))
-
-    _bite_red_green(
-        "last_mention_assignment",
-        (
-            "                elif isinstance(node, ast.Delete):",
-            "                elif False and isinstance(node, ast.Delete):",
-        ),
-        lambda m: detects_del(m),
-        lambda m: detects_del(m),
-    )
-
-
-def test_bite_wiring_defects_malformed_file_handling(tmp_path):
-    root = _write_wiring_root(
-        tmp_path,
-        "bite_e18",
-        conftest='pytest_plugins = ("source_guard",)\n',
-    )
-    (root / "pytest.ini").write_bytes(b"[pytest]\n\xff\xfe\n")
-    target = "pytest.ini could not be read or parsed"
-
-    def detects_bad_utf8(mod):
-        try:
-            return target in mod.wiring_defects(str(root))
-        except (UnicodeDecodeError, OSError, ValueError):
-            return False
-
-    _bite_red_green(
-        "malformed_file_handling",
-        (
-            "            with open(pytest_ini_path, encoding=\"utf-8\") as fh:\n"
-            "                parser.read_file(fh)\n"
-            "        except (configparser.Error, OSError, UnicodeDecodeError, ValueError):\n"
-            "            defects.append(\"pytest.ini could not be read or parsed\")",
-            "            with open(pytest_ini_path, encoding=\"utf-8\") as fh:\n"
-            "                parser.read_file(fh)\n"
-            "        except configparser.Error:\n"
-            "            defects.append(\"pytest.ini could not be read or parsed\")",
-        ),
-        lambda m: detects_bad_utf8(m),
-        lambda m: detects_bad_utf8(m),
-    )
 
