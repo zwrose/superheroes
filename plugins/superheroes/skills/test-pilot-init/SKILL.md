@@ -150,11 +150,16 @@ Continue to Step 6. Follow-up: `/superheroes:configure`.
    dependency versions.
 3. Generate the catalog:
    `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/catalog.py" --blocks-dir <blocks_dir>`
-4. CREATE path (fresh setup, FR-5): pipe the shared facts JSON (stack, verify command,
-   threat model) into `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/core_md.py" write
-   --status provisional` to write the band-wide `core.md`,
-   and pipe `$TEST_PILOT_LAYER_BODY` (test-pilot's `json test-pilot-config` block + prose,
-   including the `## Setup disclosures` section assembled from Steps 4–5) into
+4. CREATE path (fresh setup, FR-5): Fail-closed guard before the pipes below — not the
+   mechanical-carrier redesign: refuse when either the shared facts JSON (stack, verify command,
+   threat model) or `$TEST_PILOT_LAYER_BODY` (test-pilot's `json test-pilot-config` block + prose,
+   including the `## Setup disclosures` section assembled from Steps 4–5) is empty, because
+   `write-layer` replaces the entire layer file and an empty piped payload would silently blank it.
+   When either payload is empty, surface `assembly produced empty payloads; halting rather than
+   writing an empty layer` and **stop** — do not pipe into `write` or `write-layer`. When both
+   payloads are present, pipe the shared facts JSON into
+   `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/core_md.py" write
+   --status provisional` to write the band-wide `core.md`, and pipe `$TEST_PILOT_LAYER_BODY` into
    `core_md.py write-layer --hero test-pilot --status <s>` so they land in the `test-pilot.md`
    layer (FR-3). On reconcile of a pre-existing profile, the legacy `profile.md` is not adopted —
    `resolve_shared` returns the `legacy-profile-unsupported` refusal pointing at
