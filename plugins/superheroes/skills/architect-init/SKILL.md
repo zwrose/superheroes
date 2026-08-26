@@ -101,17 +101,24 @@ provisional, and that `/superheroes:configure` confirms or changes it — plus t
 **`write_policy` refusal.** The block prints `WRITE_POLICY_REFUSED` when `write_policy` returns
 `None`; otherwise it prints the written record as JSON. `read_policy` returns only the four known
 fields and cannot distinguish which refusal cause applied — branch on the block's output, not on
-`read_policy`. `write_policy` returns `None` for four reasons (see its docstring in
+`read_policy`.
+
+`WRITE_POLICY_REFUSED` is a **single token that does not identify which cause applied**. When the
+block prints it, the write did **not** apply and nothing was persisted. Surface a notice that the doc
+policy could not be written and **stop** — do not proceed as if the policy had been written, and do
+not spin-wait.
+
+Because the causes are **not distinguishable from the token**, a run **cannot** choose between
+retrying and reporting that the plugin must be upgraded; a retry may simply refuse again.
+
+`write_policy` returns `None` for four possible reasons (see its docstring in
 `lib/architect_config.py`):
 
-1. **Config lock contended** — surface a notice and exit; the caller retries (CONVENTIONS `§4.4`).
-2. **Project store cannot be ensured** — surface a notice and exit; the caller retries once the
-   store is available.
-3. **Repository root unavailable** — surface a notice and exit; the caller retries once the repo
-   root can be resolved.
-4. **Persisted record declares a `schemaVersion` newer than this module supports** — surface a
-   notice that the plugin must be upgraded; retrying cannot succeed (a newer plugin wrote that
-   record, and this one refuses to overwrite what it cannot read in full).
+1. **Config lock contended** — another holder has the config lock.
+2. **Project store cannot be ensured** — the project store is not available.
+3. **Repository root unavailable** — the repository root cannot be resolved.
+4. **Persisted record declares a `schemaVersion` newer than this module supports** — a newer plugin
+   wrote the record, and this one refuses to overwrite what it cannot read in full.
 
 ## Step 4 — Report
 
