@@ -74,6 +74,7 @@ import round_orders  # noqa: E402
 import round_records  # noqa: E402
 import round_phases  # noqa: E402
 import seat_map  # noqa: E402
+import session_mode  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
 import version_skew  # noqa: E402
@@ -5550,8 +5551,10 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
         if not dim_label:
             raise ValueError("order-render-refused:no-dimension-label:%s" % seat_key)
         pr_checkout = _session_pr_checkout_path(session_dir)
+        mode_resolved = session_mode.resolve(meta, cfg)
         ph = {
-            "MODE": meta.get("mode") or cfg.get("mode") or "branch",
+            "MODE": mode_resolved["mode"],
+            "MODE_EVIDENCE": session_mode.evidence_line(mode_resolved),
             "REPO": meta.get("repo") or cfg.get("repo") or "unknown",
             "TARGET": meta.get("branch") or cfg.get("branch") or "unknown",
             "DIFF_PATH": diff_path,

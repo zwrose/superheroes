@@ -333,9 +333,16 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > argparse before dispatch with a usage error, a non-zero exit, and no result object. A **`verdicts`**
 > payload now travels through `dispatch-review` for verifier seats — a correct `{"verdicts": [...]}`
 > stdout no longer parses `unreadable` by construction; **`grouping`** and **`ruling`** payloads are
-> likewise recognised for synthesis judges and fix auditors. **Per-id audit rulings** (`dispatch-audits`) still do not
-> travel through this verb; encode those inside audit result objects or use the file-writing auditor
-> path. For verifier delivery channels, see `verification-pass.md`.
+> likewise recognised for synthesis judges and fix auditors. A **`ruling`** payload is recognised only
+> when the object carries `id`, `reason`, and a `ruling` drawn from `audits.AUDIT_RULINGS`, and
+> validates against the `P_AUDITS` contract; the terminal result then carries the scrubbed ruling
+> record under **`ruling`**, with `id` and `reason` **nested inside that record and not mirrored at
+> top level** — **one per-id ruling per dispatch**. What does not
+> travel through this verb is the round-driver's `dispatch-audits` **phase submission**: its seat
+> payloads land on the per-target artifact path the order names, and the `collectionManifest`
+> provenance is built out-of-band from the orchestrator's own dispatch records, so the batch submit
+> stays the driver's channel (`round-driver.md`). For verifier delivery channels, see
+> `verification-pass.md`.
 >
 > **`engagement.read` (#687).** When the result carries an **`engagement`** block with a non-`null`
 > value (present only when the attempt produced stdout that was graded), `engagement.read` is
@@ -803,9 +810,9 @@ carries `{vendor, model, effort, tier, family, source}`:
   panel buys its independence from anthropic/openai instead; where
   none is live, the seat still fills with the maker family and the map records a disclosed
   `same-family` degradation, which rides the certification shape (`-degraded`) alongside
-  `independenceDegraded`, `baseDegraded`, and disclosed `plugin-version-skew` (content
-  divergence of `lib/model_registry.py` or `lib/seat_map.py` against the superheroes
-  source repo — detection only, not a version-string compare). The `verify()` result (the #547c
+  `independenceDegraded`, `baseDegraded`, and disclosed `plugin-version-skew` (semantics-divergent
+  or evidence-unreadable across `lib/model_registry.py`, `lib/seat_map.py`, and `lib/version_skew.py`
+  against the superheroes source repo — detection only, not a version-string compare). The `verify()` result (the #547c
   maker-family-vs-seat check) now separates a **violation** (maker family seated when an
   alternative was reachable) from that unavoidable **degradation**; unusable liveness evidence
   fails closed to violation. Every degradation / unhonorable-pin fallback is recorded in the

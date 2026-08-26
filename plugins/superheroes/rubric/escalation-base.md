@@ -1,4 +1,4 @@
-<!-- escalation-version: 2 -->
+<!-- escalation-version: 3 -->
 # escalation-base
 
 The source of truth for **when a superheroes skill escalates to the owner vs. decides
@@ -15,10 +15,16 @@ in `escalation.py` (paired with this rubric as `loop_state.py` is paired with `r
   reversible/low-blast, or **verifiable by the agent itself** against spec/types/tests/code.
 - **NOTIFY** — act on the best default, but surface a flagged decision the owner can veto, with an
   **undo path and an expiry** ("I did X because Y — undo before Z"). Use when the choice is
-  owner-relevant but **reversible and safely defaultable**.
-- **GATE** — stop, ask via `AskUserQuestion`, wait. Use only when the choice is the owner's
-  value-call that can't be safely defaulted, **or** irreversible-and-unverified, **or** anything on
-  the hard floor.
+  owner-relevant but **reversible and safely defaultable**. NOTIFY **discloses without waiting** —
+  the run continues after the disclosure lands in the durable artifact.
+- **GATE** — stop, write the decision down with its full owner-facing framing into the skill's
+  durable artifact, and hand back — **never wait for an answer**. Use only when the choice is the
+  owner's value-call that can't be safely defaulted, **or** irreversible-and-unverified, **or**
+  anything on the hard floor. GATE **does not act** — that is the one axis on which it differs
+  from NOTIFY. Both disclose; neither waits.
+
+**NOTIFY vs GATE:** both modes disclose without waiting. NOTIFY **acts** on the best default; GATE
+**does not act** — it stops and hands back for the owner's call.
 
 ## Routing (apply in order)
 
@@ -34,9 +40,11 @@ in `escalation.py` (paired with this rubric as `loop_state.py` is paired with `r
      **or** low confidence on something consequential) → **GATE**.
    - Owner-relevant but reversible and high-confidence → **NOTIFY**.
    - Engineering-internal (no trade-off the owner would weigh) → **PROCEED**, record-only.
-4. **Interrupt-cost discipline.** Probe before pinging (resolve with one cheap reversible step
-   first). Batch GATEs to one moment. If you're GATEing on most runs, the threshold is too low —
-   lean PROCEED/NOTIFY. Over-asking is a failure mode: it trains rubber-stamping.
+4. **Hand-back cost discipline.** Probe before GATEing (resolve with one cheap reversible step
+   first). Batch GATEs to one moment — one consolidated write-down. If you're GATEing on most
+   runs, the threshold is too low — lean PROCEED/NOTIFY. Over-GATEing is a failure mode: a GATE
+   ends the run and hands back, so routine GATEs mean the work never finishes and the owner
+   accumulates a backlog of write-downs instead of completed work.
 
 ## The hard floor (always-GATE)
 
@@ -65,9 +73,11 @@ require…") · **Alternatives** (≥ the runner-up) · **Reverse path** (how to
 **what** it verified against (the spec line, the test, the source). A decision with no citable
 ground truth is not eligible for autonomy → it GATEs.
 
-## Presenting a GATE (`AskUserQuestion`)
+## Writing a GATE into the durable artifact
 
-A recipe, in order — the message before the prompt lays out:
+A recipe, in order — write all three parts into the skill's durable artifact (the review
+presentation, the audit report, the PR body, the dispatch summary — whichever that surface
+already owns), not into a live prompt:
 1. **The decision & why it matters** — one plain `what`, no jargon, and the owner-currency stake
    (money / time / risk / data / UX) riding on it.
 2. **The options** — 2–3, each with a one-line pro and con in **owner-currency** (never technical
@@ -76,11 +86,13 @@ A recipe, in order — the message before the prompt lays out:
 3. **Your recommendation** — the option you'd pick and why, in one line, marked `(Recommended)`. No
    confident pick? Say so ("close call — your call") rather than feigning neutrality.
 
-Keep the `AskUserQuestion` option labels crisp — the framing lives in the message above. Batch
-multiple GATEs into one prompt at a logical boundary; never interrupt serially.
+Write one consolidated write-down at a logical boundary rather than a running commentary — batch
+multiple GATEs into a single artifact section; never interrupt serially across partial writes.
 
 ## Scope
 
 This rubric governs the **autonomous phases** (plan → tasks → build → verify → fix). It does **not**
 govern **discovery**: discovery is *elicitation*, not escalation — the owner co-authoring the *what*
-is the point, and its one-question-at-a-time dialogue is not an escalation to be minimized.
+is the point, and its one-question-at-a-time dialogue is not an escalation to be minimized. That
+exclusion is consistent with the owner-presence ruling: discovery is conversation-driven, and the
+owner's words in the current turn are the hearing event — not a detected state.

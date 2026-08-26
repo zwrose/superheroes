@@ -681,7 +681,7 @@ as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry
 | --- | --- |
 | `full-panel-confirmed` | A qualifying full `reviewer-deep` confirmation panel ran before exit. |
 | `audited-chain` | Scoped certifying finish — fixes discharged via audits + scoped verification; **no** final full panel. Surface this honestly; never imply a pristine fresh pass. |
-| `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, the seat map disclosed same-family self-review, or compose disclosed `plugin-version-skew` (content divergence of `lib/model_registry.py` or `lib/seat_map.py` against the superheroes source repo — detection only, not a version-string compare). |
+| `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, the seat map disclosed same-family self-review, or compose disclosed `plugin-version-skew` (semantics-divergent or evidence-unreadable across `lib/model_registry.py`, `lib/seat_map.py`, and `lib/version_skew.py` against the superheroes source repo — detection only, not a version-string compare). |
 | `*-constraint-violated` | Appended when the seat map carries unexcused constraint violation(s) (#680); supersedes `*-degraded` when both would apply. |
 | `null` / withheld | Verify fail, stall unresolved (`stalled`), capped-with-open-Critical park, round-ceiling halt, owner `hold`, or `cannot-certify` (including an unresolvable `one-more-round` stall-target snapshot). |
 

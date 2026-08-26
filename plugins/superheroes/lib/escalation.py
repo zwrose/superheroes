@@ -114,6 +114,8 @@ SAFETY_MACHINERY = (
     "engine_adapter.py",      # #685 parse trust boundary (echo strip, parse_result, investigation-floor inputs); a fixer could weaken strip or vacuous-parse detection
     "hooks.json",             # workhorse PreToolUse hook registration (F3)
     "session_start.py",       # workhorse resume hooks (resilience)
+    "session_mode.py",        # #1151: session-mode fail direction (UNRESOLVED_MODE -> PR); a fixer editing it could flip conservative PR default to branch and drop PR-only context
+    "version_skew.py",        # #1151: append-to-degradations rule (APPENDS_DEGRADATION); a fixer editing it could widen which skew statuses ride degradations
     "escalation-base.md",
     "review-base.md",
     # shared review-and-fix loop (#104): the loop's deciders, its durable record, and its
@@ -123,6 +125,13 @@ SAFETY_MACHINERY = (
     "verification.py",          # per-finding verification 3-state verdict fold (#506)
     "round_phases.py",          # verifier-verdict enum + verify submit-shape guard (#1123)
     "payload_contracts.py",     # per-seat payload contracts engine_adapter enforces (#1123)
+    "round_adapters.py",        # #1147: module-level REBINDABLE ALIASES in front of protected contract code
+                                # (payload_fault/payload_contract/VACUOUS_FIELD <- payload_contracts, the phase
+                                # tokens <- round_phases), and round_driver resolves the record-time validator
+                                # THROUGH them (_preflight_payload_fault -> _adapters().payload_fault). An
+                                # unprotected alias in front of a protected callee is a bypass path: a fixer
+                                # could rebind it to a permissive stub and disable per-field validation without
+                                # editing any pinned file. Its own missing_policy is a halt surface too.
     "verify_gate.py",         # code-leg verify gate decider
     "review_result.py",       # the durable terminal-record writer (UFR-9)
     "round_driver.py",        # the one-entrypoint loop orchestration (#507)

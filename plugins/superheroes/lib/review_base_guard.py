@@ -19,6 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import session_mode  # noqa: E402
 import store_core  # noqa: E402
 
 REASON_META_UNREADABLE = "base-meta-unreadable"
@@ -38,7 +39,7 @@ REASON_REPO_ROOT_MISMATCH = "base-repo-root-mismatch"
 REASON_MODE_UNRECOGNIZED = "base-mode-unrecognized"
 
 # Closed session modes — authoritative set for check_base and grounding_stage.
-SESSION_MODES = frozenset({"pr", "branch"})
+SESSION_MODES = session_mode.MODES
 
 META_REASONS = frozenset({"unreadable", "undecodable", "unparseable", "not-an-object"})
 
@@ -543,7 +544,8 @@ def check_base(session_dir, repo_root, prior_pin=None, run=None):
     mode = meta.get("mode")
     # Fail closed: defaulting unrecognized mode to branch mode made the fork check inert when
     # mode was unset; the guard cannot know whether fork comparison applies without a known mode.
-    if mode not in SESSION_MODES:
+    mode_resolved = session_mode.resolve(meta, None)
+    if not mode_resolved["resolved"]:
         return {
             "ok": False,
             "reason": REASON_MODE_UNRECOGNIZED,
@@ -552,7 +554,7 @@ def check_base(session_dir, repo_root, prior_pin=None, run=None):
     base_repo = origin_repo(repo_root, run=run)
     base_repo_check = "not-applicable-branch-mode"
     # Branch mode's base is origin/HEAD, i.e. origin by construction — nothing to compare.
-    if mode == "pr":
+    if mode_resolved["mode"] == session_mode.MODE_PR:
         pr_repo = pr_base_repo(session_dir)
         if pr_repo is None:
             return {

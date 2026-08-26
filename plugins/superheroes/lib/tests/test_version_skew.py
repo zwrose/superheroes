@@ -179,6 +179,36 @@ def test_skew_seat_map_divergent(tmp_path):
     assert "lib/seat_map.py" in record["reason"]
 
 
+def test_skew_version_skew_divergent(tmp_path):
+    repo = tmp_path / "repo"
+    _write_manifest(repo)
+    _write_version_txt(repo)
+    _copy_semantics_to(repo)
+    plugin_root = tmp_path / "plugin"
+    manifest = plugin_root / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({"name": "superheroes", "version": "0.29.0"}), encoding="utf-8")
+    lib = plugin_root / "lib"
+    lib.mkdir(parents=True, exist_ok=True)
+    for entry in VS.SEMANTICS_FILES:
+        src = os.path.join(_PLUGIN_ROOT, entry)
+        content = open(src, encoding="utf-8").read()
+        if entry == "lib/version_skew.py":
+            content = content + "# version-skew home skew marker\n"
+        (lib / os.path.basename(entry)).write_text(content, encoding="utf-8")
+    record = VS.detect(str(repo), str(plugin_root))
+    _assert_record_shape(record)
+    assert record["status"] == VS.STATUS_CHECKED_DEGRADED
+    assert record["detail"] == VS.DETAIL_SEMANTICS_DIVERGENT
+    assert "lib/version_skew.py" in record["reason"]
+    assert "family/registry" not in record["reason"]
+    assert "watched review semantics differ" in record["reason"]
+    assert (
+        "lib/version_skew.py differ between the running plugin and this repository"
+        in record["reason"]
+    )
+
+
 def test_evidence_unreadable_plugin_side_missing(tmp_path):
     repo = tmp_path / "repo"
     _write_manifest(repo)

@@ -50,7 +50,7 @@ class Migration:
     state) is deliberately NOT in `files` for a flip (FR-10)."""
 
     def __init__(self, *, kind="flip", target=None, files=None, cwd=None, root=None,
-                 remote_key=None, blocked=False, reason=""):
+                 remote_key=None, blocked=False, reason="", owner_authorized=False):
         self.kind = kind
         self.target = target
         self.files = files or []
@@ -59,6 +59,7 @@ class Migration:
         self.remote_key = remote_key
         self.blocked = blocked
         self.reason = reason
+        self.owner_authorized = owner_authorized
 
 
 # --------------------------------------------------------------------------- paths
@@ -164,13 +165,10 @@ def _enumerate(src_cal_dir, dst_cal_dir, src_docs_base, dst_docs_base):
     return files
 
 
-def plan(cwd, target_mode, *, root=None, interactive):
-    """Enumerate a flip to target_mode. Refuses unattended (FR-14). Records cwd/root/remote_key
-    on the Migration so execute()/recover() need no extra params."""
-    if not interactive:
-        return Migration(blocked=True, reason="never switch unattended (FR-14)",
-                         cwd=cwd, root=root, target=target_mode)
-    current = mode_registry.resolve(cwd, root)["mode"]
+def enumerate_flip(cwd, target_mode, *, root=None):
+    """Enumerate a flip to target_mode. Read-only — no owner authorization required (FR-10 preview).
+    Records cwd/root/remote_key on the Migration so execute()/recover() need no extra params."""
+    current = mode_registry.resolve(cwd, root, persist_backfill=False)["mode"]
     in_cal, gl_cal = _in_repo_cal_dir(cwd), _global_cal_dir(cwd, root)
     in_docs, gl_docs = _in_repo_docs_base(cwd), _global_docs_base(cwd, root)
     if current == mode_registry.IN_REPO:
@@ -179,7 +177,21 @@ def plan(cwd, target_mode, *, root=None, interactive):
         files = _enumerate(gl_cal, in_cal, gl_docs, in_docs)
     remote_key = store_core.derive_identifiers(cwd)["remote_hash"]
     return Migration(kind="flip", target=target_mode, files=files,
-                     cwd=cwd, root=root, remote_key=remote_key)
+                     cwd=cwd, root=root, remote_key=remote_key,
+                     owner_authorized=False)
+
+
+def plan(cwd, target_mode, *, root=None, owner_authorized):
+    """Enumerate a flip to target_mode. Refuses without owner authorization (FR-14). Records
+    cwd/root/remote_key on the Migration so execute()/recover() need no extra params."""
+    if not owner_authorized:
+        return Migration(blocked=True,
+                         reason="storage migration requires owner authorization (FR-14)",
+                         cwd=cwd, root=root, target=target_mode,
+                         owner_authorized=False)
+    m = enumerate_flip(cwd, target_mode, root=root)
+    m.owner_authorized = True
+    return m
 
 
 def _is_calibration(path):
@@ -224,6 +236,11 @@ def execute(migration, *, root=None):
     """Relocation as a working-tree move with one atomic commit point (the raw registry flip).
     journal → copy → commit → delete, all under config_lock. Aborts before any delete if the
     registry write fails (UFR-6). Returns {"status": "done"|"blocked"|"busy"}."""
+    if migration.blocked:
+        return {"status": "blocked", "reason": migration.reason}
+    if migration.owner_authorized is not True:
+        return {"status": "blocked",
+                "reason": "storage migration requires owner authorization (FR-14)"}
     cwd = migration.cwd
     root = root if root is not None else migration.root
     if mode_registry.ensure_project_store(cwd, root) is None:
@@ -359,7 +376,7 @@ def rebind(cwd, *, root=None):
     """FR-9 first-push re-keying: move the whole <common-dir-key> project store to the
     <remote-key> store (registry.json travels), merge, and surface a value conflict rather than
     clobber. Locked + journalled at the rebind-invariant <common-dir-key> so an interruption is
-    recoverable regardless of the now-changed active config_key (UFR-10). Takes no `interactive`
+    recoverable regardless of the now-changed active config_key (UFR-10). Takes no `owner_authorized`
     flag (unlike the destructive flip's plan/execute, which refuse unattended): a rebind is a
     mechanical re-key that runs even headless, and its one owner-decision part — a value conflict
     — is surfaced (applied=False) regardless of mode, satisfying FR-9 + FR-17 in both."""
@@ -424,23 +441,24 @@ def main(argv):
         if name in ("plan", "preview", "execute"):
             sp.add_argument("--target", choices=(mode_registry.IN_REPO, mode_registry.GLOBAL),
                             required=True)
-            sp.add_argument("--interactive", default="true")
+            sp.add_argument("--owner-authorized", default="false")
     args = ap.parse_args(argv)
     try:
         if args.cmd == "recover":
             out = recover(args.cwd, root=args.root)
         elif args.cmd == "rebind":
             out = rebind(args.cwd, root=args.root)
+        elif args.cmd == "preview":
+            m = enumerate_flip(args.cwd, args.target, root=args.root)
+            out = preview(m)
         else:
-            m = plan(args.cwd, args.target, root=args.root, interactive=_b(args.interactive))
+            m = plan(args.cwd, args.target, root=args.root,
+                     owner_authorized=_b(args.owner_authorized))
             if args.cmd == "plan":
                 out = {"kind": m.kind, "target": m.target, "blocked": m.blocked,
                        "reason": m.reason, "files": m.files}
-            elif args.cmd == "preview":
-                out = ({"blocked": True, "reason": m.reason} if m.blocked else preview(m))
             else:  # execute
-                out = ({"status": "blocked", "reason": m.reason} if m.blocked
-                       else execute(m, root=args.root))
+                out = execute(m, root=args.root)
     except Exception as exc:  # fail-open like core_md.main — never crash a consumer
         out = {"status": "error", "detail": str(exc)}
     sys.stdout.write(json.dumps(out, indent=2) + "\n")

@@ -52,6 +52,7 @@ def _base_context(**over):
 def _panel_placeholders(channel="file", pr_checkout=False):
     ph = {
         "MODE": "branch",
+        "MODE_EVIDENCE": "Review session mode branch (from session metadata).",
         "REPO": "acme/widget",
         "TARGET": "feature/wo4",
         "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
@@ -888,6 +889,72 @@ def test_golden_render_with_pr_checkout_matches_fixture():
     with open(golden_path, encoding="utf-8") as fh:
         expected = fh.read()
     assert _normalize_golden_machine_paths(text) == _normalize_golden_machine_paths(expected)
+
+
+# --- #1151: mode-less session defaults to PR via session_mode SSOT --------------
+
+
+def test_panel_order_modeless_session_defaults_to_pr_with_disclosure(tmp_path):
+    """Mode-less meta must not fall open to branch; disclosure must name the default."""
+    import round_driver as RD
+
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    session_dir = os.path.join(str(tmp_path), "session")
+    os.makedirs(session_dir)
+    meta = {"repoRoot": repo, "repo": "acme/widget", "branch": "feature/x"}
+    with open(os.path.join(session_dir, RR.META_FILE), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    state = {"config": {"repoRoot": repo}, "reviewedDiff": "diff --git a/f b/f\n"}
+    paths = {
+        "storage_key": "code-reviewer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RP.P_PANEL, "code-reviewer", 0, state, state["config"], {},
+        session_dir, 2, paths, RD.CHANNEL_FILE,)
+    assert ph["MODE"] == "pr"
+    assert ph["MODE"] != "branch"
+    assert "defaulting to PR review" in ph["MODE_EVIDENCE"]
+    text, reason = RO.render_order(
+        RP.P_PANEL, "code-reviewer",
+        _base_context(host_seat=True, placeholders=ph, landing_path=paths["bare_payload_path"]),
+    )
+    assert reason is None
+    assert text.startswith("You are reviewing pr for repo")
+    assert "You are reviewing branch for repo" not in text
+    assert "defaulting to PR review" in text
+
+
+def test_panel_order_modeless_session_renders_without_refusal(tmp_path):
+    import round_driver as RD
+
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    session_dir = os.path.join(str(tmp_path), "session")
+    os.makedirs(session_dir)
+    with open(os.path.join(session_dir, RR.META_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"repoRoot": repo}, fh)
+    state = {"config": {"repoRoot": repo}, "reviewedDiff": ""}
+    paths = {
+        "storage_key": "code-reviewer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RP.P_PANEL, "code-reviewer", 0, state, state["config"], {},
+        session_dir, 1, paths, RD.CHANNEL_FILE,)
+    text, reason = RO.render_order(
+        RP.P_PANEL, "code-reviewer", _base_context(placeholders=ph))
+    assert reason is None
+    assert "order-render-refused" not in (reason or "")
 
 
 # --- FX-4A: engine landing stdout channel --------------------------------------
