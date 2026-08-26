@@ -3165,6 +3165,7 @@ def _park_capped_open(state, detail):
 
 # Stall self-recovery fix-batch refusal tokens — shared by composition and routing (#1107).
 REFUSAL_UNRESOLVABLE_OPEN_SET = "unresolvable-open-set"
+REFUSAL_OPEN_TARGET_UNREPRESENTABLE = "open-target-unrepresentable"
 REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE = "open-blocking-uncomposable"
 
 
@@ -3267,22 +3268,39 @@ def _commit_stall_self_recovery(state, config, breaker):
 
 
 def _union_open_blockers(*groups):
-    """Union open blockers into one fix batch — deduped on the per-location key (#507 R2 residual-3).
+    """Union open blockers into one fix batch — deduped by id when present (#507 R2 residual-3).
 
-    Dedupe on the per-LOCATION key (line-less identity + line), NOT the line-less identity alone:
-    a new blocker sharing a target's file+title at a DIFFERENT line is a DISTINCT finding, so
-    keying on identity alone would silently drop the unresolved audit target."""
+    Id-bearing audit targets dedupe on ``id`` so occurrence-suffixed siblings at one location stay
+    distinct. Id-less legacy blockers dedupe on the per-location key (line-less identity + line);
+    an id-bearing target at the same location supersedes a prior id-less entry."""
     batch = []
-    seen = set()
+    seen_ids = set()
+    idless_at_loc = {}
     for group in groups:
         for item in group:
             f = dict(item)
             ident = f.get("identity") or finding_identity(f)
-            key = (ident, f.get("line"))
-            if ident is not None and key not in seen:
+            if ident is None:
+                continue
+            loc_key = (ident, f.get("line"))
+            tid = f.get("id")
+            if tid:
+                if tid in seen_ids:
+                    continue
+                if loc_key in idless_at_loc:
+                    batch[idless_at_loc.pop(loc_key)] = None
                 batch.append(f)
-                seen.add(key)
-    return batch
+                seen_ids.add(tid)
+            else:
+                if loc_key in idless_at_loc:
+                    continue
+                if any(isinstance(b, dict) and b.get("id")
+                       and (b.get("identity") or finding_identity(b)) == ident
+                       and b.get("line") == f.get("line") for b in batch if b is not None):
+                    continue
+                idless_at_loc[loc_key] = len(batch)
+                batch.append(f)
+    return [b for b in batch if b is not None]
 
 
 def _compose_stall_fix_batch(state, breaker):
@@ -3294,35 +3312,31 @@ def _compose_stall_fix_batch(state, breaker):
     """
     stalled = [dict(t) for t in _stalled_open_targets(state, breaker)]
     outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
-    nd_raw = outcome.get("notDischarged")
-    if nd_raw is not None:
+    if "notDischarged" in outcome:
+        nd_raw = outcome.get("notDischarged")
         if _open_audit_ids_from_not_discharged(nd_raw) is None:
             return [], REFUSAL_UNRESOLVABLE_OPEN_SET
+        nd_ids = _open_audit_ids_from_not_discharged(nd_raw)
+    else:
+        nd_ids = None
     open_set = _resolve_open_audit_targets(state)
     if open_set.kind == "unresolvable" and not stalled:
         return [], REFUSAL_UNRESOLVABLE_OPEN_SET
+    if nd_ids is not None:
+        nd_targets = [dict(t) for t in (state.get("_auditTargets") or [])
+                      if isinstance(t, dict) and t.get("id") in nd_ids]
+        matched_ids = {t.get("id") for t in nd_targets}
+        if nd_ids - matched_ids:
+            return [], REFUSAL_OPEN_TARGET_UNREPRESENTABLE
+    else:
+        nd_targets = []
     if stalled:
-        nd_ids = (_open_audit_ids_from_not_discharged(nd_raw)
-                  if nd_raw is not None else None)
-        if nd_ids is not None:
-            nd_targets = [dict(t) for t in (state.get("_auditTargets") or [])
-                          if t.get("id") in nd_ids]
-            matched_ids = {t.get("id") for t in nd_targets}
-            if nd_ids - matched_ids:
-                return [], REFUSAL_UNRESOLVABLE_OPEN_SET
-        else:
-            nd_targets = []
         batch = _union_open_blockers(stalled, nd_targets)
         return batch, None
     batch = []
-    nd_ids = (_open_audit_ids_from_not_discharged(nd_raw)
-              if isinstance(nd_raw, list) else None)
     new_blocking = _blocking(state.get("findings") or [])
     nd_members = nd_ids if nd_ids is not None else set()
     if nd_members or new_blocking:
-        nd_targets = ([dict(t) for t in (state.get("_auditTargets") or [])
-                       if t.get("id") in nd_ids]
-                      if nd_ids is not None else [])
         batch = _union_open_blockers(new_blocking, nd_targets)
         if not batch:
             return [], REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE
@@ -3341,6 +3355,20 @@ def _route_stall_self_recovery(state, config, batch, refusal, breaker):
             state,
             "audit-stall self-recovery — open audit target set unresolvable "
             "(missing or malformed _auditOutcome); cannot dispatch fix batch")
+    elif refusal == REFUSAL_OPEN_TARGET_UNREPRESENTABLE:
+        outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
+        nd_raw = outcome.get("notDischarged")
+        nd_ids = _open_audit_ids_from_not_discharged(nd_raw) if isinstance(nd_raw, list) else None
+        if nd_ids is not None:
+            matched = {t.get("id") for t in (state.get("_auditTargets") or [])
+                       if isinstance(t, dict)}
+            unmatched = sorted(nd_ids - matched)
+        else:
+            unmatched = []
+        _park_cannot_certify(
+            state,
+            "audit-stall self-recovery — open audit target id(s) %s have no matching "
+            "_auditTargets entry; cannot compose a complete fix batch" % unmatched)
     elif refusal == REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE:
         _park_capped_open(
             state,

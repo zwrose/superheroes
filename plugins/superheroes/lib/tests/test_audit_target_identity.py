@@ -350,6 +350,64 @@ def test_handle_stall_uncomposable_open_id_refuses():
     RD._handle_stall(state, state["config"], breaker)
     assert state["step"] == RD.P_TERMINAL
     assert state["terminal"] == "cannot-certify"
+    assert "z.py::missing@L99" in (state.get("certification") or {}).get("reason", "")
+
+
+def test_handle_stall_uncomposable_open_id_refuses_empty_stalled_match():
+    # axis: no stalled alias match must still refuse a partial batch (not dispatch missing open ids)
+    open_target = {
+        "id": "f.py::open@L1", "identity": "f.py::open",
+        "file": "f.py", "line": 1, "title": "open", "severity": "Important",
+        "classKey": "Code::open::x", "dimension": "Code", "taxonomy": "x",
+    }
+    phantom_id = "z.py::missing@L99"
+    state = RD.new_state(_cfg())
+    state["_auditTargets"] = [open_target]
+    state["fixBatch"] = [dict(open_target)]
+    state["_auditOutcome"] = {"notDischarged": [open_target["id"], phantom_id]}
+    breaker = {"reason": "audit-stall", "detail": "x",
+               "stalledIdentities": ["other::alias"]}
+    RD._handle_stall(state, state["config"], breaker)
+    assert state["step"] == RD.P_TERMINAL
+    assert state["terminal"] == "cannot-certify"
+    assert phantom_id in (state.get("certification") or {}).get("reason", "")
+
+
+def test_handle_stall_malformed_audit_target_member_parks():
+    # axis: a non-dict _auditTargets member must fail closed, never raise out of stall recovery
+    stalled_target = {
+        "id": "f.py::old title@L1", "identity": "f.py::old title",
+        "file": "f.py", "line": 1, "title": "new title", "severity": "Important",
+        "classKey": "Security::CWE-401::orig", "dimension": "Security", "taxonomy": "CWE-401",
+    }
+    state = RD.new_state(_cfg())
+    state["_auditTargets"] = [stalled_target, "not-a-dict"]
+    state["fixBatch"] = [dict(stalled_target)]
+    state["_auditOutcome"] = {"notDischarged": [stalled_target["id"], "z.py::missing@L9"]}
+    breaker = {"reason": "audit-stall", "detail": "x",
+               "stalledIdentities": [stalled_target["classKey"]]}
+    RD._handle_stall(state, state["config"], breaker)
+    assert state["step"] == RD.P_TERMINAL
+    assert state["terminal"] == "cannot-certify"
+
+
+def test_handle_stall_retains_occurrence_suffixed_open_targets():
+    # axis: two not-discharged occurrence ids at one location must both stay in the recovery batch
+    ident = FI.finding_identity(_finding(title="dup", line=1))
+    target_a = {"id": "%s@L1" % ident, "identity": ident,
+                "file": "f.py", "line": 1, "title": "dup", "severity": "Important"}
+    target_b = {"id": "%s@L1#1" % ident, "identity": ident,
+                "file": "f.py", "line": 1, "title": "dup", "severity": "Important"}
+    state = RD.new_state(_cfg())
+    state["_auditTargets"] = [target_a, target_b]
+    state["fixBatch"] = [dict(target_a), dict(target_b)]
+    state["_auditOutcome"] = {"notDischarged": [target_a["id"], target_b["id"]], "discharged": []}
+    breaker = {"reason": "audit-stall", "detail": "x",
+               "stalledIdentities": [ident]}
+    RD._handle_stall(state, state["config"], breaker)
+    assert state["step"] == RD.P_FIXER
+    batch = state.get("_fixBatch") or []
+    assert {b["id"] for b in batch} == {target_a["id"], target_b["id"]}
 
 
 def test_stalled_critical_uses_alias_not_line_less_identity():
