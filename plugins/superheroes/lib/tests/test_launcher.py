@@ -917,6 +917,368 @@ def test_detachment_stdin_devnull(tmp_path, monkeypatch):
         pass
 
 
+# --- effort pinning at the spawn point (#1156) --------------------------------
+
+
+def _capturing_spawn(captured, behavior="sleep"):
+    """Spawn stand-in that records the child env the launcher actually composed."""
+    def spawn(argv, cwd, out_fh, err_fh, child_env):
+        captured.append(dict(child_env))
+        return _make_spawn_fn(behavior)(argv, cwd, out_fh, err_fh, child_env)
+    return spawn
+
+
+def _reap(result):
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except (ProcessLookupError, KeyError, TypeError):
+        pass
+
+
+def test_opus_child_effort_pinned_medium_over_ambient_high(tmp_path, monkeypatch):
+  # axis: resolved opus tier pins the effort input to medium in the child even when the launching
+  # env carries high — the inheritance accident #1156 closes
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv(L.EFFORT_ENV, "high")
+    captured = []
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_capturing_spawn(captured),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert result["model"] == "opus"
+    assert len(captured) == 1
+    assert captured[0][L.EFFORT_ENV] == "medium"
+    assert result["effort"] == "medium"
+    assert result["effortSource"] == "opus-policy"
+    _reap(result)
+
+
+def test_pinned_effort_uses_the_documented_cli_input_variable(tmp_path, monkeypatch):
+  # axis: the pin lands on the variable the CLI actually READS. Every other test in this
+  # family spells the key as `L.EFFORT_ENV`, which stays green under ANY name the constant
+  # happens to hold — including the CLAUDE_EFFORT this branch first shipped, which the CLI
+  # overwrites with its own resolution (a live four-arm probe: injecting CLAUDE_EFFORT=medium
+  # produced a child that resolved `high`). This test names the documented input as a LITERAL,
+  # so a rename of the constant cannot keep it passing. It is the red-on-old proof.
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_EFFORT_LEVEL", "high")
+    captured = []
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_capturing_spawn(captured),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert result["model"] == "opus"
+    assert captured[0]["CLAUDE_CODE_EFFORT_LEVEL"] == "medium"
+    _reap(result)
+
+
+def test_pinned_child_drops_the_stale_effort_reflection(tmp_path, monkeypatch):
+  # axis: CLAUDE_EFFORT is the CLI's own OUTPUT, not an input. Letting the launching session's
+  # stale value ride into a pinned child would leave a forged observable that reads exactly
+  # like a receipt — the placebo shape vet 178 caught — so the pin drops it and lets the child's
+  # own reflection be the honest evidence of what the CLI resolved.
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    captured = []
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_capturing_spawn(captured),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert result["model"] == "opus"
+    assert captured[0]["CLAUDE_CODE_EFFORT_LEVEL"] == "medium"
+    assert "CLAUDE_EFFORT" not in captured[0]
+    _reap(result)
+
+
+def test_inherit_case_touches_neither_effort_variable(tmp_path, monkeypatch):
+  # axis: boundary, both variables at once — the ruling names Opus 5 only, so a non-opus child
+  # inherits the documented input AND keeps the reflection the pin would otherwise have dropped.
+  # Pins the literals so the boundary cannot drift with the constant.
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    monkeypatch.setenv("CLAUDE_CODE_EFFORT_LEVEL", "high")
+    captured = []
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        model="sonnet",
+        spawn_fn=_capturing_spawn(captured),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert result["model"] == "sonnet"
+    assert captured[0]["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
+    assert captured[0]["CLAUDE_EFFORT"] == "high"
+    assert result["effortSource"] == "inherited"
+    _reap(result)
+
+
+def test_reserved_row_carries_opus_effort_provenance(tmp_path, monkeypatch):
+  # axis: the ledger records what effort a lane ran at and why, beside the model resolution
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv(L.EFFORT_ENV, "high")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    reserved = [r for r in ll.read(repo)["records"] if r.get("event") == "reserved"][0]
+    assert reserved["model"] == "opus"
+    assert reserved["modelSource"] == "default"
+    assert reserved["effort"] == "medium"
+    assert reserved["effortSource"] == "opus-policy"
+    _reap(result)
+
+
+def test_explicit_effort_overrides_opus_default_and_is_recorded(tmp_path, monkeypatch):
+  # axis: --effort is the deliberate exception — it beats the opus default and lands in the ledger
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv(L.EFFORT_ENV, "high")
+    captured = []
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_capturing_spawn(captured),
+        settle_seconds=0.3,
+        effort="xhigh",
+    )
+    assert result["ok"] is True
+    assert result["model"] == "opus"
+    assert captured[0][L.EFFORT_ENV] == "xhigh"
+    assert result["effortSource"] == "explicit"
+    reserved = [r for r in ll.read(repo)["records"] if r.get("event") == "reserved"][0]
+    assert reserved["effort"] == "xhigh"
+    assert reserved["effortSource"] == "explicit"
+    _reap(result)
+
+
+def test_explicit_effort_applies_to_a_non_opus_tier(tmp_path, monkeypatch):
+  # axis: an explicit effort is an instruction, not an opus-only default — it pins any tier
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv(L.EFFORT_ENV, "high")
+    captured = []
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        model="sonnet",
+        spawn_fn=_capturing_spawn(captured),
+        settle_seconds=0.3,
+        effort="low",
+    )
+    assert result["ok"] is True
+    assert result["model"] == "sonnet"
+    assert captured[0][L.EFFORT_ENV] == "low"
+    assert result["effortSource"] == "explicit"
+    _reap(result)
+
+
+def test_non_opus_tier_keeps_ambient_effort(tmp_path, monkeypatch):
+  # axis: boundary — the ruling names Opus 5 only, so a sonnet child still inherits
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv(L.EFFORT_ENV, "high")
+    captured = []
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        model="sonnet",
+        spawn_fn=_capturing_spawn(captured),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert result["model"] == "sonnet"
+    assert captured[0][L.EFFORT_ENV] == "high"
+    assert result["effort"] is None
+    assert result["effortSource"] == "inherited"
+    reserved = [r for r in ll.read(repo)["records"] if r.get("event") == "reserved"][0]
+    assert reserved["effort"] == ""
+    assert reserved["effortSource"] == "inherited"
+    _reap(result)
+
+
+def test_non_opus_tier_without_ambient_effort_sets_nothing(tmp_path, monkeypatch):
+  # axis: the inherit case invents no value — an unset effort input stays unset
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.delenv(L.EFFORT_ENV, raising=False)
+    captured = []
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        model="sonnet",
+        spawn_fn=_capturing_spawn(captured),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert L.EFFORT_ENV not in captured[0]
+    _reap(result)
+
+
+def test_compose_cli_effort_flag_reaches_the_resolver(tmp_path):
+  # axis: --effort is wired through the real parser, not just the function signature
+    repo = _init_repo(tmp_path / "repo")
+    premise_path = tmp_path / "premise.json"
+    _write_json(premise_path, _valid_premise(repo))
+    base = [
+        sys.executable, _MOD, "compose",
+        "--repo-root", repo, "--issue", "656", "--premise", str(premise_path),
+    ]
+    default = json.loads(subprocess.run(
+        base, capture_output=True, text=True, check=False,
+    ).stdout)
+    assert default["ok"] is True
+    assert default["effort"] == "medium"
+    assert default["effortSource"] == "opus-policy"
+
+    pinned = json.loads(subprocess.run(
+        base + ["--effort", "low"], capture_output=True, text=True, check=False,
+    ).stdout)
+    assert pinned["ok"] is True
+    assert pinned["effort"] == "low"
+    assert pinned["effortSource"] == "explicit"
+
+    bad = json.loads(subprocess.run(
+        base + ["--effort", "turbo"], capture_output=True, text=True, check=False,
+    ).stdout)
+    assert bad["ok"] is False
+    assert bad["reason"] == "effort-not-registry-known"
+
+
+def test_opus_policy_effort_is_gated_by_the_registry_too(tmp_path, monkeypatch):
+  # axis: the policy default goes through the same registry gate as an explicit --effort,
+  # so a registry that stopped accepting `medium` refuses before spawn instead of falling open
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setattr(L.model_registry, "effort_enum", lambda vendor: ("low", "high"))
+    result = L.compose_launch(repo, 656, _valid_premise(repo))
+    assert result["ok"] is False
+    assert result["reason"] == "effort-not-registry-known"
+
+
+def test_non_opus_tier_resolves_without_consulting_the_effort_enum(tmp_path, monkeypatch):
+  # axis: the inherit case pins no value, so a narrowed enum cannot refuse a sonnet launch
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setattr(L.model_registry, "effort_enum", lambda vendor: ())
+    result = L.compose_launch(repo, 656, _valid_premise(repo), model="sonnet")
+    assert result["ok"] is True
+    assert result["effort"] is None
+    assert result["effortSource"] == "inherited"
+
+
+def test_compose_unknown_effort_refuses(tmp_path):
+  # axis: the effort vocabulary comes from the registry, not from the caller
+    repo = _init_repo(tmp_path / "repo")
+    result = L.compose_launch(repo, 656, _valid_premise(repo), effort="turbo")
+    assert result["ok"] is False
+    assert result["reason"] == "effort-not-registry-known"
+
+
+def test_launch_build_unknown_effort_refuses_before_any_spawn(tmp_path, monkeypatch):
+  # axis: an unrunnable effort is a pre-spawn refusal, never a child launched at a guess
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+
+    def never_spawn(argv, cwd, out_fh, err_fh, child_env):
+        raise AssertionError("spawned despite an unknown effort")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=never_spawn,
+        effort="turbo",
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "effort-not-registry-known"
+    records = ll.read(repo)["records"]
+    assert not [r for r in records if r.get("event") == "started"]
+    # The refusal is accounted, not merely aborted: it reserves and then terminalizes at the
+    # same stage its model-resolution sibling uses, so a reader sees why the lane never ran.
+    assert len([r for r in records if r.get("event") == "reserved"]) == 1
+    refused = [r for r in records if r.get("event") == "refused"]
+    assert len(refused) == 1
+    assert refused[0]["stage"] == "model"
+    assert refused[0]["reason"] == "effort-not-registry-known"
+
+
+def test_opus_effort_pin_survives_a_spawn_retry(tmp_path, monkeypatch):
+  # axis: the pin rides every attempt — a retried spawn is still an opus child at medium
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv(L.EFFORT_ENV, "high")
+    captured = []
+    calls = {"n": 0}
+
+    def oserror_then_capture(argv, cwd, out_fh, err_fh, child_env):
+        calls["n"] += 1
+        captured.append(dict(child_env))
+        if calls["n"] == 1:
+            raise OSError("spawn failed")
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=oserror_then_capture,
+        settle_seconds=0.3,
+        backoff_seconds=(0,),
+    )
+    assert result["ok"] is True
+    assert result["model"] == "opus"
+    assert calls["n"] == 2
+    assert [env[L.EFFORT_ENV] for env in captured] == ["medium", "medium"]
+    _reap(result)
+
+
 # --- retry / settle branches -------------------------------------------------
 
 
@@ -3247,6 +3609,7 @@ def test_cli_launch_boundary_happy_path_forwards(tmp_path, monkeypatch):
         premise=str(premise_path),
         log_dir=str(log_dir),
         model=None,
+        effort=None,
         slot="slot-a",
         generation=1,
         boundary=str(boundary_path),

@@ -1,5 +1,6 @@
 """#915: per-location audit target ids, line-less stall identity, and fail-closed duplicates."""
 import importlib.util
+import inspect
 import os
 
 import pytest
@@ -329,14 +330,36 @@ def test_stalled_critical_important_open_critical_discharged_returns_empty():
 
 
 def test_stalled_callers_share_helper_no_duplicate_alias_loops():
-    # axis: stall selection must live in one helper — no independent alias loops in callers
+    # axis: stall selection must live in one helper — no independent alias loops in callers;
+    # module-wide census (not per-caller inspect)
+    import ast
     import inspect
-    src_critical = inspect.getsource(RD._stalled_critical)
-    src_stall = inspect.getsource(RD._handle_stall)
-    assert "audit_target_aliases" not in src_critical
-    assert "audit_target_aliases" not in src_stall
-    assert "_stalled_open_targets" in src_critical
-    assert "_stalled_open_targets" in src_stall
+    rd_path = os.path.join(_LIB, "round_driver.py")
+    with open(rd_path, encoding="utf-8") as fh:
+        source = fh.read()
+    tree = ast.parse(source, filename=rd_path)
+    lines = source.splitlines(True)
+    alias_fns = []
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        # Slice starts at `def`; decorator lines above lineno are excluded.
+        if node.end_lineno is None:
+            fn_src = ""
+        else:
+            fn_src = "".join(lines[node.lineno - 1:node.end_lineno])
+        if "audit_target_aliases" in fn_src:
+            alias_fns.append(node.name)
+    assert alias_fns == ["_stalled_open_targets"], (
+        "audit_target_aliases must appear only in _stalled_open_targets, found: %s" % alias_fns)
+    compose_src = inspect.getsource(RD._compose_stall_fix_batch)
+    assert "_stalled_open_targets" in compose_src
+    stall_src = inspect.getsource(RD._handle_stall)
+    # the stall-MENU half still selects through the shared helper; the RECOVERY half's
+    # delegation is pinned separately in test_stall_decomposition.py.
+    assert "_stalled_open_targets" in stall_src
+    crit_src = inspect.getsource(RD._stalled_critical)
+    assert "_stalled_open_targets" in crit_src
 
 
 def test_handle_stall_legacy_no_audit_outcome_uses_alias_only():
@@ -401,6 +424,21 @@ def test_settle_delta_same_location_does_not_double_add():
     keys = [(b.get("identity") or FI.finding_identity(b), b.get("line"))
             for b in batch if isinstance(b, dict)]
     assert keys.count((ident, 4)) == 1
+
+
+def test_union_open_blockers_dedupe_rule_single_home():
+    # axis: per-location dedupe rule has exactly one home in round_driver
+    rd_path = os.path.join(_LIB, "round_driver.py")
+    with open(rd_path, encoding="utf-8") as fh:
+        source = fh.read()
+    assert source.count('f.get("identity") or finding_identity(f)') == 1
+    assert "_union_open_blockers" in source
+    settle_src = inspect.getsource(RD._settle_delta)
+    compose_src = inspect.getsource(RD._compose_stall_fix_batch)
+    assert "_union_open_blockers" in settle_src
+    assert "_union_open_blockers" in compose_src
+    helper_src = inspect.getsource(RD._union_open_blockers)
+    assert 'f.get("identity") or finding_identity(f)' in helper_src
 
 
 # --- circuit_breaker audit_target_aliases -------------------------------------
@@ -475,10 +513,16 @@ def test_stalled_open_targets_legacy_empty_fix_batch_returns_empty():
     assert RD._stalled_open_targets(state, breaker) == []
 
 
-def test_handle_stall_legacy_empty_fix_batch_falls_back_to_fix_batch():
-    # axis: empty legacy selection must preserve batch-or-fixBatch fallback
+def test_handle_stall_legacy_empty_fix_batch_parks_unresolvable_open_set():
+    # axis: legacy persisted session with audit history and an unreadable outcome parks — no prior-batch fallback
     state = RD.new_state(_cfg())
     state["fixBatch"] = []
+    state["auditRounds"] = [{"round": 1, "outcomes": [
+        {"identity": "lib/a.py::x", "ruling": "not-discharged"}]}]
     breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": ["lib/a.py::x"]}
     RD._handle_stall(state, state["config"], breaker)
-    assert state.get("_fixBatch") == []
+    assert state["terminal"] == "cannot-certify"
+    assert state["step"] == RD.P_TERMINAL
+    assert any(d["kind"] == "cannot-certify" for d in state["decisions"])
+    detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
+    assert "open audit target set unresolvable" in detail

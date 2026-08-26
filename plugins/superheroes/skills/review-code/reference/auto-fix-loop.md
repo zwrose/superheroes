@@ -639,13 +639,16 @@ and `REPO_ROOT` resolved in setup), exactly as it embeds the absolute `RUBRIC`/`
 fixer edits any file, it gates it with those embedded absolute values:
 `python3 -B "<absolute ESC_WRAPPER path>" guard --root "<absolute REPO_ROOT>" --path "<file>"`.
 If `allow` is false, the fixer MUST NOT edit that file (it is safety machinery — the authoritative
-membership is the `SAFETY_MACHINERY` tuple in `escalation.py`); surface it as a finding for the owner instead. A `degraded:true`
+membership is the `SAFETY_MACHINERY` tuple in `escalation.py`); report the refusal and let the
+orchestrator route it per `rubric/review-discipline.md` § *The safety-machinery route — the guard
+refuses the fixer*. A `degraded:true`
 result also refuses (fail-closed). The fixer never pushes/merges/deploys (those stay user-gated).
 
 **Where those findings go next.** A refusal here means this loop **cannot converge on that surface** —
 that is the guard's designed bound, not a defect, an engine failure, or an escalation trigger. The
-route from the refusal to a fix — ordered implementer work orders, the owner authorization a blocking
-finding needs first, and the park branch when that authorization is unavailable — is
+route from the refusal to a fix — ordered implementer work orders on advisor or builder authority
+with loud disclosure, the owner's word required only for the owner-authority-gate family, and the
+park branch scoped to that family — is
 `rubric/review-discipline.md` § *The safety-machinery route — the guard refuses the fixer*. Follow it
 rather than re-deriving it; do not retry the fixer, and never narrow the guard to converge a round.
 
@@ -681,7 +684,7 @@ You are the fixer for one round of an auto-fix code-review loop.
    values from ## Input:
    `python3 -B "<absolute ESC_WRAPPER path>" guard --root "<absolute REPO_ROOT>" --path "<file>"`
    — if `allow` is false (or `degraded` is true), DO NOT edit that file (it is
-   safety machinery); report it under "escalated" for the owner instead. Never
+   safety machinery); report it under "escalated" for the orchestrator to route instead. Never
    push/merge/deploy (those stay user-gated).
 2. Fix ONLY what the findings call for. No unrelated refactors (YAGNI).
 3. If a verify command was provided, run it. If it fails, fix the failure and
