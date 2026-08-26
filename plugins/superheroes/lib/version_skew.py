@@ -211,6 +211,26 @@ def _file_digest(path: str, *, expected_root: str | None = None) -> str | None:
         os.close(fd)
 
 
+def _manifest_version_bytes(version: str) -> bytes | None:
+    """UTF-8 bytes for a manifest ``version`` string, or None when unencodable.
+
+    ``json.loads`` accepts lone surrogates in JSON strings; encoding them as UTF-8
+    raises — callers must treat None as unreadable version evidence (#1107)."""
+    try:
+        return version.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+
+
+def _manifest_version_unencodable(manifest: dict | None) -> bool:
+    if manifest is None:
+        return False
+    version = manifest.get("version")
+    if not isinstance(version, str):
+        return False
+    return _manifest_version_bytes(version) is None
+
+
 def _sanitize_version_text(raw: bytes) -> str:
     first_line = raw.split(b"\n", 1)[0]
     try:
@@ -232,7 +252,10 @@ def _read_installed_version(plugin_root: str) -> str:
         expected_root=plugin_root,
     )
     if manifest is not None and isinstance(manifest.get("version"), str):
-        return _sanitize_version_text(manifest["version"].encode("utf-8"))
+        encoded = _manifest_version_bytes(manifest["version"])
+        if encoded is None:
+            return "unknown"
+        return _sanitize_version_text(encoded)
     return "unknown"
 
 
@@ -240,7 +263,10 @@ def _read_repo_version(manifest: dict | None) -> str:
     """Repo-side version from the plugin manifest ``detect()`` already read — ``plugin.json`` is
     the single source of truth (CLAUDE.md); ``version.txt`` is never consulted."""
     if manifest is not None and isinstance(manifest.get("version"), str):
-        return _sanitize_version_text(manifest["version"].encode("utf-8"))
+        encoded = _manifest_version_bytes(manifest["version"])
+        if encoded is None:
+            return "unknown"
+        return _sanitize_version_text(encoded)
     return "unknown"
 
 
@@ -307,6 +333,27 @@ def detect(repo_root: str, plugin_root: str) -> dict:
         )
 
     inspected_root = os.path.abspath(repo_root)
+    installed_manifest = _read_json(
+        os.path.join(plugin_root, ".claude-plugin", "plugin.json"),
+        expected_root=plugin_root,
+    )
+    # bite-axis: unencodable manifest version — json.loads accepts lone surrogates but UTF-8
+    # encoding raises; unreadable version evidence is checked-degraded / evidence-unreadable,
+    # never a raise and never checked-clean (#1107).
+    if _manifest_version_unencodable(manifest) or _manifest_version_unencodable(
+        installed_manifest,
+    ):
+        installed_version = _read_installed_version(plugin_root)
+        repo_version = _read_repo_version(manifest)
+        reason = (
+            "plugin-version-skew: installed %s, this repository's version at %s — skew evidence "
+            "unreadable (manifest version unencodable); cannot prove the running plugin matches "
+            "this repository's semantics."
+        ) % (installed_version, repo_version)
+        return _make_record(
+            STATUS_CHECKED_DEGRADED, DETAIL_EVIDENCE_UNREADABLE, reason, inspected_root,
+        )
+
     installed_version = _read_installed_version(plugin_root)
     repo_version = _read_repo_version(manifest)
 

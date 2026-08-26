@@ -445,3 +445,47 @@ def test_containment_valid_read_when_repo_root_is_symlink(tmp_path):
     record = VS.detect(str(link_repo), plugin)
     assert record["status"] == VS.STATUS_CHECKED_CLEAN
     assert record["detail"] == VS.DETAIL_NO_DIVERGENCE
+
+
+def test_repo_manifest_lone_surrogate_version_evidence_unreadable(tmp_path):
+    repo = tmp_path / "repo"
+    manifest_path = repo / "plugins" / "superheroes" / ".claude-plugin" / "plugin.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps({"name": "superheroes", "version": "\ud800"}),
+        encoding="utf-8",
+    )
+    _copy_semantics_to(repo)
+    plugin = _plugin_tree(tmp_path)
+    record = VS.detect(str(repo), plugin)
+    _assert_record_shape(record)
+    assert record["status"] == "checked-degraded"
+    assert record["detail"] == "evidence-unreadable"
+    assert record["inspectedRoot"] == os.path.abspath(str(repo))
+
+
+def test_installed_manifest_lone_surrogate_version_evidence_unreadable(tmp_path):
+    repo = tmp_path / "repo"
+    _write_manifest(repo)
+    _copy_semantics_to(repo)
+    plugin_root = tmp_path / "plugin"
+    manifest = plugin_root / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps({"name": "superheroes", "version": "\ud800"}),
+        encoding="utf-8",
+    )
+    lib = plugin_root / "lib"
+    lib.mkdir(parents=True, exist_ok=True)
+    for entry in VS.SEMANTICS_FILES:
+        src = os.path.join(_PLUGIN_ROOT, entry)
+        (lib / os.path.basename(entry)).write_text(open(src, encoding="utf-8").read(), encoding="utf-8")
+    record = VS.detect(str(repo), str(plugin_root))
+    _assert_record_shape(record)
+    assert record["status"] == "checked-degraded"
+    assert record["detail"] == "evidence-unreadable"
+
+
+def test_read_repo_version_lone_surrogate_does_not_raise():
+    manifest = json.loads('{"name":"superheroes","version":"\\ud800"}')
+    assert VS._read_repo_version(manifest) == "unknown"

@@ -509,8 +509,37 @@ def _scoped_handback_repo(tmp_path, receipt_obj, *, verdict="converged"):
     return repo, session, base_sha
 
 
-def _reload_handback_gate():
-    return _load("handback_gate")
+_INTERIM_CHOKEPOINT_BRANCH = (
+    '        if bind_why == "receipt-interim-not-handback-evidence":\n'
+    '            return _refuse("receipt-interim-not-handback-evidence", "",\n'
+    '                            subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)\n'
+    '        return _refuse("handback-verdict-not-allowlisted", "",\n'
+    '                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)'
+)
+
+_INTERIM_CHOKEPOINT_BRANCH_REMOVED = (
+    '        return _refuse("handback-verdict-not-allowlisted", "",\n'
+    '                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)'
+)
+
+
+def _load_handback_gate_copy(copy_path, module_name="handback_gate_bite_copy"):
+    spec = importlib.util.spec_from_file_location(module_name, copy_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _handback_gate_copy_without_interim_branch(tmp_path):
+    shipped_src_path = os.path.join(_LIB, "handback_gate.py")
+    with open(shipped_src_path, encoding="utf-8") as fh:
+        src = fh.read()
+    patched = src.replace(
+        _INTERIM_CHOKEPOINT_BRANCH, _INTERIM_CHOKEPOINT_BRANCH_REMOVED, 1)
+    assert patched != src
+    copy_path = tmp_path / "handback_gate_without_interim_branch.py"
+    copy_path.write_text(patched, encoding="utf-8")
+    return copy_path
 
 
 def test_handback_gate_rejects_interim_receipt():
@@ -548,35 +577,16 @@ def test_public_handback_rejects_non_allowlisted_verdict(tmp_path):
     assert result["reason"] == "handback-verdict-not-allowlisted"
 
 
-@pytest.mark.xdist_group(name="handback_gate_source_mutators")
 def test_bite_public_handback_interim_token(tmp_path):
     interim = RD.build_interim_receipt(RD.new_state(_cfg()), None, "tripwire")
     repo, _, _ = _scoped_handback_repo(tmp_path, interim, verdict="converged")
-    red = HG.validate_handback("gh pr ready", repo)
-    assert red["reason"] == "receipt-interim-not-handback-evidence"
-    path = os.path.join(_LIB, "handback_gate.py")
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
-    patched = src.replace(
-        '        if bind_why == "receipt-interim-not-handback-evidence":\n'
-        '            return _refuse("receipt-interim-not-handback-evidence", "",\n'
-        '                            subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)\n'
-        '        return _refuse("handback-verdict-not-allowlisted", "",\n'
-        '                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)',
-        '        return _refuse("handback-verdict-not-allowlisted", "",\n'
-        '                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)',
-        1,
-    )
-    assert patched != src
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(patched)
-    try:
-        mod = _reload_handback_gate()
-        green = mod.validate_handback("gh pr ready", repo)
-        assert green["reason"] != "receipt-interim-not-handback-evidence"
-        assert green["reason"] == "handback-verdict-not-allowlisted"
-    finally:
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(src)
-        _reload_handback_gate()
+    shipped = HG.validate_handback("gh pr ready", repo)
+    assert shipped["reason"] == "receipt-interim-not-handback-evidence"
+    copy_path = _handback_gate_copy_without_interim_branch(tmp_path)
+    mutated = _load_handback_gate_copy(str(copy_path))
+    wrong = mutated.validate_handback("gh pr ready", repo)
+    assert wrong["reason"] != "receipt-interim-not-handback-evidence"
+    assert wrong["reason"] == "handback-verdict-not-allowlisted"
+    assert HG.validate_handback("gh pr ready", repo)["reason"] == (
+        "receipt-interim-not-handback-evidence")
 

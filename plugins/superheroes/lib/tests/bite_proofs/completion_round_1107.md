@@ -8,11 +8,10 @@ edit**, with `git status --porcelain` confirmed **empty** afterwards.
 **Normalization, stated because it changes what the runs mean.** Every command ran under
 `-B -X pycache_prefix=/private/tmp/superheroes-pyc` so Apple Python's out-of-tree bytecode cache
 (`~/Library/Caches/com.apple.python/`) could not serve stale objects across same-second edits — the
-exact shape of every mutation here. Every command also ran **serially**, never under `-n auto`:
-`test_handback_gate.py` and `test_interim_receipt.py` prove their guards bite by rewriting
-`handback_gate.py` on disk, and under `pytest-xdist` those save/restore cycles interleave and leave
-the shipped source mutated with guards disabled. That race is a **known, reproduced defect on `main`**
-and is out of scope for this round; these proofs route around it rather than repairing it.
+exact shape of every mutation here. Every command also ran **serially**, never under `-n auto`.
+BP-CR-9 routes around `source_guard` (#1153): its detector loads a neutralized **copy** of
+`handback_gate.py` under `tmp_path` via `importlib.util.spec_from_file_location`, never opening the
+shipped file for write.
 
 `grep -c 'if False' plugins/superheroes/lib/handback_gate.py` was confirmed **0** after the probe
 sequence, and the working tree was confirmed byte-identical to `HEAD`.
@@ -234,27 +233,45 @@ unnoticed. The interim branch is covered separately by BP-CR-9.
 **Guarded element:** the `receipt-interim-not-handback-evidence` branch in the chokepoint — the one
 element BP-CR-8's mutation leaves untouched.
 
-**Neutralization:** deleted that three-line branch outright, with `test_interim_receipt.py`
-**unedited**. This is the smallest edit that removes exactly one guarded element.
+**Neutralization:** copied `handback_gate.py` into `tmp_path`, deleted the three-line interim branch
+from the **copy** (same string-replace as the pre-`source_guard` proof), and loaded the copy under a
+distinct module name. Shipped `handback_gate.py` was not opened for write.
 
-**Red run:**
+**Detector:** `test_bite_public_handback_interim_token` — asserts the shipped module returns
+`receipt-interim-not-handback-evidence` while the neutralized copy returns
+`handback-verdict-not-allowlisted`.
+
+**Red run** (neutralized copy wired to the interim-token assertion; shipped assertions left in place
+so the failure names the wrong reason on the mutated module):
+
 ```
->       assert red["reason"] == "receipt-interim-not-handback-evidence"
+>       assert wrong["reason"] == "receipt-interim-not-handback-evidence"
 E       AssertionError: assert 'handback-ver...t-allowlisted' == 'receipt-inte...back-evidence'
+E         
+E         - receipt-interim-not-handback-evidence
+E         + handback-verdict-not-allowlisted
 FAILED …::test_bite_public_handback_interim_token
-1 failed in 0.70s
+1 failed in 0.39s
 ```
 
 An interim receipt would refuse handback for the *wrong stated reason* — still fail-safe, but the
 operator loses the diagnosis. The detector catches it.
 
-**Green run after inverse revert:** `26 passed` (whole file).
+**Green run after inverse revert** (restore = point the assertions at the shipped-vs-copy contrast the
+test now encodes permanently):
 
-**Note on this detector's own repair.** WO-C1 changed the chokepoint text that this bite-proof
-neutralizes by string-replacement, so its search literal stopped matching and `str.replace` silently
-no-opped. The test's own `assert patched != src` self-check caught it — a detector refusing to pass
-once it can no longer bite. WO-C2 re-pointed the literal at the shipped text; this proof is the
-receipt that the repaired detector bites again.
+```
+1 passed in 0.42s
+```
+
+**Restore receipt:** the test's final assertions require both `wrong["reason"] ==
+"handback-verdict-not-allowlisted"` and a second `HG.validate_handback` call returning
+`receipt-interim-not-handback-evidence` — the shipped module was never mutated.
+
+**Note on this detector's repair (WO-1107c4-C).** After `source_guard` (#1153) blocked the
+on-disk rewrite, the proof was re-expressed as copy-and-contrast (shape **(a)** in the work order):
+the guarded branch is removed only on a `tmp_path` copy, loaded via `importlib`, while the shipped
+module supplies the green baseline.
 
 ---
 

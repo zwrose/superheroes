@@ -165,11 +165,11 @@ FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_compositi
 /usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_stall_decomposition.py::test_routing_owner_is_total -q -p no:randomly
 ```
 
-**Red run:**
-```
-......                                                                   [100%]
-6 passed in 0.30s
-```
+**Red run:** Superseded — the substring pin did not bite when only the call was deleted (the
+comment still carried `_settle_delta_converged`), so this record captured a false green. The AST pin
+`assert _subtree_has_bare_name_call(route, "_settle_delta_converged")` in
+`test_routing_owner_is_total` replaced it; see **BP-B** in `wo_r2_1107.md` for the real red capture
+(`1 failed in 0.13s`).
 
 **Restore:** restored `_settle_delta_converged(state, config)` in the else branch.
 
