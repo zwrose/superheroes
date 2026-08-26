@@ -3270,12 +3270,15 @@ def _commit_stall_self_recovery(state, config, breaker):
 def _union_open_blockers(*groups):
     """Union open blockers into one fix batch — deduped by id when present (#507 R2 residual-3).
 
+    First-wins: an admitted entry is never replaced, removed, or downgraded by a later group.
     Id-bearing audit targets dedupe on ``id`` so occurrence-suffixed siblings at one location stay
-    distinct. Id-less legacy blockers dedupe on the per-location key (line-less identity + line);
-    an id-bearing target at the same location supersedes a prior id-less entry."""
+    distinct. An id-less item and any item at the same per-location key (line-less identity + line)
+    represent each other — whichever arrives first is kept. ``_settle_delta`` passes id-less
+    ``new_blocking`` before id-bearing ``nd_targets``; that ordering depends on first-wins."""
     batch = []
     seen_ids = set()
-    idless_at_loc = {}
+    seen_locs = set()
+    idless_locs = set()
     for group in groups:
         for item in group:
             f = dict(item)
@@ -3287,20 +3290,18 @@ def _union_open_blockers(*groups):
             if tid:
                 if tid in seen_ids:
                     continue
-                if loc_key in idless_at_loc:
-                    batch[idless_at_loc.pop(loc_key)] = None
+                if loc_key in idless_locs:
+                    continue
                 batch.append(f)
                 seen_ids.add(tid)
+                seen_locs.add(loc_key)
             else:
-                if loc_key in idless_at_loc:
+                if loc_key in seen_locs:
                     continue
-                if any(isinstance(b, dict) and b.get("id")
-                       and (b.get("identity") or finding_identity(b)) == ident
-                       and b.get("line") == f.get("line") for b in batch if b is not None):
-                    continue
-                idless_at_loc[loc_key] = len(batch)
                 batch.append(f)
-    return [b for b in batch if b is not None]
+                seen_locs.add(loc_key)
+                idless_locs.add(loc_key)
+    return batch
 
 
 def _compose_stall_fix_batch(state, breaker):

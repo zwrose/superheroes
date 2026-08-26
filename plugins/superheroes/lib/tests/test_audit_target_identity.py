@@ -599,6 +599,29 @@ def test_union_open_blockers_dedupe_rule_single_home():
     assert 'f.get("identity") or finding_identity(f)' in helper_src
 
 
+def test_union_open_blockers_never_downgrades_an_earlier_entry():
+    # axis: first-wins — _settle_delta passes new_blocking (id-less) before nd_targets (id-bearing)
+    ident = FI.finding_identity(_finding(file="a.py", title="boom", line=4))
+    new_blocking = [_finding(file="a.py", line=4, title="boom", severity="Critical")]
+    nd_target = {"id": "%s@L4" % ident, "identity": ident, "file": "a.py", "line": 4,
+                 "title": "boom", "severity": "Important"}
+    batch = RD._union_open_blockers(new_blocking, [nd_target])
+    assert len(batch) == 1
+    assert batch[0]["severity"] == "Critical"
+
+
+def test_union_open_blockers_keeps_distinct_occurrence_ids():
+    # axis: occurrence-suffixed ids at one location are distinct and both survive
+    ident = FI.finding_identity(_finding(title="dup", line=1))
+    target_a = {"id": "%s@L1" % ident, "identity": ident,
+                "file": "f.py", "line": 1, "title": "dup", "severity": "Important"}
+    target_b = {"id": "%s@L1#1" % ident, "identity": ident,
+                "file": "f.py", "line": 1, "title": "dup", "severity": "Important"}
+    batch = RD._union_open_blockers([target_a], [target_b])
+    assert len(batch) == 2
+    assert {b["id"] for b in batch} == {target_a["id"], target_b["id"]}
+
+
 # --- circuit_breaker audit_target_aliases -------------------------------------
 
 def test_audit_target_aliases_agrees_with_outcome_aliases_for_identity_bearing_records():
