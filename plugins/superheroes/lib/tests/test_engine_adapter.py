@@ -1873,6 +1873,38 @@ def test_scrub_findings_rejects_hollow_with_named_reason():
     assert rejected[0]["reason"] == "no-substantive-fields"
 
 
+def _walk_all_nested_values(obj):
+    """Yield every nested value in a dict/list tree."""
+    if isinstance(obj, dict):
+        for val in obj.values():
+            yield val
+            for nested in _walk_all_nested_values(val):
+                yield nested
+    elif isinstance(obj, list):
+        for item in obj:
+            yield item
+            for nested in _walk_all_nested_values(item):
+                yield nested
+    else:
+        yield obj
+
+
+def test_scrub_findings_part_synonym_secret_redacted_before_normalize():
+    # axis: structural synonym keys scrub before normalization copies onto canonical structural keys
+    secret = "ghp_EXAMPLEfakenotarealtoken000000000"
+    finding = {
+        "severity": "Critical",
+        "part": secret,
+        "defect": "null deref on empty input",
+    }
+    accepted, rejected = EA._scrub_findings([finding])
+    assert rejected == []
+    assert len(accepted) == 1
+    for val in _walk_all_nested_values(accepted[0]):
+        if isinstance(val, str):
+            assert secret not in val
+
+
 # ---------------------------------------------------------------------------
 # #1145 WO-B: tolerant grader at one chokepoint, still fail-closed
 
@@ -2417,6 +2449,17 @@ def test_review_payload_shape_object_without_findings():
     assert res["parsed"] == EA.SHAPE_OBJECT_WITHOUT_FINDINGS
     assert res["topLevelKeys"] == ["error", "status"]
     assert res["keysTruncated"] is False
+
+
+def test_review_payload_shape_investigated_only_invalid_entries_not_clean():
+    # axis: investigated-only payloads agree with _scrub_investigated acceptance
+    res = EA.review_payload_shape(json.dumps({"investigated": [42]}))
+    assert res is not None
+    assert res["parsed"] == EA.SHAPE_OBJECT_WITHOUT_FINDINGS
+
+
+def test_review_payload_shape_investigated_only_valid_still_clean():
+    assert EA.review_payload_shape(json.dumps({"investigated": ["src/main.py"]})) is None
 
 
 def test_review_payload_shape_object_findings_not_a_list():

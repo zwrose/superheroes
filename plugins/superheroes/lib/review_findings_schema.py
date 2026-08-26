@@ -30,6 +30,27 @@ _FALLBACK_CANONICAL_MEMBER_KEYS = (
     "tradeoff",
 )
 _FALLBACK_SEVERITY_TIERS = frozenset({"Critical", "Important", "Minor", "Nit"})
+_FALLBACK_DIMENSION_ENUM = (
+    "Architecture",
+    "Code",
+    "Security",
+    "Test",
+    "Failure-Mode",
+    "Clarity",
+    "Verifiability",
+    "Coherence",
+    "Safety-access",
+    "Grounding",
+)
+_FALLBACK_CONFIDENCE_ENUM = ("High", "Low", None)
+_FALLBACK_FINDING_PROPERTY_SCHEMAS = {
+    key: {} for key in _FALLBACK_CANONICAL_MEMBER_KEYS
+}
+_FALLBACK_FINDING_PROPERTY_SCHEMAS["severity"] = {"enum": list(_FALLBACK_SEVERITY_TIERS)}
+_FALLBACK_FINDING_PROPERTY_SCHEMAS["dimension"] = {"enum": list(_FALLBACK_DIMENSION_ENUM)}
+_FALLBACK_FINDING_PROPERTY_SCHEMAS["confidence"] = {"enum": list(_FALLBACK_CONFIDENCE_ENUM)}
+_FALLBACK_FINDING_PROPERTY_SCHEMAS["line"] = {"type": ["integer", "null"]}
+_FALLBACK_FINDING_PROPERTY_SCHEMAS["tradeoff"] = {"type": ["boolean", "null"]}
 
 SUBSTANCE_KEYS_CANONICAL = frozenset({"title", "body", "evidence", "suggestion"})
 
@@ -59,6 +80,7 @@ EXAMPLE_SENTINEL = "[RFS-EXAMPLE-SENTINEL-1145]"
 
 CANONICAL_MEMBER_KEYS = ()
 SEVERITY_TIERS = frozenset()
+FINDING_PROPERTY_SCHEMAS = {}
 SCHEMA_READ_USED_FALLBACK = False
 
 _VERDICT_ENUM = frozenset(round_phases.VERDICTS)
@@ -72,7 +94,7 @@ def review_findings_schema_path():
 
 def _init_schema_constants():
     """Read canonical keys and severity tiers from the shipped schema once."""
-    global CANONICAL_MEMBER_KEYS, SEVERITY_TIERS, SCHEMA_READ_USED_FALLBACK
+    global CANONICAL_MEMBER_KEYS, SEVERITY_TIERS, FINDING_PROPERTY_SCHEMAS, SCHEMA_READ_USED_FALLBACK
     try:
         with open(REVIEW_FINDINGS_SCHEMA_PATH, encoding="utf-8") as fh:
             schema = json.load(fh)
@@ -80,10 +102,12 @@ def _init_schema_constants():
         CANONICAL_MEMBER_KEYS = tuple(finding_props.keys())
         severity_enum = finding_props["severity"]["enum"]
         SEVERITY_TIERS = frozenset(severity_enum)
+        FINDING_PROPERTY_SCHEMAS = finding_props
         SCHEMA_READ_USED_FALLBACK = False
     except (OSError, json.JSONDecodeError, KeyError, TypeError):
         CANONICAL_MEMBER_KEYS = _FALLBACK_CANONICAL_MEMBER_KEYS
         SEVERITY_TIERS = _FALLBACK_SEVERITY_TIERS
+        FINDING_PROPERTY_SCHEMAS = _FALLBACK_FINDING_PROPERTY_SCHEMAS
         SCHEMA_READ_USED_FALLBACK = True
 
 
@@ -242,9 +266,7 @@ def example_member_values():
 
 
 def _shipped_finding_property_schemas():
-    with open(REVIEW_FINDINGS_SCHEMA_PATH, encoding="utf-8") as fh:
-        schema = json.load(fh)
-    return schema["properties"]["findings"]["items"]["properties"]
+    return FINDING_PROPERTY_SCHEMAS
 
 
 def _first_schema_enum_member(field_schema):
@@ -269,7 +291,14 @@ def example_findings_object():
     field_schemas = _shipped_finding_property_schemas()
     member = {}
     for key in CANONICAL_MEMBER_KEYS:
-        member[key] = _example_value_for_field(key, field_schemas[key])
+        field_schema = field_schemas.get(key)
+        if field_schema is None:
+            if SCHEMA_READ_USED_FALLBACK:
+                member[key] = _placeholder_string(key)
+            else:
+                member[key] = _example_value_for_field(key, field_schemas[key])
+        else:
+            member[key] = _example_value_for_field(key, field_schema)
     return {
         "findings": [member],
         "investigated": [_placeholder_string("investigated-path")],
