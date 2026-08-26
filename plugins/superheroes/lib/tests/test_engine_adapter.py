@@ -2049,6 +2049,68 @@ def test_review_payload_shape_echo_nonce_second_path_agrees_with_parse():
     }
 
 
+# ---------------------------------------------------------------------------
+# #1145 WO-G: investigated list placeholder echo (chokepoint parity with findings)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_result_review_investigated_all_placeholder_echo_refused():
+    # axis: all investigated entries that are whole-value placeholder near-copies → unreadable
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo_g_1145c3.md (BP1)
+    nonce = "dispatch-abc123"
+    placeholder = RFS._placeholder_string("investigated-path", nonce)
+    stdout = json.dumps({"findings": [], "investigated": [placeholder]})
+    assert EA.parse_result("codex", "review", stdout, echo_nonce=nonce) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_parse_result_review_investigated_verifier_reproduction_refused():
+    # axis: verifier reproduction — empty findings + nonce-keyed investigated placeholder
+    nonce = "dispatch-abc123"
+    placeholder = RFS._placeholder_string("investigated-path", nonce)
+    stdout = json.dumps({"findings": [], "investigated": [placeholder]})
+    assert EA.parse_result("codex", "review", stdout, echo_nonce=nonce) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_parse_result_review_investigated_path_quoting_placeholder_is_clean():
+    # axis: genuine path that merely quotes a placeholder inside a longer string is not echo
+    nonce = "dispatch-abc123"
+    sentinel = RFS._placeholder_string("investigated-path", nonce)
+    genuine = "src/pkg/" + sentinel + "/module.py"
+    stdout = json.dumps({"findings": [], "investigated": [genuine]})
+    res = EA.parse_result("codex", "review", stdout, echo_nonce=nonce)
+    assert res["ok"] is True
+    assert res["findings"] == []
+    assert res["investigated"] == [genuine]
+
+
+def test_parse_result_review_empty_investigated_list_is_clean():
+    # axis: empty investigated list is ordinary shape, not placeholder echo
+    stdout = json.dumps({"findings": [], "investigated": []})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert res["findings"] == []
+    assert res["investigated"] == []
+
+
+def test_parse_result_review_investigated_no_nonce_base_placeholder_refused():
+    # axis: missing echo_nonce → base placeholder set still refuses whole-value echo
+    placeholder = RFS._placeholder_string("investigated-path")
+    stdout = json.dumps({"findings": [], "investigated": [placeholder]})
+    assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_review_payload_shape_investigated_placeholder_echo_agrees_with_parse():
+    # axis: review_payload_shape investigated-only branch diagnoses placeholder echo like parse
+    nonce = "dispatch-abc123"
+    placeholder = RFS._placeholder_string("investigated-path", nonce)
+    stdout = json.dumps({"findings": [], "investigated": [placeholder]})
+    shape = EA.review_payload_shape(stdout, echo_nonce=nonce)
+    assert shape == {
+        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
+    }
+    assert EA.parse_result("codex", "review", stdout, echo_nonce=nonce) == _HOLLOW_MEMBER_MALFORMED
+
+
 def test_parse_result_review_near_copy_example_sentinel_is_hollow():
     # axis: near-copy bypass — plausible id/severity cannot override example sentinel in body/title
     member = dict(RFS.example_findings_object()["findings"][0])
