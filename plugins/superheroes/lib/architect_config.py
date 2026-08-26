@@ -105,11 +105,16 @@ def read_policy(cwd, root=None):
 def write_policy(cwd, policy, root=None):
     """Record the doc-policy under the project config lock.
 
-    Returns the written record on success. Returns None when the write does not apply —
-    no file is created or overwritten: the config lock is contended; ``ensure_project_store``
-    fails; the repository root is unavailable; or an existing persisted record declares
+    Returns the written record on success. Returns None when the doc-policy record is not
+    written — no ``doc-policy.json`` is created, and an existing one is left byte-for-byte —
+    because the config lock is contended; ``ensure_project_store`` fails; the repository root
+    is unavailable; or an existing persisted record declares
     ``schemaVersion`` greater than ``SCHEMA_VERSION`` (the on-disk file is preserved).
-    None does not identify which cause applied; callers branch on their own policy
+    Store setup and the lock file may already have been created as side effects on a refusal
+    path (``ensure_project_store`` runs ``os.makedirs``, may ``git init``, and atomically writes
+    ``meta.json``; ``config_lock`` ensures the store directory exists and creates ``config.lock``
+    before the contention answer is known). None does not identify which cause applied; callers
+    branch on their own policy
     (``architect-init`` stops on any refusal; ``definition_doc.resolve_write_path`` treats
     provisional-write refusal as non-fatal)."""
     rec = _migrate(policy)

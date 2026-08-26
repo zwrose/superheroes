@@ -158,9 +158,11 @@ Continue to Step 6. Follow-up: `/superheroes:configure`.
    When either payload is empty, surface `assembly produced empty payloads; halting rather than
    writing an empty layer` and **stop** — do not pipe into `write` or `write-layer`. This guard's
    protection is **unverified**: nothing in the test suite executes skill prose, so no automated
-   test exercises this refusal. Provability would require converting Step 6's write path to
-   executable shell (as `review-init` Step 4b does), so the empty-payload halt can be observed at
-   runtime. When both
+   test exercises this refusal. Provability would require expressing Step 6's write path as
+   executable shell **and** driving it with a harness that actually executes it — `review-init`
+   Step 4b already uses executable shell for its guard, but that guard remains unproven for the
+   same reason: no harness runs skill prose. With both halves in place, the empty-payload halt
+   could be observed at runtime. When both
    payloads are present, pipe the shared facts JSON into
    `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/core_md.py" write
    --status provisional` to write the band-wide `core.md`, and pipe `$TEST_PILOT_LAYER_BODY` into
