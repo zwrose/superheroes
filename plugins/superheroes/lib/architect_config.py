@@ -103,10 +103,15 @@ def read_policy(cwd, root=None):
 
 
 def write_policy(cwd, policy, root=None):
-    """Record the doc-policy under the project config lock. Returns the written record,
-    or None if the lock is contended, the project store cannot be ensured, the repository
-    root is unavailable, or the persisted record declares a newer schemaVersion than this
-    module supports (caller proceeds + surfaces a notice — UFR-1)."""
+    """Record the doc-policy under the project config lock.
+
+    Returns the written record on success. Returns None when the write does not apply —
+    no file is created or overwritten: the config lock is contended; ``ensure_project_store``
+    fails; the repository root is unavailable; or an existing persisted record declares
+    ``schemaVersion`` greater than ``SCHEMA_VERSION`` (the on-disk file is preserved).
+    None does not identify which cause applied; callers branch on their own policy
+    (``architect-init`` stops on any refusal; ``definition_doc.ensure_work_item_dir`` treats
+    provisional-write refusal as non-fatal)."""
     rec = _migrate(policy)
     if rec is None:
         raise ValueError("invalid doc-policy: %r" % (policy,))
