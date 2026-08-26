@@ -3079,7 +3079,10 @@ def test_dispatch_poll_running_graded_attempt1_ended_attempt2_live(tmp_path):
     assert len(graded) == 1
     assert graded[0]["attempt"] == 1
     assert graded[0]["resultKind"] == "findings"
-    assert graded[0]["findings"] == [{"id": "f1", "message": "issue found"}]
+    member = graded[0]["findings"][0]
+    # WO-B additive normalization: original synonym key survives; canonical body is added.
+    assert member["message"] == "issue found"
+    assert member["body"] == "issue found"
 
 
 # --- WO-2 (#747): per-attempt telemetry + terminal-record supersede (PR #783) ---
