@@ -109,14 +109,16 @@ def test_safety_machinery_set_members_are_pinned():
         "engine_adapter.py",
         "hooks.json",
         "session_start.py",
+        "session_mode.py", "version_skew.py",
         "escalation-base.md", "review-base.md",
         # shared review-and-fix loop (#104): deciders, durable record, and the orchestration shell
         "panel_tally.py", "loop_synthesis.py", "verification.py", "round_phases.py",
         "payload_contracts.py", "round_adapters.py", "verify_gate.py",
         "review_result.py", "round_driver.py", "audits.py", "delta_surface.py",
         # the two owner-named-risk gates + their hook wrappers (collector #695 item 55)
-        "worktree_guard.py", "owner_authority.py",
+        "worktree_guard.py", "owner_authority.py", "mode_registry.py",
         "worktree_guard_gate.py", "owner_authority_gate.py",
+        "owner-authority-allowlist.md",  # named owner-authority-gate-family member — fixer must refuse or the carve-out is decorative on this member
     }
 
 def _band_file(tmp_path, sub, name):

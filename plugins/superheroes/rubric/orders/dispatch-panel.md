@@ -1,4 +1,5 @@
 You are reviewing {{MODE}} for repo {{REPO}}, target {{TARGET}}.
+{{MODE_EVIDENCE}}
 
 ## Your assignment
 Review the diff at {{DIFF_PATH}} for your dimension.

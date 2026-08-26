@@ -2049,12 +2049,12 @@ def _write_superheroes_fixture_repo(tmp_path, divergent=True):
     (sh / "version.txt").write_text("0.31.0\n", encoding="utf-8")
     lib = sh / "lib"
     lib.mkdir(parents=True, exist_ok=True)
-    for entry in ("model_registry.py", "seat_map.py"):
-        src = os.path.join(_PLUGIN_ROOT, "lib", entry)
+    for entry in version_skew.SEMANTICS_FILES:
+        src = os.path.join(_PLUGIN_ROOT, entry)
         content = open(src, encoding="utf-8").read()
-        if divergent and entry == "model_registry.py":
+        if divergent and entry == "lib/model_registry.py":
             content = content + "# fixture skew marker\n"
-        (lib / entry).write_text(content, encoding="utf-8")
+        (lib / os.path.basename(entry)).write_text(content, encoding="utf-8")
     return str(repo)
 
 
@@ -2136,3 +2136,61 @@ def test_cli_compose_repo_root_not_superheroes_emits_no_plugin_version_skew(tmp_
     assert skew == []
     assert receipt["pluginVersionSkew"]["status"] == version_skew.STATUS_NOT_CHECKED
     assert receipt["pluginVersionSkew"]["detail"] == version_skew.DETAIL_NOT_SOURCE_REPO
+
+
+_COMPOSE_SKEW_APPEND_CASES = [
+    (version_skew.STATUS_CHECKED_CLEAN, version_skew.DETAIL_NO_DIVERGENCE, False),
+    (version_skew.STATUS_NOT_CHECKED, version_skew.DETAIL_NOT_SOURCE_REPO, False),
+] + [
+    (version_skew.STATUS_CHECKED_DEGRADED, degrading_detail, True)
+    for degrading_detail in sorted(version_skew.DEGRADING_DETAILS)
+]
+assert frozenset(
+    case_detail for _, case_detail, should_append in _COMPOSE_SKEW_APPEND_CASES if should_append
+) == version_skew.DEGRADING_DETAILS
+
+
+@pytest.mark.parametrize(
+    "status,detail,should_append",
+    _COMPOSE_SKEW_APPEND_CASES,
+)
+def test_compose_skew_record_appends_degradation_only_when_degraded(
+    monkeypatch, tmp_path, capsys, status, detail, should_append,
+):
+    repo_root = _write_superheroes_fixture_repo(tmp_path, divergent=False)
+
+    def _fake_detect(_repo_root, _plugin_root):
+        return {
+            "constraint": version_skew.CONSTRAINT,
+            "status": status,
+            "detail": detail,
+            "reason": "plugin-version-skew: append-rule behavior test",
+            "inspectedRoot": repo_root,
+        }
+
+    monkeypatch.setattr(version_skew, "detect", _fake_detect)
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--author-family",
+            "xai",
+            "--narrative-family",
+            "anthropic",
+            "--pr-number",
+            "677",
+            "--repo-root",
+            repo_root,
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    skew = [d for d in receipt["degradations"] if d.get("constraint") == "plugin-version-skew"]
+    if should_append:
+        assert len(skew) == 1
+        assert skew[0]["status"] == status
+        assert skew[0]["detail"] == detail
+    else:
+        assert skew == []

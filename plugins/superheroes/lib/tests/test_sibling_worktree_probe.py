@@ -317,6 +317,15 @@ def test_compare_unreadable_sibling_reports_kind():
     assert any(d["kind"] == "unreadable" for d in result["deltas"])
 
 
+def test_parse_worktree_list_preserves_cr_in_path():
+    raw_path = "/tmp/example\rpath"
+    porcelain = "worktree " + raw_path + "\nbranch refs/heads/main"
+    blocks = SWP._parse_worktree_list(porcelain)
+    assert len(blocks) == 1
+    assert blocks[0]["path"] == raw_path
+    assert "\r" in blocks[0]["path"]
+
+
 def test_capture_sibling_baseline_never_passes_none_deadline(monkeypatch):
     """_capture_sibling_baseline must always bound snapshot, including when preflight_timeout is None."""
     import importlib.util

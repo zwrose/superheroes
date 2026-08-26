@@ -61,7 +61,7 @@ def _run_git(cwd, args, *, run, deadline_end, env):
 def _parse_worktree_list(text):
     blocks = []
     current = {}
-    for line in (text or "").splitlines():
+    for line in (text or "").split("\n"):
         if not line.strip():
             if current:
                 blocks.append(current)
