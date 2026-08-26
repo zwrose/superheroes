@@ -20,6 +20,17 @@ def _load():
 EA = _load()
 
 
+def _load_rfs():
+    spec = importlib.util.spec_from_file_location(
+        "review_findings_schema", os.path.join(_HERE, "..", "review_findings_schema.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+RFS = _load_rfs()
+
+
 def _help_text_for_substring_match(text: str) -> str:
     """Normalize argparse --help for substring assertions.
 
@@ -1860,6 +1871,163 @@ def test_scrub_findings_rejects_hollow_with_named_reason():
     assert accepted == []
     assert len(rejected) == 1
     assert rejected[0]["reason"] == "no-substantive-fields"
+
+
+# ---------------------------------------------------------------------------
+# #1145 WO-B: tolerant grader at one chokepoint, still fail-closed
+
+
+_PR1143_FINDING = {
+    "severity": "Critical",
+    "part": "src/widget.py",
+    "defect": "null deref on empty input",
+    "change": "guard before dereference",
+}
+
+
+def test_parse_result_review_pr1143_censused_member_spelling_engaged():
+    # axis: PR #1143 brief-check member spelling parses through normalize + member_is_engaged
+    stdout = json.dumps({"findings": [_PR1143_FINDING]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    member = res["findings"][0]
+    assert member["defect"] == _PR1143_FINDING["defect"]
+    assert member["body"] == _PR1143_FINDING["defect"]
+    assert member["change"] == _PR1143_FINDING["change"]
+    assert member["suggestion"] == _PR1143_FINDING["change"]
+    assert member["file"] == _PR1143_FINDING["part"]
+
+
+@pytest.mark.parametrize("member", [
+    {"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in diff", "severity": "Minor"},
+    {"id": "f1", "ruling": "discharged", "reason": "resolved in diff", "severity": "Minor"},
+    {"member_ids": ["f1"], "rationale": "seams align", "severity": "Minor"},
+])
+def test_parse_result_review_kind_member_spellings_inside_findings_engaged(member):
+    # axis: verifier / audit / synthesis member spellings engage inside a findings array
+    stdout = json.dumps({"findings": [member]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+
+
+def test_parse_result_review_censused_substance_without_severity_is_hollow():
+    # axis: censused substance keys require valid severity — no severity → hollow
+    stdout = json.dumps({"findings": [{"defect": "real censused prose"}]})
+    assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_parse_result_review_severity_with_trivial_body_is_hollow():
+    # axis: whitespace-only body is not substantive
+    stdout = json.dumps({"findings": [{"severity": "Minor", "body": "   "}]})
+    assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_parse_result_review_verbatim_example_member_is_hollow():
+    # axis: rendered example sentinel refuses engagement even when member_is_engaged would pass
+    stdout = json.dumps(RFS.example_findings_object())
+    assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_parse_result_review_near_copy_example_sentinel_is_hollow():
+    # axis: near-copy bypass — plausible id/severity cannot override example sentinel in body/title
+    member = dict(RFS.example_findings_object()["findings"][0])
+    member["id"] = "real-finding-001"
+    member["severity"] = "Critical"
+    stdout = json.dumps({"findings": [member]})
+    assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
+@pytest.mark.parametrize("bad_severity", [None, "", "critical", 0, True, "bogus-tier"])
+def test_parse_result_review_off_scale_severity_with_censused_body_is_hollow(bad_severity):
+    # axis: off-scale severity cannot unlock censused substance keys
+    stdout = json.dumps({"findings": [{"severity": bad_severity, "defect": "real censused prose"}]})
+    assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_parse_result_review_empty_findings_no_investigated_engagement_floor_unchanged():
+    # axis: empty findings without verifiable investigated still does not read as engaged
+    res = EA.parse_result("codex", "review", json.dumps({"findings": []}))
+    assert res["ok"] is True
+    assert res["findings"] == []
+    assert res.get("investigated") == []
+    assert EA.engagement_read(res) == "unknown"
+
+
+def test_parse_result_review_normalize_member_is_additive():
+    # axis: ingest normalization adds canonical keys without removing synonym keys
+    stdout = json.dumps({"findings": [{"message": "issue found", "severity": "Minor"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    member = res["findings"][0]
+    assert member["message"] == "issue found"
+    assert member["body"] == "issue found"
+
+
+def _findings_member_hollow_via_parse(stdout):
+    return EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
+def _findings_member_hollow_via_shape(stdout):
+    shape = EA.review_payload_shape(stdout)
+    return shape == {
+        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+@pytest.mark.parametrize("member,expect_hollow", [
+    ({}, True),
+    ({"severity": "Minor", "title": "t", "body": "b"}, False),
+    ({"defect": "real prose"}, True),
+    ({"severity": "Minor", "body": "   "}, True),
+    (_PR1143_FINDING, False),
+])
+def test_findings_member_parse_and_shape_diagnostic_agree(member, expect_hollow):
+    # axis: hollow predicate shared — parse path and shape diagnostic never disagree per member
+    for stdout in (json.dumps({"findings": [member]}), json.dumps([member])):
+        assert _findings_member_hollow_via_parse(stdout) is expect_hollow
+        assert _findings_member_hollow_via_shape(stdout) is expect_hollow
+
+
+@pytest.mark.parametrize("kind,payload", [
+    ("findings", {"findings": [{"severity": "Minor", "title": "t", "body": "b"}]}),
+    ("verdicts", {"verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "ok"}]}),
+    ("grouping", {"grouping": [{"member_ids": ["f1"]}]}),
+    ("ruling", {"id": "f1", "ruling": "discharged", "reason": "fixed"}),
+])
+def test_review_payload_shape_valid_registered_kind_returns_none(kind, payload):
+    # axis: registry-based recognition — valid payloads for all four kinds diagnose as clean
+    assert EA.review_payload_shape(json.dumps(payload)) is None
+
+
+@pytest.mark.parametrize("kind,payload,expected_parsed", [
+    ("findings", {"findings": [{}]}, EA.SHAPE_FINDINGS_HOLLOW_MEMBER),
+    ("findings", {"findings": "oops"}, EA.SHAPE_OBJECT_FINDINGS_NOT_A_LIST),
+    ("verdicts", {"verdicts": [{}]}, EA.SHAPE_VERDICTS_HOLLOW_MEMBER),
+    ("verdicts", {"verdicts": "oops"}, EA.SHAPE_OBJECT_VERDICTS_NOT_A_LIST),
+    ("grouping", {"grouping": [{"member_ids": []}]}, EA.SHAPE_OBJECT_WITHOUT_FINDINGS),
+    ("ruling", {"id": "", "ruling": "discharged", "reason": "x"}, EA.SHAPE_OBJECT_WITHOUT_FINDINGS),
+])
+def test_review_payload_shape_invalid_registered_kind_diagnoses(kind, payload, expected_parsed):
+    # axis: registry-based recognition — invalid payloads get a shape label, not silent None
+    res = EA.review_payload_shape(json.dumps(payload))
+    assert res is not None
+    assert res["parsed"] == expected_parsed
+
+
+def test_review_payload_shape_valid_top_level_ruling_returns_none():
+    # axis: ruling payload no longer mislabelled object-without-findings (#1145 B3)
+    assert EA.review_payload_shape(json.dumps({
+        "id": "f1", "ruling": "discharged", "reason": "fixed",
+    })) is None
+
+
+def test_review_payload_shape_valid_top_level_grouping_returns_none():
+    # axis: grouping payload no longer mislabelled object-without-findings (#1145 B3)
+    assert EA.review_payload_shape(json.dumps({
+        "grouping": [{"member_ids": ["f1"]}],
+    })) is None
 
 
 def test_finding_substance_keys_canonical_membership():

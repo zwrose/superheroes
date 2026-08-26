@@ -33,6 +33,7 @@ TASK_ID_TRAILER = "Task-Id"
 import audits  # noqa: E402  (AUDIT_RULINGS + usability predicates; stdlib-only sibling)
 import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import engine_adapter)
 import payload_contracts  # noqa: E402  (single contract home below this layer; no upward import)
+import review_findings_schema  # noqa: E402  (findings-member schema home; #1145)
 import round_phases  # noqa: E402  (verifier-verdict enum home; verification.VERDICTS re-exports same tuple)
 
 REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
@@ -41,8 +42,8 @@ REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 # literals; engine_dispatch and drift tests import this name, never restate the tuple.
 REVIEW_RESULT_KINDS = ("findings", "verdicts", "grouping", "ruling")
 
-# Rubric severity tiers — structural pin for verdicts[].severity (G-4); findings path unchanged.
-REVIEW_SEVERITY_TIERS = frozenset({"Critical", "Important", "Minor", "Nit"})
+# Rubric severity tiers — re-export from review_findings_schema (single home; #1145).
+REVIEW_SEVERITY_TIERS = review_findings_schema.SEVERITY_TIERS
 
 # Bounds for the payload-shape diagnostic. These strings come from ENGINE-CONTROLLED JSON and
 # cross the same trust boundary as any other external free text.
@@ -565,27 +566,19 @@ def _scrub(text):
 # (body/suggestion/evidence/title/description/message/id/etc.) and is scrubbed unconditionally so no
 # new field name can silently reopen the leak this boundary exists to close.
 _FINDING_STRUCTURAL_KEYS = {"file", "line", "severity", "dimension", "confidence"}
-_FINDING_SUBSTANCE_KEYS_CANONICAL = frozenset({"title", "body", "evidence", "suggestion"})
-# Tolerated aliases for substance fields — description is named in the scrub boundary
-# comment above _FINDING_STRUCTURAL_KEYS as untrusted free text.
-_FINDING_SUBSTANCE_KEYS_TOLERATED = frozenset({"summary", "message", "description"})
+# Re-export substance censuses from review_findings_schema — legacy names kept for tests/consumers.
+_FINDING_SUBSTANCE_KEYS_CANONICAL = review_findings_schema.SUBSTANCE_KEYS_CANONICAL
+_FINDING_SUBSTANCE_KEYS_TOLERATED = review_findings_schema.SUBSTANCE_KEYS_LEGACY
 FINDING_REJECT_NO_SUBSTANCE = "no-substantive-fields"
 
 
-def _substance_value_is_substantive(val):
-    """True when a substance-field value carries human-readable review prose."""
-    return isinstance(val, str) and val.strip() != ""
-
-
 def _finding_is_substantive(obj):
-    """True when a finding dict carries at least one substantive substance-field value."""
+    """True when a finding dict carries substantive review content per the schema home."""
     if not isinstance(obj, dict):
         return False
-    substance_keys = _FINDING_SUBSTANCE_KEYS_CANONICAL | _FINDING_SUBSTANCE_KEYS_TOLERATED
-    for key in substance_keys:
-        if key in obj and _substance_value_is_substantive(obj[key]):
-            return True
-    return False
+    if review_findings_schema.member_carries_sentinel(obj):
+        return False
+    return review_findings_schema.member_is_engaged(obj)
 
 
 def _findings_list_has_hollow_member(findings):
@@ -736,6 +729,7 @@ def _scrub_findings(findings):
         if not _finding_is_substantive(f):
             rejected.append({"entry": _render_rejection_entry(f), "reason": FINDING_REJECT_NO_SUBSTANCE})
             continue
+        f = review_findings_schema.normalize_member(f)
         g = dict(f)
         for key, val in g.items():
             if key in _FINDING_STRUCTURAL_KEYS:
@@ -1222,6 +1216,69 @@ def _bound_top_level_keys(obj):
     return keys, keys_truncated
 
 
+def _review_payload_shape_findings_obj(obj):
+    """Findings-kind shape diagnostic for a recognised review object. Never raises."""
+    findings = obj.get("findings")
+    if findings is None:
+        investigated = obj.get("investigated")
+        if isinstance(investigated, list) and investigated:
+            return None
+        top_keys, keys_truncated = _bound_top_level_keys(obj)
+        return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
+                "topLevelKeys": top_keys, "keysTruncated": keys_truncated}
+    if not isinstance(findings, list):
+        return {"parsed": SHAPE_OBJECT_FINDINGS_NOT_A_LIST,
+                "topLevelKeys": [], "keysTruncated": False}
+    if _review_items_have_placeholder_literal(findings):
+        return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
+                "topLevelKeys": [], "keysTruncated": False}
+    if _findings_list_has_hollow_member(findings):
+        return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
+                "topLevelKeys": [], "keysTruncated": False}
+    return None
+
+
+def _review_payload_shape_verdicts_obj(obj):
+    """Verdicts-kind shape diagnostic for a recognised review object. Never raises."""
+    verdicts = obj.get("verdicts")
+    if not isinstance(verdicts, list):
+        return {"parsed": SHAPE_OBJECT_VERDICTS_NOT_A_LIST,
+                "topLevelKeys": [], "keysTruncated": False}
+    if _review_items_have_placeholder_literal(verdicts):
+        return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
+                "topLevelKeys": [], "keysTruncated": False}
+    if _verdicts_list_has_hollow_member(verdicts):
+        return {"parsed": SHAPE_VERDICTS_HOLLOW_MEMBER,
+                "topLevelKeys": [], "keysTruncated": False}
+    return None
+
+
+def _review_payload_shape_grouping_obj(obj):
+    """Grouping-kind shape diagnostic for a recognised review object. Never raises."""
+    if _grouping_payload_valid(obj.get("grouping")):
+        return None
+    top_keys, keys_truncated = _bound_top_level_keys(obj)
+    return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
+            "topLevelKeys": top_keys, "keysTruncated": keys_truncated}
+
+
+def _review_payload_shape_ruling_obj(obj):
+    """Ruling-kind shape diagnostic for a recognised review object. Never raises."""
+    if _matches_review_ruling(obj) and _audit_ruling_payload_valid(obj):
+        return None
+    top_keys, keys_truncated = _bound_top_level_keys(obj)
+    return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
+            "topLevelKeys": top_keys, "keysTruncated": keys_truncated}
+
+
+_REVIEW_PAYLOAD_SHAPE_DIAGNOSTICS = {
+    "findings": _review_payload_shape_findings_obj,
+    "verdicts": _review_payload_shape_verdicts_obj,
+    "grouping": _review_payload_shape_grouping_obj,
+    "ruling": _review_payload_shape_ruling_obj,
+}
+
+
 def review_payload_shape(stdout, fed_prompt=None):
     """Diagnose WHY a review stdout failed the findings parse.
 
@@ -1240,39 +1297,19 @@ def review_payload_shape(stdout, fed_prompt=None):
             return {"parsed": SHAPE_EMPTY_STDOUT, "topLevelKeys": [], "keysTruncated": False}
         obj = _last_json_object(stdout)
         if isinstance(obj, dict):
-            has_findings = "findings" in obj
-            has_verdicts = "verdicts" in obj
-            if has_findings and has_verdicts:
+            matched = _recognised_review_kinds(obj)
+            if len(matched) > 1:
                 top_keys, keys_truncated = _bound_top_level_keys(obj)
                 return {"parsed": SHAPE_OBJECT_BOTH_PAYLOAD_KEYS,
                         "topLevelKeys": top_keys, "keysTruncated": keys_truncated}
-            if has_verdicts:
-                verdicts = obj.get("verdicts")
-                if not isinstance(verdicts, list):
-                    return {"parsed": SHAPE_OBJECT_VERDICTS_NOT_A_LIST,
-                            "topLevelKeys": [], "keysTruncated": False}
-                if _review_items_have_placeholder_literal(verdicts):
-                    return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
-                            "topLevelKeys": [], "keysTruncated": False}
-                if _verdicts_list_has_hollow_member(verdicts):
-                    return {"parsed": SHAPE_VERDICTS_HOLLOW_MEMBER,
-                            "topLevelKeys": [], "keysTruncated": False}
+            if len(matched) == 1:
+                diag = _REVIEW_PAYLOAD_SHAPE_DIAGNOSTICS[matched[0]](obj)
+                if diag is not None:
+                    return diag
                 return None
-            if "findings" not in obj:
-                top_keys, keys_truncated = _bound_top_level_keys(obj)
-                return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
-                        "topLevelKeys": top_keys, "keysTruncated": keys_truncated}
-            findings = obj.get("findings")
-            if not isinstance(findings, list):
-                return {"parsed": SHAPE_OBJECT_FINDINGS_NOT_A_LIST,
-                        "topLevelKeys": [], "keysTruncated": False}
-            if _review_items_have_placeholder_literal(findings):
-                return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
-                        "topLevelKeys": [], "keysTruncated": False}
-            if _findings_list_has_hollow_member(findings):
-                return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
-                        "topLevelKeys": [], "keysTruncated": False}
-            return None
+            top_keys, keys_truncated = _bound_top_level_keys(obj)
+            return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
+                    "topLevelKeys": top_keys, "keysTruncated": keys_truncated}
         if obj is None:
             arr = _last_json_array(stdout)
             if isinstance(arr, list):
