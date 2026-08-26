@@ -176,6 +176,31 @@ def _member_has_non_placeholder_substance_fields(member, placeholders):
     return False
 
 
+def _value_contains_sentinel(value):
+    """True when EXAMPLE_SENTINEL appears in any nested string under value."""
+    if isinstance(value, dict):
+        return any(_value_contains_sentinel(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_value_contains_sentinel(item) for item in value)
+    if isinstance(value, str):
+        return EXAMPLE_SENTINEL in value
+    return False
+
+
+def _all_present_substance_fields_carry_sentinel(member):
+    """True when every present substance field value contains EXAMPLE_SENTINEL."""
+    if not isinstance(member, dict):
+        return False
+    present_values = []
+    for key in _ECHO_SUBSTANCE_KEYS:
+        if key not in member:
+            continue
+        present_values.append(member[key])
+    if not present_values:
+        return False
+    return all(_value_contains_sentinel(value) for value in present_values)
+
+
 def member_carries_sentinel(member):
     # axis: placeholder field-value equality (not substring sentinel) refuses verbatim/near-copy echo
     """True when field values are example placeholders (verbatim/near-copy echo).
@@ -191,6 +216,8 @@ def member_carries_sentinel(member):
     if placeholder_count == 1 and not _member_has_non_placeholder_substance_fields(
         member, placeholders
     ):
+        return True
+    if _all_present_substance_fields_carry_sentinel(member):
         return True
     return False
 

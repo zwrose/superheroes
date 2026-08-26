@@ -380,6 +380,29 @@ def test_member_carries_sentinel_false_for_prose_quoting_sentinel():
     ) is False
 
 
+def _uniform_retype_strings(value):
+    """Cosmetic recase on 'placeholder' token — sentinel survives, exact equality breaks."""
+    if isinstance(value, dict):
+        return {key: _uniform_retype_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_uniform_retype_strings(item) for item in value]
+    if isinstance(value, str):
+        return value.replace("placeholder", "PLACEHOLDER")
+    return value
+
+
+def test_member_carries_sentinel_true_for_uniform_retype_of_example():
+    # axis: uniform cosmetic retype keeps sentinel in every value but breaks exact placeholder match
+    member = _uniform_retype_strings(RFS.example_findings_object()["findings"][0])
+    assert RFS.member_carries_sentinel(member) is True
+
+
+def test_member_carries_sentinel_false_for_empty_substance_field_set():
+    # axis: no present substance fields — all-quantifier leg must not echo-verdict
+    member = {"severity": "Critical", "file": "lib/gate.py", "line": 12}
+    assert RFS.member_carries_sentinel(member) is False
+
+
 def test_substance_key_synonym_targets_are_canonical():
     # axis: every synonym maps to a declared canonical member key
     canonical = set(RFS.CANONICAL_MEMBER_KEYS)

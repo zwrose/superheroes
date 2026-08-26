@@ -212,6 +212,24 @@ def _format_residual_block(context: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _panel_stdout_delivery_text(include_investigated_reminder: bool = False) -> str:
+    """Format-only panel stdout delivery — shape illustration, not a literal emit target."""
+    lines = [
+        review_findings_schema.example_prompt_block(),
+        "",
+        "Emit a single JSON object of this shape as your final stdout with nothing "
+        "after it. Replace every value in the example above with your own review "
+        "content — do not echo the example. A review with nothing to flag emits "
+        "`\"findings\": []` (an empty list).",
+    ]
+    if include_investigated_reminder:
+        lines.append(
+            "List in `investigated` every repo-relative path you actually read to ground "
+            "this review — always, whether or not you found anything."
+        )
+    return "\n".join(lines)
+
+
 def _stdout_payload_example(phase: str) -> tuple[str | None, str | None]:
     """Minimal stdout JSON example derived from the phase payload contract — one home with the block above."""
     contract, reason = round_adapters.payload_contract(phase)
@@ -254,10 +272,9 @@ def _format_landing_block(context: dict, phase: str) -> tuple[str | None, str | 
             return None, reason
         if phase == round_phases.P_PANEL:
             lines.extend([
-                "Deliver on the stdout channel described in the Delivery section above — emit "
-                "`%s` as your final stdout with nothing after it. Do not write a landing file "
-                "(read-only sandbox)."
-                % stdout_example,
+                "Deliver on the stdout channel described in the Delivery section above — "
+                "your final stdout must be a single JSON object with nothing after it. "
+                "Do not write a landing file (read-only sandbox).",
             ])
         else:
             lines.extend([
@@ -286,15 +303,10 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     channel = ph.get("CHANNEL", "file")
     landing = context.get("landing_path", "")
     if channel == "stdout":
-        panel_example = json.dumps(
-            review_findings_schema.example_findings_object(), sort_keys=True,
-        )
+        # Delivery block is format-only (wraps review_findings_schema.example_findings_object).
         ph["OUTPUT_CHANNEL_BLOCK"] = (
-            "Emit `%s` as your final stdout with nothing "
-            "after it; do not write a findings file (read-only sandbox — nothing reads one). "
-            "List in `investigated` every repo-relative path you actually read to ground this "
-            "review — always, whether or not you found anything."
-            % panel_example
+            _panel_stdout_delivery_text(include_investigated_reminder=True)
+            + " do not write a findings file (read-only sandbox — nothing reads one)."
         )
     else:
         ph["OUTPUT_CHANNEL_BLOCK"] = (
