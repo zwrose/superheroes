@@ -946,6 +946,82 @@ def test_record_result_sweep_ingests_every_unclaimed_landing(tmp_path, adapters)
     assert len(_outcomes(d, "recorded")) == len(RD.DIMENSIONS)
 
 
+def test_record_result_sweep_supersede_refuses_by_name(tmp_path, adapters):
+    """T1 — `--sweep --supersede` must refuse `sweep-supersede-unsupported`, not false-success."""
+    d = _session(tmp_path)
+    first = _land_and_record(d, "code-reviewer")
+    _land(d, "code-reviewer", payload={"findings": ["replacement"], "confidence": "high",
+                                        "seat": "code-reviewer",
+                                        "verificationReceipt": {"ran": True}})
+    out = RD.cmd_record_result(d, sweep=True, supersede=True,
+                               expect_sha256=first["payloadSha256"])
+    assert out["ok"] is False and out["reason"] == "sweep-supersede-unsupported"
+
+
+def test_record_result_sweep_expect_sha256_alone_refuses(tmp_path, adapters):
+    """T2 — `--sweep --expect-sha256` without `--supersede` is refused the same way."""
+    d = _session(tmp_path)
+    first = _land_and_record(d, "code-reviewer")
+    _land(d, "code-reviewer")
+    out = RD.cmd_record_result(d, sweep=True, expect_sha256=first["payloadSha256"])
+    assert out["ok"] is False and out["reason"] == "sweep-supersede-unsupported"
+
+
+def test_record_result_plain_sweep_unaffected_by_supersede_refusal(tmp_path, adapters):
+    """T3 — plain `--sweep` still ingests unclaimed landings."""
+    d = _session(tmp_path)
+    _land(d, "code-reviewer")
+    out = RD.cmd_record_result(d, sweep=True)
+    assert out["ok"] is True and out["recorded"] == ["code-reviewer"]
+
+
+def test_record_result_sweep_supersede_recovery_is_occurrence_safe(tmp_path, adapters):
+    """T4 — recovery commands carry raw seat keys and explicit `--occurrence` per slot."""
+    dup = "code-reviewer"
+    adapters.rosters[RD.P_PANEL] = [dup, dup]
+    d = _session(tmp_path)
+    assert RD.cmd_record_missing(d, dup, 0, "timeout", occurrence=0)["ok"] is True
+    assert RD.cmd_record_missing(d, dup, 0, "timeout", occurrence=1)["ok"] is True
+    replacement = {"findings": ["confirmed"], "confidence": "high", "seat": dup,
+                   "verificationReceipt": {"ran": True}}
+    _land(d, dup, payload=replacement, occurrence=1)
+    pend = _pending(d)
+    spath0 = RR.store_path(d, pend["round"], pend["phase"], RR.storage_key(dup, 0),
+                           pend["attempt"])
+    spath1 = RR.store_path(d, pend["round"], pend["phase"], RR.storage_key(dup, 1),
+                           pend["attempt"])
+    before0 = open(spath0, "rb").read()
+    before1 = open(spath1, "rb").read()
+    out = RD.cmd_record_result(d, sweep=True, supersede=True,
+                               expect_sha256=RR.MISSING_CAS_TOKEN)
+    assert out["ok"] is False and out["reason"] == "sweep-supersede-unsupported"
+    assert len(out["recovery"]) == 2
+    occ1 = [entry for entry in out["recovery"] if entry["occurrence"] == 1]
+    assert len(occ1) == 1
+    cmd = occ1[0]["command"]
+    assert "--occurrence 1" in cmd
+    assert dup in cmd
+    assert "%s#1" % dup not in cmd
+    supersede = RD.cmd_record_result(d, seat=dup, occurrence=1, supersede=True,
+                                     expect_sha256=RR.MISSING_CAS_TOKEN)
+    assert supersede["ok"] is True and supersede["superseded"] is True
+    assert open(spath0, "rb").read() == before0
+    assert open(spath1, "rb").read() != before1
+
+
+def test_record_result_sweep_stray_refusal_carries_recorded(tmp_path, adapters):
+    """T5 — a mid-sweep refusal reports slots ingested before the refusing result."""
+    adapters.rosters[RD.P_PANEL] = ["code-reviewer", "test-reviewer"]
+    d = _session(tmp_path)
+    _land(d, "code-reviewer")
+    pend = _pending(d)
+    stray = RR.landing_path(d, pend["round"], pend["phase"], "stray-seat", pend["attempt"])
+    RR.atomic_write_json(stray, _result_envelope(d, "stray-seat"))
+    out = RD.cmd_record_result(d, sweep=True)
+    assert out["ok"] is False and out["reason"] == "stale-landing"
+    assert out["recorded"] == ["code-reviewer"]
+
+
 def test_record_missing_writes_and_ingests_a_seat_missing_envelope(tmp_path, adapters):
     d = _session(tmp_path)
     out = RD.cmd_record_missing(d, "security-reviewer", 0, "forfeit")

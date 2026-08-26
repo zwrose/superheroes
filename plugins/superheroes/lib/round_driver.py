@@ -5988,6 +5988,14 @@ def _slot_label(seat_key, occurrence):
     return seat_key if not occurrence else "%s#%d" % (seat_key, occurrence)
 
 
+def _record_result_recovery_cmd(session_dir, seat_key, occurrence, cas_token):
+    """Shell-ready per-slot supersede command — matches round-driver.md invocation spelling."""
+    token = cas_token if isinstance(cas_token, str) else ""
+    return ("python3 -B lib/round_driver.py record-result --session-dir %s --seat %s "
+            "--occurrence %d --supersede --expect-sha256 %s"
+            % (shlex.quote(session_dir), shlex.quote(seat_key), occurrence, shlex.quote(token)))
+
+
 def _store_file_exists(spath):
     """True when a store path is present for the record-submit fence — fail-closed on ambiguity.
 
@@ -6291,6 +6299,36 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     if refusal is not None:
         return refusal
     anchor = _orders_anchor(state, session_dir, rnd, phase, cur_attempt)
+    if sweep and (supersede or expect_sha256 is not None):
+        recovery = []
+        for seat_key, occurrence in round_records.roster_slots(roster):
+            try:
+                skey = round_records.storage_key(seat_key, occurrence)
+                spath = round_records.store_path(session_dir, rnd, phase, skey, cur_attempt)
+            except ValueError:
+                continue
+            if not os.path.exists(spath):
+                continue
+            stored, store_err = round_records.read_json(spath)
+            cas_token = (round_records.envelope_cas_token(stored)
+                         if store_err is None else None)
+            recovery.append({
+                "seatKey": seat_key,
+                "occurrence": occurrence,
+                "expectSha256": cas_token,
+                "command": _record_result_recovery_cmd(session_dir, seat_key, occurrence,
+                                                       cas_token),
+            })
+        if recovery:
+            detail = ("--sweep cannot supersede: supersede is compare-and-swap and the CAS token "
+                      "is per-slot; supersede each slot individually with the commands listed.")
+        else:
+            detail = ("--sweep cannot supersede: supersede is compare-and-swap and the CAS token "
+                      "is per-slot; no slot currently has a stored record — the flags were still "
+                      "ineffective and are refused.")
+        return _refuse_cmd(session_dir, "record-result", "sweep-supersede-unsupported",
+                           phase=phase, rnd=rnd, attempt=cur_attempt,
+                           detail=detail, recovery=recovery)
     if sweep:
         return _sweep_record(session_dir, state, "record-result", phase, rnd, cur_attempt, roster,
                              anchor)
@@ -6408,7 +6446,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
             return _refuse_cmd(session_dir, cmd, result.get("reason"), phase=phase, rnd=rnd,
                                attempt=attempt,
                                seat=_slot_label(result.get("seatKey"), occurrence),
-                               detail=result.get("message"))
+                               detail=result.get("message"), recorded=recorded)
         if result.get("reason") == "already-stored":
             if phase == P_FIXER:
                 stored, _stored_err = round_records.read_json(result.get("storePath"))
