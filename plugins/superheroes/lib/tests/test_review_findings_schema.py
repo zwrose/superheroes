@@ -307,13 +307,13 @@ def test_member_is_engaged_off_scale_severity_fails_leg_b(bad_severity):
 
 
 def test_member_carries_sentinel_true_for_example_member():
-    # axis: sentinel anywhere in member refuses engagement (near-copy defence)
+    # axis: two-or-more placeholder field values refuse verbatim example echo
     example = RFS.example_findings_object()["findings"][0]
     assert RFS.member_carries_sentinel(example) is True
 
 
 def test_member_carries_sentinel_true_for_near_copy():
-    # axis: near-copy with plausible id/severity but example body still carries sentinel
+    # axis: near-copy with plausible id/severity but other fields still exact placeholders
     example = RFS.example_findings_object()["findings"][0]
     near_copy = dict(example)
     near_copy["id"] = "security-001"
@@ -324,6 +324,18 @@ def test_member_carries_sentinel_true_for_near_copy():
 def test_member_carries_sentinel_false_for_ordinary_prose():
     assert RFS.member_carries_sentinel(
         {"id": "code-001", "severity": "Minor", "body": "Ordinary review prose."}
+    ) is False
+
+
+def test_member_carries_sentinel_false_for_prose_quoting_sentinel():
+    # axis: embedded sentinel in real prose is not a placeholder-echo field value
+    sentinel = RFS.EXAMPLE_SENTINEL
+    assert RFS.member_carries_sentinel(
+        {
+            "severity": "Important",
+            "title": "quoted example in body",
+            "body": "context:\n" + sentinel + " appears inside prose",
+        }
     ) is False
 
 

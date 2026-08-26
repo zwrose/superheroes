@@ -91,27 +91,55 @@ def _all_synonym_maps():
     return merged
 
 
+def _placeholder_field_value_count(value, placeholders):
+    """Count string values that exactly equal an example placeholder (stripped)."""
+    count = 0
+    if isinstance(value, dict):
+        for item in value.values():
+            count += _placeholder_field_value_count(item, placeholders)
+    elif isinstance(value, list):
+        for item in value:
+            count += _placeholder_field_value_count(item, placeholders)
+    elif isinstance(value, str) and value.strip() in placeholders:
+        count += 1
+    return count
+
+
+def _member_has_non_placeholder_substance(value, placeholders):
+    """True when value carries non-empty content beyond exact placeholder strings."""
+    if isinstance(value, dict):
+        return any(
+            _member_has_non_placeholder_substance(item, placeholders)
+            for item in value.values()
+        )
+    if isinstance(value, list):
+        return any(
+            _member_has_non_placeholder_substance(item, placeholders)
+            for item in value
+        )
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped != "" and stripped not in placeholders
+    return value is not None
+
+
 def member_carries_sentinel(member):
-    """True when any string at any nesting depth contains EXAMPLE_SENTINEL."""
+    # axis: placeholder field-value equality (not substring sentinel) refuses verbatim/near-copy echo
+    """True when field values are example placeholders (verbatim/near-copy echo).
+
+    Prose that merely embeds EXAMPLE_SENTINEL inside a real sentence is not an echo.
+    """
     if not isinstance(member, dict):
         return False
-
-    def _walk(value):
-        if isinstance(value, dict):
-            for item in value.values():
-                if _walk(item):
-                    return True
-            return False
-        if isinstance(value, list):
-            for item in value:
-                if _walk(item):
-                    return True
-            return False
-        if isinstance(value, str) and EXAMPLE_SENTINEL in value:
-            return True
-        return False
-
-    return _walk(member)
+    placeholders = example_member_values()
+    placeholder_count = _placeholder_field_value_count(member, placeholders)
+    if placeholder_count >= 2:
+        return True
+    if placeholder_count == 1 and not _member_has_non_placeholder_substance(
+        member, placeholders
+    ):
+        return True
+    return False
 
 
 def member_is_engaged(member):
