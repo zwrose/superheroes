@@ -35,17 +35,36 @@ puts the walk back on its old shape, with the detector itself unedited.
 
 **Red run (exit 1):**
 ```
-PLACEHOLDER_RED_BP1
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_r8_element_sentence_has_exactly_one_plugin_home _____________
+    def test_r8_element_sentence_has_exactly_one_plugin_home():
+        hits = _r8_element_hits(_PLUGIN_ROOT)
+>       assert hits == [(_CLOSURE_REF, 1)], (
+            "R8 element list must live in closure.md and nowhere else in the plugin; found %r"
+            % (hits,)
+        )
+E       AssertionError: R8 element list must live in closure.md and nowhere else in the plugin; found [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 1), ('skills/showrunner/reference/closure.md', 1)]
+E       assert [('lib/tests/...osure.md', 1)] == [('skills/sho...osure.md', 1)]
+E         
+E         At index 0 diff: ('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 1) != ('skills/showrunner/reference/closure.md', 1)
+E         Left contains one more item: ('skills/showrunner/reference/closure.md', 1)
+E         Use -v to get more diff
+plugins/superheroes/lib/tests/test_closure_doctrine.py:468: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_closure_doctrine.py::test_r8_element_sentence_has_exactly_one_plugin_home
+1 failed in 0.45s
 ```
 
 **Restore:** inverse edit — `_CENSUS_EXCLUDED_DIRS` restored to `("lib/tests/bite_proofs",)`.
 
 **Restore receipt:** `git status --porcelain plugins/superheroes/lib/tests/test_closure_doctrine.py`
-→ PLACEHOLDER_RESTORE_BP1
+→ empty output (file byte-identical to HEAD).
 
 **Green run (exit 0):**
 ```
-PLACEHOLDER_GREEN_BP1
+.                                                                        [100%]
+1 passed in 0.54s
 ```
 
 **The census still bites (consumer surface outside `bite_proofs/`).** The same sentence planted in
@@ -53,10 +72,28 @@ an ordinary plugin surface — `plugins/superheroes/rubric/covenant.md` — with
 
 **Red run (exit 1):**
 ```
-PLACEHOLDER_BITES_BP1
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_r8_element_sentence_has_exactly_one_plugin_home _____________
+    def test_r8_element_sentence_has_exactly_one_plugin_home():
+        hits = _r8_element_hits(_PLUGIN_ROOT)
+>       assert hits == [(_CLOSURE_REF, 1)], (
+            "R8 element list must live in closure.md and nowhere else in the plugin; found %r"
+            % (hits,)
+        )
+E       AssertionError: R8 element list must live in closure.md and nowhere else in the plugin; found [('rubric/covenant.md', 1), ('skills/showrunner/reference/closure.md', 1)]
+E       assert [('rubric/cov...osure.md', 1)] == [('skills/sho...osure.md', 1)]
+E         
+E         At index 0 diff: ('rubric/covenant.md', 1) != ('skills/showrunner/reference/closure.md', 1)
+E         Left contains one more item: ('skills/showrunner/reference/closure.md', 1)
+E         Use -v to get more diff
+plugins/superheroes/lib/tests/test_closure_doctrine.py:468: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_closure_doctrine.py::test_r8_element_sentence_has_exactly_one_plugin_home
+1 failed in 0.36s
 ```
 
-**Restore receipt:** PLACEHOLDER_BITES_RESTORE_BP1
+**Restore receipt:** the planted paragraph removed by the inverse write; `git status --porcelain` over the whole tree → empty output.
 
 ---
 
@@ -88,17 +125,51 @@ so the guarded element is one, not two, and both consumers are named in the comm
 
 **Red run (exit 1):**
 ```
-PLACEHOLDER_RED_BP2
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_________________ test_retired_cursor_grok_4_5_literal_census __________________
+    def test_retired_cursor_grok_4_5_literal_census():
+        """I4: the retired cursor judge id may appear only in the two drift-guard tuple declarations (I1)."""
+        allowed = _allowed_retired_grok_literal_sites()
+        paths = _retired_grok_census_paths()
+        hits = _scan_paths_for_retired_grok_literal(paths)
+        unexpected = sorted(set(hits) - allowed)
+>       assert not unexpected, (
+            "retired literal %r outside intentional declaration sites %r — stale hits: %r"
+            % (_retired_grok_literal(), sorted(allowed), unexpected)
+        )
+E       AssertionError: retired literal 'cursor-grok-4.5' outside intentional declaration sites [('lib/tests/test_ssot_drift.py', 1584), ('lib/tests/test_ssot_drift.py', 1600)] — stale hits: [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 74)]
+E       assert not [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 74)]
+plugins/superheroes/lib/tests/test_ssot_drift.py:1923: AssertionError
+___________________ test_retired_discovery_route_name_census ___________________
+    def test_retired_discovery_route_name_census():
+        # axis: absence of the retired route name across plugin source, README, CONVENTIONS
+        # docs/ is out of scope — specs and child definition-docs quote the retired name as history.
+        literal = _retired_discovery_route_literal()
+        paths = _routing_census_paths()
+        hits = _scan_paths_for_literal(paths, literal)
+>       assert not hits, (
+            "retired route name %r found outside allowed history-only docs — hits: %r"
+            % (literal, hits)
+        )
+E       AssertionError: retired route name 'needs-discovery' found outside allowed history-only docs — hits: [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 75)]
+E       assert not [('lib/tests/bite_proofs/wo_1162_census_exclusions.md', 75)]
+plugins/superheroes/lib/tests/test_ssot_drift.py:5553: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ssot_drift.py::test_retired_cursor_grok_4_5_literal_census
+FAILED plugins/superheroes/lib/tests/test_ssot_drift.py::test_retired_discovery_route_name_census
+2 failed in 1.39s
 ```
 
 **Restore:** inverse edit — `_CENSUS_EXCLUDED_DIRS` restored to `("lib/tests/bite_proofs",)`.
 
 **Restore receipt:** `git status --porcelain plugins/superheroes/lib/tests/test_ssot_drift.py`
-→ PLACEHOLDER_RESTORE_BP2
+→ empty output (file byte-identical to HEAD).
 
 **Green run (exit 0):**
 ```
-PLACEHOLDER_GREEN_BP2
+..                                                                       [100%]
+2 passed in 2.13s
 ```
 
 **The censuses still bite (consumer surface outside `bite_proofs/`).** Each retired literal planted
@@ -107,7 +178,40 @@ place:
 
 **Red run (exit 1):**
 ```
-PLACEHOLDER_BITES_BP2
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_________________ test_retired_cursor_grok_4_5_literal_census __________________
+    def test_retired_cursor_grok_4_5_literal_census():
+        """I4: the retired cursor judge id may appear only in the two drift-guard tuple declarations (I1)."""
+        allowed = _allowed_retired_grok_literal_sites()
+        paths = _retired_grok_census_paths()
+        hits = _scan_paths_for_retired_grok_literal(paths)
+        unexpected = sorted(set(hits) - allowed)
+>       assert not unexpected, (
+            "retired literal %r outside intentional declaration sites %r — stale hits: %r"
+            % (_retired_grok_literal(), sorted(allowed), unexpected)
+        )
+E       AssertionError: retired literal 'cursor-grok-4.5' outside intentional declaration sites [('lib/tests/test_ssot_drift.py', 1584), ('lib/tests/test_ssot_drift.py', 1600)] — stale hits: [('rubric/covenant.md', 63)]
+E       assert not [('rubric/covenant.md', 63)]
+plugins/superheroes/lib/tests/test_ssot_drift.py:1923: AssertionError
+___________________ test_retired_discovery_route_name_census ___________________
+    def test_retired_discovery_route_name_census():
+        # axis: absence of the retired route name across plugin source, README, CONVENTIONS
+        # docs/ is out of scope — specs and child definition-docs quote the retired name as history.
+        literal = _retired_discovery_route_literal()
+        paths = _routing_census_paths()
+        hits = _scan_paths_for_literal(paths, literal)
+>       assert not hits, (
+            "retired route name %r found outside allowed history-only docs — hits: %r"
+            % (literal, hits)
+        )
+E       AssertionError: retired route name 'needs-discovery' found outside allowed history-only docs — hits: [('rubric/covenant.md', 63)]
+E       assert not [('rubric/covenant.md', 63)]
+plugins/superheroes/lib/tests/test_ssot_drift.py:5553: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ssot_drift.py::test_retired_cursor_grok_4_5_literal_census
+FAILED plugins/superheroes/lib/tests/test_ssot_drift.py::test_retired_discovery_route_name_census
+2 failed in 2.94s
 ```
 
-**Restore receipt:** PLACEHOLDER_BITES_RESTORE_BP2
+**Restore receipt:** the planted line removed by the inverse write; `git status --porcelain` over the whole tree → empty output.
