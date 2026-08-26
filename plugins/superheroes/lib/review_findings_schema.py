@@ -29,7 +29,8 @@ _FALLBACK_CANONICAL_MEMBER_KEYS = (
     "confidence",
     "tradeoff",
 )
-_FALLBACK_SEVERITY_TIERS = frozenset({"Critical", "Important", "Minor", "Nit"})
+_FALLBACK_SEVERITY_ENUM = ("Critical", "Important", "Minor", "Nit")
+_FALLBACK_SEVERITY_TIERS = frozenset(_FALLBACK_SEVERITY_ENUM)
 _FALLBACK_DIMENSION_ENUM = (
     "Architecture",
     "Code",
@@ -46,7 +47,7 @@ _FALLBACK_CONFIDENCE_ENUM = ("High", "Low", None)
 _FALLBACK_FINDING_PROPERTY_SCHEMAS = {
     key: {} for key in _FALLBACK_CANONICAL_MEMBER_KEYS
 }
-_FALLBACK_FINDING_PROPERTY_SCHEMAS["severity"] = {"enum": list(_FALLBACK_SEVERITY_TIERS)}
+_FALLBACK_FINDING_PROPERTY_SCHEMAS["severity"] = {"enum": list(_FALLBACK_SEVERITY_ENUM)}
 _FALLBACK_FINDING_PROPERTY_SCHEMAS["dimension"] = {"enum": list(_FALLBACK_DIMENSION_ENUM)}
 _FALLBACK_FINDING_PROPERTY_SCHEMAS["confidence"] = {"enum": list(_FALLBACK_CONFIDENCE_ENUM)}
 _FALLBACK_FINDING_PROPERTY_SCHEMAS["line"] = {"type": ["integer", "null"]}

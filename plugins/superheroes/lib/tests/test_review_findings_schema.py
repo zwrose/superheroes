@@ -282,6 +282,16 @@ def test_example_findings_object_works_in_fallback_regime(tmp_path):
     assert member["tradeoff"] is None
 
 
+def test_example_findings_object_fallback_severity_is_pinned(tmp_path):
+    # axis: fallback-regime example severity is deterministic and pinned to shipped order
+    missing = str(tmp_path / "missing-schema.json")
+    mod = _reload_rfs_module(schema_path=missing)
+    pinned_severity = _schema_severity_enum()[0]
+    member = mod.example_findings_object()["findings"][0]
+    assert member["severity"] == pinned_severity
+    assert member["severity"] == mod.example_findings_object()["findings"][0]["severity"]
+
+
 def test_substance_keys_canonical_subset_of_member_keys():
     assert RFS.SUBSTANCE_KEYS_CANONICAL <= set(RFS.CANONICAL_MEMBER_KEYS)
 
@@ -496,11 +506,29 @@ def test_example_findings_object_is_engaged_and_values_in_set():
             assert value in placeholders
 
 
+_FALLBACK_ENUM_LITERALS_BY_PROPERTY = {
+    "severity": "_FALLBACK_SEVERITY_ENUM",
+    "dimension": "_FALLBACK_DIMENSION_ENUM",
+    "confidence": "_FALLBACK_CONFIDENCE_ENUM",
+}
+
+
 def test_fallback_literals_match_shipped_schema():
     # axis: fallback constants drift-guard against shipped schema keys and severity enum
     schema_props = _schema_finding_properties()
     assert tuple(RFS._FALLBACK_CANONICAL_MEMBER_KEYS) == tuple(schema_props.keys())
     assert RFS._FALLBACK_SEVERITY_TIERS == frozenset(schema_props["severity"]["enum"])
+
+    shipped_enum_props = {
+        key: schema_props[key]["enum"]
+        for key in schema_props
+        if "enum" in schema_props[key]
+    }
+    assert set(_FALLBACK_ENUM_LITERALS_BY_PROPERTY.keys()) == set(shipped_enum_props.keys())
+    for prop, shipped_enum in shipped_enum_props.items():
+        attr = _FALLBACK_ENUM_LITERALS_BY_PROPERTY[prop]
+        fallback_literal = getattr(RFS, attr)
+        assert tuple(fallback_literal) == tuple(shipped_enum)
 
 
 def test_example_prompt_block_contains_json_and_format_only_sentence():
