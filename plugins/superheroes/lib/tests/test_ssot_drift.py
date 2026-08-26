@@ -40,6 +40,8 @@ are gone with them; no lib/*.js copy-holders remain):
   routing block + frontmatter description, skills/workhorse/SKILL.md §1 intake,
   skills/configure/reference/preflight.md §E, README.md Showrunner section, CONVENTIONS.md Showrunner
   cast bullet, eval/skills/registry.json requiredPhrases)
+- Investigation floor (spot_check_investigated → dispatch-mechanics.md § Findings-only,
+  auto-fix-loop.md vacuous-forfeit block)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
@@ -385,6 +387,213 @@ def test_review_result_kind_enum_in_dispatch_mechanics_doc():
     """§11: every resultKind enum copy in dispatch-mechanics.md matches engine_adapter."""
     _assert_review_result_kind_enum_copies_match_home(
         "skills/workhorse/reference/dispatch-mechanics.md")
+
+
+# --- Cluster: investigation floor (engine_adapter.spot_check_investigated → prose copies) ---
+
+_DISPATCH_MECHANICS_DOC = "skills/workhorse/reference/dispatch-mechanics.md"
+_AUTO_FIX_LOOP_DOC = "skills/review-code/reference/auto-fix-loop.md"
+
+
+def _spot_check_investigated_source():
+    import inspect
+
+    import engine_adapter
+
+    try:
+        return inspect.getsource(engine_adapter.spot_check_investigated)
+    except (OSError, TypeError) as exc:
+        pytest.fail(
+            "spot_check_investigated floor could not be read from engine_adapter: %s" % exc
+        )
+
+
+def _investigation_floor_operative_clauses_from_home():
+    """Operative clauses from spot_check_investigated — fails closed when unparseable."""
+    source = _spot_check_investigated_source()
+    checks = (
+        (r"not isinstance\(investigated,\s*list\)\s+or\s+not\s+investigated", "non-empty list"),
+        (r"len\(accepted\)\s*>=\s*1", "at-least-one accepted-path threshold"),
+        (r"os\.path\.isabs\(entry\)", "absolute-path rejection"),
+        (r"not os\.path\.exists\(real\)", "missing-path rejection"),
+        (r"not os\.path\.isfile\(real\)", "regular-file requirement"),
+        (
+            r"real != root_real and not real\.startswith\(root_prefix\)",
+            "repo-confinement check",
+        ),
+        (r"generated-artifact", "generated-artifact rejection"),
+        (r"A spot check, not an audit:", "spot-check audit clause in docstring"),
+    )
+    missing = [label for pat, label in checks if not re.search(pat, source, re.I)]
+    assert not missing, (
+        "spot_check_investigated floor could not be parsed — missing: %r" % missing
+    )
+
+
+def _investigation_floor_threshold_token_from_home():
+    """Normalized quantity threshold from spot_check_investigated's docstring.
+
+    Locates the operative clause structurally (introduced by ``A spot check, not an audit:``)
+    rather than by searching for the token under test. The load-bearing agreement with
+    document copies is the quantity threshold (``at least one`` vs ``ideally one``, etc.).
+    """
+    source = _spot_check_investigated_source()
+    m = re.search(
+        r"A spot check, not an audit:\s*([^.]+)\.",
+        source,
+        re.I,
+    )
+    assert m, (
+        "spot_check_investigated floor could not be parsed — spot-check audit clause"
+    )
+    clause = m.group(1).strip()
+    token_m = re.search(
+        r"(?:at\s+least\s+one|ideally\s+one|exactly\s+one)",
+        clause,
+        re.I,
+    )
+    assert token_m, (
+        "spot_check_investigated floor could not be parsed — quantity threshold in docstring"
+    )
+    return token_m.group(0).lower()
+
+
+def _investigation_floor_threshold_token_from_prose(text, label):
+    """Normalized quantity threshold from a document's investigation-floor prose."""
+    token_m = re.search(
+        r"(?:at\s+least\s+one|ideally\s+one|exactly\s+one)",
+        text,
+        re.I,
+    )
+    assert token_m, (
+        "%s: investigation floor threshold could not be parsed from prose" % label
+    )
+    return token_m.group(0).lower()
+
+
+def _assert_investigation_floor_threshold_matches_home(home_token, doc_text, label):
+    """Home↔doc binding: quantity threshold in prose must match spot_check_investigated."""
+    doc_token = _investigation_floor_threshold_token_from_prose(doc_text, label)
+    assert home_token == doc_token, (
+        "investigation floor drift: %s and spot_check_investigated disagree on "
+        "at-least-one surviving-path threshold (home=%r, doc=%r)"
+        % (label, home_token, doc_token)
+    )
+
+
+def _dispatch_mechanics_investigated_threshold_prose(doc):
+    """Operative threshold sentence in dispatch-mechanics — scoped pin."""
+    m = re.search(
+        r"`investigated`\s+is present only when\s+(.+?)\s+spot-checking",
+        doc,
+        re.I,
+    ) or re.search(
+        r"\*\*`investigated`\*\*\s+is present only when\s+(.+?)\s+spot-checking",
+        doc,
+        re.I,
+    )
+    assert m, (
+        "dispatch-mechanics.md: investigation-floor threshold pin could not be located "
+        "(moved or reformatted?)"
+    )
+    return m.group(0)
+
+
+def _dispatch_mechanics_findings_only_section(doc):
+    """Findings-only review prompts — scoped to that subsection only."""
+    m = re.search(
+        r"### Findings-only review prompts\n(.*?)(?=\nEvery `dispatch-review`|\n### )",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "dispatch-mechanics.md: Findings-only review prompts pin could not be located "
+        "(moved or reformatted?)"
+    )
+    return m.group(1)
+
+
+def _auto_fix_loop_investigation_floor_block(doc):
+    """Vacuous-forfeit requirement block — scoped to the operative clause only."""
+    m = re.search(
+        r"`findings` array is accepted as \*clean\* \*\*only\*\* when `investigated` lists "
+        r".*?\*\*vacuous forfeit\*\*",
+        doc,
+        re.DOTALL | re.I,
+    )
+    assert m, (
+        "auto-fix-loop.md: investigation-floor requirement pin could not be located "
+        "(moved or reformatted?)"
+    )
+    return m.group(0)
+
+
+def _assert_dispatch_mechanics_investigation_floor_prose(text, label):
+    """Operative prose clauses dispatch-mechanics must carry."""
+    lower = text.lower()
+    missing = []
+    if not re.search(r"populated\s+`investigated`", text, re.I):
+        missing.append("populated investigated required")
+    if "vacuous" not in lower:
+        missing.append("vacuous forfeit")
+    assert not missing, (
+        "%s: investigation floor prose drift — missing: %r" % (label, missing)
+    )
+
+
+def _assert_auto_fix_loop_investigation_floor_prose(text, label):
+    """Operative prose clauses auto-fix-loop must carry."""
+    lower = text.lower()
+    missing = []
+    if not re.search(r"`investigated`\s+lists\s+at\s+least\s+one\s+path", text, re.I):
+        missing.append("investigated lists at least one path required")
+    if "vacuous" not in lower:
+        missing.append("vacuous forfeit")
+    assert not missing, (
+        "%s: investigation floor prose drift — missing: %r" % (label, missing)
+    )
+
+
+def test_investigation_floor_prose_matches_spot_check_investigated():
+    """§11: investigation-floor guidance in every copy-holder matches spot_check_investigated.
+
+    Copy-holders: skills/workhorse/reference/dispatch-mechanics.md (Findings-only review prompts),
+    skills/review-code/reference/auto-fix-loop.md (vacuous-forfeit block).
+    """
+    _investigation_floor_operative_clauses_from_home()
+    home_threshold = _investigation_floor_threshold_token_from_home()
+
+    dispatch_doc = _read(_DISPATCH_MECHANICS_DOC)
+    dispatch_section = _dispatch_mechanics_findings_only_section(dispatch_doc)
+    _assert_dispatch_mechanics_investigation_floor_prose(
+        dispatch_section, "dispatch-mechanics.md (Findings-only review prompts)"
+    )
+    assert "spot_check_investigated" in dispatch_section, (
+        "dispatch-mechanics.md: investigation floor must name engine_adapter.spot_check_investigated"
+    )
+    assert re.search(r"repo-relative path to an existing", dispatch_section, re.I), (
+        "dispatch-mechanics.md: surviving-path entry requirements drift"
+    )
+    dispatch_threshold_prose = _dispatch_mechanics_investigated_threshold_prose(dispatch_doc)
+    _assert_investigation_floor_threshold_matches_home(
+        home_threshold,
+        dispatch_threshold_prose,
+        "dispatch-mechanics.md (investigated threshold)",
+    )
+
+    auto_fix_doc = _read(_AUTO_FIX_LOOP_DOC)
+    auto_fix_block = _auto_fix_loop_investigation_floor_block(auto_fix_doc)
+    _assert_investigation_floor_threshold_matches_home(
+        home_threshold,
+        auto_fix_block,
+        "auto-fix-loop.md (vacuous-forfeit block)",
+    )
+    _assert_auto_fix_loop_investigation_floor_prose(
+        auto_fix_block, "auto-fix-loop.md (vacuous-forfeit block)"
+    )
+    assert re.search(r"at least one path", auto_fix_block, re.I), (
+        "auto-fix-loop.md: at-least-one surviving-path threshold drift"
+    )
 
 
 def test_review_result_kind_enum_recognizer_cardinality_independent():
