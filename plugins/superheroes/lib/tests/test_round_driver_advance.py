@@ -26,6 +26,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 import ast
@@ -139,7 +140,19 @@ class FakeAdapters(object):
                     seats[seat] = env.get("payload") or {"findings": []}
             return {"seats": seats}, None
         if phase == RD.P_VERIFIERS:
-            return {"verdicts": []}, None
+            verdicts = []
+            for env in (envelopes or []):
+                if not isinstance(env, dict):
+                    continue
+                if env.get("schema") == RR.SEAT_MISSING_SCHEMA:
+                    continue
+                payload = env.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                for verdict in payload.get("verdicts") or []:
+                    if isinstance(verdict, dict):
+                        verdicts.append(dict(verdict))
+            return {"verdicts": verdicts}, None
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}, None
         if phase == RD.P_VERIFY:
@@ -975,6 +988,38 @@ def test_record_result_plain_sweep_unaffected_by_supersede_refusal(tmp_path, ada
     assert out["ok"] is True and out["recorded"] == ["code-reviewer"]
 
 
+def _parse_record_result_recovery_command(command):
+    """Pull record-result flags out of an emitted recovery command string."""
+    parts = shlex.split(command)
+    flags = {}
+    i = 0
+    while i < len(parts):
+        tok = parts[i]
+        if tok.startswith("--") and i + 1 < len(parts) and not parts[i + 1].startswith("--"):
+            flags[tok] = parts[i + 1]
+            i += 2
+            continue
+        if tok.startswith("--"):
+            flags[tok] = True
+            i += 1
+            continue
+        i += 1
+    driver = None
+    if "record-result" in parts:
+        idx = parts.index("record-result")
+        if idx >= 1:
+            driver = parts[idx - 1]
+    return {
+        "driver": driver,
+        "session_dir": flags.get("--session-dir"),
+        "seat": flags.get("--seat"),
+        "occurrence": int(flags["--occurrence"]) if "--occurrence" in flags else None,
+        "attempt": int(flags["--attempt"]) if "--attempt" in flags else None,
+        "expect_sha256": flags.get("--expect-sha256"),
+        "supersede": "--supersede" in flags,
+    }
+
+
 def test_record_result_sweep_supersede_recovery_is_occurrence_safe(tmp_path, adapters):
     """T4 — recovery commands carry raw seat keys and explicit `--occurrence` per slot."""
     dup = "code-reviewer"
@@ -995,18 +1040,89 @@ def test_record_result_sweep_supersede_recovery_is_occurrence_safe(tmp_path, ada
     out = RD.cmd_record_result(d, sweep=True, supersede=True,
                                expect_sha256=RR.MISSING_CAS_TOKEN)
     assert out["ok"] is False and out["reason"] == "sweep-supersede-unsupported"
-    assert len(out["recovery"]) == 2
+    # F2: occ 0 has a stored record and no landing — not actionable, not listed.
+    assert len(out["recovery"]) == 1
     occ1 = [entry for entry in out["recovery"] if entry["occurrence"] == 1]
     assert len(occ1) == 1
+    assert [entry["occurrence"] for entry in out["recovery"] if entry["occurrence"] == 0] == []
     cmd = occ1[0]["command"]
     assert "--occurrence 1" in cmd
+    assert "--attempt %d" % pend["attempt"] in cmd
     assert dup in cmd
     assert "%s#1" % dup not in cmd
-    supersede = RD.cmd_record_result(d, seat=dup, occurrence=1, supersede=True,
-                                     expect_sha256=RR.MISSING_CAS_TOKEN)
+    parsed = _parse_record_result_recovery_command(cmd)
+    assert os.path.isfile(parsed["driver"])
+    assert os.path.isdir(parsed["session_dir"]) and parsed["session_dir"] == d
+    assert parsed["seat"] == dup
+    assert parsed["occurrence"] == 1
+    assert parsed["attempt"] == pend["attempt"]
+    assert parsed["expect_sha256"] == occ1[0]["expectSha256"]
+    supersede = RD.cmd_record_result(parsed["session_dir"], seat=parsed["seat"],
+                                     occurrence=parsed["occurrence"],
+                                     attempt=parsed["attempt"], supersede=True,
+                                     expect_sha256=parsed["expect_sha256"])
     assert supersede["ok"] is True and supersede["superseded"] is True
     assert open(spath0, "rb").read() == before0
     assert open(spath1, "rb").read() != before1
+
+
+def test_record_result_sweep_recovery_command_refuses_when_attempt_moved(tmp_path, adapters):
+    """F1 — a recovery command produced for attempt K refuses when the pending attempt has moved."""
+    d = _session(tmp_path)
+    assert RD.cmd_record_missing(d, "code-reviewer", 0, "timeout")["ok"] is True
+    _land(d, "code-reviewer")
+    out = RD.cmd_record_result(d, sweep=True, supersede=True,
+                               expect_sha256=RR.MISSING_CAS_TOKEN)
+    assert out["ok"] is False and out["reason"] == "sweep-supersede-unsupported"
+    assert len(out["recovery"]) == 1
+    parsed = _parse_record_result_recovery_command(out["recovery"][0]["command"])
+    assert parsed["attempt"] == 0
+    state = _state(d)
+    state["pending"]["attempt"] = parsed["attempt"] + 1
+    RD.save_state(d, state)
+    refuse = RD.cmd_record_result(parsed["session_dir"], seat=parsed["seat"],
+                                  occurrence=parsed["occurrence"],
+                                  attempt=parsed["attempt"], supersede=True,
+                                  expect_sha256=parsed["expect_sha256"])
+    assert refuse["ok"] is False and refuse["reason"] == "attempt-not-pending"
+    assert refuse["pendingAttempt"] == parsed["attempt"] + 1
+
+
+def test_record_result_sweep_recovery_omits_recorded_missing_slot_with_no_replacement(
+        tmp_path, adapters):
+    """F2 — a recorded-missing slot with no replacement envelope is not an actionable recovery
+    entry (`record-missing` leaves its own landing, so presence of a landing file is not a
+    replacement)."""
+    d = _session(tmp_path)
+    assert RD.cmd_record_missing(d, "code-reviewer", 0, "timeout")["ok"] is True
+    out = RD.cmd_record_result(d, sweep=True, supersede=True,
+                               expect_sha256=RR.MISSING_CAS_TOKEN)
+    assert out["ok"] is False and out["reason"] == "sweep-supersede-unsupported"
+    assert out["recovery"] == []
+    assert "both a stored record and a pending landing" in out["detail"]
+
+
+def test_record_result_sweep_recovery_unreadable_cas_is_not_a_runnable_command(tmp_path, adapters):
+    """F4 — an unreadable CAS token is listed with expectSha256 null and command null."""
+    d = _session(tmp_path)
+    assert RD.cmd_record_missing(d, "code-reviewer", 0, "timeout")["ok"] is True
+    pend = _pending(d)
+    spath = RR.store_path(d, pend["round"], pend["phase"], RR.storage_key("code-reviewer"),
+                          pend["attempt"])
+    stored, err = RR.read_json(spath)
+    assert err is None
+    stored["schema"] = "torn-record/0"
+    RR.atomic_write_json(spath, stored)
+    _land(d, "code-reviewer")
+    out = RD.cmd_record_result(d, sweep=True, supersede=True,
+                               expect_sha256=RR.MISSING_CAS_TOKEN)
+    assert out["ok"] is False and out["reason"] == "sweep-supersede-unsupported"
+    assert len(out["recovery"]) == 1
+    entry = out["recovery"][0]
+    assert entry["expectSha256"] is None
+    assert entry["command"] is None
+    assert entry["attempt"] == pend["attempt"]
+    assert "readable" in entry["note"]
 
 
 def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path, adapters):
@@ -1037,8 +1153,11 @@ def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path,
     assert sweep_out["reason"] == "sweep-supersede-unsupported"
     assert not (sweep_out.get("ok") is True and sweep_out.get("recorded") == [])
 
-    supersede_out = RD.cmd_record_result(d, seat=verifier_seat, supersede=True,
-                                         expect_sha256=RR.MISSING_CAS_TOKEN)
+    parsed = _parse_record_result_recovery_command(sweep_out["recovery"][0]["command"])
+    supersede_out = RD.cmd_record_result(parsed["session_dir"], seat=parsed["seat"],
+                                         occurrence=parsed["occurrence"],
+                                         attempt=parsed["attempt"], supersede=True,
+                                         expect_sha256=parsed["expect_sha256"])
     assert supersede_out["ok"] is True and supersede_out["superseded"] is True
     stored_result, err = RR.read_json(spath)
     assert err is None
@@ -1046,9 +1165,9 @@ def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path,
     assert stored_result["payload"]["verdicts"][0]["verdict"] == "CONFIRMED"
 
     # axis: fold applies CONFIRMED from superseded seat-result, not PLAUSIBLE from silent cluster
+    folded = _advance(d, tmp_path)
+    assert folded["ok"] is True, folded
     state = _state(d)
-    RD._fold_verifiers(state, state["config"],
-                       {"verdicts": stored_result["payload"]["verdicts"]})
     assert state["_verified"][0]["verdict"] == "CONFIRMED"
     verify_passes = state["rounds"]["1"]["verifyPasses"][-1]
     assert verify_passes["CONFIRMED"] == 1 and verify_passes["PLAUSIBLE"] == 0
@@ -1065,6 +1184,30 @@ def test_record_result_sweep_stray_refusal_carries_recorded(tmp_path, adapters):
     out = RD.cmd_record_result(d, sweep=True)
     assert out["ok"] is False and out["reason"] == "stale-landing"
     assert out["recorded"] == ["code-reviewer"]
+
+
+def test_record_result_sweep_reports_every_stray_in_one_refusal(tmp_path, adapters):
+    """F3 — two stray storage keys surface together, each with storageKey and landingPaths."""
+    adapters.rosters[RD.P_PANEL] = ["code-reviewer"]
+    d = _session(tmp_path)
+    _land(d, "code-reviewer")
+    pend = _pending(d)
+    names = ("stray-aaa", "stray-zzz")
+    for skey in names:
+        stray = RR.landing_path(d, pend["round"], pend["phase"], skey, pend["attempt"])
+        RR.atomic_write_json(stray, _result_envelope(d, skey))
+    out = RD.cmd_record_result(d, sweep=True)
+    assert out["ok"] is False and out["reason"] == "stale-landing"
+    assert out["recorded"] == ["code-reviewer"]
+    assert out.get("storageKey") in names
+    assert isinstance(out.get("landingPaths"), list) and out["landingPaths"]
+    assert len(out["strays"]) == 2
+    by_key = {entry["storageKey"]: entry for entry in out["strays"]}
+    assert set(by_key) == set(names)
+    for skey, entry in by_key.items():
+        expected = os.path.basename(
+            RR.landing_path(d, pend["round"], pend["phase"], skey, pend["attempt"]))
+        assert expected in entry["landingPaths"]
 
 
 def test_record_missing_writes_and_ingests_a_seat_missing_envelope(tmp_path, adapters):

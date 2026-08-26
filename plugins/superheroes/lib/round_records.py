@@ -721,9 +721,10 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
     `ok: True` (re-running a sweep after a crash must not manufacture an error), and a landing
     file that maps to no roster seat is reported with the enumerated `stale-landing` refusal
     rather than skipped in silence. Both landing shapes count: `<skey>.a<K>.json` (full envelope)
-    and `<skey>.a<K>.payload.json` (host bare payload). Returns one result dict per roster SLOT
-    plus one per stray storage key; roster-slot results always sort before stray refusals so a
-    caller that stops on the first non-`ok` result still journals every ingested roster seat.
+    and `<skey>.a<K>.payload.json` (host bare payload). Returns one result dict per landed or
+    already-stored roster SLOT, plus one per stray storage key; roster-slot results always sort
+    before stray refusals so a caller that stops on the first non-`ok` result still journals every
+    ingested roster seat.
 
     The sweep walks SLOTS — (seat_key, occurrence) — not bare seat keys: a roster carrying one id
     twice owes two landings, and sweeping by key alone would claim the first slot's file twice and
