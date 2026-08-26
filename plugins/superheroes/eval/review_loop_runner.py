@@ -33,6 +33,7 @@ import review_loop_plan as RLP  # noqa: E402
 import review_memory as RM  # noqa: E402
 import review_telemetry as RT  # noqa: E402
 import round_driver as RD  # noqa: E402
+import seat_map as SM  # noqa: E402
 
 # Synthetic citation surface so fixture findings (often file/line-less, written for the JS
 # shell's graftSynthesizedFindings path) survive round_driver.mechanical_compile.
@@ -194,6 +195,18 @@ def _compose_worklist(run_dir, round_no, batch, roster):
         return worklist_path, minimal
     with open(worklist_path, encoding="utf-8") as fh:
         return worklist_path, json.load(fh)
+
+
+def _eval_clean_seat_map():
+    """All-claude+codex seat map verified clean — models a clean eval harness run (#681)."""
+    live = ["claude", "codex"]
+    for author in ("xai", "anthropic", "openai"):
+        for narrative in ("anthropic", "openai"):
+            m = SM.build(SM.PANEL_ROSTER, live, author, narrative, 0)
+            violations = SM.verify(m, author)
+            if violations == []:
+                return SM.to_receipt(m, author)
+    raise RuntimeError("eval harness seat map must verify clean for claude+codex")
 
 
 def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=False):
@@ -539,7 +552,8 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             "changed_subjects": changed_subjects,
             "io": {
                 "stall_menu": lambda payload: "hold",
-                "seatMap": {},
+                "seatMap": _eval_clean_seat_map(),
+                "canaryResult": {"engaged": True, "evidence": {"probe": "eval"}},
             },
         }
         config = {

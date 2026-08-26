@@ -81,7 +81,7 @@ def _big_diff(n_files=25):
 # --- default scripted seams ---------------------------------------------------
 
 def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=None,
-           verify_runner=None, io=None):
+           verify_runner=None, io=None, vendors=None):
     def default_reviewer(dim, tier, rnd, ctx):
         return []
 
@@ -104,6 +104,11 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
     def default_verify(command, rnd):
         return "pass"
 
+    io_out = dict(io or {})
+    if vendors is not None:
+        io_out.setdefault("seatMap", _verified_clean_seat_map(vendors))
+        io_out.setdefault("canaryResult", {"engaged": True, "evidence": {"probe": "test"}})
+
     return {
         "reviewer": reviewer or default_reviewer,
         "verifier": verifier or default_verifier,
@@ -111,7 +116,7 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
         "auditor": auditor or default_auditor,
         "fix_step": fix_step or default_fix,
         "verify_runner": verify_runner or default_verify,
-        "io": io or {},
+        "io": io_out,
     }
 
 
@@ -375,7 +380,7 @@ def _drive_cli(session_dir, cfg, respond, max_steps=80):
 
 
 def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pass",
-               head=HEAD, verdict="CONFIRMED"):
+               head=HEAD, verdict="CONFIRMED", seat_map=None, vendors=None):
     scoped_state = {"fired": False}
 
     def respond(phase, payload, rnd):
@@ -383,7 +388,14 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
             seats = {d: {"findings": []} for d in RD.DIMENSIONS}
             if rnd == 1 and round1_findings:
                 seats["code-reviewer"] = {"findings": list(round1_findings)}
-            return {"seats": seats}
+            art = {"seats": seats}
+            if seat_map is not None:
+                art["seatMap"] = seat_map
+                art["canaryResult"] = {"engaged": True, "evidence": {"probe": "test"}}
+            elif vendors is not None:
+                art["seatMap"] = _verified_clean_seat_map(vendors)
+                art["canaryResult"] = {"engaged": True, "evidence": {"probe": "test"}}
+            return art
         if phase == RD.P_VERIFIERS:
             out = []
             for c in payload.get("clusters", []):
@@ -1020,8 +1032,10 @@ def test_new_issues_usability_agrees_with_the_running_fold():
 def test_happy_path_audited_chain_certification(tmp_path):
     """Round-1 panel → verify findings → fix → delta round → all discharged → audited-chain."""
     d = str(tmp_path)
-    payload = _drive_cli(d, _cfg(), _responder(
-        round1_findings=[{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]))
+    cfg = _cfg()
+    payload = _drive_cli(d, cfg, _responder(
+        round1_findings=[{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}],
+        vendors=cfg["vendors"]))
     assert payload["verdict"] == "converged"
     assert payload["certification"]["shape"] == "audited-chain"
     # receipt is written at the terminal and validates.
@@ -1035,7 +1049,8 @@ def test_happy_path_audited_chain_certification(tmp_path):
 def test_clean_round1_certifies_full_panel_confirmed(tmp_path):
     """A clean full-deep baseline certifies off the qualifying panel (full-panel-confirmed)."""
     d = str(tmp_path)
-    payload = _drive_cli(d, _cfg(), _responder(round1_findings=None))
+    cfg = _cfg()
+    payload = _drive_cli(d, cfg, _responder(round1_findings=None, vendors=cfg["vendors"]))
     assert payload["verdict"] == "converged"
     assert payload["certification"]["shape"] == "full-panel-confirmed"
 
@@ -1767,6 +1782,7 @@ def _delta_state_ready(confirmations, surfaced, findings=None, not_discharged=No
     state["auditRounds"] = [{"round": 2, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
     state["_auditOutcome"] = {"notDischarged": nd, "discharged": ["x"]}
     state["_changedSubjects"] = ["Code"]
+    state["seatMap"] = _verified_clean_seat_map(state["config"]["vendors"])
     return state
 
 
@@ -1814,7 +1830,8 @@ def test_confirmation_budget_two_respected_end_to_end(tmp_path):
         counter["n"] += 1
         return {"fixes": [], "headDiff": _headf_ns(counter["n"]), "changedSubjects": ["Code"]}
 
-    receipt = RD.run_loop(_seams(reviewer=reviewer, fix_step=fix_step), _cfg(maxRounds=20))
+    receipt = RD.run_loop(_seams(reviewer=reviewer, fix_step=fix_step, vendors=["claude", "codex"]),
+                          _cfg(maxRounds=20))
     assert receipt["verdict"] == "converged"
     assert receipt["certificationShape"] == "full-panel-confirmed"
     assert any(x["kind"] == "confirmation" for x in receipt["rounds"])
@@ -1873,7 +1890,7 @@ def test_independent_auditor_selection_two_vendor(tmp_path):
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
-        auditor=auditor), _cfg(vendors=["claude", "codex"], fixerVendor="claude"))
+        auditor=auditor, vendors=["claude", "codex"]), _cfg(vendors=["claude", "codex"], fixerVendor="claude"))
     assert receipt["verdict"] == "converged"
     assert captured["targets"], "the auditor must have received the fix's audit targets"
     t = captured["targets"][0]
@@ -1922,7 +1939,7 @@ def test_explicit_cross_family_fixer_still_independent_two_vendor(tmp_path):
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
-        auditor=auditor), cfg)
+        auditor=auditor, vendors=["claude", "codex"]), cfg)
     assert receipt["verdict"] == "converged"
     t = captured["targets"][0]
     assert t["independence"] == "independent"
@@ -2807,7 +2824,8 @@ def test_resume_degraded_confirmation_runs_fresh_panel(tmp_path):
          "findings": [], "coverageDecisions": []},
     ]
     records.write_text(json.dumps(seed))
-    receipt = RD.run_loop(_seams(), _cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    receipt = RD.run_loop(_seams(vendors=["claude", "codex"]),
+                          _cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
     assert receipt["verdict"] == "converged"
     # A fresh full confirmation panel ran at the resume round (3), certifying as a full panel —
     # NOT anchored on the degraded round-2 seed.
@@ -2894,7 +2912,7 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
     for marker in ("reviewer-fell-open (round 1): seat test-reviewer",
                      "reviewer-fell-open-provenance-unavailable (round 1): cross-vendor seat(s) "
                      "security-reviewer",
-                     "reviewer-fell-open-seatmap-unavailable (round 1): live cross-vendor vendor(s) "
+                     "reviewer-fell-open-seatmap-unavailable (round 1): live panel vendor(s) "
                      "codex",
                      "vacuous-seat (round 1): seat(s) architecture-reviewer",
                      "engaged-artifact-seat (round 1): seat(s) premortem-reviewer",
@@ -3502,7 +3520,7 @@ def test_base_guard_receipt_carries_base_block(tmp_path, capsys):
         assert n["ok"], n
         if n["action"] == RD.P_TERMINAL:
             break
-        art = _responder(round1_findings=None)(n["phase"], n["payload"], n["round"])
+        art = _responder(round1_findings=None, vendors=["codex", "cursor"])(n["phase"], n["payload"], n["round"])
         s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
         assert s["ok"], s
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
@@ -3545,7 +3563,7 @@ def test_base_guard_healthy_next_stat_bound_receipt(tmp_path, capsys):
         assert n["ok"], n
         if n["action"] == RD.P_TERMINAL:
             break
-        art = _responder(round1_findings=None)(n["phase"], n["payload"], n["round"])
+        art = _responder(round1_findings=None, vendors=["codex", "cursor"])(n["phase"], n["payload"], n["round"])
         s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
         assert s["ok"], s
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
@@ -3568,7 +3586,7 @@ def _guard_cli_to_terminal_receipt(d, capsys, guard_kwargs=None, next_extra=None
         assert n["ok"], n
         if n["action"] == RD.P_TERMINAL:
             break
-        art = _responder(round1_findings=None)(n["phase"], n["payload"], n["round"])
+        art = _responder(round1_findings=None, vendors=["codex", "cursor"])(n["phase"], n["payload"], n["round"])
         s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
         assert s["ok"], s
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
@@ -3609,7 +3627,7 @@ def test_base_degraded_absent_base_fetch(tmp_path, capsys):
         assert n["ok"], n
         if n["action"] == RD.P_TERMINAL:
             break
-        art = _responder(round1_findings=None)(n["phase"], n["payload"], n["round"])
+        art = _responder(round1_findings=None, vendors=["codex", "cursor"])(n["phase"], n["payload"], n["round"])
         s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
         assert s["ok"], s
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
@@ -3727,6 +3745,7 @@ def test_seat_map_unexcused_violation_constraint_violated_cert_shape():
 def test_seat_map_excused_only_violation_unchanged_cert_shape():
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state_clean = RD.new_state(cfg)
+    state_clean["seatMap"] = _verified_clean_seat_map(cfg["vendors"])
     RD._terminal_converged(state_clean, cfg, full_panel=True)
     shape_clean = state_clean["certification"]["shape"]
     SM = _load("seat_map")
@@ -4166,6 +4185,7 @@ def test_skip_with_reason_records_ledger_and_rides_disclosure():
     the dedicated top-level `skippedBlockers` channel. With nothing left to fix, the run converges —
     but CLEAN EXCEPT FOR SKIPPED, never a plain success (the reason leads with clean-except-skipped)."""
     state = RD.new_state(_cfg())
+    state["seatMap"] = _verified_clean_seat_map(state["config"]["vendors"])
     RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
     RD._fold_judgment(state, state["config"], {"dispositions": [
         {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "shipping v1 narrow on purpose"}]})
@@ -4390,7 +4410,7 @@ def test_tradeoff_finding_reaches_audited_chain_end_to_end(tmp_path):
     receipt = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [dict(_TRADEOFF)]} if rnd == 1 and dim == "code-reviewer" else []),
-        io={"judgment_gate": judgment_gate}), _cfg())
+        io={"judgment_gate": judgment_gate}, vendors=["claude", "codex"]), _cfg())
     assert len(disposed) == 1 and disposed[0]["findings"][0]["id"] == _TRADEOFF_ID
     assert receipt["verdict"] == "converged"
     assert receipt["certificationShape"] == "audited-chain"
@@ -4406,6 +4426,21 @@ def test_tradeoff_finding_reaches_audited_chain_end_to_end(tmp_path):
 
 def _seat_map_vendors(vendors):
     return {"seats": {d: {"vendor": v} for d, v in vendors.items()}}
+
+
+def _verified_clean_seat_map(vendors):
+    """Build a seat map through seat_map's API; assert it verifies clean for vendors."""
+    SM = _load("seat_map")
+    live = sorted({v for v in (vendors or []) if isinstance(v, str) and v})
+    if not live:
+        live = ["claude"]
+    for author in ("xai", "anthropic", "openai"):
+        for narrative in ("anthropic", "openai"):
+            m = SM.build(SM.PANEL_ROSTER, live, author, narrative, 0)
+            violations = SM.verify(m, author)
+            if violations == []:
+                return SM.to_receipt(m, author)
+    raise AssertionError("no verify-clean seat map for vendors %r" % vendors)
 
 
 def _all_run_status(dims=None):
@@ -4521,12 +4556,91 @@ def test_fell_open_fold_receipt_seatmap_unavailable():
     state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     RD._fold_panel(state, state["config"], {"seats": seats})
-    assert state["rounds"]["1"]["seatMapUnavailable"] == ["codex"]
+    assert state["rounds"]["1"]["seatMapUnavailable"] == ["claude", "codex"]
     receipt = RD.build_receipt(state)
     smu_lines = [d for d in receipt["degraded"]
                  if d.startswith("reviewer-fell-open-seatmap-unavailable")]
     assert len(smu_lines) == 1
-    assert "codex" in smu_lines[0]
+    assert "claude" in smu_lines[0] and "codex" in smu_lines[0]
+
+
+# =============================================================================
+# #681 — seatMapUnavailable backstop widened + certification wiring
+# =============================================================================
+
+def test_seat_map_unavailable_claude_only_fold_and_certification():
+    """Collapsed-family claude-only run with no seat map: backstop, -degraded, driver, prose (#681)."""
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude"]))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    RD._fold_panel(state, state["config"], {"seats": seats})
+    # bite-axis: widened record predicate — claude-only pool, never silent (#681).
+    assert state["rounds"]["1"]["seatMapUnavailable"] == ["claude"]
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    # bite-axis: -degraded shape projection when map absent (#681).
+    assert state["certification"]["shape"] == "full-panel-confirmed-degraded"
+    # bite-axis: shapeDrivers projection (#681).
+    assert "seat-map-unavailable" in state["certification"]["shapeDrivers"]
+    receipt = RD.build_receipt(state)
+    smu_lines = [d for d in receipt["degraded"]
+                 if d.startswith("reviewer-fell-open-seatmap-unavailable")]
+    assert len(smu_lines) == 1
+    # bite-axis: honest prose — never claims cross-vendor when pool is claude-only (#681).
+    assert smu_lines[0] == (
+        "reviewer-fell-open-seatmap-unavailable (round 1): live panel vendor(s) claude "
+        "but no seat map submitted — fall-open provenance unverified for the panel")
+    assert "live cross-vendor" not in smu_lines[0]
+
+
+def test_seat_map_unavailable_terminal_arm_without_round_record():
+    """Terminal merged map with no seats degrades even when no round recorded unavailable (#681)."""
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["certification"]["shape"].endswith("-degraded")
+    assert "seat-map-unavailable" in state["certification"]["shapeDrivers"]
+
+
+def test_seat_map_unavailable_round1_map_round2_absent():
+    """Round 1 submitted a map; round 2 did not — round-1 record persists in union (#681)."""
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
+    seat_map = _verified_clean_seat_map(["claude", "codex"])
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": seat_map,
+        "canaryResult": {"engaged": True, "evidence": {"probe": "test"}},
+    })
+    assert "seatMapUnavailable" not in state["rounds"]["1"]
+    state["round"] = 2
+    state["seatMap"] = {}
+    RD._fold_panel(state, state["config"], {"seats": seats})
+    assert state["rounds"]["2"]["seatMapUnavailable"] == ["claude", "codex"]
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["certification"]["shape"].endswith("-degraded")
+
+
+def test_seat_map_unavailable_degenerate_vendor_configs():
+    """Degenerate vendor configs still record a non-empty sorted de-duplicated value (#681)."""
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    for vendors, expected in (
+        ([], ["unknown"]),
+        ([""], ["unknown"]),
+        ([None], ["unknown"]),
+        (["claude", "claude"], ["claude"]),
+    ):
+        state = RD.new_state(_cfg(leg="panel", vendors=vendors))
+        RD._fold_panel(state, state["config"], {"seats": seats})
+        assert state["rounds"]["1"]["seatMapUnavailable"] == expected
+
+
+def test_seat_map_unavailable_constraint_violated_supersedes_shape():
+    """-constraint-violated still wins when both violation and unavailable apply (#681)."""
+    seat_map = _seat_map_receipt_with_unexcused_maker_family()
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    RD._fold_panel(state, state["config"], {"seats": seats})
+    state["seatMap"] = seat_map
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["certification"]["shape"].endswith("-constraint-violated")
+    assert not state["certification"]["shape"].endswith("-degraded")
 
 
 def test_fell_open_in_seat_ran_vendor_echo_ignored_at_fold():

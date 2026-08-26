@@ -1127,6 +1127,27 @@ def _seat_map_unproven_liveness(state):
     return False
 
 
+def _seat_map_has_seats(seat_map):
+    return isinstance(seat_map, dict) and isinstance(seat_map.get("seats"), dict) and seat_map.get("seats")
+
+
+def _seat_map_unavailable(state):
+    """Whether the run lacks a usable seat map — rounds ∪ terminal merged-map union idiom.
+
+    UNION of (a) any round recorded ``seatMapUnavailable`` and (b) the live merged
+    ``state["seatMap"]`` carrying no seats at the terminal, so neither channel alone is
+    load-bearing.
+
+    ``_seed_resume`` restores review records and coverage only — NOT ``state["seatMap"]`` and
+    NOT the rounds ledger. This union does NOT confer resume protection."""
+    for rec in (state.get("rounds") or {}).values():
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("seatMapUnavailable"):
+            return True
+    return not _seat_map_has_seats(state.get("seatMap"))
+
+
 def _certification_base(state):
     """Tri-state base provenance for certification — never infer fetched from absence."""
     if _base_degraded(state):
@@ -1148,6 +1169,8 @@ def _cert_shape(state, base):
         # skew guards (_cert_shape here; shapeDrivers and degraded prose are the other two, #677).
         or _skew_degraded(state)
         or _seat_pin_excused(state)
+        # bite-axis: absent seat map never certifies unqualified-clean — projection 1 of 3 (#681).
+        or _seat_map_unavailable(state)
     ):
         return base + "-degraded"
     return base
@@ -2048,16 +2071,15 @@ def _fold_panel(state, config, artifact):
         _record_round(state, "fellOpen", fell_open)
     if prov_missing:
         _record_round(state, "fellOpenProvenanceMissing", prov_missing)
-    # #563 DoD1 v7: an ABSENT seat-map baseline would silently disable all fall-open detection (both
-    # outputs anchor on the configured seat map). If the driver's live vendor pool has a cross-vendor
-    # engine but no seat map was submitted, disclose provenance-unavailable for the whole panel — so an
-    # absent seat map is loud, not silent (the exact class this feature prevents).
-    _sm = state.get("seatMap")
-    _seat_map_empty = not (isinstance(_sm, dict) and isinstance(_sm.get("seats"), dict) and _sm.get("seats"))
-    _live_cross = sorted(v for v in (config.get("vendors") or [])
-                         if isinstance(v, str) and v in _PANEL_VENDORS and v != "claude")
-    if _seat_map_empty and _live_cross:
-        _record_round(state, "seatMapUnavailable", _live_cross)
+    # #563 DoD1 v7 / #681: an ABSENT seat-map baseline would silently disable all fall-open detection
+    # (both outputs anchor on the configured seat map). If no seat map was submitted, disclose
+    # provenance-unavailable for the whole panel — regardless of which panel vendors are live.
+    if not _seat_map_has_seats(state.get("seatMap")):
+        _live_panel = sorted({v for v in (config.get("vendors") or [])
+                              if isinstance(v, str) and v in _PANEL_VENDORS})
+        if not _live_panel:
+            _live_panel = ["unknown"]
+        _record_round(state, "seatMapUnavailable", _live_panel)
     _sm_violations = _seat_map_unexcused_violations(state.get("seatMap") or {})
     if _sm_violations:
         _record_round(state, "seatMapViolations", _sm_violations)
@@ -3453,6 +3475,9 @@ def _terminal_converged(state, config, full_panel, note=None):
         shape_drivers.append("plugin-version-skew")
     if _seat_pin_excused(state):
         shape_drivers.append("seat-pin")
+    # bite-axis: absent seat map names shapeDrivers — projection 2 of 3 (#681).
+    if _seat_map_unavailable(state):
+        shape_drivers.append("seat-map-unavailable")
     if _seat_map_violated(state):
         shape_drivers.append("seat-map-violation")
     if _seat_map_unproven_liveness(state):
@@ -3612,8 +3637,9 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                     rkey, ", ".join(miss)))
         smu = rrec.get("seatMapUnavailable")
         if smu:
+            # bite-axis: honest whether pool is cross-vendor, claude-only, or unknown — projection 3 of 3 (#681).
             degraded.append(
-                "reviewer-fell-open-seatmap-unavailable (round %s): live cross-vendor vendor(s) %s "
+                "reviewer-fell-open-seatmap-unavailable (round %s): live panel vendor(s) %s "
                 "but no seat map submitted — fall-open provenance unverified for the panel" % (
                     rkey, ", ".join(smu)))
         vac = rrec.get("vacuousSeats")
@@ -4077,7 +4103,15 @@ def _run_seam(seams, action, payload, state, config):
                 attempts += 1
                 result = seams["reviewer"](dim, tier, state["round"], payload)
             seats[dim] = result
-        return {"seats": seats, "seatMap": io.get("seatMap") if isinstance(io, dict) else {}}
+        out = {"seats": seats}
+        if isinstance(io, dict):
+            sm = io.get("seatMap")
+            if isinstance(sm, dict):
+                out["seatMap"] = sm
+            cr = io.get("canaryResult")
+            if isinstance(cr, dict):
+                out["canaryResult"] = cr
+        return out
     if action == P_VERIFIERS:
         return {"verdicts": seams["verifier"](payload.get("clusters"), state["round"])}
     if action == P_SYNTHESIS:
