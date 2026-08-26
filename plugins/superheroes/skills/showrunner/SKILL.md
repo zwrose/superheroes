@@ -693,7 +693,7 @@ above).
    sitting**, never a separate process. **No spec closes without either full delivery accepted or an explicit owner acceptance of partial delivery, named as such on the closure receipt with delivered, deferred, and declined each named; nothing closes silently incomplete.** **A failing end-to-end validation run keeps the spec open by default and mints one repair issue per failure, each anchored to the failing run's record and naming the unmet acceptance criterion it restores; the owner may instead explicitly accept delivery with the failing run disclosed, and either way the cycle ends at an owner decision.** Both outcomes are the design — the default (spec stays open, repair issues minted) and the alternative (the owner explicitly accepts with the failing run disclosed) — not a rule plus an exception. The verdict is **advisory** and the acceptance is the **owner's**, consistent with this charter's standing rule that approval never delegates. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/closure.md`.
    **Calibration home:** this list is the **default**; per-owner taste domains belong in the
-   **configure profile** when that surface exists, so a consuming advisor does not re-derive what
+   **configure profile**, so a consuming advisor does not re-derive what
    "taste" means for their owner.
    **About to deliver open decisions to the owner → read
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md` first** —
