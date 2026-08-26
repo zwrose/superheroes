@@ -6328,8 +6328,25 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                              "command cannot be issued until the record is readable"),
                 })
                 continue
-            envelope, _lerr = _read_landing_envelope(session_dir, rnd, phase, seat_key,
-                                                     cur_attempt, occurrence)
+            envelope, landing_err = _read_landing_envelope(session_dir, rnd, phase, seat_key,
+                                                           cur_attempt, occurrence)
+            if landing_err is not None:
+                # Only `landing-missing` means there is genuinely nothing landed. EVERY other
+                # refusal — including one a future reason introduces — means a landing IS present
+                # and could not be read, and must be reported rather than silently skipped.
+                if landing_err == "landing-missing":
+                    continue
+                recovery.append({
+                    "seatKey": seat_key,
+                    "occurrence": occurrence,
+                    "attempt": cur_attempt,
+                    "expectSha256": cas_token,
+                    "command": None,
+                    "note": ("the landing file is present but could not be read (%s); no "
+                             "supersede command can be issued until the landing is readable"
+                             % landing_err),
+                })
+                continue
             landing_token = round_records.envelope_cas_token(envelope)
             landing_readable = isinstance(landing_token, str) and landing_token
             if not landing_readable or landing_token == cas_token:

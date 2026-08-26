@@ -1125,6 +1125,74 @@ def test_record_result_sweep_recovery_unreadable_cas_is_not_a_runnable_command(t
     assert "readable" in entry["note"]
 
 
+# The four constructible refusal shapes of `_read_landing_envelope` that mean "a landing IS there
+# but it could not be read" (`landing-missing` — the genuine no-landing case — is excluded on
+# purpose, and `bad-argument` is unreachable here because the loop already resolved the storage
+# key). The recovery loop must emit a truthful entry for every one of them.
+_UNREADABLE_LANDING_SHAPES = ("landing-ambiguous", "landing-torn", "envelope-stub-missing",
+                              "schema-unknown")
+
+
+def _place_unreadable_landing(session_dir, shape, seat="code-reviewer", occurrence=0):
+    """Put one seat's landing slot into the named `_read_landing_envelope` refusal shape."""
+    pend = _pending(session_dir)
+    skey = RR.storage_key(seat, occurrence)
+    env_path = RR.landing_path(session_dir, pend["round"], pend["phase"], skey, pend["attempt"])
+    bare_path = RR.bare_payload_path(session_dir, pend["round"], pend["phase"], skey,
+                                     pend["attempt"])
+    stub_path = RR.envelope_stub_path(session_dir, pend["round"], pend["phase"], skey,
+                                      pend["attempt"])
+    for path in (env_path, bare_path):
+        if os.path.exists(path):
+            os.remove(path)
+    bare_payload = {"findings": [], "confidence": "high", "seat": seat,
+                    "verificationReceipt": {"ran": True}}
+    if shape == "landing-ambiguous":
+        _land(session_dir, seat, pend=pend, occurrence=occurrence)
+        RR.atomic_write_json(bare_path, bare_payload)
+    elif shape == "landing-torn":
+        os.makedirs(os.path.dirname(env_path), exist_ok=True)
+        with open(env_path, "w", encoding="utf-8") as fh:
+            fh.write("{ this is not json")
+    elif shape == "envelope-stub-missing":
+        RR.atomic_write_json(bare_path, bare_payload)
+        if os.path.exists(stub_path):
+            os.remove(stub_path)
+    elif shape == "schema-unknown":
+        env = _result_envelope(session_dir, seat, pend=pend, occurrence=occurrence)
+        del env["schema"]
+        RR.atomic_write_json(env_path, env)
+    else:
+        raise AssertionError("unknown landing shape: %s" % shape)
+    return env_path
+
+
+@pytest.mark.parametrize("shape", _UNREADABLE_LANDING_SHAPES)
+def test_record_result_sweep_recovery_reports_unreadable_landing(tmp_path, adapters, shape):
+    """FIX3 — a stored record whose landing is PRESENT but unreadable is reported truthfully: the
+    slot is listed with the stored CAS token and no runnable command, and the refusal detail no
+    longer claims there is no pending landing."""
+    d = _session(tmp_path)
+    assert RD.cmd_record_missing(d, "code-reviewer", 0, "timeout")["ok"] is True
+    pend = _pending(d)
+    _place_unreadable_landing(d, shape)
+    out = RD.cmd_record_result(d, sweep=True, supersede=True,
+                               expect_sha256=RR.MISSING_CAS_TOKEN)
+    assert out["ok"] is False and out["reason"] == "sweep-supersede-unsupported"
+    assert len(out["recovery"]) == 1, out["recovery"]
+    entry = out["recovery"][0]
+    assert entry["seatKey"] == "code-reviewer"
+    assert entry["occurrence"] == 0
+    assert entry["attempt"] == pend["attempt"]
+    assert entry["command"] is None
+    assert entry["expectSha256"] == RR.MISSING_CAS_TOKEN
+    assert entry["expectSha256"] is not None
+    assert shape in entry["note"]
+    # The false receipt this test exists to stop: a landing IS present, so the detail must not
+    # claim no slot has one.
+    assert "no slot has both" not in out["detail"]
+
+
 def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path, adapters):
     """End-to-end: stale seat-missing must not survive sweep-supersede false-success; sanctioned
     per-slot supersede leaves fold reading CONFIRMED, not PLAUSIBLE."""
