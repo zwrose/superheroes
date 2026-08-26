@@ -652,16 +652,6 @@ park branch scoped to that family — is
 `rubric/review-discipline.md` § *The safety-machinery route — the guard refuses the fixer*. Follow it
 rather than re-deriving it; do not retry the fixer, and never narrow the guard to converge a round.
 
-> **Enforcement boundary (review-flagged residual, design-consistent).** In F5 this guard is invoked
-> by skill prose — a subagent *could* skip it, the same rationalize-past-prose risk `loop_state` was
-> built to remove. F5 deliberately ships the deterministic guard *function* (tested, §8) + this
-> wiring; the **non-bypassable** enforcement at the action boundary is the F3 producer's job (§4
-> bound-2, §12). `REPO_ROOT` must be defined in setup and embedded wherever this guard is wired: an
-> *empty* `--root` does **not** fail the guard open — `_band_roots("")` still returns `[_PLUGIN_ROOT]`
-> and an empty `--root` still anchors against `[_PLUGIN_ROOT, resolved the-architect root]`; it only
-> drops the **in-repo the-architect anchor**, and refuses (`allow:false, degraded:true`) only when
-> `escalation.py` is itself unresolvable. Define `REPO_ROOT` to keep that anchor.
-
 ```
 You are the fixer for one round of an auto-fix code-review loop.
 
