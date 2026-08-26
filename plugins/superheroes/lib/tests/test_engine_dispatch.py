@@ -2819,17 +2819,19 @@ def test_review_dispatch_fed_prompt_includes_schema_example_block(
     res = ED.dispatch_review(**dispatch_kwargs)
     records, _ = ED._journal_read(res["runDir"])
     opened = next(r for r in records if r.get("kind") == "run-opened")
-    block = RFS.example_prompt_block()
     contract = EA.REVIEW_RESULT_CONTRACT(expected_result_kind)
     prompt_text = fake.calls[0]["prompt_bytes"].decode("utf-8")
     if expect_findings_block:
+        echo_nonce = opened.get("echoNonce")
+        assert isinstance(echo_nonce, str) and echo_nonce
+        block = RFS.example_prompt_block(echo_nonce)
         assert block in opened["fedPrompt"]
         assert block in prompt_text
         assert prompt_text.endswith(contract)
         assert prompt_text.index(block) < prompt_text.index(contract)
     else:
-        assert block not in opened["fedPrompt"]
-        assert block not in prompt_text
+        assert RFS.example_prompt_block() not in opened["fedPrompt"]
+        assert RFS.example_prompt_block() not in prompt_text
     assert contract in opened["fedPrompt"]
     assert contract in prompt_text
     assert prompt_text.endswith(contract)
@@ -2903,6 +2905,170 @@ def test_review_result_contract_unknown_kind_renders_unpinned():
     for kind in EA.REVIEW_RESULT_KINDS:
         assert "`%s`" % kind in contract
     assert '`resultKind`: "findings"' not in contract
+
+
+# --- #1145 WO-C: per-dispatch echo nonce lifecycle ---
+
+
+def _grade_state_with_echo_nonce(tmp_path, run_dir, *, echo_nonce, stdout, repo_root=None):
+    repo_root = repo_root or _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    return {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+            "echoNonce": echo_nonce,
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+
+
+def test_dispatch_review_open_stores_echo_nonce(tmp_path):
+    # axis: open path mints and journals echoNonce beside expectedResultKind
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        expected_result_kind="findings",
+    )
+    records, _ = ED._journal_read(res["runDir"])
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    echo_nonce = opened.get("echoNonce")
+    assert isinstance(echo_nonce, str) and echo_nonce
+    assert RFS.example_prompt_block(echo_nonce) in opened["fedPrompt"]
+
+
+def test_dispatch_review_continuation_grades_with_stored_echo_nonce(tmp_path):
+    # axis: continuation seam — grade in a later call uses opened.echoNonce, not a fresh mint
+    # bite-proof: wo_c_1145c3.md §1 (stored-nonce read-back)
+    repo_root = _repo(tmp_path)
+    run_dir = tmp_path / "continue-echo-nonce"
+    first = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
+        order_id="order-echo-nonce", expected_result_kind="findings",
+    )
+    records, _ = ED._journal_read(first["runDir"])
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    echo_nonce = opened["echoNonce"]
+    example_stdout = json.dumps(RFS.example_findings_object(echo_nonce))
+    fake = FakeRunner([
+        (example_stdout, False, 0, ""),
+        (example_stdout, False, 0, ""),
+    ])
+    second = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_never_build_view, run_dir=str(run_dir), max_wait=60,
+        order_id="order-echo-nonce", expected_result_kind="findings",
+    )
+    assert second.get("forfeited") is True
+
+
+def test_grade_review_attempt_stored_echo_nonce_rejects_keyed_example(tmp_path):
+    # axis: grading with stored nonce refuses verbatim example rendered under that nonce
+    echo_nonce = "stored-nonce-for-grade"
+    stdout = json.dumps(RFS.example_findings_object(echo_nonce))
+    state = _grade_state_with_echo_nonce(
+        tmp_path, str(tmp_path / "run"), echo_nonce=echo_nonce, stdout=stdout,
+    )
+    grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
+    assert grade.get("forfeit") is True
+    shape = grade.get("payloadShape")
+    assert shape is not None
+    assert shape["parsed"] == EA.SHAPE_FINDINGS_HOLLOW_MEMBER
+
+
+def test_grade_review_attempt_genuine_finding_quoting_sentinel_in_prose_ok(tmp_path):
+    # axis: genuine finding with sentinel-free title plus quoting body survives grading under nonce
+    echo_nonce = "dispatch-nonce-prose"
+    sentinel = RFS.EXAMPLE_SENTINEL
+    member = {
+        "severity": "Important",
+        "title": "quoted example in body",
+        "body": "context:\n" + sentinel + " appears inside prose",
+    }
+    stdout = json.dumps({"findings": [member]})
+    state = _grade_state_with_echo_nonce(
+        tmp_path, str(tmp_path / "run"), echo_nonce=echo_nonce, stdout=stdout,
+    )
+    grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
+    assert grade.get("ok") is True
+    assert grade["findings"][0]["title"] == member["title"]
+
+
+def test_grade_review_attempt_second_parse_pair_carries_echo_nonce(tmp_path):
+    # axis: both parse_result call sites in _grade_review_attempt carry stored echo_nonce
+    echo_nonce = "second-parse-nonce"
+    inner = json.dumps(RFS.example_findings_object(echo_nonce))
+    stream = json.dumps({
+        "type": "result", "subtype": "success", "is_error": False,
+        "duration_ms": 1, "session_id": "x", "result": inner,
+    }) + "\n" + inner
+    state = _grade_state_with_echo_nonce(
+        tmp_path, str(tmp_path / "run"), echo_nonce=echo_nonce, stdout=stream,
+    )
+    grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
+    assert grade.get("forfeit") is True
+    shape = grade.get("payloadShape")
+    assert shape is not None
+    assert shape["parsed"] == EA.SHAPE_FINDINGS_HOLLOW_MEMBER
+
+
+def test_grade_review_attempt_second_payload_shape_pair_carries_echo_nonce(tmp_path):
+    # axis: both review_payload_shape call sites carry stored echo_nonce
+    echo_nonce = "shape-pair-nonce"
+    stdout = json.dumps(RFS.example_findings_object(echo_nonce))
+    state = _grade_state_with_echo_nonce(
+        tmp_path, str(tmp_path / "run"), echo_nonce=echo_nonce, stdout=stdout,
+    )
+    grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("payloadShape", {}).get("parsed") == EA.SHAPE_FINDINGS_HOLLOW_MEMBER
+
+
+def _engaged_review_stdout_with_nonce_example(echo_nonce):
+    padding = (
+        "Review notes for lib/auth.py:12 and lib/gate.py:99.\n"
+        "- first observation\n"
+        "- second observation\n\n"
+        "## Findings draft\n\n"
+    ) * 8
+    return padding + json.dumps(RFS.example_findings_object(echo_nonce))
+
+
+def test_scan_review_engaged_candidates_salvage_refuses_nonce_echo(tmp_path):
+    # axis: salvage path (row 5) refuses structured export of nonce-keyed example echo
+    # bite-proof: wo_c_1145c3.md §2 (salvage threading)
+    echo_nonce = "salvage-nonce"
+    stdout = _engaged_review_stdout_with_nonce_example(echo_nonce)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {"fedPrompt": "", "echoNonce": echo_nonce},
+        "attempts": {1: {"ended": {"exit": 0}}},
+    }
+    candidates = ED._scan_review_engaged_candidates(run_dir, state)
+    assert len(candidates) == 1
+    salvage = candidates[0]["salvage"]
+    assert salvage.get("structured") is not True
 
 
 def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):

@@ -123,8 +123,8 @@ def _all_synonym_maps():
     return merged
 
 
-def _effective_nonce(nonce):
-    """Return nonce when it is a non-empty string; otherwise treat as no nonce."""
+def effective_nonce(nonce):
+    """Return nonce when it is a non-empty string; otherwise None (fail-closed, never wildcard)."""
     if not isinstance(nonce, str) or nonce == "":
         return None
     return nonce
@@ -204,7 +204,7 @@ def _member_has_non_placeholder_substance_fields(member, normalized_placeholders
 def _build_placeholder_set(nonce):
     """Union of base and nonce-keyed placeholders when nonce is effective; base only otherwise."""
     base = example_member_values(None)
-    effective = _effective_nonce(nonce)
+    effective = effective_nonce(nonce)
     if effective is None:
         return base
     return base | example_member_values(effective)
@@ -287,7 +287,7 @@ def normalize_member(member):
 
 
 def _placeholder_string(field_name, nonce=None):
-    if _effective_nonce(nonce) is None:
+    if effective_nonce(nonce) is None:
         return "%s placeholder %s" % (field_name, EXAMPLE_SENTINEL)
     return "%s placeholder %s-%s" % (field_name, EXAMPLE_SENTINEL, nonce)
 
