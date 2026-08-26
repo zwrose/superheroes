@@ -1913,6 +1913,59 @@ def panel_seat_key_fault(dimensions, artifact):
     return "; ".join(parts)
 
 
+def _degradation_record_identity(deg):
+    """Union key for seat-map degradation rows — skew rows use ``_skew_record_identity``."""
+    if not isinstance(deg, dict):
+        return None
+    if deg.get("constraint") == version_skew.CONSTRAINT:
+        return _skew_record_identity(deg)
+    seat = deg.get("seat")
+    seat_key = seat if isinstance(seat, str) and seat else ""
+    return (str(deg.get("constraint", "")), seat_key)
+
+
+def _merge_seat_map(accumulated, incoming):
+    """Evidence-preserving merge of one round's seat map into the accumulator (#681 Invariant B).
+
+    ``seats`` merge per key (later wins only for named seats); ``degradations`` union by identity;
+    every other key keeps today's later-wins ``dict.update`` behavior."""
+    if not isinstance(incoming, dict):
+        return
+    if not isinstance(accumulated, dict):
+        return
+    incoming_seats = incoming.get("seats")
+    if isinstance(incoming_seats, dict) and incoming_seats:
+        acc_seats = accumulated.get("seats")
+        if not isinstance(acc_seats, dict):
+            acc_seats = {}
+        merged_seats = dict(acc_seats)
+        for key, value in incoming_seats.items():
+            if not isinstance(key, str):
+                continue
+            merged_seats[key] = value
+        accumulated["seats"] = merged_seats
+    incoming_degs = incoming.get("degradations")
+    if isinstance(incoming_degs, list):
+        acc_degs = accumulated.get("degradations")
+        if not isinstance(acc_degs, list):
+            acc_degs = []
+        seen: set[tuple] = set()
+        merged_degs: list[dict] = []
+        for source in (acc_degs, incoming_degs):
+            for deg in source:
+                if not isinstance(deg, dict):
+                    continue
+                key = _degradation_record_identity(deg)
+                if key is None or key in seen:
+                    continue
+                seen.add(key)
+                merged_degs.append(deg)
+        merged_degs.sort(key=lambda item: _degradation_record_identity(item) or ("", ""))
+        accumulated["degradations"] = merged_degs
+    other = {k: v for k, v in incoming.items() if k not in ("seats", "degradations")}
+    accumulated.update(other)
+
+
 def _fold_panel(state, config, artifact):
     """Fold a full reviewer-deep panel. `artifact` maps dimension → {findings, receiptMissing?,
     receiptStale?}. A persistently receipt-missing/stale seat is terminal `missing` (shell
@@ -1921,7 +1974,7 @@ def _fold_panel(state, config, artifact):
     seats = artifact.get("seats") if isinstance(artifact.get("seats"), dict) else artifact
     seat_map = artifact.get("seatMap") if isinstance(artifact.get("seatMap"), dict) else {}
     if seat_map:
-        state["seatMap"].update(seat_map)
+        _merge_seat_map(state["seatMap"], seat_map)
     raw = []
     seat_status = {}
     unverified = []
