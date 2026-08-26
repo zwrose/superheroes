@@ -2900,8 +2900,6 @@ def test_review_result_kind_census_survives_consumers(tmp_path, kind):
     other_kinds = tuple(k for k in ED.REVIEW_RESULT_KINDS if k != kind)
     for other_kind in other_kinds:
         assert other_kind not in res
-        has_other_payload, _ = ED._review_result_payload(res, other_kind)
-        assert has_other_payload is False
     opened = {"runKind": ED.RUN_KIND_REVIEW}
     stages = ED._ledger_stages(res, {}, str(tmp_path / "run"), opened)
     assert stages["delivered"] is True
@@ -2936,8 +2934,33 @@ def test_review_result_kind_census_survives_consumers(tmp_path, kind):
     assert kind in graded[0]
     for other_kind in other_kinds:
         assert other_kind not in graded[0]
-        has_other_graded_payload, _ = ED._review_result_payload(graded[0], other_kind)
-        assert has_other_graded_payload is False
+
+
+def test_review_payload_carried_detects_cross_kind_payload_key():
+    """axis: review_payload_carried reads payload keys regardless of resultKind."""
+    kind = "findings"
+    other_kind = "verdicts"
+    result = {
+        "resultKind": kind,
+        kind: [{"id": "f1", "message": "issue found"}],
+        other_kind: [{"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced"}],
+    }
+    has_other, _ = EA.review_payload_carried(result, other_kind)
+    assert has_other is True
+
+
+def test_review_result_payload_short_circuits_on_kind_mismatch():
+    """axis: _review_result_payload returns (False, None) on resultKind mismatch even when payload key is present."""
+    kind = "findings"
+    other_kind = "verdicts"
+    result = {
+        "resultKind": kind,
+        kind: [{"id": "f1", "message": "issue found"}],
+        other_kind: [{"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced"}],
+    }
+    has_payload, payload = ED._review_result_payload(result, other_kind)
+    assert has_payload is False
+    assert payload is None
 
 
 def test_dispatch_review_ruling_terminal_carries_payload(tmp_path):
@@ -5730,7 +5753,7 @@ def test_rewrite_failure_capture_grades_truncated(tmp_path, monkeypatch):
     assert ED._attempt_stdout_truncated(run_dir, state, 1) == 9001
 
 
-def test_cap_file_tail_rewrite_failure_signal_distinct_from_clean_cap(tmp_path):
+def test_cap_file_tail_rewrite_failure_signal_distinct_from_clean_cap(tmp_path, monkeypatch):
     """axis: _cap_file_tail rewrite_failed distinguishes failed rewrite from clean cap."""
     cap = 2048
     over = cap + 512
@@ -5742,6 +5765,44 @@ def test_cap_file_tail_rewrite_failure_signal_distinct_from_clean_cap(tmp_path):
     assert truncated is True
     assert observed == over
     assert rewrite_failed is False
+
+    path.write_bytes(b"x" * over)
+    path_str = str(path)
+    real_open = open
+    write_attempted = False
+
+    class _FailingWriteWrapper:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self._fh.__exit__(*args)
+
+        def write(self, data):
+            raise OSError(28, "No space left on device")
+
+        def __getattr__(self, name):
+            return getattr(self._fh, name)
+
+    def patched_open(file, mode="r", *args, **kwargs):
+        nonlocal write_attempted
+        fh = real_open(file, mode, *args, **kwargs)
+        if mode == "wb" and os.fspath(file) == path_str:
+            write_attempted = True
+            return _FailingWriteWrapper(fh)
+        return fh
+
+    monkeypatch.setattr("builtins.open", patched_open)
+    truncated, observed, rewrite_failed = ED._cap_file_tail(
+        path_str, cap, ED.CAP_STREAM_STDOUT,
+    )
+    assert truncated is True
+    assert observed == over
+    assert rewrite_failed is True
+    assert write_attempted is True
 
 
 def test_ledger_attempt_records_carries_stdout_cap_rewrite_failed(tmp_path):
@@ -5923,6 +5984,36 @@ def test_stdout_marker_overruled_just_over_digit_bound_claim_null_marker_bytes(t
     assert len(overruled) == 1
     assert overruled[0]["markerBytes"] is None
     assert overruled[0]["stampedBytes"] == stamped
+
+
+def test_stdout_marker_overruled_absent_when_stamped_capture_lacks_marker(tmp_path):
+    """axis: stamped authoritative record with no truncation marker writes no stdout-marker-overruled journal."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write("plain short body without marker\n")
+    stamped = 58
+    state = {"attempts": {1: {"ended": {"stdoutBytes": stamped, "stdoutBytesPreCap": True}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) is None
+    records, _ = ED._journal_read(run_dir)
+    overruled = [r for r in records if r.get("kind") == "stdout-marker-overruled"]
+    assert len(overruled) == 0
+
+
+def test_stdout_marker_overruled_absent_when_unstamped_record_falls_through(tmp_path):
+    """axis: unstamped record falling through to marker read writes no stdout-marker-overruled journal."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_small_forged_head_marker_capture())
+    stamped = 58
+    state = {"attempts": {1: {"ended": {"stdoutBytes": stamped}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) == stamped
+    records, _ = ED._journal_read(run_dir)
+    overruled = [r for r in records if r.get("kind") == "stdout-marker-overruled"]
+    assert len(overruled) == 0
 
 
 def test_nested_foreign_leased_sibling_no_dirt_forfeit(tmp_path):
@@ -6704,12 +6795,8 @@ def test_probe_git_fake_flag_flip_bypass_dead(monkeypatch):
         monkeypatch.setattr(ED, "_git_scrubbed_bytes", lambda *a, **k: None)
 
 
-def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source):
-    """Run a single child pytest case out-of-process with the real autouse fixture."""
-    tests_dir = _HERE
-    pyc_dir = os.path.join(str(tmp_path), "pyc")
-    conftest_path = os.path.join(tmp_path, "conftest.py")
-    conftest_source = (
+def _probe_guard_selftest_conftest_source(tests_dir, pyc_dir):
+    return (
         "import sys\n"
         "sys.path.insert(0, %s)\n"
         "\n"
@@ -6720,6 +6807,14 @@ def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source
         "_probe_git_fake_route_registry = TED._probe_git_fake_route_registry\n"
         % (repr(tests_dir), repr(pyc_dir))
     )
+
+
+def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source):
+    """Run a single child pytest case out-of-process with the real autouse fixture."""
+    tests_dir = _HERE
+    pyc_dir = os.path.join(str(tmp_path), "pyc")
+    conftest_path = os.path.join(tmp_path, "conftest.py")
+    conftest_source = _probe_guard_selftest_conftest_source(tests_dir, pyc_dir)
     ast.parse(conftest_source)
     with open(conftest_path, "w", encoding="utf-8") as fh:
         fh.write(conftest_source)
@@ -6803,10 +6898,12 @@ def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source
 
 def test_probe_guard_selftest_child_conftest_premise_before_import():
     """axis: child conftest premise guard runs before importing the fixture module."""
-    import inspect
-    src = inspect.getsource(_run_probe_guard_selftest_child)
-    assert_pos = src.find('"assert sys.pycache_prefix')
-    import_pos = src.find('"import test_engine_dispatch as TED')
+    tests_dir = _HERE
+    pyc_dir = os.path.join("/tmp", "pyc")
+    src = _probe_guard_selftest_conftest_source(tests_dir, pyc_dir)
+    ast.parse(src)
+    assert_pos = src.find("assert sys.pycache_prefix")
+    import_pos = src.find("import test_engine_dispatch")
     assert assert_pos != -1 and import_pos != -1
     assert assert_pos < import_pos
 
