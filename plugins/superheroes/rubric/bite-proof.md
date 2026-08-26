@@ -59,17 +59,16 @@ emphatic its name.
 **The guarded-element set is declared up front.** An order that adds or changes a detector
 declares the set it expects proven — an **explicit enumeration of every independently
 neutralizable element** the detector claims to guard, never an aggregate label and never the
-empty set. **Every lane has a declarer and a surface:** the order's author declares it in the
-order; whoever types the change declares it in the build record where the lane keeps one
-(orchestrator-typed work); and where the lane keeps no build record — **micro**, which the
-advisor types — the advisor declares it in the reviewer's dispatch. In every lane the declaration
-is made **before review**. **Whoever grades the record grades it against that declaration** — a
-grader who reads the set one level finer records the finer reading as a **signal for the
-advisor**, never a rework demand. The equivalence classes below may group only members of that
-enumeration, so declaring coarsely never licenses the one-representative proof trap 3 refuses.
-Undeclared, "one entry per guarded element" can be re-read finer every round and the bar does not
-terminate by construction: three engaged rounds each read it one level finer on #1162, and the
-same seat passed a two-entry record clean on #1164.
+empty set. **The declaration goes on a surface that predates the review**: the order, where the
+work is dispatched; the **reviewer's dispatch**, where it is not — orchestrator-typed light work
+and advisor-typed **micro** alike, whose durable record is written only after the review it would
+have to bind. Where the lane keeps a build record, the declaration is carried into it verbatim.
+**Whoever grades the record grades it against that declaration** — a grader who reads the set one
+level finer records the finer reading as a **signal for the advisor**, never a rework demand. The
+equivalence classes below may group only members of that enumeration. Undeclared, "one entry per
+guarded element" can be re-read finer every round and the bar does not terminate by construction:
+three engaged rounds each read it one level finer on #1162, and the same seat passed a two-entry
+record clean on #1164.
 
 **One bite-proof entry, per guarded element, must contain:**
 
