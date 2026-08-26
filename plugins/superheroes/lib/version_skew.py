@@ -4,9 +4,10 @@ Detection only — never switches code sources, blocks, or changes decisions. Al
 labelled record describing whether skew was checked and what was found.
 
 Disclosed bound: comparison is against the **working tree** at ``repo_root``, so a checkout
-deliberately parked on an old commit can read as no-skew; and the two files watched are the
-seat-composition and family-resolution surfaces only (``lib/model_registry.py``,
-``lib/seat_map.py``), not the whole library.
+deliberately parked on an old commit can read as no-skew; and the three files watched are the
+seat-composition surface (``lib/seat_map.py``), the family-resolution surface
+(``lib/model_registry.py``), and this module itself (``lib/version_skew.py``) — which owns the
+skew status vocabulary and the append-to-degradations rule — not the whole library.
 """
 from __future__ import annotations
 
@@ -17,7 +18,11 @@ import stat
 import string
 
 CONSTRAINT = "plugin-version-skew"
-SEMANTICS_FILES = ("lib/model_registry.py", "lib/seat_map.py")
+SEMANTICS_FILES = (
+    "lib/model_registry.py",
+    "lib/seat_map.py",
+    "lib/version_skew.py",
+)
 
 STATUS_NOT_CHECKED = "not-checked"
 STATUS_CHECKED_DEGRADED = "checked-degraded"
@@ -34,6 +39,30 @@ DETAIL_NOT_COMPOSED = "not-composed"
 DETAIL_SEMANTICS_DIVERGENT = "semantics-divergent"
 DETAIL_EVIDENCE_UNREADABLE = "evidence-unreadable"
 DETAIL_NO_DIVERGENCE = "no-divergence"
+
+DETAILS = frozenset({
+    DETAIL_NOT_SOURCE_REPO,
+    DETAIL_SELF,
+    DETAIL_NOT_COMPOSED,
+    DETAIL_SEMANTICS_DIVERGENT,
+    DETAIL_EVIDENCE_UNREADABLE,
+    DETAIL_NO_DIVERGENCE,
+})
+DEGRADING_DETAILS = frozenset({
+    DETAIL_SEMANTICS_DIVERGENT,
+    DETAIL_EVIDENCE_UNREADABLE,
+})
+APPENDS_DEGRADATION = frozenset({STATUS_CHECKED_DEGRADED})
+
+
+# bite-axis: closed membership — a non-string, None, or unhashable argument returns False
+# (only statuses declared here append); a set-membership home beats scattered == at call sites
+# so a future fourth status is decided here, not silently non-appending elsewhere (#1151).
+def appends_degradation(status) -> bool:
+    try:
+        return status in APPENDS_DEGRADATION
+    except TypeError:
+        return False
 
 # bite-axis: bounded reads — streamed rather than read-whole so a repo-controlled symlink to an
 # endless device cannot hang compose or exhaust the reviewer (#677).
@@ -276,7 +305,7 @@ def detect(repo_root: str, plugin_root: str) -> dict:
         entries = ", ".join(differing)
         reason = (
             "plugin-version-skew: installed %s, this repository's version at %s — "
-            "family/registry semantics may differ (%s differ between the running plugin and "
+            "watched review semantics differ (%s differ between the running plugin and "
             "this repository). The guard cannot know the semantic delta, only that one may exist: "
             "apply ratified deltas by hand or wait for the release cut."
         ) % (installed_version, repo_version, entries)

@@ -40,7 +40,13 @@ emphatic its name.
 
 4. **It is delivered through a path the guarded input can never take.** If the mutation cannot
    reach the detector through the path the test uses, the red you saw came from something else —
-   or never came at all. See `## When the proof cannot be produced`.
+   or never came at all. **The same failure wears a second face:** the mutation *does* reach the
+   mutated branch, but the **fixture never creates the condition the assertion discriminates on** —
+   so the probe stays green for every implementation, and the assertion is measuring nothing. The
+   tell is **a probe green where your own reasoning says it should be red**; when you see it, the
+   defect is in the fixture and **the cure is fixing the fixture, never relaxing the assertion**
+   (observed twice in one build — PR #1134's freshness leg). See
+   `## When the proof cannot be produced`.
 
 ## The record
 
@@ -80,6 +86,13 @@ weaken trap 3 — trap 3 forbids an *unnamed* representative standing for elemen
   makes it checkable by someone reading only the change.
 - **The red and green receipts live in the durable build record** — the pull request. A bite-proof
   that happened only in a session transcript did not happen.
+
+**Records are receipts, not consumed surfaces: they are categorically outside every content
+census, exactly as detector self-paths are.** A proof must be free to quote the literal it proves —
+the retired flag name, the forbidden string, the doctrine path a pointer census polices — so a
+census that reads its own evidence re-fires on every new proof. Close the class at the **category**:
+exclude the record directory at the census's walk, the way detector self-paths are already
+excluded, rather than rewording each record that trips it. (Standing advisor ruling, 2026-08-25.)
 
 Naming an existing test as "the proof" satisfies none of these fields, and is exactly the vacuous
 claim this file exists to refuse.
