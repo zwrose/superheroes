@@ -764,6 +764,8 @@ def test_fixer_order_shell_paths_are_quoted_for_metacharacters(tmp_path):
 
 
 def test_engine_panel_landing_block_uses_phase_stdout_contract():
+    import review_findings_schema as RFS
+
     ctx = _base_context(
         host_seat=False,
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
@@ -772,7 +774,8 @@ def test_engine_panel_landing_block_uses_phase_stdout_contract():
     )
     text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
     assert reason is None
-    assert '{"findings": [...], "investigated": [...]}' in text
+    expected = json.dumps(RFS.example_findings_object(), sort_keys=True)
+    assert expected in text
     assert "Delivery section above" in text
 
 

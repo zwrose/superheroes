@@ -37,6 +37,11 @@ _SV = importlib.util.spec_from_file_location(
 _SV_MOD = importlib.util.module_from_spec(_SV)
 _SV.loader.exec_module(_SV_MOD)
 
+_RFS = importlib.util.spec_from_file_location(
+    "review_findings_schema", os.path.join(_HERE, "..", "review_findings_schema.py"))
+RFS = importlib.util.module_from_spec(_RFS)
+_RFS.loader.exec_module(RFS)
+
 
 @pytest.fixture(autouse=True)
 def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
@@ -119,10 +124,13 @@ def _fake_view_receipt(**overrides):
     return base
 
 
-def _fed_prompt(base_prompt, view_meta=None):
+def _fed_prompt(base_prompt, view_meta=None, mode="review"):
     view_meta = view_meta or {"headSha": "abc123fake", "stripped": []}
-    notice = _SV_MOD.sanitized_view_notice(view_meta)
-    return ED.ANTIHIJACK_PREAMBLE + notice + base_prompt
+    notice = _SV_MOD.sanitized_view_notice(view_meta, mode=mode)
+    return (
+        ED.ANTIHIJACK_PREAMBLE + notice + base_prompt
+        + RFS.example_prompt_block()
+    )
 
 
 _VALID_FINDINGS_STDOUT = json.dumps({"findings": [{"id": "f1", "message": "issue found"}]})
@@ -325,7 +333,7 @@ def test_dispatch_review_prompt_has_new_preamble(tmp_path):
     assert notice_at > 0
     assert body_at > notice_at
     assert "abc123fake" in text[notice_at:body_at]
-    assert text.endswith(base_body)
+    assert text.endswith(RFS.example_prompt_block())
 
 
 def test_dispatch_review_repo_survives_success(tmp_path):
@@ -1384,7 +1392,7 @@ def _manual_open_review_run(tmp_path, run_dir):
     prompt_path = _valid_prompt(tmp_path)
     with open(prompt_path, encoding="utf-8") as fh:
         base = fh.read()
-    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view) + base
+    fed = _fed_prompt(base, view_meta=view)
     os.makedirs(run_dir, exist_ok=True)
     ok, detail = ED._open_review_run(
         run_dir, engine="codex", argv=argv, cwd=cwd,
@@ -2743,6 +2751,7 @@ def test_dispatch_review_nonzero_exit_forfeit_has_no_engagement(tmp_path):
 
 def test_grade_review_attempt_prompt_echo_payload_shape_prompt_echo_only(tmp_path):
     """Prompt-echo-only stdout (echo contains findings contract) yields prompt-echo-only."""
+    # axis: full fedPrompt echo (including schema example block) → SHAPE_PROMPT_ECHO_ONLY, not engaged findings
     run_dir = str(tmp_path / "run")
     repo_root = _repo(tmp_path)
     prompt_body = (
@@ -2775,6 +2784,25 @@ def test_grade_review_attempt_prompt_echo_payload_shape_prompt_echo_only(tmp_pat
     shape = grade.get("payloadShape")
     assert shape is not None
     assert shape["parsed"] == ED.engine_adapter.SHAPE_PROMPT_ECHO_ONLY
+
+
+def test_review_dispatch_fed_prompt_includes_schema_example_block(tmp_path):
+    """#1145 WO-C: runner chokepoint appends review_findings_schema.example_prompt_block()."""
+    # axis: composed fedPrompt must include schema-rendered example block (C1 append)
+    repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view,
+    )
+    records, _ = ED._journal_read(res["runDir"])
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    block = RFS.example_prompt_block()
+    assert block in opened["fedPrompt"]
+    prompt_text = fake.calls[0]["prompt_bytes"].decode("utf-8")
+    assert block in prompt_text
 
 
 def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
@@ -3385,7 +3413,7 @@ def _manual_open_review_run_git(tmp_path, run_dir, repo_root):
     prompt_path = _valid_prompt(tmp_path)
     with open(prompt_path, encoding="utf-8") as fh:
         base = fh.read()
-    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view) + base
+    fed = _fed_prompt(base, view_meta=view)
     os.makedirs(run_dir, exist_ok=True)
     ok, detail = ED._open_review_run(
         run_dir, engine="codex", argv=argv, cwd=cwd,
@@ -4551,7 +4579,7 @@ def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_
     prompt_path = _valid_prompt(tmp_path)
     with open(prompt_path, encoding="utf-8") as fh:
         base = fh.read()
-    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view, mode=mode) + base
+    fed = _fed_prompt(base, view_meta=view, mode=mode)
     os.makedirs(run_dir, exist_ok=True)
     journal_root = os.environ.get(ED.JOURNAL_ROOT_ENV, "")
     with open(os.path.join(run_dir, "journal-root.txt"), "w", encoding="utf-8") as fh:
@@ -7854,7 +7882,7 @@ def _manual_open_review_run_with_pr_body(tmp_path, run_dir, *, pr_body_source):
     prompt_path = _valid_prompt(tmp_path)
     with open(prompt_path, encoding="utf-8") as fh:
         base = fh.read()
-    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view) + base
+    fed = _fed_prompt(base, view_meta=view)
     os.makedirs(run_dir, exist_ok=True)
     ok, detail = ED._open_review_run(
         run_dir, engine="codex", argv=argv, cwd=cwd,
