@@ -1962,6 +1962,64 @@ def test_parse_result_review_verbatim_example_member_is_hollow():
     assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
 
 
+def test_parse_result_echo_nonce_keyed_example_is_hollow():
+    # axis: example rendered under dispatch nonce M is echo when graded with echo_nonce=M
+    nonce = "dispatch-abc123"
+    stdout = json.dumps(RFS.example_findings_object(nonce))
+    assert EA.parse_result("codex", "review", stdout, echo_nonce=nonce) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_parse_result_different_echo_nonce_example_not_sentinel_echo():
+    # axis: example under nonce M is not sentinel-echo when graded under nonce N (no base-set match)
+    nonce_m = "dispatch-m"
+    nonce_n = "dispatch-n"
+    member = RFS.example_findings_object(nonce_m)["findings"][0]
+    assert RFS.member_carries_sentinel(member, nonce=nonce_n) is False
+    assert EA.parse_result(
+        "codex", "review", json.dumps({"findings": [member]}), echo_nonce=nonce_n,
+    ) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_parse_result_review_title_plus_body_quoting_sentinel_survives_with_echo_nonce():
+    # axis: genuine finding quoting sentinel in prose parses clean under dispatch nonce
+    nonce = "dispatch-nonce-prose"
+    sentinel = RFS.EXAMPLE_SENTINEL
+    member = {
+        "severity": "Important",
+        "title": "quoted example in body",
+        "body": "context:\n" + sentinel + " appears inside prose",
+    }
+    stdout = json.dumps({"findings": [member]})
+    res = EA.parse_result("codex", "review", stdout, echo_nonce=nonce)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+
+
+def test_parse_result_nonceless_callers_unchanged_on_base_example():
+    # axis: missing echo_nonce → base placeholder set; fail-closed edge 1
+    # bite-proof: wo_c_1145c3.md §3 (fail-closed edge 1)
+    stdout = json.dumps(RFS.example_findings_object())
+    assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_salvage_from_artifact_refuses_nonce_keyed_example_echo():
+    # axis: salvage refuses structured export when echo_nonce matches keyed example
+    nonce = "salvage-nonce"
+    stdout = json.dumps(RFS.example_findings_object(nonce))
+    salvage = EA.salvage_from_artifact(stdout, "", echo_nonce=nonce)
+    assert salvage.get("structured") is not True
+
+
+def test_review_payload_shape_echo_nonce_second_path_agrees_with_parse():
+    # axis: review_payload_shape bare-array branch carries echo_nonce like parse_result
+    nonce = "shape-nonce"
+    stdout = json.dumps(RFS.example_findings_object(nonce)["findings"])
+    shape = EA.review_payload_shape(stdout, echo_nonce=nonce)
+    assert shape == {
+        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
 def test_parse_result_review_near_copy_example_sentinel_is_hollow():
     # axis: near-copy bypass — plausible id/severity cannot override example sentinel in body/title
     member = dict(RFS.example_findings_object()["findings"][0])

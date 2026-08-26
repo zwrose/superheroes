@@ -613,20 +613,23 @@ _FINDING_SUBSTANCE_KEYS_TOLERATED = review_findings_schema.SUBSTANCE_KEYS_LEGACY
 FINDING_REJECT_NO_SUBSTANCE = "no-substantive-fields"
 
 
-def _finding_is_substantive(obj):
+def _finding_is_substantive(obj, *, echo_nonce=None):
     """True when a finding dict carries substantive review content per the schema home."""
     if not isinstance(obj, dict):
         return False
-    if review_findings_schema.member_carries_sentinel(obj):
+    if review_findings_schema.member_carries_sentinel(obj, nonce=echo_nonce):
         return False
     return review_findings_schema.member_is_engaged(obj)
 
 
-def _findings_list_has_hollow_member(findings):
+def _findings_list_has_hollow_member(findings, *, echo_nonce=None):
     """True when a findings array contains at least one hollow object member."""
     if not isinstance(findings, list):
         return False
-    return any(isinstance(x, dict) and not _finding_is_substantive(x) for x in findings)
+    return any(
+        isinstance(x, dict) and not _finding_is_substantive(x, echo_nonce=echo_nonce)
+        for x in findings
+    )
 
 
 def _verdict_is_valid(obj):
@@ -757,7 +760,7 @@ def _render_rejection_entry(entry):
         return _scrub(str(entry))
 
 
-def _scrub_findings(findings):
+def _scrub_findings(findings, *, echo_nonce=None):
     """Return (accepted, rejected) — reject non-dicts with a named reason, never skip. Never raises."""
     if not isinstance(findings, list):
         return [], []
@@ -767,7 +770,7 @@ def _scrub_findings(findings):
         if not isinstance(f, dict):
             rejected.append({"entry": _render_rejection_entry(f), "reason": "not-a-dict"})
             continue
-        if not _finding_is_substantive(f):
+        if not _finding_is_substantive(f, echo_nonce=echo_nonce):
             rejected.append({"entry": _render_rejection_entry(f), "reason": FINDING_REJECT_NO_SUBSTANCE})
             continue
         pre_scrubbed = dict(f)
@@ -1064,7 +1067,7 @@ def _parse_review_ruling_object(obj, outer_envelope_error):
     return _attach_investigated_parse_rejections(result, inv_rejected)
 
 
-def _parse_review_findings_object(obj, outer_envelope_error):
+def _parse_review_findings_object(obj, outer_envelope_error, *, echo_nonce=None):
     """Parse a review object recognised as findings. Never raises."""
     if "findings" not in obj and "investigated" in obj:
         if (_outer_envelope_error_makes_unreadable(outer_envelope_error, [])
@@ -1083,7 +1086,7 @@ def _parse_review_findings_object(obj, outer_envelope_error):
         return {"ok": False, "reason": "unreadable"}
     if _review_items_have_placeholder_literal(findings):
         return {"ok": False, "reason": "unreadable"}
-    findings_list, findings_rejected = _scrub_findings(findings)
+    findings_list, findings_rejected = _scrub_findings(findings, echo_nonce=echo_nonce)
     if _findings_reply_has_hollow_member(findings_rejected):
         return {"ok": False, "reason": "unreadable"}
     if _outer_envelope_error_makes_unreadable(outer_envelope_error, findings_list):
@@ -1262,7 +1265,7 @@ def _bound_top_level_keys(obj):
     return keys, keys_truncated
 
 
-def _review_payload_shape_findings_obj(obj):
+def _review_payload_shape_findings_obj(obj, *, echo_nonce=None):
     """Findings-kind shape diagnostic for a recognised review object. Never raises."""
     if "findings" not in obj:
         investigated = obj.get("investigated")
@@ -1280,7 +1283,7 @@ def _review_payload_shape_findings_obj(obj):
     if _review_items_have_placeholder_literal(findings):
         return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
                 "topLevelKeys": [], "keysTruncated": False}
-    if _findings_list_has_hollow_member(findings):
+    if _findings_list_has_hollow_member(findings, echo_nonce=echo_nonce):
         return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
                 "topLevelKeys": [], "keysTruncated": False}
     return None
@@ -1327,7 +1330,7 @@ _REVIEW_PAYLOAD_SHAPE_DIAGNOSTICS = {
 }
 
 
-def review_payload_shape(stdout, fed_prompt=None):
+def review_payload_shape(stdout, fed_prompt=None, *, echo_nonce=None):
     """Diagnose WHY a review stdout failed the findings parse.
 
     Returns {"parsed": <one of REVIEW_PAYLOAD_SHAPES>,
@@ -1351,7 +1354,10 @@ def review_payload_shape(stdout, fed_prompt=None):
                 return {"parsed": SHAPE_OBJECT_BOTH_PAYLOAD_KEYS,
                         "topLevelKeys": top_keys, "keysTruncated": keys_truncated}
             if len(matched) == 1:
-                diag = _REVIEW_PAYLOAD_SHAPE_DIAGNOSTICS[matched[0]](obj)
+                if matched[0] == "findings":
+                    diag = _review_payload_shape_findings_obj(obj, echo_nonce=echo_nonce)
+                else:
+                    diag = _REVIEW_PAYLOAD_SHAPE_DIAGNOSTICS[matched[0]](obj)
                 if diag is not None:
                     return diag
                 return None
@@ -1365,7 +1371,7 @@ def review_payload_shape(stdout, fed_prompt=None):
                     if _review_items_have_placeholder_literal(arr):
                         return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
                                 "topLevelKeys": [], "keysTruncated": False}
-                    if _findings_list_has_hollow_member(arr):
+                    if _findings_list_has_hollow_member(arr, echo_nonce=echo_nonce):
                         return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
                                 "topLevelKeys": [], "keysTruncated": False}
                     return None
@@ -1593,7 +1599,7 @@ def review_artifact_shape(stdout, fed_prompt):
         }
 
 
-def salvage_from_artifact(stdout, fed_prompt):
+def salvage_from_artifact(stdout, fed_prompt, *, echo_nonce=None):
     """Salvage structured findings or a scrubbed prose excerpt from review stdout.
 
     Uses the same residue path as ``review_artifact_shape``. When ``parse_result`` yields
@@ -1618,7 +1624,7 @@ def salvage_from_artifact(stdout, fed_prompt):
         excerpt_raw = residue.encode("utf-8")[:ARTIFACT_EXCERPT_BYTES]
         excerpt = _scrub(excerpt_raw.decode("utf-8", errors="ignore"))
         excerpt_bytes = len(excerpt_raw)
-        parsed = parse_result("codex", "review", residue)
+        parsed = parse_result("codex", "review", residue, echo_nonce=echo_nonce)
         if parsed.get("ok") and isinstance(parsed.get("findings"), list):
             findings = parsed["findings"]
             if findings:
@@ -1811,7 +1817,7 @@ def spot_check_investigated(investigated, repo_root, *, generated_artifacts=()):
     return len(accepted) >= 1, accepted, rejected
 
 
-def parse_result(engine, role_kind, stdout, *, raw_envelope_error=None):
+def parse_result(engine, role_kind, stdout, *, raw_envelope_error=None, echo_nonce=None):
     """Parse an external engine's stdout into the native result shape. review → scrubbed
     findings (from the canonical {"findings": [...]} object OR, tolerated, a bare top-level
     array of finding objects — #196); build|fix → {ok,signal,evidence{testFailed,testPassed}}
@@ -1844,7 +1850,7 @@ def parse_result(engine, role_kind, stdout, *, raw_envelope_error=None):
                 if isinstance(arr, list) and all(isinstance(x, dict) for x in arr):
                     if _review_items_have_placeholder_literal(arr):
                         return {"ok": False, "reason": "unreadable"}
-                    findings_list, findings_rejected = _scrub_findings(arr)
+                    findings_list, findings_rejected = _scrub_findings(arr, echo_nonce=echo_nonce)
                     if _findings_reply_has_hollow_member(findings_rejected):
                         return {"ok": False, "reason": "unreadable"}
                     if _outer_envelope_error_makes_unreadable(outer_envelope_error, findings_list):
@@ -1861,6 +1867,9 @@ def parse_result(engine, role_kind, stdout, *, raw_envelope_error=None):
             if len(matched) > 1:
                 return {"ok": False, "reason": "unreadable"}
             if len(matched) == 1:
+                if matched[0] == "findings":
+                    return _parse_review_findings_object(
+                        obj, outer_envelope_error, echo_nonce=echo_nonce)
                 return _REVIEW_CONTRACT_PARSERS[matched[0]](obj, outer_envelope_error)
             return {"ok": False, "reason": "unreadable"}
         outer_envelope_error = _raw_stream_envelope_has_error_control(stdout)
