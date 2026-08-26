@@ -5828,25 +5828,48 @@ _FINDINGS_EXAMPLE_HAND_LITERALS = (
 
 # Enumerated emitting sites — one line per site when adding a new emitter.
 _REVIEW_FINDINGS_EXAMPLE_EMITTING_SITES = (
-    ("C1", "lib/engine_dispatch.py", "review_findings_schema.example_prompt_block"),
-    ("C2a", "lib/round_orders.py", "review_findings_schema.example_findings_object"),
-    ("C2b", "lib/round_orders.py", "review_findings_schema.example_findings_object"),
-    ("C3", "lib/seat_canary.py", "review_findings_schema.example_prompt_block"),
+    ("C1", "lib/engine_dispatch.py", "_dispatch_review_impl", "review_findings_schema.example_prompt_block"),
+    ("C2a", "lib/round_orders.py", "_stdout_payload_example", "review_findings_schema.example_findings_object"),
+    ("C2b", "lib/round_orders.py", "_panel_derived_placeholders", "review_findings_schema.example_findings_object"),
+    ("C3", "lib/seat_canary.py", "CANARY_FIXTURE_PROMPT", "review_findings_schema.example_prompt_block"),
 )
+
+
+def _definition_source(rel, definition_name):
+    """Return source text for a function or module-level assignment name in rel."""
+    import ast
+
+    text = _read(rel)
+    try:
+        tree = ast.parse(text, filename=rel)
+    except SyntaxError as exc:
+        raise AssertionError("%s: cannot parse for definition %r: %s" % (rel, definition_name, exc))
+    lines = text.splitlines()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == definition_name:
+            return "\n".join(lines[node.lineno - 1:node.end_lineno])
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == definition_name:
+                    return "\n".join(lines[node.lineno - 1:node.end_lineno])
+    raise AssertionError(
+        "%s: definition %r not found (census row must name an existing function or assignment)"
+        % (rel, definition_name)
+    )
 
 
 def test_review_findings_example_emitting_sites_delegate_to_home():
     """#1145 WO-C: every enumerated emitter renders from review_findings_schema — no hand literals."""
     # axis: enumerated emitting sites reference home, not hand-written example literals
-    for site_id, rel, home_ref in _REVIEW_FINDINGS_EXAMPLE_EMITTING_SITES:
-        text = _read(rel)
+    for site_id, rel, definition_name, home_ref in _REVIEW_FINDINGS_EXAMPLE_EMITTING_SITES:
+        region = _definition_source(rel, definition_name)
         for literal in _FINDINGS_EXAMPLE_HAND_LITERALS:
-            assert literal not in text, (
-                "%s (%s): hand-written findings example literal reappeared: %r"
-                % (site_id, rel, literal)
+            assert literal not in region, (
+                "%s (%s:%s): hand-written findings example literal reappeared: %r"
+                % (site_id, rel, definition_name, literal)
             )
-        assert home_ref in text, (
-            "%s (%s): missing home reference %r" % (site_id, rel, home_ref)
+        assert home_ref in region, (
+            "%s (%s:%s): missing home reference %r" % (site_id, rel, definition_name, home_ref)
         )
 
 
