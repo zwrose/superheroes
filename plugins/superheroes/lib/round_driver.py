@@ -933,9 +933,9 @@ def _enrich_skew_degradation(deg, seat_map):
                 rec[field] = val
     status = rec.get("status")
     if status in (None, ""):
-        rec["status"] = version_skew.STATUS_CHECKED_DEGRADED
+        rec["status"] = version_skew.default_missing_status()
         status = rec["status"]
-    if not version_skew.is_degrading(status):
+    if not version_skew.appends_degradation(status):
         return None
     return rec
 
@@ -964,7 +964,7 @@ def _union_skew_disclosures(existing, new):
             if key is None:
                 continue
             status = rec.get("status")
-            if not version_skew.is_degrading(status):
+            if not version_skew.appends_degradation(status):
                 continue
             if key in seen:
                 continue
@@ -996,7 +996,7 @@ def _skew_records(state):
             if key is None:
                 continue
             status = row.get("status")
-            if not version_skew.is_degrading(status):
+            if not version_skew.appends_degradation(status):
                 continue
             if key in seen:
                 continue

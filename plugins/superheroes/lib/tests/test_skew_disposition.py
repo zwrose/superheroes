@@ -166,7 +166,7 @@ def test_malformed_skew_record_skipped_not_crashing():
 
 
 def test_invalid_skew_status_disclosed_as_degrading():
-    # axis: unknown skew status fails closed at every consumer — same disposition as is_degrading
+    # axis: unknown skew status fails closed at every consumer — same disposition as appends_degradation
     bogus = {
         "constraint": version_skew.CONSTRAINT,
         "status": "bogus-status",
@@ -184,7 +184,7 @@ def test_invalid_skew_status_disclosed_as_degrading():
     assert RD._skew_degraded(state) is True
 
 
-# --- Part 2: disposition census and is_degrading ---
+# --- Part 2: disposition census and appends_degradation ---
 
 
 def test_every_status_member_has_disposition():
@@ -194,15 +194,16 @@ def test_every_status_member_has_disposition():
         )
 
 
-def test_is_degrading_known_members():
-    assert version_skew.is_degrading(version_skew.STATUS_CHECKED_DEGRADED) is True
-    assert version_skew.is_degrading(version_skew.STATUS_CHECKED_CLEAN) is False
-    assert version_skew.is_degrading(version_skew.STATUS_NOT_CHECKED) is False
+def test_appends_degradation_known_members():
+    assert version_skew.appends_degradation(version_skew.STATUS_CHECKED_DEGRADED) is True
+    assert version_skew.appends_degradation(version_skew.STATUS_CHECKED_CLEAN) is False
+    assert version_skew.appends_degradation(version_skew.STATUS_NOT_CHECKED) is False
 
 
-def test_is_degrading_unknown_status_fails_closed():
-    assert version_skew.is_degrading("future-status") is True
-    assert version_skew.is_degrading(None) is True
+def test_appends_degradation_unknown_status_fails_closed():
+    assert version_skew.appends_degradation("future-status") is True
+    assert version_skew.appends_degradation(None) is True
+    assert version_skew.appends_degradation(["unhashable"]) is True
 
 
 def test_containment_refusal_manifest_symlink_evidence_unreadable(tmp_path):
