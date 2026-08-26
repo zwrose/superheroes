@@ -4197,7 +4197,8 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
                                       "attempt": None, "outcome": "refused-v1"})
         return {"ok": False, "reason": loaded}
-    if loaded is None:
+    fresh_start = loaded is None
+    if fresh_start:
         session_id, mint_reason = round_records.mint_session_id(session_dir)
         if mint_reason is not None or not session_id:
             _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
@@ -4257,14 +4258,26 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                             pending.get("round"), attempt)
         if roster_refusal is not None:
             return roster_refusal
+        materialized_prior = False
+        if fresh_start:
+            prior = state["config"].get("priorComments")
+            if prior is not None:
+                if _materialize_prior_comments(session_dir, None, prior):
+                    materialized_prior = True
+                else:
+                    state["config"]["priorComments"] = None
         try:
             _emit_orders_manifest(session_dir, state, pending.get("round"), phase, attempt, roster,
                                   journal_cmd="next", pending_payload=pending.get("payload"),
                                   seat_map=_effective_seat_map(state))
         except round_commit.CommitRefused as exc:
+            if materialized_prior:
+                _unlink_canonical_prior(session_dir)
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
         except ValueError as exc:
+            if materialized_prior:
+                _unlink_canonical_prior(session_dir)
             return _refuse_cmd(session_dir, "next", "order-render-refused", phase=phase,
                                rnd=pending.get("round"), attempt=attempt, detail=str(exc))
     save_state(session_dir, state)
@@ -5508,29 +5521,49 @@ def _prior_comments_canonical_path(session_dir):
     return os.path.join(session_dir, "prior-comments.json")
 
 
+def _unlink_canonical_prior(session_dir):
+    """Remove the canonical prior-comments file if present (fresh-path cleanup on refuse)."""
+    path = _prior_comments_canonical_path(session_dir)
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def _materialize_prior_comments(session_dir, source_path, comments):
     """Write validated prior comments to the canonical session path.
 
-    The CLI ``--prior-comments`` chokepoint calls this after validation so
-    ``config["priorComments"]`` and ``_resolve_prior_comments_path`` read one file.
-    Explicit ``--prior-comments`` wins over any pre-existing canonical file.
-    When ``source_path`` already is the canonical file, skip rewrite to avoid
-    truncating a file we are reading from.
+    For comments supplied via ``next --prior-comments`` (#1107): ``_dispatch`` validates only;
+    this helper materializes under the session lock on the fresh-state path in
+    ``_cmd_next_locked``, immediately before state is persisted. A directly-written canonical
+    file without ``--prior-comments`` is the pre-existing path tracked separately (#958).
 
-    Returns True when the canonical file is present with ``comments``; False on
-    write failure (caller must not set ``config["priorComments"]`` when False).
+    Returns True iff the canonical file on disk parses equal to ``comments``; False otherwise
+    (caller must not persist ``config["priorComments"]`` when False).
     """
     canonical = _prior_comments_canonical_path(session_dir)
+
+    def _on_disk_matches():
+        try:
+            with open(canonical, encoding="utf-8") as fh:
+                loaded = json.load(fh)
+            return loaded == comments
+        except (OSError, ValueError, RecursionError):
+            return False
+
     try:
-        if os.path.samefile(source_path, canonical):
+        if source_path is not None:
+            try:
+                if os.path.samefile(source_path, canonical):
+                    return _on_disk_matches()
+            except OSError:
+                pass
+        if _on_disk_matches():
             return True
-    except OSError:
-        pass
-    try:
         round_commit.atomic_write_json(canonical, comments)
         return True
     except OSError:
-        return False
+        return _on_disk_matches()
 
 
 def _prior_comments_unavailable_marker():
@@ -8015,21 +8048,19 @@ def _dispatch(args):
                 sys.stdout.write(json.dumps({"ok": False, "reason": "prior-comments-not-fresh-state",
                                              "value": args.prior_comments}) + "\n")
                 return 1
-            # Load + validate the PR-mode prior comments into `priorComments` so the
-            # author-justification post-filter is actually reachable (#507 v7). A missing / unreadable
-            # / non-list file leaves priorComments unset (the filter simply does not fire) — never a
-            # crash and never a silent drop.
-            # One source of truth (#1107 WO-c6A): validated comments are materialized to
-            # $SESSION_DIR/prior-comments.json before priorComments is set, so the filter and
-            # _resolve_prior_comments_path cannot disagree. Explicit --prior-comments wins over
-            # any pre-existing canonical file.
+            # Load + validate prior comments for `priorComments` so the author-justification
+            # post-filter is actually reachable (#507 v7). A missing / unreadable / non-list /
+            # deeply-nested file leaves priorComments unset (the filter simply does not fire) —
+            # never a crash and never a silent drop. Materialization to
+            # $SESSION_DIR/prior-comments.json runs under the session lock on the fresh path in
+            # `_cmd_next_locked` (#1107 WO-c6D). Comments via `--prior-comments` bind config to
+            # that file; a directly-written canonical file is the pre-existing path (#958).
             try:
                 with open(args.prior_comments, encoding="utf-8") as fh:
                     loaded = json.load(fh)
                 if isinstance(loaded, list):
-                    if _materialize_prior_comments(args.session_dir, args.prior_comments, loaded):
-                        overrides["priorComments"] = loaded
-            except (OSError, ValueError):
+                    overrides["priorComments"] = loaded
+            except (OSError, ValueError, RecursionError):
                 pass
         out = cmd_next(args.session_dir, overrides or None)
     elif args.cmd == "record-result":

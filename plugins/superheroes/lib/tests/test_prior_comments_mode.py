@@ -51,7 +51,9 @@ def _cli_next_prior_comments(tmp_path, session_dir, prior_path, *, mode="pr"):
 
 
 def _assert_prior_comments_biconditional(session_dir, state):
-    # axis: config["priorComments"] is non-None iff canonical prior-comments.json exists with equal contents
+    # axis: for comments supplied via next --prior-comments, config["priorComments"] is non-None
+    # iff canonical prior-comments.json exists with equal contents (directly-written canonical
+    # files are the pre-existing path tracked in #958)
     canonical = _canonical_prior_path(session_dir)
     prior = state["config"].get("priorComments")
     file_exists = os.path.isfile(canonical)
@@ -348,3 +350,62 @@ def test_prior_comments_unavailable_marker_and_disclosure_inseparable(tmp_path):
     broken = {"rounds": {}, "config": _cfg(tmp_path)}
     with pytest.raises(KeyError):
         RD._resolve_prior_comments_path(session_dir, broken)
+
+
+def test_prior_comments_deeply_nested_json_fail_closed(tmp_path):
+    # axis: deeply nested valid JSON must not crash next — priorComments stays unset
+    session_dir = _session_with_mode(tmp_path, "branch")
+    canonical = _canonical_prior_path(session_dir)
+    depth = 2000
+    prior_path = str(tmp_path / "deep.json")
+    with open(prior_path, "w", encoding="utf-8") as fh:
+        fh.write("[" * depth + "]" * depth)
+
+    state = _cli_next_prior_comments(tmp_path, session_dir, prior_path, mode="branch")
+    assert state["config"].get("priorComments") is None
+    assert not os.path.isfile(canonical)
+
+
+def test_prior_comments_post_replace_write_failure_reconciles(tmp_path, monkeypatch):
+    # axis: when write raises after the file landed, reconciliation returns True iff on-disk matches
+    session_dir = _session_with_mode(tmp_path, "branch")
+    canonical = _canonical_prior_path(session_dir)
+    source = [{"id": "c1", "justification": "fixed"}]
+    prior_path = str(tmp_path / "prior-source.json")
+    with open(prior_path, "w", encoding="utf-8") as fh:
+        json.dump(source, fh)
+
+    real_atomic = round_commit.atomic_write_json
+
+    def _raise_after_landing(path, obj):
+        real_atomic(path, obj)
+        raise OSError("simulated post-replace fsync failure")
+
+    monkeypatch.setattr(round_commit, "atomic_write_json", _raise_after_landing)
+
+    state = _cli_next_prior_comments(tmp_path, session_dir, prior_path, mode="branch")
+    _assert_prior_comments_biconditional(session_dir, state)
+    assert state["config"]["priorComments"] == source
+    assert os.path.isfile(canonical)
+
+
+def test_prior_comments_no_stranded_file_on_post_fresh_refusal(tmp_path, monkeypatch):
+    # axis: a refusal after the fresh branch begins must not leave a canonical file with no state
+    def _refuse_placeholders(*_a, **_k):
+        raise ValueError("order-render-refused:probe-seat:probe-reason")
+
+    monkeypatch.setattr(RD, "_order_placeholders", _refuse_placeholders)
+    session_dir = _session_with_mode(tmp_path, "branch")
+    canonical = _canonical_prior_path(session_dir)
+    prior_path = str(tmp_path / "prior.json")
+    with open(prior_path, "w", encoding="utf-8") as fh:
+        json.dump([{"id": "x"}], fh)
+
+    out = RD.cmd_next(session_dir, {"leg": "code", "vendors": ["claude"], "diff": "diff --git a/f b/f\n",
+                                    "fixerVendor": "claude", "repoRoot": str(tmp_path),
+                                    "priorComments": [{"id": "x"}]})
+    assert out["ok"] is False
+    assert out["reason"] == "order-render-refused"
+    assert not os.path.isfile(canonical)
+    ok, state = RD.load_state(session_dir)
+    assert ok and state is None
