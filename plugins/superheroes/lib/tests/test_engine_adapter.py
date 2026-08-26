@@ -1639,6 +1639,32 @@ def test_parse_result_review_near_miss_investigated_only_is_clean():
                   "findings": [], "investigated": ["src/main.py"]}
 
 
+def test_review_result_contract_unpinned_never_instructs_result_kind():
+    """#1145 WO-F: unpinned contract must not tell the seat to emit resultKind."""
+    # axis: unpinned seat-facing contract must not mention emitting a resultKind field
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo_f_1145c3.md (BP1)
+    contract = EA.REVIEW_RESULT_CONTRACT(None)
+    assert "resultKind" not in contract
+
+
+@pytest.mark.parametrize("kind", EA.REVIEW_RESULT_KINDS)
+def test_review_result_contract_pinned_never_instructs_result_kind(kind):
+    """#1145 WO-F: pinned contract must not tell the seat to emit resultKind."""
+    # axis: pinned seat-facing contract must not mention emitting a resultKind field
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo_f_1145c3.md (BP1)
+    contract = EA.REVIEW_RESULT_CONTRACT(kind)
+    assert "resultKind" not in contract
+
+
+def test_parse_result_review_findings_pin_investigated_only_near_miss_still_clean():
+    """#1145 WO-F: investigated-only stdout stays clean (schema forbids resultKind)."""
+    # axis: investigated-only near-miss tolerance survives findings-pin contract era
+    stdout = json.dumps({"investigated": ["src/main.py"]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res == {"ok": True, "resultKind": "findings",
+                  "findings": [], "investigated": ["src/main.py"]}
+
+
 def test_parse_result_review_error_object_with_investigated_stays_unreadable(tmp_path):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
