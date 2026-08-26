@@ -110,7 +110,7 @@ def write_policy(cwd, policy, root=None):
     fails; the repository root is unavailable; or an existing persisted record declares
     ``schemaVersion`` greater than ``SCHEMA_VERSION`` (the on-disk file is preserved).
     None does not identify which cause applied; callers branch on their own policy
-    (``architect-init`` stops on any refusal; ``definition_doc.ensure_work_item_dir`` treats
+    (``architect-init`` stops on any refusal; ``definition_doc.resolve_write_path`` treats
     provisional-write refusal as non-fatal)."""
     rec = _migrate(policy)
     if rec is None:
