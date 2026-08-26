@@ -93,7 +93,7 @@ Per-agent-dimension recall (own-dimension seeds) + traps:
 
 **M1: PASS (methodology proxy).** Date: 2026-06-11.
 
-The installed review-crew at run time was the cached 0.2.0 release (no `premortem-reviewer`), so the literal skill-tests.md §7 procedure — `/review-crew:review-plan` driving the 5-agent crew end-to-end — could not run in-session. Instead M1 was run as a **faithful methodology proxy**: a subagent applied the on-branch `agents/premortem-reviewer.md` + `rubric/review-base.md`, under the review-plan plan-time framing and the strict (no-profile) threat-model fallback, against `eval/samples/gappy-plan.md`, blind to the expected outcome. (The skill *wiring* that dispatches premortem-reviewer as the 5th plan-time agent is separately guarded by `lib/tests/test_dispatch_tables.py`; this proxy verifies the agent *behavior* M1 cares about.)
+The installed review-crew at run time was the cached 0.2.0 release (no `premortem-reviewer`), so the literal skill-tests-v1-frozen.md §7 procedure — `/review-crew:review-plan` driving the 5-agent crew end-to-end — could not run in-session. Instead M1 was run as a **faithful methodology proxy**: a subagent applied the on-branch `agents/premortem-reviewer.md` + `rubric/review-base.md`, under the review-plan plan-time framing and the strict (no-profile) threat-model fallback, against `eval/samples/gappy-plan.md`, blind to the expected outcome. (The skill *wiring* that dispatches premortem-reviewer as the 5th plan-time agent is separately guarded by `lib/tests/test_dispatch_tables.py`; this proxy verifies the agent *behavior* M1 cares about.)
 
 Both M1 acceptance criteria met, each citing the plan doc:
 
@@ -102,7 +102,7 @@ Both M1 acceptance criteria met, each citing the plan doc:
 
 Three additional correct gaps surfaced (all Important, all real for this plan): `concurrency/race` (concurrent scheduler runs double-push), `dependency-failure` (outbound HTTP push with no timeout/retry story), `detectability` (no log/metric for failure or dirty-row accumulation). No false positives.
 
-A literal installed-plugin live-run remains available to anyone after `/plugin marketplace update` + `/plugin update` to 0.3.0 (re-run skill-tests.md §7); it is expected to reproduce (a) and (b).
+A literal installed-plugin live-run remains available to anyone after `/plugin marketplace update` + `/plugin update` to 0.3.0 (re-run skill-tests-v1-frozen.md §7); it is expected to reproduce (a) and (b).
 
 # 0.10.0 release-eval — single-variant benchmark, all fixtures
 

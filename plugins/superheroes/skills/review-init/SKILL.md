@@ -75,6 +75,8 @@ If `$LOCATION` is not `none` (a profile resolved at `$PROFILE`) → **Reconcile*
 (Step 5). Otherwise (`$LOCATION` is `none`) → **Create** (Steps 3–4); decide the
 storage location and mint the path before writing:
 
+<!-- decision-point: id=review-init-storage-location mode=notify kind=storage-location default="returned .mode (recorded when configured, else the lib's provisional default)" carrier=review-crew-layer -->
+
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
@@ -82,7 +84,7 @@ if [ "$LOCATION" = "none" ]; then
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
   SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
   PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
-  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
+  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] && [ -n "$SOURCE" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
   PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
 fi
 ```
@@ -101,13 +103,19 @@ taken, its source, whether it is provisional, and that `/superheroes:configure` 
 `.provisional` is `true`, also state that it is a provisional default rather than an owner choice
 and will be re-taken on the next run when not recorded. **Follow-up:** `/superheroes:configure`.
 The minted `$PROFILE` is the path Step 4 writes to.
+NOTIFY: take the returned `.mode` from `decide-location`, record mode/source/provisional status in
+`## Setup disclosures` within `$REVIEW_LAYER_BODY`, and the run continues. Follow-up:
+`/superheroes:configure`.
+<!-- /decision-point: id=review-init-storage-location -->
 
 ## Step 3 — Create: detection + defaults (no interview)
 
 Do not interview. Build the profile from Step 1 detection + `CLAUDE.md` + named provisional
 defaults. Write `status: provisional` always on this path — the interview branch that produced
 `status: confirmed` is retired; only `/superheroes:configure` confirms a profile with a real verify
-story. State in the **profile provenance block** which fields were defaulted rather than answered.
+story. State in the **review-crew layer body** (`$REVIEW_LAYER_BODY`, `## Setup disclosures`
+section piped to `core_md.py write-layer` in Step 4b) which fields were defaulted rather than
+answered.
 
 Defaults when detection + `CLAUDE.md` did not answer:
 
@@ -156,9 +164,13 @@ conventions) belong in its layer `review-crew.md`. Both are written through the 
 never hand-format core.md (CONVENTIONS §2.2). Always pass `--status provisional` on this create path
 (FR-5); `confirmed` is reached only via `/superheroes:configure`:
 
+Fail-closed guard below — not the mechanical-carrier redesign: it refuses to execute a write whose
+piped input is missing, because `write-layer` replaces the entire layer file.
+
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 STATUS=provisional   # always on this create path; confirmed only via /superheroes:configure (FR-5)
+[ -n "$CORE_FACTS_JSON" ] && [ -n "$REVIEW_LAYER_BODY" ] || { echo "assembly produced empty payloads; halting rather than writing an empty layer" >&2; exit 1; }
 # CREATE: shared facts → core.md (lock-guarded, reuse-not-clobber FR-6/FR-7; a
 # `proposed`/`deferred` action is surfaced, never silently overwritten).
 printf '%s' "$CORE_FACTS_JSON" \
@@ -171,7 +183,10 @@ printf '%s' "$REVIEW_LAYER_BODY" \
 `write` above is the **create** path: on an existing core it returns `reused`/`proposed`/`refused`/`deferred`.
 A `refused` result (including `fable-on-external-engine`, `core-md-unreadable`, or
 `dispatch-gate-evaluation-failed`) means the write did not apply — surface the `violations` to the
-owner and **stop**; never proceed to write the layer as if the write had succeeded. For
+owner and **stop**; never proceed to write the layer as if the write had succeeded. On refusal the
+`## Setup disclosures` block (including which fields were defaulted) never lands in the review-crew
+layer — those disclosures are stated in the run output instead, naming which fields were
+defaulted, so a refused write does not silently take the disclosure with it. For
 `core-md-unreadable`, the existing `core.md` could not be read, so the write was refused rather than
 overwriting it — surface the path from the violation's `detail` to the owner. On a successful create path without refusal, `reused`/`proposed`
 apply as before. Confirming a pre-existing **provisional** core/layer is a separate path —
