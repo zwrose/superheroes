@@ -14,6 +14,7 @@ must-not-clobber of the SKILL-written meta.json, and the handback sidecar.
 import importlib.util
 import json
 import os
+import errno
 
 import pytest
 
@@ -741,6 +742,101 @@ def test_sweep_refuses_out_of_session_dangling_landing_symlink_at_path_build(tmp
     out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
     bad = [r for r in out if r.get("reason") == "bad-argument" and r.get("seatKey") == SEAT]
     assert len(bad) == 1
+
+
+def test_sweep_refuses_out_of_session_dangling_bare_payload_symlink_at_path_build(tmp_path):
+    """T5b — edge 1, bare arm: out-of-session dangling bare payload refuses bad-argument."""
+    sd = _session(tmp_path)
+    bare = RR.bare_payload_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    _dangling_symlink_outside_session(sd, bare)
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    bad = [r for r in out if r.get("reason") == "bad-argument" and r.get("seatKey") == SEAT]
+    assert len(bad) == 1
+
+
+def test_probe_store_entry_outcomes(tmp_path, monkeypatch):
+    """_probe_store_entry: present, absent (ENOENT), and indeterminate (other errno)."""
+    present_path = tmp_path / "present.json"
+    present_path.write_text("{}", encoding="utf-8")
+    absent_path = tmp_path / "missing.json"
+    indeterminate_path = tmp_path / "blocked.json"
+
+    present, refusal = RR._probe_store_entry(str(present_path))
+    assert present is True and refusal is None
+
+    present, refusal = RR._probe_store_entry(str(absent_path))
+    assert present is False and refusal is None
+
+    real_lstat = os.lstat
+
+    def deny_lstat(path):
+        if path == str(indeterminate_path):
+            raise OSError(errno.EACCES, "permission denied")
+        return real_lstat(path)
+
+    monkeypatch.setattr(RR.os, "lstat", deny_lstat)
+    present, refusal = RR._probe_store_entry(str(indeterminate_path))
+    assert present is None
+    assert refusal["ok"] is False
+    assert refusal["reason"] == "store-exists"
+    assert "indeterminate" in refusal["message"]
+
+
+def test_ingest_refuses_indeterminate_store_probe(tmp_path, monkeypatch):
+    """Indeterminate store probe refuses store-exists rather than clobbering."""
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    spath = RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    real_lstat = RR.os.lstat
+
+    def deny_store_lstat(path):
+        if path == spath:
+            raise OSError(errno.EACCES, "permission denied")
+        return real_lstat(path)
+
+    monkeypatch.setattr(RR.os, "lstat", deny_store_lstat)
+    out = _ingest(sd)
+    assert out["ok"] is False
+    assert out["reason"] == "store-exists"
+    assert "indeterminate" in out["message"]
+
+
+def test_sweep_refuses_indeterminate_store_probe(tmp_path, monkeypatch):
+    """Sweep decorates an indeterminate store probe and never reports already-stored."""
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    spath = RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    real_lstat = RR.os.lstat
+
+    def deny_store_lstat(path):
+        if path == spath:
+            raise OSError(errno.EACCES, "permission denied")
+        return real_lstat(path)
+
+    monkeypatch.setattr(RR.os, "lstat", deny_store_lstat)
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    slot_results = [r for r in out if r.get("seatKey") == SEAT]
+    assert len(slot_results) == 1
+    assert slot_results[0]["ok"] is False
+    assert slot_results[0]["reason"] == "store-exists"
+    assert "indeterminate" in slot_results[0]["message"]
+    assert not any(r.get("reason") == "already-stored" for r in out)
+
+
+def test_ingest_refuses_enotdir_store_directory_ancestor(tmp_path):
+    """ENOTDIR on the store path refuses store-exists rather than treating the entry as absent."""
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    spath = RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    store_parent = os.path.dirname(spath)
+    os.makedirs(os.path.dirname(store_parent), exist_ok=True)
+    with open(store_parent, "w", encoding="utf-8") as fh:
+        fh.write("not a directory")
+    out = _ingest(sd)
+    assert out["ok"] is False
+    assert out["reason"] == "store-exists"
+    assert "indeterminate" in out["message"]
+    assert not os.path.lexists(spath)
 
 
 def test_ingest_refuses_out_of_session_dangling_store_symlink_at_path_build(tmp_path):
