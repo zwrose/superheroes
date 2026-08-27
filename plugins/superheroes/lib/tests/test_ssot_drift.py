@@ -219,12 +219,49 @@ def test_base_guard_reason_tokens_in_round_driver_doc():
         % [(n, reasons[n]) for n in missing])
 
 
-# --- Cluster: gap-sweep re-emission unknown-seat token (round_records → round-driver.md) -
+# --- Cluster: gap-sweep stale-landing token (round_records → round-driver.md) -
 
-def test_unknown_seat_refusal_token_in_round_driver_doc():
+def test_stale_landing_refusal_token_in_round_driver_doc():
     """§11: round-driver.md's gap-sweep re-emission trap restates round_records.py's own
-    `unknown-seat` sweep refusal literally — a rename of that refusal reason would silently
+    `stale-landing` sweep refusal literally — a rename of that refusal reason would silently
     strand the doc's recovery guidance behind a token `record-result --sweep` no longer emits."""
+    home = _read(os.path.join("lib", "round_records.py"))
+    assert '_refuse("stale-landing"' in home, (
+        "round_records.py: expected literal `_refuse(\"stale-landing\", ...)` call not found "
+        "(renamed/refactored? update this pin's home check along with the rename)"
+    )
+    doc = _read("skills/review-code/reference/round-driver.md")
+    assert "stale-landing" in doc, (
+        "round-driver.md: gap-sweep re-emission trap must name the `stale-landing` refusal "
+        "that round_records.sweep_landing raises when a stray landing file maps to no roster "
+        "slot in the current manifest"
+    )
+
+
+# --- Cluster: sweep-supersede-unsupported token (round_driver → round-driver.md) -
+
+def test_sweep_supersede_unsupported_refusal_token_in_round_driver_doc():
+    """§11: round-driver.md restates round_driver.py's `sweep-supersede-unsupported` refusal
+    literally — a rename would strand the doc's recovery guidance behind a token
+    `record-result --sweep --supersede` no longer emits."""
+    home = _read(os.path.join("lib", "round_driver.py"))
+    assert "sweep-supersede-unsupported" in home, (
+        "round_driver.py: expected literal `sweep-supersede-unsupported` refusal token not found "
+        "(renamed/refactored? update this pin's home check along with the rename)"
+    )
+    doc = _read("skills/review-code/reference/round-driver.md")
+    assert "sweep-supersede-unsupported" in doc, (
+        "round-driver.md: must name the `sweep-supersede-unsupported` refusal that "
+        "record-result --sweep returns when combined with --supersede or --expect-sha256"
+    )
+
+
+# --- Cluster: addressed-seat unknown-seat token (round_records → round-driver.md) -
+
+def test_unknown_seat_addressed_seat_refusal_token_in_round_driver_doc():
+    """§11: round-driver.md distinguishes `unknown-seat` (addressed seat not on roster) from
+    `stale-landing` (sweep stray file) — both tokens must stay literal so a cleanup cannot
+    collapse them back into one."""
     home = _read(os.path.join("lib", "round_records.py"))
     assert '_refuse("unknown-seat"' in home, (
         "round_records.py: expected literal `_refuse(\"unknown-seat\", ...)` call not found "
@@ -232,9 +269,9 @@ def test_unknown_seat_refusal_token_in_round_driver_doc():
     )
     doc = _read("skills/review-code/reference/round-driver.md")
     assert "unknown-seat" in doc, (
-        "round-driver.md: gap-sweep re-emission trap must name the `unknown-seat` refusal "
-        "that round_records.sweep_landing raises when a stray landing file maps to no roster "
-        "slot in the current manifest"
+        "round-driver.md: must name the `unknown-seat` refusal for an addressed seat "
+        "(`record-result --seat <key>`) that is not on the current roster — distinct from "
+        "the sweep's `stale-landing` stray-file refusal"
     )
 
 

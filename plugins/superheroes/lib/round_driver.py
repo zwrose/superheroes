@@ -6079,6 +6079,18 @@ def _slot_label(seat_key, occurrence):
     return seat_key if not occurrence else "%s#%d" % (seat_key, occurrence)
 
 
+def _record_result_recovery_cmd(session_dir, seat_key, occurrence, cas_token, attempt):
+    """Shell-ready per-slot supersede command — matches round-driver.md invocation spelling.
+
+    Round and phase are not separately addressable on this CLI; ``--attempt`` is the fence
+    that binds the command to the slot it was produced for."""
+    driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "round_driver.py")
+    return ("python3 -B %s record-result --session-dir %s --seat %s "
+            "--occurrence %d --attempt %d --supersede --expect-sha256 %s"
+            % (shlex.quote(driver_path), shlex.quote(session_dir), shlex.quote(seat_key),
+               occurrence, attempt, shlex.quote(cas_token)))
+
+
 def _store_file_exists(spath):
     """True when a store path is present for the record-submit fence — fail-closed on ambiguity.
 
@@ -6417,6 +6429,73 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     if refusal is not None:
         return refusal
     anchor = _orders_anchor(state, session_dir, rnd, phase, cur_attempt)
+    if sweep and (supersede or expect_sha256 is not None):
+        recovery = []
+        for seat_key, occurrence in round_records.roster_slots(roster):
+            try:
+                skey = round_records.storage_key(seat_key, occurrence)
+                spath = round_records.store_path(session_dir, rnd, phase, skey, cur_attempt)
+            except ValueError:
+                continue
+            if not os.path.exists(spath):
+                continue
+            stored, store_err = round_records.read_json(spath)
+            cas_token = (round_records.envelope_cas_token(stored)
+                         if store_err is None else None)
+            readable = isinstance(cas_token, str) and cas_token
+            if not readable:
+                recovery.append({
+                    "seatKey": seat_key,
+                    "occurrence": occurrence,
+                    "attempt": cur_attempt,
+                    "expectSha256": None,
+                    "command": None,
+                    "note": ("stored envelope has no readable CAS token; a supersede "
+                             "command cannot be issued until the record is readable"),
+                })
+                continue
+            envelope, landing_err = _read_landing_envelope(session_dir, rnd, phase, seat_key,
+                                                           cur_attempt, occurrence)
+            if landing_err is not None:
+                # Only `landing-missing` means there is genuinely nothing landed. EVERY other
+                # refusal — including one a future reason introduces — means a landing IS present
+                # and could not be read, and must be reported rather than silently skipped.
+                if landing_err == "landing-missing":
+                    continue
+                recovery.append({
+                    "seatKey": seat_key,
+                    "occurrence": occurrence,
+                    "attempt": cur_attempt,
+                    "expectSha256": cas_token,
+                    "command": None,
+                    "note": ("the landing file is present but could not be read (%s); no "
+                             "supersede command can be issued until the landing is readable"
+                             % landing_err),
+                })
+                continue
+            landing_token = round_records.envelope_cas_token(envelope)
+            landing_readable = isinstance(landing_token, str) and landing_token
+            if not landing_readable or landing_token == cas_token:
+                continue
+            recovery.append({
+                "seatKey": seat_key,
+                "occurrence": occurrence,
+                "attempt": cur_attempt,
+                "expectSha256": cas_token,
+                "command": _record_result_recovery_cmd(session_dir, seat_key, occurrence,
+                                                       cas_token, cur_attempt),
+            })
+        if recovery:
+            detail = ("--sweep cannot supersede: supersede is compare-and-swap and the CAS token "
+                      "is per-slot; supersede each slot individually with the commands listed.")
+        else:
+            detail = ("--sweep cannot supersede: supersede is compare-and-swap and the CAS token "
+                      "is per-slot; no slot has both a stored record and a pending landing "
+                      "that differs from the stored envelope — the flags were still "
+                      "ineffective and are refused.")
+        return _refuse_cmd(session_dir, "record-result", "sweep-supersede-unsupported",
+                           phase=phase, rnd=rnd, attempt=cur_attempt,
+                           detail=detail, recovery=recovery)
     if sweep:
         return _sweep_record(session_dir, state, "record-result", phase, rnd, cur_attempt, roster,
                              anchor, expect_round=expect_round, expect_phase=expect_phase)
@@ -6532,13 +6611,17 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
     results = round_records.sweep_landing(session_dir, rnd, phase, current_attempt=attempt,
                                           roster=roster, anchor=anchor)
     recorded = []
+    stale_strays = []
     for result in results:
         occurrence = result.get("occurrence") or 0
         if not result.get("ok"):
+            if result.get("reason") == "stale-landing":
+                stale_strays.append(result)
+                continue
             return _refuse_cmd(session_dir, cmd, result.get("reason"), phase=phase, rnd=rnd,
                                attempt=attempt,
                                seat=_slot_label(result.get("seatKey"), occurrence),
-                               detail=result.get("message"))
+                               detail=result.get("message"), recorded=recorded)
         if result.get("reason") == "already-stored":
             if phase == P_FIXER:
                 stored, _stored_err = round_records.read_json(result.get("storePath"))
@@ -6593,6 +6676,17 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                            **_journal_addressing_fields(expect_round, expect_phase),
                            **_journal_identity_fields(phase, seat, occurrence, attempt))
         recorded.append(_slot_label(seat, occurrence))
+    if stale_strays:
+        first = stale_strays[0]
+        strays = [{"storageKey": item.get("storageKey"),
+                   "landingPaths": item.get("landingPaths")} for item in stale_strays]
+        return _refuse_cmd(session_dir, cmd, "stale-landing", phase=phase, rnd=rnd,
+                           attempt=attempt,
+                           seat=_slot_label(first.get("seatKey"), first.get("occurrence") or 0),
+                           detail=first.get("message"), recorded=recorded,
+                           storageKey=first.get("storageKey"),
+                           landingPaths=first.get("landingPaths"),
+                           strays=strays)
     return {"ok": True, "phase": phase, "round": rnd, "attempt": attempt, "recorded": recorded}
 
 

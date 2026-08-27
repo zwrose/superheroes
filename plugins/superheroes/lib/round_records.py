@@ -525,8 +525,11 @@ def _read_landing_envelope(session_dir, rnd, phase, skey, attempt, occurrence):
     except ValueError as exc:
         return None, _refuse("bad-argument", message=str(exc))
 
-    env_exists = os.path.exists(env_path)
-    bare_exists = os.path.exists(bare_path)
+    # `lexists`, never `exists`: presence is the DIRECTORY ENTRY, not whether its target resolves.
+    # A landing that is a dangling symlink IS present; reporting it `landing-missing` would send it
+    # down the caller's "genuinely nothing landed" carve-out and re-emit a false no-landing detail.
+    env_exists = os.path.lexists(env_path)
+    bare_exists = os.path.lexists(bare_path)
     if env_exists and bare_exists:
         return None, _refuse("landing-ambiguous", envelopePath=env_path, payloadPath=bare_path,
                              message="both a full envelope and a bare payload file are present")
@@ -719,12 +722,16 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
 
     Idempotent by construction: a seat already in the store is reported `already-stored` with
     `ok: True` (re-running a sweep after a crash must not manufacture an error), and a landing
-    file that maps to no roster seat is reported with the enumerated `unknown-seat` refusal
-    rather than skipped in silence. Returns one result dict per SLOT/file, sorted by storage key.
+    file that maps to no roster seat is reported with the enumerated `stale-landing` refusal
+    rather than skipped in silence. Both landing shapes count: `<skey>.a<K>.json` (full envelope)
+    and `<skey>.a<K>.payload.json` (host bare payload). Returns one result dict per landed or
+    already-stored roster SLOT, plus one per stray storage key; roster-slot results always sort
+    before stray refusals so a caller that stops on the first non-`ok` result still journals every
+    ingested roster seat.
 
     The sweep walks SLOTS — (seat_key, occurrence) — not bare seat keys: a roster carrying one id
     twice owes two landings, and sweeping by key alone would claim the first slot's file twice and
-    leave the second's unswept (and then reported as an `unknown-seat` stray).
+    leave the second's unswept (and then reported as a `stale-landing` stray).
     """
     results = []
     claimed = set()
@@ -760,21 +767,44 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
         results.append(out)
 
     valid = _roster_keys(roster)
-    suffix = ".a%d.json" % current_attempt if isinstance(current_attempt, int) else None
+    env_suffix = ".a%d.json" % current_attempt if isinstance(current_attempt, int) else None
+    bare_suffix = ".a%d.payload.json" % current_attempt if isinstance(current_attempt, int) else None
     try:
-        names = sorted(os.listdir(landing_dir(session_dir, rnd, phase)))
+        ldir = landing_dir(session_dir, rnd, phase)
+        names = sorted(os.listdir(ldir))
     except (OSError, ValueError):
+        ldir = None
         names = []
+    strays = {}
     for name in names:
-        if name in claimed or name.startswith(RESERVED_PREFIX) or suffix is None:
+        if name in claimed or name.startswith(RESERVED_PREFIX) or env_suffix is None:
             continue
-        if not name.endswith(suffix):
+        if ldir is None or not os.path.isfile(os.path.join(ldir, name)):
             continue
-        results.append(_refuse("unknown-seat", storageKey=name[:-len(suffix)],
-                               message="landing file %r maps to no roster seat; valid keys: %s"
-                                       % (name, ", ".join(valid) if valid else "(none)"),
-                               validKeys=valid))
-    results.sort(key=lambda r: (r.get("storageKey") or "", r.get("seatKey") or ""))
+        skey = None
+        if name.endswith(env_suffix):
+            skey = name[:-len(env_suffix)]
+        elif bare_suffix and name.endswith(bare_suffix):
+            skey = name[:-len(bare_suffix)]
+        if skey is None:
+            continue
+        strays.setdefault(skey, []).append(name)
+    for skey in sorted(strays):
+        paths = sorted(strays[skey])
+        results.append(_refuse("stale-landing",
+                               storageKey=skey,
+                               landingPaths=paths,
+                               validKeys=valid,
+                               message=("landing file(s) %s map to no slot in the current roster "
+                                        "(valid keys: %s); this usually means the phase was "
+                                        "re-opened with a different roster at the same attempt, "
+                                        "so the file was a legitimate landing one attempt/wave ago — "
+                                        "move it aside (never delete it) and re-run the sweep")
+                                        % (", ".join(paths),
+                                           ", ".join(valid) if valid else "(none)")))
+    # Strays after roster results: round_driver._sweep_record refuses on the first non-ok result.
+    results.sort(key=lambda r: (1 if r.get("reason") == "stale-landing" else 0,
+                                r.get("storageKey") or "", r.get("seatKey") or ""))
     return results
 
 
