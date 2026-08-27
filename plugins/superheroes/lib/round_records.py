@@ -569,13 +569,14 @@ def _read_landing_envelope(session_dir, rnd, phase, skey, attempt, occurrence):
 def _probe_store_entry(spath):
     """Return (present, refusal) for a store-path existence probe — fail-closed on ambiguity.
 
-    Only ``ENOENT`` / ``ENOTDIR`` count as absent. Every other ``lstat`` outcome is either present
-    or an indeterminate ``store-exists`` refusal rather than a silent absent."""
+    Only ``ENOENT`` counts as absent. Every other ``lstat`` outcome is either present or an
+    indeterminate ``store-exists`` refusal (the token names the store seam, not whether the entry
+    definitely exists — see ``ingest_landing``'s reason roster) rather than a silent absent."""
     try:
         os.lstat(spath)
         return True, None
     except OSError as exc:
-        if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+        if exc.errno == errno.ENOENT:
             return False, None
         return None, _refuse("store-exists", storePath=spath,
                              message="store entry state is indeterminate: %s" % exc)
@@ -703,7 +704,8 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
 
       bootstrap-required, reserved-seat-name, unknown-seat, unknown-occurrence, stale-attempt,
       landing-missing, landing-ambiguous, landing-torn, envelope-stub-missing, attempt-mismatch, seat-mismatch, occurrence-mismatch,
-      session-mismatch, phase-mismatch, round-mismatch, schema-unknown, missing-reason, store-exists,
+      session-mismatch, phase-mismatch, round-mismatch, schema-unknown, missing-reason,
+      store-exists (definite entry present, or indeterminate probe — see ``_probe_store_entry``),
       cas-expect-required, cas-mismatch, manifest-anchor-mismatch, manifest-anchor-unanchored
 
     plus two defensive reasons outside that roster: `invalid-path` (a crafted phase/seat/round
@@ -768,8 +770,10 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
         bare_path = None
         try:
             bare_path = bare_payload_path(session_dir, rnd, phase, skey, current_attempt)
-        except ValueError:
-            bare_path = None
+        except ValueError as exc:
+            results.append(_refuse("bad-argument", seatKey=seat_key, occurrence=occurrence,
+                                   message=str(exc)))
+            continue
         # `lexists`, never `exists`: presence is the DIRECTORY ENTRY, not whether its target resolves.
         has_landing = os.path.lexists(lpath) or (bare_path is not None and os.path.lexists(bare_path))
         if not has_landing:
