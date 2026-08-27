@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """#1185 — rollback refusal and hash-preserving load for STATE_SCHEMA_VERSION bump."""
+import copy
 import importlib.util
 import json
 import os
@@ -20,6 +21,12 @@ _SPEC = importlib.util.spec_from_file_location(
 _TDI = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_TDI)
 
+_SPEC_TRD = importlib.util.spec_from_file_location(
+    "test_round_driver",
+    os.path.join(_HERE, "test_round_driver.py"))
+_TRD = importlib.util.module_from_spec(_SPEC_TRD)
+_SPEC_TRD.loader.exec_module(_TRD)
+
 _bootstrap = _TDI._bootstrap
 _land = _TDI._land
 _write_dispatch_manifest = _TDI._write_dispatch_manifest
@@ -28,6 +35,41 @@ _payload_for = _TDI._payload_for
 _auditor_vendor_for = _TDI._auditor_vendor_for
 _state = _TDI._state
 _fake_git = _TDI._fake_git
+
+# A frozen pre-#681 v3 session: top-level ``seatMap``, no ``seatMapReceipts``. Hash pinned so a
+# drift in the representative fixture fails loudly instead of silently relabelling a v4 bootstrap.
+PRE_681_V3_DIFF = _TRD.DIFF
+PRE_681_V3_SEAT_MAP = {
+    "seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
+              for dim in RD.DIMENSIONS}
+}
+PRE_681_V3_INITIAL = {
+    "schemaVersion": 3,
+    "config": {"leg": "code", "panel": False, "code": True, "vendors": ["claude", "codex"],
+               "fixerVendor": "claude", "verifyCommand": "none", "maxRounds": 7,
+               "maxRoundsAbsolute": 7, "dimensions": list(RD.DIMENSIONS),
+               "recordsPath": None, "coveragePath": None, "priorComments": None,
+               "seatMap": PRE_681_V3_SEAT_MAP, "diff": PRE_681_V3_DIFF},
+    "round": 1, "step": RD.P_PANEL, "pending": None, "lastAccepted": None,
+    "rounds": {}, "findings": [], "decisions": [], "auditRounds": [],
+    "confirmations": 0, "selfRecovered": False, "independenceDegraded": False,
+    "seatMap": dict(PRE_681_V3_SEAT_MAP), "reviewedDiff": PRE_681_V3_DIFF,
+    "headDiff": None, "fixBatch": [], "fullPanelRan": False, "_incompletePanel": False,
+    "_changedSubjectsSincePanel": [], "terminal": None, "certification": None,
+    "_records": [], "_coverage": [], "_resumeCorrupt": None,
+}
+PRE_681_V3_INITIAL_HASH = (
+    "caaadfcf13bfbe182510e3976e760f12d03f752dec1c465954ecc58933c5dac9")
+
+
+def _seed_pre681_v3_session(tmp_path, name="pre681-v3"):
+    session_dir = str(tmp_path / name)
+    os.makedirs(session_dir, exist_ok=True)
+    state = copy.deepcopy(PRE_681_V3_INITIAL)
+    assert RD.state_hash(state) == PRE_681_V3_INITIAL_HASH
+    with open(os.path.join(session_dir, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+        json.dump(state, fh)
+    return session_dir
 
 
 def _legacy_v3_session(tmp_path, name="legacy-v3", *, land_records=False):
@@ -97,19 +139,18 @@ def test_legacy_refusal_plain_session_names_next_submit(tmp_path):
 
 
 def test_next_and_submit_still_finish_a_v3_session_unchanged(tmp_path):
-    """`next`/`submit` finish an in-flight v3 session and leave schemaVersion at 3."""
-    session_dir, _gitdir, _head_path = _bootstrap(tmp_path, name="v3-continuation")
+    """`next`/`submit` finish a genuine pre-#681 v3 session through a terminal receipt."""
+    session_dir = _seed_pre681_v3_session(tmp_path)
+    _TRD._drive_cli(session_dir, None, _TRD._responder(round1_findings=None))
     state = _state(session_dir)
-    state["schemaVersion"] = 3
-    with open(os.path.join(session_dir, RD.STATE_FILE), "w", encoding="utf-8") as fh:
-        json.dump(state, fh)
-    pend = RD.cmd_next(session_dir)
-    assert pend["ok"] and pend["phase"] == RD.P_PANEL
-    seats = {dim: {"findings": []} for dim in RD.DIMENSIONS}
-    out = RD.cmd_submit(session_dir, pend["phase"], pend["attempt"], pend["expectedStateHash"],
-                        {"seats": seats})
-    assert out["ok"] is True
-    assert _state(session_dir)["schemaVersion"] == 3
+    assert state["schemaVersion"] == 3
+    assert state["terminal"] == "converged"
+    with open(os.path.join(session_dir, RD.RECEIPT_FILE), encoding="utf-8") as fh:
+        receipt = json.load(fh)
+    assert receipt["schemaVersion"] == 3
+    assert RD.receipt_kind(receipt) == RD.RECEIPT_CERTIFIED_SCHEMA % 3
+    ok, why = RD.validate_receipt(receipt)
+    assert ok, why
 
 
 def test_legacy_refusal_durable_records_names_fresh_session(tmp_path):

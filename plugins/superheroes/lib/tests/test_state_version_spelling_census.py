@@ -344,7 +344,7 @@ def _scan_bindings(tree, source, relpath):
                                     _binding_segment(source, key, val),
                                     "binding",
                                 )
-            if isinstance(func, ast.Attribute) and func.attr == "get":
+            if isinstance(func, ast.Attribute) and func.attr in ("get", "setdefault"):
                 if len(node.args) >= 2:
                     key, val = node.args[0], node.args[1]
                     if (isinstance(key, ast.Constant) and key.value == "schemaVersion"
@@ -692,6 +692,17 @@ def test_synthetic_injection_get_default_binding():
     findings = census_module(path, source)
     hits = [f for f in findings if f.leg == "binding" and "schemaVersion=3" in f.segment]
     assert hits, "expected binding leg on injected state.get(\"schemaVersion\", 3)"
+
+
+def test_synthetic_injection_setdefault_binding():
+    path = os.path.join(_LIB, "round_state_io.py")
+    source = (
+        "def migrate(state):\n"
+        "    state.setdefault(\"schemaVersion\", 4)\n"
+    )
+    findings = census_module(path, source)
+    hits = [f for f in findings if f.leg == "binding" and "schemaVersion=4" in f.segment]
+    assert hits, "expected binding leg on injected state.setdefault(\"schemaVersion\", 4)"
 
 
 def test_synthetic_injection_ann_assign_constant():
