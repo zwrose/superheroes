@@ -177,8 +177,9 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" submit \
 python3 -B "$ROOT_DIR/lib/round_driver.py" next --session-dir "$SESSION_DIR"
 # … dispatch seats; each seat lands under landing/ …
 python3 -B "$ROOT_DIR/lib/round_driver.py" record-result \
-  --session-dir "$SESSION_DIR" --seat "<seat>"  # or: record-result --sweep
-# … record-missing for any slot that forfeit/timeout …
+  --session-dir "$SESSION_DIR" --seat "<seat>" \
+  --round <round from next> --phase "<phase from next>"  # or: record-result --sweep with same
+# … record-missing for any slot that forfeit/timeout — echo the same --round and --phase …
 python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
   --session-dir "$SESSION_DIR"
 ```
@@ -228,6 +229,7 @@ token names the seam, not the direction.
 | `owner-artifact-shape` | `--owner-artifact` parses but is not a JSON object | resubmit a JSON object per gate shape above |
 | `record-submit-interleaved` | a `record-result` / `record-missing` after any hand `submit` in this session (`_submitUsed`) | compile and hand-`submit` this phase — **not** `advance` (this session's latch refuses it) |
 | `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` on a session that has **not** hand-folded yet (**per-attempt** fence — defers when `_submitUsed` is set) | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced via `record-result --supersede --expect-sha256 …` |
+| `round-phase-not-pending` | `record-result` / `record-missing` with `--round` and/or `--phase` that do not match the pending slot | re-read `next` and echo the current `round` and `phase` onto the durable-record command |
 
 **Owner-artifact refusal causes** (authoritative list — drift-tested against `round_driver`
 `OWNER_ARTIFACT_*_REFUSAL` constants):
