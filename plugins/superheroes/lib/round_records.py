@@ -525,8 +525,11 @@ def _read_landing_envelope(session_dir, rnd, phase, skey, attempt, occurrence):
     except ValueError as exc:
         return None, _refuse("bad-argument", message=str(exc))
 
-    env_exists = os.path.exists(env_path)
-    bare_exists = os.path.exists(bare_path)
+    # `lexists`, never `exists`: presence is the DIRECTORY ENTRY, not whether its target resolves.
+    # A landing that is a dangling symlink IS present; reporting it `landing-missing` would send it
+    # down the caller's "genuinely nothing landed" carve-out and re-emit a false no-landing detail.
+    env_exists = os.path.lexists(env_path)
+    bare_exists = os.path.lexists(bare_path)
     if env_exists and bare_exists:
         return None, _refuse("landing-ambiguous", envelopePath=env_path, payloadPath=bare_path,
                              message="both a full envelope and a bare payload file are present")

@@ -1193,6 +1193,75 @@ def test_record_result_sweep_recovery_reports_unreadable_landing(tmp_path, adapt
     assert "no slot has both" not in out["detail"]
 
 
+def _place_dangling_landing_symlink(session_dir, which, seat="code-reviewer", occurrence=0):
+    """Make one seat's landing slot a DANGLING SYMLINK at the full-envelope or bare-payload path.
+
+    The entry is present; its target is not. `os.path.exists` follows the link and calls this
+    absent, `os.path.lexists` sees the entry — which is the whole distinction under proof.
+    """
+    pend = _pending(session_dir)
+    skey = RR.storage_key(seat, occurrence)
+    env_path = RR.landing_path(session_dir, pend["round"], pend["phase"], skey, pend["attempt"])
+    bare_path = RR.bare_payload_path(session_dir, pend["round"], pend["phase"], skey,
+                                     pend["attempt"])
+    for path in (env_path, bare_path):
+        if os.path.lexists(path):
+            os.remove(path)
+    target = {"envelope": env_path, "bare": bare_path}[which]
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    os.symlink(target + ".no-such-target", target)
+    assert os.path.lexists(target) and not os.path.exists(target)
+    assert not os.path.lexists(env_path if which == "bare" else bare_path)
+    return target
+
+
+def test_record_result_sweep_recovery_reports_dangling_envelope_symlink(tmp_path, adapters):
+    """FIX5 — a landing slot that IS present as a dangling symlink at `landing_path` is reported,
+    not swallowed by the caller's `landing-missing` carve-out."""
+    d = _session(tmp_path)
+    assert RD.cmd_record_missing(d, "code-reviewer", 0, "timeout")["ok"] is True
+    pend = _pending(d)
+    _place_dangling_landing_symlink(d, "envelope")
+    out = RD.cmd_record_result(d, sweep=True, supersede=True,
+                               expect_sha256=RR.MISSING_CAS_TOKEN)
+    assert out["ok"] is False and out["reason"] == "sweep-supersede-unsupported"
+    assert len(out["recovery"]) == 1, out["recovery"]
+    entry = out["recovery"][0]
+    assert entry["seatKey"] == "code-reviewer"
+    assert entry["occurrence"] == 0
+    assert entry["attempt"] == pend["attempt"]
+    assert entry["command"] is None
+    assert entry["expectSha256"] == RR.MISSING_CAS_TOKEN
+    assert entry["expectSha256"] is not None
+    assert "landing-torn" in entry["note"]
+    # The false receipt this test exists to stop: a landing IS present, so the detail must not
+    # claim no slot has one.
+    assert "no slot has both" not in out["detail"]
+
+
+def test_record_result_sweep_recovery_reports_dangling_bare_payload_symlink(tmp_path, adapters):
+    """FIX5 — the same for a dangling symlink at `bare_payload_path` with no full envelope."""
+    d = _session(tmp_path)
+    assert RD.cmd_record_missing(d, "code-reviewer", 0, "timeout")["ok"] is True
+    pend = _pending(d)
+    _place_dangling_landing_symlink(d, "bare")
+    out = RD.cmd_record_result(d, sweep=True, supersede=True,
+                               expect_sha256=RR.MISSING_CAS_TOKEN)
+    assert out["ok"] is False and out["reason"] == "sweep-supersede-unsupported"
+    assert len(out["recovery"]) == 1, out["recovery"]
+    entry = out["recovery"][0]
+    assert entry["seatKey"] == "code-reviewer"
+    assert entry["occurrence"] == 0
+    assert entry["attempt"] == pend["attempt"]
+    assert entry["command"] is None
+    assert entry["expectSha256"] == RR.MISSING_CAS_TOKEN
+    assert entry["expectSha256"] is not None
+    assert "landing-torn" in entry["note"]
+    # The false receipt this test exists to stop: a landing IS present, so the detail must not
+    # claim no slot has one.
+    assert "no slot has both" not in out["detail"]
+
+
 def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path, adapters):
     """End-to-end: stale seat-missing must not survive sweep-supersede false-success; sanctioned
     per-slot supersede leaves fold reading CONFIRMED, not PLAUSIBLE."""
