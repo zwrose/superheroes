@@ -2922,6 +2922,26 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
                for line in receipt["degraded"])
 
 
+def test_driver_persists_round_disclosures_for_resume(tmp_path):
+    """The driver writes per-round disclosure channels to round-records.json after each fold so a
+    recordsPath resume restores what the run actually recorded — not only what a hand-seeded file
+    carries."""
+    records = tmp_path / "round-records.json"
+    records.write_text("[]")
+    cfg = _cfg(dimensions=["test-reviewer", "code-reviewer"], recordsPath=str(records),
+               maxRounds=8)
+    RD.run_loop(_vacuous_round1_seams(), cfg)
+
+    on_disk = json.loads(records.read_text())
+    round1 = next(r for r in on_disk if r.get("round") == 1)
+    assert round1.get("disclosures", {}).get("vacuousSeats") == ["test-reviewer"]
+
+    resumed = RD.run_loop(_seams(), cfg)
+    assert _round_channels(resumed, 1).get("vacuousSeats") == ["test-reviewer"]
+    prose = "\n".join(_round_disclosures(resumed, 1))
+    assert "vacuous-seat (round 1): seat(s) test-reviewer" in prose
+
+
 def _vacuous_round1_seams():
     """Round 1: one vacuous seat (a real `vacuousSeats` + `seatMapUnavailable` record) plus a
     blocking finding so the run continues past round 1 to a terminal."""
