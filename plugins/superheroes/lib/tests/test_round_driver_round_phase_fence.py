@@ -36,7 +36,7 @@ _drive_to_phase = _TDI._drive_to_phase
 _drive_one_phase = _TDI._drive_one_phase
 _auditor_vendor_for = _TDI._auditor_vendor_for
 
-REASON = "round-phase-not-pending"
+REASON = round_driver.ROUND_PHASE_NOT_PENDING_REFUSAL
 P_AUDITS = round_driver.P_AUDITS
 
 
@@ -297,3 +297,152 @@ def test_back_compat_no_new_args(tmp_path):
     assert out["ok"] is True, out
     assert out["round"] == pend["round"]
     assert out["phase"] == pend["phase"]
+
+
+def _last_journal_recorded(session_dir, cmd):
+    rows = [e for e in round_driver.read_journal(session_dir)
+            if e.get("cmd") == cmd and e.get("outcome") == "recorded"]
+    assert rows, "no %s recorded journal row" % cmd
+    return rows[-1]
+
+
+def test_journal_addressed_true_when_round_phase_echoed(tmp_path):
+    """#1177-C bite-proof: journal addressed distinguishes fenced durable-record calls."""
+    session_dir, _gitdir, _head_path, _findings, pend, tid, _slots = _setup_audits_pending(tmp_path)
+    state = _state(session_dir)
+    _land(session_dir, state, pend, tid, _audit_payload(tid), occurrence=0)
+    out = round_driver.cmd_record_result(
+        session_dir, tid, attempt=pend["attempt"],
+        expect_round=pend["round"], expect_phase=pend["phase"])
+    assert out["ok"] is True, out
+    entry = _last_journal_recorded(session_dir, "record-result")
+    assert entry["addressed"] is True
+
+
+def test_journal_addressed_false_when_addressing_omitted(tmp_path):
+    """#1177-C bite-proof: unaddressed durable-record calls journal addressed=false."""
+    session_dir, _gitdir, _head_path, _findings, pend, tid, _slots = _setup_audits_pending(tmp_path)
+    state = _state(session_dir)
+    _land(session_dir, state, pend, tid, _audit_payload(tid), occurrence=0)
+    out = round_driver.cmd_record_result(session_dir, tid, attempt=pend["attempt"])
+    assert out["ok"] is True, out
+    entry = _last_journal_recorded(session_dir, "record-result")
+    assert entry["addressed"] is False
+
+
+def test_journal_addressed_record_missing_both_directions(tmp_path):
+    findings = [_blocking_finding("missing bounds guard", 2)]
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="fence-addressed")
+    _drive_to_phase(session_dir, gitdir, findings, head_path, P_AUDITS)
+    state = _state(session_dir)
+    pend = state["pending"]
+    roster, _ = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
+    slots = _slots_of(roster)
+    _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
+    other = slots[1][0] if len(slots) > 1 else slots[0][0]
+    addressed_out = round_driver.cmd_record_missing(
+        session_dir, other, pend["attempt"], "forfeit",
+        expect_round=pend["round"], expect_phase=pend["phase"])
+    assert addressed_out["ok"] is True, addressed_out
+    assert _last_journal_recorded(session_dir, "record-missing")["addressed"] is True
+
+    session_dir2, gitdir2, head_path2 = _bootstrap(tmp_path, name="fence-unaddressed")
+    _drive_to_phase(session_dir2, gitdir2, findings, head_path2, P_AUDITS)
+    state2 = _state(session_dir2)
+    pend2 = state2["pending"]
+    roster2, _ = round_adapters.roster_for(pend2["phase"], state2, state2.get("config") or {})
+    slots2 = _slots_of(roster2)
+    _write_dispatch_manifest(session_dir2, pend2, slots2, _auditor_vendor_for(state2))
+    other2 = slots2[1][0] if len(slots2) > 1 else slots2[0][0]
+    bare_out = round_driver.cmd_record_missing(session_dir2, other2, pend2["attempt"], "forfeit")
+    assert bare_out["ok"] is True, bare_out
+    assert _last_journal_recorded(session_dir2, "record-missing")["addressed"] is False
+
+
+def test_cli_record_result_stale_round_phase_refuses(tmp_path, capsys):
+    session_dir, _gitdir, _head_path, _findings, pend, tid, _slots = _setup_audits_pending(tmp_path)
+    state = _state(session_dir)
+    _land(session_dir, state, pend, tid, _audit_payload(tid), occurrence=0)
+    store_before = _store_bytes_snapshot(session_dir)
+    rc = round_driver.main([
+        "record-result", "--session-dir", session_dir,
+        "--seat", tid, "--attempt", str(pend["attempt"]),
+        "--round", str(pend["round"] - 1), "--phase", pend["phase"],
+    ])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == 0
+    assert out["ok"] is False and out["reason"] == REASON, out
+    assert _store_bytes_snapshot(session_dir) == store_before
+
+
+def test_cli_record_result_matching_round_phase_succeeds(tmp_path, capsys):
+    session_dir, _gitdir, _head_path, _findings, pend, tid, _slots = _setup_audits_pending(tmp_path)
+    state = _state(session_dir)
+    _land(session_dir, state, pend, tid, _audit_payload(tid), occurrence=0)
+    rc = round_driver.main([
+        "record-result", "--session-dir", session_dir,
+        "--seat", tid, "--attempt", str(pend["attempt"]),
+        "--round", str(pend["round"]), "--phase", pend["phase"],
+    ])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == 0
+    assert out["ok"] is True, out
+
+
+def test_cli_record_result_omitting_round_phase_retains_prior_behavior(tmp_path, capsys):
+    session_dir, _gitdir, _head_path, _findings, pend, tid, _slots = _setup_audits_pending(tmp_path)
+    state = _state(session_dir)
+    _land(session_dir, state, pend, tid, _audit_payload(tid), occurrence=0)
+    rc = round_driver.main([
+        "record-result", "--session-dir", session_dir,
+        "--seat", tid, "--attempt", str(pend["attempt"]),
+    ])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == 0
+    assert out["ok"] is True, out
+    assert out["round"] == pend["round"]
+    assert out["phase"] == pend["phase"]
+
+
+def test_cli_record_missing_stale_round_phase_refuses(tmp_path, capsys):
+    session_dir, _gitdir, _head_path, _findings, pend, tid, slots = _setup_audits_pending(tmp_path)
+    other = slots[1][0] if len(slots) > 1 else tid
+    store_before = _store_bytes_snapshot(session_dir)
+    rc = round_driver.main([
+        "record-missing", "--session-dir", session_dir,
+        "--seat", other, "--attempt", str(pend["attempt"]), "--reason", "forfeit",
+        "--round", str(pend["round"] - 1), "--phase", pend["phase"],
+    ])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == 0
+    assert out["ok"] is False and out["reason"] == REASON, out
+    assert _store_bytes_snapshot(session_dir) == store_before
+
+
+def test_cli_record_missing_matching_round_phase_succeeds(tmp_path, capsys):
+    session_dir, _gitdir, _head_path, _findings, pend, tid, slots = _setup_audits_pending(tmp_path)
+    other = slots[1][0] if len(slots) > 1 else tid
+    rc = round_driver.main([
+        "record-missing", "--session-dir", session_dir,
+        "--seat", other, "--attempt", str(pend["attempt"]), "--reason", "forfeit",
+        "--round", str(pend["round"]), "--phase", pend["phase"],
+    ])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == 0
+    assert out["ok"] is True, out
+
+
+def test_cli_sweep_stale_round_refuses(tmp_path, capsys):
+    session_dir, _gitdir, _head_path, _findings, pend, tid, slots = _setup_audits_pending(tmp_path)
+    state = _state(session_dir)
+    for seat, occurrence in slots:
+        _land(session_dir, state, pend, seat, _audit_payload(seat), occurrence=occurrence)
+    store_before = _store_bytes_snapshot(session_dir)
+    rc = round_driver.main([
+        "record-result", "--session-dir", session_dir, "--sweep",
+        "--round", str(pend["round"] - 1), "--phase", pend["phase"],
+    ])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == 0
+    assert out["ok"] is False and out["reason"] == REASON, out
+    assert _store_bytes_snapshot(session_dir) == store_before

@@ -15,7 +15,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 _REF = os.path.join(_PLUGIN_ROOT, "skills", "review-code", "reference", "round-driver.md")
 
-_REFUSAL_MARKER = "**Owner-artifact refusal causes**"
+_REFUSAL_TABLE_MARKER = "**Refusal tokens when paths interleave.**"
+_REFUSAL_TABLE_END = "**Owner-artifact refusal causes**"
+_OWNER_ARTIFACT_MARKER = "**Owner-artifact refusal causes**"
 _SOURCE_MARKER = "**Policy-applied sources**"
 
 
@@ -32,6 +34,14 @@ def _parse_fenced_text_block(text, after_marker):
     if not match:
         raise RuntimeError("no ```text block found after marker %r" % after_marker)
     return [line.strip() for line in match.group(1).splitlines() if line.strip()]
+
+
+def _parse_refusal_table_reasons(text):
+    """Reason tokens from the durable-record refusal table in round-driver.md."""
+    start = text.index(_REFUSAL_TABLE_MARKER)
+    end = text.index(_REFUSAL_TABLE_END, start)
+    chunk = text[start:end]
+    return frozenset(re.findall(r"\| `([^`]+)` \|", chunk))
 
 
 def _owner_artifact_refusal_causes():
@@ -51,10 +61,19 @@ def _policy_applied_sources():
     )
 
 
+def _round_phase_refusal_causes():
+    """Every ``ROUND_PHASE_*_REFUSAL`` string constant on ``round_driver``."""
+    return frozenset(
+        val for name, val in vars(RD).items()
+        if name.startswith("ROUND_PHASE_") and name.endswith("_REFUSAL")
+        and isinstance(val, str)
+    )
+
+
 def test_owner_artifact_refusal_causes_match_docs():
     """round-driver.md owner-artifact refusal list ↔ OWNER_ARTIFACT_*_REFUSAL (both directions)."""
     text = _read(_REF)
-    documented = set(_parse_fenced_text_block(text, _REFUSAL_MARKER))
+    documented = set(_parse_fenced_text_block(text, _OWNER_ARTIFACT_MARKER))
     coded = set(_owner_artifact_refusal_causes())
 
     only_docs = documented - coded
@@ -81,3 +100,19 @@ def test_policy_applied_sources_match_docs():
     assert not only_code, (
         "driver emits policyApplied sources missing from round-driver.md: %s"
         % sorted(only_code))
+
+
+def test_round_phase_refusal_causes_match_docs():
+    """round-driver.md durable-record refusal table ↔ ROUND_PHASE_*_REFUSAL (both directions)."""
+    text = _read(_REF)
+    documented = set(_parse_refusal_table_reasons(text))
+    coded = set(_round_phase_refusal_causes())
+
+    only_code = coded - documented
+    only_docs = documented.intersection(coded) - coded
+    assert not only_code, (
+        "ROUND_PHASE_*_REFUSAL constants missing from round-driver.md refusal table: %s"
+        % sorted(only_code))
+    assert not only_docs, (
+        "round-driver.md refusal table lists round-phase tokens the driver cannot emit: %s"
+        % sorted(only_docs))

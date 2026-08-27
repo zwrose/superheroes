@@ -300,6 +300,7 @@ POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED = "owner-unattributed"
 OWNER_ARTIFACT_TERMINAL_REFUSAL = "owner-artifact-terminal"
 OWNER_ARTIFACT_UNREADABLE_REFUSAL = "owner-artifact-unreadable"
 OWNER_ARTIFACT_SHAPE_REFUSAL = "owner-artifact-shape"
+ROUND_PHASE_NOT_PENDING_REFUSAL = "round-phase-not-pending"
 OWNER_GATE_PHASES = (P_JUDGMENT, P_STALL)
 
 
@@ -3885,9 +3886,7 @@ def _write_interim_receipt(session_dir, state, stop_reason):
 
 def _receipt_requires_round_verify_passes(receipt):
     """Whether round entries must carry verifyPasses (certified v3, attested, interim only)."""
-    kind = receipt_kind(receipt)
-    return kind in (RECEIPT_ATTESTED_SCHEMA, RECEIPT_INTERIM_SCHEMA,
-                    RECEIPT_CERTIFIED_SCHEMA % 3)
+    return receipt_kind(receipt) in ROUND_ENTRY_KEY_FORMS["verifyPasses"]
 
 
 def _validate_round_entries_verify_passes(receipt):
@@ -3901,10 +3900,12 @@ def _validate_round_entries_verify_passes(receipt):
         return True, None
     for idx, rd in enumerate(receipt.get("rounds") or []):
         if not isinstance(rd, dict):
-            continue
+            return False, "round entry %s is not an object" % idx
         rnd = rd.get("round", idx)
         if "verifyPasses" not in rd:
-            return False, "round %s missing verifyPasses" % rnd
+            return False, (
+                "round %s missing verifyPasses — receipt likely written before this requirement "
+                "shipped; re-run the review rather than trusting the stale receipt" % rnd)
         if not isinstance(rd.get("verifyPasses"), list):
             return False, "round %s verifyPasses must be a list" % rnd
     return True, None
@@ -6302,6 +6303,15 @@ def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurren
     return payload_sha, None
 
 
+def _round_phase_addressing_supplied(expect_round, expect_phase):
+    """True when the caller supplied both round/phase addressing echoes from ``next``."""
+    return expect_round is not None and expect_phase is not None
+
+
+def _journal_addressing_fields(expect_round, expect_phase):
+    return {"addressed": _round_phase_addressing_supplied(expect_round, expect_phase)}
+
+
 def _pending_of(session_dir, state, cmd, expect_round=None, expect_phase=None):
     """(phase, round, attempt, refusal) for the pending step every record/advance call works on.
 
@@ -6324,8 +6334,8 @@ def _pending_of(session_dir, state, cmd, expect_round=None, expect_phase=None):
         mismatch_extra["pendingPhase"] = phase
     if mismatch_extra:
         return None, None, None, _refuse_cmd(
-            session_dir, cmd, "round-phase-not-pending", phase=phase, rnd=rnd, attempt=attempt,
-            **mismatch_extra)
+            session_dir, cmd, ROUND_PHASE_NOT_PENDING_REFUSAL, phase=phase, rnd=rnd,
+            attempt=attempt, **mismatch_extra)
     return phase, rnd, attempt, None
 
 
@@ -6397,7 +6407,7 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     anchor = _orders_anchor(state, session_dir, rnd, phase, cur_attempt)
     if sweep:
         return _sweep_record(session_dir, state, "record-result", phase, rnd, cur_attempt, roster,
-                             anchor)
+                             anchor, expect_round=expect_round, expect_phase=expect_phase)
 
     # Validate BEFORE storing: a refusal must leave nothing behind.
     if isinstance(seat, str) and seat in roster:
@@ -6437,6 +6447,7 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         session_dir, "record-result", "recorded", phase=phase, round=rnd, attempt=cur_attempt,
         seat=seat, occurrence=occurrence, payloadSha256=payload_sha,
         superseded=bool(plan["superseded"]), headDiffStorePath=head_store_path,
+        **_journal_addressing_fields(expect_round, expect_phase),
         **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     try:
         c = round_commit.begin(session_dir, "record-ingest")
@@ -6454,7 +6465,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
             "storePath": plan["storePath"], "headDiffStorePath": head_store_path}
 
 
-def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
+def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
+                  expect_round=None, expect_phase=None):
     """Ingest every unclaimed landing for the pending phase. Idempotent by construction (a seat
     already stored comes back `already-stored`); ANY refusal in the sweep refuses the whole call,
     with the refusing seat's own reason — a landing nobody could ingest is never skipped in
@@ -6548,6 +6560,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
                 journal_entry = _journal_entry_for_commit(
                     session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                     seat=seat, occurrence=occurrence,
+                    **_journal_addressing_fields(expect_round, expect_phase),
                     **_journal_identity_fields(phase, seat, occurrence, attempt))
                 try:
                     _unused, rehashed = _store_head_diff(session_dir, rnd, phase, seat, attempt,
@@ -6561,6 +6574,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
         if not head_diff_journaled:
             _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                            seat=seat, occurrence=occurrence, payloadSha256=payload_sha,
+                           **_journal_addressing_fields(expect_round, expect_phase),
                            **_journal_identity_fields(phase, seat, occurrence, attempt))
         recorded.append(_slot_label(seat, occurrence))
     return {"ok": True, "phase": phase, "round": rnd, "attempt": attempt, "recorded": recorded}
@@ -6672,6 +6686,7 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
                            detail=out.get("message") or out.get("storePath"))
     _journal_event(session_dir, "record-missing", "recorded", phase=phase, round=rnd,
                    attempt=cur_attempt, seat=seat, occurrence=occurrence, reason=reason,
+                   **_journal_addressing_fields(expect_round, expect_phase),
                    **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     return {"ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
             "occurrence": occurrence, "missingReason": reason, "storePath": out.get("storePath")}

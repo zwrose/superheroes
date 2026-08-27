@@ -183,6 +183,22 @@ def test_terminal_receipt_validates(tmp_path):
     assert ok is True, reason
 
 
+@pytest.mark.parametrize("bad_entry", [None, "not-an-object", 42])
+@pytest.mark.parametrize("form,spine_fn", [
+    ("certified-v3", _certified_v3_spine),
+    ("attested", _attested_spine),
+    ("interim", _interim_spine),
+])
+def test_validator_refuses_non_object_round_entries(form, spine_fn, bad_entry):
+    """Applicable forms refuse non-object round entries without conflating missing/malformed."""
+    receipt = spine_fn([bad_entry])
+    ok, reason = round_driver.validate_receipt(receipt)
+    assert ok is False, (form, bad_entry, reason)
+    assert "not an object" in reason
+    assert "missing" not in reason
+    assert "must be a list" not in reason
+
+
 @pytest.mark.parametrize("form,spine_fn", [
     ("certified-v3", _certified_v3_spine),
     ("attested", _attested_spine),
