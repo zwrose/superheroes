@@ -397,9 +397,6 @@ may be another session's settings.
 ### Declared items
 
 Repeat `--expect-item` for every file the order must deliver (or use `--expect-items-file` instead).
-The runner support for these flags ships in `main` via [#951](https://github.com/zwrose/superheroes/issues/951);
-they become accepted when this stack merges into `main` — on this branch the parser does not yet expose
-them.
 
 `$IMPL_ENGINE` and `$IMPL_ENGINE_MODEL` come from the project's dispatch calibration for the
 **implementer** role. `--effort` is **optional** on `dispatch-write` because a registry model may
