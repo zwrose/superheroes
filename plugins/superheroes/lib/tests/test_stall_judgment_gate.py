@@ -78,3 +78,21 @@ def test_stall_self_recovery_judgment_gate_keeps_self_recovered_flag():
     RD._handle_stall(state, state["config"], breaker)
     assert state["step"] == RD.P_JUDGMENT
     assert state.get("selfRecovered") is True
+
+
+def test_stall_union_admitted_tradeoff_target_routes_to_judgment():
+    # axis: a tradeoff target admitted by the #1165 union (not the stalled alias) still gates on judgment
+    mech = _finding(title="null deref")
+    mech_ident = FI.finding_identity(mech)
+    stalled = {"id": "%s@L1" % mech_ident, "identity": mech_ident, **dict(mech)}
+    to_ident = FI.finding_identity(_TRADEOFF)
+    sibling = {"id": "%s@L1" % to_ident, "identity": to_ident, **dict(_TRADEOFF)}
+    state = RD.new_state(_cfg())
+    state["_auditTargets"] = [dict(stalled), dict(sibling)]
+    state["fixBatch"] = [dict(stalled), dict(sibling)]
+    state["_auditOutcome"] = {"notDischarged": [stalled["id"], sibling["id"]], "discharged": []}
+    breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": [mech_ident]}
+    RD._handle_stall(state, state["config"], breaker)
+    assert state["step"] == RD.P_JUDGMENT
+    assert "_fixBatch" not in state
+    assert [j["title"] for j in (state.get("_judgmentFindings") or [])] == ["widen the API"]
