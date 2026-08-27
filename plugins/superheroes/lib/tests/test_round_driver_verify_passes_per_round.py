@@ -32,7 +32,7 @@ _state = _TDI._state
 _fake_git = _TDI._fake_git
 
 # axis: every emitted round on v3-certified/attested/interim receipts must carry verifyPasses as a list.
-# bite-proof record: plugins/superheroes/lib/tests/bite_proofs/wo_1177_a.md (orchestrator durable record)
+# Bite-proof: WO 1177-A — always-emit rule and v2 form gate; durable build record.
 
 
 def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path):

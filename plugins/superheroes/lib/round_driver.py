@@ -3560,6 +3560,9 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
             rd["lensCoverage"] = rec.get("lensCoverage")
         # Fossil-channel census requires a literal per-channel round-record read — not a variable
         # key through the generic loop — so this channel is consumed here (form-gated, always-emit).
+        # Bite axis (#1177-A): every emitted round entry on a form permitting the channel carries
+        # verifyPasses as a list, empty when the round recorded none; absence is impossible.
+        # Bite-proof: WO 1177-A — always-emit rule and v2 form gate; durable build record.
         if _round_entry_key_allowed("verifyPasses", form, state):
             verify_passes = rec.get("verifyPasses")
             rd["verifyPasses"] = verify_passes if isinstance(verify_passes, list) else []
@@ -3888,7 +3891,12 @@ def _receipt_requires_round_verify_passes(receipt):
 
 
 def _validate_round_entries_verify_passes(receipt):
-    """Every round entry on forms that permit the channel must carry verifyPasses as a list."""
+    """Every round entry on forms that permit the channel must carry verifyPasses as a list.
+
+    Bite axis (#1177-A): a receipt on an applicable form whose round entry is missing
+    ``verifyPasses``, or carries a non-list, is refused.
+    Bite-proof: WO 1177-A — missing-channel refusal and malformed-channel refusal; durable build
+    record."""
     if not _receipt_requires_round_verify_passes(receipt):
         return True, None
     for idx, rd in enumerate(receipt.get("rounds") or []):
@@ -6791,6 +6799,12 @@ def _policy_applied_record(phase, resolution):
 
 
 def _owner_artifact_provenance_well_formed(artifact):
+    """Return whether ``artifact`` carries a well-formed ``_provenance`` block.
+
+    Bite axis (#1177-B): the ``owner-supplied`` source is reachable only through a well-formed
+    ``_provenance`` block; every other shape is unattributed.
+    Bite-proof: WO 1177-B — object-type check, ``ruledBy`` check, ``ruledAt`` check, ``records``
+    check, and the branch in ``_owner_supplied_applied_record``; durable build record."""
     if not isinstance(artifact, dict):
         return False
     block = artifact.get("_provenance")
