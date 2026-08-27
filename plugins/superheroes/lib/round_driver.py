@@ -879,22 +879,169 @@ def _base_degraded(state):
     return bool((state.get("config") or {}).get("baseDegraded"))
 
 
+# =============================================================================================
+# Seat-map receipt projections (#681) — invariant: no shared accumulated seat-map blob in the
+# driver. The only stored submitted-map state is ``state["seatMapReceipts"]`` (append-only,
+# round-scoped). Every read of submitted-map content goes through exactly one function below;
+# ``_seat_map_receipts`` is the sole reader of raw state.
+# =============================================================================================
+
+def _seat_map_receipts(state):
+    """Ordered receipt list — legacy ``state["seatMap"]`` dict prepended when present, then receipts."""
+    receipts: list[dict] = []
+    sm = state.get("seatMap")
+    if isinstance(sm, dict) and sm:
+        receipts.append({"round": "legacy", "map": sm})
+    raw = state.get("seatMapReceipts")
+    if isinstance(raw, list):
+        for entry in raw:
+            if isinstance(entry, dict) and isinstance(entry.get("map"), dict):
+                receipts.append(entry)
+    return receipts
+
+
+def _sm_latest_with_seats(state):
+    """Seats-identity projection — last receipt whose ``map["seats"]`` is a non-empty dict."""
+    for entry in reversed(_seat_map_receipts(state)):
+        seats = entry["map"].get("seats")
+        if isinstance(seats, dict) and seats:
+            return entry["map"]
+    return {}
+
+
+def _sm_any_seats(state):
+    """Seats-existence projection — True iff any receipt carries a non-empty ``seats`` dict."""
+    for entry in _seat_map_receipts(state):
+        seats = entry["map"].get("seats")
+        if isinstance(seats, dict) and seats:
+            return True
+    return False
+
+
+def _sm_same_family_seats(state):
+    """Degradations projection — union of same-family seats across all receipts."""
+    seats: list[str] = []
+    for entry in _seat_map_receipts(state):
+        degradations = entry["map"].get("degradations")
+        if not isinstance(degradations, list):
+            continue
+        for deg in degradations:
+            if isinstance(deg, dict) and deg.get("constraint") == "same-family":
+                seat = deg.get("seat")
+                seats.append(seat if isinstance(seat, str) and seat else "unnamed-seat")
+    return sorted(set(seats))
+
+
+def _sm_unexcused_violations(state):
+    """Violations projection — per-receipt ``unexcused_violations``, deduped by (constraint, seat)."""
+    seen: set[tuple] = set()
+    merged: list[dict] = []
+    for entry in _seat_map_receipts(state):
+        for v in _seat_map_unexcused_violations(entry["map"]):
+            key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(v)
+    merged.sort(key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")))
+    return merged
+
+
+def _sm_pin_excused_records(state):
+    """Pin-excusal projection — per-receipt ``classify_violations`` excusedByPin lists."""
+    records: list[dict] = []
+    for entry in _seat_map_receipts(state):
+        classified = _seat_map_classify_violations(entry["map"])
+        for rec in classified.get("excusedByPin") or []:
+            if isinstance(rec, dict):
+                records.append(rec)
+    return records
+
+
+def _sm_skew_records(state):
+    """Skew projection — per-receipt skew degradations, deduped by ``_skew_record_identity``."""
+    seen: set[tuple] = set()
+    merged: list[dict] = []
+    for entry in _seat_map_receipts(state):
+        for row in _skew_records_from_seat_map(entry["map"]):
+            key = _skew_record_identity(row)
+            if key is None or key in seen:
+                continue
+            seen.add(key)
+            merged.append(row)
+    merged.sort(
+        key=lambda item: (
+            str(item.get("constraint", "")),
+            str(item.get("status", "")),
+            str(item.get("detail", "")),
+            str(item.get("inspectedRoot", "")),
+        ),
+    )
+    return merged
+
+
+def _sm_plugin_version_skew_status(state):
+    """Skew-status projection — tri-state ``pluginVersionSkew`` across receipts."""
+    last_recognized = None
+    for entry in _seat_map_receipts(state):
+        pvs = entry["map"].get("pluginVersionSkew")
+        if not isinstance(pvs, dict):
+            continue
+        status = pvs.get("status")
+        try:
+            if status in version_skew.STATUSES:
+                last_recognized = status
+            else:
+                return "unknown"
+        except TypeError:
+            return "unknown"
+    if last_recognized is None:
+        return "absent"
+    return last_recognized
+
+
+def _sm_canary_map(state, round_map):
+    """Canary projection — round map when it carries seats, else latest-with-seats."""
+    if isinstance(round_map, dict):
+        seats = round_map.get("seats")
+        if isinstance(seats, dict) and seats:
+            return round_map
+    return _sm_latest_with_seats(state)
+
+
+def _emit_receipt_seat_map(state):
+    """Derived read-time union for ``build_receipt`` — latest seats, merged degradations, last-wins."""
+    base = dict(_sm_latest_with_seats(state))
+    seen: set[str] = set()
+    merged_degs: list = []
+    for entry in _seat_map_receipts(state):
+        degs = entry["map"].get("degradations")
+        if not isinstance(degs, list):
+            continue
+        for row in degs:
+            if isinstance(row, dict):
+                key = json.dumps(row, sort_keys=True)
+                if key in seen:
+                    continue
+                seen.add(key)
+            merged_degs.append(row)
+    if merged_degs:
+        base["degradations"] = merged_degs
+    for entry in reversed(_seat_map_receipts(state)):
+        map_ = entry["map"]
+        for k, v in map_.items():
+            if k not in ("seats", "degradations"):
+                base[k] = v
+    return base
+
+
 def _same_family_seats(state):
     """Seats the #510 seat map had to fill with the MAKER's own model family because no alternative
     family was live (#670, owner-ratified 2026-07-26). A disclosed degradation, never a violation —
     but a panel that reviewed itself must never certify as plainly clean, so it joins independence
     and base provenance in the certification shape. Read off the seat map's own receipt; never
     recomputed here."""
-    sm = state.get("seatMap")
-    degradations = sm.get("degradations") if isinstance(sm, dict) else None
-    if not isinstance(degradations, list):
-        return []
-    seats = []
-    for deg in degradations:
-        if isinstance(deg, dict) and deg.get("constraint") == "same-family":
-            seat = deg.get("seat")
-            seats.append(seat if isinstance(seat, str) and seat else "unnamed-seat")
-    return sorted(set(seats))
+    return _sm_same_family_seats(state)
 
 
 def _same_family_degraded(state):
@@ -983,9 +1130,8 @@ def _union_skew_disclosures(existing, new):
 
 def _skew_records(state):
     """Plugin-version-skew degradations — the UNION of what each round recorded and what the live
-    merged seat map carries, so neither channel alone is load-bearing: ``state["rounds"]`` is lost
-    across a ``recordsPath`` resume, and ``state["seatMap"].update()`` lets a later round's map
-    overwrite an earlier one. Deduped by (constraint, status, detail, inspectedRoot), sorted."""
+    receipt projections carry, so neither channel alone is load-bearing: ``state["rounds"]`` is lost
+    across a ``recordsPath`` resume. Deduped by (constraint, status, detail, inspectedRoot), sorted."""
     seen: set[tuple] = set()
     merged: list[dict] = []
     for rec in (state.get("rounds") or {}).values():
@@ -1002,7 +1148,7 @@ def _skew_records(state):
                 continue
             seen.add(key)
             merged.append(row)
-    for row in _skew_records_from_seat_map(state.get("seatMap") or {}):
+    for row in _sm_skew_records(state):
         key = _skew_record_identity(row)
         if key is None or key in seen:
             continue
@@ -1024,32 +1170,19 @@ def _skew_degraded(state):
 
 
 def _plugin_version_skew_status(state):
-    """Seat-map tri-state status for certification disclosure (#677). ``absent`` when the seat map
-    carries no ``pluginVersionSkew`` receipt — an older map or one built without the field — so the
+    """Seat-map tri-state status for certification disclosure (#677). ``absent`` when no receipt
+    carries ``pluginVersionSkew`` — an older map or one built without the field — so the
     certification block never claims a skew check ran. A receipt with an unrecognized ``status`` is
     ``unknown``, not ``absent`` — unknown skew receipts degrade via ``version_skew.appends_degradation``
     (#1107)."""
-    sm = state.get("seatMap")
-    if not isinstance(sm, dict):
-        return "absent"
-    pvs = sm.get("pluginVersionSkew")
-    if not isinstance(pvs, dict):
-        return "absent"
-    status = pvs.get("status")
-    try:
-        if status in version_skew.STATUSES:
-            return status
-    except TypeError:
-        pass
-    return "unknown"
+    return _sm_plugin_version_skew_status(state)
 
 
 def _seat_map_violations(state):
     """Unexcused seat-map constraint violations — a BREACH channel, distinct from the disclosed
-    degradations (#680). The UNION of what each round recorded and what the live merged seat map
-    carries, so neither channel alone is load-bearing: `state["rounds"]` is lost across a
-    `recordsPath` resume, and `state["seatMap"].update()` lets a later round's map overwrite an
-    earlier one. Deduped by (constraint, seat), sorted."""
+    degradations (#680). The UNION of what each round recorded and what the receipt projections
+    carry, so neither channel alone is load-bearing: `state["rounds"]` is lost across a
+    `recordsPath` resume. Deduped by (constraint, seat), sorted."""
     seen: set[tuple] = set()
     merged: list[dict] = []
     for rec in (state.get("rounds") or {}).values():
@@ -1063,7 +1196,7 @@ def _seat_map_violations(state):
                 continue
             seen.add(key)
             merged.append(v)
-    for v in _seat_map_unexcused_violations(state.get("seatMap") or {}):
+    for v in _sm_unexcused_violations(state):
         key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
         if key in seen:
             continue
@@ -1100,20 +1233,12 @@ def _seat_map_violation_breach_prose(v: dict) -> str:
 
 
 def _seat_pin_excused(state):
-    sm = state.get("seatMap")
-    if not isinstance(sm, dict):
-        return False
-    return bool(_seat_map_classify_violations(sm).get("excusedByPin"))
+    return bool(_sm_pin_excused_records(state))
 
 
 def _seat_pin_excused_seats(state):
-    sm = state.get("seatMap")
-    if not isinstance(sm, dict):
-        return []
     seats: set[str] = set()
-    for rec in _seat_map_classify_violations(sm).get("excusedByPin") or []:
-        if not isinstance(rec, dict):
-            continue
+    for rec in _sm_pin_excused_records(state):
         for s in rec.get("excusedSeats") or []:
             if isinstance(s, str) and s:
                 seats.add(s)
@@ -1132,20 +1257,19 @@ def _seat_map_has_seats(seat_map):
 
 
 def _seat_map_unavailable(state):
-    """Whether the run lacks a usable seat map — rounds ∪ terminal merged-map union idiom.
+    """Whether the run lacks a usable seat map — rounds ∪ receipt projections union idiom.
 
-    UNION of (a) any round recorded ``seatMapUnavailable`` and (b) the live merged
-    ``state["seatMap"]`` carrying no seats at the terminal, so neither channel alone is
-    load-bearing.
+    UNION of (a) any round recorded ``seatMapUnavailable`` and (b) no receipt anywhere carries
+    seats, so neither channel alone is load-bearing.
 
-    ``_seed_resume`` restores review records and coverage only — NOT ``state["seatMap"]`` and
+    ``_seed_resume`` restores review records and coverage only — NOT ``seatMapReceipts`` and
     NOT the rounds ledger. This union does NOT confer resume protection."""
     for rec in (state.get("rounds") or {}).values():
         if not isinstance(rec, dict):
             continue
         if rec.get("seatMapUnavailable"):
             return True
-    return not _seat_map_has_seats(state.get("seatMap"))
+    return not _sm_any_seats(state)
 
 
 def _certification_base(state):
@@ -1203,10 +1327,9 @@ def _default_config(overrides=None):
         # PR-mode prior review comments (a list) for the author-justification post-filter. Wired from
         # the CLI's `--prior-comments` (#507 v7); None → the filter never fires.
         "priorComments": None,
-        # #723 `next --seat-map`: the #510 seat map for round 1. Before this, `state["seatMap"]` was
-        # populated ONLY by `_fold_panel` off the panel artifact, so the record layer's adapter had
-        # no vendor/model source on round 1 (the round that dispatches the panel). Fresh-state-only,
-        # same refusal discipline as `--vendors`.
+        # #723 `next --seat-map`: the #510 seat map for round 1. Before #681, `state["seatMap"]`
+        # was populated ONLY by `_fold_panel` off the panel artifact; receipt list (#681) stores
+        # each round's submission in `seatMapReceipts` instead.
         "seatMap": None,
     }
     if isinstance(overrides, dict):
@@ -1253,9 +1376,9 @@ def new_state(config=None):
         "confirmations": 0,
         "selfRecovered": False,
         "independenceDegraded": len(_live_vendors(cfg)) < 2,
-        # Seeded from `--seat-map` when one was supplied (#723) — `_fold_panel`'s own
-        # `state["seatMap"].update(...)` still wins for every round that submits a map.
-        "seatMap": dict(seeded_seat_map) if isinstance(seeded_seat_map, dict) else {},
+        # Seeded from `--seat-map` when one was supplied (#723) as receipt round "0".
+        "seatMapReceipts": ([{"round": "0", "map": dict(seeded_seat_map)}]
+                            if isinstance(seeded_seat_map, dict) and seeded_seat_map else []),
         "reviewedDiff": cfg.get("diff"),
         "headDiff": None,
         "fixBatch": [],
@@ -1913,59 +2036,6 @@ def panel_seat_key_fault(dimensions, artifact):
     return "; ".join(parts)
 
 
-def _degradation_record_identity(deg):
-    """Union key for seat-map degradation rows — skew rows use ``_skew_record_identity``."""
-    if not isinstance(deg, dict):
-        return None
-    if deg.get("constraint") == version_skew.CONSTRAINT:
-        return _skew_record_identity(deg)
-    seat = deg.get("seat")
-    seat_key = seat if isinstance(seat, str) and seat else ""
-    return (str(deg.get("constraint", "")), seat_key)
-
-
-def _merge_seat_map(accumulated, incoming):
-    """Evidence-preserving merge of one round's seat map into the accumulator (#681 Invariant B).
-
-    ``seats`` merge per key (later wins only for named seats); ``degradations`` union by identity;
-    every other key keeps today's later-wins ``dict.update`` behavior."""
-    if not isinstance(incoming, dict):
-        return
-    if not isinstance(accumulated, dict):
-        return
-    incoming_seats = incoming.get("seats")
-    if isinstance(incoming_seats, dict) and incoming_seats:
-        acc_seats = accumulated.get("seats")
-        if not isinstance(acc_seats, dict):
-            acc_seats = {}
-        merged_seats = dict(acc_seats)
-        for key, value in incoming_seats.items():
-            if not isinstance(key, str):
-                continue
-            merged_seats[key] = value
-        accumulated["seats"] = merged_seats
-    incoming_degs = incoming.get("degradations")
-    if isinstance(incoming_degs, list):
-        acc_degs = accumulated.get("degradations")
-        if not isinstance(acc_degs, list):
-            acc_degs = []
-        seen: set[tuple] = set()
-        merged_degs: list[dict] = []
-        for source in (acc_degs, incoming_degs):
-            for deg in source:
-                if not isinstance(deg, dict):
-                    continue
-                key = _degradation_record_identity(deg)
-                if key is None or key in seen:
-                    continue
-                seen.add(key)
-                merged_degs.append(deg)
-        merged_degs.sort(key=lambda item: _degradation_record_identity(item) or ("", ""))
-        accumulated["degradations"] = merged_degs
-    other = {k: v for k, v in incoming.items() if k not in ("seats", "degradations")}
-    accumulated.update(other)
-
-
 def _fold_panel(state, config, artifact):
     """Fold a full reviewer-deep panel. `artifact` maps dimension → {findings, receiptMissing?,
     receiptStale?}. A persistently receipt-missing/stale seat is terminal `missing` (shell
@@ -1974,7 +2044,11 @@ def _fold_panel(state, config, artifact):
     seats = artifact.get("seats") if isinstance(artifact.get("seats"), dict) else artifact
     seat_map = artifact.get("seatMap") if isinstance(artifact.get("seatMap"), dict) else {}
     if seat_map:
-        _merge_seat_map(state["seatMap"], seat_map)
+        receipts = state.get("seatMapReceipts")
+        if not isinstance(receipts, list):
+            receipts = []
+            state["seatMapReceipts"] = receipts
+        receipts.append({"round": str(state["round"]), "map": dict(seat_map)})
     raw = []
     seat_status = {}
     unverified = []
@@ -2030,7 +2104,7 @@ def _fold_panel(state, config, artifact):
                   "independent verification"
                   % (len(engaged_artifact_dims), ", ".join(engaged_artifact_dims)))
     # Cross-vendor liveness canary — per-vendor judgement via canary_liveness (pure).
-    _sm_for_canary = state.get("seatMap") if isinstance(state.get("seatMap"), dict) else seat_map
+    _sm_for_canary = _sm_canary_map(state, seat_map)
     canary_panel_gap = False
     ran_manifest_canary = (artifact.get("ranManifest")
                            if isinstance(artifact.get("ranManifest"), dict) else {})
@@ -2119,7 +2193,7 @@ def _fold_panel(state, config, artifact):
     # against the #510 seat map's configured vendors and record a per-round dispatch-provenance row for
     # any `run` seat that fell open to a different vendor; disclose an omitted manifest too (below).
     ran_manifest = artifact.get("ranManifest") if isinstance(artifact.get("ranManifest"), dict) else None
-    fell_open, prov_missing = _fell_open_rows(state.get("seatMap"), ran_manifest, seat_status)
+    fell_open, prov_missing = _fell_open_rows(_sm_latest_with_seats(state), ran_manifest, seat_status)
     if fell_open:
         _record_round(state, "fellOpen", fell_open)
     if prov_missing:
@@ -2127,13 +2201,13 @@ def _fold_panel(state, config, artifact):
     # #563 DoD1 v7 / #681: an ABSENT seat-map baseline would silently disable all fall-open detection
     # (both outputs anchor on the configured seat map). If no seat map was submitted, disclose
     # provenance-unavailable for the whole panel — regardless of which panel vendors are live.
-    if not _seat_map_has_seats(state.get("seatMap")):
+    if not _sm_any_seats(state):
         _live_panel = sorted({v for v in (config.get("vendors") or [])
                               if isinstance(v, str) and v in _PANEL_VENDORS})
         if not _live_panel:
             _live_panel = ["unknown"]
         _record_round(state, "seatMapUnavailable", _live_panel)
-    _sm_violations = _seat_map_unexcused_violations(state.get("seatMap") or {})
+    _sm_violations = _sm_unexcused_violations(state)
     if _sm_violations:
         _record_round(state, "seatMapViolations", _sm_violations)
         _parts = []
@@ -2143,7 +2217,7 @@ def _fold_panel(state, config, artifact):
             _parts.append("%s@%s" % (c, s) if s else c)
         _decision(state, "seat-map-constraint-violated",
                   "unexcused seat-map constraint violation(s): %s" % ", ".join(_parts))
-    _sm_skew = _skew_records_from_seat_map(state.get("seatMap") or {})
+    _sm_skew = _skew_records_from_seat_map(seat_map) if seat_map else []
     if _sm_skew:
         rnd_rec = state["rounds"].setdefault(str(state["round"]), {})
         _record_round(
@@ -3826,7 +3900,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
         "rounds": rounds,
         "findings": findings,
         "decisions": list(state.get("decisions") or []),
-        "seatMap": dict(state.get("seatMap") or {}),
+        "seatMap": _emit_receipt_seat_map(state),
         "scriptRan": scriptran,
         "degraded": degraded,
         "skippedBlockers": skipped_blockers,
@@ -5219,9 +5293,9 @@ def _reviewer_engine_vendor(repo_root):
 
 
 def _effective_seat_map(state):
-    """Seat map for order emission: the state copy wins; otherwise the seeded config (#723)."""
-    sm = state.get("seatMap")
-    if isinstance(sm, dict) and isinstance(sm.get("seats"), dict) and sm.get("seats"):
+    """Seat map for order emission: latest receipt with seats wins; otherwise the seeded config (#723)."""
+    sm = _sm_latest_with_seats(state)
+    if isinstance(sm.get("seats"), dict) and sm.get("seats"):
         return sm
     cfg_sm = (state.get("config") or {}).get("seatMap")
     if isinstance(cfg_sm, dict):

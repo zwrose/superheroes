@@ -645,6 +645,15 @@ is the home for the driver-or-park valve.
 - `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapViolations`, `vacuousSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `orderVendorProvenanceGaps`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
 
+**Seat-map storage (#681).** The driver stores each round's submitted seat map as an append-only
+`state["seatMapReceipts"]` list (`{round, map}` entries). There is no shared accumulated
+`state["seatMap"]` blob — `_fold_panel` appends one receipt per non-empty submitted map; reads
+route through projection helpers (`_seat_map_receipts` and its family). A legacy persisted
+`state["seatMap"]` dict, when present, is prepended at read time as `round: "legacy"` (no write-side
+migration). `build_receipt`'s `seatMap` is a derived union projection (latest seats, degradations
+union by whole-row identity, other keys last-receipt-wins). `--seat-map` at fresh state seeds
+receipt round `"0"`.
+
 **Per-round fields and `degraded` disclosures (#563, #666, #668).** Machinery records these on the round when `_fold_panel` (or dispatch-provenance folding) detects them; `_finalize_receipt` mirrors each into a `degraded` line except `canaryVerified` (evidence-only, no disclosure).
 
 | Round field | Set when | `degraded` line |

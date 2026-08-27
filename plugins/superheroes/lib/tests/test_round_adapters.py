@@ -256,11 +256,11 @@ def test_panel_with_manifest_and_canary_matches_the_hand_written_envelope(tmp_pa
         envelopes = [_result_env(d, dict(seats[d]), vendor="codex") for d in RD.DIMENSIONS]
         manifest = {d: {"vendor": "codex", "model": "gpt-5", "engine": "codex"}
                     for d in RD.DIMENSIONS}
-        state["seatMap"] = dict(seat_map)
+        state["seatMapReceipts"] = [{"round": "1", "map": dict(seat_map)}]
         return hand, envelopes, {"dispatch_manifest": manifest, "canary": probes}
 
     # Both sessions must carry the same seat map, so it is seeded into state before assembly and
-    # rides the hand-written artifact too (the fold merges `artifact["seatMap"]` into state).
+    # rides the hand-written artifact too (the fold appends `artifact["seatMap"]` to receipts).
     artifact, hand = _assert_fold_equivalent(tmp_path, RD.P_PANEL, build)
     assert artifact["ranManifest"] == hand["ranManifest"]
     assert artifact["canaryResult"] == probes
@@ -878,9 +878,9 @@ def test_seat_map_comes_from_state_and_is_omitted_when_empty(tmp_path):
     envelopes = [_result_env(dim, {"findings": []}) for dim in RD.DIMENSIONS]
     artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"])
     assert reason is None and "seatMap" not in artifact
-    state["seatMap"] = {"seats": {"code-reviewer": {"vendor": "codex"}}}
+    state["seatMapReceipts"] = [{"round": "1", "map": {"seats": {"code-reviewer": {"vendor": "codex"}}}}]
     artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"])
-    assert reason is None and artifact["seatMap"] == state["seatMap"]
+    assert reason is None and artifact["seatMap"] == {"seats": {"code-reviewer": {"vendor": "codex"}}}
 
 
 def test_canary_absent_omits_the_key_and_a_single_dict_is_tolerated(tmp_path):

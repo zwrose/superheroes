@@ -43,6 +43,15 @@ LPC = _load("loop_plan_common")
 FI = _load("finding_identity")
 version_skew = _load("version_skew")
 
+
+def _seat_map_receipts(seat_map, round_id="1"):
+    return [{"round": round_id, "map": dict(seat_map)}]
+
+
+def _set_seat_map(state, seat_map, round_id="1"):
+    state["seatMapReceipts"] = _seat_map_receipts(seat_map, round_id)
+
+
 # --- diffs --------------------------------------------------------------------
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
@@ -1782,7 +1791,7 @@ def _delta_state_ready(confirmations, surfaced, findings=None, not_discharged=No
     state["auditRounds"] = [{"round": 2, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
     state["_auditOutcome"] = {"notDischarged": nd, "discharged": ["x"]}
     state["_changedSubjects"] = ["Code"]
-    state["seatMap"] = _verified_clean_seat_map(state["config"]["vendors"])
+    state["seatMapReceipts"] = _seat_map_receipts(_verified_clean_seat_map(state["config"]["vendors"]))
     return state
 
 
@@ -3683,7 +3692,7 @@ def test_same_family_seat_map_degrades_cert_shape():
 
 def test_same_family_disclosed_in_receipt_degraded_list():
     state = RD.new_state(_cfg(leg="panel", vendors=["codex", "cursor"]))
-    state["seatMap"] = _panel_seat_map_with_same_family("security-reviewer")
+    _set_seat_map(state, _panel_seat_map_with_same_family("security-reviewer"))
     state["terminal"] = "converged"
     state["certification"] = {"shape": "full-panel-confirmed-degraded", "independence": "independent",
                               "base": "not-checked"}
@@ -3711,7 +3720,7 @@ def test_same_family_malformed_seat_map_is_safe():
 def test_same_family_does_not_clear_other_degradations():
     state = RD.new_state(_cfg(vendors=["claude"]))
     state["independenceDegraded"] = True
-    state["seatMap"] = _panel_seat_map_with_same_family()
+    _set_seat_map(state, _panel_seat_map_with_same_family())
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert state["certification"]["shape"].endswith("-degraded")
     assert state["certification"]["independence"] == "degraded"
@@ -3775,7 +3784,7 @@ def test_seat_map_pin_excusal_degraded_shape_and_disclosure():
     }
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state = RD.new_state(cfg)
-    state["seatMap"] = seats
+    _set_seat_map(state, seats)
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert state["certification"]["shape"].endswith("-degraded")
     assert "seat-pin" in state["certification"]["shapeDrivers"]
@@ -3795,7 +3804,7 @@ def test_seat_map_unproven_liveness_shape_driver():
     assert SM.unexcused_violations(seat_map)[0].get("evidence") == "unproven-liveness"
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state = RD.new_state(cfg)
-    state["seatMap"] = seat_map
+    _set_seat_map(state, seat_map)
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert "unproven-liveness" in state["certification"]["shapeDrivers"]
     assert state["certification"]["shape"].endswith("-constraint-violated")
@@ -3813,7 +3822,7 @@ def test_certification_shape_drivers_lists_every_fired_channel():
     cfg["baseDegraded"] = True
     state = RD.new_state(cfg)
     state["independenceDegraded"] = True
-    state["seatMap"] = seat_map
+    _set_seat_map(state, seat_map)
     RD._terminal_converged(state, state["config"], full_panel=True)
     drivers = state["certification"]["shapeDrivers"]
     assert drivers == ["base", "independence", "same-family", "seat-map-violation"]
@@ -3898,7 +3907,7 @@ def test_seat_map_violations_e8_sticky_across_round_map_overwrite():
     state["rounds"] = {
         "1": {"seatMapViolations": SM.unexcused_violations(seat_map_r1)},
     }
-    state["seatMap"] = clean
+    _set_seat_map(state, clean)
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert state["certification"]["shape"].endswith("-constraint-violated")
 
@@ -4185,7 +4194,7 @@ def test_skip_with_reason_records_ledger_and_rides_disclosure():
     the dedicated top-level `skippedBlockers` channel. With nothing left to fix, the run converges —
     but CLEAN EXCEPT FOR SKIPPED, never a plain success (the reason leads with clean-except-skipped)."""
     state = RD.new_state(_cfg())
-    state["seatMap"] = _verified_clean_seat_map(state["config"]["vendors"])
+    state["seatMapReceipts"] = _seat_map_receipts(_verified_clean_seat_map(state["config"]["vendors"]))
     RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
     RD._fold_judgment(state, state["config"], {"dispositions": [
         {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "shipping v1 narrow on purpose"}]})
@@ -4629,7 +4638,7 @@ def test_seat_map_unavailable_terminal_arm_without_round_record():
 
 
 def test_seat_map_unavailable_round1_map_round2_absent():
-    """Round 1 submitted a map; round 2 did not — round-1 record persists in union (#681)."""
+    """Round 1 submitted a map; round 2 did not — receipt list preserves seats (#681)."""
     state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
     seat_map = _verified_clean_seat_map(["claude", "codex"])
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
@@ -4639,11 +4648,27 @@ def test_seat_map_unavailable_round1_map_round2_absent():
     })
     assert "seatMapUnavailable" not in state["rounds"]["1"]
     state["round"] = 2
-    state["seatMap"] = {}
     RD._fold_panel(state, state["config"], {"seats": seats})
-    assert state["rounds"]["2"]["seatMapUnavailable"] == ["claude", "codex"]
+    assert "seatMapUnavailable" not in state["rounds"]["2"]
     RD._terminal_converged(state, state["config"], full_panel=True)
-    assert state["certification"]["shape"].endswith("-degraded")
+    assert "seat-map-unavailable" not in state["certification"]["shapeDrivers"]
+
+
+def test_seat_map_unavailable_rounds_arm_with_seats_present():
+    """Rounds arm alone: round record carries seatMapUnavailable while receipts have seats."""
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
+    seat_map = _verified_clean_seat_map(["claude", "codex"])
+    _set_seat_map(state, seat_map)
+    state["rounds"] = {"1": {"seatMapUnavailable": ["claude", "codex"]}}
+    assert RD._seat_map_unavailable(state) is True
+
+
+def test_seat_map_unavailable_existence_arm_no_rounds_no_seats():
+    """Existence arm alone: no round records and no receipt carries seats."""
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
+    assert state["rounds"] == {}
+    assert state["seatMapReceipts"] == []
+    assert RD._seat_map_unavailable(state) is True
 
 
 def test_seat_map_unavailable_degenerate_vendor_configs():
@@ -4666,40 +4691,126 @@ def test_seat_map_unavailable_constraint_violated_supersedes_shape():
     state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     RD._fold_panel(state, state["config"], {"seats": seats})
-    state["seatMap"] = seat_map
+    _set_seat_map(state, seat_map)
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert state["certification"]["shape"].endswith("-constraint-violated")
     assert not state["certification"]["shape"].endswith("-degraded")
 
 
 # =============================================================================
-# #681 item 3 — evidence-preserving seat map merge (Invariant B)
+# #681 — seat-map receipt list (append-only, projection family)
 # =============================================================================
 
-def test_partial_round2_seat_map_preserves_fell_open_disclosure():
-    """axis: later partial seat map must not wipe round-1 configured seats — fellOpen still fires."""
+def test_fold_appends_seat_map_receipt_not_merge():
+    """axis: each fold appends a receipt; later partial maps do not overwrite earlier seats."""
     state = RD.new_state(_cfg(leg="panel"))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     round1_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
     round1_map["seats"]["code-reviewer"] = {"vendor": "codex"}
-    RD._fold_panel(state, state["config"], {
-        "seats": seats,
-        "seatMap": round1_map,
-        "ranManifest": {"code-reviewer": "codex"},
-    })
-    assert "fellOpen" not in state["rounds"]["1"]
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round1_map})
     state["round"] = 2
     partial_map = {"seats": {"security-reviewer": {"vendor": "claude"}}}
-    RD._fold_panel(state, state["config"], {
-        "seats": seats,
-        "seatMap": partial_map,
-        "ranManifest": {"code-reviewer": "claude"},
-    })
-    assert state["seatMap"]["seats"]["code-reviewer"] == {"vendor": "codex"}
-    assert state["rounds"]["2"]["fellOpen"] == [
-        {"seat": "code-reviewer", "configured": "codex", "ran": "claude",
-         "reason": "forfeit-fell-open"},
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": partial_map})
+    assert len(state["seatMapReceipts"]) == 2
+    assert state["seatMapReceipts"][0]["map"]["seats"]["code-reviewer"] == {"vendor": "codex"}
+    assert RD._sm_latest_with_seats(state)["seats"] == partial_map["seats"]
+
+
+def test_seat_map_receipts_legacy_prepend_with_receipt_list():
+    """axis: legacy state[\"seatMap\"] prepended whenever present alongside receipts."""
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    state = RD.new_state(_cfg(leg="panel"))
+    state["seatMap"] = {"seats": {"code-reviewer": {"vendor": "codex"}}}
+    state["seatMapReceipts"] = [{"round": "1", "map": seat_map}]
+    receipts = RD._seat_map_receipts(state)
+    assert receipts[0]["round"] == "legacy"
+    assert receipts[0]["map"]["seats"]["code-reviewer"]["vendor"] == "codex"
+    assert receipts[1]["round"] == "1"
+
+
+def test_later_pin_cannot_excuse_earlier_breach():
+    """axis: per-receipt classify — later pin does not excuse earlier round's breach."""
+    SM = _load("seat_map")
+    breach_map = _seat_map_receipt_with_unexcused_maker_family()
+    pin_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    pin_map["livenessPinScoped"] = True
+    pin_map["violations"] = []
+    pin_map["degradations"] = []
+    state = RD.new_state(_cfg(leg="panel", vendors=["codex", "cursor"]))
+    state["seatMapReceipts"] = [
+        {"round": "1", "map": breach_map},
+        {"round": "2", "map": pin_map},
     ]
+    violations = RD._seat_map_violations(state)
+    assert any(v.get("constraint") == "maker-family" for v in violations)
+
+
+def test_emit_receipt_seat_map_distinct_degradation_rows_survive():
+    """axis: emitted map dedupes identical rows but distinct degradation rows survive."""
+    row_a = {"constraint": "same-family", "seat": "security-reviewer", "reason": "alpha"}
+    row_b = {"constraint": "same-family", "seat": "test-reviewer", "reason": "beta"}
+    map1 = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    map1["degradations"] = [row_a]
+    map2 = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    map2["degradations"] = [row_b]
+    state = RD.new_state(_cfg(leg="panel"))
+    state["seatMapReceipts"] = [
+        {"round": "1", "map": map1},
+        {"round": "2", "map": map2},
+    ]
+    emitted = RD.build_receipt(state)["seatMap"]
+    degs = emitted.get("degradations") or []
+    assert row_a in degs and row_b in degs
+
+
+_SEAT_MAP_RECEIPTS_CALLERS = frozenset({
+    "_sm_latest_with_seats",
+    "_sm_any_seats",
+    "_sm_same_family_seats",
+    "_sm_unexcused_violations",
+    "_sm_pin_excused_records",
+    "_sm_skew_records",
+    "_sm_plugin_version_skew_status",
+    "_emit_receipt_seat_map",
+})
+
+
+def _seat_map_receipts_call_sites():
+    """Return enclosing function names for every `_seat_map_receipts(` call in round_driver.py."""
+    tree, ast_mod = _round_driver_ast()
+    sites = set()
+    for node in tree.body:
+        if not isinstance(node, ast_mod.FunctionDef):
+            continue
+        for child in ast_mod.walk(node):
+            if isinstance(child, ast_mod.Call):
+                func = child.func
+                if isinstance(func, ast_mod.Name) and func.id == "_seat_map_receipts":
+                    sites.add(node.name)
+    return sites
+
+
+def test_seat_map_receipts_projection_family_census_positive():
+    """Every `_seat_map_receipts` caller is a projection-family member (#681)."""
+    callers = _seat_map_receipts_call_sites()
+    assert callers == set(_SEAT_MAP_RECEIPTS_CALLERS)
+
+
+def test_seat_map_blob_read_sites_census_negative():
+    """No `state[\"seatMap\"]` / `state.get(\"seatMap\")` outside `_seat_map_receipts` (#681)."""
+    allowed = 1  # the lone site inside `_seat_map_receipts`
+    pattern = re.compile(r'state\.get\("seatMap"\)|state\["seatMap"\]')
+    paths = [
+        os.path.join(_LIB, "round_driver.py"),
+        os.path.join(_LIB, "round_adapters.py"),
+    ]
+    hits = []
+    for path in paths:
+        with open(path, encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, 1):
+                if pattern.search(line):
+                    hits.append((path, lineno, line.strip()))
+    assert len(hits) == allowed, "unexpected seatMap reads: %r" % hits
 
 
 def test_partial_round2_degradations_preserves_same_family_shape():
@@ -4718,19 +4829,6 @@ def test_partial_round2_degradations_preserves_same_family_shape():
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert state["certification"]["shape"].endswith("-degraded")
     assert "same-family" in state["certification"]["shapeDrivers"]
-
-
-def test_seat_map_merge_later_wins_for_named_seat():
-    """axis: when both rounds name a seat, the later map's vendor wins."""
-    state = RD.new_state(_cfg(leg="panel"))
-    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
-    round1_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
-    round1_map["seats"]["code-reviewer"] = {"vendor": "codex"}
-    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round1_map})
-    state["round"] = 2
-    round2_map = {"seats": {"code-reviewer": {"vendor": "cursor"}}}
-    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round2_map})
-    assert state["seatMap"]["seats"]["code-reviewer"] == {"vendor": "cursor"}
 
 
 def test_fell_open_in_seat_ran_vendor_echo_ignored_at_fold():
@@ -5425,7 +5523,7 @@ def test_skew_alone_degrades_certification_three_projections():
         "plugin-version-skew: running plugin 0.30.0 semantics differ from repository 0.31.0")
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state = RD.new_state(cfg)
-    state["seatMap"] = _panel_seat_map_with_skew(reason=reason)
+    _set_seat_map(state, _panel_seat_map_with_skew(reason=reason))
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert state["certification"]["shape"].endswith("-degraded")
     assert "plugin-version-skew" in state["certification"]["shapeDrivers"]
@@ -5452,7 +5550,7 @@ def test_skew_with_unexcused_violation_constraint_violated_shape_driver_persists
     }
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state = RD.new_state(cfg)
-    state["seatMap"] = seat_map
+    _set_seat_map(state, seat_map)
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert state["certification"]["shape"].endswith("-constraint-violated")
     assert "-degraded" not in state["certification"]["shape"]
@@ -5464,8 +5562,8 @@ def test_skew_evidence_unreadable_degrades_identically():
     reason = "plugin-version-skew: skew evidence unreadable"
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state = RD.new_state(cfg)
-    state["seatMap"] = _panel_seat_map_with_skew(
-        detail=version_skew.DETAIL_EVIDENCE_UNREADABLE, reason=reason)
+    _set_seat_map(state, _panel_seat_map_with_skew(
+        detail=version_skew.DETAIL_EVIDENCE_UNREADABLE, reason=reason))
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert state["certification"]["shape"].endswith("-degraded")
     assert "plugin-version-skew" in state["certification"]["shapeDrivers"]
@@ -5486,7 +5584,7 @@ def test_skew_malformed_seat_map_is_safe():
 def test_no_skew_record_absent_from_shape_drivers_and_degraded():
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state = RD.new_state(cfg)
-    state["seatMap"] = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    _set_seat_map(state, _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS}))
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert "plugin-version-skew" not in state["certification"]["shapeDrivers"]
     assert state["certification"]["pluginVersionSkew"] == "absent"
@@ -5505,7 +5603,7 @@ def test_skew_classification_uses_shared_constant():
         {"constraint": "plugin-version-skew-typo", "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
          "reason": "plugin-version-skew: near-miss ignored"},
     ]
-    state["seatMap"] = seat_map
+    _set_seat_map(state, seat_map)
     records = RD._skew_records(state)
     assert len(records) == 1
     assert records[0]["reason"] == "plugin-version-skew: matched"
@@ -5518,7 +5616,7 @@ def test_skew_disclosure_prose_single_prefix():
         "family/registry semantics may differ")
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state = RD.new_state(cfg)
-    state["seatMap"] = _panel_seat_map_with_skew(reason=reason)
+    _set_seat_map(state, _panel_seat_map_with_skew(reason=reason))
     RD._terminal_converged(state, state["config"], full_panel=True)
     receipt = RD.build_receipt(state)
     skew_lines = [d for d in receipt["degraded"] if "plugin-version-skew" in d]
@@ -5533,7 +5631,7 @@ def test_skew_disclosure_prose_no_usable_reason():
     state = RD.new_state(cfg)
     seat_map = _panel_seat_map_with_skew(reason="")
     seat_map["degradations"][0]["reason"] = ""
-    state["seatMap"] = seat_map
+    _set_seat_map(state, seat_map)
     RD._terminal_converged(state, state["config"], full_panel=True)
     receipt = RD.build_receipt(state)
     skew_lines = [d for d in receipt["degraded"] if "plugin-version-skew" in d]
@@ -5565,7 +5663,7 @@ def test_certification_plugin_version_skew_status_from_seat_map(status):
             "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
             "reason": "plugin-version-skew: degraded for status test",
         }]
-    state["seatMap"] = seat_map
+    _set_seat_map(state, seat_map)
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert state["certification"]["pluginVersionSkew"] == status
 
@@ -5573,7 +5671,7 @@ def test_certification_plugin_version_skew_status_from_seat_map(status):
 def test_certification_plugin_version_skew_status_absent_without_tri_state():
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state = RD.new_state(cfg)
-    state["seatMap"] = _panel_seat_map_with_skew(plugin_version_skew_status=None)
+    _set_seat_map(state, _panel_seat_map_with_skew(plugin_version_skew_status=None))
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert state["certification"]["pluginVersionSkew"] == "absent"
 
@@ -5588,7 +5686,7 @@ def test_certification_plugin_version_skew_status_absent_when_seat_map_missing()
 def test_certification_plugin_version_skew_status_absent_when_tri_state_malformed():
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state = RD.new_state(cfg)
-    state["seatMap"] = {"pluginVersionSkew": "not-a-dict"}
+    _set_seat_map(state, {"pluginVersionSkew": "not-a-dict"})
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert state["certification"]["pluginVersionSkew"] == "absent"
 
@@ -5596,13 +5694,13 @@ def test_certification_plugin_version_skew_status_absent_when_tri_state_malforme
 def test_certification_plugin_version_skew_status_absent_when_status_invalid():
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state = RD.new_state(cfg)
-    state["seatMap"] = {
+    _set_seat_map(state, {
         "pluginVersionSkew": {
             "status": "bogus",
             "detail": "x",
             "inspectedRoot": "/tmp/repo",
         },
-    }
+    })
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert state["certification"]["pluginVersionSkew"] == "unknown"
 
@@ -5612,7 +5710,7 @@ def test_certification_plugin_version_skew_unknown_status_agrees_with_degradatio
     reason = "plugin-version-skew: future build persisted unrecognized status"
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state = RD.new_state(cfg)
-    state["seatMap"] = {
+    _set_seat_map(state, {
         "pluginVersionSkew": {
             "status": "future-status",
             "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
@@ -5623,7 +5721,7 @@ def test_certification_plugin_version_skew_unknown_status_agrees_with_degradatio
             "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
             "reason": reason,
         }],
-    }
+    })
     RD._terminal_converged(state, state["config"], full_panel=True)
     cert = state["certification"]
     assert cert["pluginVersionSkew"] != "absent"

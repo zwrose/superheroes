@@ -385,7 +385,7 @@ def test_seat_map_seeds_config_and_state(tmp_path):
     assert RD.main(argv) == 0
     state = _state(d)
     assert state["config"]["seatMap"] == SEAT_MAP
-    assert state["seatMap"] == SEAT_MAP
+    assert state["seatMapReceipts"] == [{"round": "0", "map": SEAT_MAP}]
 
 
 def test_seat_map_unparseable_refuses_nonzero(tmp_path, capsys):
@@ -1384,7 +1384,7 @@ def test_emitted_order_resolves_host_seat_vendor_from_config_seat_map(tmp_path, 
                                                     "engine": "codex"}}}
     d = _session(tmp_path, seatMap=None)
     state = _state(d)
-    assert state["seatMap"] == {}
+    assert state["seatMapReceipts"] == []
     state["config"]["seatMap"] = partial
     RD.save_state(d, state)
 
@@ -1400,7 +1400,7 @@ def test_emitted_order_resolves_host_seat_vendor_from_config_seat_map(tmp_path, 
     assert submit_out["ok"] is True, submit_out
 
     state = _state(d)
-    assert state["seatMap"] == {}
+    assert state["seatMapReceipts"] == []
     assert state["config"]["seatMap"]["seats"] == partial["seats"]
 
     # Reach the next panel dispatch through the SUPPORTED re-arm — the #174 confirmation re-arm,
@@ -1448,7 +1448,7 @@ def test_empty_submitted_seat_map_preserves_accumulated_seats(tmp_path, adapters
                                                     "engine": "codex"}}}
     d = _session(tmp_path, seatMap=partial)
     state = _state(d)
-    assert state["seatMap"]["seats"] == partial["seats"]
+    assert state["seatMapReceipts"][0]["map"]["seats"] == partial["seats"]
 
     pend = _pending(d)
     seats = {dim: {"findings": []} for dim in RD.DIMENSIONS}
@@ -1459,7 +1459,7 @@ def test_empty_submitted_seat_map_preserves_accumulated_seats(tmp_path, adapters
     assert submit_out["ok"] is True, submit_out
 
     state = _state(d)
-    assert state["seatMap"]["seats"] == partial["seats"]
+    assert RD._sm_latest_with_seats(state)["seats"] == partial["seats"]
 
 
 def test_emitted_order_discloses_vendor_gap_when_seat_map_absent(tmp_path, adapters):
