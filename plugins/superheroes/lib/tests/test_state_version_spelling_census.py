@@ -74,6 +74,7 @@ _SPELLING_ALLOWLIST = {
     },
     ("loop_plan_common.py", '"schemaVersion": 1'): {
         "reason": "loop-plan common manifest schema, not the driver state/receipt version",
+        "max_count": 5,
     },
     ("mode_registry.py", "SCHEMA_VERSION = 1"): {
         "reason": "mode-registry meta schema, not the driver state/receipt version",
@@ -98,6 +99,7 @@ _SPELLING_ALLOWLIST = {
     },
     ("review_memory.py", '"schemaVersion": 2'): {
         "reason": "review-memory round-record schema v2, not the driver state/receipt version",
+        "max_count": 2,
     },
     ("spec_loop_plan.py", '"schemaVersion": 1'): {
         "reason": "spec-loop-plan manifest schema, not the driver state/receipt version",
@@ -414,6 +416,31 @@ def _is_allowlisted(finding):
     return key in _SPELLING_ALLOWLIST
 
 
+def _unexpected_findings(findings):
+    """Return findings that are not covered by the tier-1 allowlist.
+
+    Each allowlist entry may set ``max_count`` (default 1). When more live sites
+    share the same ``(relpath, segment)`` key than ``max_count``, the extras are
+    unexpected — a second copy-and-paste regression must not hide behind one slot.
+    """
+    from collections import defaultdict
+
+    by_key = defaultdict(list)
+    unexpected = []
+    for finding in findings:
+        key = (finding.relpath, finding.segment)
+        if key in _SPELLING_ALLOWLIST:
+            by_key[key].append(finding)
+        else:
+            unexpected.append(finding)
+    for key, grouped in by_key.items():
+        max_count = _SPELLING_ALLOWLIST[key].get("max_count", 1)
+        if len(grouped) > max_count:
+            sorted_group = sorted(grouped, key=lambda f: (f.line, f.leg))
+            unexpected.extend(sorted_group[max_count:])
+    return unexpected
+
+
 def run_tree_census():
     all_findings = []
     marker_modules = []
@@ -510,7 +537,7 @@ def test_spelling_allowlist_entries_match_live_sites():
 
 def test_state_version_spelling_census():
     findings = run_tree_census()
-    unexpected = [f for f in findings if not _is_allowlisted(f)]
+    unexpected = _unexpected_findings(findings)
     assert not unexpected, (
         "hand-spelled state/receipt version sites:\n" + _format_findings(unexpected)
     )

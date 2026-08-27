@@ -72,11 +72,22 @@ def _parse_gate_artifact_example_dispositions(text):
 
 def _parse_provenance_field_shapes(text):
     """``field — shape`` pairs from the owner-gate ``_provenance`` fenced block."""
+    marker_count = text.count(_PROVENANCE_MARKER)
+    if marker_count != 1:
+        raise RuntimeError(
+            "expected exactly one owner-gate _provenance marker in round-driver.md, "
+            "found %d" % marker_count
+        )
     lines = _parse_fenced_text_block(text, _PROVENANCE_MARKER)
     pairs = {}
     for line in lines:
         field, shape = line.split(" — ", 1)
-        pairs[field.strip()] = shape.strip()
+        field = field.strip()
+        if field in pairs:
+            raise RuntimeError(
+                "duplicate provenance field %r in owner-gate _provenance block" % field
+            )
+        pairs[field] = shape.strip()
     return pairs
 
 
