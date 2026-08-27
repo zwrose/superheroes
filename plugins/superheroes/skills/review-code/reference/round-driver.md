@@ -236,7 +236,7 @@ Example `present-judgment` gate artifact (gate shape plus a filled-in `_provenan
 ```json
 {
   "dispositions": [
-    {"id": "finding-1", "disposition": "accept"}
+    {"id": "finding-1", "disposition": "fix-as-suggested"}
   ],
   "_provenance": {
     "ruledBy": "owner",
