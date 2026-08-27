@@ -883,6 +883,7 @@ def _base_degraded(state):
 # call sites and existing tests.
 _seat_map_receipts = seat_map_receipts.receipts
 _sm_latest_with_seats = seat_map_receipts.latest_with_seats
+_sm_effective_seat_map = seat_map_receipts.effective_seat_map
 _sm_any_seats = seat_map_receipts.any_seats
 _sm_same_family_seats = seat_map_receipts.same_family_seats
 _sm_unexcused_violations = seat_map_receipts.unexcused_violations
@@ -5186,15 +5187,9 @@ def _reviewer_engine_vendor(repo_root):
 
 
 def effective_seat_map(state):
-    """Seat map for order emission: latest receipt with seats wins; otherwise the seeded config (#723).
+    """Seat map for order emission — delegates to ``seat_map_receipts.effective_seat_map`` (#723).
     Cross-module caller: round_adapters._assemble_panel."""
-    sm = _sm_latest_with_seats(state)
-    if isinstance(sm.get("seats"), dict) and sm.get("seats"):
-        return sm
-    cfg_sm = (state.get("config") or {}).get("seatMap")
-    if isinstance(cfg_sm, dict):
-        return cfg_sm
-    return sm if isinstance(sm, dict) else {}
+    return seat_map_receipts.effective_seat_map(state)
 
 
 def _effective_seat_map(state):
