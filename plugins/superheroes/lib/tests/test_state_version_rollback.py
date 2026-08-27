@@ -123,3 +123,41 @@ def test_legacy_refusal_durable_records_names_fresh_session(tmp_path):
     assert "fresh session" in detail
     assert "record-submit-interleaved" in detail
     assert "`next`/`submit`" not in detail
+
+
+def test_legacy_refusal_advance_latched_names_fresh_session(tmp_path):
+    """An advance-latched legacy session with no durable records names a fresh session dir."""
+    session_dir, gitdir, _head_path = _legacy_v3_session(tmp_path, name="legacy-advance-latched")
+    state = _state(session_dir)
+    state["_advanceUsed"] = True
+    RD.save_state(session_dir, state)
+    out = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
+    assert out["ok"] is False
+    assert out["reason"] == RD.LEGACY_SESSION_REFUSAL
+    detail = out.get("detail", "")
+    assert "advance-submit-interleaved" in detail
+    assert "fresh session" in detail
+    assert "`next`/`submit`" not in detail
+
+
+@pytest.mark.parametrize("land_records,next_submit,fresh_session,interleave_tag", [
+    (False, True, False, None),
+    (True, False, True, "record-submit-interleaved"),
+])
+def test_legacy_refusal_existing_branches_still_answer_as_before(
+        tmp_path, land_records, next_submit, fresh_session, interleave_tag):
+    """Plain and durable-record legacy refusal branches keep their recovery wording."""
+    session_dir, gitdir, _head_path = _legacy_v3_session(
+        tmp_path, name="legacy-branch-%s" % land_records, land_records=land_records)
+    out = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
+    assert out["ok"] is False
+    assert out["reason"] == RD.LEGACY_SESSION_REFUSAL
+    detail = out.get("detail", "")
+    if next_submit:
+        assert "`next`/`submit`" in detail
+    else:
+        assert "`next`/`submit`" not in detail
+    if fresh_session:
+        assert "fresh session" in detail
+    if interleave_tag:
+        assert interleave_tag in detail

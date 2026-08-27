@@ -5023,6 +5023,10 @@ def _legacy_session_has_durable_pending_records(session_dir, state):
 
 def _legacy_session_refusal_detail(session_dir, loaded):
     version = loaded.get("schemaVersion")
+    if loaded.get("_advanceUsed"):
+        return ("loop-state.json is schemaVersion %r with `_advanceUsed` set — hand `submit` "
+                "refuses `advance-submit-interleaved`; start a fresh session dir to continue"
+                % (version,))
     if _legacy_session_has_durable_pending_records(session_dir, loaded):
         return ("loop-state.json is schemaVersion %r with durable seat record(s) at the pending "
                 "slot — hand `submit` refuses `record-submit-interleaved`; start a fresh session "
