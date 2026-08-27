@@ -5,8 +5,31 @@ round-scoped). Every read of submitted-map content goes through exactly one func
 ``receipts`` is the sole reader of raw state."""
 import json
 
+import liveness_cache
 import seat_map
 import version_skew
+
+# Evidence / breach / provenance keys — union or most-conservative merge, never last-wins (#681).
+_EVIDENCE_MAP_KEYS = frozenset({
+    "violations",
+    "liveCellsSource",
+    "liveCells",
+    "liveVendors",
+    "livenessPinScoped",
+    "authorFamily",
+})
+_LIST_EVIDENCE_MAP_KEYS = frozenset({
+    "violations",
+    "liveCells",
+    "liveVendors",
+})
+# liveCellsSource trust — lower rank is less trusted; unrecognized sources rank below unprobed.
+_LIVE_CELLS_SOURCE_TRUST = {
+    liveness_cache.LIVE_CELLS_SOURCE_PROBED: 3,
+    liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED: 2,
+    liveness_cache.LIVE_CELLS_SOURCE_UNPROBED: 1,
+}
+_UNRECOGNIZED_LIVE_CELLS_SOURCE_TRUST = 0
 
 
 def receipts(state):
@@ -133,11 +156,12 @@ def canary_map(state, round_map):
 
 
 def emit_receipt_seat_map(state):
-    """Derived read-time union for ``build_receipt`` — latest seats, merged degradations, last-wins."""
+    """Derived read-time union for ``build_receipt`` — latest seats, merged evidence, last-wins scalars."""
+    receipt_list = receipts(state)
     base = dict(latest_with_seats(state))
     seen: set[str] = set()
     merged_degs: list = []
-    for entry in receipts(state):
+    for entry in receipt_list:
         degs = entry["map"].get("degradations")
         if not isinstance(degs, list):
             continue
@@ -150,12 +174,72 @@ def emit_receipt_seat_map(state):
             merged_degs.append(row)
     if merged_degs:
         base["degradations"] = merged_degs
-    for entry in receipts(state):
+    for key in _LIST_EVIDENCE_MAP_KEYS:
+        seen_rows: set[str] = set()
+        merged_rows: list = []
+        for entry in receipt_list:
+            rows = entry["map"].get(key)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict):
+                    row_key = json.dumps(row, sort_keys=True)
+                    if row_key in seen_rows:
+                        continue
+                    seen_rows.add(row_key)
+                merged_rows.append(row)
+        if merged_rows:
+            base[key] = merged_rows
+        else:
+            base.pop(key, None)
+    live_cells_sources: list = []
+    for entry in receipt_list:
+        if "liveCellsSource" in entry["map"]:
+            live_cells_sources.append(entry["map"]["liveCellsSource"])
+    if live_cells_sources:
+        base["liveCellsSource"] = _merge_live_cells_source(live_cells_sources)
+    else:
+        base.pop("liveCellsSource", None)
+    pin_values: list = []
+    for entry in receipt_list:
+        if "livenessPinScoped" in entry["map"]:
+            pin_values.append(entry["map"]["livenessPinScoped"])
+    if pin_values:
+        # Any receipt not explicitly False leaves liveness evidence unproven — True wins over False.
+        base["livenessPinScoped"] = any(val is not False for val in pin_values)
+    else:
+        base.pop("livenessPinScoped", None)
+    author_families: list = []
+    for entry in receipt_list:
+        if "authorFamily" in entry["map"]:
+            author_families.append(entry["map"]["authorFamily"])
+    if (
+        author_families
+        and all(isinstance(fam, str) and fam for fam in author_families)
+        and len(set(author_families)) == 1
+    ):
+        base["authorFamily"] = author_families[0]
+    else:
+        base.pop("authorFamily", None)
+    for entry in receipt_list:
         map_ = entry["map"]
         for k, v in map_.items():
-            if k not in ("seats", "degradations"):
-                base[k] = v
+            if k in ("seats", "degradations") or k in _EVIDENCE_MAP_KEYS:
+                continue
+            base[k] = v
     return base
+
+
+def _merge_live_cells_source(sources: list) -> object:
+    """Least-trusted liveCellsSource across receipts — disagreement is unproven provenance."""
+    best_rank = -1
+    worst_value = None
+    for source in sources:
+        rank = _LIVE_CELLS_SOURCE_TRUST.get(source, _UNRECOGNIZED_LIVE_CELLS_SOURCE_TRUST)
+        if rank < best_rank or best_rank < 0:
+            best_rank = rank
+            worst_value = source
+    return worst_value
 
 
 def _skew_record_identity(rec):
@@ -201,11 +285,32 @@ def _skew_records_from_seat_map(seat_map_blob):
     """Plugin-version-skew degradations from one seat map's degradations list."""
     degradations = seat_map_blob.get("degradations") if isinstance(seat_map_blob, dict) else None
     if not isinstance(degradations, list):
-        return []
+        degradations = []
     records = []
     for deg in degradations:
         rec = _enrich_skew_degradation(deg, seat_map_blob)
         if rec is None:
             continue
         records.append(rec)
+    pvs = seat_map_blob.get("pluginVersionSkew") if isinstance(seat_map_blob, dict) else None
+    if isinstance(pvs, dict) and not records:
+        status = pvs.get("status")
+        try:
+            unknown_status = status not in version_skew.STATUSES
+        except TypeError:
+            unknown_status = True
+        if unknown_status:
+            offending = status
+            synthetic_status = (
+                offending
+                if offending not in (None, "") and version_skew.appends_degradation(offending)
+                else version_skew.default_missing_status()
+            )
+            records.append({
+                "constraint": version_skew.CONSTRAINT,
+                "status": synthetic_status,
+                "detail": pvs.get("detail") or version_skew.DETAIL_SEMANTICS_DIVERGENT,
+                "reason": "unrecognized pluginVersionSkew.status: %r" % offending,
+                "inspectedRoot": pvs.get("inspectedRoot") or "",
+            })
     return records
