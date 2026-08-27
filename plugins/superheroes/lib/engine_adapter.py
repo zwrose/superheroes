@@ -893,10 +893,7 @@ def _investigated_path_is_placeholder_echo(path_val, *, echo_nonce=None):
     """True when a whole investigated path string is a verbatim/near-copy example placeholder."""
     if not isinstance(path_val, str):
         return False
-    placeholders = review_findings_schema.example_member_values(None)
-    effective = review_findings_schema.effective_nonce(echo_nonce)
-    if effective is not None:
-        placeholders = placeholders | review_findings_schema.example_member_values(effective)
+    placeholders = review_findings_schema._build_placeholder_set(echo_nonce)
     normalized_placeholders = review_findings_schema._normalized_placeholder_set(placeholders)
     normalized = review_findings_schema._near_copy_normalize(path_val)
     return bool(normalized) and normalized in normalized_placeholders
