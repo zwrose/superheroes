@@ -661,8 +661,8 @@ def _state_version(state):
 
 
 def _receipt_version(state):
-    """The receipt schemaVersion for a state: the STATE's version drives it, so a v2 session still
-    terminates to today's `receipt-certified/2` and only a v3 session emits `receipt-certified/3`."""
+    """The receipt schemaVersion for a state: the STATE's version drives it via
+    ``RECEIPT_CERTIFIED_SCHEMA % _state_version(state)``."""
     return _state_version(state) or SCHEMA_VERSION
 
 
@@ -3918,7 +3918,8 @@ def validate_receipt(receipt):
     """Validate a driver receipt's SHAPE — version-dispatched since #723.
 
     Two shapes are valid and they are structurally UN-CONFUSABLE, which is the point: a CERTIFIED
-    receipt (`receipt-certified/2` or `/3`) carries its `certification` block and an allowlisted
+    receipt (``RECEIPT_CERTIFIED_SCHEMA % <v>`` for a supported ``v``) carries its
+    ``certification`` block and an allowlisted
     verdict; an ATTESTED receipt (`receipt-attested/1`, written by `attest`) carries an
     `attestation` block, the `uncertified-manual` verdict, and NO certification block at all. A
     reader can therefore never mistake a hand attestation for a certification, and a certified
@@ -4995,6 +4996,36 @@ def _state_load_fault(session_dir):
     return "state-schema-unsupported", FAULT_CALLER, None
 
 
+def _legacy_session_has_durable_pending_records(session_dir, state):
+    """True when durable seat records exist at the pending slot and ``_submitUsed`` is not set."""
+    if state.get("_submitUsed"):
+        return False
+    pending = state.get("pending")
+    if not isinstance(pending, dict):
+        return False
+    phase = pending.get("phase")
+    if phase not in _adapters().ADAPTER_PHASES:
+        return False
+    rnd = pending.get("round")
+    attempt = pending.get("attempt")
+    roster, roster_reason = _adapters().roster_for(
+        phase, state, state.get("config") or {})
+    if roster_reason is not None or not isinstance(roster, (list, tuple)):
+        return False
+    roster = [s for s in roster if isinstance(s, str)]
+    return bool(_durable_slot_records(session_dir, rnd, phase, attempt, roster))
+
+
+def _legacy_session_refusal_detail(session_dir, loaded):
+    version = loaded.get("schemaVersion")
+    if _legacy_session_has_durable_pending_records(session_dir, loaded):
+        return ("loop-state.json is schemaVersion %r with durable seat record(s) at the pending "
+                "slot — hand `submit` refuses `record-submit-interleaved`; start a fresh session "
+                "dir to continue" % (version,))
+    return ("loop-state.json is schemaVersion %r; `next`/`submit` "
+            "finish it" % (version,))
+
+
 def _load_driver_state(session_dir, cmd):
     """(state, refusal) — the front door every #723 subcommand shares."""
     ok, loaded = load_state(session_dir)
@@ -5008,8 +5039,7 @@ def _load_driver_state(session_dir, cmd):
         return None, _refuse_cmd(session_dir, cmd, "bootstrap-required")
     if _state_version(loaded) != STATE_SCHEMA_VERSION:
         return None, _refuse_cmd(session_dir, cmd, LEGACY_SESSION_REFUSAL,
-                                 detail="loop-state.json is schemaVersion %r; `next`/`submit` "
-                                        "finish it" % (loaded.get("schemaVersion"),))
+                                 detail=_legacy_session_refusal_detail(session_dir, loaded))
     return loaded, None
 
 

@@ -24,6 +24,8 @@ _PINNED_SYMBOLS = frozenset({
     "RECEIPT_INTERIM_SCHEMA",
 })
 
+_VERSION_ACCESSORS = ("_state_version", "_receipt_version")
+
 _BEGIN_MARKER = "# --- version spelling: pinned declaration block (BEGIN) ---"
 _END_MARKER = "# --- version spelling: pinned declaration block (END) ---"
 
@@ -42,6 +44,66 @@ _SPELLING_ALLOWLIST = {
             "the in-memory review-record schema, a different schema from the "
             "driver's state/receipt version"
         ),
+    },
+    ("architect_config.py", "SCHEMA_VERSION = 2"): {
+        "reason": "architect-config manifest schema, not the driver state/receipt version",
+    },
+    ("control_plane.py", "SCHEMA_VERSION = 1"): {
+        "reason": "control-plane meta schema, not the driver state/receipt version",
+    },
+    ("core_md.py", "SCHEMA_VERSION = 2"): {
+        "reason": "core-md sidecar schema, not the driver state/receipt version",
+    },
+    ("definition_doc.py", "SCHEMA_VERSION = 1"): {
+        "reason": "definition-doc manifest schema, not the driver state/receipt version",
+    },
+    ("eval/review_loop_runner.py", '"schemaVersion": 1'): {
+        "reason": "review-loop-runner telemetry envelope schema, not the driver state/receipt version",
+    },
+    ("eval/review_telemetry.py", '"schemaVersion": 1'): {
+        "reason": "review-telemetry record schema, not the driver state/receipt version",
+    },
+    ("guardian_lens_duplication.py", '"schemaVersion": 1'): {
+        "reason": "guardian lens-duplication digest schema, not the driver state/receipt version",
+    },
+    ("guardian_lens_hotspots.py", "SCHEMA_VERSION = 1"): {
+        "reason": "guardian lens-hotspots digest schema, not the driver state/receipt version",
+    },
+    ("liveness_cache.py", "SCHEMA_VERSION = 3"): {
+        "reason": "liveness-cache snapshot schema, not the driver state/receipt version",
+    },
+    ("loop_plan_common.py", '"schemaVersion": 1'): {
+        "reason": "loop-plan common manifest schema, not the driver state/receipt version",
+    },
+    ("mode_registry.py", "SCHEMA_VERSION = 1"): {
+        "reason": "mode-registry meta schema, not the driver state/receipt version",
+    },
+    ("panel_tally.py", "SCHEMA_VERSION = 1"): {
+        "reason": "panel-tally verdict schema, not the driver state/receipt version",
+    },
+    ("pilot_appctl.py", 'authorized.get("schemaVersion") != 1'): {
+        "reason": "pilot appctl authorization record schema, not the driver state/receipt version",
+    },
+    ("pilot_conformance_cleanup.py", '"schemaVersion": 1'): {
+        "reason": "pilot conformance-cleanup record schema, not the driver state/receipt version",
+    },
+    ("pilot_provision.py", '"schemaVersion": 1'): {
+        "reason": "pilot provision manifest schema, not the driver state/receipt version",
+    },
+    ("review_loop_plan.py", "SCHEMA_VERSION = 1"): {
+        "reason": "review-loop-plan manifest schema, not the driver state/receipt version",
+    },
+    ("review_memory.py", 'record.get("schemaVersion") == 2'): {
+        "reason": "review-memory round-record schema v2, not the driver state/receipt version",
+    },
+    ("review_memory.py", '"schemaVersion": 2'): {
+        "reason": "review-memory round-record schema v2, not the driver state/receipt version",
+    },
+    ("spec_loop_plan.py", '"schemaVersion": 1'): {
+        "reason": "spec-loop-plan manifest schema, not the driver state/receipt version",
+    },
+    ("state.py", "SCHEMA_VERSION = 1"): {
+        "reason": "generic state manifest schema, not the driver state/receipt version",
     },
 }
 
@@ -137,7 +199,20 @@ def _int_constants_from_container(node):
     return None
 
 
+def _is_version_accessor_call(node):
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name) and func.id in _VERSION_ACCESSORS:
+        return True
+    if isinstance(func, ast.Attribute) and func.attr in _VERSION_ACCESSORS:
+        return True
+    return False
+
+
 def _is_schema_version_read(node):
+    if _is_version_accessor_call(node):
+        return True
     if isinstance(node, ast.Subscript):
         sl = node.slice
         if isinstance(sl, ast.Constant) and sl.value == "schemaVersion":
@@ -286,11 +361,6 @@ def _scan_constant_assignments(tree, source, relpath, pinned_begin, pinned_end):
         for target in node.targets:
             if not isinstance(target, ast.Name) or target.id not in _PINNED_SYMBOLS:
                 continue
-            # Unrelated modules declare their own schema-version constants under the
-            # same identifier; only round_driver.py carries the pinned block's
-            # SCHEMA_VERSION binding.
-            if target.id == "SCHEMA_VERSION" and relpath != "round_driver.py":
-                continue
             yield Finding(
                 relpath,
                 node.lineno,
@@ -303,7 +373,7 @@ def _scan_string_literals(tree, source, relpath):
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
             continue
-        if _RECEIPT_CERTIFIED_LITERAL_RE.fullmatch(node.value):
+        if _RECEIPT_CERTIFIED_LITERAL_RE.search(node.value):
             yield Finding(
                 relpath,
                 node.lineno,
@@ -316,7 +386,7 @@ def census_module(path, source, *, pinned_range=None):
     """Return findings for one module source string."""
     relpath = _relpath(path)
     tree = ast.parse(source, filename=path)
-    in_scope = _module_references_pinned_symbols(tree)
+    refs_pinned = _module_references_pinned_symbols(tree)
     findings = []
 
     if pinned_range is None:
@@ -326,10 +396,11 @@ def census_module(path, source, *, pinned_range=None):
             pinned_range = (0, 0)
     pinned_begin, pinned_end = pinned_range
 
-    if in_scope:
+    if refs_pinned:
         findings.extend(_scan_mod_format(tree, source, relpath))
-        findings.extend(_scan_comparisons(tree, source, relpath))
-        findings.extend(_scan_bindings(tree, source, relpath))
+    findings.extend(_scan_comparisons(tree, source, relpath))
+    findings.extend(_scan_bindings(tree, source, relpath))
+    if refs_pinned:
         findings.extend(_scan_constant_assignments(
             tree, source, relpath, pinned_begin, pinned_end,
         ))
@@ -494,7 +565,7 @@ def test_synthetic_injection_comparison():
         source = fh.read()
     injected = source.replace(
         "if _state_version(loaded) != STATE_SCHEMA_VERSION:",
-        'if loaded.get("schemaVersion") == 99:',
+        "if _state_version(loaded) != 99:",
         1,
     )
     findings = census_module(path, injected)

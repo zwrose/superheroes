@@ -80,6 +80,23 @@ def _cfg(**over):
     return base
 
 
+def _certified_v4_spine(rounds):
+    return {
+        "schemaVersion": 4,
+        "schema": round_driver.RECEIPT_CERTIFIED_SCHEMA % 4,
+        "verdict": "converged",
+        "certificationShape": "audited-chain",
+        "certification": {"shape": "audited-chain"},
+        "scriptRan": {"byPhase": {}, "invocations": 1},
+        "seatMap": {},
+        "rounds": rounds,
+        "findings": [],
+        "decisions": [],
+        "degraded": [],
+        "skippedBlockers": [],
+    }
+
+
 def _certified_v3_spine(rounds):
     return {
         "schemaVersion": 3,
@@ -231,6 +248,7 @@ def test_terminal_receipt_validates(tmp_path):
 @pytest.mark.parametrize("bad_entry", [None, "not-an-object", 42])
 @pytest.mark.parametrize("form,spine_fn", [
     ("certified-v3", _certified_v3_spine),
+    ("certified-v4", _certified_v4_spine),
     ("attested", _attested_spine),
     ("interim", _interim_spine),
 ])
@@ -246,6 +264,7 @@ def test_validator_refuses_non_object_round_entries(form, spine_fn, bad_entry):
 
 @pytest.mark.parametrize("form,spine_fn", [
     ("certified-v3", _certified_v3_spine),
+    ("certified-v4", _certified_v4_spine),
     ("attested", _attested_spine),
     ("interim", _interim_spine),
 ])
