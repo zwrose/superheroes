@@ -1151,6 +1151,9 @@ def _default_config(overrides=None):
         # `round_commit` submit-accept transaction rather than calling it from `_fold`, because
         # `_fold` runs before that transaction opens.
         "recordsPath": None,
+        # A caller that already owns round-records.json — e.g. a harness with its own producer —
+        # sets this False; the driver then never writes that file.
+        "persistRecords": True,
         "coveragePath": None,
         # PR-mode prior review comments (a list) for the author-justification post-filter. Wired from
         # the CLI's `--prior-comments` (#507 v7); None → the filter never fires.
@@ -1336,10 +1339,20 @@ def _persist_round_records(state, config):
     path = config.get("recordsPath")
     if not path:
         return
+    if not config.get("persistRecords"):
+        return
     if state.get("_resumeCorrupt"):
         return
+
+    def _seed_findings_before_park():
+        # A park between the panel fold and synthesis leaves compiled findings in _toVerify
+        # only; without this copy build_receipt would under-report what the round gathered.
+        if not state.get("findings") and state.get("_toVerify"):
+            state["findings"] = state["_toVerify"]
+
     loaded = review_memory.load_records_state(path, _panel_dimensions(config))
     if not loaded.get("ok"):
+        _seed_findings_before_park()
         _park_cannot_certify(
             state,
             "durable round records at %s (%s) could not be refreshed — cannot certify"
@@ -1359,16 +1372,26 @@ def _persist_round_records(state, config):
             durable[review_memory.DISCLOSURES_FIELD] = block
         outgoing.append(durable)
     outgoing.sort(key=lambda r: r.get("round") if isinstance(r.get("round"), int) else 0)
-    accum = []
-    for rec in outgoing:
-        result = review_memory.persist_record(path, accum, rec)
-        if not result.get("ok"):
-            _park_cannot_certify(
-                state,
-                "durable round records at %s could not be persisted (%s)"
-                % (path, result.get("reason") or result.get("detail") or "write-failed"))
-            return
-        accum = result.get("records") or []
+    if not outgoing:
+        return
+    records_arg = outgoing[:-1]
+    last = outgoing[-1]
+    try:
+        result = review_memory.persist_record(path, records_arg, last)
+    except OSError as exc:
+        _seed_findings_before_park()
+        _park_cannot_certify(
+            state,
+            "durable round records at %s could not be persisted (%s)"
+            % (path, exc))
+        return
+    if not result.get("ok"):
+        _seed_findings_before_park()
+        _park_cannot_certify(
+            state,
+            "durable round records at %s could not be persisted (%s)"
+            % (path, result.get("reason") or result.get("detail") or "write-failed"))
+        return
 
 
 def load_state(session_dir):

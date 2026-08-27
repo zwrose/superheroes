@@ -3054,10 +3054,17 @@ def test_producer_parks_and_preserves_a_destination_that_went_corrupt(tmp_path):
 
 def test_producer_parks_when_the_durable_write_fails(tmp_path, monkeypatch):
     records = tmp_path / "round-records.json"
-    records.write_text("[]")
+    initial_text = json.dumps(
+        [_seed_record(1, {"vacuousSeats": ["x"]}), _seed_record(7, {"vacuousSeats": ["y"]})],
+        indent=2) + "\n"
+    records.write_text(initial_text)
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    state["_records"] = [_seed_record(1)]
-    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    state["_records"] = [
+        _seed_record(1, {"vacuousSeats": ["a"]}),
+        _seed_record(2, {"vacuousSeats": ["b"]}),
+    ]
+    state["rounds"]["1"] = {"vacuousSeats": ["a"]}
+    state["rounds"]["2"] = {"vacuousSeats": ["b"]}
     monkeypatch.setattr(
         RD.review_memory, "persist_record",
         lambda path, accum, rec: {"ok": False, "reason": "write-failed"})
@@ -3065,6 +3072,72 @@ def test_producer_parks_when_the_durable_write_fails(tmp_path, monkeypatch):
     assert state["terminal"] == "cannot-certify"
     detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
     assert "write-failed" in detail
+    assert records.read_text() == initial_text
+
+
+def test_producer_parks_when_persist_record_raises_oserror(tmp_path, monkeypatch):
+    records = tmp_path / "round-records.json"
+    records.write_text("[]")
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["_records"] = [_seed_record(1)]
+    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    def _raise_oserror(path, accum, rec):
+        raise OSError(13, "permission denied")
+
+    monkeypatch.setattr(RD.review_memory, "persist_record", _raise_oserror)
+    RD._persist_round_records(state, state["config"])
+    assert state["terminal"] == "cannot-certify"
+    assert "permission denied" in next(
+        d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
+
+
+def test_producer_park_after_panel_fold_carries_toverify_findings(tmp_path, monkeypatch):
+    records = tmp_path / "round-records.json"
+    records.write_text("[]")
+    finding = {"title": "panel-bug", "severity": "Important", "file": "f.py", "line": 1,
+               "dimension": "Code"}
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["findings"] = []
+    state["_toVerify"] = [finding]
+    state["_records"] = [_seed_record(1)]
+    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    monkeypatch.setattr(
+        RD.review_memory, "persist_record",
+        lambda path, accum, rec: {"ok": False, "reason": "write-failed"})
+    RD._persist_round_records(state, state["config"])
+    receipt = RD.build_receipt(state)
+    assert receipt["findings"]
+    assert any(f.get("title") == "panel-bug" for f in receipt["findings"])
+
+
+def test_producer_respects_persist_records_false(tmp_path):
+    records = tmp_path / "round-records.json"
+    state = RD.new_state(
+        _cfg(dimensions=["test-reviewer"], recordsPath=str(records), persistRecords=False))
+    state["_records"] = [_seed_record(1)]
+    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    RD._persist_round_records(state, state["config"])
+    assert state.get("terminal") is None
+    assert not records.exists()
+
+    records_default = tmp_path / "round-records-default.json"
+    state_default = RD.new_state(
+        _cfg(dimensions=["test-reviewer"], recordsPath=str(records_default)))
+    state_default["_records"] = [_seed_record(1)]
+    state_default["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    RD._persist_round_records(state_default, state_default["config"])
+    assert records_default.exists()
+
+
+def test_producer_empty_ledger_leaves_destination_unchanged(tmp_path):
+    records = tmp_path / "round-records.json"
+    initial_text = json.dumps([_seed_record(1)], indent=2) + "\n"
+    records.write_text(initial_text)
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["_records"] = []
+    RD._persist_round_records(state, state["config"])
+    assert records.read_text() == initial_text
+    assert state.get("terminal") is None
 
 
 def test_producer_is_inert_without_a_records_path(tmp_path):
