@@ -71,7 +71,10 @@ The census enforces:
 
 Two fixed sets — matching is **case-insensitive** (`casefold()` on both sides) after `*` emphasis
 is normalized away; backticks and underscores are **not** normalized (underscore-emphasis is a
-stated limitation — see the census module docstring). **Forbidden-primitive** matching also joins
+stated limitation — see the census module docstring). `*`-normalization is length-preserving —
+each `*` becomes one space, runs are not collapsed — so emphasis markers **inside** a literal's
+span break the match: `only **what they approve**` does not match the forbidden literal
+`only what they approve` (a stated limitation, same family as underscore-emphasis). **Forbidden-primitive** matching also joins
 lines (`_match_search_text`) so multi-word literals can match across a line break. **Waiting-token**
 matching searches normalized prose with newlines intact, so a token split across a line break is
 not found. A backtick only affects matching when it interrupts the exact literal — as in
