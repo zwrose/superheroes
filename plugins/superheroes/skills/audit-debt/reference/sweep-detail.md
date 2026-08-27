@@ -36,14 +36,14 @@ The `severity × inverse-effort` sort means an `Important + Quick` finding ranks
 | Treating consistent patterns as drift                              | Consistency > novelty. If 12 of 13 routes use the same pattern, the 13th matching is **consistency**, not debt. If 6 use pattern A and 7 use pattern B, THAT is drift.     |
 | Mapping every dependency-audit advisory to Critical                | Advisory severity is a hint, not a verdict — `moderate` maps to Minor in this skill. If the vulnerable code path isn't reachable in our usage, the advisory is even lower. |
 | Running this before every PR                                       | This skill is slow and broad by design. Run it monthly. For PR review, use `/superheroes:review-code`.                                                                     |
-| Filing noisy findings the owner won't action                       | Issue-filing is NOTIFY — findings are filed by default and reported back; use the **File** / **Drop** deselect pass to trim, and hard-floor trackers (public/shared/paid) still GATE.                           |
+| Filing noisy findings the owner won't action                       | Issue-filing is NOTIFY — findings are filed by default and reported back; **Undecided — needs a human call** findings stay in the audit report with no decision record; hard-floor trackers (public/shared/paid) still GATE. |
 | Running a deps pass when no audit tool ran                         | The deps audit is ecosystem-aware and skips gracefully (no manifest, or tool absent). If §1 wrote no audit artifact, emit no deps findings — don't invent advisories.     |
 | Dispatching reviewers by reading an agent file                     | The four reviewers are bundled plugin agents — dispatch the `<name>` reviewer with its methodology (resolve dispatch via the host tool map (`hosts/<host>-tools.md` at the plugin root)).                          |
-| Skipping the profile bootstrap                                     | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                                 |
+| Skipping the profile bootstrap                                     | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first — when no profile resolves, every run gets a provisional strict profile until `/superheroes:configure` confirms one. |
 
 ## Recording Decisions (Helper Reference)
 
-audit-debt's resolution point is the §5 issue-gate (File / Drop, and the auto-included Fix/Defer). Append ONE record per decision to the **project-level** learning-loop store at the resolved `$DECISIONS` path (NOT the temp `$SESSION_DIR`). Use the bundled helper:
+audit-debt writes one `decisions.py` `fix` record per finding auto-filed as an issue (auto-included `Fix`/`Defer`). Undecided findings get no record — the audit report carries them. Append each `fix` record to the **project-level** learning-loop store at the resolved `$DECISIONS` path (NOT the temp `$SESSION_DIR`). Use the bundled helper:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -51,6 +51,6 @@ python3 -B "$ROOT_DIR/lib/decisions.py" \
   append "$DECISIONS" '<record-json>'
 ```
 
-`<record-json>` is `{"dimension": "<finding dimension>", "category": "<finding taxonomy/topic>", "action": "skip"|"guidance"|"fix"}`:
-- `action` maps from the issue-gate decision: **filed** (auto-included `Fix`/`Defer`, or **File**) → `fix`; **Drop**/deselected → `skip`. `guidance` does not arise here (audit-debt files or drops; it never edits code).
+`<record-json>` is `{"dimension": "<finding dimension>", "category": "<finding taxonomy/topic>", "action": "fix"}`:
+- `action` is `fix` only for findings auto-filed as issues (auto-included `Fix`/`Defer`). Undecided findings get **no record** — an absent record is not `skip`; `skip` would assert someone decided. `guidance` does not arise here (audit-debt files issues; it never edits code).
 - `dimension` is the finding's `dimension`; `category` is the finding's taxonomy/topic (its normalized title or topic tag). The store is append-only and atomic; it soft-fails on a bad/missing store, so this never blocks.

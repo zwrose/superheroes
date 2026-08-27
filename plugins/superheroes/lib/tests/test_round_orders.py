@@ -50,6 +50,7 @@ def _base_context(**over):
 
 
 def _panel_placeholders(channel="file", pr_checkout=False):
+    prior_path = os.path.join(_SESSION, "prior-comments.json")
     ph = {
         "MODE": "branch",
         "MODE_EVIDENCE": "Review session mode branch (from session metadata).",
@@ -60,7 +61,7 @@ def _panel_placeholders(channel="file", pr_checkout=False):
         "CORE_PATH": _CORE_UNRESOLVED,
         "LAYER_PATH": _LAYER_UNRESOLVED,
         "PR_CHECKOUT_PATH": os.path.join(_SESSION, "repo") if pr_checkout else "",
-        "PRIOR_COMMENTS_PATH": os.path.join(_SESSION, "prior-comments.json"),
+        "PRIOR_COMMENTS_PATH": prior_path,
         "FOCUS_NOTES": "touch auth paths carefully",
         "DIMENSION": "Code",
         "CHANNEL": channel,
@@ -738,6 +739,7 @@ def test_fixer_order_shell_paths_are_quoted_for_metacharacters(tmp_path):
     state = {
         "config": {"repoRoot": repo, "fixerVendor": "claude"},
         "reviewedDiff": "diff --git a/f b/f\n",
+        "fixBatch": [],  # fixer-order render path requires a known batch
     }
     paths = {
         "storage_key": "fixer.a0",
@@ -764,6 +766,8 @@ def test_fixer_order_shell_paths_are_quoted_for_metacharacters(tmp_path):
 
 
 def test_engine_panel_landing_block_uses_phase_stdout_contract():
+    import review_findings_schema as RFS
+
     ctx = _base_context(
         host_seat=False,
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
@@ -772,8 +776,37 @@ def test_engine_panel_landing_block_uses_phase_stdout_contract():
     )
     text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
     assert reason is None
-    assert '{"findings": [...], "investigated": [...]}' in text
+    assert RFS.example_prompt_block() in text
+    assert "Format only" in text
+    assert '"findings": []' in text
     assert "Delivery section above" in text
+    example_json = json.dumps(RFS.example_findings_object(), sort_keys=True)
+    assert f"emit `{example_json}`".lower() not in text.lower()
+
+
+def test_panel_stdout_delivery_never_imperates_literal_example_emit():
+    """#1145 WO-J: panel stdout text is format-only — never 'emit this' with sentinel example."""
+    import review_findings_schema as RFS
+
+    example_json = json.dumps(RFS.example_findings_object(), sort_keys=True)
+    sentinel = RFS.EXAMPLE_SENTINEL
+    format_only = "Format only — your findings replace every value"
+
+    ctx = _base_context(
+        host_seat=False,
+        placeholders=_panel_placeholders(channel="stdout"),
+    )
+    text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
+    assert reason is None
+
+    assert format_only in text
+    assert sentinel in text
+    assert f"emit `{example_json}`".lower() not in text.lower()
+    assert f"emit `{example_json}` as your final stdout".lower() not in text.lower()
+
+    channel_block = RO._panel_derived_placeholders(ctx)["OUTPUT_CHANNEL_BLOCK"]
+    assert format_only in channel_block
+    assert f"emit `{example_json}`".lower() not in channel_block.lower()
 
 
 # --- FX-4A: core path drift guard ------------------------------------------------
@@ -1157,6 +1190,7 @@ def test_fixer_escalation_wrapper_path_quoted_through_renderer(tmp_path, monkeyp
     state = {
         "config": {"repoRoot": repo, "fixerVendor": "claude"},
         "reviewedDiff": "diff --git a/f b/f\n",
+        "fixBatch": [],  # fixer-order render path requires a known batch
     }
     paths = {
         "storage_key": "fixer.a0",
@@ -1274,6 +1308,7 @@ def test_engine_fixer_order_landing_block_uses_fixes_stdout_contract(tmp_path, m
     state = {
         "config": {"repoRoot": repo, "fixerVendor": "codex"},
         "reviewedDiff": "diff --git a/f b/f\n",
+        "fixBatch": [],  # fixer-order render path requires a known batch
     }
     paths = {
         "storage_key": "fixer.a0",
@@ -1319,7 +1354,8 @@ def test_order_sidecar_paths_match_placeholder_paths(tmp_path):
         "envelope_stub_path": os.path.join(session_dir, "stub.json"),
         "order_path": os.path.join(session_dir, "order.md"),
     }
-    state = {"config": {"repoRoot": str(tmp_path)}, "reviewedDiff": "diff --git a/f b/f\n"}
+    state = {"config": {"repoRoot": str(tmp_path)}, "reviewedDiff": "diff --git a/f b/f\n",
+             "headDiff": "diff --git a/f b/f\n"}
     ph = RD._order_placeholders(
         RP.P_VERIFIERS, "verifier:f.py:0", 0, state, state["config"],
         {"clusters": payload["clusters"]}, session_dir, 2, paths, RD.CHANNEL_FILE,)
@@ -1362,6 +1398,7 @@ def test_fixer_guard_command_uses_stdin_not_shell_path_interpolation(tmp_path):
     state = {
         "config": {"repoRoot": repo, "fixerVendor": "claude"},
         "reviewedDiff": "diff --git a/f b/f\n",
+        "fixBatch": [],  # fixer-order render path requires a known batch
     }
     paths = {
         "storage_key": "fixer.a0",

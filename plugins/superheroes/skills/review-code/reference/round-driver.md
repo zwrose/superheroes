@@ -2,6 +2,7 @@
 
 - [The one entrypoint](#the-one-entrypoint)
 - [next / submit protocol](#next--submit-protocol)
+- [checkpoint](#checkpoint)
 - [Durable-record path](#durable-record-path)
 - [Base guard](#base-guard)
 - [Batch concurrency — an independent batch goes out together](#batch-concurrency--an-independent-batch-goes-out-together)
@@ -97,6 +98,48 @@ step and hash. An exact duplicate `submit` (same phase/attempt/artifact) returns
 Persist state under `$SESSION_DIR/loop-state.json`. Append every `next`/`submit` to
 `$SESSION_DIR/driver-journal.jsonl` (the `scriptRan` evidence). On `terminal`, the driver writes
 `$SESSION_DIR/round-receipt.json` — validate with `round_driver.validate_receipt`.
+
+## checkpoint
+
+Orchestrator-invoked verb at a **non-terminal** stop — like `next`, `submit`, and `advance`, the
+driver does not observe tripwire doctrine itself; the orchestrator decides the stop and calls
+`checkpoint`.
+
+```bash
+python3 -B "$ROOT_DIR/lib/round_driver.py" checkpoint \
+  --session-dir "$SESSION_DIR" \
+  --stop-reason <tripwire|park|held>
+```
+
+`--stop-reason` is required; the only accepted values are `tripwire`, `park`, and `held`
+(`CHECKPOINT_STOP_REASONS`).
+
+**What it writes.** An interim `round-receipt-interim.json` built by `build_interim_receipt`: it starts from
+`build_receipt` (journal-derived `rounds`, `findings`, `decisions`, `seatMap`, `scriptRan`,
+`degraded`, `skippedBlockers` — including **per-pass verdict totals** on each round as
+`rounds[].verifyPasses`), then strips terminal-only keys (`certification`, `certificationShape`,
+`schemaVersion`, `verdict`), sets `schema` to `receipt-interim/1`, and adds a `stop` block
+(`reason`, `writtenAt`). `_validate_interim_receipt` enforces that interim receipts carry **no**
+`certification`, `certificationShape`, `verdict`, or `attestation` — an interim is not a
+certification.
+
+**Which stops invoke it.** Call `checkpoint` when the orchestrator parks at a non-terminal stop
+with `--stop-reason` matching the stop: **tripwire** (third-rework tripwire), **park** (owner gate
+park before the owner rules), or **held** (stall menu — certification not yet folded; the
+orchestrator checkpoints progress before the hold choice is submitted). Once the hold fold sets
+`terminal = "held"`, `checkpoint` refuses (`checkpoint-session-terminal`) and the terminal
+`round-receipt.json` (full `rounds` record, `verdict: "held"`) is the record from then on. These are
+orchestrator doctrine; the driver only validates the reason against `CHECKPOINT_STOP_REASONS`.
+
+**Terminal receipt preserved.** `cmd_checkpoint` refuses when the session is already terminal
+(`checkpoint-session-terminal`) or when a **terminal** certified/attested receipt sits on disk
+(`checkpoint-terminal-receipt-exists`). Re-invoking `checkpoint` after an earlier interim receipt is
+allowed — each write supersedes the previous interim. The write-once rule applies only to terminal
+receipts, not interim supersession.
+
+**Not handback evidence.** `handback_gate` refuses an interim receipt at the receipt-binding check
+with `receipt-interim-not-handback-evidence` — progress evidence for the operator, not valid
+handback.
 
 ## Durable-record path
 
@@ -253,6 +296,42 @@ Paths (round `N`, phase `P`, attempt `K`, storage key `skey`):
 Both shapes present → `landing-ambiguous`. The order's landing block names the paths; seats copy
 stub header fields verbatim and never recompute hashes.
 
+**Gap-sweep re-emission trap.** A live build lost a debugging cycle to this exact sequence: (1)
+`dispatch-gap-sweep` produces a new finding; (2) the driver **re-opens an already-folded phase
+with a different roster**, rewriting `orders/<phase>/manifest.a0.json` **in place at the same
+`attempt: 0`**; (3) the **prior wave's landing files are still on disk** from the first fold; (4)
+`record-result --sweep` (`round_records.sweep_landing`) walks the **landing directory**, not the
+manifest, so it finds those stale files, finds they map to no slot in the *current* roster, and
+hard-refuses `unknown-seat` for each one; (5) `advance` then refuses too, and the phase is left
+**pending** — a stuck session with no obvious cause, because the failure reads as a driver bug
+when it is really a directory-vs-manifest mismatch. **Recovery, proven in that build:** move the
+prior wave's landing files aside — never delete — keeping only the file(s) that match the current
+manifest, then re-run the sweep.
+
+**`seat-result/1` envelope fields** (engine-seat full envelope — the orchestrator writes every field
+below when landing a `dispatch-review` stdout result):
+
+| Field | Carries |
+| --- | --- |
+| `schema` | Literal `seat-result/1` |
+| `session` | Session id from `meta.json` |
+| `round` | Round number |
+| `phase` | Phase name (e.g. `dispatch-panel`) |
+| `seat` | Roster seat key |
+| `attempt` | Attempt counter for this phase |
+| `vendor` | Seat vendor string |
+| `model` | Seat model string |
+| `dispatchRef` | Dispatch reference id |
+| `orderSha256` | SHA-256 of the order file, or `not-emitted` when no emission anchor exists |
+| `manifestSha256` | SHA-256 of the orders manifest, or `not-emitted` when no emission anchor exists |
+| `recordedAt` | ISO-8601 timestamp when the envelope was stamped |
+| `payloadSha256` | SHA-256 over the canonical JSON of `payload`; an envelope **without** this field, or with a hash that does not match `payload`, is refused **`landing-torn`** at ingest |
+| `payload` | The seat's artifact (JSON object) |
+
+The **`seat-missing/1`** shape is deliberately different: it records a seat that produced no artifact
+and carries **no** `payload` or `payloadSha256` — instead `reason` (one of `forfeit`, `timeout`,
+`refusal`, `killed`, `malformed-output`) and optional `evidence`.
+
 **The order's output contract follows the seat's channel** (`round_driver._seat_channel`, the one
 home for the choice): an order names a landing path to **write** only when the seat's transport row
 carries a vendor positively known to be a host seat, and every other case — an engine vendor, or a
@@ -287,18 +366,25 @@ The manifest and per-order hashes are mirrored into state (`_ordersAnchors`) and
 they disagree).
 
 **Order-input ownership.** Orders cite round-scoped paths that must exist before a seat can run.
-The driver writes these in the `orders-emit` commit when it emits dispatch orders:
-`round-<N>/clusters/<i>.json`, `round-<N>/audit-targets/<skey>.json`, `round-<N>/scoped-hunks.json`,
-and `round-<N>/verified.json` (phase-dependent — see `_order_sidecar_writes`). When
-`round-<N>/diff.txt` is absent or its bytes do not match loop state (`reviewedDiff`),
-`_ensure_round_diff` writes it via `round_commit.atomic_write_bytes` (atomic tmp+rename) —
-outside the `orders-emit` commit, not inside it. The orchestrator still produces the real round diff (`git diff <pinned baseRef>...HEAD`; see
-`setup.md`'s session-artifact table). The orchestrator must write these **before** dispatching a
-fixer, audits, or scoped order: `round-<N>/fix-batch.json` (the review-code loop's session-artifact
-table in `setup.md`). `round-<N>/head.diff` is named by audits/scoped orders — it is
-**not** produced by the driver; the orchestrator must write it before dispatching those phases (the
-driver only names the path in rendered orders). The driver never creates `head.diff` or
-`fix-batch.json`.
+The driver materializes them before order emit (see also the inline comment at
+`_emit_orders_for_phase`):
+
+- **Phase sidecars** — written in the `orders-emit` commit and materialized before render from the
+  single `_order_sidecar_writes` derivation: `round-<N>/clusters/<i>.json` (verifiers),
+  `round-<N>/audit-targets/<skey>.json` (audits), `round-<N>/scoped-hunks.json` (scoped),
+  `round-<N>/verified.json` (synthesis).
+- **`round-<N>/diff.txt`** — `_ensure_round_diff` when absent or its bytes do not match loop state
+  (`reviewedDiff`), via `round_commit.atomic_write_bytes` (atomic tmp+rename) **outside** the
+  `orders-emit` commit. The orchestrator still owns the real round diff: produce the bytes with
+  `git diff <pinned baseRef>...HEAD` and bind them on the first `next` via `--diff-path` (see
+  `setup.md`'s session-artifact table).
+- **`round-<N>/head.diff`** — `_ensure_round_head_diff` from state `headDiff` when audits or scoped
+  orders render (the orchestrator supplies `headDiff` inline or via `headDiffPath` at fixer
+  `submit`; the driver then materializes the file the audit/scoped order cites).
+- **`round-<N>/fix-batch.json`** — `_ensure_fix_batch_file` from state `_fixBatch` / `fixBatch` when
+  the fixer order renders. If the orchestrator pre-writes this file and the bytes differ from the
+  driver's re-derivation, the driver **replaces** it silently — do not treat a hand-written
+  `fix-batch.json` as authoritative over loop state.
 
 ## Base guard
 
@@ -536,6 +622,10 @@ every replay — re-verifies receipt integrity before answering: the fault-marke
 copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "detail": …}` with a
 **nonzero exit** (never `terminal`-with-ok), the same fail-loud family as `journal-fault-unrecordable`.
 
+When the driver cannot continue — a refusal, a park, `journal-fault-unrecordable`, `receipt-fault`,
+or any other halt — park citing the blocker and never hand-drive the remainder; `rubric/review-discipline.md`
+is the home for the driver-or-park valve.
+
 **Receipt (`round-receipt.json`).** Required keys (shape-checked by `validate_receipt`, fail-closed):
 
 - `schemaVersion` — `2` or `3` (`validate_receipt` accepts both). It is the **state's** version, not
@@ -545,9 +635,11 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
   `degraded` | `not-checked`, optional `note`/`reason`, `pluginVersionSkew` — tri-state skew
-  disclosure: `checked-clean`, `checked-degraded`, `not-checked`, or `absent` when the seat map
-  carries no usable `pluginVersionSkew` receipt (distinct from `seatMap.pluginVersionSkew`, the
-  compose receipt object with `status`, `detail`, and `inspectedRoot`), `shapeDrivers` — sorted
+  disclosure: `checked-clean`, `checked-degraded`, `not-checked`, `absent` when the seat map
+  carries no `pluginVersionSkew` receipt (older map or missing field — distinct from
+  `seatMap.pluginVersionSkew`, the compose receipt object with `status`, `detail`, and
+  `inspectedRoot`), or `unknown` when a receipt is present but its `status` is not one this
+  build recognizes (degrading — not `absent`), `shapeDrivers` — sorted
   channel names that fired for the certification shape (`independence`, `base`, `same-family`,
   `plugin-version-skew`, `seat-map-violation`, `unproven-liveness`, `seat-pin`))
 - `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapViolations`, `vacuousSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `orderVendorProvenanceGaps`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
