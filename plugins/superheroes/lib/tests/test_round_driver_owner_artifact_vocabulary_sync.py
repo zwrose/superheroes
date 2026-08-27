@@ -175,6 +175,13 @@ def test_gate_artifact_example_dispositions_match_judgment_vocabulary():
         "recognize: %s" % sorted(invalid))
 
 
+def test_gate_artifact_example_provenance_is_not_submittable():
+    """Worked gate-artifact JSON example must not pass _owner_artifact_provenance_well_formed."""
+    text = _read(_REF)
+    artifact = _parse_fenced_json_block(text, _GATE_ARTIFACT_EXAMPLE_MARKER)
+    assert not RD._owner_artifact_provenance_well_formed(artifact)
+
+
 def test_owner_provenance_field_shapes_match_docs():
     """round-driver.md ``_provenance`` field shapes ↔ OWNER_PROVENANCE_FIELD_SHAPES (both directions)."""
     text = _read(_REF)

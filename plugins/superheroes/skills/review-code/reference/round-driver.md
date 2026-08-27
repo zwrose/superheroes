@@ -242,15 +242,17 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
 
 Example `present-judgment` gate artifact (gate shape plus a filled-in `_provenance` block):
 
+SHAPE ILLUSTRATION — deliberately NOT submittable; `null` fails the non-empty shape check, so submitting unchanged folds as `owner-unattributed` rather than falsely attributing a ruling. Replace each `null` with a value transcribed from the real ruling.
+
 ```json
 {
   "dispositions": [
     {"id": "finding-1", "disposition": "fix-as-suggested"}
   ],
   "_provenance": {
-    "ruledBy": "<the owner who ruled>",
-    "ruledAt": "<ISO-8601 time the owner ruled>",
-    "records": ["<URL of the durable record where they ruled>"]
+    "ruledBy": null,
+    "ruledAt": null,
+    "records": [null]
   }
 }
 ```
