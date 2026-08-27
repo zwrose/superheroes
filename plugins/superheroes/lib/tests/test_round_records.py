@@ -643,6 +643,18 @@ def test_sweep_reports_dangling_roster_landing_symlink_as_landing_torn(tmp_path)
     assert slot_results[0]["reason"] == "landing-torn"
 
 
+def test_sweep_reports_dangling_bare_payload_landing_symlink_as_landing_torn(tmp_path):
+    """site 1, bare arm: a roster slot whose BARE PAYLOAD landing is a dangling symlink is swept, not skipped."""
+    sd = _session(tmp_path)
+    bare = RR.bare_payload_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    _dangling_symlink_inside_session(sd, bare)
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    slot_results = [r for r in out if r.get("seatKey") == SEAT]
+    assert len(slot_results) == 1
+    assert slot_results[0]["ok"] is False
+    assert slot_results[0]["reason"] == "landing-torn"
+
+
 def test_ingest_refuses_dangling_symlink_store_entry(tmp_path):
     """T2 — site 2: a store entry that is a dangling symlink refuses store-exists, never clobbers."""
     sd = _session(tmp_path)

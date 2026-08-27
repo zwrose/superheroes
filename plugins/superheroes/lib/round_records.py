@@ -566,6 +566,21 @@ def _read_landing_envelope(session_dir, rnd, phase, skey, attempt, occurrence):
     return None, _refuse("landing-missing", landingPath=env_path)
 
 
+def _probe_store_entry(spath):
+    """Return (present, refusal) for a store-path existence probe — fail-closed on ambiguity.
+
+    Only ``ENOENT`` / ``ENOTDIR`` count as absent. Every other ``lstat`` outcome is either present
+    or an indeterminate ``store-exists`` refusal rather than a silent absent."""
+    try:
+        os.lstat(spath)
+        return True, None
+    except OSError as exc:
+        if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+            return False, None
+        return None, _refuse("store-exists", storePath=spath,
+                             message="store entry state is indeterminate: %s" % exc)
+
+
 def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                      supersede=False, expect_sha256=None, anchor=None, occurrence=0):
     """Every check `ingest_landing` performs, with NO write.
@@ -651,7 +666,10 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
         return None, _refuse(anchor_reason, manifestSha256=envelope.get("manifestSha256"),
                              orderSha256=envelope.get("orderSha256"))
 
-    exists = os.path.lexists(spath)
+    present, present_refusal = _probe_store_entry(spath)
+    if present_refusal is not None:
+        return None, present_refusal
+    exists = present
     if exists and not supersede:
         return None, _refuse("store-exists", storePath=spath)
     if supersede:
@@ -739,24 +757,31 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
     for seat_key, occurrence in roster_slots(_roster_keys(roster)):
         try:
             skey = storage_key(seat_key, occurrence)
+            claimed.add(_seat_filename(skey, current_attempt))
+            claimed.add("%s.a%d.payload.json" % (skey, current_attempt))
             lpath = landing_path(session_dir, rnd, phase, skey, current_attempt)
             spath = store_path(session_dir, rnd, phase, skey, current_attempt)
         except ValueError as exc:
             results.append(_refuse("bad-argument", seatKey=seat_key, occurrence=occurrence,
                                    message=str(exc)))
             continue
-        claimed.add(os.path.basename(lpath))
         bare_path = None
         try:
             bare_path = bare_payload_path(session_dir, rnd, phase, skey, current_attempt)
-            claimed.add(os.path.basename(bare_path))
         except ValueError:
             bare_path = None
         # `lexists`, never `exists`: presence is the DIRECTORY ENTRY, not whether its target resolves.
         has_landing = os.path.lexists(lpath) or (bare_path is not None and os.path.lexists(bare_path))
         if not has_landing:
             continue
-        if os.path.lexists(spath):
+        present, present_refusal = _probe_store_entry(spath)
+        if present_refusal is not None:
+            present_refusal.setdefault("seatKey", seat_key)
+            present_refusal.setdefault("storageKey", skey)
+            present_refusal.setdefault("occurrence", occurrence)
+            results.append(present_refusal)
+            continue
+        if present:
             try:
                 os.stat(spath)
                 results.append({"ok": True, "reason": "already-stored", "seatKey": seat_key,
