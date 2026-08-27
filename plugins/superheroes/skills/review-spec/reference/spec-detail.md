@@ -13,7 +13,7 @@
 | Re-raising findings the user skipped                                        | Check the `skip-set` and prior rounds before raising a finding.                                                                                                 |
 | Skipping the all-six-lenses rule based on classification                    | The `touches` array is informational. All six doc-native lenses (Clarity, Verifiability, Failure-Mode, Coherence, Safety & access, Grounding) always run — each returns `[]` when there's nothing in its dimension.                                            |
 | Dispatching reviewers by reading an agent file                              | The six lenses are bundled plugin agents — the five shared review-code reviewers in doc-native identity plus the spec-only `grounding-reviewer` seat. Dispatch the `<name>` reviewer with its methodology (resolve dispatch via the host tool map (`hosts/<host>-tools.md` at the plugin root)).               |
-| Skipping the profile bootstrap                                              | If no profile resolves, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                                        |
+| Skipping the profile bootstrap                                              | If no profile resolves, run review-init's create procedure inline first; every run gets a provisional strict profile.                                        |
 | Reading an annex as background (not checking for new decisions)             | Apply the annex-opinion test in **Annex opinion** below — if the core spec alone would decide differently, the annex carries an unapproved opinion; flag it under Coherence. |
 
 ## Annex opinion (finding class)

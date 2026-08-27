@@ -385,6 +385,33 @@ def test_mode_unrecognized_values(git_repo, tmp_path, bad_mode):
     assert r["reason"] == REASON.REASON_MODE_UNRECOGNIZED
 
 
+def test_check_base_returns_resolved_mode_not_raw_meta(git_repo, tmp_path, monkeypatch):
+    """I3 (#1107 WO-rc1): the returned "mode" is `mode_resolved["mode"]` — the ONE resolution —
+    never a second raw re-read of `meta.get("mode")`. Through `check_base`'s own entry point the
+    two are equal by construction (the refusal above guarantees session_mode.resolve only reaches
+    the return when meta's own raw value was already valid), so this proof monkeypatches
+    `session_mode.resolve` itself — the seam `check_base` calls — to return a DIFFERENT valid mode
+    than the raw meta value, and asserts the guard's returned "mode" follows the resolution, not
+    the raw local."""
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha, mode="branch")
+
+    # A token distinct from both "pr" and "branch" — proves the return value follows the
+    # resolution seam rather than the raw meta local, without also re-triggering PR-mode's own
+    # (unrelated) pr.json/origin checks.
+    def _fake_resolve(meta, config):
+        return {
+            "mode": "resolved-not-raw", "evidence": "session-meta", "resolved": True,
+            "disclosure": None,
+        }
+
+    monkeypatch.setattr(rbg.session_mode, "resolve", _fake_resolve)
+    r = rbg.check_base(session, root)
+    assert r["ok"] is True
+    assert r["mode"] == "resolved-not-raw"
+
+
 def test_prior_pin_non_string_int(git_repo, tmp_path):
     root, sha = git_repo
     session = str(tmp_path / "sess")
