@@ -726,6 +726,156 @@ def test_plugin_version_skew_status_vocabulary_in_docs():
     )
 
 
+# --- Cluster: shapeDrivers channel vocabulary (round_driver.py → round-driver.md) ---
+
+
+_SHAPE_DRIVERS_DOC_ANCHOR_LABEL = (
+    "`shapeDrivers` — sorted channel names that fired for the certification shape"
+)
+
+_SHAPE_DRIVERS_CHANNEL_COPY_REGISTER = (
+    os.path.normpath(os.path.join(PLUGIN, "skills/review-code/reference/round-driver.md")),
+)
+
+
+def _shape_drivers_doc_anchor_regex(anchor_label=None):
+    label = anchor_label if anchor_label is not None else _SHAPE_DRIVERS_DOC_ANCHOR_LABEL
+    return r"\s+".join(re.escape(token) for token in label.split())
+
+
+def _shape_drivers_append_block_from_home():
+    src = _read("lib/round_driver.py")
+    pattern = (
+        r"shape_drivers = \[\].*?"
+        r'"shapeDrivers": sorted\(shape_drivers\)\}'
+    )
+    matches = re.findall(pattern, src, re.DOTALL)
+    return _one(
+        matches,
+        "shape_drivers block",
+        "round_driver.py",
+        "shape_drivers = [] ... \"shapeDrivers\": sorted(shape_drivers)}",
+    )
+
+
+def _shape_drivers_members_from_home():
+    block = _shape_drivers_append_block_from_home()
+    members = set(re.findall(r'shape_drivers\.append\("([^"]+)"\)', block))
+    assert members, (
+        "round_driver.py: no shape_drivers.append(...) sites discovered in the "
+        "certification block (vacuous extraction — pin would agree with everything)"
+    )
+    return members
+
+
+def _certification_shape_drivers_enumeration_tokens(doc, *, anchor=None):
+    anchor_label = anchor if anchor is not None else _SHAPE_DRIVERS_DOC_ANCHOR_LABEL
+    pattern = _shape_drivers_doc_anchor_regex(anchor_label) + r"\s*\(([^)]+)\)"
+    matches = re.findall(pattern, doc, re.DOTALL)
+    if not matches:
+        assert False, (
+            "round-driver.md: certification shapeDrivers enumeration not found "
+            "(anchor %r moved or reworded?)" % anchor_label
+        )
+    block = _one(
+        matches,
+        "shapeDrivers enumeration",
+        "round-driver.md",
+        "%s (...)" % anchor_label,
+    )
+    tokens = set(re.findall(r"`([^`]+)`", block))
+    assert tokens, (
+        "round-driver.md: certification shapeDrivers enumeration parsed to zero tokens "
+        "(regex drift or empty enumeration?)"
+    )
+    return tokens
+
+
+def _shape_drivers_copy_enumeration_in_text(text):
+    try:
+        return _certification_shape_drivers_enumeration_tokens(text)
+    except AssertionError:
+        return None
+
+
+def _assert_shape_drivers_vocabulary_matches(
+    *,
+    code_extra=None,
+    doc_extra=None,
+    doc_anchor=None,
+):
+    code = _shape_drivers_members_from_home()
+    if code_extra:
+        code = code | {code_extra}
+    doc = _read("skills/review-code/reference/round-driver.md")
+    doc_tokens = _certification_shape_drivers_enumeration_tokens(doc, anchor=doc_anchor)
+    if doc_extra:
+        doc_tokens = doc_tokens | {doc_extra}
+    missing_from_doc = sorted(code - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - code)
+    assert not missing_from_doc and not extra_in_doc, (
+        "round-driver.md certification shapeDrivers vocabulary drift from "
+        "round_driver.py shape_drivers.append sites — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+def test_shape_drivers_channel_copy_register_census():
+    """§11: every .md carrying the certification shapeDrivers enumeration must be registered."""
+    examined = 0
+    unregistered = []
+    for path in _repo_markdown_files():
+        examined += 1
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        if _shape_drivers_copy_enumeration_in_text(text) is None:
+            continue
+        norm = os.path.normpath(path)
+        if norm not in _SHAPE_DRIVERS_CHANNEL_COPY_REGISTER:
+            rel = os.path.relpath(path, os.path.join(PLUGIN, "..", ".."))
+            unregistered.append(rel)
+    assert examined > 0, (
+        "shapeDrivers channel census examined zero markdown files (vacuous)"
+    )
+    assert not unregistered, (
+        "unregistered shapeDrivers channel copy — add to "
+        "_SHAPE_DRIVERS_CHANNEL_COPY_REGISTER: %r" % sorted(unregistered)
+    )
+
+
+def test_shape_drivers_channel_vocabulary_in_round_driver_doc():
+    """§11: round-driver.md restates every shapeDrivers channel round_driver.py can emit."""
+    _assert_shape_drivers_vocabulary_matches()
+
+
+def test_shape_drivers_channel_vocabulary_biteproof_code_to_doc():
+    _expect_assertion_error(
+        lambda: _assert_shape_drivers_vocabulary_matches(
+            code_extra="wo-bite-throwaway-code-member",
+        ),
+        match=r"missing from doc: \['wo-bite-throwaway-code-member'\]",
+    )
+
+
+def test_shape_drivers_channel_vocabulary_biteproof_doc_to_code():
+    _expect_assertion_error(
+        lambda: _assert_shape_drivers_vocabulary_matches(
+            doc_extra="wo-bite-throwaway-doc-name",
+        ),
+        match=r"present in doc but not in home: \['wo-bite-throwaway-doc-name'\]",
+    )
+
+
+def test_shape_drivers_channel_vocabulary_biteproof_doc_anchor_non_vacuous():
+    _expect_assertion_error(
+        lambda: _assert_shape_drivers_vocabulary_matches(
+            doc_anchor="`shapeDrivers` — NO SUCH ANCHOR",
+        ),
+        match=r"anchor '`shapeDrivers` — NO SUCH ANCHOR' moved or reworded",
+    )
+
+
 # --- Cluster: review payload shape tokens (engine_adapter → auto-fix-loop.md) ---
 
 
