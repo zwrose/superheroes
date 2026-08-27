@@ -3047,17 +3047,21 @@ def test_producer_is_inert_without_a_records_path(tmp_path):
 
 
 def _two_round_disclosure_seams():
-    """Round 1 baseline panel and round 3 confirmation panel — each records disclosure channels."""
-    finding = {"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
-               "dimension": "Code"}
+    """Round 1 baseline panel and round 2 scoped-finder delta — each records disclosure channels."""
+    f1 = {"title": "bug", "severity": "Important", "file": "f.py", "line": 2,
+          "dimension": "Code"}
+    f2 = {"title": "bug2", "severity": "Important", "file": "f.py", "line": 3,
+          "dimension": "Code"}
 
     def reviewer(dim, tier, rnd, ctx):
-        if rnd == 1:
-            return {"findings": [dict(finding)]}
-        return {"findings": []}
+        if dim == "scoped-finder":
+            return [dict(f2)] if rnd == 2 else []
+        if rnd == 1 and dim == "code-reviewer":
+            return {"findings": [dict(f1)]}
+        return []
 
     def fix_step(batch, rnd, payload):
-        return {"fixes": [], "headDiff": HEAD, "changedSubjects": []}
+        return {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Code"]}
 
     return _seams(reviewer=reviewer, fix_step=fix_step)
 
@@ -3068,24 +3072,33 @@ def test_resumed_and_unresumed_receipts_disclose_the_same_channels(tmp_path):
     Deliberately excluded from comparison: scriptRan, the decision ledger, seatMap, and the
     non-restored round bookkeeping in UNRESTORED_PANEL_ROUND_KEYS (seatStatus, lensCoverage,
     compileDrops, unverified, missingSeats, verify) plus roundKind / blockingCount / verifyResult —
-    resume restores the declared disclosure channels by design and nothing else."""
-    records = tmp_path / "round-records.json"
-    cfg = _cfg(recordsPath=str(records), maxRounds=8)
-    seams = _two_round_disclosure_seams()
-    receipt_a = RD.run_loop(seams, cfg)
-    assert _round_channels(receipt_a, 1)
-    assert _round_channels(receipt_a, 3)
+    resume restores the declared disclosure channels by design and nothing else.
 
-    records.unlink(missing_ok=True)
-    split_cfg = dict(cfg, maxRoundsAbsolute=3)
-    RD.run_loop(seams, split_cfg)
-    receipt_b = RD.run_loop(seams, cfg)
+    Round-numbering diverges after resume (unbroken live round 3 vs resumed live round 4) — so
+    equivalence is scoped to the shared rounds {1, 2} only."""
+    dims = ["test-reviewer", "code-reviewer"]
+    seams = _two_round_disclosure_seams()
+
+    records_a = tmp_path / "a.json"
+    receipt_a = RD.run_loop(
+        seams, _cfg(dimensions=dims, recordsPath=str(records_a), maxRounds=8))
+    assert _round_channels(receipt_a, 1)
+    assert _round_channels(receipt_a, 2)
+
+    records_b = tmp_path / "b.json"
+    RD.run_loop(
+        seams, _cfg(dimensions=dims, recordsPath=str(records_b), maxRounds=2))
+    receipt_b = RD.run_loop(
+        seams, _cfg(dimensions=dims, recordsPath=str(records_b), maxRounds=8))
 
     shared = {r["round"] for r in receipt_a["rounds"]} & {r["round"] for r in receipt_b["rounds"]}
-    assert shared >= {1, 3}
+    assert shared >= {1, 2}
     for rnd in shared:
         assert _round_channels(receipt_a, rnd) == _round_channels(receipt_b, rnd)
         assert _round_disclosures(receipt_a, rnd) == _round_disclosures(receipt_b, rnd)
+
+    b_only = {r["round"] for r in receipt_b["rounds"]} - {r["round"] for r in receipt_a["rounds"]}
+    assert any(_round_channels(receipt_b, rnd) for rnd in b_only)
 
 
 def _vacuous_round1_seams():
