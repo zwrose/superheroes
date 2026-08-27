@@ -344,6 +344,16 @@ def test_dispatch_review_prompt_has_new_preamble(tmp_path):
     assert _FINDINGS_EXAMPLE_STABLE_MARKER not in text
 
 
+def test_findings_example_stable_marker_pinned_to_rendered_block():
+    """The marker literal must appear in the rendered example block, nonce or not.
+
+    Every `_FINDINGS_EXAMPLE_STABLE_MARKER not in ...` assertion in this file goes
+    vacuously green if the source prose is reworded; this presence pin fails first.
+    """
+    assert _FINDINGS_EXAMPLE_STABLE_MARKER in RFS.example_prompt_block(None)
+    assert _FINDINGS_EXAMPLE_STABLE_MARKER in RFS.example_prompt_block("nonce-pin-probe")
+
+
 def test_dispatch_review_repo_survives_success(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
