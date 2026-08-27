@@ -42,6 +42,8 @@ RD = _load("round_driver")
 LPC = _load("loop_plan_common")
 FI = _load("finding_identity")
 version_skew = _load("version_skew")
+SC_CANARY = _load("seat_canary")
+_canary_probes_for = SC_CANARY.canary_probes_for
 
 
 def _seat_map_receipts(seat_map, round_id="1"):
@@ -4435,21 +4437,6 @@ def test_tradeoff_finding_reaches_audited_chain_end_to_end(tmp_path):
 
 def _seat_map_vendors(vendors):
     return {"seats": {d: {"vendor": v} for d, v in vendors.items()}}
-
-
-def _canary_probes_for(seat_map):
-    """Canary probes the cross-vendor liveness check recognizes for a submitted seat map."""
-    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
-    if not isinstance(seats, dict):
-        return []
-    vendors = set()
-    for cell in seats.values():
-        if not isinstance(cell, dict):
-            continue
-        vendor = cell.get("vendor")
-        if isinstance(vendor, str) and vendor and vendor != "claude":
-            vendors.add(vendor)
-    return [{"engine": v, "engaged": True} for v in sorted(vendors)]
 
 
 def test_canary_probes_for_all_claude_empty():

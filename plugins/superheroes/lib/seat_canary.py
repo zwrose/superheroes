@@ -97,6 +97,21 @@ def _engaged_from_dispatch(res):
     return engine_adapter.engagement_read(res) == "engaged"
 
 
+def canary_probes_for(seat_map):
+    """Canary probes the cross-vendor liveness check recognizes for a submitted seat map."""
+    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
+    if not isinstance(seats, dict):
+        return []
+    vendors = set()
+    for cell in seats.values():
+        if not isinstance(cell, dict):
+            continue
+        vendor = cell.get("vendor")
+        if isinstance(vendor, str) and vendor and vendor != "claude":
+            vendors.add(vendor)
+    return [{"engine": v, "engaged": True} for v in sorted(vendors)]
+
+
 def _evidence_from_dispatch(res):
     findings = res.get("findings") or []
     investigated = res.get("investigated") or []

@@ -33,6 +33,7 @@ import review_loop_plan as RLP  # noqa: E402
 import review_memory as RM  # noqa: E402
 import review_telemetry as RT  # noqa: E402
 import round_driver as RD  # noqa: E402
+import seat_canary  # noqa: E402
 import seat_map as SM  # noqa: E402
 
 # Synthetic citation surface so fixture findings (often file/line-less, written for the JS
@@ -207,21 +208,6 @@ def _eval_clean_seat_map():
             if violations == []:
                 return SM.to_receipt(m, author)
     raise RuntimeError("eval harness seat map must verify clean for claude+codex")
-
-
-def _canary_probes_for(seat_map):
-    """Canary probes the cross-vendor liveness check recognizes for a submitted seat map."""
-    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
-    if not isinstance(seats, dict):
-        return []
-    vendors = set()
-    for cell in seats.values():
-        if not isinstance(cell, dict):
-            continue
-        vendor = cell.get("vendor")
-        if isinstance(vendor, str) and vendor and vendor != "claude":
-            vendors.add(vendor)
-    return [{"engine": v, "engaged": True} for v in sorted(vendors)]
 
 
 def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=False):
@@ -569,7 +555,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             "io": {
                 "stall_menu": lambda payload: "hold",
                 "seatMap": eval_seat_map,
-                "canaryResult": _canary_probes_for(eval_seat_map),
+                "canaryResult": seat_canary.canary_probes_for(eval_seat_map),
             },
         }
         config = {

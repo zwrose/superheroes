@@ -24,6 +24,25 @@ def _load_engine_adapter():
 SC = _load()
 EA = _load_engine_adapter()
 
+_PLUGIN_ROOT = os.path.join(_HERE, "..", "..")
+
+
+def _count_canary_probes_for_defs():
+    count = 0
+    for dirpath, _, filenames in os.walk(_PLUGIN_ROOT):
+        for fn in filenames:
+            if not fn.endswith(".py"):
+                continue
+            with open(os.path.join(dirpath, fn), encoding="utf-8") as fh:
+                for line in fh:
+                    if re.match(r"def canary_probes_for\s*\(", line):
+                        count += 1
+    return count
+
+
+def test_canary_probes_for_single_definition():
+    assert _count_canary_probes_for_defs() == 1
+
 
 def _repo(tmp_path):
     root = tmp_path / "repo"
