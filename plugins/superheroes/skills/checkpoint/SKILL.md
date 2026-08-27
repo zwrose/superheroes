@@ -120,9 +120,9 @@ Present the finished line in a fenced code block clearly marked as the thing to 
 ## What happens after you paste
 
 Compaction runs on the host. On the next SessionStart with `source: compact`, the
-SessionStart recovery hook re-injects a pointer to re-read the charter skill from disk —
-that was step 5 of the old five-step dance and this feature removes it. You still paste
-`/compact` once; nothing in this skill triggers compaction programmatically.
+SessionStart recovery hook re-injects a pointer to re-read the charter skill from disk;
+no re-invoke is needed. You still paste `/compact` once; nothing in this skill triggers
+compaction programmatically.
 
 ## Common mistakes
 
