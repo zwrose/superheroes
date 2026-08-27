@@ -200,69 +200,8 @@ _RECONCILE_MODE_PATTERN = re.compile(r"reconcile\s+--mode")
 
 _DECIDE_MODE_DIRECT_PATTERN = re.compile(r"mode_registry\.decide_mode\(")
 
-# Retired presence-premise spellings — byte-literal census with cardinality floor zero outside
-# the explicit allowlist (in-class pinned literals; no meaning guard).
+# Retired presence-premise spellings — byte-literal census with cardinality floor zero (#1144).
 _PREMISE_LITERALS = ("no human", "nobody to answer", "headless run")
-
-# Content-keyed allowlist: (relative_path, exact stripped line text, literal). File-scoped
-# content-keying matches the literal on that exact line anywhere in the file — edits above the
-# line cannot stale the key, while a changed line drops out of the allowlist and must be
-# re-adjudicated. Global content-keying would false-allow duplicates on other surfaces.
-_PREMISE_LITERAL_ALLOWLIST = {
-    # no human
-    (
-        "skills/review-code/SKILL.md",
-        "Print the artifact's path and a terminal report for the **approved** set only — grouped by severity, verdict label in bold. For each approved finding: severity tag, `file:line`, title, body, and the orchestrator POV line. State in one line that the `ask-set` went undecided because no human answered the review gate. `compiled.json` already holds the full record; the artifact is the durable presentation.",
-        "no human",
-    ): (
-        "terminal report names why the ask-set stayed undecided — outcome disclosure, not a "
-        "presence branch"
-    ),
-    # headless run — skills/: lowercase "headless run" removed; "Headless runs" still matches
-    # case-insensitively — re-keyed on content, same adjudicated rationale.
-    (
-        "skills/review-spec/reference/spec-detail.md",
-        "| Skipping the profile bootstrap                                              | If no profile resolves, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                                        |",
-        "headless run",
-    ): (
-        "bootstrap table row names provisional profile outcome without detecting presence"
-    ),
-    (
-        "skills/review-code/reference/auto-fix-loop.md",
-        "| Skipping the profile bootstrap                           | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                         |",
-        "headless run",
-    ): (
-        "bootstrap table row names provisional profile outcome without detecting presence"
-    ),
-    (
-        "skills/audit-debt/reference/sweep-detail.md",
-        "| Skipping the profile bootstrap                                     | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                                 |",
-        "headless run",
-    ): (
-        "bootstrap table row names provisional profile outcome without detecting presence"
-    ),
-    (
-        "lib/engine_authz.py",
-        "# -p/--print is required for a headless run (without it cursor-agent goes interactive and",
-        "headless run",
-    ): (
-        "engine comment: CLI -p/--print invocation mode, not owner presence"
-    ),
-    (
-        "lib/engine_adapter.py",
-        "# headless run (without it it goes interactive and --output-format is a no-op); --trust",
-        "headless run",
-    ): (
-        "engine comment: CLI -p/--print invocation mode, not owner presence"
-    ),
-    (
-        "lib/engine_adapter.py",
-        "# clears the workspace-trust gate that otherwise HANGS a headless run (needed for the",
-        "headless run",
-    ): (
-        "engine comment: CLI trust gate for non-interactive engine, not owner presence"
-    ),
-}
 
 
 def _bootstrap_disclosure_window(text):
@@ -430,38 +369,21 @@ def test_no_direct_decide_mode_calls_in_skills():
     )
 
 
-# axis: every allowlist entry must match a line that currently exists — dead entries are
-# unreviewed permissions and must fail the suite, not sit in the map.
-def test_premise_literal_allowlist_entries_exist():
-    """#1136: a pruned allowlist must not retain entries for lines that no longer exist."""
-    stale = []
-    for (rel, line_text, literal), _rationale in _PREMISE_LITERAL_ALLOWLIST.items():
-        try:
-            file_lines = [ln.strip() for ln in _read_plugin_rel(rel).splitlines()]
-        except OSError:
-            stale.append(f"{rel}: file not found (literal {literal!r})")
-            continue
-        if line_text not in file_lines:
-            stale.append(
-                f"{rel}: allowlisted line not found (literal {literal!r}): {line_text!r}"
-            )
-    assert not stale, (
-        "premise literal allowlist contains dead entries — prune or re-adjudicate (#1136). "
-        "Every stale entry:\n" + "\n".join(stale)
-    )
-
-
 @pytest.mark.parametrize("literal", _PREMISE_LITERALS)
-# axis: retired presence-premise spellings — cardinality floor zero outside explicit allowlist.
+# axis: retired presence-premise spellings — cardinality floor zero unconditionally (#1144).
 def test_retired_presence_premise_literals_census(literal):
-    """#1136: premise spellings that detected owner presence must not survive unallowlisted."""
+    """#1136/#1144: premise spellings that detected owner presence must not survive.
+
+    Floor is zero with no allowlist — an allowlist whose entries are prose rationales does not
+    terminate by construction. Expected red on seven formerly-allowlisted lines until other WOs
+    reword them (#1144).
+    """
     hits = []
     for rel, lineno, matched in _premise_literal_hits(literal):
         line_text = _read_plugin_rel(rel).splitlines()[lineno - 1].strip()
-        if (rel, line_text, matched) not in _PREMISE_LITERAL_ALLOWLIST:
-            hits.append(f"{rel}:{lineno}: {line_text}")
+        hits.append(f"{rel}:{lineno}: {line_text}")
     assert not hits, (
-        "retired presence-premise literal %r found outside the explicit allowlist (#1136). "
+        "retired presence-premise literal %r found (#1136/#1144 zero floor). "
         "Every hit:\n" + "\n".join(hits)
     )
 

@@ -33,6 +33,14 @@ STATUSES = frozenset({
     STATUS_CHECKED_CLEAN,
 })
 
+# Per-member degrading disposition — every STATUSES member must appear here; the census test
+# iterates STATUSES and fails on an undispositioned member (#1107).
+STATUS_DISPOSITIONS = {
+    STATUS_NOT_CHECKED: False,
+    STATUS_CHECKED_DEGRADED: True,
+    STATUS_CHECKED_CLEAN: False,
+}
+
 DETAIL_NOT_SOURCE_REPO = "not-source-repo"
 DETAIL_SELF = "self"
 DETAIL_NOT_COMPOSED = "not-composed"
@@ -52,17 +60,36 @@ DEGRADING_DETAILS = frozenset({
     DETAIL_SEMANTICS_DIVERGENT,
     DETAIL_EVIDENCE_UNREADABLE,
 })
-APPENDS_DEGRADATION = frozenset({STATUS_CHECKED_DEGRADED})
+# Derived from STATUS_DISPOSITIONS — never hand-maintained beside it, so a status added to one
+# cannot be forgotten in the other (#1107; this is the single owner PR #1160 first introduced).
+APPENDS_DEGRADATION = frozenset(
+    status for status, degrading in STATUS_DISPOSITIONS.items() if degrading
+)
 
 
-# bite-axis: closed membership — a non-string, None, or unhashable argument returns False
-# (only statuses declared here append); a set-membership home beats scattered == at call sites
-# so a future fourth status is decided here, not silently non-appending elsewhere (#1151).
-def appends_degradation(status) -> bool:
+# bite-axis: fail-closed disposition — a status with no STATUS_DISPOSITIONS entry (a future
+# STATUSES member nobody dispositioned yet, an unrecognized string, None, or an unhashable value)
+# returns True (appends/degrading); only a status explicitly dispositioned False in
+# STATUS_DISPOSITIONS returns False. This is the single home for the skew status vocabulary and
+# its disposition — a future STATUSES member cannot ship silently non-degrading (#1107; the
+# new-enum-member fall-open class).
+def appends_degradation(status: object) -> bool:
     try:
-        return status in APPENDS_DEGRADATION
+        known = status in STATUSES
     except TypeError:
-        return False
+        return True
+    if not known:
+        return True
+    if status not in STATUS_DISPOSITIONS:
+        return True
+    return STATUS_DISPOSITIONS[status]
+
+
+def default_missing_status() -> str:
+    """The fail-closed status to fill in when a skew record is missing one — decided here so
+    callers never spell STATUS_CHECKED_DEGRADED themselves (#1107 chokepoint: only this module may
+    reference STATUS_CHECKED_DEGRADED or the ``checked-degraded`` literal)."""
+    return STATUS_CHECKED_DEGRADED
 
 # bite-axis: bounded reads — streamed rather than read-whole so a repo-controlled symlink to an
 # endless device cannot hang compose or exhaust the reviewer (#677).
@@ -184,6 +211,26 @@ def _file_digest(path: str, *, expected_root: str | None = None) -> str | None:
         os.close(fd)
 
 
+def _manifest_version_bytes(version: str) -> bytes | None:
+    """UTF-8 bytes for a manifest ``version`` string, or None when unencodable.
+
+    ``json.loads`` accepts lone surrogates in JSON strings; encoding them as UTF-8
+    raises — callers must treat None as unreadable version evidence (#1107)."""
+    try:
+        return version.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+
+
+def _manifest_version_unencodable(manifest: dict | None) -> bool:
+    if manifest is None:
+        return False
+    version = manifest.get("version")
+    if not isinstance(version, str):
+        return False
+    return _manifest_version_bytes(version) is None
+
+
 def _sanitize_version_text(raw: bytes) -> str:
     first_line = raw.split(b"\n", 1)[0]
     try:
@@ -205,22 +252,22 @@ def _read_installed_version(plugin_root: str) -> str:
         expected_root=plugin_root,
     )
     if manifest is not None and isinstance(manifest.get("version"), str):
-        return _sanitize_version_text(manifest["version"].encode("utf-8"))
+        encoded = _manifest_version_bytes(manifest["version"])
+        if encoded is None:
+            return "unknown"
+        return _sanitize_version_text(encoded)
     return "unknown"
 
 
-def _read_repo_version(repo_root: str) -> str:
-    path = os.path.join(_repo_plugin_dir(repo_root), "version.txt")
-    fd = _open_regular_file(path, expected_root=repo_root)
-    if fd is None:
-        return "unknown"
-    try:
-        raw = _read_bounded(fd, _MAX_READ_BYTES)
-        if raw is None:
+def _read_repo_version(manifest: dict | None) -> str:
+    """Repo-side version from the plugin manifest ``detect()`` already read — ``plugin.json`` is
+    the single source of truth (CLAUDE.md); ``version.txt`` is never consulted."""
+    if manifest is not None and isinstance(manifest.get("version"), str):
+        encoded = _manifest_version_bytes(manifest["version"])
+        if encoded is None:
             return "unknown"
-        return _sanitize_version_text(raw)
-    finally:
-        os.close(fd)
+        return _sanitize_version_text(encoded)
+    return "unknown"
 
 
 def _make_record(
@@ -242,7 +289,23 @@ def detect(repo_root: str, plugin_root: str) -> dict:
     manifest_path = os.path.join(
         _repo_plugin_dir(repo_root), ".claude-plugin", "plugin.json",
     )
-    manifest = _read_json(manifest_path, expected_root=repo_root)
+    manifest_exists = os.path.lexists(manifest_path)
+    manifest = (
+        _read_json(manifest_path, expected_root=repo_root) if manifest_exists else None
+    )
+    # bite-axis: refused manifest read — a symlink escaping repo_root or a non-regular file must
+    # not collapse into not-source-repo; the honest label is checked-degraded / evidence-unreadable
+    # (#1107; same fail-closed class as unreadable semantics evidence below).
+    if manifest_exists and manifest is None:
+        inspected_root = os.path.abspath(repo_root)
+        reason = (
+            "plugin-version-skew: installed %s, this repository's version at %s — skew evidence "
+            "unreadable (plugins/superheroes/.claude-plugin/plugin.json); cannot prove the running "
+            "plugin matches this repository's semantics."
+        ) % (_read_installed_version(plugin_root), "unknown")
+        return _make_record(
+            STATUS_CHECKED_DEGRADED, DETAIL_EVIDENCE_UNREADABLE, reason, inspected_root,
+        )
     # bite-axis: silence outside the source repository — a consuming project's installed cache is
     # its only semantics source, so skew is not provable here; this path returns a not-checked /
     # not-source-repo record rather than checked-clean (#677).
@@ -270,8 +333,29 @@ def detect(repo_root: str, plugin_root: str) -> dict:
         )
 
     inspected_root = os.path.abspath(repo_root)
+    installed_manifest = _read_json(
+        os.path.join(plugin_root, ".claude-plugin", "plugin.json"),
+        expected_root=plugin_root,
+    )
+    # bite-axis: unencodable manifest version — json.loads accepts lone surrogates but UTF-8
+    # encoding raises; unreadable version evidence is checked-degraded / evidence-unreadable,
+    # never a raise and never checked-clean (#1107).
+    if _manifest_version_unencodable(manifest) or _manifest_version_unencodable(
+        installed_manifest,
+    ):
+        installed_version = _read_installed_version(plugin_root)
+        repo_version = _read_repo_version(manifest)
+        reason = (
+            "plugin-version-skew: installed %s, this repository's version at %s — skew evidence "
+            "unreadable (manifest version unencodable); cannot prove the running plugin matches "
+            "this repository's semantics."
+        ) % (installed_version, repo_version)
+        return _make_record(
+            STATUS_CHECKED_DEGRADED, DETAIL_EVIDENCE_UNREADABLE, reason, inspected_root,
+        )
+
     installed_version = _read_installed_version(plugin_root)
-    repo_version = _read_repo_version(repo_root)
+    repo_version = _read_repo_version(manifest)
 
     unreadable: list[str] = []
     differing: list[str] = []

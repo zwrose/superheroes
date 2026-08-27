@@ -39,6 +39,7 @@ derived placeholders (panel channel block, optional context lines) before substi
 ``context["placeholders"]``."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -49,6 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import core_md  # noqa: E402
 import mode_registry  # noqa: E402
 import round_adapters  # noqa: E402
+import review_findings_schema  # noqa: E402
 import round_phases  # noqa: E402
 
 _PLACEHOLDER_RE = re.compile(r"\{\{([A-Z][A-Z0-9_]*)\}\}")
@@ -70,6 +72,7 @@ _AUX_PLACEHOLDER_INPUTS = frozenset({
     "FINDINGS_OUTPUT_PATH",
     "GROUPING_OUTPUT_PATH",
     "PR_CHECKOUT_PATH",
+    "PRIOR_COMMENTS_PATH",
 })
 
 _COMMON_CONTEXT_KEYS = (
@@ -210,6 +213,24 @@ def _format_residual_block(context: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _panel_stdout_delivery_text(include_investigated_reminder: bool = False) -> str:
+    """Format-only panel stdout delivery — shape illustration, not a literal emit target."""
+    lines = [
+        review_findings_schema.example_prompt_block(),
+        "",
+        "Emit a single JSON object of this shape as your final stdout with nothing "
+        "after it. Replace every value in the example above with your own review "
+        "content — do not echo the example. A review with nothing to flag emits "
+        "`\"findings\": []` (an empty list).",
+    ]
+    if include_investigated_reminder:
+        lines.append(
+            "List in `investigated` every repo-relative path you actually read to ground "
+            "this review — always, whether or not you found anything."
+        )
+    return "\n".join(lines)
+
+
 def _stdout_payload_example(phase: str) -> tuple[str | None, str | None]:
     """Minimal stdout JSON example derived from the phase payload contract — one home with the block above."""
     contract, reason = round_adapters.payload_contract(phase)
@@ -217,8 +238,12 @@ def _stdout_payload_example(phase: str) -> tuple[str | None, str | None]:
         return None, "payload-contract:%s" % reason
     required = contract.get("required") or []
     if phase == round_phases.P_PANEL:
-        return '{"findings": [...], "investigated": [...]}', None
+        return json.dumps(
+            review_findings_schema.example_findings_object(), sort_keys=True,
+        ), None
     if phase == round_phases.P_AUDITS:
+        # Audits stdout contract (id/ruling/reason) — not the findings-member schema; do not
+        # route through review_findings_schema.example_findings_object().
         return '{"id": "...", "ruling": "...", "reason": "..."}', None
     if not required:
         return '{...}', None
@@ -248,10 +273,9 @@ def _format_landing_block(context: dict, phase: str) -> tuple[str | None, str | 
             return None, reason
         if phase == round_phases.P_PANEL:
             lines.extend([
-                "Deliver on the stdout channel described in the Delivery section above — emit "
-                "`%s` as your final stdout with nothing after it. Do not write a landing file "
-                "(read-only sandbox)."
-                % stdout_example,
+                "Deliver on the stdout channel described in the Delivery section above — "
+                "your final stdout must be a single JSON object with nothing after it. "
+                "Do not write a landing file (read-only sandbox).",
             ])
         else:
             lines.extend([
@@ -280,11 +304,10 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     channel = ph.get("CHANNEL", "file")
     landing = context.get("landing_path", "")
     if channel == "stdout":
+        # Delivery block is format-only (wraps review_findings_schema.example_findings_object).
         ph["OUTPUT_CHANNEL_BLOCK"] = (
-            'Emit `{"findings": [...], "investigated": [...]}` as your final stdout with nothing '
-            "after it; do not write a findings file (read-only sandbox — nothing reads one). "
-            "List in `investigated` every repo-relative path you actually read to ground this "
-            "review — always, whether or not you found anything."
+            _panel_stdout_delivery_text(include_investigated_reminder=True)
+            + " do not write a findings file (read-only sandbox — nothing reads one)."
         )
     else:
         ph["OUTPUT_CHANNEL_BLOCK"] = (
@@ -313,6 +336,20 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     ph["PRIOR_COMMENTS_CONTEXT_LINE"] = (
         "- Prior comments + author justifications: %s" % prior if prior else ""
     )
+    prior_instr = ph.get("PRIOR_COMMENTS_PATH", "")
+    if not isinstance(prior_instr, str):
+        prior_instr = ""
+    if prior_instr and not prior_instr.startswith("("):
+        ph["PRIOR_COMMENTS_INSTRUCTION_BLOCK"] = (
+            "%s contains prior review comments and their\nthreads." % prior_instr
+        )
+    elif prior_instr.startswith("("):
+        ph["PRIOR_COMMENTS_INSTRUCTION_BLOCK"] = (
+            "No prior-comments.json was supplied for this PR — there are no prior review "
+            "comments or author justifications to consult."
+        )
+    else:
+        ph["PRIOR_COMMENTS_INSTRUCTION_BLOCK"] = ""
     focus = ph.get("FOCUS_NOTES", "").strip()
     ph["FOCUS_CONTEXT_LINE"] = (
         "- Focus: %s" % focus if focus else ""

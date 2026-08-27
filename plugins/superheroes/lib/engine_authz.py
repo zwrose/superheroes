@@ -99,7 +99,7 @@ def implementation_dispatch_allowed(cwd, engine, run=None, overrides=None):
         argv = ["codex", "exec", "-m", probe_model,
                 "--sandbox", "workspace-write", "-C", cwd, write_prompt]
     else:  # cursor
-        # -p/--print is required for a headless run (without it cursor-agent goes interactive and
+        # -p/--print is required for a non-interactive CLI invocation (without it cursor-agent goes interactive and
         # the probe hangs to the timeout, always reporting the engine not-ready); -f forces/trusts.
         argv = ["cursor-agent", "-p", "-f", write_prompt]
     timeout = _probe_timeout(overrides)
