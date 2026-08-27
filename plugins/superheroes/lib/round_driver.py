@@ -6272,7 +6272,8 @@ def _fixer_head_diff_needs_repair(stored):
     return not os.path.exists(store_path_val)
 
 
-def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurrence, cmd=None):
+def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurrence, cmd=None,
+                            expect_round=None, expect_phase=None):
     """Repair a fixer store record whose head-diff blob was not yet bound.
 
     Returns (payload_sha, detail) where detail is None, a refusal token string, or a
@@ -6294,6 +6295,7 @@ def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurren
         journal_entry = _journal_entry_for_commit(
             session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
             seat=seat_key, occurrence=occurrence, headDiffRepaired=True,
+            **_journal_addressing_fields(expect_round, expect_phase),
             **_journal_identity_fields(phase, seat_key, occurrence, attempt))
     try:
         _path, payload_sha = _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content,
@@ -6486,7 +6488,9 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
         if not _fixer_head_diff_needs_repair(stored):
             continue
         rehashed, detail = _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt,
-                                                   occurrence, cmd=cmd)
+                                                   occurrence, cmd=cmd,
+                                                   expect_round=expect_round,
+                                                   expect_phase=expect_phase)
         if detail == "head-diff-unreadable":
             payload = stored.get("payload") if isinstance(stored, dict) else {}
             return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd, attempt=attempt,
@@ -6532,7 +6536,9 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                     seat = result.get("seatKey")
                     occurrence = result.get("occurrence") or 0
                     rehashed, detail = _repair_fixer_head_diff(session_dir, rnd, phase, seat,
-                                                               attempt, occurrence, cmd=cmd)
+                                                               attempt, occurrence, cmd=cmd,
+                                                               expect_round=expect_round,
+                                                               expect_phase=expect_phase)
                     if detail == "head-diff-unreadable":
                         payload = stored.get("payload") if isinstance(stored, dict) else {}
                         return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd,

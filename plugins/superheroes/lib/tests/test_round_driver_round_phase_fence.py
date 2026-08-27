@@ -38,6 +38,7 @@ _auditor_vendor_for = _TDI._auditor_vendor_for
 
 REASON = round_driver.ROUND_PHASE_NOT_PENDING_REFUSAL
 P_AUDITS = round_driver.P_AUDITS
+P_FIXER = round_driver.P_FIXER
 
 
 def _audit_payload(seat, ruling="not-discharged"):
@@ -306,6 +307,42 @@ def _last_journal_recorded(session_dir, cmd):
     return rows[-1]
 
 
+def _setup_fixer_sweep_repair_pending(tmp_path):
+    """Pending fixer phase with a stored record whose head-diff blob needs sweep repair."""
+    findings = [_blocking_finding("missing bounds guard", 2)]
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="fence-fixer-repair")
+    _drive_to_phase(session_dir, gitdir, findings, head_path, P_FIXER)
+    state = _state(session_dir)
+    pend = state["pending"]
+    assert pend["phase"] == P_FIXER
+    roster, _ = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
+    seat = roster[0]
+    slots = _slots_of(roster)
+    _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
+    repair_head_path = str(tmp_path / "fixer-repair-head.diff")
+    with open(repair_head_path, "w", encoding="utf-8") as fh:
+        fh.write("diff --git a/f.py b/f.py\n+sweep-repair\n")
+    payload = _TDI._payload_for(session_dir, state, pend, seat, findings, repair_head_path)
+    _land(session_dir, state, pend, seat, payload, occurrence=0)
+    recorded = round_driver.cmd_record_result(session_dir, seat, occurrence=0)
+    assert recorded["ok"], recorded
+    spath = recorded["storePath"]
+    blob = recorded["headDiffStorePath"]
+    stored, _ = round_records.read_json(spath)
+    del stored["payload"]["headDiffStorePath"]
+    round_records.atomic_write_json(spath, stored)
+    os.remove(blob)
+    return session_dir, pend, seat
+
+
+def _last_sweep_repair_journal_recorded(session_dir):
+    rows = [e for e in round_driver.read_journal(session_dir)
+            if e.get("cmd") == "record-result" and e.get("outcome") == "recorded"
+            and e.get("headDiffRepaired") is True]
+    assert rows, "no sweep repair recorded journal row"
+    return rows[-1]
+
+
 def test_journal_addressed_true_when_round_phase_echoed(tmp_path):
     """#1177-C bite-proof: journal addressed distinguishes fenced durable-record calls."""
     session_dir, _gitdir, _head_path, _findings, pend, tid, _slots = _setup_audits_pending(tmp_path)
@@ -357,6 +394,33 @@ def test_journal_addressed_record_missing_both_directions(tmp_path):
     bare_out = round_driver.cmd_record_missing(session_dir2, other2, pend2["attempt"], "forfeit")
     assert bare_out["ok"] is True, bare_out
     assert _last_journal_recorded(session_dir2, "record-missing")["addressed"] is False
+
+
+def test_journal_addressed_sweep_fixer_repair_branch(tmp_path):
+    """#1177-G: sweep fixer-repair journal recorded events carry addressed when fenced."""
+    session_dir, pend, _seat = _setup_fixer_sweep_repair_pending(tmp_path)
+    out = round_driver.cmd_record_result(
+        session_dir, sweep=True,
+        expect_round=pend["round"], expect_phase=pend["phase"])
+    assert out["ok"] is True, out
+    entry = _last_sweep_repair_journal_recorded(session_dir)
+    assert entry["addressed"] is True
+
+
+def test_cli_record_result_matching_round_wrong_phase_refuses(tmp_path, capsys):
+    session_dir, _gitdir, _head_path, _findings, pend, tid, _slots = _setup_audits_pending(tmp_path)
+    state = _state(session_dir)
+    _land(session_dir, state, pend, tid, _audit_payload(tid), occurrence=0)
+    store_before = _store_bytes_snapshot(session_dir)
+    rc = round_driver.main([
+        "record-result", "--session-dir", session_dir,
+        "--seat", tid, "--attempt", str(pend["attempt"]),
+        "--round", str(pend["round"]), "--phase", round_driver.P_PANEL,
+    ])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == 0
+    assert out["ok"] is False and out["reason"] == REASON, out
+    assert _store_bytes_snapshot(session_dir) == store_before
 
 
 def test_cli_record_result_stale_round_phase_refuses(tmp_path, capsys):
@@ -412,6 +476,21 @@ def test_cli_record_missing_stale_round_phase_refuses(tmp_path, capsys):
         "record-missing", "--session-dir", session_dir,
         "--seat", other, "--attempt", str(pend["attempt"]), "--reason", "forfeit",
         "--round", str(pend["round"] - 1), "--phase", pend["phase"],
+    ])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == 0
+    assert out["ok"] is False and out["reason"] == REASON, out
+    assert _store_bytes_snapshot(session_dir) == store_before
+
+
+def test_cli_record_missing_matching_round_wrong_phase_refuses(tmp_path, capsys):
+    session_dir, _gitdir, _head_path, _findings, pend, tid, slots = _setup_audits_pending(tmp_path)
+    other = slots[1][0] if len(slots) > 1 else tid
+    store_before = _store_bytes_snapshot(session_dir)
+    rc = round_driver.main([
+        "record-missing", "--session-dir", session_dir,
+        "--seat", other, "--attempt", str(pend["attempt"]), "--reason", "forfeit",
+        "--round", str(pend["round"]), "--phase", round_driver.P_PANEL,
     ])
     out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert rc == 0
