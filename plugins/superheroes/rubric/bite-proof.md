@@ -15,6 +15,12 @@ test, an assertion, a guard clause, a validator, a CI check, a lint rule, a revi
 
 The proof runs with the **detector unedited**. A detector edited to make itself go red proves nothing.
 
+**An external-contract constant is proven by pinning its literal.** Where the guarded thing is a
+value some other system reads — a config key, an env-var name, a marker or token another tool
+matches on — **one test asserts the literal, spelled out**. A proof that reaches the constant
+through the symbol that defines it stays green under *any* value, so it proves the plumbing and
+nothing about the contract (PR #1159, vet 181; same shape at PR #1156, vet 178).
+
 A green run is equally consistent with *the code is right* and *this detector cannot fail*. Only
 the red run tells them apart. This is the covenant's fourth promise — **claim nothing you did not
 verify** (`rubric/covenant.md`). A guard with no bite-proof is an unverified claim, however
@@ -49,6 +55,20 @@ emphatic its name.
    `## When the proof cannot be produced`.
 
 ## The record
+
+**The guarded-element set is declared up front.** An order that adds or changes a detector
+declares the set it expects proven — an **explicit enumeration of every independently
+neutralizable element** the detector claims to guard, never an aggregate label and never the
+empty set. **The declaration goes on a surface that predates the review**: the order, where the
+work is dispatched; the **reviewer's dispatch**, where it is not — orchestrator-typed light work
+and advisor-typed **micro** alike, whose durable record is written only after the review it would
+have to bind. Where the lane keeps a build record, the declaration is carried into it verbatim.
+**Whoever grades the record grades it against that declaration** — a grader who reads the set one
+level finer records the finer reading as a **signal for the advisor**, never a rework demand. The
+equivalence classes below may group only members of that enumeration. Undeclared, "one entry per
+guarded element" can be re-read finer every round and the bar does not terminate by construction:
+three engaged rounds each read it one level finer on #1162, and the same seat passed a two-entry
+record clean on #1164.
 
 **One bite-proof entry, per guarded element, must contain:**
 

@@ -2011,11 +2011,33 @@ def _looks_like_binary_file(path):
     return b"\x00" in chunk
 
 
+# Bite-proof records are receipts, not consumed surfaces: they are categorically outside every
+# content census, exactly as detector self-paths are. A proof must be free to quote the literal
+# it proves — a census that polices its own evidence re-fires on every new proof.
+# Standing advisor ruling, 2026-08-25 (#1136 shipped the code half; #1158 the doctrine half).
+# Root-relative so the exclusion holds for the real plugin tree and for tmp_path fixtures alike.
+_CENSUS_EXCLUDED_DIRS = ("lib/tests/bite_proofs",)
+
+
+def _census_excluded(root, path):
+    """Both plugin-source censuses' one chokepoint: paths they must not read."""
+    rel = os.path.normpath(os.path.relpath(path, root))
+    return any(
+        rel == os.path.normpath(d) or rel.startswith(os.path.normpath(d) + os.sep)
+        for d in _CENSUS_EXCLUDED_DIRS
+    )
+
+
 def _collect_plugin_source_paths(root):
-    """Repository source paths under root — build artifacts are pruned, never decoded."""
+    """Repository source paths under root — build artifacts and bite-proof receipts are pruned."""
     paths = []
     for dirpath, _dirs, files in os.walk(root):
-        _dirs[:] = [d for d in _dirs if d != "__pycache__"]
+        _dirs[:] = [
+            d
+            for d in _dirs
+            if d != "__pycache__"
+            and not _census_excluded(root, os.path.join(dirpath, d))
+        ]
         for name in files:
             if _is_binary_build_artifact_filename(name):
                 continue
@@ -2057,6 +2079,72 @@ def test_census_excludes_pycache_but_catches_source_literal(tmp_path):
                 if literal in line:
                     scanned.append((path, lineno))
     assert scanned == [(str(stale_py), 1)]
+
+
+def test_grok_census_skips_bite_proof_records_but_still_bites_elsewhere(tmp_path):
+    # axis: the retired-grok census reads no lib/tests/bite_proofs/ path, and still reports source
+    """Receipts are outside the census; an ordinary plugin source file still reports.
+
+    Both halves in one fixture tree: the retired literal is planted twice — once in a
+    bite-proof record, once in ordinary source — and only the ordinary one is reported.
+    """
+    literal = _retired_grok_literal()
+    root = tmp_path / "plugin"
+    record = root / "lib" / "tests" / "bite_proofs" / "wo_probe.md"
+    record.parent.mkdir(parents=True)
+    record.write_text("quoting %s in a receipt\n" % literal, encoding="utf-8")
+
+    consumer = root / "lib" / "stale_hit.py"
+    consumer.write_text('token = "%s"\n' % literal, encoding="utf-8")
+
+    paths = _collect_plugin_source_paths(str(root))
+    assert str(record) not in paths, "bite-proof record must be pruned from the walk"
+    assert str(consumer) in paths, "ordinary source must still be walked"
+
+    scanned = []
+    for path in paths:
+        with open(path, encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                if literal in line:
+                    scanned.append((path, lineno))
+    assert scanned == [(str(consumer), 1)], (
+        "census must skip lib/tests/bite_proofs/ and still report ordinary source; got %r"
+        % (scanned,)
+    )
+
+
+def test_plugin_source_census_excluded_predicate_is_scoped_to_the_records_directory(tmp_path):
+    # axis: the shared exclusion predicate covers the records directory only — not adjacent names
+    """The shared chokepoint predicate excludes the records directory and nothing adjacent."""
+    root = str(tmp_path)
+    assert _census_excluded(root, os.path.join(root, "lib", "tests", "bite_proofs"))
+    assert _census_excluded(root, os.path.join(root, "lib", "tests", "bite_proofs", "a.md"))
+    assert _census_excluded(
+        root, os.path.join(root, "lib", "tests", "bite_proofs", "nested", "a.md")
+    )
+    assert not _census_excluded(root, os.path.join(root, "lib", "tests", "test_ssot_drift.py"))
+    assert not _census_excluded(root, os.path.join(root, "lib", "tests", "bite_proofs_notes.md"))
+    assert not _census_excluded(root, os.path.join(root, "rubric", "bite-proof.md"))
+
+
+def test_both_plugin_source_censuses_read_no_bite_proof_record_on_the_real_tree():
+    # axis: on the real plugin tree, neither census path set includes a bite-proof record
+    """Real-tree pin: neither census's path set reaches lib/tests/bite_proofs/ — and both are non-empty."""
+    records_dir = os.path.normpath(os.path.join(PLUGIN, "lib", "tests", "bite_proofs"))
+    assert os.path.isdir(records_dir), "the records directory must exist for this pin to mean anything"
+    assert any(
+        name.endswith(".md") for name in os.listdir(records_dir)
+    ), "the records directory must hold records for this pin to mean anything"
+
+    for label, paths in (
+        ("retired-grok", _retired_grok_census_paths()),
+        ("routing", _routing_census_paths()),
+    ):
+        assert paths, "%s census walked zero paths" % label
+        inside = [
+            p for p in paths if os.path.normpath(p).startswith(records_dir + os.sep)
+        ]
+        assert not inside, "%s census read bite-proof records: %r" % (label, inside)
 
 
 def test_retired_cursor_grok_4_5_literal_census():
@@ -5709,6 +5797,29 @@ def test_census_excludes_pycache_but_catches_retired_route_literal(tmp_path):
     )
 
 
+def test_routing_census_skips_bite_proof_records_but_still_bites_elsewhere(tmp_path):
+    # axis: the routing census reads no lib/tests/bite_proofs/ path, and still reports source
+    """Receipts are outside the census; an ordinary plugin source file still reports."""
+    literal = _retired_discovery_route_literal()
+    root = tmp_path / "plugin"
+    record = root / "lib" / "tests" / "bite_proofs" / "wo_probe.md"
+    record.parent.mkdir(parents=True)
+    record.write_text("quoting %s in a receipt\n" % literal, encoding="utf-8")
+
+    consumer = root / "lib" / "stale_hit.py"
+    consumer.write_text('token = "%s"\n' % literal, encoding="utf-8")
+
+    paths = _collect_plugin_source_paths(str(root))
+    assert str(record) not in paths, "bite-proof record must be pruned from the walk"
+    assert str(consumer) in paths, "ordinary source must still be walked"
+
+    hits = _scan_paths_for_literal(paths, literal)
+    assert len(hits) == 1 and hits[0][0].endswith("stale_hit.py") and hits[0][1] == 1, (
+        "census must skip lib/tests/bite_proofs/ and still report ordinary source; got %r"
+        % (hits,)
+    )
+
+
 def test_retired_discovery_route_name_census():
     # axis: absence of the retired route name across plugin source, README, CONVENTIONS
     # docs/ is out of scope — specs and child definition-docs quote the retired name as history.
@@ -6092,6 +6203,109 @@ def test_r8_in_repo_copy_holder_census_drift_missing_paths():
         "R8 in-repo copy-holder census drift: missing path(s): %s"
         % ", ".join(missing)
     )
+
+
+# --- Cluster: review findings example renderer (#1145 WO-C) --------------------
+
+
+_FINDINGS_EXAMPLE_HAND_LITERALS = (
+    '{"findings": [...], "investigated": [...]}',
+    '{"findings": [{"id": "...", "severity": "...", "file": "...", "title": "...", "body": "..."}',
+)
+
+# Enumerated emitting sites — one line per site when adding a new emitter.
+_REVIEW_FINDINGS_EXAMPLE_EMITTING_SITES = (
+    ("C1", "lib/engine_dispatch.py", "_dispatch_review_impl", "review_findings_schema.example_prompt_block"),
+    ("C2a", "lib/round_orders.py", "_stdout_payload_example", "review_findings_schema.example_findings_object"),
+    ("C2b", "lib/round_orders.py", "_panel_stdout_delivery_text", "review_findings_schema.example_prompt_block"),
+    ("C3", "lib/seat_canary.py", "CANARY_FIXTURE_PROMPT", "review_findings_schema.example_prompt_block"),
+)
+
+
+def _strip_comments(source):
+    """Return source with COMMENT tokens removed; string literals containing '#' are preserved."""
+    import io
+    import tokenize
+
+    tokens = []
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type == tokenize.COMMENT:
+            continue
+        tokens.append(tok)
+    return tokenize.untokenize(tokens)
+
+
+def _strip_function_docstring(region, func_node):
+    """Drop a leading function docstring from region; no-op when absent."""
+    import ast
+
+    if not func_node.body:
+        return region
+    first = func_node.body[0]
+    if not (
+        isinstance(first, ast.Expr)
+        and isinstance(first.value, ast.Constant)
+        and isinstance(first.value.value, str)
+    ):
+        return region
+    region_lines = region.splitlines()
+    start_idx = first.lineno - func_node.lineno
+    end_idx = first.end_lineno - func_node.lineno + 1
+    return "\n".join(region_lines[:start_idx] + region_lines[end_idx:])
+
+
+def _definition_source(rel, definition_name):
+    """Return comment-free, docstring-free source for a function or module-level assignment."""
+    import ast
+
+    text = _read(rel)
+    try:
+        tree = ast.parse(text, filename=rel)
+    except SyntaxError as exc:
+        raise AssertionError("%s: cannot parse for definition %r: %s" % (rel, definition_name, exc))
+    lines = text.splitlines()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == definition_name:
+            region = "\n".join(lines[node.lineno - 1:node.end_lineno])
+            region = _strip_function_docstring(region, node)
+            return _strip_comments(region)
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == definition_name:
+                    region = "\n".join(lines[node.lineno - 1:node.end_lineno])
+                    return _strip_comments(region)
+    raise AssertionError(
+        "%s: definition %r not found (census row must name an existing function or assignment)"
+        % (rel, definition_name)
+    )
+
+
+def test_review_findings_example_emitting_sites_delegate_to_home():
+    """#1145 WO-C: every enumerated emitter renders from review_findings_schema — no hand literals."""
+    # axis: enumerated emitting sites reference home, not hand-written example literals
+    for site_id, rel, definition_name, home_ref in _REVIEW_FINDINGS_EXAMPLE_EMITTING_SITES:
+        region = _definition_source(rel, definition_name)
+        for literal in _FINDINGS_EXAMPLE_HAND_LITERALS:
+            assert literal not in region, (
+                "%s (%s:%s): hand-written findings example literal reappeared: %r"
+                % (site_id, rel, definition_name, literal)
+            )
+        assert home_ref in region, (
+            "%s (%s:%s): missing home reference %r" % (site_id, rel, definition_name, home_ref)
+        )
+
+
+def test_review_findings_renderer_and_grader_census_share_home_objects():
+    """#1145 WO-C/H: renderer keys and grader census keys are review_findings_schema singletons."""
+    # axis: renderer member keys and grader census frozensets are module singletons (identity, not re-typed literals)
+    import engine_adapter as ea
+    import review_findings_schema as rfs
+
+    member = rfs.example_findings_object()["findings"][0]
+    assert set(member.keys()) == set(rfs.CANONICAL_MEMBER_KEYS)
+    assert ea.REVIEW_SEVERITY_TIERS is rfs.SEVERITY_TIERS
+    assert ea._FINDING_SUBSTANCE_KEYS_CANONICAL is rfs.SUBSTANCE_KEYS_CANONICAL
+    assert ea._FINDING_SUBSTANCE_KEYS_TOLERATED is rfs.SUBSTANCE_KEYS_LEGACY
 
 
 # --- Cluster: session-mode vocabulary (#1151) -----------------------------------

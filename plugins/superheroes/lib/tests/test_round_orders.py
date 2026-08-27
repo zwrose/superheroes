@@ -766,6 +766,8 @@ def test_fixer_order_shell_paths_are_quoted_for_metacharacters(tmp_path):
 
 
 def test_engine_panel_landing_block_uses_phase_stdout_contract():
+    import review_findings_schema as RFS
+
     ctx = _base_context(
         host_seat=False,
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
@@ -774,8 +776,37 @@ def test_engine_panel_landing_block_uses_phase_stdout_contract():
     )
     text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
     assert reason is None
-    assert '{"findings": [...], "investigated": [...]}' in text
+    assert RFS.example_prompt_block() in text
+    assert "Format only" in text
+    assert '"findings": []' in text
     assert "Delivery section above" in text
+    example_json = json.dumps(RFS.example_findings_object(), sort_keys=True)
+    assert f"emit `{example_json}`".lower() not in text.lower()
+
+
+def test_panel_stdout_delivery_never_imperates_literal_example_emit():
+    """#1145 WO-J: panel stdout text is format-only — never 'emit this' with sentinel example."""
+    import review_findings_schema as RFS
+
+    example_json = json.dumps(RFS.example_findings_object(), sort_keys=True)
+    sentinel = RFS.EXAMPLE_SENTINEL
+    format_only = "Format only — your findings replace every value"
+
+    ctx = _base_context(
+        host_seat=False,
+        placeholders=_panel_placeholders(channel="stdout"),
+    )
+    text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
+    assert reason is None
+
+    assert format_only in text
+    assert sentinel in text
+    assert f"emit `{example_json}`".lower() not in text.lower()
+    assert f"emit `{example_json}` as your final stdout".lower() not in text.lower()
+
+    channel_block = RO._panel_derived_placeholders(ctx)["OUTPUT_CHANNEL_BLOCK"]
+    assert format_only in channel_block
+    assert f"emit `{example_json}`".lower() not in channel_block.lower()
 
 
 # --- FX-4A: core path drift guard ------------------------------------------------

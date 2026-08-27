@@ -303,6 +303,7 @@ def test_dispatch_receives_fixture_prompt_and_repo_root(tmp_path):
     def dispatch(engine, *, prompt_path, repo_root, **kwargs):
         seen["prompt_path"] = prompt_path
         seen["repo_root"] = repo_root
+        seen["kwargs"] = kwargs
         assert os.path.isfile(prompt_path)
         with open(prompt_path, encoding="utf-8") as fh:
             seen["contents"] = fh.read()
@@ -314,6 +315,22 @@ def test_dispatch_receives_fixture_prompt_and_repo_root(tmp_path):
     assert seen["repo_root"] == repo
     assert SC.PLANT_MARKER in seen["contents"]
     assert "investigated" in seen["contents"]
+
+
+def test_run_canary_pins_findings_expected_result_kind(tmp_path):
+    """#1145 WO-B: canary production dispatch pins findings to match its fixture contract."""
+    # axis: run_canary must pass expected_result_kind=findings to dispatch_review
+    repo = _repo(tmp_path)
+    seen = {}
+
+    def dispatch(engine, **kwargs):
+        seen.update(kwargs)
+        return _base_dispatch_result()
+
+    SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root=repo, dispatch=dispatch,
+    )
+    assert seen.get("expected_result_kind") == "findings"
 
 
 def _engagement_decision_source(src):

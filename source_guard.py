@@ -8,6 +8,20 @@ Three layers:
 Residual (stated, not attributed to an individual test by layer 2): a same-size
 rewrite whose ``mtime_ns`` was restored is caught at session end only. No layer
 can promise anything about a ``SIGKILL`` landing mid-write.
+
+Residual (stated): CPython's ``open`` audit event carries ``(path, mode, flags)``
+and no ``dir_fd``, so a ``dir_fd``-relative ``os.open`` for writing cannot be
+anchored from the event alone and stays resolved against the process cwd. The
+replace-ish events (``os.remove``, ``os.rename``/``os.replace``) do carry their
+anchors and are resolved against them. Layers 2 and 3 remain the backstop for
+anything layer 1 declines to match.
+
+Residual (stated): the two stat failures in descriptor-anchored matching resolve
+in OPPOSITE directions, deliberately. A watched parent that cannot be stat'd
+falls CLOSED -- the basename already matched and only confirmation is missing.
+An ANCHOR that cannot be stat'd falls open, because the operation's directory is
+then unidentifiable and blocking every such call would refuse ordinary traffic
+(a stale or closed descriptor during tmpdir GC). Layers 2 and 3 back that case.
 """
 from __future__ import annotations
 
@@ -93,7 +107,15 @@ def watched_paths(repo_root):
         rel_str = rel.decode("utf-8", "replace")
         if "/tests/" in rel_str or rel_str.startswith("tests/"):
             continue
-        paths.append(os.path.realpath(os.path.join(repo_root, rel_str)))
+        # Track BOTH the lexical path git reports and its realpath. They differ only
+        # for a tracked symlink (or a path under one), where the realpath names the
+        # TARGET while the tracked entry is the link itself. The descriptor-anchored
+        # matcher compares lexical parents, so a realpath-only set would let an
+        # fd-relative delete of the tracked symlink fall open. Where they coincide --
+        # every entry in a repository with no tracked symlinks -- the frozenset dedupes.
+        lexical = os.path.join(repo_root, rel_str)
+        paths.append(lexical)
+        paths.append(os.path.realpath(lexical))
     if not paths:
         raise RuntimeError("source_guard: watched set is empty after excluding tests/")
     return frozenset(paths)
@@ -169,6 +191,51 @@ def _is_write_open(mode, flags):
     return False
 
 
+# Captured at import so the audit hook never resolves anchors through a mutable
+# global. This repository replaces os.stat during tests (test_cache_markers.py):
+# a fake lacking dir_fd support would make the guard fall open, and one lacking
+# st_dev would raise out of the audit hook and break an unrelated operation.
+_REAL_STAT = os.stat
+
+
+def _is_real_dir_fd(dir_fd):
+    """True when ``dir_fd`` is an actual descriptor rather than the "no dir_fd" sentinel.
+
+    Measured against CPython's audit events: the sentinel is reported as a negative
+    int (``-1`` observed on macOS/3.9), and ``AT_FDCWD`` is negative on every platform
+    that defines it, so the sign test needs no platform constant. A real descriptor is
+    always non-negative.
+    """
+    # bite-axis: sign — a non-negative int is a real descriptor to anchor on; a
+    # negative int, a non-int, or a bool is the cwd-anchored sentinel.
+    if isinstance(dir_fd, bool) or not isinstance(dir_fd, int):
+        return False
+    return dir_fd >= 0
+
+
+def _write_targets(event, args):
+    """Pair every path argument of a replace-ish audit event with its own dir_fd anchor.
+
+    Signatures measured from CPython's audit events: ``os.remove(path, dir_fd)``,
+    ``os.rename(src, dst, src_dir_fd, dst_dir_fd)`` — which ``os.replace`` raises too,
+    rather than a distinct ``os.replace`` event — and ``os.truncate(path_or_fd, length)``,
+    which carries no dir_fd. Short arg tuples are tolerated so a signature change
+    degrades to cwd anchoring rather than raising IndexError inside the audit hook.
+    """
+    # bite-axis: pairing — each path travels with the dir_fd that anchors THAT path,
+    # so a rename's src and dst can never borrow each other's anchor.
+    def arg(index):
+        return args[index] if len(args) > index else None
+
+    if event == "os.remove":
+        return ((arg(0), arg(1)),)
+    if event in ("os.rename", "os.replace"):
+        return ((arg(0), arg(2)), (arg(1), arg(3)))
+    if event == "os.truncate":
+        return ((arg(0), None),)
+    return ()
+
+
 def _resolve_repo_root(config):
     candidate = os.environ.get(REPO_ROOT_ENV)
     if candidate is None:
@@ -232,11 +299,53 @@ class GuardState:
         self._addaudithook(self.audit)
         self.audit_hook_installed = True
 
-    def _path_hits_watched(self, path):
+    def _relative_hits_watched(self, path, dir_fd):
+        """Match a dir_fd-relative path by the identity of the directory it acts in.
+
+        Compares ``(st_dev, st_ino)`` of the directory the operation actually targets
+        against the parent directory of every watched file sharing the basename. It
+        never consults the process cwd, so a tmp-tree ``conftest.py`` unlinked during
+        pytest's tmpdir GC cannot borrow the repo root's identity — while a genuine
+        ``dir_fd``-relative delete of the repo's own ``conftest.py`` still matches.
+        """
+        # bite-axis: directory identity — a basename match counts only when the
+        # anchored directory IS the watched file's parent, not merely same-named.
+        head, tail = os.path.split(path)
+        # Every stat result is unpacked INSIDE its try: an attribute read left outside
+        # would raise out of the audit hook and break the operation being audited.
+        try:
+            anchor = _REAL_STAT(head or os.curdir, dir_fd=dir_fd)
+            anchor_key = (anchor.st_dev, anchor.st_ino)
+        except (OSError, ValueError, TypeError, NotImplementedError, AttributeError):
+            return False
+        for watched in self.watched:
+            if os.path.basename(watched) != tail:
+                continue
+            try:
+                parent = _REAL_STAT(os.path.dirname(watched))
+                parent_key = (parent.st_dev, parent.st_ino)
+            except (OSError, ValueError, TypeError, AttributeError):
+                # bite-axis: fail-closed — the basename already matched and the anchor
+                # is known; only CONFIRMATION is missing. An open descriptor can still
+                # name a directory whose absolute pathname has become unreachable (an
+                # ancestor loses search permission), so skipping the candidate here
+                # would let a real mutation through. A check that cannot complete
+                # blocks; it never falls open.
+                return True
+            if parent_key == anchor_key:
+                return True
+        return False
+
+    def _path_hits_watched(self, path, dir_fd=None):
+        # bite-axis: anchor selection — a relative path is resolved against the
+        # operation's own dir_fd; cwd resolution applies only when the operation
+        # is genuinely cwd-anchored (absolute path, or no real descriptor).
         if not isinstance(path, (str, bytes)):
             return False
         if isinstance(path, bytes):
             path = path.decode("utf-8", "replace")
+        if _is_real_dir_fd(dir_fd) and not os.path.isabs(path):
+            return self._relative_hits_watched(path, dir_fd)
         real = os.path.realpath(path)
         return real in self.watched
 
@@ -254,14 +363,13 @@ class GuardState:
                 )
             return
 
-        if event in ("os.rename", "os.replace", "os.remove", "os.truncate"):
-            for arg in args:
-                if self._path_hits_watched(arg):
-                    node = self.current_test_nodeid or "<unknown test>"
-                    raise ShippedSourceWrite(
-                        "%s on shipped source %r blocked — see %s"
-                        % (event, arg, node)
-                    )
+        for target, dir_fd in _write_targets(event, args):
+            if self._path_hits_watched(target, dir_fd):
+                node = self.current_test_nodeid or "<unknown test>"
+                raise ShippedSourceWrite(
+                    "%s on shipped source %r blocked — see %s"
+                    % (event, target, node)
+                )
 
     def check_residue(self, test_nodeid):
         changed = []

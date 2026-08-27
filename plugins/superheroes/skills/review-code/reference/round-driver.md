@@ -677,10 +677,8 @@ receipt round `"0"`.
 ### Handback receipt gate (Claude host, Bash tool)
 
 **Shipped dark in 0.25.0** — the review-receipt handback refusal class is built and in-tree but
-**unwired** from the PreToolUse chain; it enforces nothing today. **Arming is owned by #954**
-(retrospective would-refuse audit → shadow mode → preconditions → owner decision). The scope markers
-and sidecar below still ship and still produce data — that data is what #954's retrospective audit
-reads.
+**unwired** from the PreToolUse chain; it enforces nothing today (arming: #954). The scope markers
+and sidecar below still ship and still produce data.
 
 When armed, the PreToolUse `handback_receipt_gate` hook would refuse `gh pr ready` and non-draft
 `gh pr create` when the worktree is mechanically in scope but lacks a valid full-lane review receipt.

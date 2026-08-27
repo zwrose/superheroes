@@ -14,6 +14,7 @@ if _LIB_DIR not in sys.path:
 import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
+import review_findings_schema  # noqa: E402
 
 PLANT_MARKER = "check_receipt"
 
@@ -21,8 +22,7 @@ CANARY_FIXTURE_PROMPT = """\
 You are the security reviewer seat for a one-shot dispatched review.
 
 Respond on stdout with a single JSON object (no prose outside it) matching this contract:
-{"findings": [{"id": "...", "severity": "...", "file": "...", "title": "...", "body": "..."}],
- "investigated": ["relative/path.py", ...]}
+%s
 List in `investigated` every repo-relative path you read to ground your review —
 always, whether or not you found anything.
 
@@ -41,7 +41,7 @@ Review ONLY this diff hunk:
 ```
 
 The function `check_receipt` above must not fail open — flag it as Critical if you engage.
-"""
+""" % review_findings_schema.example_prompt_block()
 
 
 def _safe_engagement(raw):
@@ -151,6 +151,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
                 prompt_path=prompt_path,
                 repo_root=repo_root,
                 timeout=timeout,
+                expected_result_kind="findings",
             )
         except Exception as exc:
             return {

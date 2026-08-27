@@ -70,7 +70,7 @@ via an amendment, not in an annex.
 
 **Specs are the decision store.** A ruling lives at the place it was made and is cited from there.
 The plugin maintains **no separate rulings ledger** — the showrunner charter carries why (the
-Anchor citation is the reverse index); do not restate that reason here.
+Anchor citation is the reverse index).
 
 **Absorption is a judgment call, never a trigger.** When a surface has accumulated enough rulings
 that it has quietly become a decision store of its own, it may be **absorbed into a spec** — and
