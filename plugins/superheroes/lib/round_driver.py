@@ -108,6 +108,7 @@ _SELF_RECOVERY_FIXER_EFFORT = "high"
 # Fix-batch guidance key — single source shared with order templates (dispatch-fixer.md).
 FIX_BATCH_GUIDANCE_KEY = "userGuidance"
 
+# --- version spelling: pinned declaration block (BEGIN) ---
 SCHEMA_VERSION = 2
 STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"
@@ -135,6 +136,7 @@ SUPPORTED_STATE_VERSIONS = (2, 3)
 RECEIPT_CERTIFIED_SCHEMA = "receipt-certified/%d"
 RECEIPT_ATTESTED_SCHEMA = "receipt-attested/1"
 RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
+# --- version spelling: pinned declaration block (END) ---
 RECEIPT_FORM_CERTIFIED = "certified"
 RECEIPT_FORM_ATTESTED = "attested"
 RECEIPT_FORM_INTERIM = "interim"
