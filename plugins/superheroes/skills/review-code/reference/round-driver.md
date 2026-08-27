@@ -204,8 +204,12 @@ shape guard's own fault. `manifest-anchor-unanchored` stays reserved for seat ph
 (`advance-judgment-park` / `advance-stall-park`), fold the owner's choice with `--owner-artifact` —
 the same JSON **object** shape hand `submit` takes for that gate: `{"dispositions": [...]}` for
 `present-judgment`, `{"choice": "<stall choice>"}` for `present-stall-menu`. Whenever an owner
-genuinely rules, the folded artifact **MUST** carry a `_provenance` block — an owner ruling without
-one is journalled `owner-unattributed`, which is a lost attribution, not a neutral default. The fold
+genuinely rules, the folded artifact **MUST** carry a `_provenance` block whose values are
+**transcribed from the real owner interaction** — never composed by the orchestrator to satisfy the
+gate. When no owner ruled, **omit** `_provenance` entirely; the fold is journalled
+`owner-unattributed`, which is the truthful answer, not a degraded one. Fabricating any provenance
+field is forbidden and worse than omission (the driver's validator is shape-only and cannot detect
+it). The fold
 runs through the same `cmd_submit` chokepoint as every other fold (echo, state-hash, terminal-receipt
 gate, round ceiling, stall guards `stall-choice-retired:<name>`,
 `stall-choice-not-offered:<name>`, `stall-choice-missing`, `stall-accept-risk-not-eligible`). The
@@ -220,9 +224,11 @@ also journals `artifactSha256` naming the artifact folded, on the fold's own com
 `round_driver` `OWNER_PROVENANCE_FIELD_SHAPES`):
 
 ```text
-ruledBy — non-empty string
-ruledAt — non-empty string
-records — non-empty list of non-empty strings
+ruledBy — non-empty string: the owner who ruled (transcribed, not invented)
+ruledAt — non-empty string: ISO-8601 time the owner ruled (not when the artifact is written)
+records — non-empty list of non-empty strings: URLs of durable records a third party can open
+          (e.g. the issue or PR comment where the owner ruled, a dated decision record) — never
+          a file name the recipe invented
 ```
 
 ```bash
@@ -239,9 +245,9 @@ Example `present-judgment` gate artifact (gate shape plus a filled-in `_provenan
     {"id": "finding-1", "disposition": "fix-as-suggested"}
   ],
   "_provenance": {
-    "ruledBy": "owner",
-    "ruledAt": "2026-08-26T00:00:00Z",
-    "records": ["gate-ruling.json"]
+    "ruledBy": "<the owner who ruled>",
+    "ruledAt": "<ISO-8601 time the owner ruled>",
+    "records": ["<URL of the durable record where they ruled>"]
   }
 }
 ```

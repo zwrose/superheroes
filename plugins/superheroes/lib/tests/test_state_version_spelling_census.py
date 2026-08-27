@@ -213,6 +213,10 @@ def _is_version_accessor_call(node):
 
 
 def _is_schema_version_read(node):
+    # Comparison leg (narrowed): a schema-version read counts only when it appears
+    # syntactically inside the comparison operand. A read bound to a local first
+    # (e.g. version = state.get("schemaVersion") then version == 99) is NOT
+    # reported — closing that gap needs alias resolution, deliberately not built.
     if _is_version_accessor_call(node):
         return True
     if isinstance(node, ast.Subscript):
@@ -278,6 +282,8 @@ def _binding_segment(source, key_node, val_node):
 
 
 def _scan_comparisons(tree, source, relpath):
+    # Comparison leg: only operands that are syntactically a schema-version read
+    # (see _is_schema_version_read); aliased locals are out of scope.
     for node in ast.walk(tree):
         if not isinstance(node, ast.Compare):
             continue
