@@ -513,6 +513,72 @@ def test_stalled_open_targets_legacy_empty_fix_batch_returns_empty():
     assert RD._stalled_open_targets(state, breaker) == []
 
 
+# --- D7: settle_delta open-id completeness (#681) ------------------------------
+
+def _settle_delta_base_state(**over):
+    state = RD.new_state(_cfg(maxRounds=20))
+    state["auditRounds"] = [{"round": 2, "outcomes": []}]
+    state["findings"] = []
+    state.update(over)
+    return state
+
+
+def test_settle_delta_unmatched_open_id_parks_cannot_certify():
+    # axis: an open id with no _auditTargets entry must park, not silently drop
+    ghost = "f.py::ghost@L9"
+    state = _settle_delta_base_state(
+        _auditTargets=[],
+        _auditOutcome={"notDischarged": [ghost], "discharged": []},
+    )
+    RD._settle_delta(state, state["config"])
+    assert state["terminal"] == "cannot-certify"
+    assert state["step"] == RD.P_TERMINAL
+    detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
+    assert ghost in detail
+    assert "no _auditTargets entry" in detail
+    assert "cannot dispatch fix batch" in detail
+
+
+def test_settle_delta_multiple_unmatched_open_ids_sorted_in_park_message():
+    # axis: every unmatched open id must appear in the park message, sorted
+    ids = ["z.py::z@L2", "a.py::a@L1"]
+    state = _settle_delta_base_state(
+        _auditTargets=[],
+        _auditOutcome={"notDischarged": list(reversed(ids)), "discharged": []},
+    )
+    RD._settle_delta(state, state["config"])
+    assert state["terminal"] == "cannot-certify"
+    detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
+    assert detail.index("a.py::a@L1") < detail.index("z.py::z@L2")
+
+
+def test_settle_delta_empty_not_discharged_with_new_blocker_composes_batch():
+    # axis: empty open-id set is not an unmatched one — new blockers alone still fix
+    blocker = _finding(title="fresh", line=3)
+    state = _settle_delta_base_state(
+        _auditOutcome={"notDischarged": [], "discharged": []},
+        findings=[dict(blocker)],
+    )
+    RD._settle_delta(state, state["config"])
+    assert state.get("terminal") is None
+    assert state["step"] == RD.P_FIXER
+    batch = state.get("_fixBatch") or []
+    assert len(batch) == 1
+
+
+def test_settle_delta_non_dict_audit_target_skipped_unmatched_id_parks():
+    # axis: non-dict _auditTargets members cannot satisfy or suppress the completeness check
+    ghost = "f.py::ghost@L9"
+    state = _settle_delta_base_state(
+        _auditTargets=["not-a-dict"],
+        _auditOutcome={"notDischarged": [ghost], "discharged": []},
+    )
+    RD._settle_delta(state, state["config"])
+    assert state["terminal"] == "cannot-certify"
+    detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
+    assert ghost in detail
+
+
 def test_handle_stall_legacy_empty_fix_batch_parks_unresolvable_open_set():
     # axis: legacy persisted session with audit history and an unreadable outcome parks — no prior-batch fallback
     state = RD.new_state(_cfg())

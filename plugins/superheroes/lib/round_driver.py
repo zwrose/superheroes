@@ -3186,7 +3186,18 @@ def _settle_delta(state, config):
                 state,
                 "malformed _auditOutcome.notDischarged — cannot dispatch fix batch")
             return
-        nd_targets = [dict(t) for t in (state.get("_auditTargets") or []) if t.get("id") in nd_ids]
+        audit_targets = state.get("_auditTargets") or []
+        matched_ids = {t.get("id") for t in audit_targets
+                       if isinstance(t, dict) and t.get("id") in nd_ids}
+        unmatched = sorted(nd_ids - matched_ids)
+        if unmatched:
+            _park_cannot_certify(
+                state,
+                "settle-delta — open audit id(s) have no _auditTargets entry (%s); "
+                "cannot dispatch fix batch" % ", ".join(unmatched))
+            return
+        nd_targets = [dict(t) for t in audit_targets
+                      if isinstance(t, dict) and t.get("id") in nd_ids]
         batch = _union_open_blockers(new_blocking, nd_targets)
         if _route_judgment_blockers(state, batch):
             return
