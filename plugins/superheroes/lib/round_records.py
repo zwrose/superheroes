@@ -30,6 +30,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -650,7 +651,7 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
         return None, _refuse(anchor_reason, manifestSha256=envelope.get("manifestSha256"),
                              orderSha256=envelope.get("orderSha256"))
 
-    exists = os.path.exists(spath)
+    exists = os.path.lexists(spath)
     if exists and not supersede:
         return None, _refuse("store-exists", storePath=spath)
     if supersede:
@@ -751,13 +752,22 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
             claimed.add(os.path.basename(bare_path))
         except ValueError:
             bare_path = None
-        has_landing = os.path.exists(lpath) or (bare_path is not None and os.path.exists(bare_path))
+        # `lexists`, never `exists`: presence is the DIRECTORY ENTRY, not whether its target resolves.
+        has_landing = os.path.lexists(lpath) or (bare_path is not None and os.path.lexists(bare_path))
         if not has_landing:
             continue
-        if os.path.exists(spath):
-            results.append({"ok": True, "reason": "already-stored", "seatKey": seat_key,
-                            "storageKey": skey, "storePath": spath, "occurrence": occurrence})
-            continue
+        if os.path.lexists(spath):
+            try:
+                os.stat(spath)
+                results.append({"ok": True, "reason": "already-stored", "seatKey": seat_key,
+                                "storageKey": skey, "storePath": spath, "occurrence": occurrence})
+                continue
+            except OSError:
+                results.append(_refuse("store-exists", storePath=spath, seatKey=seat_key,
+                                       storageKey=skey, occurrence=occurrence,
+                                       message=("store entry %r is present but its target does not "
+                                                "resolve" % spath)))
+                continue
         out = ingest_landing(session_dir, rnd, phase, seat_key, current_attempt,
                              current_attempt=current_attempt, roster=roster, anchor=anchor,
                              occurrence=occurrence)
@@ -779,7 +789,11 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
     for name in names:
         if name in claimed or name.startswith(RESERVED_PREFIX) or env_suffix is None:
             continue
-        if ldir is None or not os.path.isfile(os.path.join(ldir, name)):
+        entry_path = os.path.join(ldir, name)
+        try:
+            if stat.S_ISDIR(os.lstat(entry_path).st_mode):
+                continue
+        except OSError:
             continue
         skey = None
         if name.endswith(env_suffix):
