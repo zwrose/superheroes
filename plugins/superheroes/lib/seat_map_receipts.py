@@ -55,6 +55,23 @@ def latest_with_seats(state):
     return {}
 
 
+def effective_seat_map(state):
+    """Effective seat map for a state — single home for resolution order (#1185).
+
+    Latest receipt whose ``map["seats"]`` is a non-empty dict wins; otherwise the seeded
+    ``state["config"]["seatMap"]`` when it is a dict; otherwise the latest-with-seats result
+    when it is a dict; otherwise ``{}``.
+
+    Callers: ``round_driver.effective_seat_map``, ``round_adapters._assemble_panel``."""
+    sm = latest_with_seats(state)
+    if isinstance(sm.get("seats"), dict) and sm.get("seats"):
+        return sm
+    cfg_sm = (state.get("config") or {}).get("seatMap")
+    if isinstance(cfg_sm, dict):
+        return cfg_sm
+    return sm if isinstance(sm, dict) else {}
+
+
 def any_seats(state):
     """Seats-existence projection — True iff any receipt carries a non-empty ``seats`` dict."""
     for entry in receipts(state):
