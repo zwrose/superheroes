@@ -97,21 +97,6 @@ def _engaged_from_dispatch(res):
     return engine_adapter.engagement_read(res) == "engaged"
 
 
-def canary_probes_for(seat_map):
-    """Canary probes the cross-vendor liveness check recognizes for a submitted seat map."""
-    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
-    if not isinstance(seats, dict):
-        return []
-    vendors = set()
-    for cell in seats.values():
-        if not isinstance(cell, dict):
-            continue
-        vendor = cell.get("vendor")
-        if isinstance(vendor, str) and vendor and vendor != "claude":
-            vendors.add(vendor)
-    return [{"engine": v, "engaged": True} for v in sorted(vendors)]
-
-
 def _evidence_from_dispatch(res):
     findings = res.get("findings") or []
     investigated = res.get("investigated") or []
@@ -244,6 +229,28 @@ def main(argv):
     )
     sys.stdout.write(json.dumps(res) + "\n")
     return 0
+
+
+def __getattr__(name):
+    if name == "canary_probes_for":
+        import importlib.util
+        _lib = os.path.dirname(os.path.abspath(__file__))
+        _eval = os.path.join(_lib, "..", "eval")
+        _saved = list(sys.path)
+        try:
+            if _lib not in sys.path:
+                sys.path.insert(0, _lib)
+            if _eval not in sys.path:
+                sys.path.insert(0, _eval)
+            spec = importlib.util.spec_from_file_location(
+                "_review_loop_runner_fixture",
+                os.path.join(_eval, "review_loop_runner.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod.fabricate_canary_probes_for
+        finally:
+            sys.path[:] = _saved
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))
 
 
 if __name__ == "__main__":
