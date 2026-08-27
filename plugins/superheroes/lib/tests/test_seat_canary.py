@@ -1,6 +1,7 @@
 import importlib.util
 import os
 import re
+import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -23,6 +24,67 @@ def _load_engine_adapter():
 
 SC = _load()
 EA = _load_engine_adapter()
+
+_PLUGIN_ROOT = os.path.join(_HERE, "..", "..")
+
+
+def _count_fabricate_canary_probes_for_defs():
+    count = 0
+    for dirpath, _, filenames in os.walk(_PLUGIN_ROOT):
+        for fn in filenames:
+            if not fn.endswith(".py"):
+                continue
+            with open(os.path.join(dirpath, fn), encoding="utf-8") as fh:
+                for line in fh:
+                    if re.match(r"def fabricate_canary_probes_for\s*\(", line):
+                        count += 1
+    return count
+
+
+def test_fabricate_canary_probes_for_single_definition():
+    assert _count_fabricate_canary_probes_for_defs() == 1
+
+
+def _load_fabricate_canary_probes_for():
+    eval_dir = os.path.join(_PLUGIN_ROOT, "eval")
+    saved = list(sys.path)
+    try:
+        if eval_dir not in sys.path:
+            sys.path.insert(0, eval_dir)
+        spec = importlib.util.spec_from_file_location(
+            "review_loop_runner",
+            os.path.join(eval_dir, "review_loop_runner.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.fabricate_canary_probes_for
+    finally:
+        sys.path[:] = saved
+
+
+def test_fabricate_canary_probes_for_non_dict_map_empty():
+    fabricate = _load_fabricate_canary_probes_for()
+    assert fabricate(None) == []
+    assert fabricate("not-a-map") == []
+
+
+def test_fabricate_canary_probes_for_non_dict_seats_empty():
+    fabricate = _load_fabricate_canary_probes_for()
+    assert fabricate({"seats": None}) == []
+    assert fabricate({"seats": "bad"}) == []
+
+
+def test_fabricate_canary_probes_for_claude_and_invalid_vendors_skipped():
+    fabricate = _load_fabricate_canary_probes_for()
+    seat_map = {
+        "seats": {
+            "a": {"vendor": "claude"},
+            "b": {"vendor": ""},
+            "c": {"vendor": 42},
+            "d": {},
+            "e": {"vendor": "codex"},
+        }
+    }
+    assert fabricate(seat_map) == [{"engine": "codex", "engaged": True}]
 
 
 def _repo(tmp_path):

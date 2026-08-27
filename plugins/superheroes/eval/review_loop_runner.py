@@ -33,6 +33,27 @@ import review_loop_plan as RLP  # noqa: E402
 import review_memory as RM  # noqa: E402
 import review_telemetry as RT  # noqa: E402
 import round_driver as RD  # noqa: E402
+import seat_map as SM  # noqa: E402
+
+
+def fabricate_canary_probes_for(seat_map):
+    """Fabricate always-engaged canary probes for eval/test fixtures only.
+
+    NOT evidence of cross-vendor liveness — real engagement comes from
+    ``seat_canary.run_canary`` dispatching through the actual seat path.
+    """
+    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
+    if not isinstance(seats, dict):
+        return []
+    vendors = set()
+    for cell in seats.values():
+        if not isinstance(cell, dict):
+            continue
+        vendor = cell.get("vendor")
+        if isinstance(vendor, str) and vendor and vendor != "claude":
+            vendors.add(vendor)
+    return [{"engine": v, "engaged": True} for v in sorted(vendors)]
+
 
 # Synthetic citation surface so fixture findings (often file/line-less, written for the JS
 # shell's graftSynthesizedFindings path) survive round_driver.mechanical_compile.
@@ -196,11 +217,28 @@ def _compose_worklist(run_dir, round_no, batch, roster):
         return worklist_path, json.load(fh)
 
 
-def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=False):
+def _eval_clean_seat_map():
+    """All-claude+codex seat map verified clean — models a clean eval harness run (#681)."""
+    live = ["claude", "codex"]
+    for author in ("xai", "anthropic", "openai"):
+        for narrative in ("anthropic", "openai"):
+            m = SM.build(SM.PANEL_ROSTER, live, author, narrative, 0)
+            violations = SM.verify(m, author)
+            if violations == []:
+                return SM.to_receipt(m, author)
+    raise RuntimeError("eval harness seat map must verify clean for claude+codex")
+
+
+def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=False,
+                supply_seat_map=True, supply_canary_probes=True):
     """Drive ``round_driver.run_loop`` for one fixture; return the observational JSON dict.
 
     ``fixture`` may be a path (str/Path) or an already-loaded dict. ``corrupt_records`` writes a
     mangled round-records.json so the driver's fail-closed resume seam parks (cannot-certify).
+
+    ``supply_seat_map`` / ``supply_canary_probes`` default True so every existing caller and golden
+    still receives the verified-clean seat map and fabricated engaged probes. Set either False to
+    exercise the driver's fail-closed disclosures without pre-satisfying that gate.
     """
     if isinstance(fixture, (str, Path)):
         fixture_path = Path(fixture)
@@ -529,6 +567,13 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
 
     RD._fold_panel = _fold_panel_persist
     try:
+        io = {"stall_menu": lambda payload: "hold"}
+        eval_seat_map = None
+        if supply_seat_map:
+            eval_seat_map = _eval_clean_seat_map()
+            io["seatMap"] = eval_seat_map
+        if supply_canary_probes and eval_seat_map is not None:
+            io["canaryResult"] = fabricate_canary_probes_for(eval_seat_map)
         seams = {
             "reviewer": reviewer,
             "synthesis": synthesis,
@@ -537,10 +582,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             "fix_step": fix_step,
             "verify_runner": verify_runner,
             "changed_subjects": changed_subjects,
-            "io": {
-                "stall_menu": lambda payload: "hold",
-                "seatMap": {},
-            },
+            "io": io,
         }
         config = {
             "leg": "panel",
