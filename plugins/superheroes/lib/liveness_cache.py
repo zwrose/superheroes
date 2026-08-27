@@ -288,10 +288,16 @@ def _dead_cell_note(vendor, model, effort, detail):
     }
 
 
-def _liveness_read_error_note(detail):
+def _liveness_read_error_note(detail, stage=None):
+    if stage == "cell-evidence":
+        prefix = "liveness read failed during cell-evidence scan"
+    elif stage == "reconcile":
+        prefix = "liveness read failed during inventory reconcile"
+    else:
+        prefix = "liveness read failed"
     return {
         "constraint": "liveness-read-error",
-        "reason": "liveness read failed: %s" % _bounded_reason(detail),
+        "reason": "%s: %s" % (prefix, _bounded_reason(detail)),
     }
 
 
@@ -446,6 +452,7 @@ def live_from(liveness, needed):
     inventory = _build_needed_inventory(needed)
 
     loop_error = None
+    reconcile_error = None
     try:
         for vendor, slots in inventory.items():
             if slots is None:
@@ -461,8 +468,13 @@ def live_from(liveness, needed):
     except Exception as exc:
         loop_error = exc
     if loop_error is not None:
-        dead_notes.append(_liveness_read_error_note(str(loop_error)))
-    _reconcile_inventory(inventory, live_cells, liveness, dead_notes, live)
+        dead_notes.append(_liveness_read_error_note(str(loop_error), stage="cell-evidence"))
+    try:
+        _reconcile_inventory(inventory, live_cells, liveness, dead_notes, live)
+    except Exception as exc:
+        reconcile_error = exc
+    if reconcile_error is not None:
+        dead_notes.append(_liveness_read_error_note(str(reconcile_error), stage="reconcile"))
 
     if "claude" not in live:
         live.append("claude")
