@@ -173,6 +173,51 @@ def test_v2_certified_receipt_omits_verify_passes(tmp_path):
     assert "verifyPasses" not in receipt["rounds"][0]
 
 
+def _state_with_verify_passes(schema_version):
+    """Minimal state with one round that recorded verifyPasses."""
+    import verification
+    state = round_driver.new_state(_cfg())
+    state["schemaVersion"] = schema_version
+    f = _blocking_finding("issue", 1)
+    staged = verification.stage_ids([f])
+    state["_toVerify"] = staged
+    round_driver._fold_verifiers(
+        state, state["config"],
+        {"verdicts": [{"id": staged[0]["id"], "verdict": "CONFIRMED", "evidence": "ran"}]})
+    assert state["rounds"]["1"]["verifyPasses"]
+    return state
+
+
+def test_v4_certified_receipt_carries_verify_passes(tmp_path):
+    """v4 certified receipts carry verifyPasses on every round entry (min-version rule)."""
+    state = _state_with_verify_passes(4)
+    state["terminal"] = "converged"
+    state["certification"] = {"shape": "audited-chain"}
+    receipt = round_driver.build_receipt(state, str(tmp_path))
+    assert receipt["schemaVersion"] == 4
+    rounds = receipt.get("rounds") or []
+    assert rounds, "expected at least one round entry"
+    for rd in rounds:
+        assert isinstance(rd, dict)
+        assert "verifyPasses" in rd
+        assert isinstance(rd["verifyPasses"], list)
+
+
+def test_v3_certified_receipt_still_carries_verify_passes(tmp_path):
+    """v3 certified receipts still carry verifyPasses (no regression from the v4 bump)."""
+    state = _state_with_verify_passes(3)
+    state["terminal"] = "converged"
+    state["certification"] = {"shape": "audited-chain"}
+    receipt = round_driver.build_receipt(state, str(tmp_path))
+    assert receipt["schemaVersion"] == 3
+    rounds = receipt.get("rounds") or []
+    assert rounds, "expected at least one round entry"
+    for rd in rounds:
+        assert isinstance(rd, dict)
+        assert "verifyPasses" in rd
+        assert isinstance(rd["verifyPasses"], list)
+
+
 def test_terminal_receipt_validates(tmp_path):
     """validate_receipt accepts the multi-round terminal receipt."""
     session_dir, gitdir, head_path = _bootstrap(tmp_path, maxRounds=8)

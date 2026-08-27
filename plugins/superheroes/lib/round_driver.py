@@ -118,19 +118,26 @@ RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 
 # --- the #723 schema matrix -------------------------------------------------------------------
 # `SCHEMA_VERSION` stays the version a v2 RECEIPT keys off (and the version an in-flight v2 state
-# carries). NEW state is minted at `STATE_SCHEMA_VERSION`; `load_state` accepts BOTH.
+# carries). NEW state is minted at `STATE_SCHEMA_VERSION`; `load_state` accepts every member of
+# `SUPPORTED_STATE_VERSIONS`.
 #
-# THE HASH-PRESERVATION RULE. A loaded state's `schemaVersion` is NEVER mutated and NO v3 default
-# field is written into the dict on load: `state_hash` hashes the WHOLE canonical state, so
-# injecting a v3 key on load would change the hash of an already-emitted `expectedStateHash` and
-# every in-flight v2 session's next `submit` would fail its echo fence. Every v3-only field is
-# therefore read with `.get()` at its read site, never seeded on load.
-STATE_SCHEMA_VERSION = 3
-SUPPORTED_STATE_VERSIONS = (2, 3)
+# THE HASH-PRESERVATION RULE. A loaded state's `schemaVersion` is NEVER mutated and NO default
+# field for the current version is written into the dict on load: `state_hash` hashes the WHOLE
+# canonical state, so injecting a key on load would change the hash of an already-emitted
+# `expectedStateHash` and every in-flight session's next `submit` would fail its echo fence.
+# Version-gated fields are therefore read with `.get()` at their read sites, never seeded on load.
+#
+# Rollback residual (#1185): this bump protects state minted from here on; state already persisted
+# at `schemaVersion: 3` by a post-#681 build carries the new shape under the old number and a
+# rolled-back v3 reader will still accept it. Re-versioning persisted state is impossible without
+# violating the hash-preservation rule above, so this residual is disclosed rather than fixed.
+STATE_SCHEMA_VERSION = 4
+SUPPORTED_STATE_VERSIONS = (2, 3, 4)
 
 # The receipt VERSION derives from the STATE's version: a v2 state terminates to
 # `receipt-certified/2` (today's shape, byte-for-byte unchanged — no key added), a v3 state to
-# `receipt-certified/3`. `attest` writes `receipt-attested/1`, which carries an `attestation` block
+# `receipt-certified/3`, a v4 state to `receipt-certified/4`. `attest` writes `receipt-attested/1`,
+# which carries an `attestation` block
 # and NO `certification`/`certificationShape` — so the certified and attested shapes are
 # structurally un-confusable and `validate_receipt` dispatches on that.
 RECEIPT_CERTIFIED_SCHEMA = "receipt-certified/%d"
@@ -206,13 +213,15 @@ def _receipt_forbidden_keys(form):
                  if form not in forms)
 
 
-# Per-round receipt entry keys gated by certified schema version (v2 omits `verifyPasses`).
+# Per-round receipt entry keys gated by minimum certified version and non-certified schemas.
+# Each gated key maps to:
+#   min_certified_version — certified receipts at this state version or later carry the key
+#   non_certified_schemas — attested/interim receipt schemas that also carry the key
 ROUND_ENTRY_KEY_FORMS = {
-    "verifyPasses": (
-        RECEIPT_CERTIFIED_SCHEMA % 3,
-        RECEIPT_ATTESTED_SCHEMA,
-        RECEIPT_INTERIM_SCHEMA,
-    ),
+    "verifyPasses": {
+        "min_certified_version": 3,
+        "non_certified_schemas": (RECEIPT_ATTESTED_SCHEMA, RECEIPT_INTERIM_SCHEMA),
+    },
 }
 
 
@@ -227,10 +236,12 @@ def _round_entry_form_schema(form, state):
 
 
 def _round_entry_key_allowed(key, form, state):
-    allowed = ROUND_ENTRY_KEY_FORMS.get(key)
-    if allowed is None:
+    decl = ROUND_ENTRY_KEY_FORMS.get(key)
+    if decl is None:
         return True
-    return _round_entry_form_schema(form, state) in allowed
+    if form == RECEIPT_FORM_CERTIFIED:
+        return _receipt_version(state) >= decl["min_certified_version"]
+    return _round_entry_form_schema(form, state) in decl["non_certified_schemas"]
 
 
 ATTESTED_VERDICT = "uncertified-manual"
@@ -1315,12 +1326,13 @@ def load_state(session_dir):
     """(ok, state_or_reason). A missing file → (True, None) fresh. A v1 file is REFUSED — session
     dirs are per-invocation, there is no migration; the caller must start fresh.
 
-    #723: BOTH `SCHEMA_VERSION` (2, an in-flight session) and `STATE_SCHEMA_VERSION` (3, a session
-    minted after #723) are accepted, and a loaded state is returned EXACTLY as it was persisted:
-    `schemaVersion` is never rewritten and no v3 default field is injected. `state_hash` hashes the
-    whole canonical state, so seeding one v3 key here would invalidate the `expectedStateHash` a v2
-    session's last `next` already handed out and break its next `submit`. v3-only fields are read
-    with `.get()` at their read sites instead. (`_migrate_judgment_step` is the ONE pre-existing
+    #723: every member of `SUPPORTED_STATE_VERSIONS` is accepted — `SCHEMA_VERSION` (2, an in-flight
+    session) through `STATE_SCHEMA_VERSION` (the current mint version) — and a loaded state is
+    returned EXACTLY as it was persisted: `schemaVersion` is never rewritten and no default field
+    for the current version is injected. `state_hash` hashes the whole canonical state, so seeding
+    one gated key here would invalidate the `expectedStateHash` a session's last `next` already
+    handed out and break its next `submit`. Version-gated fields are read with `.get()` at their
+    read sites instead. (`_migrate_judgment_step` is the ONE pre-existing
     in-place migration; it is unchanged, fires only for the #507 R2a stall/judgment state, and
     predates the hash-preservation rule it deliberately trades against.)"""
     path = os.path.join(session_dir, STATE_FILE)
@@ -3853,8 +3865,21 @@ def _write_interim_receipt(session_dir, state, stop_reason):
 
 
 def _receipt_requires_round_verify_passes(receipt):
-    """Whether round entries must carry verifyPasses (certified v3, attested, interim only)."""
-    return receipt_kind(receipt) in ROUND_ENTRY_KEY_FORMS["verifyPasses"]
+    """Whether round entries must carry verifyPasses (certified v3+, attested, interim only)."""
+    decl = ROUND_ENTRY_KEY_FORMS.get("verifyPasses")
+    if decl is None:
+        return True
+    kind = receipt_kind(receipt)
+    if kind is None:
+        return False
+    if kind in decl["non_certified_schemas"]:
+        return True
+    version = receipt.get("schemaVersion")
+    if isinstance(version, bool) or not isinstance(version, int):
+        return False
+    if kind != RECEIPT_CERTIFIED_SCHEMA % version:
+        return False
+    return version >= decl["min_certified_version"]
 
 
 def _validate_round_entries_verify_passes(receipt):

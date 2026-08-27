@@ -32,7 +32,7 @@ _END_MARKER = "# --- version spelling: pinned declaration block (END) ---"
 _RECEIPT_CERTIFIED_LITERAL_RE = re.compile(r"receipt-certified/\d+")
 _STATE_SCHEMA_PROSE_RE = re.compile(r"\(`STATE_SCHEMA_VERSION`\s*=\s*(\d+)\)")
 _SCHEMA_VERSION_BULLET_RE = re.compile(
-    r"`schemaVersion`[^`\n]*`(\d+)`\s+or\s+`(\d+)`"
+    r"`schemaVersion`\s*—\s*([^(\n]+)"
 )
 
 Finding = namedtuple("Finding", ("relpath", "line", "segment", "leg"))
@@ -43,12 +43,6 @@ _SPELLING_ALLOWLIST = {
         "reason": (
             "the in-memory review-record schema, a different schema from the "
             "driver's state/receipt version"
-        ),
-    },
-    ("round_driver.py", "RECEIPT_CERTIFIED_SCHEMA % 3"): {
-        "reason": (
-            "#1185 WO-B removes this hand-built mod-format spelling at "
-            "ROUND_ENTRY_KEY_FORMS"
         ),
     },
 }
@@ -377,10 +371,15 @@ def census_prose():
     m = _SCHEMA_VERSION_BULLET_RE.search(text)
     if not m:
         errors.append(
-            "prose leg: round-driver.md missing schemaVersion `N` or `M` receipt list"
+            "prose leg: round-driver.md missing schemaVersion supported-version list"
         )
     else:
-        doc_supported = {int(m.group(1)), int(m.group(2))}
+        doc_supported = {int(v) for v in re.findall(r"`(\d+)`", m.group(1))}
+        if not doc_supported:
+            errors.append(
+                "prose leg: round-driver.md schemaVersion bullet has no backticked versions"
+            )
+            return errors
         code_supported = set(RD.SUPPORTED_STATE_VERSIONS)
         missing_from_doc = sorted(code_supported - doc_supported)
         missing_from_code = sorted(doc_supported - code_supported)
