@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,6 +37,14 @@ _SV = importlib.util.spec_from_file_location(
     "sanitized_view", os.path.join(_HERE, "..", "sanitized_view.py"))
 _SV_MOD = importlib.util.module_from_spec(_SV)
 _SV.loader.exec_module(_SV_MOD)
+
+_RFS = importlib.util.spec_from_file_location(
+    "review_findings_schema", os.path.join(_HERE, "..", "review_findings_schema.py"))
+RFS = importlib.util.module_from_spec(_RFS)
+_RFS.loader.exec_module(RFS)
+
+# Nonce-invariant stem present in every findings example block (any echo_nonce).
+_FINDINGS_EXAMPLE_STABLE_MARKER = "an echoed example grades hollow."
 
 
 @pytest.fixture(autouse=True)
@@ -119,10 +128,13 @@ def _fake_view_receipt(**overrides):
     return base
 
 
-def _fed_prompt(base_prompt, view_meta=None):
+def _fed_prompt(base_prompt, view_meta=None, mode="review"):
     view_meta = view_meta or {"headSha": "abc123fake", "stripped": []}
-    notice = _SV_MOD.sanitized_view_notice(view_meta)
-    return ED.ANTIHIJACK_PREAMBLE + notice + base_prompt
+    notice = _SV_MOD.sanitized_view_notice(view_meta, mode=mode)
+    return (
+        ED.ANTIHIJACK_PREAMBLE + notice + base_prompt
+        + RFS.example_prompt_block()
+    )
 
 
 _VALID_FINDINGS_STDOUT = json.dumps({"findings": [{"id": "f1", "message": "issue found"}]})
@@ -306,6 +318,7 @@ def test_dispatch_review_codex_argv_has_c_repo_no_skip_git(tmp_path):
 
 
 def test_dispatch_review_prompt_has_new_preamble(tmp_path):
+    # axis: unpinned review dispatch must not append any findings example block (any nonce)
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
     base_body = "Review this code.\n"
@@ -325,7 +338,10 @@ def test_dispatch_review_prompt_has_new_preamble(tmp_path):
     assert notice_at > 0
     assert body_at > notice_at
     assert "abc123fake" in text[notice_at:body_at]
-    assert text.endswith(base_body)
+    contract = EA.REVIEW_RESULT_CONTRACT(None)
+    assert contract in text
+    assert text.endswith(contract)
+    assert _FINDINGS_EXAMPLE_STABLE_MARKER not in text
 
 
 def test_dispatch_review_repo_survives_success(tmp_path):
@@ -1384,7 +1400,7 @@ def _manual_open_review_run(tmp_path, run_dir):
     prompt_path = _valid_prompt(tmp_path)
     with open(prompt_path, encoding="utf-8") as fh:
         base = fh.read()
-    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view) + base
+    fed = _fed_prompt(base, view_meta=view)
     os.makedirs(run_dir, exist_ok=True)
     ok, detail = ED._open_review_run(
         run_dir, engine="codex", argv=argv, cwd=cwd,
@@ -2743,6 +2759,7 @@ def test_dispatch_review_nonzero_exit_forfeit_has_no_engagement(tmp_path):
 
 def test_grade_review_attempt_prompt_echo_payload_shape_prompt_echo_only(tmp_path):
     """Prompt-echo-only stdout (echo contains findings contract) yields prompt-echo-only."""
+    # axis: full fedPrompt echo (including schema example block) → SHAPE_PROMPT_ECHO_ONLY, not engaged findings
     run_dir = str(tmp_path / "run")
     repo_root = _repo(tmp_path)
     prompt_body = (
@@ -2775,6 +2792,315 @@ def test_grade_review_attempt_prompt_echo_payload_shape_prompt_echo_only(tmp_pat
     shape = grade.get("payloadShape")
     assert shape is not None
     assert shape["parsed"] == ED.engine_adapter.SHAPE_PROMPT_ECHO_ONLY
+
+
+@pytest.mark.parametrize(
+    "expected_result_kind,expect_findings_block",
+    [
+        (None, False),
+        ("findings", True),
+        ("verdicts", False),
+        ("grouping", False),
+        ("ruling", False),
+    ],
+    ids=["unpinned", "findings", "verdicts", "grouping", "ruling"],
+)
+def test_review_dispatch_fed_prompt_includes_schema_example_block(
+    tmp_path, expected_result_kind, expect_findings_block,
+):
+    """#1145 WO-C/WO-B: findings example block only when dispatch pins findings kind."""
+    # axis: composed fedPrompt must include schema example only for explicit findings pin
+    repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
+    stdout = _census_review_stdout(expected_result_kind or "findings")
+    fake = FakeRunner([(stdout, False, 0, "")])
+    dispatch_kwargs = dict(
+        engine="codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view,
+    )
+    if expected_result_kind is not None:
+        dispatch_kwargs["expected_result_kind"] = expected_result_kind
+    res = ED.dispatch_review(**dispatch_kwargs)
+    records, _ = ED._journal_read(res["runDir"])
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    contract = EA.REVIEW_RESULT_CONTRACT(expected_result_kind)
+    prompt_text = fake.calls[0]["prompt_bytes"].decode("utf-8")
+    if expect_findings_block:
+        echo_nonce = opened.get("echoNonce")
+        assert isinstance(echo_nonce, str) and echo_nonce
+        block = RFS.example_prompt_block(echo_nonce)
+        assert block in opened["fedPrompt"]
+        assert block in prompt_text
+        assert prompt_text.endswith(contract)
+        assert prompt_text.index(block) < prompt_text.index(contract)
+    else:
+        assert _FINDINGS_EXAMPLE_STABLE_MARKER not in opened["fedPrompt"]
+        assert _FINDINGS_EXAMPLE_STABLE_MARKER not in prompt_text
+    assert contract in opened["fedPrompt"]
+    assert contract in prompt_text
+    assert prompt_text.endswith(contract)
+
+
+def test_review_dispatch_fed_prompt_result_contract_unpinned_lists_all_kinds(tmp_path):
+    """#1145 WO-B: unpinned dispatch fedPrompt carries all-four-kinds contract."""
+    # axis: unpinned fedPrompt must name every REVIEW_RESULT_KINDS member, never findings example
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    records, _ = ED._journal_read(res["runDir"])
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    prompt_text = opened["fedPrompt"]
+    contract = EA.REVIEW_RESULT_CONTRACT(None)
+    assert contract in prompt_text
+    assert prompt_text.endswith(contract)
+    assert _FINDINGS_EXAMPLE_STABLE_MARKER not in prompt_text
+    for kind in EA.REVIEW_RESULT_KINDS:
+        assert "`%s`" % kind in contract
+        assert "`%s`" % kind in prompt_text
+
+
+@pytest.mark.parametrize("expected_result_kind", ["verdicts", "grouping", "ruling"])
+def test_review_dispatch_fed_prompt_result_contract_pinned_non_findings(
+    tmp_path, expected_result_kind,
+):
+    """#1145 WO-B: non-findings pin gets kind-specific contract, no findings example."""
+    # axis: pinned non-findings seat must not receive findings example block
+    repo_root = _repo(tmp_path)
+    stdout = _census_review_stdout(expected_result_kind)
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        expected_result_kind=expected_result_kind,
+    )
+    records, _ = ED._journal_read(res["runDir"])
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    prompt_text = opened["fedPrompt"]
+    contract = EA.REVIEW_RESULT_CONTRACT(expected_result_kind)
+    assert contract in prompt_text
+    assert prompt_text.endswith(contract)
+    assert "`%s`" % expected_result_kind in contract
+    assert _FINDINGS_EXAMPLE_STABLE_MARKER not in prompt_text
+
+
+def test_review_dispatch_fed_prompt_blocks_never_abut(tmp_path):
+    """#1145 WO-F: composed fedPrompt sections must not run together."""
+    # axis: example JSON closing brace must never abut the contract heading
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo_f_1145c3.md (BP2)
+    repo_root = _repo(tmp_path)
+    cases = [
+        (None, _VALID_FINDINGS_STDOUT),
+        ("findings", _VALID_FINDINGS_STDOUT),
+    ]
+    for expected_result_kind, stdout in cases:
+        fake = FakeRunner([(stdout, False, 0, "")])
+        dispatch_kwargs = dict(
+            engine="codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path, "Review this code.\n"),
+            repo_root=repo_root, run_engine=fake,
+            build_view=_fake_build_view(tmp_path),
+        )
+        if expected_result_kind is not None:
+            dispatch_kwargs["expected_result_kind"] = expected_result_kind
+        ED.dispatch_review(**dispatch_kwargs)
+        prompt_text = fake.calls[0]["prompt_bytes"].decode("utf-8")
+        assert "}Review result contract" not in prompt_text
+        for match in re.finditer("Review result contract", prompt_text):
+            pos = match.start()
+            assert pos >= 2 and prompt_text[pos - 2:pos] == "\n\n"
+
+
+def test_review_result_contract_kind_names_derive_from_review_result_kinds():
+    """#1145 WO-B: contract renderer enumerates REVIEW_RESULT_KINDS, not a hand-written list."""
+    # axis: unpinned contract text must cite every tuple member so a fifth kind cannot drift stale
+    unpinned = EA.REVIEW_RESULT_CONTRACT(None)
+    for kind in EA.REVIEW_RESULT_KINDS:
+        assert "`%s`" % kind in unpinned
+    pinned = EA.REVIEW_RESULT_CONTRACT("findings")
+    assert "`findings`" in pinned
+    for other in EA.REVIEW_RESULT_KINDS:
+        if other == "findings":
+            continue
+        assert "`%s`" % other not in pinned
+
+
+def test_review_result_contract_unknown_kind_renders_unpinned():
+    """#1145 WO-B: invalid expected_result_kind never normalizes to findings-specific text."""
+    # axis: unexpected kind values render all-four contract, never findings-only branch
+    contract = EA.REVIEW_RESULT_CONTRACT("not-a-kind")
+    for kind in EA.REVIEW_RESULT_KINDS:
+        assert "`%s`" % kind in contract
+    assert "resultKind" not in contract
+
+
+# --- #1145 WO-C: per-dispatch echo nonce lifecycle ---
+
+
+def _grade_state_with_echo_nonce(tmp_path, run_dir, *, echo_nonce, stdout, repo_root=None):
+    repo_root = repo_root or _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    return {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+            "echoNonce": echo_nonce,
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+
+
+def test_dispatch_review_open_stores_echo_nonce(tmp_path):
+    # axis: open path mints and journals echoNonce beside expectedResultKind
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        expected_result_kind="findings",
+    )
+    records, _ = ED._journal_read(res["runDir"])
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    echo_nonce = opened.get("echoNonce")
+    assert isinstance(echo_nonce, str) and echo_nonce
+    assert RFS.example_prompt_block(echo_nonce) in opened["fedPrompt"]
+
+
+def test_dispatch_review_continuation_grades_with_stored_echo_nonce(tmp_path):
+    # axis: continuation seam — grade in a later call uses opened.echoNonce, not a fresh mint
+    # bite-proof: wo_c_1145c3.md §1 (stored-nonce read-back)
+    repo_root = _repo(tmp_path)
+    run_dir = tmp_path / "continue-echo-nonce"
+    first = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
+        order_id="order-echo-nonce", expected_result_kind="findings",
+    )
+    records, _ = ED._journal_read(first["runDir"])
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    echo_nonce = opened["echoNonce"]
+    example_stdout = json.dumps(RFS.example_findings_object(echo_nonce))
+    fake = FakeRunner([
+        (example_stdout, False, 0, ""),
+        (example_stdout, False, 0, ""),
+    ])
+    second = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_never_build_view, run_dir=str(run_dir), max_wait=60,
+        order_id="order-echo-nonce", expected_result_kind="findings",
+    )
+    assert second.get("forfeited") is True
+
+
+def test_grade_review_attempt_stored_echo_nonce_rejects_keyed_example(tmp_path):
+    # axis: grading with stored nonce refuses verbatim example rendered under that nonce
+    echo_nonce = "stored-nonce-for-grade"
+    stdout = json.dumps(RFS.example_findings_object(echo_nonce))
+    state = _grade_state_with_echo_nonce(
+        tmp_path, str(tmp_path / "run"), echo_nonce=echo_nonce, stdout=stdout,
+    )
+    grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
+    assert grade.get("forfeit") is True
+    shape = grade.get("payloadShape")
+    assert shape is not None
+    assert shape["parsed"] == EA.SHAPE_FINDINGS_HOLLOW_MEMBER
+
+
+def test_grade_review_attempt_genuine_finding_quoting_sentinel_in_prose_ok(tmp_path):
+    # axis: genuine finding with sentinel-free title plus quoting body survives grading under nonce
+    echo_nonce = "dispatch-nonce-prose"
+    sentinel = RFS.EXAMPLE_SENTINEL
+    member = {
+        "severity": "Important",
+        "title": "quoted example in body",
+        "body": "context:\n" + sentinel + " appears inside prose",
+    }
+    stdout = json.dumps({"findings": [member]})
+    state = _grade_state_with_echo_nonce(
+        tmp_path, str(tmp_path / "run"), echo_nonce=echo_nonce, stdout=stdout,
+    )
+    grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
+    assert grade.get("ok") is True
+    assert grade["findings"][0]["title"] == member["title"]
+
+
+def test_grade_review_attempt_second_parse_pair_carries_echo_nonce(tmp_path):
+    # axis: both parse_result call sites in _grade_review_attempt carry stored echo_nonce
+    echo_nonce = "second-parse-nonce"
+    inner = json.dumps(RFS.example_findings_object(echo_nonce))
+    stream = json.dumps({
+        "type": "result", "subtype": "success", "is_error": False,
+        "duration_ms": 1, "session_id": "x", "result": inner,
+    }) + "\n" + inner
+    state = _grade_state_with_echo_nonce(
+        tmp_path, str(tmp_path / "run"), echo_nonce=echo_nonce, stdout=stream,
+    )
+    grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
+    assert grade.get("forfeit") is True
+    shape = grade.get("payloadShape")
+    assert shape is not None
+    assert shape["parsed"] == EA.SHAPE_FINDINGS_HOLLOW_MEMBER
+
+
+def test_grade_review_attempt_second_payload_shape_pair_carries_echo_nonce(tmp_path):
+    # axis: both review_payload_shape call sites carry stored echo_nonce
+    echo_nonce = "shape-pair-nonce"
+    stdout = json.dumps(RFS.example_findings_object(echo_nonce))
+    state = _grade_state_with_echo_nonce(
+        tmp_path, str(tmp_path / "run"), echo_nonce=echo_nonce, stdout=stdout,
+    )
+    grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("payloadShape", {}).get("parsed") == EA.SHAPE_FINDINGS_HOLLOW_MEMBER
+
+
+def _engaged_review_stdout_with_nonce_example(echo_nonce):
+    padding = (
+        "Review notes for lib/auth.py:12 and lib/gate.py:99.\n"
+        "- first observation\n"
+        "- second observation\n\n"
+        "## Findings draft\n\n"
+    ) * 8
+    return padding + json.dumps(RFS.example_findings_object(echo_nonce))
+
+
+def test_scan_review_engaged_candidates_salvage_refuses_nonce_echo(tmp_path):
+    # axis: salvage path (row 5) refuses structured export of nonce-keyed example echo
+    # bite-proof: wo_c_1145c3.md §2 (salvage threading)
+    echo_nonce = "salvage-nonce"
+    stdout = _engaged_review_stdout_with_nonce_example(echo_nonce)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {"fedPrompt": "", "echoNonce": echo_nonce},
+        "attempts": {1: {"ended": {"exit": 0}}},
+    }
+    candidates = ED._scan_review_engaged_candidates(run_dir, state)
+    assert len(candidates) == 1
+    salvage = candidates[0]["salvage"]
+    assert salvage.get("structured") is not True
 
 
 def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
@@ -2900,8 +3226,6 @@ def test_review_result_kind_census_survives_consumers(tmp_path, kind):
     other_kinds = tuple(k for k in ED.REVIEW_RESULT_KINDS if k != kind)
     for other_kind in other_kinds:
         assert other_kind not in res
-        has_other_payload, _ = ED._review_result_payload(res, other_kind)
-        assert has_other_payload is False
     opened = {"runKind": ED.RUN_KIND_REVIEW}
     stages = ED._ledger_stages(res, {}, str(tmp_path / "run"), opened)
     assert stages["delivered"] is True
@@ -2936,8 +3260,33 @@ def test_review_result_kind_census_survives_consumers(tmp_path, kind):
     assert kind in graded[0]
     for other_kind in other_kinds:
         assert other_kind not in graded[0]
-        has_other_graded_payload, _ = ED._review_result_payload(graded[0], other_kind)
-        assert has_other_graded_payload is False
+
+
+def test_review_payload_carried_detects_cross_kind_payload_key():
+    """axis: review_payload_carried reads payload keys regardless of resultKind."""
+    kind = "findings"
+    other_kind = "verdicts"
+    result = {
+        "resultKind": kind,
+        kind: [{"id": "f1", "message": "issue found"}],
+        other_kind: [{"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced"}],
+    }
+    has_other, _ = EA.review_payload_carried(result, other_kind)
+    assert has_other is True
+
+
+def test_review_result_payload_short_circuits_on_kind_mismatch():
+    """axis: _review_result_payload returns (False, None) on resultKind mismatch even when payload key is present."""
+    kind = "findings"
+    other_kind = "verdicts"
+    result = {
+        "resultKind": kind,
+        kind: [{"id": "f1", "message": "issue found"}],
+        other_kind: [{"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced"}],
+    }
+    has_payload, payload = ED._review_result_payload(result, other_kind)
+    assert has_payload is False
+    assert payload is None
 
 
 def test_dispatch_review_ruling_terminal_carries_payload(tmp_path):
@@ -3028,7 +3377,10 @@ def test_dispatch_poll_running_graded_attempt1_ended_attempt2_live(tmp_path):
     assert len(graded) == 1
     assert graded[0]["attempt"] == 1
     assert graded[0]["resultKind"] == "findings"
-    assert graded[0]["findings"] == [{"id": "f1", "message": "issue found"}]
+    member = graded[0]["findings"][0]
+    # WO-B additive normalization: original synonym key survives; canonical body is added.
+    assert member["message"] == "issue found"
+    assert member["body"] == "issue found"
 
 
 # --- WO-2 (#747): per-attempt telemetry + terminal-record supersede (PR #783) ---
@@ -3362,7 +3714,7 @@ def _manual_open_review_run_git(tmp_path, run_dir, repo_root):
     prompt_path = _valid_prompt(tmp_path)
     with open(prompt_path, encoding="utf-8") as fh:
         base = fh.read()
-    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view) + base
+    fed = _fed_prompt(base, view_meta=view)
     os.makedirs(run_dir, exist_ok=True)
     ok, detail = ED._open_review_run(
         run_dir, engine="codex", argv=argv, cwd=cwd,
@@ -4528,7 +4880,7 @@ def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_
     prompt_path = _valid_prompt(tmp_path)
     with open(prompt_path, encoding="utf-8") as fh:
         base = fh.read()
-    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view, mode=mode) + base
+    fed = _fed_prompt(base, view_meta=view, mode=mode)
     os.makedirs(run_dir, exist_ok=True)
     journal_root = os.environ.get(ED.JOURNAL_ROOT_ENV, "")
     with open(os.path.join(run_dir, "journal-root.txt"), "w", encoding="utf-8") as fh:
@@ -5730,7 +6082,7 @@ def test_rewrite_failure_capture_grades_truncated(tmp_path, monkeypatch):
     assert ED._attempt_stdout_truncated(run_dir, state, 1) == 9001
 
 
-def test_cap_file_tail_rewrite_failure_signal_distinct_from_clean_cap(tmp_path):
+def test_cap_file_tail_rewrite_failure_signal_distinct_from_clean_cap(tmp_path, monkeypatch):
     """axis: _cap_file_tail rewrite_failed distinguishes failed rewrite from clean cap."""
     cap = 2048
     over = cap + 512
@@ -5742,6 +6094,44 @@ def test_cap_file_tail_rewrite_failure_signal_distinct_from_clean_cap(tmp_path):
     assert truncated is True
     assert observed == over
     assert rewrite_failed is False
+
+    path.write_bytes(b"x" * over)
+    path_str = str(path)
+    real_open = open
+    write_attempted = False
+
+    class _FailingWriteWrapper:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self._fh.__exit__(*args)
+
+        def write(self, data):
+            raise OSError(28, "No space left on device")
+
+        def __getattr__(self, name):
+            return getattr(self._fh, name)
+
+    def patched_open(file, mode="r", *args, **kwargs):
+        nonlocal write_attempted
+        fh = real_open(file, mode, *args, **kwargs)
+        if mode == "wb" and os.fspath(file) == path_str:
+            write_attempted = True
+            return _FailingWriteWrapper(fh)
+        return fh
+
+    monkeypatch.setattr("builtins.open", patched_open)
+    truncated, observed, rewrite_failed = ED._cap_file_tail(
+        path_str, cap, ED.CAP_STREAM_STDOUT,
+    )
+    assert truncated is True
+    assert observed == over
+    assert rewrite_failed is True
+    assert write_attempted is True
 
 
 def test_ledger_attempt_records_carries_stdout_cap_rewrite_failed(tmp_path):
@@ -5849,6 +6239,29 @@ def test_stdout_capped_forfeit_disclosure_attempt2_names_attempt_not_retry_refus
     assert "attempt budget was exhausted" in disclosure
 
 
+def test_worktree_dirtied_forfeit_disclosure_attempt1_names_attempt_and_refused_retry(tmp_path):
+    """axis: disclosure names the real attempt number and retry-refusal reason on attempt 1."""
+    terminal = ED._worktree_dirtied_forfeit(
+        "cursor", run_dir_real=str(tmp_path), attempts=1)
+    disclosure = terminal["disclosure"]
+    assert terminal["detail"] == "worktree-dirtied-by-attempt"
+    assert "attempt 1" in disclosure
+    assert "retry was refused" in disclosure
+    assert "dirtied tree" in disclosure
+    assert "attempt budget was exhausted" not in disclosure
+
+
+def test_worktree_dirtied_forfeit_disclosure_attempt2_names_attempt_not_retry_refused(tmp_path):
+    """axis: disclosure names attempt 2 and cites exhausted budget, not a refused retry."""
+    terminal = ED._worktree_dirtied_forfeit(
+        "cursor", run_dir_real=str(tmp_path), attempts=ED.MAX_ATTEMPTS)
+    disclosure = terminal["disclosure"]
+    assert terminal["detail"] == "worktree-dirtied-by-attempt"
+    assert "attempt %d" % ED.MAX_ATTEMPTS in disclosure
+    assert "retry was refused" not in disclosure
+    assert "attempt budget was exhausted" in disclosure
+
+
 def test_stdout_marker_overruled_journal_on_authoritative_suppression(tmp_path):
     """axis: stamped under-cap count overrules head marker and journals both counts."""
     run_dir = str(tmp_path / "run")
@@ -5923,6 +6336,36 @@ def test_stdout_marker_overruled_just_over_digit_bound_claim_null_marker_bytes(t
     assert len(overruled) == 1
     assert overruled[0]["markerBytes"] is None
     assert overruled[0]["stampedBytes"] == stamped
+
+
+def test_stdout_marker_overruled_absent_when_stamped_capture_lacks_marker(tmp_path):
+    """axis: stamped authoritative record with no truncation marker writes no stdout-marker-overruled journal."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write("plain short body without marker\n")
+    stamped = 58
+    state = {"attempts": {1: {"ended": {"stdoutBytes": stamped, "stdoutBytesPreCap": True}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) is None
+    records, _ = ED._journal_read(run_dir)
+    overruled = [r for r in records if r.get("kind") == "stdout-marker-overruled"]
+    assert len(overruled) == 0
+
+
+def test_stdout_marker_overruled_absent_when_unstamped_record_falls_through(tmp_path):
+    """axis: unstamped record falling through to marker read writes no stdout-marker-overruled journal."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_small_forged_head_marker_capture())
+    stamped = 58
+    state = {"attempts": {1: {"ended": {"stdoutBytes": stamped}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) == stamped
+    records, _ = ED._journal_read(run_dir)
+    overruled = [r for r in records if r.get("kind") == "stdout-marker-overruled"]
+    assert len(overruled) == 0
 
 
 def test_nested_foreign_leased_sibling_no_dirt_forfeit(tmp_path):
@@ -6704,12 +7147,8 @@ def test_probe_git_fake_flag_flip_bypass_dead(monkeypatch):
         monkeypatch.setattr(ED, "_git_scrubbed_bytes", lambda *a, **k: None)
 
 
-def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source):
-    """Run a single child pytest case out-of-process with the real autouse fixture."""
-    tests_dir = _HERE
-    pyc_dir = os.path.join(str(tmp_path), "pyc")
-    conftest_path = os.path.join(tmp_path, "conftest.py")
-    conftest_source = (
+def _probe_guard_selftest_conftest_source(tests_dir, pyc_dir):
+    return (
         "import sys\n"
         "sys.path.insert(0, %s)\n"
         "\n"
@@ -6720,6 +7159,14 @@ def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source
         "_probe_git_fake_route_registry = TED._probe_git_fake_route_registry\n"
         % (repr(tests_dir), repr(pyc_dir))
     )
+
+
+def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source):
+    """Run a single child pytest case out-of-process with the real autouse fixture."""
+    tests_dir = _HERE
+    pyc_dir = os.path.join(str(tmp_path), "pyc")
+    conftest_path = os.path.join(tmp_path, "conftest.py")
+    conftest_source = _probe_guard_selftest_conftest_source(tests_dir, pyc_dir)
     ast.parse(conftest_source)
     with open(conftest_path, "w", encoding="utf-8") as fh:
         fh.write(conftest_source)
@@ -6803,10 +7250,12 @@ def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source
 
 def test_probe_guard_selftest_child_conftest_premise_before_import():
     """axis: child conftest premise guard runs before importing the fixture module."""
-    import inspect
-    src = inspect.getsource(_run_probe_guard_selftest_child)
-    assert_pos = src.find('"assert sys.pycache_prefix')
-    import_pos = src.find('"import test_engine_dispatch as TED')
+    tests_dir = _HERE
+    pyc_dir = os.path.join("/tmp", "pyc")
+    src = _probe_guard_selftest_conftest_source(tests_dir, pyc_dir)
+    ast.parse(src)
+    assert_pos = src.find("assert sys.pycache_prefix")
+    import_pos = src.find("import test_engine_dispatch")
     assert assert_pos != -1 and import_pos != -1
     assert assert_pos < import_pos
 
@@ -7757,7 +8206,7 @@ def _manual_open_review_run_with_pr_body(tmp_path, run_dir, *, pr_body_source):
     prompt_path = _valid_prompt(tmp_path)
     with open(prompt_path, encoding="utf-8") as fh:
         base = fh.read()
-    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view) + base
+    fed = _fed_prompt(base, view_meta=view)
     os.makedirs(run_dir, exist_ok=True)
     ok, detail = ED._open_review_run(
         run_dir, engine="codex", argv=argv, cwd=cwd,

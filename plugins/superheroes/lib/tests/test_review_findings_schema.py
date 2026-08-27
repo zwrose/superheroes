@@ -1,9 +1,11 @@
-"""Canonical review-findings schema guards (#949 WO-2)."""
+"""Canonical review-findings schema guards (#949 WO-2, #1145 WO-A)."""
+import ast
 import importlib.util
 import json
 import os
 import re
 
+import jsonschema
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -222,3 +224,456 @@ def test_resolver_does_not_raise_when_path_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(RFS, "REVIEW_FINDINGS_SCHEMA_PATH", missing)
     assert RFS.review_findings_schema_path() == missing
     assert not os.path.isfile(missing)
+
+
+def _schema_finding_properties():
+    with open(RFS.review_findings_schema_path(), encoding="utf-8") as fh:
+        schema = json.load(fh)
+    return schema["properties"]["findings"]["items"]["properties"]
+
+
+def _schema_severity_enum():
+    return _schema_finding_properties()["severity"]["enum"]
+
+
+def _reload_rfs_module(schema_path=None):
+    spec = importlib.util.spec_from_file_location(
+        "review_findings_schema_reload_%s" % (schema_path or "default"),
+        os.path.join(_LIB, "review_findings_schema.py"),
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    if schema_path is not None:
+        mod.REVIEW_FINDINGS_SCHEMA_PATH = schema_path
+        mod._init_schema_constants()
+    return mod
+
+
+def test_canonical_member_keys_match_schema_independently():
+    # axis: canonical member keys are read from the shipped schema, not hand-copied
+    schema_keys = tuple(_schema_finding_properties().keys())
+    assert RFS.CANONICAL_MEMBER_KEYS == schema_keys
+
+
+def test_schema_read_success_no_fallback():
+    assert RFS.SCHEMA_READ_USED_FALLBACK is False
+
+
+def test_schema_read_failure_uses_literal_fallback(tmp_path):
+    missing = str(tmp_path / "missing-schema.json")
+    mod = _reload_rfs_module(schema_path=missing)
+    assert mod.SCHEMA_READ_USED_FALLBACK is True
+    assert mod.CANONICAL_MEMBER_KEYS == mod._FALLBACK_CANONICAL_MEMBER_KEYS
+    assert mod.SEVERITY_TIERS == mod._FALLBACK_SEVERITY_TIERS
+
+
+def test_example_findings_object_works_in_fallback_regime(tmp_path):
+    # axis: example renderer uses cached fallback metadata when shipped schema cannot be read
+    missing = str(tmp_path / "missing-schema.json")
+    mod = _reload_rfs_module(schema_path=missing)
+    assert mod.SCHEMA_READ_USED_FALLBACK is True
+    obj = mod.example_findings_object()
+    member = obj["findings"][0]
+    assert set(member.keys()) == set(mod.CANONICAL_MEMBER_KEYS)
+    assert member["severity"] in mod._FALLBACK_SEVERITY_TIERS
+    assert member["dimension"] in mod._FALLBACK_DIMENSION_ENUM
+    assert member["confidence"] in mod._FALLBACK_CONFIDENCE_ENUM
+    assert member["line"] is None
+    assert member["tradeoff"] is None
+
+
+def test_example_findings_object_fallback_severity_is_pinned(tmp_path):
+    # axis: fallback-regime example severity is deterministic and pinned to shipped order
+    missing = str(tmp_path / "missing-schema.json")
+    mod = _reload_rfs_module(schema_path=missing)
+    pinned_severity = _schema_severity_enum()[0]
+    member = mod.example_findings_object()["findings"][0]
+    assert member["severity"] == pinned_severity
+    assert member["severity"] == mod.example_findings_object()["findings"][0]["severity"]
+
+
+def test_substance_keys_canonical_subset_of_member_keys():
+    assert RFS.SUBSTANCE_KEYS_CANONICAL <= set(RFS.CANONICAL_MEMBER_KEYS)
+
+
+def test_severity_tiers_match_schema_and_engine_adapter():
+    # axis: severity tiers are schema-derived and match engine_adapter until WO-B re-points
+    import engine_adapter as EA
+
+    schema_tiers = frozenset(_schema_severity_enum())
+    assert RFS.SEVERITY_TIERS == schema_tiers
+    assert RFS.SEVERITY_TIERS == EA.REVIEW_SEVERITY_TIERS
+
+
+def test_review_findings_schema_import_cycle_pin():
+    # axis: declared home stays below engine_adapter and round_orders — no upward imports
+    with open(os.path.join(_LIB, "review_findings_schema.py"), encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename="review_findings_schema.py")
+    forbidden = {"engine_adapter", "round_orders", "payload_contracts"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                assert root not in forbidden
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                root = node.module.split(".")[0]
+                assert root not in forbidden
+
+
+@pytest.mark.parametrize(
+    "bad_severity",
+    [None, "", "critical", 0, True, "Bogus"],
+    ids=["null", "empty", "lowercase", "zero", "true", "off-scale-string"],
+)
+def test_member_is_engaged_off_scale_severity_fails_leg_b(bad_severity):
+    # axis: leg (b) requires enum membership, not mere severity presence
+    member = {"severity": bad_severity, "defect": "real censused prose"}
+    assert RFS.member_is_engaged(member) is False
+
+
+def test_member_carries_sentinel_true_for_example_member():
+    # axis: two-or-more placeholder field values refuse verbatim example echo
+    example = RFS.example_findings_object()["findings"][0]
+    assert RFS.member_carries_sentinel(example) is True
+
+
+def test_member_carries_sentinel_true_for_near_copy():
+    # axis: near-copy with plausible id/severity but other fields still exact placeholders
+    example = RFS.example_findings_object()["findings"][0]
+    near_copy = dict(example)
+    near_copy["id"] = "security-001"
+    near_copy["severity"] = "Critical"
+    assert RFS.member_carries_sentinel(near_copy) is True
+
+
+def test_member_carries_sentinel_true_for_single_placeholder_with_structural_only():
+    # axis: lone placeholder with only structural values (severity) is echo — grades hollow via parse
+    title_placeholder = RFS._placeholder_string("title")
+    member = {"severity": "Critical", "title": title_placeholder}
+    assert RFS.member_carries_sentinel(member) is True
+
+
+def test_member_carries_sentinel_false_for_single_placeholder_plus_real_substance():
+    # axis: lone placeholder beside real prose in another substance field is genuine content
+    title_placeholder = RFS._placeholder_string("title")
+    member = {"severity": "Critical", "title": title_placeholder, "body": "Real finding prose."}
+    assert RFS.member_carries_sentinel(member) is False
+    assert RFS.member_is_engaged(member) is True
+
+
+def test_member_carries_sentinel_false_for_ordinary_prose():
+    assert RFS.member_carries_sentinel(
+        {"id": "code-001", "severity": "Minor", "body": "Ordinary review prose."}
+    ) is False
+
+
+def test_member_carries_sentinel_false_for_title_plus_body_quoting_sentinel():
+    # axis: sentinel-free title blocks all-quantifier leg even when body embeds EXAMPLE_SENTINEL
+    sentinel = RFS.EXAMPLE_SENTINEL
+    assert RFS.member_carries_sentinel(
+        {
+            "severity": "Important",
+            "title": "quoted example in body",
+            "body": "context:\n" + sentinel + " appears inside prose",
+        }
+    ) is False
+
+
+def test_member_carries_sentinel_false_for_body_only_quoting_sentinel():
+    # axis: real prose containing EXAMPLE_SENTINEL is not echo — substring leg retired (#1145c3)
+    sentinel = RFS.EXAMPLE_SENTINEL
+    assert RFS.member_carries_sentinel(
+        {
+            "severity": "Important",
+            "body": "context:\n" + sentinel + " appears inside prose",
+        }
+    ) is False
+
+
+def test_member_carries_sentinel_false_for_body_only_ordinary_prose():
+    # axis: body-only member without sentinel must not echo-verdict
+    assert RFS.member_carries_sentinel(
+        {"severity": "Minor", "body": "Ordinary review prose."}
+    ) is False
+
+
+def test_member_carries_sentinel_true_for_body_only_exact_placeholder():
+    # axis: lone exact placeholder in body — placeholder_count==1 leg (no non-placeholder substance)
+    body_placeholder = RFS._placeholder_string("body")
+    assert RFS.member_carries_sentinel(
+        {"severity": "Critical", "body": body_placeholder}
+    ) is True
+
+
+def test_parse_result_review_title_plus_body_quoting_sentinel_survives():
+    # axis: genuine finding with sentinel-free title plus quoting body survives parse_result
+    import engine_adapter as EA
+
+    sentinel = RFS.EXAMPLE_SENTINEL
+    member = {
+        "severity": "Important",
+        "title": "quoted example in body",
+        "body": "context:\n" + sentinel + " appears inside prose",
+    }
+    stdout = json.dumps({"findings": [member]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["title"] == member["title"]
+    assert res["findings"][0]["body"] == member["body"]
+
+
+def _uniform_retype_strings(value):
+    """Cosmetic recase on 'placeholder' token — sentinel survives, exact equality breaks."""
+    if isinstance(value, dict):
+        return {key: _uniform_retype_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_uniform_retype_strings(item) for item in value]
+    if isinstance(value, str):
+        return value.replace("placeholder", "PLACEHOLDER")
+    return value
+
+
+def test_member_carries_sentinel_true_for_uniform_retype_of_example():
+    # axis: uniform cosmetic retype keeps sentinel in every value but breaks exact placeholder match
+    member = _uniform_retype_strings(RFS.example_findings_object()["findings"][0])
+    assert RFS.member_carries_sentinel(member) is True
+
+
+def test_member_carries_sentinel_false_for_empty_substance_field_set():
+    # axis: no present substance fields — all-quantifier leg must not echo-verdict
+    member = {"severity": "Critical", "file": "lib/gate.py", "line": 12}
+    assert RFS.member_carries_sentinel(member) is False
+
+
+def test_member_carries_sentinel_true_for_uniform_retype_with_null_substance_field():
+    # axis: schema types suggestion/evidence as ["string","null"] and requires them — null must not disarm echo leg
+    member = _uniform_retype_strings(RFS.example_findings_object()["findings"][0])
+    member["suggestion"] = None
+    assert RFS.member_carries_sentinel(member) is True
+
+
+def test_member_carries_sentinel_false_for_all_null_substance_fields():
+    # axis: all-quantifier over empty content-bearing set must not echo-verdict
+    member = {
+        "severity": "Critical",
+        "title": None,
+        "body": None,
+        "evidence": None,
+        "suggestion": None,
+    }
+    assert RFS.member_carries_sentinel(member) is False
+
+
+def test_substance_key_synonym_targets_are_canonical():
+    # axis: every synonym maps to a declared canonical member key
+    canonical = set(RFS.CANONICAL_MEMBER_KEYS)
+    for synonym, target in RFS.SUBSTANCE_KEY_SYNONYMS.items():
+        assert target in canonical, "%s -> %s" % (synonym, target)
+    for synonym, target in RFS.STRUCTURAL_KEY_SYNONYMS.items():
+        assert target in canonical, "%s -> %s" % (synonym, target)
+    substance_and_structural = set(RFS.SUBSTANCE_KEY_SYNONYMS) | set(RFS.STRUCTURAL_KEY_SYNONYMS)
+    assert substance_and_structural.isdisjoint(canonical)
+
+
+@pytest.mark.parametrize(
+    "member,expected",
+    [
+        ({"summary": "Title via summary"}, True),
+        ({"message": "Body via message key"}, True),
+        ({"description": "Body via description key"}, True),
+        (
+            {
+                "severity": "Minor",
+                "part": "src/a.py",
+                "defect": "real defect prose",
+                "change": "apply the fix",
+            },
+            True,
+        ),
+        ({"file": "a.py", "line": 3}, False),
+        ({"severity": "Minor", "body": "   "}, False),
+        ({"defect": "real prose"}, False),
+        ({"severity": "Bogus", "defect": "real prose"}, False),
+        ("not-a-dict", False),
+    ],
+    ids=[
+        "specimen-summary",
+        "specimen-message",
+        "specimen-description",
+        "specimen-pr1143-brief-check",
+        "structural-only",
+        "trivial-body",
+        "censused-without-severity",
+        "off-scale-severity-with-censused",
+        "non-dict",
+    ],
+)
+def test_member_is_engaged_table(member, expected):
+    assert RFS.member_is_engaged(member) is expected
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        {"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in diff"},
+        {"id": "f1", "ruling": "discharged", "reason": "resolved in diff"},
+    ],
+    ids=["verifier-without-severity", "ruling-without-severity"],
+)
+def test_member_is_engaged_id_enum_credential_without_severity(member):
+    # axis: leg (c) — id + verdict/ruling enum + censused body engages without severity
+    assert RFS.member_is_engaged(member) is True
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        {"id": "v1", "verdict": "BOGUS", "reason": "reproduced in diff"},
+        {"id": "v1"},
+        {"id": "v1", "verdict": "CONFIRMED"},
+    ],
+    ids=["off-scale-verdict", "id-alone", "id-verdict-without-body"],
+)
+def test_member_is_engaged_id_enum_credential_fail_closed(member):
+    # axis: leg (c) stays fail-closed — off-scale enum or missing censused body
+    assert RFS.member_is_engaged(member) is False
+
+
+def test_normalize_member_adds_canonical_for_synonym():
+    member = {"message": "Body text"}
+    out = RFS.normalize_member(member)
+    assert out["message"] == "Body text"
+    assert out["body"] == "Body text"
+
+
+def test_normalize_member_does_not_overwrite_existing_target():
+    # axis: additive normalization never overwrites an existing canonical key
+    member = {"message": "from message", "body": "canonical body"}
+    out = RFS.normalize_member(member)
+    assert out["body"] == "canonical body"
+    assert out["message"] == "from message"
+
+
+def test_normalize_member_preserves_unknown_keys():
+    member = {"custom": "value", "message": "text"}
+    out = RFS.normalize_member(member)
+    assert out["custom"] == "value"
+
+
+def test_normalize_member_does_not_mutate_input():
+    member = {"message": "text"}
+    original = dict(member)
+    RFS.normalize_member(member)
+    assert member == original
+
+
+def test_example_findings_object_member_keys_are_canonical():
+    member = RFS.example_findings_object()["findings"][0]
+    assert set(member.keys()) == set(RFS.CANONICAL_MEMBER_KEYS)
+
+
+def test_example_findings_object_validates_against_shipped_schema():
+    # axis: rendered example must validate against the schema it is derived from
+    schema = _load_shipped_schema()
+    jsonschema.validate(RFS.example_findings_object(), schema)
+
+
+def test_example_findings_object_is_engaged_and_values_in_set():
+    member = RFS.example_findings_object()["findings"][0]
+    assert RFS.member_is_engaged(member) is True
+    placeholders = RFS.example_member_values()
+    field_schemas = _schema_finding_properties()
+    for key, value in member.items():
+        if "enum" in field_schemas[key]:
+            continue
+        if isinstance(value, str):
+            assert value in placeholders
+
+
+_FALLBACK_ENUM_LITERALS_BY_PROPERTY = {
+    "severity": "_FALLBACK_SEVERITY_ENUM",
+    "dimension": "_FALLBACK_DIMENSION_ENUM",
+    "confidence": "_FALLBACK_CONFIDENCE_ENUM",
+}
+
+
+def test_fallback_literals_match_shipped_schema():
+    # axis: fallback constants drift-guard against shipped schema keys and severity enum
+    schema_props = _schema_finding_properties()
+    assert tuple(RFS._FALLBACK_CANONICAL_MEMBER_KEYS) == tuple(schema_props.keys())
+    assert RFS._FALLBACK_SEVERITY_TIERS == frozenset(schema_props["severity"]["enum"])
+
+    shipped_enum_props = {
+        key: schema_props[key]["enum"]
+        for key in schema_props
+        if "enum" in schema_props[key]
+    }
+    assert set(_FALLBACK_ENUM_LITERALS_BY_PROPERTY.keys()) == set(shipped_enum_props.keys())
+    for prop, shipped_enum in shipped_enum_props.items():
+        attr = _FALLBACK_ENUM_LITERALS_BY_PROPERTY[prop]
+        fallback_literal = getattr(RFS, attr)
+        assert tuple(fallback_literal) == tuple(shipped_enum)
+
+
+def test_example_prompt_block_contains_json_and_format_only_sentence():
+    block = RFS.example_prompt_block()
+    assert "Format only" in block
+    assert "echoed example grades hollow" in block
+    assert json.dumps(RFS.example_findings_object(), indent=2, sort_keys=True) in block
+
+
+_EXPECTED_TITLE_PLACEHOLDER = "title placeholder [RFS-EXAMPLE-SENTINEL-1145]"
+
+
+def test_example_rendering_back_compat_no_nonce():
+    # axis: round_orders and seat_canary call renderers with no argument — output must not drift
+    assert RFS._placeholder_string("title") == _EXPECTED_TITLE_PLACEHOLDER
+    assert RFS.example_findings_object()["findings"][0]["title"] == _EXPECTED_TITLE_PLACEHOLDER
+    expected_payload = json.dumps(RFS.example_findings_object(), indent=2, sort_keys=True)
+    expected_block = (
+        "Format only — your findings replace every value; "
+        "an echoed example grades hollow.\n"
+        + expected_payload
+    )
+    assert RFS.example_prompt_block() == expected_block
+
+
+def test_near_copy_normalization_casefold_and_whitespace():
+    # axis: near-copy matches case/whitespace variants; punctuation differences do not match
+    base = RFS._placeholder_string("title")
+    assert RFS._near_copy_normalize(base) == RFS._near_copy_normalize(
+        "  TITLE   PLACEHOLDER   [RFS-EXAMPLE-SENTINEL-1145]  "
+    )
+    assert RFS.member_carries_sentinel({"title": base.replace("placeholder", "PLACEHOLDER")}) is True
+    assert RFS.member_carries_sentinel({"title": base + "."}) is False
+
+
+def test_member_carries_sentinel_nonce_keyed_echo():
+    # axis: dispatch nonce N grades echo for example rendered under N
+    nonce = "dispatch-abc123"
+    example = RFS.example_findings_object(nonce)["findings"][0]
+    assert RFS.member_carries_sentinel(example, nonce=nonce) is True
+
+
+def test_member_carries_sentinel_different_nonce_not_echo():
+    # axis: same member is not echo when checked with a different nonce and no base-set match
+    nonce_n = "dispatch-n"
+    nonce_m = "dispatch-m"
+    example = RFS.example_findings_object(nonce_n)["findings"][0]
+    assert RFS.member_carries_sentinel(example, nonce=nonce_m) is False
+
+
+def test_member_carries_sentinel_nonceless_order_body_echo_under_any_nonce():
+    # axis: union with base set catches order-body examples rendered before dispatch exists
+    order_body_example = RFS.example_findings_object()["findings"][0]
+    assert RFS.member_carries_sentinel(order_body_example, nonce="any-dispatch-nonce") is True
+
+
+def test_member_carries_sentinel_invalid_nonce_treated_as_base_only():
+    # axis: empty or non-string nonce → base placeholder set only (fail-closed edge 5)
+    nonce_example = RFS.example_findings_object("dispatch-only")["findings"][0]
+    assert RFS.member_carries_sentinel(nonce_example, nonce="") is False
+    assert RFS.member_carries_sentinel(nonce_example, nonce=None) is False
+    assert RFS.member_carries_sentinel(nonce_example, nonce=0) is False

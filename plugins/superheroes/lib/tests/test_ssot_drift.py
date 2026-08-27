@@ -5970,6 +5970,109 @@ def test_r8_in_repo_copy_holder_census_drift_missing_paths():
     )
 
 
+# --- Cluster: review findings example renderer (#1145 WO-C) --------------------
+
+
+_FINDINGS_EXAMPLE_HAND_LITERALS = (
+    '{"findings": [...], "investigated": [...]}',
+    '{"findings": [{"id": "...", "severity": "...", "file": "...", "title": "...", "body": "..."}',
+)
+
+# Enumerated emitting sites — one line per site when adding a new emitter.
+_REVIEW_FINDINGS_EXAMPLE_EMITTING_SITES = (
+    ("C1", "lib/engine_dispatch.py", "_dispatch_review_impl", "review_findings_schema.example_prompt_block"),
+    ("C2a", "lib/round_orders.py", "_stdout_payload_example", "review_findings_schema.example_findings_object"),
+    ("C2b", "lib/round_orders.py", "_panel_stdout_delivery_text", "review_findings_schema.example_prompt_block"),
+    ("C3", "lib/seat_canary.py", "CANARY_FIXTURE_PROMPT", "review_findings_schema.example_prompt_block"),
+)
+
+
+def _strip_comments(source):
+    """Return source with COMMENT tokens removed; string literals containing '#' are preserved."""
+    import io
+    import tokenize
+
+    tokens = []
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type == tokenize.COMMENT:
+            continue
+        tokens.append(tok)
+    return tokenize.untokenize(tokens)
+
+
+def _strip_function_docstring(region, func_node):
+    """Drop a leading function docstring from region; no-op when absent."""
+    import ast
+
+    if not func_node.body:
+        return region
+    first = func_node.body[0]
+    if not (
+        isinstance(first, ast.Expr)
+        and isinstance(first.value, ast.Constant)
+        and isinstance(first.value.value, str)
+    ):
+        return region
+    region_lines = region.splitlines()
+    start_idx = first.lineno - func_node.lineno
+    end_idx = first.end_lineno - func_node.lineno + 1
+    return "\n".join(region_lines[:start_idx] + region_lines[end_idx:])
+
+
+def _definition_source(rel, definition_name):
+    """Return comment-free, docstring-free source for a function or module-level assignment."""
+    import ast
+
+    text = _read(rel)
+    try:
+        tree = ast.parse(text, filename=rel)
+    except SyntaxError as exc:
+        raise AssertionError("%s: cannot parse for definition %r: %s" % (rel, definition_name, exc))
+    lines = text.splitlines()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == definition_name:
+            region = "\n".join(lines[node.lineno - 1:node.end_lineno])
+            region = _strip_function_docstring(region, node)
+            return _strip_comments(region)
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == definition_name:
+                    region = "\n".join(lines[node.lineno - 1:node.end_lineno])
+                    return _strip_comments(region)
+    raise AssertionError(
+        "%s: definition %r not found (census row must name an existing function or assignment)"
+        % (rel, definition_name)
+    )
+
+
+def test_review_findings_example_emitting_sites_delegate_to_home():
+    """#1145 WO-C: every enumerated emitter renders from review_findings_schema — no hand literals."""
+    # axis: enumerated emitting sites reference home, not hand-written example literals
+    for site_id, rel, definition_name, home_ref in _REVIEW_FINDINGS_EXAMPLE_EMITTING_SITES:
+        region = _definition_source(rel, definition_name)
+        for literal in _FINDINGS_EXAMPLE_HAND_LITERALS:
+            assert literal not in region, (
+                "%s (%s:%s): hand-written findings example literal reappeared: %r"
+                % (site_id, rel, definition_name, literal)
+            )
+        assert home_ref in region, (
+            "%s (%s:%s): missing home reference %r" % (site_id, rel, definition_name, home_ref)
+        )
+
+
+def test_review_findings_renderer_and_grader_census_share_home_objects():
+    """#1145 WO-C/H: renderer keys and grader census keys are review_findings_schema singletons."""
+    # axis: renderer member keys and grader census frozensets are module singletons (identity, not re-typed literals)
+    import engine_adapter as ea
+    import review_findings_schema as rfs
+
+    member = rfs.example_findings_object()["findings"][0]
+    assert set(member.keys()) == set(rfs.CANONICAL_MEMBER_KEYS)
+    assert ea.REVIEW_SEVERITY_TIERS is rfs.SEVERITY_TIERS
+    assert ea._FINDING_SUBSTANCE_KEYS_CANONICAL is rfs.SUBSTANCE_KEYS_CANONICAL
+    assert ea._FINDING_SUBSTANCE_KEYS_TOLERATED is rfs.SUBSTANCE_KEYS_LEGACY
+
+
 # --- Cluster: session-mode vocabulary (#1151) -----------------------------------
 
 
