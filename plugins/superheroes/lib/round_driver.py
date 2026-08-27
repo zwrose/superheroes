@@ -129,8 +129,13 @@ RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 #
 # Rollback residual (#1185): this bump protects state minted from here on; state already persisted
 # at `schemaVersion: 3` by a post-#681 build carries the new shape under the old number and a
-# rolled-back v3 reader will still accept it. Re-versioning persisted state is impossible without
-# violating the hash-preservation rule above, so this residual is disclosed rather than fixed.
+# rolled-back v3 reader will still accept it. A scoped migration is technically POSSIBLE — `advance`
+# recomputes `state_hash`, so re-versioning that population would not break the echo fence; the
+# hash-preservation rule above binds the hand-submit path, which this population is already refused.
+# It is declined as not worth the machinery (owner ruling 2026-08-27): a persisted `schemaVersion: 3`
+# is SHAPE-AMBIGUOUS after #681 — a genuine pre-#681 v3 state and a post-#681 state carrying the v4
+# shape under the old number are indistinguishable on disk — so a migration would have to guess which
+# one it is holding. The residual is disclosed rather than fixed.
 STATE_SCHEMA_VERSION = 4
 SUPPORTED_STATE_VERSIONS = (2, 3, 4)
 

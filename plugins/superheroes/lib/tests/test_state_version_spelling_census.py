@@ -631,3 +631,48 @@ def test_synthetic_injection_prose_doc_missing_code_version():
     assert any(
         "not stated in round-driver.md" in e for e in errors
     ), "expected prose leg error when code version is omitted from doc"
+
+
+def test_synthetic_injection_no_pinned_symbol_module():
+    path = os.path.join(_LIB, "build_lane.py")
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    assert not _module_references_pinned_symbols(ast.parse(source)), (
+        "build_lane.py must not reference a pinned symbol for this invariant test"
+    )
+    injected = source + (
+        "\n"
+        "def _synth_no_pinned_symbol_checks(state):\n"
+        "    if state[\"schemaVersion\"] != 99:\n"
+        "        return False\n"
+        "    return {\"schemaVersion\": 99}\n"
+    )
+    findings = census_module(path, injected)
+    comparison_hits = [f for f in findings if f.leg == "comparison"]
+    binding_hits = [f for f in findings if f.leg == "binding"]
+    assert comparison_hits, (
+        "comparison leg must run on a module with no pinned-symbol reference"
+    )
+    assert binding_hits, (
+        "binding leg must run on a module with no pinned-symbol reference"
+    )
+
+
+def test_synthetic_injection_embedded_string_literal():
+    path = os.path.join(_LIB, "handback_gate.py")
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    embedded_literal = "prefix receipt-certified/9 suffix"
+    assert embedded_literal != "receipt-certified/9", (
+        "injected string must not be a whole-string match for receipt-certified/9"
+    )
+    injected = source + '\n_SYNTH = "%s"\n' % embedded_literal
+    findings = census_module(path, injected)
+    hits = [
+        f for f in findings
+        if f.leg == "string-literal" and "receipt-certified/9" in f.segment
+    ]
+    assert hits, (
+        "string-literal leg must find an embedded `receipt-certified/<n>`, "
+        "not only a whole-string match"
+    )
