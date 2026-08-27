@@ -195,12 +195,16 @@ def test_validator_refuses_missing_or_malformed_verify_passes(form, spine_fn):
     ok, reason = round_driver.validate_receipt(missing)
     assert ok is False, (form, reason)
     assert "verifyPasses" in reason
+    assert "missing" in reason
+    assert "must be a list" not in reason
 
     for malformed in ({"CONFIRMED": 1}, "not-a-list"):
         bad = spine_fn([dict(base_round, verifyPasses=malformed)])
         ok, reason = round_driver.validate_receipt(bad)
         assert ok is False, (form, malformed, reason)
         assert "verifyPasses" in reason
+        assert "must be a list" in reason
+        assert "missing" not in reason
 
 
 def test_validator_accepts_certified_v2_without_verify_passes():
