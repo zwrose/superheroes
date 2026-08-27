@@ -1711,7 +1711,7 @@ def test_stall_self_recovery_unknown_fixer_does_not_stamp_escalated_rung():
     assert state["config"]["fixerVendor"] is None
     RD._handle_stall(state, state["config"], _STALL_BREAKER)
     assert state["selfRecovered"] is True
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_TERMINAL
     assert state.get("_escalatedRung") is None
     # #620 R3a: the null-rung self-recovery decision detail must be honest — never "escalated to None".
     sr = [d for d in state["decisions"] if d["kind"] == "self-recovery"]
@@ -1725,7 +1725,7 @@ def test_stall_self_recovery_known_fixer_stamps_escalated_rung():
     state = RD.new_state({"leg": "code", "vendors": ["claude"], "fixerVendor": "claude"})
     RD._handle_stall(state, state["config"], _STALL_BREAKER)
     assert state["selfRecovered"] is True
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_TERMINAL
     escalated = state.get("_escalatedRung")
     assert escalated is not None
     assert escalated["rung"] is not None
@@ -2841,6 +2841,16 @@ _ALL_CHANNELS = {
     "recordOrphansIgnored": ["code-reviewer"],
     "orderVendorProvenanceGaps": [{"seat": "architecture-reviewer",
                                    "storeKey": "architecture-reviewer", "occurrence": 0}],
+    "priorCommentsUnavailable": True,
+    "pluginVersionSkew": [{
+        "constraint": version_skew.CONSTRAINT,
+        "status": version_skew.STATUS_CHECKED_DEGRADED,
+        "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
+        "reason": "plugin-version-skew: seeded resume fixture skew",
+        "inspectedRoot": "/tmp/repo",
+    }],
+    "verifyPasses": [{"CONFIRMED": 1, "PLAUSIBLE": 0, "REFUTED": 0, "drops": 0,
+                      "downgrades": 0, "unverified": 0, "ambiguous": 0}],
 }
 
 
@@ -2901,6 +2911,7 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
         "order-vendor-provenance-gap (round 1): seat(s) architecture-reviewer"
         in "\n".join(_round_disclosures(receipt, 1))
     )
+    assert "plugin-version-skew: seeded resume fixture skew" in "\n".join(receipt["degraded"])
     # adapter-provenance names the phase as `(round N, phase)` — outside the `(round 1)` filter.
     degraded_all = "\n".join(receipt["degraded"])
     assert ("adapter-provenance (round 1, unknown-phase): vendor echo mismatch"
@@ -2985,6 +2996,40 @@ def test_resume_drops_a_wrong_typed_channel_and_still_resumes(tmp_path):
     assert "vacuous-seat" not in prose and "canary-failed" not in prose
     assert "reviewer-fell-open (round 1)" not in prose
     assert "order-vendor-provenance-gap" not in prose
+
+
+def test_prior_comments_unavailable_discloses_on_receipt_and_survives_resume(tmp_path):
+    """PR-mode absence of prior-comments.json is a provenance gap that must ride the receipt and
+    resume path — not only live in state where build_receipt and recordsPath resume drop it."""
+    session_dir = str(tmp_path / "pr-session")
+    os.makedirs(session_dir)
+    os.makedirs(os.path.join(session_dir, "repo"))
+    state = RD.new_state(_cfg())
+    RD._resolve_prior_comments_path(session_dir, state)
+    assert state["rounds"]["1"]["priorCommentsUnavailable"] is True
+    receipt = RD.build_receipt(state)
+    assert _round_channels(receipt, 1).get("priorCommentsUnavailable") is True
+
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1, {"priorCommentsUnavailable": True})]))
+    resumed = RD.new_state(_cfg(recordsPath=str(records)))
+    assert resumed["rounds"]["1"]["priorCommentsUnavailable"] is True
+    resumed_receipt = RD.build_receipt(resumed)
+    assert _round_channels(resumed_receipt, 1).get("priorCommentsUnavailable") is True
+
+
+def test_prior_comments_unavailable_degraded_prose_on_receipt():
+    """Round-recorded priorCommentsUnavailable must name the round and the missing prior comments."""
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {"1": {"priorCommentsUnavailable": True}}
+    receipt = RD.build_receipt(state)
+    prose = "\n".join(_round_disclosures(receipt, 1))
+    assert (
+        "prior-comments-unavailable (round 1): orchestrator did not supply prior-comments.json "
+        "in PR mode — panel ran without prior PR comments; any claim that prior comments were "
+        "considered is not supported for this round"
+        in prose
+    )
 
 
 def test_malformed_order_vendor_gap_in_session_does_not_crash_receipt():
@@ -3101,12 +3146,12 @@ def _fn_node(tree, ast_mod, name):
 def test_panel_round_channels_are_all_accounted_for():
     """CENSUS (#720) — closes the set by construction, not by listing sites.
 
-    Every per-round key `_fold_panel` records is enumerated FROM THE SOURCE with `ast` and must have
-    exactly one module-level home: `RESUMABLE_DISCLOSURE_CHANNELS` (the channels `build_receipt`
-    emits and a `recordsPath` resume restores) or `UNRESTORED_PANEL_ROUND_KEYS` (the deliberate
-    not-restored list, each with its reason in the source). A NEW `_record_round` channel that ships
-    without a resume path fails HERE — instead of silently under-disclosing every resumed run's
-    terminal receipt, which is the defect this test exists to prevent recurring.
+    Every per-round key `_fold_panel` or `_fold_verifiers` records is enumerated FROM THE SOURCE
+    with `ast` and must have exactly one module-level home: `RESUMABLE_DISCLOSURE_CHANNELS` (the
+    channels `build_receipt` emits and a `recordsPath` resume restores) or `UNRESTORED_PANEL_ROUND_KEYS`
+    (the deliberate not-restored list, each with its reason in the source). A NEW `_record_round`
+    channel that ships without a resume path fails HERE — instead of silently under-disclosing every
+    resumed run's terminal receipt, which is the defect this test exists to prevent recurring.
     """
     tree, ast_mod = _round_driver_ast()
     fold = _fn_node(tree, ast_mod, "_fold_panel")
@@ -3122,9 +3167,29 @@ def test_panel_round_channels_are_all_accounted_for():
         recorded.add(key.value)
     assert len(recorded) >= 9, "the census enumerated %d keys — the parse looks inert" % len(recorded)
 
+    fold_verifiers = _fn_node(tree, ast_mod, "_fold_verifiers")
+    verifier_recorded = set()
+    verifier_appended = set()
+    for node in ast_mod.walk(fold_verifiers):
+        if not (isinstance(node, ast_mod.Call) and isinstance(node.func, ast_mod.Name)):
+            continue
+        if node.func.id == "_record_round":
+            assert len(node.args) >= 2, "_record_round must be called with (state, key, value)"
+            key = node.args[1]
+            assert isinstance(key, ast_mod.Constant) and isinstance(key.value, str), (
+                "a _record_round key must be a string LITERAL so the census can enumerate it")
+            verifier_recorded.add(key.value)
+        elif node.func.id == "_record_round_append":
+            assert len(node.args) >= 2, "_record_round_append must be called with (state, key, value)"
+            key = node.args[1]
+            assert isinstance(key, ast_mod.Constant) and isinstance(key.value, str), (
+                "a _record_round_append key must be a string LITERAL so the census can enumerate it")
+            verifier_appended.add(key.value)
+
     fold_provenance = set(RD.FOLD_PROVENANCE_DISCLOSURE_CHANNELS)
     submit_disclosure = set(RD.SUBMIT_DISCLOSURE_CHANNELS)
     order_emission = set(RD.ORDER_EMISSION_DISCLOSURE_CHANNELS)
+    verifier_fold = set(RD.VERIFIER_FOLD_DISCLOSURE_CHANNELS)
     restorable = set(RD.RESUMABLE_DISCLOSURE_CHANNELS)
     unrestored = set(RD.UNRESTORED_PANEL_ROUND_KEYS)
     assert fold_provenance <= restorable, (
@@ -3136,14 +3201,19 @@ def test_panel_round_channels_are_all_accounted_for():
     assert order_emission <= restorable, (
         "order-emission disclosure channels must be restorable: %s"
         % sorted(order_emission - restorable))
+    assert verifier_fold <= restorable, (
+        "verifier-fold disclosure channels must be restorable: %s"
+        % sorted(verifier_fold - restorable))
     assert not (restorable & unrestored), \
         "a channel cannot be both restorable and not-restored: %s" % sorted(restorable & unrestored)
     accounted = restorable | unrestored
-    assert recorded | fold_provenance | submit_disclosure | order_emission == accounted, (
+    all_recorded = (recorded | fold_provenance | submit_disclosure | order_emission
+                    | verifier_recorded | verifier_appended | verifier_fold)
+    assert all_recorded == accounted, (
         "every per-round disclosure channel needs exactly one home — unaccounted (no resume path): %s; "
         "stale (named but no longer recorded): %s"
-        % (sorted((recorded | fold_provenance | submit_disclosure | order_emission) - accounted),
-           sorted(accounted - (recorded | fold_provenance | submit_disclosure | order_emission))))
+        % (sorted(all_recorded - accounted),
+           sorted(accounted - all_recorded)))
 
 
 def test_disclosure_channels_have_one_home_read_by_receipt_and_resume():
@@ -3732,6 +3802,62 @@ def test_certification_shape_drivers_lists_every_fired_channel():
     assert state["certification"]["shape"].count("-degraded") == 0
 
 
+def _write_meta_json(session_dir, payload):
+    os.makedirs(session_dir, exist_ok=True)
+    with open(os.path.join(session_dir, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+
+
+def test_receipt_base_mode_routes_through_session_mode_meta_wins(tmp_path):
+    """I2 (#1107 WO-rc1): the receipt's base.mode is the DRIVER-RESOLVED mode, never a raw
+    cfg echo. Under meta-wins precedence, session metadata overrides a disagreeing driver
+    config value in the receipt too — the same precedence `session_mode.resolve` already
+    applies everywhere else."""
+    session_dir = str(tmp_path / "sess")
+    _write_meta_json(session_dir, {"mode": "branch"})
+    state = RD.new_state(_cfg(mode="pr"))
+    receipt = RD.build_receipt(state, session_dir)
+    assert receipt["base"]["mode"] == "branch"
+
+
+def test_receipt_base_mode_edge_no_session_dir_grounds_from_config(tmp_path):
+    """Fail-closed edge 1: session_dir is None (the run_loop receipt paths) — no metadata
+    exists; resolve({}, cfg) is grounded iff cfg carried a valid mode."""
+    state = RD.new_state(_cfg(mode="pr"))
+    receipt = RD.build_receipt(state)
+    assert receipt["base"]["mode"] == "pr"
+
+
+def test_receipt_base_mode_edge_missing_meta_file_does_not_raise(tmp_path):
+    """Fail-closed edge 2: session_dir set but meta.json missing — _session_meta already
+    returns {}; must not raise, and (with no cfg mode either) base.mode is simply absent."""
+    session_dir = str(tmp_path / "sess-no-meta")
+    os.makedirs(session_dir)
+    state = RD.new_state(_cfg())
+    receipt = RD.build_receipt(state, session_dir)
+    assert "base" not in receipt or "mode" not in receipt.get("base", {})
+
+
+def test_receipt_base_mode_edge_invalid_meta_is_absent_not_config_fallthrough(tmp_path):
+    """Fail-closed edge 3: meta carries a present-but-invalid mode — resolve is unresolved,
+    so base.mode is ABSENT — it must not fall through to cfg's disagreeing valid value
+    (I1's whole point, now reaching the receipt)."""
+    session_dir = str(tmp_path / "sess-invalid")
+    _write_meta_json(session_dir, {"mode": "bogus"})
+    state = RD.new_state(_cfg(mode="pr"))
+    receipt = RD.build_receipt(state, session_dir)
+    assert "mode" not in receipt.get("base", {})
+
+
+def test_receipt_base_mode_edge_neither_source_has_mode_is_absent(tmp_path):
+    """Fail-closed edge 4: neither meta nor cfg carries a mode — base.mode absent."""
+    session_dir = str(tmp_path / "sess-empty")
+    os.makedirs(session_dir)
+    state = RD.new_state(_cfg())
+    receipt = RD.build_receipt(state, session_dir)
+    assert "base" not in receipt or "mode" not in receipt.get("base", {})
+
+
 def test_seat_map_violations_round_field_and_degraded_disclosure():
     seat_map = _seat_map_receipt_with_unexcused_maker_family()
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
@@ -4031,7 +4157,8 @@ def test_fix_with_guidance_attaches_guidance():
     assert state["step"] == RD.P_FIXER
     b = state["_fixBatch"][0]
     assert b["judgmentDisposition"] == "fix-with-guidance"
-    assert b["guidance"] == "keep it backward compatible"
+    assert b[RD.FIX_BATCH_GUIDANCE_KEY] == "keep it backward compatible"
+    assert "guidance" not in b
 
 
 def test_skip_with_reason_records_ledger_and_rides_disclosure():
@@ -5254,7 +5381,35 @@ def test_certification_plugin_version_skew_status_absent_when_status_invalid():
         },
     }
     RD._terminal_converged(state, state["config"], full_panel=True)
-    assert state["certification"]["pluginVersionSkew"] == "absent"
+    assert state["certification"]["pluginVersionSkew"] == "unknown"
+
+
+def test_certification_plugin_version_skew_unknown_status_agrees_with_degradation():
+    # axis: unrecognized skew receipt status must not certify as absent — degradation agrees
+    reason = "plugin-version-skew: future build persisted unrecognized status"
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    state = RD.new_state(cfg)
+    state["seatMap"] = {
+        "pluginVersionSkew": {
+            "status": "future-status",
+            "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
+            "inspectedRoot": "/tmp/repo",
+        },
+        "degradations": [{
+            "constraint": version_skew.CONSTRAINT,
+            "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
+            "reason": reason,
+        }],
+    }
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    cert = state["certification"]
+    assert cert["pluginVersionSkew"] != "absent"
+    assert cert["pluginVersionSkew"] == "unknown"
+    assert "plugin-version-skew" in cert["shapeDrivers"]
+    receipt = RD.build_receipt(state)
+    skew_lines = [d for d in receipt["degraded"] if "plugin-version-skew" in d]
+    assert len(skew_lines) == 1
+    assert reason in skew_lines[0]
 
 
 _RETIRED_RUN_CONFIG_KEYS = ("docMode", "fixerModel", "fixerEffort")
@@ -6074,7 +6229,7 @@ def test_settle_delta_breaker_reasons_reachable_and_claimed(monkeypatch):
         "converged", "capped-with-open-critical", "capped-with-open-blocker",
     )
 
-    # audit-stall — _handle_stall self-recovery legitimately routes to the fixer.
+    # audit-stall — discharged targets leave no open work; self-recovery settles via confirmation.
     state = _delta_settle_state_for_breaker(monkeypatch, {
         "halt": True, "reason": "audit-stall", "detail": "stalled",
         "stalledIdentities": ["x"],
@@ -6082,7 +6237,7 @@ def test_settle_delta_breaker_reasons_reachable_and_claimed(monkeypatch):
     state["_auditTargets"] = [{"id": "x", "identity": "x", "severity": "Important",
                                "file": "f.py", "line": 1}]
     RD._settle_delta(state, state["config"])
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_PANEL
     assert any(d["kind"] == "self-recovery" for d in state["decisions"])
 
     # round-ceiling — unreachable at _settle_delta; enforced on the round-advance boundary only.
@@ -6103,3 +6258,18 @@ def test_settle_delta_unregistered_halt_reason_parks_fail_closed(monkeypatch):
     assert state["step"] != RD.P_FIXER
     detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
     assert "synthetic-unregistered-reason" in detail
+
+
+# --- on-disk receipt trust (#1107 WO-c4A A1) -----------------------------------------------
+
+
+def test_on_disk_receipt_class_rejects_invalid_known_schema(tmp_path):
+    # axis: receipt_kind match without validate_receipt must classify as untrusted
+    d = str(tmp_path / "invalid-interim")
+    os.makedirs(d)
+    with open(os.path.join(d, RD.RECEIPT_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"schema": RD.RECEIPT_INTERIM_SCHEMA}, fh)
+    assert RD._on_disk_receipt_class(d) == "untrusted"
+    assert RD._receipt_write_refusal(
+        d, terminal_reason="terminal-receipt-exists",
+        untrusted_reason="terminal-receipt-unreadable") == "terminal-receipt-unreadable"

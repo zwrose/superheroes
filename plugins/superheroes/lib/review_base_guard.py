@@ -586,7 +586,10 @@ def check_base(session_dir, repo_root, prior_pin=None, run=None):
         "baseBranch": meta.get("baseBranch"),
         "baseFetch": base_fetch,
         "baseDegraded": base_degraded,
-        "mode": mode,
+        # Single-source (#1107 WO-rc1 I3): `mode_resolved` above is the ONE resolution of this
+        # value — the raw `mode` local (read a few lines up) stays only for the refusal `detail`
+        # message above, never as a second owner of the returned value.
+        "mode": mode_resolved["mode"],
         "baseRepo": base_repo,
         "baseRepoCheck": base_repo_check,
         "repoRoot": checkout_rp,

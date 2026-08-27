@@ -24,11 +24,12 @@
 | `$SESSION_DIR/round-<N>/compiled.json`              | orchestrator   | Deduplicated, verified findings + summary + verdict (read by `circuit_breaker.py`)          |
 | `$SESSION_DIR/round-<N>/triage.json`                | triage agent   | Per-finding `mechanical`/`judgment` classification + POV for every finding (loop only)      |
 | `$SESSION_DIR/round-<N>/resolutions.json`           | orchestrator   | User decisions on `present-set` findings (loop only; read by `circuit_breaker.py`)          |
-| `$SESSION_DIR/round-<N>/fix-batch.json`             | orchestrator   | Findings handed to the fixer this round (loop only)                                         |
+| `$SESSION_DIR/round-<N>/fix-batch.json`             | round driver   | Findings handed to the fixer this round — materialized from loop state before fixer emit (loop only) |
 | `$SESSION_DIR/round-1/presentation.md`              | orchestrator   | `--review-only`: the presentation as prose — approved set + undecided `ask-set` |
 | `$SESSION_DIR/loop-state.json`                      | round driver   | Auto-fix loop only: driver state (`next`/`submit` protocol)                                 |
 | `$SESSION_DIR/driver-journal.jsonl`                 | round driver   | Auto-fix loop only: `scriptRan` journal (one line per `next`/`submit`)                      |
 | `$SESSION_DIR/round-receipt.json`                   | round driver   | Auto-fix loop only: terminal receipt (`validate_receipt` shape)                             |
+| `$SESSION_DIR/round-receipt-interim.json`           | round driver   | Auto-fix loop only: interim checkpoint receipt (`receipt-interim/1`; not handback evidence) |
 
 ## Setup resolution — run these in order
 
@@ -147,6 +148,8 @@ Capture `DOCTOR_JSON`; on `readable: false`, tell the user to re-run `/superhero
 
 **Profile bootstrap (run before dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
+<!-- decision-point: id=review-code-setup-storage-location mode=notify kind=storage-location default="returned .mode (recorded when configured, else the lib's provisional default)" carrier=review-code-meta -->
+
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
@@ -154,13 +157,15 @@ if [ "$LOCATION" = "none" ]; then
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
   SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
   PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
-  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
+  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] && [ -n "$SOURCE" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
   PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
 fi
 ```
 
 **Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or `global` (`ask` no longer exists); `.source` is where the decision came from: `env` (environment override `REVIEW_CREW_STORAGE` for this run only; never recorded), `registry` (a mode the owner recorded; authoritative), `backfilled` (a mode inferred from consistent existing evidence and then recorded), `provisional` (nothing recorded and no consistent evidence; the lib's default, re-taken next run); `.provisional` is `true` when the mode was not owner-recorded. **Default:** the returned `.mode` (recorded when configured, else the lib's provisional default). Bootstrap blocks never record — an unrecorded mode is re-taken next run. **Disclosure.** Write into `$SESSION_DIR/meta.json` when that file is written (`storageMode`, `storageSource`, `storageProvisional` from `$LOC`, `$SOURCE`, `$PROVISIONAL`) — the durable session record review-code's setup path owns — and repeat the same facts in the **dispatch summary** for visibility. When `.provisional` is `true`, also state that it is a provisional default rather than an owner choice and will be re-taken on the next run when not recorded, and that `/superheroes:configure` changes it. **Follow-up:** `/superheroes:configure`.
+NOTIFY: take the returned `.mode` from `decide-location`, encode `storageMode`/`storageSource`/`storageProvisional` into `$SESSION_DIR/meta.json`, and the run continues. Follow-up: `/superheroes:configure`.
+<!-- /decision-point: id=review-code-setup-storage-location -->
 
 When `$LOCATION` was `none`, run review-init inline (`skills/review-init/SKILL.md`, Steps 1–4) before the re-resolve above. **Skip review-init's interview** — take the provisional profile from detected defaults instead. When the created layer lands **in-repo**, **do not ask whether to commit** the new files: write the core + layer, leave them **uncommitted and untracked**, say so in the **dispatch summary**, and continue. Committing them unasked would be a review writing to the user's index — the honest answer is to leave the files for a human to stage.
 

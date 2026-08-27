@@ -26,10 +26,10 @@ def _load():
 VS = _load()
 
 
-def _write_manifest(base, name="superheroes"):
+def _write_manifest(base, name="superheroes", version="0.30.0"):
     path = base / "plugins" / "superheroes" / ".claude-plugin" / "plugin.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"name": name, "version": "0.30.0"}), encoding="utf-8")
+    path.write_text(json.dumps({"name": name, "version": version}), encoding="utf-8")
 
 
 def _write_version_txt(base, version="0.31.0"):
@@ -98,7 +98,7 @@ def test_identity_gate_wrong_name_not_checked(tmp_path):
     assert record["inspectedRoot"] == ""
 
 
-def test_identity_gate_manifest_symlink_not_checked(tmp_path):
+def test_identity_gate_manifest_symlink_evidence_unreadable(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir(parents=True)
     real_manifest = tmp_path / "real-plugin.json"
@@ -106,12 +106,11 @@ def test_identity_gate_manifest_symlink_not_checked(tmp_path):
     manifest_dir = repo / "plugins" / "superheroes" / ".claude-plugin"
     manifest_dir.mkdir(parents=True)
     os.symlink(real_manifest, manifest_dir / "plugin.json")
-    _write_version_txt(repo)
     _copy_semantics_to(repo)
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
-    assert record["status"] == VS.STATUS_NOT_CHECKED
-    assert record["detail"] == VS.DETAIL_NOT_SOURCE_REPO
+    assert record["status"] == VS.STATUS_CHECKED_DEGRADED
+    assert record["detail"] == VS.DETAIL_EVIDENCE_UNREADABLE
 
 
 def test_self_gate_repo_plugin_not_checked(tmp_path):
@@ -139,13 +138,12 @@ def test_no_skew_identical_semantics_checked_clean(tmp_path):
     assert record["detail"] == VS.DETAIL_NO_DIVERGENCE
     assert record["inspectedRoot"] == os.path.abspath(str(repo))
     assert "0.29.0" in record["reason"]
-    assert "0.31.0" in record["reason"]
+    assert "0.30.0" in record["reason"]
 
 
 def test_skew_model_registry_divergent(tmp_path):
     repo = tmp_path / "repo"
-    _write_manifest(repo)
-    _write_version_txt(repo, "0.31.0")
+    _write_manifest(repo, version="0.31.0")
     _copy_semantics_to(repo)
     plugin = _plugin_tree(tmp_path, suffix="# skew marker\n")
     record = VS.detect(str(repo), plugin)
@@ -273,7 +271,8 @@ def test_versions_unreadable_identical_semantics_checked_clean(tmp_path):
         (lib / os.path.basename(entry)).write_text(open(src, encoding="utf-8").read(), encoding="utf-8")
     record = VS.detect(str(repo), plugin)
     assert record["status"] == VS.STATUS_CHECKED_CLEAN
-    assert "unknown" in record["reason"]
+    assert "0.30.0" in record["reason"]
+    assert "0.29.0" in record["reason"]
 
 
 def test_versions_unreadable_divergent_semantics_contains_unknown(tmp_path):
@@ -309,30 +308,27 @@ def test_repo_root_missing_not_checked(tmp_path):
     assert record["detail"] == VS.DETAIL_NOT_SOURCE_REPO
 
 
-def test_version_txt_absent_reason_uses_unknown(tmp_path):
+def test_version_txt_absent_reason_uses_manifest_not_unknown(tmp_path):
     repo = tmp_path / "repo"
     _write_manifest(repo)
     _copy_semantics_to(repo)
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
     assert record["status"] == VS.STATUS_CHECKED_CLEAN
-    assert "unknown" in record["reason"]
+    assert "0.30.0" in record["reason"]
+    assert "unknown" not in record["reason"]
 
 
-def test_version_txt_symlink_refused_not_in_reason(tmp_path):
+def test_version_txt_ignored_when_manifest_present(tmp_path):
     repo = tmp_path / "repo"
     _write_manifest(repo)
     _copy_semantics_to(repo)
-    secret = tmp_path / "secret.txt"
-    secret.write_text("SECRET_LEAKED_CONTENT", encoding="utf-8")
-    version_path = repo / "plugins" / "superheroes" / "version.txt"
-    version_path.parent.mkdir(parents=True, exist_ok=True)
-    os.symlink(secret, version_path)
+    _write_version_txt(repo, "9.99.9-IGNORED")
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
     assert record["status"] == VS.STATUS_CHECKED_CLEAN
-    assert "SECRET_LEAKED_CONTENT" not in record["reason"]
-    assert "unknown" in record["reason"]
+    assert "9.99.9-IGNORED" not in record["reason"]
+    assert "0.30.0" in record["reason"]
 
 
 def test_watched_file_symlink_refused(tmp_path):
@@ -381,12 +377,9 @@ def test_oversized_watched_file_refused(tmp_path):
 
 def test_version_sanitization_truncates_long_first_line(tmp_path):
     repo = tmp_path / "repo"
-    _write_manifest(repo)
-    _copy_semantics_to(repo)
-    version_path = repo / "plugins" / "superheroes" / "version.txt"
-    version_path.parent.mkdir(parents=True, exist_ok=True)
     long_version = "1." + ("2" * VS._MAX_VERSION_CHARS)
-    version_path.write_text(long_version, encoding="utf-8")
+    _write_manifest(repo, version=long_version)
+    _copy_semantics_to(repo)
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
     assert record["status"] == VS.STATUS_CHECKED_CLEAN
@@ -396,11 +389,8 @@ def test_version_sanitization_truncates_long_first_line(tmp_path):
 
 def test_version_sanitization_strips_non_printable_before_newline(tmp_path):
     repo = tmp_path / "repo"
-    _write_manifest(repo)
+    _write_manifest(repo, version="0.\x0099.0")
     _copy_semantics_to(repo)
-    version_path = repo / "plugins" / "superheroes" / "version.txt"
-    version_path.parent.mkdir(parents=True, exist_ok=True)
-    version_path.write_bytes(b"0.\x0099.0\nignored tail")
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
     assert record["status"] == VS.STATUS_CHECKED_CLEAN
@@ -410,11 +400,8 @@ def test_version_sanitization_strips_non_printable_before_newline(tmp_path):
 
 def test_version_sanitization_multiline_ignores_second_line(tmp_path):
     repo = tmp_path / "repo"
-    _write_manifest(repo)
+    _write_manifest(repo, version="0.99.0\nsecond line ignored")
     _copy_semantics_to(repo)
-    version_path = repo / "plugins" / "superheroes" / "version.txt"
-    version_path.parent.mkdir(parents=True, exist_ok=True)
-    version_path.write_text("0.99.0\nsecond line ignored", encoding="utf-8")
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
     assert record["status"] == VS.STATUS_CHECKED_CLEAN
@@ -458,3 +445,47 @@ def test_containment_valid_read_when_repo_root_is_symlink(tmp_path):
     record = VS.detect(str(link_repo), plugin)
     assert record["status"] == VS.STATUS_CHECKED_CLEAN
     assert record["detail"] == VS.DETAIL_NO_DIVERGENCE
+
+
+def test_repo_manifest_lone_surrogate_version_evidence_unreadable(tmp_path):
+    repo = tmp_path / "repo"
+    manifest_path = repo / "plugins" / "superheroes" / ".claude-plugin" / "plugin.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps({"name": "superheroes", "version": "\ud800"}),
+        encoding="utf-8",
+    )
+    _copy_semantics_to(repo)
+    plugin = _plugin_tree(tmp_path)
+    record = VS.detect(str(repo), plugin)
+    _assert_record_shape(record)
+    assert record["status"] == "checked-degraded"
+    assert record["detail"] == "evidence-unreadable"
+    assert record["inspectedRoot"] == os.path.abspath(str(repo))
+
+
+def test_installed_manifest_lone_surrogate_version_evidence_unreadable(tmp_path):
+    repo = tmp_path / "repo"
+    _write_manifest(repo)
+    _copy_semantics_to(repo)
+    plugin_root = tmp_path / "plugin"
+    manifest = plugin_root / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps({"name": "superheroes", "version": "\ud800"}),
+        encoding="utf-8",
+    )
+    lib = plugin_root / "lib"
+    lib.mkdir(parents=True, exist_ok=True)
+    for entry in VS.SEMANTICS_FILES:
+        src = os.path.join(_PLUGIN_ROOT, entry)
+        (lib / os.path.basename(entry)).write_text(open(src, encoding="utf-8").read(), encoding="utf-8")
+    record = VS.detect(str(repo), str(plugin_root))
+    _assert_record_shape(record)
+    assert record["status"] == "checked-degraded"
+    assert record["detail"] == "evidence-unreadable"
+
+
+def test_read_repo_version_lone_surrogate_does_not_raise():
+    manifest = json.loads('{"name":"superheroes","version":"\\ud800"}')
+    assert VS._read_repo_version(manifest) == "unknown"

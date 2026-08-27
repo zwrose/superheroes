@@ -86,6 +86,7 @@ def _expected_cmd_names():
 _EXPECTED_CMD_NAMES = (
     "cmd_advance",
     "cmd_attest",
+    "cmd_checkpoint",
     "cmd_next",
     "cmd_record_missing",
     "cmd_record_result",

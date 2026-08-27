@@ -43,6 +43,7 @@ import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok �
 import file_lock  # noqa: E402
 import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
+import review_findings_schema  # noqa: E402  findings example renderer (#1145 WO-C)
 import sanitized_view  # noqa: E402
 import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
 from guardian_tools import path_is_confidently_under  # noqa: E402
@@ -1394,6 +1395,7 @@ def _scan_review_engaged_candidates(run_dir_real, state):
     """
     opened = state.get("opened") or {}
     fed_prompt = opened.get("fedPrompt", "")
+    echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
     candidates = []
     for att in sorted(state.get("attempts") or {}):
         slot = state["attempts"][att]
@@ -1406,7 +1408,8 @@ def _scan_review_engaged_candidates(run_dir_real, state):
         shape = engine_adapter.review_artifact_shape(stdout, fed_prompt)
         if not shape.get("engaged"):
             continue
-        salvage = engine_adapter.salvage_from_artifact(stdout, fed_prompt)
+        salvage = engine_adapter.salvage_from_artifact(
+            stdout, fed_prompt, echo_nonce=echo_nonce)
         candidates.append({
             "attempt": att,
             "stdoutPath": stdout_path,
@@ -2561,6 +2564,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     role_kind = opened.get("roleKind", RUN_KIND_REVIEW)
     cwd = opened["cwd"]
     fed_prompt = opened.get("fedPrompt", "")
+    echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
     slot = state["attempts"][attempt]
     ended = slot.get("ended") or {}
     stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
@@ -2606,14 +2610,30 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     diagnose_stdout = norm_strip["text"]
     envelope_error = norm_strip["rawEnvelopeError"]
 
+    if prompt_echo_only:
+        # axis: echo-only stdout must forfeit before parse accepts embedded example JSON (#1145 WO-C)
+        engagement = _engagement_with_read(engagement)
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "engagement": engagement,
+            "payloadShape": {
+                "parsed": engine_adapter.SHAPE_PROMPT_ECHO_ONLY,
+                "topLevelKeys": [],
+                "keysTruncated": False,
+            },
+        }
+
     res = engine_adapter.parse_result(
-        engine, role_kind, stdout, raw_envelope_error=envelope_error)
+        engine, role_kind, stdout, raw_envelope_error=envelope_error,
+        echo_nonce=echo_nonce)
     if not _parse_review_has_payload(res):
         stripped_text = norm_strip["text"]
         if stripped_text and stripped_text.strip():
             diagnose_stdout = stripped_text
         res = engine_adapter.parse_result(
-            engine, role_kind, stripped_text, raw_envelope_error=envelope_error)
+            engine, role_kind, stripped_text, raw_envelope_error=envelope_error,
+            echo_nonce=echo_nonce)
     if not res.get("ok"):
         engagement = _engagement_with_read(engagement)
         result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
@@ -2624,7 +2644,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
                 "keysTruncated": False,
             }
         else:
-            shape = engine_adapter.review_payload_shape(diagnose_stdout, fed_prompt)
+            shape = engine_adapter.review_payload_shape(
+                diagnose_stdout, fed_prompt, echo_nonce=echo_nonce)
             if shape is not None:
                 result["payloadShape"] = shape
         return result
@@ -2632,7 +2653,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     if _review_parse_kind_invalid(res):
         engagement = _engagement_with_read(engagement)
         result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
-        shape = engine_adapter.review_payload_shape(diagnose_stdout, fed_prompt)
+        shape = engine_adapter.review_payload_shape(
+            diagnose_stdout, fed_prompt, echo_nonce=echo_nonce)
         if shape is not None:
             result["payloadShape"] = shape
         return result
@@ -2767,6 +2789,18 @@ def _write_terminal_forfeit(engine, attempts, *, run_dir_real=None, state=None):
 
 
 def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts=1):
+    if attempts < MAX_ATTEMPTS:
+        reason_clause = (
+            "the retry was refused because a second attempt on a dirtied tree can contaminate or commit "
+            "partial work. "
+        )
+    else:
+        reason_clause = "the attempt budget was exhausted. "
+    disclosure = (
+        "%s attempt %d report was not gradeable; %s"
+        "The worktree is left exactly as the engine left it — inspect "
+        "and clean it yourself." % (engine, int(attempts), reason_clause)
+    )
     terminal = {
         "ok": False,
         "terminal": True,
@@ -2774,12 +2808,7 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
         "detail": "worktree-dirtied-by-attempt",
         "attempts": attempts,
         "forfeited": True,
-        "disclosure": (
-            "%s attempt 1 report was not gradeable; the retry was "
-            "refused because a second attempt on a dirtied tree can contaminate or commit "
-            "partial work. The worktree is left exactly as the engine left it — inspect "
-            "and clean it yourself." % engine
-        ),
+        "disclosure": disclosure,
     }
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
@@ -3324,7 +3353,8 @@ def _attach_sanitized_view(result, view):
 def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                      prompt_path, view_path, view_meta, fed_prompt, order_id,
                      progress_path, repo_root=None, mode="review",
-                     expected_result_kind=None, pr_body_source_path=None):
+                     expected_result_kind=None, pr_body_source_path=None,
+                     echo_nonce=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -3368,6 +3398,9 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     }
     if expected_result_kind in REVIEW_RESULT_KINDS:
         record["expectedResultKind"] = expected_result_kind
+    effective_nonce = review_findings_schema.effective_nonce(echo_nonce)
+    if effective_nonce is not None:
+        record["echoNonce"] = effective_nonce
     if pr_body_source_path is not None:
         record["prBodySourcePath"] = pr_body_source_path
     if not _journal_append(run_dir_real, record):
@@ -3620,6 +3653,12 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             argv = built["argv"]
             notice = sanitized_view.sanitized_view_notice(view, mode=resolved_mode["mode"])
             fed_prompt = ANTIHIJACK_PREAMBLE + notice + base_prompt
+            echo_nonce = secrets.token_hex(16)
+            # Example gate and fold-time kind check share expected_result_kind (#1145 WO-B).
+            _prompt_section_sep = "\n\n"
+            if expected_result_kind == "findings":
+                fed_prompt += _prompt_section_sep + review_findings_schema.example_prompt_block(echo_nonce)
+            fed_prompt += _prompt_section_sep + engine_adapter.REVIEW_RESULT_CONTRACT(expected_result_kind)
 
             if run_dir_real is None:
                 run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
@@ -3632,6 +3671,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 repo_root=repo_detail, mode=resolved_mode["mode"],
                 expected_result_kind=expected_result_kind,
                 pr_body_source_path=os.path.realpath(pr_body_path) if pr_body_set else None,
+                echo_nonce=echo_nonce,
             )
             if not ok_open:
                 err = _attach_sanitized_view(_with_run_fields(

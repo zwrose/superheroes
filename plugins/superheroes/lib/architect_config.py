@@ -14,7 +14,7 @@ if _LIB_DIR not in sys.path:
 import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_LOCATION = "docs/superheroes"
 COMMITTED = "committed"
 GITIGNORED = "gitignored"
@@ -36,9 +36,29 @@ def _safe_location(location):
     return norm
 
 
+def _normalize_disclosures(raw):
+    """A list of disclosure strings; absent or invalid shapes default to []."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [s for s in raw if isinstance(s, str)]
+
+
+def _record_schema_version(rec):
+    """Return the record's declared schemaVersion as int, or None if absent/invalid.
+    A bool is not an int here — reject it."""
+    sv = rec.get("schemaVersion")
+    if type(sv) is int:
+        return sv
+    return None
+
+
 def _migrate(rec):
     """Fill an older/partial record forward to the current shape (migrate-on-read).
-    Returns a normalized dict, or None if it cannot be coerced to a valid policy."""
+    Returns a normalized dict, or None if it cannot be coerced to a valid policy.
+    A record whose schemaVersion is greater than SCHEMA_VERSION is preserved in full
+    (unknown keys and its own version survive); known fields are still normalized."""
     if not isinstance(rec, dict):
         return None
     location = _safe_location(rec.get("location"))
@@ -46,15 +66,27 @@ def _migrate(rec):
     if visibility not in _VISIBILITIES:
         visibility = COMMITTED
     confirmed = bool(rec.get("confirmed", False))
+    disclosures = _normalize_disclosures(rec.get("disclosures"))
+    declared = _record_schema_version(rec)
+    if declared is not None and declared > SCHEMA_VERSION:
+        # Path-traversal guard, not a schema opinion — must stay unconditional.
+        result = dict(rec)
+        result["location"] = location
+        result["visibility"] = visibility
+        result["confirmed"] = confirmed
+        result["disclosures"] = disclosures
+        return result
     return {"schemaVersion": SCHEMA_VERSION, "location": location,
-            "visibility": visibility, "confirmed": confirmed}
+            "visibility": visibility, "confirmed": confirmed,
+            "disclosures": disclosures}
 
 
 def read_policy(cwd, root=None):
-    """{location, visibility, confirmed} or None (absent/corrupt). Migrates an older/partial
-    record forward **in memory only** (no write-back on read) — the next write_policy persists
-    the current shape. This deliberately removes the migrate-write-back failure mode the plan
-    flagged while still satisfying the spec's UFR-5 (migrate on read, no manual re-init)."""
+    """{location, visibility, confirmed, disclosures} or None (absent/corrupt). Migrates an
+    older/partial record forward **in memory only** (no write-back on read) — the next write_policy
+    persists the current shape unless the persisted record declares a newer schemaVersion than this
+    module supports (write_policy then refuses). A newer record's unknown keys and version survive
+    in memory via _migrate; read_policy still returns only the four known fields."""
     try:
         with open(policy_path(cwd, root), encoding="utf-8") as fh:
             rec = json.load(fh)
@@ -66,13 +98,25 @@ def read_policy(cwd, root=None):
     if migrated is None:
         return None
     return {"location": migrated["location"], "visibility": migrated["visibility"],
-            "confirmed": migrated["confirmed"]}
+            "confirmed": migrated["confirmed"],
+            "disclosures": migrated["disclosures"]}
 
 
 def write_policy(cwd, policy, root=None):
-    """Record the doc-policy under the project config lock. Returns the written record,
-    or None if the lock is contended, the project store cannot be ensured, or the
-    repository root is unavailable (caller proceeds + surfaces a notice — UFR-1)."""
+    """Record the doc-policy under the project config lock.
+
+    Returns the written record on success. Returns None when the doc-policy record is not
+    written — no ``doc-policy.json`` is created, and an existing one is left byte-for-byte —
+    because the config lock is contended; ``ensure_project_store`` fails; the repository root
+    is unavailable; or an existing persisted record declares
+    ``schemaVersion`` greater than ``SCHEMA_VERSION`` (the on-disk file is preserved).
+    Store setup and the lock file may already have been created as side effects on a refusal
+    path (``ensure_project_store`` runs ``os.makedirs``, may ``git init``, and atomically writes
+    ``meta.json``; ``config_lock`` ensures the store directory exists and creates ``config.lock``
+    before the contention answer is known). None does not identify which cause applied; callers
+    branch on their own policy
+    (``architect-init`` stops on any refusal; ``definition_doc.resolve_write_path`` treats
+    provisional-write refusal as non-fatal)."""
     rec = _migrate(policy)
     if rec is None:
         raise ValueError("invalid doc-policy: %r" % (policy,))
@@ -82,7 +126,16 @@ def write_policy(cwd, policy, root=None):
         with mode_registry.config_lock(cwd, root) as got:
             if not got:
                 return None
-            store_core.atomic_write(policy_path(cwd, root), json.dumps(rec, indent=2))
+            path = policy_path(cwd, root)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    existing = json.load(fh)
+                declared = _record_schema_version(existing) if isinstance(existing, dict) else None
+                if declared is not None and declared > SCHEMA_VERSION:
+                    return None
+            except (OSError, ValueError):
+                pass
+            store_core.atomic_write(path, json.dumps(rec, indent=2))
             return rec
     except store_core.RepoRootUnavailable:
         return None
