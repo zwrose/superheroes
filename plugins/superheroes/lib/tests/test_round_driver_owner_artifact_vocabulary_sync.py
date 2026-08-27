@@ -5,6 +5,7 @@ Copy-holder:
 Authoritative home (derived at runtime — never retyped as literals in this test):
   - round_driver.OWNER_ARTIFACT_*_REFUSAL module constants
   - round_driver.POLICY_APPLIED_SOURCE_* module constants
+  - round_driver.OWNER_PROVENANCE_FIELD_SHAPES
 """
 import os
 import re
@@ -19,6 +20,7 @@ _REFUSAL_TABLE_MARKER = "**Refusal tokens when paths interleave.**"
 _REFUSAL_TABLE_END = "**Owner-artifact refusal causes**"
 _OWNER_ARTIFACT_MARKER = "**Owner-artifact refusal causes**"
 _SOURCE_MARKER = "**Policy-applied sources**"
+_PROVENANCE_MARKER = "**Owner-gate `_provenance` required fields**"
 
 
 def _read(path):
@@ -34,6 +36,16 @@ def _parse_fenced_text_block(text, after_marker):
     if not match:
         raise RuntimeError("no ```text block found after marker %r" % after_marker)
     return [line.strip() for line in match.group(1).splitlines() if line.strip()]
+
+
+def _parse_provenance_field_shapes(text):
+    """``field — shape`` pairs from the owner-gate ``_provenance`` fenced block."""
+    lines = _parse_fenced_text_block(text, _PROVENANCE_MARKER)
+    pairs = {}
+    for line in lines:
+        field, shape = line.split(" — ", 1)
+        pairs[field.strip()] = shape.strip()
+    return pairs
 
 
 def _parse_refusal_table_reasons(text):
@@ -106,6 +118,69 @@ def test_policy_applied_sources_match_docs():
     assert not only_code, (
         "driver emits policyApplied sources missing from round-driver.md: %s"
         % sorted(only_code))
+
+
+def test_owner_provenance_field_shapes_match_docs():
+    """round-driver.md ``_provenance`` field shapes ↔ OWNER_PROVENANCE_FIELD_SHAPES (both directions)."""
+    text = _read(_REF)
+    documented = _parse_provenance_field_shapes(text)
+    coded = dict(RD.OWNER_PROVENANCE_FIELD_SHAPES)
+
+    only_docs = set(documented) - set(coded)
+    only_code = set(coded) - set(documented)
+    assert not only_docs, (
+        "round-driver.md lists owner-gate _provenance fields the driver does not require: %s"
+        % sorted(only_docs))
+    assert not only_code, (
+        "driver requires owner-gate _provenance fields missing from round-driver.md: %s"
+        % sorted(only_code))
+
+    shape_mismatches = {
+        field: (documented[field], coded[field])
+        for field in coded
+        if documented.get(field) != coded[field]
+    }
+    assert not shape_mismatches, (
+        "owner-gate _provenance field shape mismatch between docs and code: %s"
+        % shape_mismatches)
+
+
+def _well_formed_provenance_artifact(**provenance_overrides):
+    artifact = {
+        "dispositions": [{"id": "finding-1", "disposition": "accept"}],
+        "_provenance": {
+            "ruledBy": "owner",
+            "ruledAt": "2026-08-26T00:00:00Z",
+            "records": ["gate-ruling.json"],
+        },
+    }
+    if provenance_overrides:
+        artifact["_provenance"] = dict(artifact["_provenance"], **provenance_overrides)
+    return artifact
+
+
+def test_owner_artifact_provenance_well_formed_accepts_complete_block():
+    assert RD._owner_artifact_provenance_well_formed(_well_formed_provenance_artifact())
+
+
+def test_owner_artifact_provenance_well_formed_rejects_blank_ruled_by():
+    artifact = _well_formed_provenance_artifact(ruledBy="")
+    assert not RD._owner_artifact_provenance_well_formed(artifact)
+
+
+def test_owner_artifact_provenance_well_formed_rejects_blank_ruled_at():
+    artifact = _well_formed_provenance_artifact(ruledAt="   ")
+    assert not RD._owner_artifact_provenance_well_formed(artifact)
+
+
+def test_owner_artifact_provenance_well_formed_rejects_empty_records():
+    artifact = _well_formed_provenance_artifact(records=[])
+    assert not RD._owner_artifact_provenance_well_formed(artifact)
+
+
+def test_owner_artifact_provenance_well_formed_rejects_blank_record_entry():
+    artifact = _well_formed_provenance_artifact(records=["gate-ruling.json", ""])
+    assert not RD._owner_artifact_provenance_well_formed(artifact)
 
 
 def test_round_phase_refusal_causes_match_docs():

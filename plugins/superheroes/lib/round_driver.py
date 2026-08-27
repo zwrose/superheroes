@@ -308,6 +308,16 @@ JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
 POLICY_APPLIED_SOURCE_OWNER_SUPPLIED = "owner-supplied"
 POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED = "owner-unattributed"
+
+# ONE declaration of the owner-gate ``_provenance`` block: required field → the shape it must satisfy.
+# ``_owner_artifact_provenance_well_formed`` is the only reader; the review-code gate-artifact recipe
+# documents this same set, drift-pinned by a test. Unknown extra keys inside ``_provenance`` are tolerated.
+OWNER_PROVENANCE_FIELD_SHAPES = {
+    "ruledBy": "non-empty string",
+    "ruledAt": "non-empty string",
+    "records": "non-empty list of non-empty strings",
+}
+
 OWNER_ARTIFACT_TERMINAL_REFUSAL = "owner-artifact-terminal"
 OWNER_ARTIFACT_UNREADABLE_REFUSAL = "owner-artifact-unreadable"
 OWNER_ARTIFACT_SHAPE_REFUSAL = "owner-artifact-shape"
@@ -6819,11 +6829,23 @@ def _policy_applied_record(phase, resolution):
             "matches": list(resolution.get("matches") or []), "action": action}
 
 
+def _owner_provenance_shape_predicates():
+    """Shape-description strings for ``OWNER_PROVENANCE_FIELD_SHAPES`` → per-field validators."""
+    return {
+        "non-empty string": lambda value: isinstance(value, str) and value.strip(),
+        "non-empty list of non-empty strings": lambda value: (
+            isinstance(value, list) and value
+            and all(isinstance(entry, str) and entry.strip() for entry in value)
+        ),
+    }
+
+
 def _owner_artifact_provenance_well_formed(artifact):
     """Return whether ``artifact`` carries a well-formed ``_provenance`` block.
 
     Bite axis (#1177-B): the ``owner-supplied`` source is reachable only through a well-formed
-    ``_provenance`` block; every other shape is unattributed.
+    ``_provenance`` block; every other shape is unattributed. Required fields derive from
+    ``OWNER_PROVENANCE_FIELD_SHAPES`` — the single declaration of shapes this validator enforces.
     Bite-proof: WO 1177-B — object-type check, ``ruledBy`` check, ``ruledAt`` check, ``records``
     check, and the branch in ``_owner_supplied_applied_record``; durable build record."""
     if not isinstance(artifact, dict):
@@ -6831,17 +6853,10 @@ def _owner_artifact_provenance_well_formed(artifact):
     block = artifact.get("_provenance")
     if not isinstance(block, dict):
         return False
-    ruled_by = block.get("ruledBy")
-    if not isinstance(ruled_by, str) or not ruled_by.strip():
-        return False
-    ruled_at = block.get("ruledAt")
-    if not isinstance(ruled_at, str) or not ruled_at.strip():
-        return False
-    records = block.get("records")
-    if not isinstance(records, list) or not records:
-        return False
-    for entry in records:
-        if not isinstance(entry, str) or not entry.strip():
+    predicates = _owner_provenance_shape_predicates()
+    for field, shape in OWNER_PROVENANCE_FIELD_SHAPES.items():
+        predicate = predicates.get(shape)
+        if predicate is None or not predicate(block.get(field)):
             return False
     return True
 

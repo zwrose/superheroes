@@ -203,21 +203,47 @@ shape guard's own fault. `manifest-anchor-unanchored` stays reserved for seat ph
 `present-stall-menu` because gate policy has not pre-authorized the resolution
 (`advance-judgment-park` / `advance-stall-park`), fold the owner's choice with `--owner-artifact` —
 the same JSON **object** shape hand `submit` takes for that gate: `{"dispositions": [...]}` for
-`present-judgment`, `{"choice": "<stall choice>"}` for `present-stall-menu`. The fold runs through
-the same `cmd_submit` chokepoint as every other fold (echo, state-hash, terminal-receipt gate, round
-ceiling, stall guards `stall-choice-retired:<name>`, `stall-choice-not-offered:<name>`,
-`stall-choice-missing`, `stall-accept-risk-not-eligible`). The resolution is journalled under one of
-two owner-gate sources: the `policyApplied` record carries `source: "owner-supplied"` only when the
-folded artifact includes a well-formed `_provenance` object (`ruledBy` and `ruledAt` as non-empty
-strings, `records` a non-empty list of non-empty strings; unknown extra keys inside `_provenance`
-are tolerated); every other owner-gate fold carries `source: "owner-unattributed"`.
-Calibration-resolved folds carry `source: "gate-policy"`. Every fold also journals
-`artifactSha256` naming the artifact folded, on the fold's own commit.
+`present-judgment`, `{"choice": "<stall choice>"}` for `present-stall-menu`. Whenever an owner
+genuinely rules, the folded artifact **MUST** carry a `_provenance` block — an owner ruling without
+one is journalled `owner-unattributed`, which is a lost attribution, not a neutral default. The fold
+runs through the same `cmd_submit` chokepoint as every other fold (echo, state-hash, terminal-receipt
+gate, round ceiling, stall guards `stall-choice-retired:<name>`,
+`stall-choice-not-offered:<name>`, `stall-choice-missing`, `stall-accept-risk-not-eligible`). The
+resolution is journalled under one of two owner-gate sources: the `policyApplied` record carries
+`source: "owner-supplied"` only when the folded artifact includes a well-formed `_provenance` object
+(`ruledBy` and `ruledAt` as non-empty strings, `records` a non-empty list of non-empty strings;
+unknown extra keys inside `_provenance` are tolerated); every other owner-gate fold carries
+`source: "owner-unattributed"`. Calibration-resolved folds carry `source: "gate-policy"`. Every fold
+also journals `artifactSha256` naming the artifact folded, on the fold's own commit.
+
+**Owner-gate `_provenance` required fields** (authoritative list — drift-tested against
+`round_driver` `OWNER_PROVENANCE_FIELD_SHAPES`):
+
+```text
+ruledBy — non-empty string
+ruledAt — non-empty string
+records — non-empty list of non-empty strings
+```
 
 ```bash
 python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
   --session-dir "$SESSION_DIR" \
   --owner-artifact "$SESSION_DIR/round-<N>/<phase>-artifact.json"
+```
+
+Example `present-judgment` gate artifact (gate shape plus a filled-in `_provenance` block):
+
+```json
+{
+  "dispositions": [
+    {"id": "finding-1", "disposition": "accept"}
+  ],
+  "_provenance": {
+    "ruledBy": "owner",
+    "ruledAt": "2026-08-26T00:00:00Z",
+    "records": ["gate-ruling.json"]
+  }
+}
 ```
 
 **Refusal tokens when paths interleave.** One token can be returned by more than one command — the
