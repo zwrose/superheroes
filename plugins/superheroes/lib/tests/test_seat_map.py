@@ -890,6 +890,61 @@ def test_pinned_maker_seat_is_still_a_violation():
     )
 
 
+def test_unexcused_maker_family_under_liveness_read_error_degradation():
+    # axis: crashed liveness read examined an unknown subset — silence is not proof
+    base = {
+        "seats": {
+            "test-reviewer": {
+                "vendor": "claude",
+                "model": "opus-5",
+                "effort": "xhigh",
+                "tier": "reviewer-deep",
+                "family": "anthropic",
+                "source": "rotated",
+            },
+        },
+        "liveVendors": ["claude"],
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+        "authorFamily": "anthropic",
+    }
+    receipt = SM.to_receipt(
+        {
+            **base,
+            "degradations": [
+                {"constraint": "liveness-read-error", "reason": "read crashed"},
+            ],
+        },
+        "anthropic",
+    )
+    unexcused = SM.unexcused_violations(receipt)
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in unexcused
+    )
+
+
+def test_build_empty_live_cells_source_fail_closed():
+    # axis: falsey malformed liveCellsSource must not be laundered to synthesized
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        THREE_VENDORS,
+        "xai",
+        "anthropic",
+        0,
+        live_cells=None,
+        live_cells_source="",
+    )
+    assert m["liveCellsSource"] == ""
+    seat = "security-reviewer"
+    cfg = m["seats"][seat]
+    assert SM._resolvable_families_for_seat(m, seat, cfg) is None
+    receipt = {**m, "violations": [{"constraint": "critical-diversity"}]}
+    assert SM.unexcused_violations(receipt) == [
+        {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
+    ]
+
+
 def test_legacy_cache_only_constraint_still_marks_liveness_synthesized():
     # The `preflight-cache-only` producer was reaped (#1138), but seat maps are persisted and
     # re-read, so a map written by an OLDER plugin version can still carry the constraint. It
@@ -1632,6 +1687,7 @@ def _resolvable_families_fixture():
         ({"degradations": [{"constraint": "live-vendors", "reason": "synth"}]}, None, False),
         ({"degradations": [{"constraint": "preflight-cache-only", "reason": "cache"}]}, None, False),
         ({"degradations": [{"constraint": "compose-failed", "reason": "fail"}]}, None, False),
+        ({"degradations": [{"constraint": "liveness-read-error", "reason": "crash"}]}, None, False),
         ({"liveVendors": None}, None, False),
         ({"liveVendors": []}, None, False),
         ({"liveVendors": ["not-a-real-vendor"]}, None, False),
@@ -1643,6 +1699,7 @@ def _resolvable_families_fixture():
         "degradation-live-vendors",
         "degradation-preflight-cache-only",
         "degradation-compose-failed",
+        "degradation-liveness-read-error",
         "live-vendors-absent",
         "live-vendors-empty",
         "unregistered-vendor",

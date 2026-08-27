@@ -49,6 +49,7 @@ UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
     # read as PROVEN liveness — a fall-open, not a cleanup.
     "preflight-cache-only",   # legacy receipt: vendors were never probed
     "compose-failed",         # compose blew up and every seat fell open to Claude
+    "liveness-read-error",    # liveness read crashed — an unknown subset of cells were examined
 })
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
 DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
@@ -376,7 +377,11 @@ def build(
 
     if live_cells is None:
         live_cells_normalized = _synthesize_live_cells(live, roster, tier_by_seat)
-        resolved_cells_source = live_cells_source or liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED
+        resolved_cells_source = (
+            liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED
+            if live_cells_source is None
+            else live_cells_source
+        )
     else:
         live_cells_normalized = set()
         for entry in live_cells:
