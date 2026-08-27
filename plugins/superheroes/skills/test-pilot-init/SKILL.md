@@ -156,13 +156,7 @@ Continue to Step 6. Follow-up: `/superheroes:configure`.
    including the `## Setup disclosures` section assembled from Steps 4–5) is empty, because
    `write-layer` replaces the entire layer file and an empty piped payload would silently blank it.
    When either payload is empty, surface `assembly produced empty payloads; halting rather than
-   writing an empty layer` and **stop** — do not pipe into `write` or `write-layer`. This guard's
-   protection is **unverified**: nothing in the test suite executes skill prose, so no automated
-   test exercises this refusal. Provability would require expressing Step 6's write path as
-   executable shell **and** driving it with a harness that actually executes it — `review-init`
-   Step 4b already uses executable shell for its guard, but that guard remains unproven for the
-   same reason: no harness runs skill prose. With both halves in place, the empty-payload halt
-   could be observed at runtime. When both
+   writing an empty layer` and **stop** — do not pipe into `write` or `write-layer`. When both
    payloads are present, pipe the shared facts JSON into
    `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/core_md.py" write
    --status provisional` to write the band-wide `core.md`, and pipe `$TEST_PILOT_LAYER_BODY` into
