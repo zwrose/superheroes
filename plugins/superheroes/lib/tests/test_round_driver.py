@@ -41,6 +41,7 @@ def _load(name):
 RD = _load("round_driver")
 LPC = _load("loop_plan_common")
 FI = _load("finding_identity")
+LC = _load("liveness_cache")
 version_skew = _load("version_skew")
 SC_CANARY = _load("seat_canary")
 _canary_probes_for = SC_CANARY.canary_probes_for
@@ -4785,19 +4786,41 @@ def test_later_pin_cannot_excuse_earlier_breach():
     assert any(v.get("constraint") == "maker-family" for v in violations)
 
 
-def test_emit_receipt_seat_map_scalar_last_wins():
-    """axis: later receipt scalars win over earlier ones (last-wins, not first-wins)."""
+def test_emit_receipt_seat_map_provenance_live_cells_source_conservative():
+    """axis: disagreeing liveCellsSource resolves to least-trusted source, not latest receipt."""
     map1 = _seat_map_vendors({d: "codex" for d in RD.DIMENSIONS})
-    map1["liveCellsSource"] = "FIRST"
+    map1["liveCellsSource"] = LC.LIVE_CELLS_SOURCE_SYNTHESIZED
     map2 = _seat_map_vendors({d: "codex" for d in RD.DIMENSIONS})
-    map2["liveCellsSource"] = "SECOND"
+    map2["liveCellsSource"] = LC.LIVE_CELLS_SOURCE_PROBED
     state = RD.new_state(_cfg(leg="panel"))
     state["seatMapReceipts"] = [
         {"round": "1", "map": map1},
         {"round": "2", "map": map2},
     ]
     emitted = RD._emit_receipt_seat_map(state)
-    assert emitted.get("liveCellsSource") == "SECOND"
+    assert emitted.get("liveCellsSource") == LC.LIVE_CELLS_SOURCE_SYNTHESIZED
+    single_state = RD.new_state(_cfg(leg="panel"))
+    single_state["seatMapReceipts"] = [{"round": "1", "map": map1}]
+    single_emitted = RD._emit_receipt_seat_map(single_state)
+    assert single_emitted.get("liveCellsSource") == LC.LIVE_CELLS_SOURCE_SYNTHESIZED
+
+
+def test_emit_receipt_seat_map_non_evidence_scalar_last_wins():
+    """axis: scalars outside the evidence key set still follow last-wins across receipts."""
+    map1 = _seat_map_vendors({d: "codex" for d in RD.DIMENSIONS})
+    map1["roundNote"] = "FIRST"
+    map2 = {"roundNote": "SECOND"}
+    state = RD.new_state(_cfg(leg="panel"))
+    state["seatMapReceipts"] = [
+        {"round": "1", "map": map1},
+        {"round": "2", "map": map2},
+    ]
+    emitted = RD._emit_receipt_seat_map(state)
+    assert emitted.get("roundNote") == "SECOND"
+    single_state = RD.new_state(_cfg(leg="panel"))
+    single_state["seatMapReceipts"] = [{"round": "1", "map": map1}]
+    single_emitted = RD._emit_receipt_seat_map(single_state)
+    assert single_emitted.get("roundNote") == "FIRST"
 
 
 def test_emit_receipt_seat_map_distinct_degradation_rows_survive():
