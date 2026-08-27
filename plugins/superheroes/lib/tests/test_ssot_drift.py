@@ -6395,3 +6395,98 @@ def test_grounding_stage_branch_disposition_uses_mode_branch_constant():
         assert '== "branch"' not in src and "== 'branch'" not in src, (
             "grounding_stage.%s must not compare against bare branch literal" % label
         )
+
+
+# --- Cluster: liveness-read-error constraint (liveness_cache.py → seat_map.py) ---
+
+
+_LIVENESS_READ_ERROR_CONSTRAINT_COPY_REGISTER = (
+    os.path.normpath(os.path.join(PLUGIN, "lib", "seat_map.py")),
+)
+
+
+def _liveness_read_error_constraint_from_home():
+    import liveness_cache
+
+    token = liveness_cache.LIVENESS_READ_ERROR_CONSTRAINT
+    assert token, (
+        "liveness_cache.LIVENESS_READ_ERROR_CONSTRAINT must be non-empty (vacuous home)"
+    )
+    return token
+
+
+def _unproven_liveness_constraint_literals_from_source(*, source_rel="lib/seat_map.py"):
+    text = _read(source_rel)
+    pattern = r"UNPROVEN_LIVENESS_CONSTRAINTS = frozenset\(\{([^}]+)\}\)"
+    matches = re.findall(pattern, text, re.DOTALL)
+    block = _one(
+        matches,
+        "UNPROVEN_LIVENESS_CONSTRAINTS",
+        source_rel,
+        "UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({...})",
+    )
+    members = set(re.findall(r'"([^"]+)"', block))
+    assert members, (
+        "%s: UNPROVEN_LIVENESS_CONSTRAINTS parsed to zero members (vacuous pin)"
+        % source_rel
+    )
+    return members
+
+
+def _liveness_read_error_constraint_literal_in_plugin_sources():
+    token = _liveness_read_error_constraint_from_home()
+    home = os.path.normpath(os.path.join(PLUGIN, "lib", "liveness_cache.py"))
+    hits = []
+    for path in _plugin_python_sources_excluding_tests():
+        with open(path, encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                if token in line:
+                    hits.append((os.path.normpath(path), lineno))
+    return token, home, hits
+
+
+def _assert_liveness_read_error_constraint_pinned(*, home_token=None, source_rel=None):
+    import seat_map
+
+    token = home_token if home_token is not None else _liveness_read_error_constraint_from_home()
+    rel = source_rel if source_rel is not None else "lib/seat_map.py"
+    source_members = _unproven_liveness_constraint_literals_from_source(source_rel=rel)
+    assert token in seat_map.UNPROVEN_LIVENESS_CONSTRAINTS, (
+        "liveness-read-error producer token %r missing from "
+        "seat_map.UNPROVEN_LIVENESS_CONSTRAINTS %r"
+        % (token, sorted(seat_map.UNPROVEN_LIVENESS_CONSTRAINTS))
+    )
+    assert token in source_members, (
+        "liveness-read-error producer token %r missing from %s "
+        "UNPROVEN_LIVENESS_CONSTRAINTS literal set %r"
+        % (token, rel, sorted(source_members))
+    )
+
+
+def test_liveness_read_error_constraint_copy_register_census():
+    """§11: every non-home plugin source carrying the constraint literal must be registered."""
+    token, home, hits = _liveness_read_error_constraint_literal_in_plugin_sources()
+    assert hits, (
+        "liveness-read-error constraint literal %r not found in any plugin source (vacuous)"
+        % token
+    )
+    home_hits = [(path, lineno) for path, lineno in hits if path == home]
+    assert home_hits, (
+        "liveness-read-error constraint literal %r missing from home %s"
+        % (token, os.path.relpath(home, PLUGIN))
+    )
+    copy_hits = [(path, lineno) for path, lineno in hits if path != home]
+    unregistered = sorted(
+        os.path.relpath(path, PLUGIN)
+        for path, _lineno in copy_hits
+        if path not in _LIVENESS_READ_ERROR_CONSTRAINT_COPY_REGISTER
+    )
+    assert not unregistered, (
+        "unregistered liveness-read-error constraint copy — add to "
+        "_LIVENESS_READ_ERROR_CONSTRAINT_COPY_REGISTER: %r" % unregistered
+    )
+
+
+def test_liveness_read_error_constraint_copy_register_content():
+    """§11: liveness_cache.LIVENESS_READ_ERROR_CONSTRAINT and seat_map.py stay pinned."""
+    _assert_liveness_read_error_constraint_pinned()

@@ -35,6 +35,10 @@ LIVE_CELLS_SOURCES = (
     LIVE_CELLS_SOURCE_UNPROBED,
 )
 
+# One home for the liveness-read-error constraint token; seat_map.UNPROVEN_LIVENESS_CONSTRAINTS
+# consumes it when deciding a crashed liveness read cannot prove an alternative family absent.
+LIVENESS_READ_ERROR_CONSTRAINT = "liveness-read-error"
+
 
 def ttl_seconds():
     """Reader TTL in seconds; env override when a positive int, else default. Never raises."""
@@ -296,7 +300,7 @@ def _liveness_read_error_note(detail, stage=None):
     else:
         prefix = "liveness read failed"
     return {
-        "constraint": "liveness-read-error",
+        "constraint": LIVENESS_READ_ERROR_CONSTRAINT,
         "reason": "%s: %s" % (prefix, _bounded_reason(detail)),
     }
 

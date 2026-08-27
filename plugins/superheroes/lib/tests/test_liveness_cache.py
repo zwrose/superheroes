@@ -786,7 +786,7 @@ def test_live_from_loop_crash_emits_read_error_not_misattribution():
     live, live_cells, dead_notes = lc.live_from(liveness, needed)
     assert "codex" not in live
     assert live_cells == []
-    read_errors = [n for n in dead_notes if n.get("constraint") == "liveness-read-error"]
+    read_errors = [n for n in dead_notes if n.get("constraint") == lc.LIVENESS_READ_ERROR_CONSTRAINT]
     assert len(read_errors) == 1
     assert "liveness read failed" in read_errors[0]["reason"]
     assert "loop died" in read_errors[0]["reason"]
@@ -802,7 +802,7 @@ def test_live_from_reconcile_crash_emits_read_error_not_propagation():
     live, live_cells, dead_notes = lc.live_from(liveness, needed)
     assert "codex" not in live
     assert live_cells == []
-    read_errors = [n for n in dead_notes if n.get("constraint") == "liveness-read-error"]
+    read_errors = [n for n in dead_notes if n.get("constraint") == lc.LIVENESS_READ_ERROR_CONSTRAINT]
     assert len(read_errors) == 1
     assert "inventory reconcile" in read_errors[0]["reason"]
     assert "reconcile died" in read_errors[0]["reason"]
@@ -815,7 +815,7 @@ def test_live_from_loop_and_reconcile_crash_emit_distinguishable_read_errors():
     live, live_cells, dead_notes = lc.live_from(liveness, needed)
     assert "codex" not in live
     assert live_cells == []
-    read_errors = [n for n in dead_notes if n.get("constraint") == "liveness-read-error"]
+    read_errors = [n for n in dead_notes if n.get("constraint") == lc.LIVENESS_READ_ERROR_CONSTRAINT]
     assert len(read_errors) == 2
     reasons = [n["reason"] for n in read_errors]
     assert sum("cell-evidence scan" in r for r in reasons) == 1
@@ -825,11 +825,11 @@ def test_live_from_loop_and_reconcile_crash_emit_distinguishable_read_errors():
 
 
 def test_live_from_read_error_constraint_literal():
-    # axis: read-error constraint string is pinned literally.
+    # axis: read-error constraint string is pinned to the module constant.
     needed = {"codex": [["gpt-m", None]]}
     _, _, dead_notes = lc.live_from(_liveness_with_raising_cells(), needed)
     constraints = {n["constraint"] for n in dead_notes}
-    assert "liveness-read-error" in constraints
+    assert lc.LIVENESS_READ_ERROR_CONSTRAINT in constraints
 
 
 def test_live_from_normal_path_byte_identical():
