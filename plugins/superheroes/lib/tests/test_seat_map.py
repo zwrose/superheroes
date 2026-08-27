@@ -945,6 +945,33 @@ def test_build_empty_live_cells_source_fail_closed():
     ]
 
 
+def test_to_receipt_empty_live_cells_source_not_laundered():
+    # axis: receipt minting must not upgrade unrecognized liveCellsSource to synthesized
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        THREE_VENDORS,
+        "xai",
+        "anthropic",
+        0,
+        live_cells=None,
+        live_cells_source="",
+    )
+    receipt = SM.to_receipt(m, "xai")
+    assert receipt["liveCellsSource"] == ""
+    assert SM.unexcused_violations(
+        {**receipt, "violations": [{"constraint": "critical-diversity"}]}
+    ) == [
+        {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
+    ]
+
+
+def test_to_receipt_absent_live_cells_source_yields_synthesized():
+    # axis: absent liveCellsSource legitimately resolves to synthesized at receipt minting
+    bare = {"seats": {}, "liveVendors": ["claude", "codex", "cursor"]}
+    receipt = SM.to_receipt(bare, "xai")
+    assert receipt["liveCellsSource"] == "synthesized"
+
+
 def test_legacy_cache_only_constraint_still_marks_liveness_synthesized():
     # The `preflight-cache-only` producer was reaped (#1138), but seat maps are persisted and
     # re-read, so a map written by an OLDER plugin version can still carry the constraint. It

@@ -108,17 +108,23 @@ def _synthesize_live_cells(
     return cells
 
 
-def _live_cells_fields_for_receipt(seat_map: dict) -> tuple[list, str]:
+def _live_cells_fields_for_receipt(seat_map: dict) -> tuple[list, object]:
     raw_cells = seat_map.get("liveCells")
     raw_source = seat_map.get("liveCellsSource")
     if isinstance(raw_cells, list) and raw_source in LIVE_CELLS_SOURCES:
         return list(raw_cells), raw_source
+    if raw_source is None:
+        receipt_source = liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED
+    elif raw_source not in LIVE_CELLS_SOURCES:
+        receipt_source = raw_source
+    else:
+        receipt_source = liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED
     live = seat_map.get("liveVendors")
     if isinstance(live, list) and live:
         roster = tuple(seat_map.get("seats", {}).keys()) or PANEL_ROSTER
         synthesized = _synthesize_live_cells(live, roster, None)
-        return sorted([list(c) for c in synthesized]), liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED
-    return [], liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED
+        return sorted([list(c) for c in synthesized]), receipt_source
+    return [], receipt_source
 
 
 def _resolvable_families_for_seat(

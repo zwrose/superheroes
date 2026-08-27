@@ -692,12 +692,15 @@ is on the record, not inferred from silence; only `checked-degraded` appends to
 `verify()` treats a maker-family seat as a **violation** when an alternative family was
 reachable, and as **not** a violation when unavoidable (the degradation path); unusable
 liveness evidence — pin-scoped probes, synthesized liveness defaults, a malformed
-degradations list, or malformed vendor names on **any** receipt; an unknown, absent,
-or malformed `liveCellsSource` on **any** receipt; plus, on probed
+degradations list, or malformed vendor names on **any** receipt; a `liveCellsSource`
+that is present but not a member of the closed vocabulary (`probed`, `synthesized`,
+`unprobed`) — including empty string, wrong-case, or non-string values — on **any**
+receipt; plus, on probed
 receipts (`liveCellsSource: "probed"`), missing or malformed `liveCells`, and on
 synthesized receipts, missing recorded `liveVendors` — **fails closed to violation**,
 and only a well-formed, registry-resolvable receipt authorizes
-the degradation branch. When neither
+the degradation branch. An **absent** (`None`) `liveCellsSource` on a receipt is not
+malformed — receipt minting legitimately resolves it to `synthesized`. When neither
 narrative nor maker can seat the grounding seat independently, **maker exclusion outranks
 narrative independence**: the fallback prefers the narrative family over the maker's own.
 The cursor CLI's only sanctioned use is the models Cursor bills as **first-party** — today
