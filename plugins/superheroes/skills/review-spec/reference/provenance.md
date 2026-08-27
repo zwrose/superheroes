@@ -3,10 +3,7 @@
 # Provenance: the Grounding seat & the citation pincer
 
 The review-side detail for issue #517's "provenance pincer" (design authority:
-ratified #514 D3). This brief ships now; the **dispatched** Grounding reviewer seat
-(roster slot + agent) is wired later by the lens-recast issue (#514 D1). Until then
-the deterministic validator (the compile step) plus the mirror-claim rule (carried by
-the existing spec panel via the shared `rubric/review-base.md`) carry the pincer.
+ratified #514 D3).
 
 ## The Grounding seat's job
 
