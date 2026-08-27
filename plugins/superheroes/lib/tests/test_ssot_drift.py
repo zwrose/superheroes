@@ -248,19 +248,30 @@ def _plugin_version_skew_statuses_from_home():
 
 
 def _plugin_version_skew_certification_statuses_from_home():
-    """Values ``_plugin_version_skew_status`` can project into certification disclosure."""
+    """Values ``_sm_plugin_version_skew_status`` can project into certification disclosure."""
+    import ast
     import inspect
     import re
 
     import round_driver
     import version_skew
 
-    src = inspect.getsource(round_driver._plugin_version_skew_status)
+    src = inspect.getsource(round_driver._sm_plugin_version_skew_status)
     literals = set(re.findall(r'return "([^"]+)"', src))
     assert literals, (
-        "_plugin_version_skew_status: no string-literal return values discovered"
+        "_sm_plugin_version_skew_status: no string-literal return values discovered"
     )
-    if "return status" in src and "version_skew.STATUSES" in src:
+    tree = ast.parse(src)
+    has_non_literal_return = any(
+        isinstance(node, ast.Return)
+        and node.value is not None
+        and not (
+            isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        )
+        for node in ast.walk(tree)
+    )
+    if has_non_literal_return and "version_skew.STATUSES" in src:
         literals |= set(version_skew.STATUSES)
     return literals
 
