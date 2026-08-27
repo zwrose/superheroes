@@ -556,12 +556,65 @@ def test_sweep_ingests_every_landed_seat_and_is_idempotent(tmp_path):
     assert set(r["reason"] for r in second) == {"already-stored"}
 
 
-def test_sweep_reports_an_unrostered_landing_file_as_unknown_seat(tmp_path):
+def test_sweep_reports_full_envelope_stray_as_stale_landing(tmp_path):
     sd = _session(tmp_path)
     stray = RR.landing_path(sd, 1, PHASE, "stray-seat", 1)
-    RR.atomic_write_json(stray, _env())
+    RR.atomic_write_json(stray, _env(seat="stray-seat"))
     out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
-    assert [r["reason"] for r in out] == ["unknown-seat"]
+    stale = [r for r in out if r.get("reason") == "stale-landing"]
+    assert len(stale) == 1
+    assert stale[0]["ok"] is False
+    assert stale[0]["reason"] == "stale-landing"
+    assert stale[0]["storageKey"] == "stray-seat"
+    assert os.path.basename(stray) in stale[0]["landingPaths"]
+
+
+def test_sweep_reports_bare_payload_stray_as_stale_landing(tmp_path):
+    sd = _session(tmp_path)
+    skey = "stray-seat"
+    bare = RR.bare_payload_path(sd, 1, PHASE, skey, 1)
+    RR.atomic_write_json(bare, {"findings": ["x"]})
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    stale = [r for r in out if r.get("reason") == "stale-landing"]
+    assert len(stale) == 1
+    assert stale[0]["ok"] is False
+    assert stale[0]["reason"] == "stale-landing"
+    assert stale[0]["storageKey"] == skey
+    assert os.path.basename(bare) in stale[0]["landingPaths"]
+
+
+def test_sweep_dedupes_stray_both_shapes_per_storage_key(tmp_path):
+    sd = _session(tmp_path)
+    skey = "stray-seat"
+    env_path = RR.landing_path(sd, 1, PHASE, skey, 1)
+    bare_path = RR.bare_payload_path(sd, 1, PHASE, skey, 1)
+    RR.atomic_write_json(env_path, _env(seat=skey))
+    RR.atomic_write_json(bare_path, {"findings": ["x"]})
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    stale = [r for r in out if r.get("reason") == "stale-landing"]
+    assert len(stale) == 1
+    assert set(stale[0]["landingPaths"]) == {os.path.basename(env_path), os.path.basename(bare_path)}
+
+
+def test_sweep_journals_roster_seats_before_stale_landing_refusals(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env(), seat=SEAT)
+    stray_skey = "a-stale"  # sorts before RR.storage_key(SEAT); untiered sort would put stray first
+    stray = RR.landing_path(sd, 1, PHASE, stray_skey, 1)
+    RR.atomic_write_json(stray, _env(seat="orphan"))
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    roster_results = [r for r in out if r.get("reason") != "stale-landing"]
+    stale = [r for r in out if r.get("reason") == "stale-landing"]
+    assert roster_results[0]["ok"] is True and roster_results[0]["seatKey"] == SEAT
+    assert stale[0]["reason"] == "stale-landing"
+    assert out.index(roster_results[0]) < out.index(stale[0])
+    assert os.path.exists(roster_results[0]["storePath"])
+
+
+def test_ingest_unknown_seat_unchanged_for_addressed_off_roster_seat(tmp_path):
+    sd = _session(tmp_path)
+    out = _ingest(sd, seat="src/z.py:9")
+    assert out["reason"] == "unknown-seat"
 
 
 def test_sweep_ignores_the_reserved_orchestrator_files(tmp_path):

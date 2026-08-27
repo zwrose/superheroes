@@ -308,12 +308,35 @@ stub header fields verbatim and never recompute hashes.
 with a different roster**, rewriting `orders/<phase>/manifest.a0.json` **in place at the same
 `attempt: 0`**; (3) the **prior wave's landing files are still on disk** from the first fold; (4)
 `record-result --sweep` (`round_records.sweep_landing`) walks the **landing directory**, not the
-manifest, so it finds those stale files, finds they map to no slot in the *current* roster, and
-hard-refuses `unknown-seat` for each one; (5) `advance` then refuses too, and the phase is left
-**pending** — a stuck session with no obvious cause, because the failure reads as a driver bug
-when it is really a directory-vs-manifest mismatch. **Recovery, proven in that build:** move the
-prior wave's landing files aside — never delete — keeping only the file(s) that match the current
-manifest, then re-run the sweep.
+manifest, so it finds those stale files. It detects **both** landing shapes — a host bare payload
+`<skey>.a<K>.payload.json` as well as a full envelope `<skey>.a<K>.json` — and one stray storage
+key yields **one** refusal however many shapes it carries on disk. Files that map to no slot in the
+*current* roster are hard-refused with **`stale-landing`**; the sweep **ingests and journals every
+roster slot's real landing before it refuses**, so recovery converges without hand-moving the good
+files: **move only the stray file(s) aside — never delete — and re-run the sweep**. One pass names
+**every** stray: the refusal forwards `storageKey` and `landingPaths`, and a `strays` list carries
+one entry per stray storage key (each with those same fields). (5) Until that
+is done `advance` refuses too, and the phase is left **pending** — a stuck session with no obvious
+cause, because the failure reads as a driver bug when it is really a directory-vs-manifest
+mismatch. **`unknown-seat`** is a **different** token: an *addressed* seat
+(`record-result --seat <key>`) that is not on the current roster — not the sweep's stray-file
+refusal; a reader must be able to tell the two apart from this doc alone.
+
+**`record-result --sweep` cannot supersede.** Combining `record-result --sweep` with `--supersede` or
+`--expect-sha256` returns the literal refusal **`sweep-supersede-unsupported`**. Supersede is
+compare-and-swap and the CAS token is **per-slot**; a sweep that superseded would have to drop the
+CAS and blind-overwrite the durable record. Recovery: the refusal's `recovery` list carries a
+ready-to-paste per-slot command **only for a slot whose landing CAS token differs from the
+stored record** (equal tokens mean the landing is the envelope already stored, as with
+`record-missing`; no landing means nothing to supersede). Each command uses the **raw
+seat key**, an explicit `--occurrence` (never the `<seat>#<n>` display label), and `--attempt` for
+the attempt the refusal was produced for (round and phase are not separately addressable on this
+CLI; `--attempt` is the fence). Every `seat-missing/1` envelope shares one CAS token, so an
+occurrence-1 supersede with the occurrence omitted would pass CAS against occurrence 0 and replace
+the wrong record; a command produced for one attempt and pasted after a retry would likewise pass
+CAS against a newer slot unless `--attempt` binds it. When no slot has a landing whose CAS token
+differs from the stored record, `recovery` is empty and the refusal still fires on the flags. A stored envelope
+with no readable CAS token is listed with `expectSha256` null and no paste-and-run command.
 
 **`seat-result/1` envelope fields** (engine-seat full envelope — the orchestrator writes every field
 below when landing a `dispatch-review` stdout result):
