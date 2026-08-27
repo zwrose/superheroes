@@ -4818,14 +4818,14 @@ def test_emit_receipt_seat_map_distinct_degradation_rows_survive():
     assert row_a in degs and row_b in degs
 
 
-def test_effective_seat_map_public_cross_module_seam():
-    """axis: round_adapters resolves seat maps through the public effective_seat_map seam."""
-    assert hasattr(RD, "effective_seat_map")
+def test_round_adapters_resolves_seat_maps_through_leaf_module():
+    """axis: round_adapters resolves seat maps through seat_map_receipts (#681)."""
     adapters_path = os.path.join(_LIB, "round_adapters.py")
     with open(adapters_path, encoding="utf-8") as fh:
         source = fh.read()
-    assert "effective_seat_map" in source
-    assert "_effective_seat_map" not in source
+    assert "seat_map_receipts" in source
+    assert "effective_seat_map" not in source
+    assert "import round_driver" not in source
 
 
 def test_dead_seat_map_predicate_census_removed():
@@ -4839,43 +4839,69 @@ def test_dead_seat_map_predicate_census_removed():
 
 
 _SEAT_MAP_RECEIPTS_CALLERS = frozenset({
-    "_sm_latest_with_seats",
-    "_sm_any_seats",
-    "_sm_same_family_seats",
-    "_sm_unexcused_violations",
-    "_sm_pin_excused_records",
-    "_sm_skew_records",
-    "_sm_plugin_version_skew_status",
-    "_emit_receipt_seat_map",
+    "latest_with_seats",
+    "any_seats",
+    "same_family_seats",
+    "unexcused_violations",
+    "pin_excused_records",
+    "skew_records",
+    "plugin_version_skew_status",
+    "emit_receipt_seat_map",
 })
 
 
 def _seat_map_receipts_call_sites():
-    """Return enclosing function names for every `_seat_map_receipts(` call in round_driver.py."""
-    tree, ast_mod = _round_driver_ast()
+    """Return enclosing function names for every ``receipts(`` call in seat_map_receipts.py."""
+    path = os.path.join(_LIB, "seat_map_receipts.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
     sites = set()
     for node in tree.body:
-        if not isinstance(node, ast_mod.FunctionDef):
+        if not isinstance(node, ast.FunctionDef):
             continue
-        for child in ast_mod.walk(node):
-            if isinstance(child, ast_mod.Call):
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call):
                 func = child.func
-                if isinstance(func, ast_mod.Name) and func.id == "_seat_map_receipts":
+                if isinstance(func, ast.Name) and func.id == "receipts":
+                    sites.add(node.name)
+    return sites
+
+
+def _seat_map_receipts_external_call_sites():
+    """``round_driver`` functions that call ``receipts`` directly — must be none (#681)."""
+    path = os.path.join(_LIB, "round_driver.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
+    sites = set()
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            func = child.func
+            if isinstance(func, ast.Name) and func.id == "_seat_map_receipts":
+                sites.add(node.name)
+            elif isinstance(func, ast.Attribute) and func.attr == "receipts":
+                if isinstance(func.value, ast.Name) and func.value.id == "seat_map_receipts":
                     sites.add(node.name)
     return sites
 
 
 def test_seat_map_receipts_projection_family_census_positive():
-    """Every `_seat_map_receipts` caller is a projection-family member (#681)."""
+    """Every ``receipts`` caller is a projection-family member (#681)."""
     callers = _seat_map_receipts_call_sites()
     assert callers == set(_SEAT_MAP_RECEIPTS_CALLERS)
+    external = _seat_map_receipts_external_call_sites()
+    assert external == set()
 
 
 _SEAT_MAP_STATE_READ_PATHS = (
+    os.path.join(_LIB, "seat_map_receipts.py"),
     os.path.join(_LIB, "round_driver.py"),
     os.path.join(_LIB, "round_adapters.py"),
 )
-_ALLOWED_SEAT_MAP_STATE_READ_FN = "_seat_map_receipts"
+_ALLOWED_SEAT_MAP_STATE_READ_FN = "receipts"
 
 
 def _ast_string_constant(node):
@@ -4940,7 +4966,7 @@ def _seat_map_reads_in_function(func_node, path):
 
 
 def test_seat_map_blob_read_sites_census_negative():
-    """No executable ``state[\"seatMap\"]`` read outside ``_seat_map_receipts`` (#681)."""
+    """No executable ``state[\"seatMap\"]`` read outside ``receipts`` (#681)."""
     sites = _seat_map_state_read_sites()
     by_fn = {fn for _path, fn in sites}
     assert _ALLOWED_SEAT_MAP_STATE_READ_FN in by_fn, (
