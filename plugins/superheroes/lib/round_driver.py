@@ -1401,7 +1401,15 @@ def _persist_round_records(state, config):
         if not state.get("findings") and state.get("_toVerify"):
             state["findings"] = state["_toVerify"]
 
-    loaded = review_memory.load_records_state(path, _panel_dimensions(config))
+    try:
+        loaded = review_memory.load_records_state(path, _panel_dimensions(config))
+    except (AttributeError, TypeError) as exc:
+        _seed_findings_before_park()
+        _park_cannot_certify(
+            state,
+            "durable round records at %s could not be refreshed (%s) — cannot certify"
+            % (path, exc))
+        return
     if not loaded.get("ok"):
         _seed_findings_before_park()
         _park_cannot_certify(
