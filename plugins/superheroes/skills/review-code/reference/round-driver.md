@@ -628,9 +628,9 @@ is the home for the driver-or-park valve.
 
 **Receipt (`round-receipt.json`).** Required keys (shape-checked by `validate_receipt`, fail-closed):
 
-- `schemaVersion` — `2`, `3`, or `4` (`validate_receipt` accepts all three). It is the **state's**
-  version, not a constant: a session bootstrapped at v2 still terminates to a v2 receipt, while a
-  fresh session (`STATE_SCHEMA_VERSION` = 4) emits 4.
+- `schemaVersion` — `2` or `3` (`validate_receipt` accepts both). It is the **state's** version, not
+  a constant: a session bootstrapped at v2 still terminates to a v2 receipt, while a fresh session
+  (`STATE_SCHEMA_VERSION` = 3) emits 3.
 - `verdict` — `converged`, `halted`, `held`, `stalled`, `cannot-certify`, `capped-with-open-critical`, …
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |

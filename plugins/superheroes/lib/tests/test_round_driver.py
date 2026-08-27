@@ -4846,9 +4846,9 @@ def test_round_adapters_resolves_seat_maps_through_leaf_module():
     adapters_path = os.path.join(_LIB, "round_adapters.py")
     with open(adapters_path, encoding="utf-8") as fh:
         source = fh.read()
-    assert "seat_map_receipts.effective_seat_map" in source
+    assert "seat_map_receipts" in source
+    assert "effective_seat_map" not in source
     assert "import round_driver" not in source
-    assert "round_driver.effective_seat_map" not in source
 
 
 def test_dead_seat_map_predicate_census_removed():

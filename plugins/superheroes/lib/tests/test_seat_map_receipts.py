@@ -159,29 +159,3 @@ def test_emit_receipt_seat_map_non_list_violations_do_not_erase():
     }
     emitted = SMR.emit_receipt_seat_map(state)
     assert breach in emitted.get("violations", [])
-
-
-def test_effective_seat_map_single_home_census():
-    """Resolution has exactly one implementation — in seat_map_receipts (#681 arch-001)."""
-    adapters_path = os.path.join(_LIB, "round_adapters.py")
-    driver_path = os.path.join(_LIB, "round_driver.py")
-    with open(_MOD, encoding="utf-8") as fh:
-        receipts_source = fh.read()
-    with open(adapters_path, encoding="utf-8") as fh:
-        adapters_source = fh.read()
-    with open(driver_path, encoding="utf-8") as fh:
-        driver_source = fh.read()
-    assert receipts_source.count("def effective_seat_map(") == 1
-    assert driver_source.count("def effective_seat_map(") == 0
-    assert adapters_source.count("def effective_seat_map(") == 0
-    leaf_calls = adapters_source.count("seat_map_receipts.effective_seat_map")
-    assert leaf_calls >= 1
-
-
-def test_effective_seat_map_falls_back_to_config_then_empty():
-    """axis: config seatMap wins when no receipt carries seats; else empty latest map."""
-    cfg_map = {"seats": {"x": {"vendor": "claude"}}}
-    state = {"config": {"seatMap": cfg_map}, "seatMapReceipts": []}
-    assert SMR.effective_seat_map(state) == cfg_map
-    empty = {"config": {}, "seatMapReceipts": [{"round": "1", "map": {"seats": {}}}]}
-    assert SMR.effective_seat_map(empty) == {"seats": {}}
