@@ -224,12 +224,15 @@ also journals `artifactSha256` naming the artifact folded, on the fold's own com
 `round_driver` `OWNER_PROVENANCE_FIELD_SHAPES`):
 
 ```text
-ruledBy — non-empty string: the owner who ruled (transcribed, not invented)
-ruledAt — non-empty string: ISO-8601 time the owner ruled (not when the artifact is written)
-records — non-empty list of non-empty strings: URLs of durable records a third party can open
-          (e.g. the issue or PR comment where the owner ruled, a dated decision record) — never
-          a file name the recipe invented
+ruledBy — non-empty string
+ruledAt — non-empty string
+records — non-empty list of non-empty strings
 ```
+
+`ruledBy` is the owner who ruled (transcribed, not invented). `ruledAt` is the ISO-8601 time
+the owner ruled (not when the artifact is written). `records` is a non-empty list of URLs of
+durable records a third party can open (e.g. the issue or PR comment where the owner ruled, a
+dated decision record) — never a file name the recipe invented.
 
 ```bash
 python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
