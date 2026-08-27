@@ -2343,6 +2343,28 @@ def test_advance_owner_artifact_judgment_closes_dead_end(tmp_path, adapters):
     artifact = _judgment_dispositions_artifact(_state(d))
     out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, artifact))
     assert out["ok"] is True, out
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED
+    assert out["policyApplied"]["artifactSha256"] == hashlib.sha256(
+        RD._canonical(artifact).encode("utf-8")).hexdigest()
+    assert _state(d)["step"] == RD.P_FIXER
+    advanced = [e for e in _journal(d) if e.get("outcome") == "advanced" and e.get("policyApplied")]
+    assert advanced[-1]["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED
+
+
+def test_advance_owner_artifact_well_formed_provenance_yields_owner_supplied(tmp_path, adapters):
+    repo = _repo_without_gate_policy(tmp_path)
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="owner-artifact-judgment-provenance")
+    _set_advance_used(d)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    artifact = _judgment_dispositions_artifact(_state(d))
+    artifact["_provenance"] = {
+        "ruledBy": "owner",
+        "ruledAt": "2026-08-26T00:00:00Z",
+        "records": ["gate-ruling.json"],
+    }
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, artifact))
+    assert out["ok"] is True, out
     assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
     assert out["policyApplied"]["artifactSha256"] == hashlib.sha256(
         RD._canonical(artifact).encode("utf-8")).hexdigest()
@@ -2365,12 +2387,12 @@ def test_main_advance_owner_artifact_judgment_closes_dead_end(tmp_path, adapters
     out = json.loads(captured.out.strip())
     assert rc == 0, (rc, out)
     assert out["ok"] is True, out
-    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED
     assert out["policyApplied"]["artifactSha256"] == hashlib.sha256(
         RD._canonical(artifact).encode("utf-8")).hexdigest()
     assert _state(d)["step"] == RD.P_FIXER
     advanced = [e for e in _journal(d) if e.get("outcome") == "advanced" and e.get("policyApplied")]
-    assert advanced[-1]["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
+    assert advanced[-1]["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED
 
 
 def test_advance_owner_artifact_stall_closes_dead_end(tmp_path, adapters):
@@ -2379,7 +2401,7 @@ def test_advance_owner_artifact_stall_closes_dead_end(tmp_path, adapters):
     artifact = {"choice": RD.HOLD_CHOICE}
     out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, artifact))
     assert out["ok"] is True, out
-    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED
     assert _state(d)["terminal"] == "held"
 
 

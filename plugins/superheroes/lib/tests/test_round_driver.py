@@ -3021,7 +3021,7 @@ def test_resume_drops_a_wrong_typed_channel_and_still_resumes(tmp_path):
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
     assert state["rounds"] == {"1": {"seatMapUnavailable": ["codex"]}}
     receipt = RD.run_loop(_seams(), _cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert _round_channels(receipt, 1) == {"seatMapUnavailable": ["codex"]}
+    assert _round_channels(receipt, 1) == {"seatMapUnavailable": ["codex"], "verifyPasses": []}
     prose = "\n".join(_round_disclosures(receipt, 1))
     assert "vacuous-seat" not in prose and "canary-failed" not in prose
     assert "reviewer-fell-open (round 1)" not in prose

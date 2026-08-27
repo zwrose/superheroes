@@ -177,8 +177,9 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" submit \
 python3 -B "$ROOT_DIR/lib/round_driver.py" next --session-dir "$SESSION_DIR"
 # … dispatch seats; each seat lands under landing/ …
 python3 -B "$ROOT_DIR/lib/round_driver.py" record-result \
-  --session-dir "$SESSION_DIR" --seat "<seat>"  # or: record-result --sweep
-# … record-missing for any slot that forfeit/timeout …
+  --session-dir "$SESSION_DIR" --seat "<seat>" \
+  --round <round from next> --phase "<phase from next>"  # or: record-result --sweep with same
+# … record-missing for any slot that forfeit/timeout — echo the same --round and --phase …
 python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
   --session-dir "$SESSION_DIR"
 ```
@@ -205,9 +206,13 @@ the same JSON **object** shape hand `submit` takes for that gate: `{"disposition
 `present-judgment`, `{"choice": "<stall choice>"}` for `present-stall-menu`. The fold runs through
 the same `cmd_submit` chokepoint as every other fold (echo, state-hash, terminal-receipt gate, round
 ceiling, stall guards `stall-choice-retired:<name>`, `stall-choice-not-offered:<name>`,
-`stall-choice-missing`, `stall-accept-risk-not-eligible`). The resolution is journalled as **owner-supplied**: the
-`policyApplied` record carries `source: "owner-supplied"` (calibration-resolved carries
-`source: "gate-policy"`) plus `artifactSha256` naming the artifact folded, on the fold's own commit.
+`stall-choice-missing`, `stall-accept-risk-not-eligible`). The resolution is journalled under one of
+two owner-gate sources: the `policyApplied` record carries `source: "owner-supplied"` only when the
+folded artifact includes a well-formed `_provenance` object (`ruledBy` and `ruledAt` as non-empty
+strings, `records` a non-empty list of non-empty strings; unknown extra keys inside `_provenance`
+are tolerated); every other owner-gate fold carries `source: "owner-unattributed"`.
+Calibration-resolved folds carry `source: "gate-policy"`. Every fold also journals
+`artifactSha256` naming the artifact folded, on the fold's own commit.
 
 ```bash
 python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
@@ -228,6 +233,7 @@ token names the seam, not the direction.
 | `owner-artifact-shape` | `--owner-artifact` parses but is not a JSON object | resubmit a JSON object per gate shape above |
 | `record-submit-interleaved` | a `record-result` / `record-missing` after any hand `submit` in this session (`_submitUsed`) | compile and hand-`submit` this phase — **not** `advance` (this session's latch refuses it) |
 | `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` on a session that has **not** hand-folded yet (**per-attempt** fence — defers when `_submitUsed` is set) | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced via `record-result --supersede --expect-sha256 …` |
+| `round-phase-not-pending` | `record-result` / `record-missing` with `--round` and/or `--phase` that do not match the pending slot | re-read `next` and echo the current `round` and `phase` onto the durable-record command |
 
 **Owner-artifact refusal causes** (authoritative list — drift-tested against `round_driver`
 `OWNER_ARTIFACT_*_REFUSAL` constants):
@@ -244,6 +250,7 @@ owner-artifact-shape
 ```text
 gate-policy
 owner-supplied
+owner-unattributed
 ```
 
 **No dead ends.** Whichever fold path a session has committed to, that path's fold command stays
@@ -539,7 +546,8 @@ carries a `detail` cause distinct from the top-level reason so operators can tel
 On the orchestrator's `next`/`submit` path you still present the gate and submit the owner's choice;
 gate policy pre-authorization is what lets `advance` fold without stopping. On the `advance` path
 when policy has not pre-authorized, present the gate and fold the owner's resolution with
-`advance --owner-artifact` — the `policyApplied` record carries `source: "owner-supplied"` (vs
+`advance --owner-artifact` — the `policyApplied` record carries `source: "owner-supplied"` when the
+artifact's `_provenance` block is well-formed, `source: "owner-unattributed"` otherwise (vs
 `"gate-policy"` for a calibration-resolved fold).
 
 **Advance gate-policy park detail causes** (authoritative list — drift-tested against
