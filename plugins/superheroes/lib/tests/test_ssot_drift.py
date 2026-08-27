@@ -285,19 +285,30 @@ def _plugin_version_skew_statuses_from_home():
 
 
 def _plugin_version_skew_certification_statuses_from_home():
-    """Values ``_plugin_version_skew_status`` can project into certification disclosure."""
+    """Values ``_sm_plugin_version_skew_status`` can project into certification disclosure."""
+    import ast
     import inspect
     import re
 
     import round_driver
     import version_skew
 
-    src = inspect.getsource(round_driver._plugin_version_skew_status)
+    src = inspect.getsource(round_driver._sm_plugin_version_skew_status)
     literals = set(re.findall(r'return "([^"]+)"', src))
     assert literals, (
-        "_plugin_version_skew_status: no string-literal return values discovered"
+        "_sm_plugin_version_skew_status: no string-literal return values discovered"
     )
-    if "return status" in src and "version_skew.STATUSES" in src:
+    tree = ast.parse(src)
+    has_non_literal_return = any(
+        isinstance(node, ast.Return)
+        and node.value is not None
+        and not (
+            isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        )
+        for node in ast.walk(tree)
+    )
+    if has_non_literal_return and "version_skew.STATUSES" in src:
         literals |= set(version_skew.STATUSES)
     return literals
 
@@ -760,6 +771,156 @@ def test_plugin_version_skew_status_vocabulary_in_docs():
         "round-driver.md certification pluginVersionSkew enumeration drift — "
         "expected %r, doc enumerates %r"
         % (sorted(cert_home), sorted(doc_tokens))
+    )
+
+
+# --- Cluster: shapeDrivers channel vocabulary (round_driver.py → round-driver.md) ---
+
+
+_SHAPE_DRIVERS_DOC_ANCHOR_LABEL = (
+    "`shapeDrivers` — sorted channel names that fired for the certification shape"
+)
+
+_SHAPE_DRIVERS_CHANNEL_COPY_REGISTER = (
+    os.path.normpath(os.path.join(PLUGIN, "skills/review-code/reference/round-driver.md")),
+)
+
+
+def _shape_drivers_doc_anchor_regex(anchor_label=None):
+    label = anchor_label if anchor_label is not None else _SHAPE_DRIVERS_DOC_ANCHOR_LABEL
+    return r"\s+".join(re.escape(token) for token in label.split())
+
+
+def _shape_drivers_append_block_from_home():
+    src = _read("lib/round_driver.py")
+    pattern = (
+        r"shape_drivers = \[\].*?"
+        r'"shapeDrivers": sorted\(shape_drivers\)\}'
+    )
+    matches = re.findall(pattern, src, re.DOTALL)
+    return _one(
+        matches,
+        "shape_drivers block",
+        "round_driver.py",
+        "shape_drivers = [] ... \"shapeDrivers\": sorted(shape_drivers)}",
+    )
+
+
+def _shape_drivers_members_from_home():
+    block = _shape_drivers_append_block_from_home()
+    members = set(re.findall(r'shape_drivers\.append\("([^"]+)"\)', block))
+    assert members, (
+        "round_driver.py: no shape_drivers.append(...) sites discovered in the "
+        "certification block (vacuous extraction — pin would agree with everything)"
+    )
+    return members
+
+
+def _certification_shape_drivers_enumeration_tokens(doc, *, anchor=None):
+    anchor_label = anchor if anchor is not None else _SHAPE_DRIVERS_DOC_ANCHOR_LABEL
+    pattern = _shape_drivers_doc_anchor_regex(anchor_label) + r"\s*\(([^)]+)\)"
+    matches = re.findall(pattern, doc, re.DOTALL)
+    if not matches:
+        assert False, (
+            "round-driver.md: certification shapeDrivers enumeration not found "
+            "(anchor %r moved or reworded?)" % anchor_label
+        )
+    block = _one(
+        matches,
+        "shapeDrivers enumeration",
+        "round-driver.md",
+        "%s (...)" % anchor_label,
+    )
+    tokens = set(re.findall(r"`([^`]+)`", block))
+    assert tokens, (
+        "round-driver.md: certification shapeDrivers enumeration parsed to zero tokens "
+        "(regex drift or empty enumeration?)"
+    )
+    return tokens
+
+
+def _shape_drivers_copy_enumeration_in_text(text):
+    try:
+        return _certification_shape_drivers_enumeration_tokens(text)
+    except AssertionError:
+        return None
+
+
+def _assert_shape_drivers_vocabulary_matches(
+    *,
+    code_extra=None,
+    doc_extra=None,
+    doc_anchor=None,
+):
+    code = _shape_drivers_members_from_home()
+    if code_extra:
+        code = code | {code_extra}
+    doc = _read("skills/review-code/reference/round-driver.md")
+    doc_tokens = _certification_shape_drivers_enumeration_tokens(doc, anchor=doc_anchor)
+    if doc_extra:
+        doc_tokens = doc_tokens | {doc_extra}
+    missing_from_doc = sorted(code - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - code)
+    assert not missing_from_doc and not extra_in_doc, (
+        "round-driver.md certification shapeDrivers vocabulary drift from "
+        "round_driver.py shape_drivers.append sites — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+def test_shape_drivers_channel_copy_register_census():
+    """§11: every .md carrying the certification shapeDrivers enumeration must be registered."""
+    examined = 0
+    unregistered = []
+    for path in _repo_markdown_files():
+        examined += 1
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        if _shape_drivers_copy_enumeration_in_text(text) is None:
+            continue
+        norm = os.path.normpath(path)
+        if norm not in _SHAPE_DRIVERS_CHANNEL_COPY_REGISTER:
+            rel = os.path.relpath(path, os.path.join(PLUGIN, "..", ".."))
+            unregistered.append(rel)
+    assert examined > 0, (
+        "shapeDrivers channel census examined zero markdown files (vacuous)"
+    )
+    assert not unregistered, (
+        "unregistered shapeDrivers channel copy — add to "
+        "_SHAPE_DRIVERS_CHANNEL_COPY_REGISTER: %r" % sorted(unregistered)
+    )
+
+
+def test_shape_drivers_channel_vocabulary_in_round_driver_doc():
+    """§11: round-driver.md restates every shapeDrivers channel round_driver.py can emit."""
+    _assert_shape_drivers_vocabulary_matches()
+
+
+def test_shape_drivers_channel_vocabulary_biteproof_code_to_doc():
+    _expect_assertion_error(
+        lambda: _assert_shape_drivers_vocabulary_matches(
+            code_extra="wo-bite-throwaway-code-member",
+        ),
+        match=r"missing from doc: \['wo-bite-throwaway-code-member'\]",
+    )
+
+
+def test_shape_drivers_channel_vocabulary_biteproof_doc_to_code():
+    _expect_assertion_error(
+        lambda: _assert_shape_drivers_vocabulary_matches(
+            doc_extra="wo-bite-throwaway-doc-name",
+        ),
+        match=r"present in doc but not in home: \['wo-bite-throwaway-doc-name'\]",
+    )
+
+
+def test_shape_drivers_channel_vocabulary_biteproof_doc_anchor_non_vacuous():
+    _expect_assertion_error(
+        lambda: _assert_shape_drivers_vocabulary_matches(
+            doc_anchor="`shapeDrivers` — NO SUCH ANCHOR",
+        ),
+        match=r"anchor '`shapeDrivers` — NO SUCH ANCHOR' moved or reworded",
     )
 
 
@@ -1887,11 +2048,33 @@ def _looks_like_binary_file(path):
     return b"\x00" in chunk
 
 
+# Bite-proof records are receipts, not consumed surfaces: they are categorically outside every
+# content census, exactly as detector self-paths are. A proof must be free to quote the literal
+# it proves — a census that polices its own evidence re-fires on every new proof.
+# Standing advisor ruling, 2026-08-25 (#1136 shipped the code half; #1158 the doctrine half).
+# Root-relative so the exclusion holds for the real plugin tree and for tmp_path fixtures alike.
+_CENSUS_EXCLUDED_DIRS = ("lib/tests/bite_proofs",)
+
+
+def _census_excluded(root, path):
+    """Both plugin-source censuses' one chokepoint: paths they must not read."""
+    rel = os.path.normpath(os.path.relpath(path, root))
+    return any(
+        rel == os.path.normpath(d) or rel.startswith(os.path.normpath(d) + os.sep)
+        for d in _CENSUS_EXCLUDED_DIRS
+    )
+
+
 def _collect_plugin_source_paths(root):
-    """Repository source paths under root — build artifacts are pruned, never decoded."""
+    """Repository source paths under root — build artifacts and bite-proof receipts are pruned."""
     paths = []
     for dirpath, _dirs, files in os.walk(root):
-        _dirs[:] = [d for d in _dirs if d != "__pycache__"]
+        _dirs[:] = [
+            d
+            for d in _dirs
+            if d != "__pycache__"
+            and not _census_excluded(root, os.path.join(dirpath, d))
+        ]
         for name in files:
             if _is_binary_build_artifact_filename(name):
                 continue
@@ -1933,6 +2116,72 @@ def test_census_excludes_pycache_but_catches_source_literal(tmp_path):
                 if literal in line:
                     scanned.append((path, lineno))
     assert scanned == [(str(stale_py), 1)]
+
+
+def test_grok_census_skips_bite_proof_records_but_still_bites_elsewhere(tmp_path):
+    # axis: the retired-grok census reads no lib/tests/bite_proofs/ path, and still reports source
+    """Receipts are outside the census; an ordinary plugin source file still reports.
+
+    Both halves in one fixture tree: the retired literal is planted twice — once in a
+    bite-proof record, once in ordinary source — and only the ordinary one is reported.
+    """
+    literal = _retired_grok_literal()
+    root = tmp_path / "plugin"
+    record = root / "lib" / "tests" / "bite_proofs" / "wo_probe.md"
+    record.parent.mkdir(parents=True)
+    record.write_text("quoting %s in a receipt\n" % literal, encoding="utf-8")
+
+    consumer = root / "lib" / "stale_hit.py"
+    consumer.write_text('token = "%s"\n' % literal, encoding="utf-8")
+
+    paths = _collect_plugin_source_paths(str(root))
+    assert str(record) not in paths, "bite-proof record must be pruned from the walk"
+    assert str(consumer) in paths, "ordinary source must still be walked"
+
+    scanned = []
+    for path in paths:
+        with open(path, encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                if literal in line:
+                    scanned.append((path, lineno))
+    assert scanned == [(str(consumer), 1)], (
+        "census must skip lib/tests/bite_proofs/ and still report ordinary source; got %r"
+        % (scanned,)
+    )
+
+
+def test_plugin_source_census_excluded_predicate_is_scoped_to_the_records_directory(tmp_path):
+    # axis: the shared exclusion predicate covers the records directory only — not adjacent names
+    """The shared chokepoint predicate excludes the records directory and nothing adjacent."""
+    root = str(tmp_path)
+    assert _census_excluded(root, os.path.join(root, "lib", "tests", "bite_proofs"))
+    assert _census_excluded(root, os.path.join(root, "lib", "tests", "bite_proofs", "a.md"))
+    assert _census_excluded(
+        root, os.path.join(root, "lib", "tests", "bite_proofs", "nested", "a.md")
+    )
+    assert not _census_excluded(root, os.path.join(root, "lib", "tests", "test_ssot_drift.py"))
+    assert not _census_excluded(root, os.path.join(root, "lib", "tests", "bite_proofs_notes.md"))
+    assert not _census_excluded(root, os.path.join(root, "rubric", "bite-proof.md"))
+
+
+def test_both_plugin_source_censuses_read_no_bite_proof_record_on_the_real_tree():
+    # axis: on the real plugin tree, neither census path set includes a bite-proof record
+    """Real-tree pin: neither census's path set reaches lib/tests/bite_proofs/ — and both are non-empty."""
+    records_dir = os.path.normpath(os.path.join(PLUGIN, "lib", "tests", "bite_proofs"))
+    assert os.path.isdir(records_dir), "the records directory must exist for this pin to mean anything"
+    assert any(
+        name.endswith(".md") for name in os.listdir(records_dir)
+    ), "the records directory must hold records for this pin to mean anything"
+
+    for label, paths in (
+        ("retired-grok", _retired_grok_census_paths()),
+        ("routing", _routing_census_paths()),
+    ):
+        assert paths, "%s census walked zero paths" % label
+        inside = [
+            p for p in paths if os.path.normpath(p).startswith(records_dir + os.sep)
+        ]
+        assert not inside, "%s census read bite-proof records: %r" % (label, inside)
 
 
 def test_retired_cursor_grok_4_5_literal_census():
@@ -5585,6 +5834,29 @@ def test_census_excludes_pycache_but_catches_retired_route_literal(tmp_path):
     )
 
 
+def test_routing_census_skips_bite_proof_records_but_still_bites_elsewhere(tmp_path):
+    # axis: the routing census reads no lib/tests/bite_proofs/ path, and still reports source
+    """Receipts are outside the census; an ordinary plugin source file still reports."""
+    literal = _retired_discovery_route_literal()
+    root = tmp_path / "plugin"
+    record = root / "lib" / "tests" / "bite_proofs" / "wo_probe.md"
+    record.parent.mkdir(parents=True)
+    record.write_text("quoting %s in a receipt\n" % literal, encoding="utf-8")
+
+    consumer = root / "lib" / "stale_hit.py"
+    consumer.write_text('token = "%s"\n' % literal, encoding="utf-8")
+
+    paths = _collect_plugin_source_paths(str(root))
+    assert str(record) not in paths, "bite-proof record must be pruned from the walk"
+    assert str(consumer) in paths, "ordinary source must still be walked"
+
+    hits = _scan_paths_for_literal(paths, literal)
+    assert len(hits) == 1 and hits[0][0].endswith("stale_hit.py") and hits[0][1] == 1, (
+        "census must skip lib/tests/bite_proofs/ and still report ordinary source; got %r"
+        % (hits,)
+    )
+
+
 def test_retired_discovery_route_name_census():
     # axis: absence of the retired route name across plugin source, README, CONVENTIONS
     # docs/ is out of scope — specs and child definition-docs quote the retired name as history.
@@ -6160,3 +6432,98 @@ def test_grounding_stage_branch_disposition_uses_mode_branch_constant():
         assert '== "branch"' not in src and "== 'branch'" not in src, (
             "grounding_stage.%s must not compare against bare branch literal" % label
         )
+
+
+# --- Cluster: liveness-read-error constraint (liveness_cache.py → seat_map.py) ---
+
+
+_LIVENESS_READ_ERROR_CONSTRAINT_COPY_REGISTER = (
+    os.path.normpath(os.path.join(PLUGIN, "lib", "seat_map.py")),
+)
+
+
+def _liveness_read_error_constraint_from_home():
+    import liveness_cache
+
+    token = liveness_cache.LIVENESS_READ_ERROR_CONSTRAINT
+    assert token, (
+        "liveness_cache.LIVENESS_READ_ERROR_CONSTRAINT must be non-empty (vacuous home)"
+    )
+    return token
+
+
+def _unproven_liveness_constraint_literals_from_source(*, source_rel="lib/seat_map.py"):
+    text = _read(source_rel)
+    pattern = r"UNPROVEN_LIVENESS_CONSTRAINTS = frozenset\(\{([^}]+)\}\)"
+    matches = re.findall(pattern, text, re.DOTALL)
+    block = _one(
+        matches,
+        "UNPROVEN_LIVENESS_CONSTRAINTS",
+        source_rel,
+        "UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({...})",
+    )
+    members = set(re.findall(r'"([^"]+)"', block))
+    assert members, (
+        "%s: UNPROVEN_LIVENESS_CONSTRAINTS parsed to zero members (vacuous pin)"
+        % source_rel
+    )
+    return members
+
+
+def _liveness_read_error_constraint_literal_in_plugin_sources():
+    token = _liveness_read_error_constraint_from_home()
+    home = os.path.normpath(os.path.join(PLUGIN, "lib", "liveness_cache.py"))
+    hits = []
+    for path in _plugin_python_sources_excluding_tests():
+        with open(path, encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                if token in line:
+                    hits.append((os.path.normpath(path), lineno))
+    return token, home, hits
+
+
+def _assert_liveness_read_error_constraint_pinned(*, home_token=None, source_rel=None):
+    import seat_map
+
+    token = home_token if home_token is not None else _liveness_read_error_constraint_from_home()
+    rel = source_rel if source_rel is not None else "lib/seat_map.py"
+    source_members = _unproven_liveness_constraint_literals_from_source(source_rel=rel)
+    assert token in seat_map.UNPROVEN_LIVENESS_CONSTRAINTS, (
+        "liveness-read-error producer token %r missing from "
+        "seat_map.UNPROVEN_LIVENESS_CONSTRAINTS %r"
+        % (token, sorted(seat_map.UNPROVEN_LIVENESS_CONSTRAINTS))
+    )
+    assert token in source_members, (
+        "liveness-read-error producer token %r missing from %s "
+        "UNPROVEN_LIVENESS_CONSTRAINTS literal set %r"
+        % (token, rel, sorted(source_members))
+    )
+
+
+def test_liveness_read_error_constraint_copy_register_census():
+    """§11: every non-home plugin source carrying the constraint literal must be registered."""
+    token, home, hits = _liveness_read_error_constraint_literal_in_plugin_sources()
+    assert hits, (
+        "liveness-read-error constraint literal %r not found in any plugin source (vacuous)"
+        % token
+    )
+    home_hits = [(path, lineno) for path, lineno in hits if path == home]
+    assert home_hits, (
+        "liveness-read-error constraint literal %r missing from home %s"
+        % (token, os.path.relpath(home, PLUGIN))
+    )
+    copy_hits = [(path, lineno) for path, lineno in hits if path != home]
+    unregistered = sorted(
+        os.path.relpath(path, PLUGIN)
+        for path, _lineno in copy_hits
+        if path not in _LIVENESS_READ_ERROR_CONSTRAINT_COPY_REGISTER
+    )
+    assert not unregistered, (
+        "unregistered liveness-read-error constraint copy — add to "
+        "_LIVENESS_READ_ERROR_CONSTRAINT_COPY_REGISTER: %r" % unregistered
+    )
+
+
+def test_liveness_read_error_constraint_copy_register_content():
+    """§11: liveness_cache.LIVENESS_READ_ERROR_CONSTRAINT and seat_map.py stay pinned."""
+    _assert_liveness_read_error_constraint_pinned()

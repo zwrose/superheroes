@@ -689,22 +689,158 @@ def test_live_from_malformed_cell_unhashable_effort_returns():
 
 
 class _RaisingOnGet(dict):
-    """Liveness dict whose .get raises — forces the cell loop to die."""
+    """Liveness dict whose .get raises — swallowed by _safe_vendor_info, not the outer loop."""
 
     def get(self, key, default=None):
         raise RuntimeError("loop died")
 
 
+class _RaisingList(list):
+    """cells list that raises on first iteration only (loop read, not reconcile)."""
+
+    def __init__(self):
+        super().__init__()
+        self._read_attempts = 0
+
+    def __iter__(self):
+        self._read_attempts += 1
+        if self._read_attempts == 1:
+            raise RuntimeError("loop died")
+        return iter(())
+
+
+def _liveness_with_raising_cells():
+    return {
+        "codex": {
+            "models": {},
+            "cells": _RaisingList(),
+        },
+    }
+
+
+class _RaisingOnSecondCellsIter(list):
+    """cells list that raises on second iteration (reconcile read, not loop)."""
+
+    def __init__(self):
+        super().__init__()
+        self._read_attempts = 0
+
+    def __iter__(self):
+        self._read_attempts += 1
+        if self._read_attempts == 1:
+            return iter(())
+        raise RuntimeError("reconcile died")
+
+
+class _RaisingLoopThenReconcile(list):
+    """cells list that raises on first iter (loop) and again on second (reconcile)."""
+
+    def __init__(self):
+        super().__init__()
+        self._read_attempts = 0
+
+    def __iter__(self):
+        self._read_attempts += 1
+        if self._read_attempts == 1:
+            raise RuntimeError("loop died")
+        if self._read_attempts == 2:
+            raise RuntimeError("reconcile died")
+        return iter(())
+
+
+def _liveness_with_raising_cells_on_reconcile():
+    return {
+        "codex": {
+            "models": {},
+            "cells": _RaisingOnSecondCellsIter(),
+        },
+    }
+
+
+def _liveness_with_raising_loop_and_reconcile():
+    return {
+        "codex": {
+            "models": {},
+            "cells": _RaisingLoopThenReconcile(),
+        },
+    }
+
+
 def test_live_from_reconcile_runs_when_loop_raises():
-    """Bite-proof: reconcile discloses even when the cell-evidence loop raises."""
+    """Reconcile still runs and discloses after a transient cell-evidence loop failure."""
     needed = {"codex": [["gpt-m", None]]}
     liveness = _RaisingOnGet()
     live, live_cells, dead_notes = lc.live_from(liveness, needed)
     assert "codex" not in live
     assert live_cells == []
-    assert len(dead_notes) == 1
-    assert dead_notes[0]["vendor"] == "codex"
-    assert dead_notes[0]["model"] == "gpt-m"
+    cell_notes = [n for n in dead_notes if n.get("constraint") == "liveness-cell"]
+    assert len(cell_notes) == 1
+    assert cell_notes[0]["vendor"] == "codex"
+    assert cell_notes[0]["model"] == "gpt-m"
+
+
+def test_live_from_loop_crash_emits_read_error_not_misattribution():
+    # axis: a crashed liveness read is disclosed as read-error, not only as dead cells.
+    needed = {"codex": [["gpt-m", None]]}
+    liveness = _liveness_with_raising_cells()
+    live, live_cells, dead_notes = lc.live_from(liveness, needed)
+    assert "codex" not in live
+    assert live_cells == []
+    read_errors = [n for n in dead_notes if n.get("constraint") == lc.LIVENESS_READ_ERROR_CONSTRAINT]
+    assert len(read_errors) == 1
+    assert "liveness read failed" in read_errors[0]["reason"]
+    assert "loop died" in read_errors[0]["reason"]
+    cell_notes = [n for n in dead_notes if n.get("constraint") == "liveness-cell"]
+    assert len(cell_notes) == 1
+    assert "not live per cached liveness" in cell_notes[0]["reason"]
+
+
+def test_live_from_reconcile_crash_emits_read_error_not_propagation():
+    # axis: a persistent reconcile read failure is disclosed and does not propagate.
+    needed = {"codex": [["gpt-m", None]]}
+    liveness = _liveness_with_raising_cells_on_reconcile()
+    live, live_cells, dead_notes = lc.live_from(liveness, needed)
+    assert "codex" not in live
+    assert live_cells == []
+    read_errors = [n for n in dead_notes if n.get("constraint") == lc.LIVENESS_READ_ERROR_CONSTRAINT]
+    assert len(read_errors) == 1
+    assert "inventory reconcile" in read_errors[0]["reason"]
+    assert "reconcile died" in read_errors[0]["reason"]
+
+
+def test_live_from_loop_and_reconcile_crash_emit_distinguishable_read_errors():
+    # axis: loop and reconcile failures each emit a distinct read-error note.
+    needed = {"codex": [["gpt-m", None]]}
+    liveness = _liveness_with_raising_loop_and_reconcile()
+    live, live_cells, dead_notes = lc.live_from(liveness, needed)
+    assert "codex" not in live
+    assert live_cells == []
+    read_errors = [n for n in dead_notes if n.get("constraint") == lc.LIVENESS_READ_ERROR_CONSTRAINT]
+    assert len(read_errors) == 2
+    reasons = [n["reason"] for n in read_errors]
+    assert sum("cell-evidence scan" in r for r in reasons) == 1
+    assert sum("inventory reconcile" in r for r in reasons) == 1
+    assert sum("loop died" in r for r in reasons) == 1
+    assert sum("reconcile died" in r for r in reasons) == 1
+
+
+def test_live_from_read_error_constraint_literal():
+    # axis: read-error constraint string is pinned to the module constant.
+    needed = {"codex": [["gpt-m", None]]}
+    _, _, dead_notes = lc.live_from(_liveness_with_raising_cells(), needed)
+    constraints = {n["constraint"] for n in dead_notes}
+    assert lc.LIVENESS_READ_ERROR_CONSTRAINT in constraints
+
+
+def test_live_from_normal_path_byte_identical():
+    # axis: no-exception path output is unchanged.
+    expected_live = ["claude", "codex"]
+    expected_cells = [
+        ["codex", "gpt-5.6-sol", "medium"],
+        ["codex", "gpt-5.6-terra", None],
+    ]
+    live, live_cells, dead_notes = lc.live_from(_good_liveness(), _good_needed())
+    assert (live, live_cells, dead_notes) == (expected_live, expected_cells, [])
 
 
 @pytest.mark.parametrize(

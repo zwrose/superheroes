@@ -35,6 +35,10 @@ LIVE_CELLS_SOURCES = (
     LIVE_CELLS_SOURCE_UNPROBED,
 )
 
+# One home for the liveness-read-error constraint token; seat_map.UNPROVEN_LIVENESS_CONSTRAINTS
+# consumes it when deciding a crashed liveness read cannot prove an alternative family absent.
+LIVENESS_READ_ERROR_CONSTRAINT = "liveness-read-error"
+
 
 def ttl_seconds():
     """Reader TTL in seconds; env override when a positive int, else default. Never raises."""
@@ -288,6 +292,19 @@ def _dead_cell_note(vendor, model, effort, detail):
     }
 
 
+def _liveness_read_error_note(detail, stage=None):
+    if stage == "cell-evidence":
+        prefix = "liveness read failed during cell-evidence scan"
+    elif stage == "reconcile":
+        prefix = "liveness read failed during inventory reconcile"
+    else:
+        prefix = "liveness read failed"
+    return {
+        "constraint": LIVENESS_READ_ERROR_CONSTRAINT,
+        "reason": "%s: %s" % (prefix, _bounded_reason(detail)),
+    }
+
+
 def _slot_key_from_entry(entry):
     """Return (model, effort) or _UNKEYABLE. Never raises."""
     if not isinstance(entry, (list, tuple)) or len(entry) < 1:
@@ -438,6 +455,8 @@ def live_from(liveness, needed):
 
     inventory = _build_needed_inventory(needed)
 
+    loop_error = None
+    reconcile_error = None
     try:
         for vendor, slots in inventory.items():
             if slots is None:
@@ -450,9 +469,16 @@ def live_from(liveness, needed):
                 if _cell_is_live(cells_by_key, key):
                     model, effort = key
                     live_cells.append([vendor, model, effort])
-    except Exception:
-        pass
-    _reconcile_inventory(inventory, live_cells, liveness, dead_notes, live)
+    except Exception as exc:
+        loop_error = exc
+    if loop_error is not None:
+        dead_notes.append(_liveness_read_error_note(str(loop_error), stage="cell-evidence"))
+    try:
+        _reconcile_inventory(inventory, live_cells, liveness, dead_notes, live)
+    except Exception as exc:
+        reconcile_error = exc
+    if reconcile_error is not None:
+        dead_notes.append(_liveness_read_error_note(str(reconcile_error), stage="reconcile"))
 
     if "claude" not in live:
         live.append("claude")

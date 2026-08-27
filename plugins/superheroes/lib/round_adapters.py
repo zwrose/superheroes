@@ -45,6 +45,7 @@ import audits  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import round_phases  # noqa: E402
 import round_records  # noqa: E402
+import seat_map_receipts  # noqa: E402
 import verification  # noqa: E402
 import payload_contracts  # noqa: E402
 
@@ -408,7 +409,18 @@ def _assemble_panel(roster, indexed, state, dispatch_manifest, probes, disclosur
             continue
         seats[dim] = dict(entry["payload"])
     artifact = {"seats": seats}
-    seat_map = state.get("seatMap") if isinstance(state, dict) else None
+    if isinstance(state, dict):
+        sm = seat_map_receipts.latest_with_seats(state)
+        if isinstance(sm.get("seats"), dict) and sm.get("seats"):
+            seat_map = sm
+        else:
+            cfg_sm = (state.get("config") or {}).get("seatMap")
+            if isinstance(cfg_sm, dict):
+                seat_map = cfg_sm
+            else:
+                seat_map = sm if isinstance(sm, dict) else {}
+    else:
+        seat_map = None
     if isinstance(seat_map, dict) and seat_map:
         artifact["seatMap"] = dict(seat_map)
     ran_manifest = _trusted_vendors(roster, indexed, dispatch_manifest, disclosures)

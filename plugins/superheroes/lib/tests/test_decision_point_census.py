@@ -809,7 +809,8 @@ def test_fixture_multiline_literal_start_line(tmp_path, monkeypatch):
     skills.mkdir(parents=True)
     content = (
         "Present drift to the user and apply\n"
-        "only what they approve. Hand-edits preserved.\n"
+        "only what they\n"
+        "approve. Hand-edits preserved.\n"
     )
     (skills / "SKILL.md").write_text(content, encoding="utf-8")
     violations, _ = _scan_forbidden_violations(str(tmp_path / "skills"))

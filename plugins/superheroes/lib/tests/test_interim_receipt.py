@@ -140,7 +140,9 @@ def test_interim_receipt_validates_with_empty_verify_passes(tmp_path):
         receipt = json.load(fh)
     ok, reason = RD.validate_receipt(receipt)
     assert ok is True, reason
-    assert "verifyPasses" not in (receipt["rounds"][0] if receipt["rounds"] else {})
+    round_entry = receipt["rounds"][0] if receipt["rounds"] else {}
+    assert "verifyPasses" in round_entry
+    assert round_entry["verifyPasses"] == []
 
 
 # --- interim schema / receipt_kind ------------------------------------------------------------

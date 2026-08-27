@@ -177,8 +177,9 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" submit \
 python3 -B "$ROOT_DIR/lib/round_driver.py" next --session-dir "$SESSION_DIR"
 # … dispatch seats; each seat lands under landing/ …
 python3 -B "$ROOT_DIR/lib/round_driver.py" record-result \
-  --session-dir "$SESSION_DIR" --seat "<seat>"  # or: record-result --sweep
-# … record-missing for any slot that forfeit/timeout …
+  --session-dir "$SESSION_DIR" --seat "<seat>" \
+  --round <round from next> --phase "<phase from next>"  # or: record-result --sweep with same
+# … record-missing for any slot that forfeit/timeout — echo the same --round and --phase …
 python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
   --session-dir "$SESSION_DIR"
 ```
@@ -205,9 +206,13 @@ the same JSON **object** shape hand `submit` takes for that gate: `{"disposition
 `present-judgment`, `{"choice": "<stall choice>"}` for `present-stall-menu`. The fold runs through
 the same `cmd_submit` chokepoint as every other fold (echo, state-hash, terminal-receipt gate, round
 ceiling, stall guards `stall-choice-retired:<name>`, `stall-choice-not-offered:<name>`,
-`stall-choice-missing`, `stall-accept-risk-not-eligible`). The resolution is journalled as **owner-supplied**: the
-`policyApplied` record carries `source: "owner-supplied"` (calibration-resolved carries
-`source: "gate-policy"`) plus `artifactSha256` naming the artifact folded, on the fold's own commit.
+`stall-choice-missing`, `stall-accept-risk-not-eligible`). The resolution is journalled under one of
+two owner-gate sources: the `policyApplied` record carries `source: "owner-supplied"` only when the
+folded artifact includes a well-formed `_provenance` object (`ruledBy` and `ruledAt` as non-empty
+strings, `records` a non-empty list of non-empty strings; unknown extra keys inside `_provenance`
+are tolerated); every other owner-gate fold carries `source: "owner-unattributed"`.
+Calibration-resolved folds carry `source: "gate-policy"`. Every fold also journals
+`artifactSha256` naming the artifact folded, on the fold's own commit.
 
 ```bash
 python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
@@ -228,6 +233,7 @@ token names the seam, not the direction.
 | `owner-artifact-shape` | `--owner-artifact` parses but is not a JSON object | resubmit a JSON object per gate shape above |
 | `record-submit-interleaved` | a `record-result` / `record-missing` after any hand `submit` in this session (`_submitUsed`) | compile and hand-`submit` this phase — **not** `advance` (this session's latch refuses it) |
 | `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` on a session that has **not** hand-folded yet (**per-attempt** fence — defers when `_submitUsed` is set) | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced via `record-result --supersede --expect-sha256 …` |
+| `round-phase-not-pending` | `record-result` / `record-missing` with `--round` and/or `--phase` that do not match the pending slot | re-read `next` and echo the current `round` and `phase` onto the durable-record command |
 
 **Owner-artifact refusal causes** (authoritative list — drift-tested against `round_driver`
 `OWNER_ARTIFACT_*_REFUSAL` constants):
@@ -244,6 +250,7 @@ owner-artifact-shape
 ```text
 gate-policy
 owner-supplied
+owner-unattributed
 ```
 
 **No dead ends.** Whichever fold path a session has committed to, that path's fold command stays
@@ -562,7 +569,8 @@ carries a `detail` cause distinct from the top-level reason so operators can tel
 On the orchestrator's `next`/`submit` path you still present the gate and submit the owner's choice;
 gate policy pre-authorization is what lets `advance` fold without stopping. On the `advance` path
 when policy has not pre-authorized, present the gate and fold the owner's resolution with
-`advance --owner-artifact` — the `policyApplied` record carries `source: "owner-supplied"` (vs
+`advance --owner-artifact` — the `policyApplied` record carries `source: "owner-supplied"` when the
+artifact's `_provenance` block is well-formed, `source: "owner-unattributed"` otherwise (vs
 `"gate-policy"` for a calibration-resolved fold).
 
 **Advance gate-policy park detail causes** (authoritative list — drift-tested against
@@ -664,9 +672,18 @@ is the home for the driver-or-park valve.
   `inspectedRoot`), or `unknown` when a receipt is present but its `status` is not one this
   build recognizes (degrading — not `absent`), `shapeDrivers` — sorted
   channel names that fired for the certification shape (`independence`, `base`, `same-family`,
-  `plugin-version-skew`, `seat-map-violation`, `unproven-liveness`, `seat-pin`))
+  `plugin-version-skew`, `seat-map-violation`, `unproven-liveness`, `seat-pin`, `seat-map-unavailable`))
 - `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapViolations`, `vacuousSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `orderVendorProvenanceGaps`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
+
+**Seat-map storage (#681).** The driver stores each round's submitted seat map as an append-only
+`state["seatMapReceipts"]` list (`{round, map}` entries). There is no shared accumulated
+`state["seatMap"]` blob — `_fold_panel` appends one receipt per non-empty submitted map; reads
+route through projection helpers (`_seat_map_receipts` and its family). A legacy persisted
+`state["seatMap"]` dict, when present, is prepended at read time as `round: "legacy"` (no write-side
+migration). `build_receipt`'s `seatMap` is a derived union projection (latest seats, degradations
+union by whole-row identity, other keys last-receipt-wins). `--seat-map` at fresh state seeds
+receipt round `"0"`.
 
 **Per-round fields and `degraded` disclosures (#563, #666, #668).** Machinery records these on the round when `_fold_panel` (or dispatch-provenance folding) detects them; `_finalize_receipt` mirrors each into a `degraded` line except `canaryVerified` (evidence-only, no disclosure).
 
@@ -674,7 +691,7 @@ is the home for the driver-or-park valve.
 | --- | --- | --- |
 | `fellOpen` | A `run` seat's `ranManifest` vendor differs from the seat map's configured vendor (cross-vendor seat fell open to Claude). | `reviewer-fell-open (round N): …` |
 | `fellOpenProvenanceMissing` | A cross-vendor seat ran but has no trusted `ranManifest` entry. | `reviewer-fell-open-provenance-unavailable (round N): …` |
-| `seatMapUnavailable` | Live cross-vendor vendor(s) ran but no `seatMap` was submitted. | `reviewer-fell-open-seatmap-unavailable (round N): …` |
+| `seatMapUnavailable` | No `seatMap` was submitted while the panel ran (live panel-vendor pool recorded; never empty — `["unknown"]` when unknowable). | `reviewer-fell-open-seatmap-unavailable (round N): …` |
 | `seatMapViolations` | The submitted seat map carries constraint violation(s) not excused by its own degradation channel (#680). | `seat-map constraint breach: …` (terminal `degraded` list; also recorded per round) |
 | *(pin excusal)* | A standing excusable violation was excused because a collapsed seat was owner-pinned (`classify_violations` → `excusedByPin`). | `seat-map pin excusal: seat(s) …` (terminal `degraded`; `shapeDrivers` includes `seat-pin` and certification shape uses `-degraded`, not a third suffix) |
 | `vacuousSeats` | Seat dict has `vacuous: true` or `reason: "vacuous"` (empty findings with no verifiable investigation record). The seat folds as `missing` in `seatStatus` — it cannot anchor a `full-panel-confirmed` certification. | `vacuous-seat (round N): …` |
@@ -691,10 +708,8 @@ is the home for the driver-or-park valve.
 ### Handback receipt gate (Claude host, Bash tool)
 
 **Shipped dark in 0.25.0** — the review-receipt handback refusal class is built and in-tree but
-**unwired** from the PreToolUse chain; it enforces nothing today. **Arming is owned by #954**
-(retrospective would-refuse audit → shadow mode → preconditions → owner decision). The scope markers
-and sidecar below still ship and still produce data — that data is what #954's retrospective audit
-reads.
+**unwired** from the PreToolUse chain; it enforces nothing today (arming: #954). The scope markers
+and sidecar below still ship and still produce data.
 
 When armed, the PreToolUse `handback_receipt_gate` hook would refuse `gh pr ready` and non-draft
 `gh pr create` when the worktree is mechanically in scope but lacks a valid full-lane review receipt.
@@ -718,7 +733,7 @@ as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry
 | --- | --- |
 | `full-panel-confirmed` | A qualifying full `reviewer-deep` confirmation panel ran before exit. |
 | `audited-chain` | Scoped certifying finish — fixes discharged via audits + scoped verification; **no** final full panel. Surface this honestly; never imply a pristine fresh pass. |
-| `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, the seat map disclosed same-family self-review, or compose disclosed `plugin-version-skew` (semantics-divergent or evidence-unreadable across `lib/model_registry.py`, `lib/seat_map.py`, and `lib/version_skew.py` against the superheroes source repo — detection only, not a version-string compare). |
+| `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, the seat map disclosed same-family self-review, compose disclosed `plugin-version-skew` (semantics-divergent or evidence-unreadable across `lib/model_registry.py`, `lib/seat_map.py`, and `lib/version_skew.py` against the superheroes source repo — detection only, not a version-string compare), no usable seat map was submitted (`seat-map-unavailable`), or a standing pin excused a constraint. |
 | `*-constraint-violated` | Appended when the seat map carries unexcused constraint violation(s) (#680); supersedes `*-degraded` when both would apply. |
 | `null` / withheld | Verify fail, stall unresolved (`stalled`), capped-with-open-Critical park, round-ceiling halt, owner `hold`, or `cannot-certify` (including an unresolvable `one-more-round` stall-target snapshot). |
 

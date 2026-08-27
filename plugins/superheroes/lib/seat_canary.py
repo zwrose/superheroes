@@ -231,5 +231,27 @@ def main(argv):
     return 0
 
 
+def __getattr__(name):
+    if name == "canary_probes_for":
+        import importlib.util
+        _lib = os.path.dirname(os.path.abspath(__file__))
+        _eval = os.path.join(_lib, "..", "eval")
+        _saved = list(sys.path)
+        try:
+            if _lib not in sys.path:
+                sys.path.insert(0, _lib)
+            if _eval not in sys.path:
+                sys.path.insert(0, _eval)
+            spec = importlib.util.spec_from_file_location(
+                "_review_loop_runner_fixture",
+                os.path.join(_eval, "review_loop_runner.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod.fabricate_canary_probes_for
+        finally:
+            sys.path[:] = _saved
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))
+
+
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
