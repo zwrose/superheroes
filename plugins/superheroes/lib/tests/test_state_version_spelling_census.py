@@ -5,8 +5,6 @@ import re
 import sys
 from collections import namedtuple
 
-import pytest
-
 import round_driver as RD
 
 _TESTS = os.path.dirname(os.path.abspath(__file__))
@@ -107,6 +105,14 @@ def _pinned_block_line_range(source):
     if end <= begin:
         raise ValueError("pinned declaration block END must follow BEGIN")
     return begin, end
+
+
+def _module_has_pinned_markers(source):
+    try:
+        _pinned_block_line_range(source)
+    except ValueError:
+        return False
+    return True
 
 
 def _line_in_pinned_block(line, begin, end):
@@ -278,13 +284,19 @@ def _scan_constant_assignments(tree, source, relpath, pinned_begin, pinned_end):
         if _line_in_pinned_block(node.lineno, pinned_begin, pinned_end):
             continue
         for target in node.targets:
-            if isinstance(target, ast.Name) and target.id in _PINNED_SYMBOLS:
-                yield Finding(
-                    relpath,
-                    node.lineno,
-                    _segment(source, node),
-                    "constant-assignment",
-                )
+            if not isinstance(target, ast.Name) or target.id not in _PINNED_SYMBOLS:
+                continue
+            # Unrelated modules declare their own schema-version constants under the
+            # same identifier; only round_driver.py carries the pinned block's
+            # SCHEMA_VERSION binding.
+            if target.id == "SCHEMA_VERSION" and relpath != "round_driver.py":
+                continue
+            yield Finding(
+                relpath,
+                node.lineno,
+                _segment(source, node),
+                "constant-assignment",
+            )
 
 
 def _scan_string_literals(tree, source, relpath):
@@ -307,20 +319,20 @@ def census_module(path, source, *, pinned_range=None):
     in_scope = _module_references_pinned_symbols(tree)
     findings = []
 
-    if pinned_range is None and relpath == "round_driver.py":
-        pinned_range = _pinned_block_line_range(source)
-    pinned_begin = pinned_end = 0
-    if pinned_range is not None:
-        pinned_begin, pinned_end = pinned_range
+    if pinned_range is None:
+        try:
+            pinned_range = _pinned_block_line_range(source)
+        except ValueError:
+            pinned_range = (0, 0)
+    pinned_begin, pinned_end = pinned_range
 
     if in_scope:
         findings.extend(_scan_mod_format(tree, source, relpath))
         findings.extend(_scan_comparisons(tree, source, relpath))
         findings.extend(_scan_bindings(tree, source, relpath))
-        if pinned_range is not None:
-            findings.extend(_scan_constant_assignments(
-                tree, source, relpath, pinned_begin, pinned_end,
-            ))
+        findings.extend(_scan_constant_assignments(
+            tree, source, relpath, pinned_begin, pinned_end,
+        ))
 
     findings.extend(_scan_string_literals(tree, source, relpath))
     return findings
@@ -333,9 +345,23 @@ def _is_allowlisted(finding):
 
 def run_tree_census():
     all_findings = []
+    marker_modules = []
+    paths_and_sources = []
     for path in _scanned_py_paths():
         with open(path, encoding="utf-8") as fh:
             source = fh.read()
+        paths_and_sources.append((path, source))
+        if _module_has_pinned_markers(source):
+            marker_modules.append(_relpath(path))
+    if len(marker_modules) > 1:
+        for relpath in marker_modules:
+            all_findings.append(Finding(
+                relpath,
+                1,
+                "duplicate pinned declaration block markers",
+                "constant-assignment",
+            ))
+    for path, source in paths_and_sources:
         all_findings.extend(census_module(path, source))
     return all_findings
 
@@ -348,13 +374,14 @@ def _format_findings(findings):
     )
 
 
-def census_prose():
+def census_prose(doc_text=None):
     """Return prose-leg mismatch messages (empty when doc matches code)."""
-    with open(_ROUND_DRIVER_MD, encoding="utf-8") as fh:
-        text = fh.read()
+    if doc_text is None:
+        with open(_ROUND_DRIVER_MD, encoding="utf-8") as fh:
+            doc_text = fh.read()
 
     errors = []
-    m = _STATE_SCHEMA_PROSE_RE.search(text)
+    m = _STATE_SCHEMA_PROSE_RE.search(doc_text)
     if not m:
         errors.append(
             "prose leg: round-driver.md missing (`STATE_SCHEMA_VERSION` = N) parenthetical"
@@ -368,7 +395,7 @@ def census_prose():
                 % (doc_state, RD.STATE_SCHEMA_VERSION)
             )
 
-    m = _SCHEMA_VERSION_BULLET_RE.search(text)
+    m = _SCHEMA_VERSION_BULLET_RE.search(doc_text)
     if not m:
         errors.append(
             "prose leg: round-driver.md missing schemaVersion supported-version list"
@@ -473,3 +500,63 @@ def test_synthetic_injection_comparison():
     findings = census_module(path, injected)
     hits = [f for f in findings if f.leg == "comparison"]
     assert hits, "expected comparison leg on injected schemaVersion == 99"
+
+
+def test_synthetic_injection_constant_assignment_other_module():
+    path = os.path.join(_LIB, "round_state_io.py")
+    source = (
+        "import round_driver\n"
+        "def current_version():\n"
+        "    return round_driver.STATE_SCHEMA_VERSION\n"
+        "STATE_SCHEMA_VERSION = 99\n"
+    )
+    findings = census_module(path, source)
+    hits = [f for f in findings if f.leg == "constant-assignment"]
+    assert hits, (
+        "expected constant-assignment leg on pinned symbol assigned outside "
+        "round_driver.py (falls open before census_module chokepoint fix)"
+    )
+
+
+def test_synthetic_injection_constant_assignment_outside_block():
+    path = os.path.join(_LIB, "round_driver.py")
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    _begin, end = _pinned_block_line_range(source)
+    lines = source.splitlines()
+    lines.insert(end, "STATE_SCHEMA_VERSION = 99")
+    injected = "\n".join(lines) + "\n"
+    findings = census_module(path, injected)
+    hits = [f for f in findings if f.leg == "constant-assignment"]
+    assert hits, (
+        "expected constant-assignment leg on pinned symbol assigned outside "
+        "the marker-delimited block"
+    )
+
+
+def test_synthetic_injection_prose_doc_has_extra_version():
+    with open(_ROUND_DRIVER_MD, encoding="utf-8") as fh:
+        real = fh.read()
+    injected = real.replace(
+        "`2`, `3` or `4`",
+        "`2`, `3`, `4` or `5`",
+        1,
+    )
+    errors = census_prose(injected)
+    assert any(
+        "states receipt schemaVersion" in e for e in errors
+    ), "expected prose leg error when doc lists a version absent from code"
+
+
+def test_synthetic_injection_prose_doc_missing_code_version():
+    with open(_ROUND_DRIVER_MD, encoding="utf-8") as fh:
+        real = fh.read()
+    injected = real.replace(
+        "`2`, `3` or `4`",
+        "`2` or `3`",
+        1,
+    )
+    errors = census_prose(injected)
+    assert any(
+        "not stated in round-driver.md" in e for e in errors
+    ), "expected prose leg error when code version is omitted from doc"
