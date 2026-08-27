@@ -482,15 +482,41 @@ def test_v2_state_hash_is_unchanged_by_this_change(tmp_path):
     assert set(loaded) == set(V2_STATE)
 
 
-def test_new_state_is_v3_and_load_accepts_both(tmp_path):
-    assert RD.new_state(_cfg())["schemaVersion"] == RD.STATE_SCHEMA_VERSION == 3
-    assert RD.SUPPORTED_STATE_VERSIONS == (2, 3)
+def test_new_state_is_v4_and_load_accepts_matrix(tmp_path):
+    assert RD.new_state(_cfg())["schemaVersion"] == RD.STATE_SCHEMA_VERSION == 4
+    assert RD.SUPPORTED_STATE_VERSIONS == (2, 3, 4)
     d = str(tmp_path / "v1")
     os.makedirs(d)
     with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:
         json.dump({"schemaVersion": 1, "rounds": {}}, fh)
     ok, reason = RD.load_state(d)
     assert ok is False and "fresh session dir" in reason
+
+
+def test_load_state_refuses_schema_version_above_supported(tmp_path):
+    """Fail-closed rollback direction: a future schemaVersion is refused by version, not crashed on."""
+    d = str(tmp_path / "future")
+    os.makedirs(d)
+    with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"schemaVersion": 5, "rounds": {}}, fh)
+    ok, reason = RD.load_state(d)
+    assert ok is False and "fresh session dir" in reason
+    assert "5" in reason
+
+
+def test_v3_hand_submit_stamps_submit_used(tmp_path, adapters):
+    """A v3 session still gets _submitUsed stamped on hand submit (#681 prem-001 trap)."""
+    d = _session(tmp_path)
+    state = _state(d)
+    state["schemaVersion"] = 3
+    with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+        json.dump(state, fh)
+    p = _pending(d)
+    seats = {dim: {"findings": []} for dim in RD.DIMENSIONS}
+    out = RD.cmd_submit(d, p["phase"], p["attempt"], RD.state_hash(_state(d)),
+                        {"seats": seats})
+    assert out["ok"] is True
+    assert _state(d).get("_submitUsed") is True
 
 
 @pytest.mark.parametrize("cmd", ["advance", "record-result", "record-missing", "attest"])
@@ -538,20 +564,26 @@ def test_next_and_submit_still_finish_a_v2_session_unchanged(tmp_path):
 
 
 def test_receipt_version_derives_from_the_state_version():
-    v3 = RD.new_state(_cfg())
-    v3["terminal"] = "converged"
-    v3["certification"] = {"shape": "audited-chain"}
+    v4 = RD.new_state(_cfg())
+    v4["terminal"] = "converged"
+    v4["certification"] = {"shape": "audited-chain"}
+    r4 = RD.build_receipt(v4)
+    assert r4["schemaVersion"] == 4 and RD.receipt_kind(r4) == "receipt-certified/4"
+    assert RD.validate_receipt(r4) == (True, None)
+
+    v3 = copy.deepcopy(v4)
+    v3["schemaVersion"] = 3
     r3 = RD.build_receipt(v3)
     assert r3["schemaVersion"] == 3 and RD.receipt_kind(r3) == "receipt-certified/3"
     assert RD.validate_receipt(r3) == (True, None)
 
-    v2 = copy.deepcopy(v3)
+    v2 = copy.deepcopy(v4)
     v2["schemaVersion"] = 2
     r2 = RD.build_receipt(v2)
     assert r2["schemaVersion"] == 2 and RD.receipt_kind(r2) == "receipt-certified/2"
     assert RD.validate_receipt(r2) == (True, None)
     # today's shape, unchanged: no key was added to the v2 receipt
-    assert set(r2) == set(r3)
+    assert set(r2) == set(r4)
 
 
 def test_validate_receipt_certified_requires_certification_and_an_allowlisted_verdict():
@@ -575,7 +607,7 @@ def test_validate_receipt_certified_requires_certification_and_an_allowlisted_ve
     assert ok is False and "not one of" in why
 
     smuggled = dict(receipt)
-    smuggled["schemaVersion"] = 4
+    smuggled["schemaVersion"] = 5
     ok, why = RD.validate_receipt(smuggled)
     assert ok is False and "schemaVersion" in why
 

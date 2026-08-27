@@ -117,19 +117,25 @@ RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 
 # --- the #723 schema matrix -------------------------------------------------------------------
 # `SCHEMA_VERSION` stays the version a v2 RECEIPT keys off (and the version an in-flight v2 state
-# carries). NEW state is minted at `STATE_SCHEMA_VERSION`; `load_state` accepts BOTH.
+# carries). NEW state is minted at `STATE_SCHEMA_VERSION`; `load_state` accepts every version in
+# `SUPPORTED_STATE_VERSIONS`.
 #
-# THE HASH-PRESERVATION RULE. A loaded state's `schemaVersion` is NEVER mutated and NO v3 default
-# field is written into the dict on load: `state_hash` hashes the WHOLE canonical state, so
-# injecting a v3 key on load would change the hash of an already-emitted `expectedStateHash` and
-# every in-flight v2 session's next `submit` would fail its echo fence. Every v3-only field is
-# therefore read with `.get()` at its read site, never seeded on load.
-STATE_SCHEMA_VERSION = 3
-SUPPORTED_STATE_VERSIONS = (2, 3)
+# THE HASH-PRESERVATION RULE. A loaded state's `schemaVersion` is NEVER mutated and NO newer-schema
+# default field is written into the dict on load: `state_hash` hashes the WHOLE canonical state, so
+# injecting a newer key on load would change the hash of an already-emitted `expectedStateHash` and
+# every in-flight v2 session's next `submit` would fail its echo fence. Newer-only fields are
+# therefore read with `.get()` at their read site, never seeded on load.
+STATE_SCHEMA_VERSION = 4
+SUPPORTED_STATE_VERSIONS = (2, 3, 4)
+# State versions that carry the `_submitUsed` interleave fence and may take the `advance` path.
+# v2 is excluded: stamping a key on a v2 dict would change its hash and break its in-flight
+# `expectedStateHash` echo fence.
+ADVANCE_CAPABLE_STATE_VERSIONS = (3, 4)
 
 # The receipt VERSION derives from the STATE's version: a v2 state terminates to
 # `receipt-certified/2` (today's shape, byte-for-byte unchanged — no key added), a v3 state to
-# `receipt-certified/3`. `attest` writes `receipt-attested/1`, which carries an `attestation` block
+# `receipt-certified/3`, a v4 state to `receipt-certified/4`. `attest` writes `receipt-attested/1`,
+# which carries an `attestation` block
 # and NO `certification`/`certificationShape` — so the certified and attested shapes are
 # structurally un-confusable and `validate_receipt` dispatches on that.
 RECEIPT_CERTIFIED_SCHEMA = "receipt-certified/%d"
@@ -1310,12 +1316,12 @@ def load_state(session_dir):
     """(ok, state_or_reason). A missing file → (True, None) fresh. A v1 file is REFUSED — session
     dirs are per-invocation, there is no migration; the caller must start fresh.
 
-    #723: BOTH `SCHEMA_VERSION` (2, an in-flight session) and `STATE_SCHEMA_VERSION` (3, a session
-    minted after #723) are accepted, and a loaded state is returned EXACTLY as it was persisted:
-    `schemaVersion` is never rewritten and no v3 default field is injected. `state_hash` hashes the
-    whole canonical state, so seeding one v3 key here would invalidate the `expectedStateHash` a v2
-    session's last `next` already handed out and break its next `submit`. v3-only fields are read
-    with `.get()` at their read sites instead. (`_migrate_judgment_step` is the ONE pre-existing
+    #723: every version in `SUPPORTED_STATE_VERSIONS` is accepted, and a loaded state is returned
+    EXACTLY as it was persisted: `schemaVersion` is never rewritten and no newer-schema default
+    field is injected. `state_hash` hashes the whole canonical state, so seeding a newer key here
+    would invalidate the `expectedStateHash` a v2 session's last `next` already handed out and
+    break its next `submit`. Newer-only fields are read with `.get()` at their read sites instead.
+    (`_migrate_judgment_step` is the ONE pre-existing
     in-place migration; it is unchanged, fires only for the #507 R2a stall/judgment state, and
     predates the hash-preservation rule it deliberately trades against.)"""
     path = os.path.join(session_dir, STATE_FILE)
@@ -4679,9 +4685,10 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
     # accept: clear the pending, then fold through cmd_submit (the fold chokepoint).
     round_no = pending.get("round")
     state["pending"] = None
-    if not _via_advance and _state_version(state) == STATE_SCHEMA_VERSION:
-        # The other half of the interleave fence: a v3 session that has taken a HAND submit refuses
-        # `advance` from here on. Only stamped on v3 state — a v2 state's dict is never touched.
+    if not _via_advance and _state_version(state) in ADVANCE_CAPABLE_STATE_VERSIONS:
+        # The other half of the interleave fence: an advance-capable session that has taken a HAND
+        # submit refuses `advance` from here on. Only stamped on advance-capable state — a v2 state's
+        # dict is never touched (hash-preservation rule).
         state["_submitUsed"] = True
     return {"_fold_ready": True, "state": state, "round_no": round_no, "art_hash": art_hash,
             "orphan_seats_found": orphan_seats_found}
@@ -4932,7 +4939,7 @@ def _load_driver_state(session_dir, cmd):
         return None, _refuse_cmd(session_dir, cmd, reason, fault=fault, detail=detail)
     if loaded is None:
         return None, _refuse_cmd(session_dir, cmd, "bootstrap-required")
-    if _state_version(loaded) != STATE_SCHEMA_VERSION:
+    if _state_version(loaded) not in ADVANCE_CAPABLE_STATE_VERSIONS:
         return None, _refuse_cmd(session_dir, cmd, LEGACY_SESSION_REFUSAL,
                                  detail="loop-state.json is schemaVersion %r; `next`/`submit` "
                                         "finish it" % (loaded.get("schemaVersion"),))
@@ -5149,20 +5156,8 @@ def _reviewer_engine_vendor(repo_root):
         return "claude", VENDOR_SOURCE_DEFAULTED
 
 
-def effective_seat_map(state):
-    """Seat map for order emission: latest receipt with seats wins; otherwise the seeded config (#723).
-    Cross-module caller: round_adapters._assemble_panel."""
-    sm = _sm_latest_with_seats(state)
-    if isinstance(sm.get("seats"), dict) and sm.get("seats"):
-        return sm
-    cfg_sm = (state.get("config") or {}).get("seatMap")
-    if isinstance(cfg_sm, dict):
-        return cfg_sm
-    return sm if isinstance(sm, dict) else {}
-
-
 def _effective_seat_map(state):
-    return effective_seat_map(state)
+    return seat_map_receipts.effective_seat_map(state)
 
 
 def _disclose_order_vendor_provenance_gaps(state, gaps):

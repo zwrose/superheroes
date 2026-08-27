@@ -55,6 +55,17 @@ def latest_with_seats(state):
     return {}
 
 
+def effective_seat_map(state):
+    """Seat map in effect: latest receipt with seats wins; otherwise config seatMap; else latest map."""
+    sm = latest_with_seats(state)
+    if isinstance(sm.get("seats"), dict) and sm.get("seats"):
+        return sm
+    cfg_sm = (state.get("config") or {}).get("seatMap")
+    if isinstance(cfg_sm, dict):
+        return cfg_sm
+    return sm if isinstance(sm, dict) else {}
+
+
 def any_seats(state):
     """Seats-existence projection — True iff any receipt carries a non-empty ``seats`` dict."""
     for entry in receipts(state):
