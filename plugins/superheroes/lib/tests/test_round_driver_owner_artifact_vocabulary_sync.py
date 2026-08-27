@@ -70,6 +70,12 @@ def _round_phase_refusal_causes():
     )
 
 
+def _round_phase_refusal_tokens_in_table(text):
+    """Round-phase refusal tokens from the durable-record refusal table (excludes shared rows)."""
+    table_tokens = set(_parse_refusal_table_reasons(text))
+    return {token for token in table_tokens if token.startswith("round-phase-")}
+
+
 def test_owner_artifact_refusal_causes_match_docs():
     """round-driver.md owner-artifact refusal list ↔ OWNER_ARTIFACT_*_REFUSAL (both directions)."""
     text = _read(_REF)
@@ -105,11 +111,11 @@ def test_policy_applied_sources_match_docs():
 def test_round_phase_refusal_causes_match_docs():
     """round-driver.md durable-record refusal table ↔ ROUND_PHASE_*_REFUSAL (both directions)."""
     text = _read(_REF)
-    documented = set(_parse_refusal_table_reasons(text))
+    documented_round_phase = _round_phase_refusal_tokens_in_table(text)
     coded = set(_round_phase_refusal_causes())
 
-    only_code = coded - documented
-    only_docs = documented.intersection(coded) - coded
+    only_code = coded - documented_round_phase
+    only_docs = documented_round_phase - coded
     assert not only_code, (
         "ROUND_PHASE_*_REFUSAL constants missing from round-driver.md refusal table: %s"
         % sorted(only_code))
