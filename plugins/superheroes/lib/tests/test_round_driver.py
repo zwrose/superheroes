@@ -3052,6 +3052,22 @@ def test_producer_parks_and_preserves_a_destination_that_went_corrupt(tmp_path):
     assert any(d["kind"] == "cannot-certify" for d in state["decisions"])
 
 
+def test_producer_parks_on_a_structurally_corrupt_destination(tmp_path):
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1)]))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert not state.get("_resumeCorrupt")
+    corrupt = "[null]"
+    records.write_text(corrupt)
+    state["_records"] = [_seed_record(2)]
+    state["rounds"]["2"] = {"vacuousSeats": ["test-reviewer"]}
+    RD._persist_round_records(state, state["config"])
+    assert state["terminal"] == "cannot-certify"
+    assert state["certification"]["shape"] is None
+    assert records.read_text() == corrupt
+    assert any(d["kind"] == "cannot-certify" for d in state["decisions"])
+
+
 def test_producer_parks_when_the_durable_write_fails(tmp_path, monkeypatch):
     records = tmp_path / "round-records.json"
     initial_text = json.dumps(
