@@ -410,7 +410,7 @@ def _assemble_panel(roster, indexed, state, dispatch_manifest, probes, disclosur
     artifact = {"seats": seats}
     if isinstance(state, dict):
         import round_driver as _round_driver  # lazy: round_orders → round_adapters → round_driver cycle
-        seat_map = _round_driver._effective_seat_map(state)
+        seat_map = _round_driver.effective_seat_map(state)
     else:
         seat_map = None
     if isinstance(seat_map, dict) and seat_map:

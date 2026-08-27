@@ -1027,7 +1027,7 @@ def _emit_receipt_seat_map(state):
             merged_degs.append(row)
     if merged_degs:
         base["degradations"] = merged_degs
-    for entry in reversed(_seat_map_receipts(state)):
+    for entry in _seat_map_receipts(state):
         map_ = entry["map"]
         for k, v in map_.items():
             if k not in ("seats", "degradations"):
@@ -1250,10 +1250,6 @@ def _seat_map_unproven_liveness(state):
         if isinstance(v, dict) and v.get("evidence") == "unproven-liveness":
             return True
     return False
-
-
-def _seat_map_has_seats(seat_map):
-    return isinstance(seat_map, dict) and isinstance(seat_map.get("seats"), dict) and seat_map.get("seats")
 
 
 def _seat_map_unavailable(state):
@@ -5303,8 +5299,9 @@ def _reviewer_engine_vendor(repo_root):
         return "claude", VENDOR_SOURCE_DEFAULTED
 
 
-def _effective_seat_map(state):
-    """Seat map for order emission: latest receipt with seats wins; otherwise the seeded config (#723)."""
+def effective_seat_map(state):
+    """Seat map for order emission: latest receipt with seats wins; otherwise the seeded config (#723).
+    Cross-module caller: round_adapters._assemble_panel."""
     sm = _sm_latest_with_seats(state)
     if isinstance(sm.get("seats"), dict) and sm.get("seats"):
         return sm
@@ -5312,6 +5309,10 @@ def _effective_seat_map(state):
     if isinstance(cfg_sm, dict):
         return cfg_sm
     return sm if isinstance(sm, dict) else {}
+
+
+def _effective_seat_map(state):
+    return effective_seat_map(state)
 
 
 def _disclose_order_vendor_provenance_gaps(state, gaps):

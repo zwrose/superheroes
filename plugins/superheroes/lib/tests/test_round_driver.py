@@ -4785,6 +4785,21 @@ def test_later_pin_cannot_excuse_earlier_breach():
     assert any(v.get("constraint") == "maker-family" for v in violations)
 
 
+def test_emit_receipt_seat_map_scalar_last_wins():
+    """axis: later receipt scalars win over earlier ones (last-wins, not first-wins)."""
+    map1 = _seat_map_vendors({d: "codex" for d in RD.DIMENSIONS})
+    map1["liveCellsSource"] = "FIRST"
+    map2 = _seat_map_vendors({d: "codex" for d in RD.DIMENSIONS})
+    map2["liveCellsSource"] = "SECOND"
+    state = RD.new_state(_cfg(leg="panel"))
+    state["seatMapReceipts"] = [
+        {"round": "1", "map": map1},
+        {"round": "2", "map": map2},
+    ]
+    emitted = RD._emit_receipt_seat_map(state)
+    assert emitted.get("liveCellsSource") == "SECOND"
+
+
 def test_emit_receipt_seat_map_distinct_degradation_rows_survive():
     """axis: emitted map dedupes identical rows but distinct degradation rows survive."""
     row_a = {"constraint": "same-family", "seat": "security-reviewer", "reason": "alpha"}
@@ -4801,6 +4816,26 @@ def test_emit_receipt_seat_map_distinct_degradation_rows_survive():
     emitted = RD.build_receipt(state)["seatMap"]
     degs = emitted.get("degradations") or []
     assert row_a in degs and row_b in degs
+
+
+def test_effective_seat_map_public_cross_module_seam():
+    """axis: round_adapters resolves seat maps through the public effective_seat_map seam."""
+    assert hasattr(RD, "effective_seat_map")
+    adapters_path = os.path.join(_LIB, "round_adapters.py")
+    with open(adapters_path, encoding="utf-8") as fh:
+        source = fh.read()
+    assert "effective_seat_map" in source
+    assert "_effective_seat_map" not in source
+
+
+def test_dead_seat_map_predicate_census_removed():
+    """axis: dead seats-predicate helper is gone from round_driver."""
+    dead_name = "_seat_map" + "_has_seats"
+    driver_path = os.path.join(_LIB, "round_driver.py")
+    with open(driver_path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=driver_path)
+    names = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    assert dead_name not in names
 
 
 _SEAT_MAP_RECEIPTS_CALLERS = frozenset({
