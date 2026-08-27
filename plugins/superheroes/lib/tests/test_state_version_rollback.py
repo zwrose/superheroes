@@ -96,6 +96,22 @@ def test_legacy_refusal_plain_session_names_next_submit(tmp_path):
     assert "fresh session" not in out.get("detail", "")
 
 
+def test_next_and_submit_still_finish_a_v3_session_unchanged(tmp_path):
+    """`next`/`submit` finish an in-flight v3 session and leave schemaVersion at 3."""
+    session_dir, _gitdir, _head_path = _bootstrap(tmp_path, name="v3-continuation")
+    state = _state(session_dir)
+    state["schemaVersion"] = 3
+    with open(os.path.join(session_dir, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+        json.dump(state, fh)
+    pend = RD.cmd_next(session_dir)
+    assert pend["ok"] and pend["phase"] == RD.P_PANEL
+    seats = {dim: {"findings": []} for dim in RD.DIMENSIONS}
+    out = RD.cmd_submit(session_dir, pend["phase"], pend["attempt"], pend["expectedStateHash"],
+                        {"seats": seats})
+    assert out["ok"] is True
+    assert _state(session_dir)["schemaVersion"] == 3
+
+
 def test_legacy_refusal_durable_records_names_fresh_session(tmp_path):
     """A legacy session with durable pending records names a fresh session dir, not hand submit."""
     session_dir, gitdir, _head_path = _legacy_v3_session(

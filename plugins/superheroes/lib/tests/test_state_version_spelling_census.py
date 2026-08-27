@@ -344,6 +344,17 @@ def _scan_bindings(tree, source, relpath):
                                     _binding_segment(source, key, val),
                                     "binding",
                                 )
+            if isinstance(func, ast.Attribute) and func.attr == "get":
+                if len(node.args) >= 2:
+                    key, val = node.args[0], node.args[1]
+                    if (isinstance(key, ast.Constant) and key.value == "schemaVersion"
+                            and _is_int_constant(val)):
+                        yield Finding(
+                            relpath,
+                            val.lineno,
+                            "schemaVersion=%d" % val.value,
+                            "binding",
+                        )
             for kw in node.keywords:
                 if kw.arg == "schemaVersion" and _is_int_constant(kw.value):
                     yield Finding(
@@ -356,11 +367,22 @@ def _scan_bindings(tree, source, relpath):
 
 def _scan_constant_assignments(tree, source, relpath, pinned_begin, pinned_end):
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        if _line_in_pinned_block(node.lineno, pinned_begin, pinned_end):
-            continue
-        for target in node.targets:
+        if isinstance(node, ast.Assign):
+            if _line_in_pinned_block(node.lineno, pinned_begin, pinned_end):
+                continue
+            for target in node.targets:
+                if not isinstance(target, ast.Name) or target.id not in _PINNED_SYMBOLS:
+                    continue
+                yield Finding(
+                    relpath,
+                    node.lineno,
+                    _segment(source, node),
+                    "constant-assignment",
+                )
+        elif isinstance(node, ast.AnnAssign):
+            if _line_in_pinned_block(node.lineno, pinned_begin, pinned_end):
+                continue
+            target = node.target
             if not isinstance(target, ast.Name) or target.id not in _PINNED_SYMBOLS:
                 continue
             yield Finding(
@@ -658,6 +680,34 @@ def test_synthetic_injection_prose_doc_missing_code_version():
     assert any(
         "not stated in round-driver.md" in e for e in errors
     ), "expected prose leg error when code version is omitted from doc"
+
+
+def test_synthetic_injection_get_default_binding():
+    path = os.path.join(_LIB, "round_driver.py")
+    source = (
+        "import round_driver\n"
+        "def _synth_get_default(state):\n"
+        "    return state.get(\"schemaVersion\", 3)\n"
+    )
+    findings = census_module(path, source)
+    hits = [f for f in findings if f.leg == "binding" and "schemaVersion=3" in f.segment]
+    assert hits, "expected binding leg on injected state.get(\"schemaVersion\", 3)"
+
+
+def test_synthetic_injection_ann_assign_constant():
+    path = os.path.join(_LIB, "round_state_io.py")
+    source = (
+        "import round_driver\n"
+        "def current_version():\n"
+        "    return round_driver.STATE_SCHEMA_VERSION\n"
+        "STATE_SCHEMA_VERSION: int = 99\n"
+    )
+    findings = census_module(path, source)
+    hits = [f for f in findings if f.leg == "constant-assignment"]
+    assert hits, (
+        "expected constant-assignment leg on pinned symbol AnnAssign outside "
+        "round_driver.py pinned block"
+    )
 
 
 def test_synthetic_injection_no_pinned_symbol_module():
