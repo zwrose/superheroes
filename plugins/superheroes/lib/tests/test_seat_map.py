@@ -757,6 +757,7 @@ def test_verify_unknown_liveness_is_a_violation():
         {
             "seats": seats2,
             "liveVendors": ["claude"],
+            "liveCellsSource": "synthesized",
             "livenessPinScoped": False,
             "degradations": [
                 {"constraint": "live-vendors", "reason": "no live vendors — defaulted to claude"},
@@ -785,6 +786,7 @@ def test_verify_pin_scoped_liveness_is_a_violation():
     sm = {
         "seats": {**_full_seats_template(), "test-reviewer": seat_cfg},
         "liveVendors": ["cursor"],
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": True,
     }
     violations = SM.verify(sm, author)
@@ -834,6 +836,7 @@ def test_to_receipt_carries_liveness_pin_scoped_provenance():
     sm = {
         "seats": {**_full_seats_template(), "test-reviewer": seat_cfg},
         "liveVendors": ["cursor"],
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": True,
     }
     receipt = SM.to_receipt(sm, author)
@@ -847,6 +850,7 @@ def test_to_receipt_carries_liveness_pin_scoped_provenance():
     bare = {
         "seats": _full_seats_template(),
         "liveVendors": THREE_VENDORS,
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": False,
     }
     bare_receipt = SM.to_receipt(bare, "xai")
@@ -886,6 +890,88 @@ def test_pinned_maker_seat_is_still_a_violation():
     )
 
 
+def test_unexcused_maker_family_under_liveness_read_error_degradation():
+    # axis: crashed liveness read examined an unknown subset — silence is not proof
+    base = {
+        "seats": {
+            "test-reviewer": {
+                "vendor": "claude",
+                "model": "opus-5",
+                "effort": "xhigh",
+                "tier": "reviewer-deep",
+                "family": "anthropic",
+                "source": "rotated",
+            },
+        },
+        "liveVendors": ["claude"],
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+        "authorFamily": "anthropic",
+    }
+    receipt = SM.to_receipt(
+        {
+            **base,
+            "degradations": [
+                {"constraint": "liveness-read-error", "reason": "read crashed"},
+            ],
+        },
+        "anthropic",
+    )
+    unexcused = SM.unexcused_violations(receipt)
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in unexcused
+    )
+
+
+def test_build_empty_live_cells_source_fail_closed():
+    # axis: falsey malformed liveCellsSource must not be laundered to synthesized
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        THREE_VENDORS,
+        "xai",
+        "anthropic",
+        0,
+        live_cells=None,
+        live_cells_source="",
+    )
+    assert m["liveCellsSource"] == ""
+    seat = "security-reviewer"
+    cfg = m["seats"][seat]
+    assert SM._resolvable_families_for_seat(m, seat, cfg) is None
+    receipt = {**m, "violations": [{"constraint": "critical-diversity"}]}
+    assert SM.unexcused_violations(receipt) == [
+        {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
+    ]
+
+
+def test_to_receipt_empty_live_cells_source_not_laundered():
+    # axis: receipt minting must not upgrade unrecognized liveCellsSource to synthesized
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        THREE_VENDORS,
+        "xai",
+        "anthropic",
+        0,
+        live_cells=None,
+        live_cells_source="",
+    )
+    receipt = SM.to_receipt(m, "xai")
+    assert receipt["liveCellsSource"] == ""
+    assert SM.unexcused_violations(
+        {**receipt, "violations": [{"constraint": "critical-diversity"}]}
+    ) == [
+        {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
+    ]
+
+
+def test_to_receipt_absent_live_cells_source_yields_synthesized():
+    # axis: absent liveCellsSource legitimately resolves to synthesized at receipt minting
+    bare = {"seats": {}, "liveVendors": ["claude", "codex", "cursor"]}
+    receipt = SM.to_receipt(bare, "xai")
+    assert receipt["liveCellsSource"] == "synthesized"
+
+
 def test_legacy_cache_only_constraint_still_marks_liveness_synthesized():
     # The `preflight-cache-only` producer was reaped (#1138), but seat maps are persisted and
     # re-read, so a map written by an OLDER plugin version can still carry the constraint. It
@@ -902,6 +988,7 @@ def test_legacy_cache_only_constraint_still_marks_liveness_synthesized():
             },
         },
         "liveVendors": ["claude"],
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": False,
     }
     with_note = {
@@ -1108,7 +1195,7 @@ def test_absent_liveness_pin_scoped_is_unknown_and_fails_closed():
         for v in violations_absent
     )
 
-    explicit = {**absent, "livenessPinScoped": False}
+    explicit = {**absent, "livenessPinScoped": False, "liveCellsSource": "synthesized"}
     violations_explicit = SM.verify(explicit, author)
     assert not any(
         v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
@@ -1131,6 +1218,7 @@ def test_verify_mixed_valid_and_unknown_liveness_is_a_violation():
     mixed = {
         "seats": {**_full_seats_template(), "test-reviewer": seat_cfg},
         "liveVendors": ["cursor", "not-a-real-vendor"],
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": False,
     }
     violations_mixed = SM.verify(mixed, author)
@@ -1139,7 +1227,7 @@ def test_verify_mixed_valid_and_unknown_liveness_is_a_violation():
         for v in violations_mixed
     )
 
-    clean = {**mixed, "liveVendors": ["cursor"]}
+    clean = {**mixed, "liveVendors": ["cursor"], "liveCellsSource": "synthesized"}
     violations_clean = SM.verify(clean, author)
     assert not any(
         v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
@@ -1196,6 +1284,7 @@ def test_verify_unresolvable_tier_is_a_violation():
     sm = {
         "seats": {**_full_seats_template(), "test-reviewer": seat_cfg},
         "liveVendors": ["cursor"],
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": False,
     }
     violations = SM.verify(sm, author)
@@ -1212,6 +1301,7 @@ def test_unexcused_maker_family_violation_is_unexcused():
     sm = {
         "seats": _full_seats_template(),
         "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": False,
         "degradations": [],
     }
@@ -1299,6 +1389,7 @@ def test_unexcused_e5_pinned_seat_excuses_strong_tier_via_pin():
     receipt = {
         "seats": seats,
         "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": False,
         "authorFamily": "xai",
         "degradations": [
@@ -1341,6 +1432,7 @@ def test_unexcused_critical_diversity_missing_author_family_fail_closed():
     base = {
         "seats": seats,
         "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": False,
         "degradations": [{"constraint": "critical-diversity"}],
         "violations": [{"constraint": "critical-diversity"}],
@@ -1379,6 +1471,7 @@ def test_unexcused_critical_diversity_availability_not_pin_presence(live, maker,
     receipt = {
         "seats": seats,
         "liveVendors": live,
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": False,
         "authorFamily": maker,
         "degradations": [{"constraint": "critical-diversity"}],
@@ -1412,6 +1505,7 @@ def test_unexcused_strong_tier_excused_when_reviewer_deep_unavailable(monkeypatc
     receipt = {
         "seats": seats,
         "liveVendors": ["claude"],
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": False,
         "authorFamily": "anthropic",
         "degradations": [{"constraint": "strong-tier", "seat": "architecture-reviewer"}],
@@ -1438,6 +1532,7 @@ def test_unexcused_strong_tier_stands_when_reviewer_deep_available():
     receipt = {
         "seats": seats,
         "liveVendors": ["claude"],
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": False,
         "authorFamily": "anthropic",
         "degradations": [{"constraint": "strong-tier", "seat": "security-reviewer"}],
@@ -1462,6 +1557,7 @@ def test_unexcused_critical_diversity_pin_not_causal_f3a():
     receipt = {
         "seats": seats,
         "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": False,
         "authorFamily": "xai",
         "degradations": [{"constraint": "critical-diversity"}],
@@ -1590,6 +1686,7 @@ def test_classify_pin_excuses_critical_diversity_collapsed_seats():
     receipt = {
         "seats": seats,
         "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
         "livenessPinScoped": False,
         "authorFamily": "xai",
         "violations": [{"constraint": "critical-diversity"}],
@@ -1602,6 +1699,7 @@ def test_classify_pin_excuses_critical_diversity_collapsed_seats():
 def _resolvable_families_fixture():
     seat_map = {
         "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
         "degradations": [],
         "livenessPinScoped": False,
     }
@@ -1616,6 +1714,7 @@ def _resolvable_families_fixture():
         ({"degradations": [{"constraint": "live-vendors", "reason": "synth"}]}, None, False),
         ({"degradations": [{"constraint": "preflight-cache-only", "reason": "cache"}]}, None, False),
         ({"degradations": [{"constraint": "compose-failed", "reason": "fail"}]}, None, False),
+        ({"degradations": [{"constraint": "liveness-read-error", "reason": "crash"}]}, None, False),
         ({"liveVendors": None}, None, False),
         ({"liveVendors": []}, None, False),
         ({"liveVendors": ["not-a-real-vendor"]}, None, False),
@@ -1627,6 +1726,7 @@ def _resolvable_families_fixture():
         "degradation-live-vendors",
         "degradation-preflight-cache-only",
         "degradation-compose-failed",
+        "degradation-liveness-read-error",
         "live-vendors-absent",
         "live-vendors-empty",
         "unregistered-vendor",
@@ -1666,7 +1766,7 @@ def test_resolvable_families_for_seat_positive_family_set():
 
 
 def test_resolvable_families_live_cells_source_probed_vs_synthesized_vs_absent():
-    # axis: probed uses cell-level derivation; synthesized and absent agree on vendor-level
+    # axis: probed uses cell-level derivation; synthesized uses vendor-level; absent is unusable
     seat_map, seat, cfg = _resolvable_families_fixture()
     seat_map["livenessPinScoped"] = False
     partial_cells = [["cursor", "cursor-grok-4.6", "xhigh"]]
@@ -1685,11 +1785,7 @@ def test_resolvable_families_live_cells_source_probed_vs_synthesized_vs_absent()
 
     absent_map = {k: v for k, v in seat_map.items() if k != "liveCellsSource"}
     absent_map.pop("liveCells", None)
-    assert SM._resolvable_families_for_seat(absent_map, seat, cfg) == vendor_level
-    assert (
-        SM._resolvable_families_for_seat(synthesized_map, seat, cfg)
-        == SM._resolvable_families_for_seat(absent_map, seat, cfg)
-    )
+    assert SM._resolvable_families_for_seat(absent_map, seat, cfg) is None
 
 
 def test_resolvable_families_unprobed_empty_degradations_returns_none():
@@ -1701,6 +1797,50 @@ def test_resolvable_families_unprobed_empty_degradations_returns_none():
     seat_map["liveCells"] = []
     seat_map["liveVendors"] = ["claude", "codex", "cursor"]
     assert SM._resolvable_families_for_seat(seat_map, seat, cfg) is None
+
+
+@pytest.mark.parametrize(
+    "cells_source",
+    [
+        pytest.param(None, id="absent"),
+        pytest.param("", id="empty-string"),
+        pytest.param("bogus", id="unrecognized-string"),
+        pytest.param("Probed", id="wrong-case"),
+        pytest.param(123, id="non-string-int"),
+        pytest.param({"source": "probed"}, id="non-string-dict"),
+        pytest.param(["probed"], id="non-string-list"),
+    ],
+)
+def test_resolvable_families_unknown_live_cells_source_returns_none(cells_source):
+    # axis: only members of LIVE_CELLS_SOURCES are usable evidence
+    seat_map, seat, cfg = _resolvable_families_fixture()
+    if cells_source is None:
+        seat_map.pop("liveCellsSource", None)
+    else:
+        seat_map["liveCellsSource"] = cells_source
+    assert SM._resolvable_families_for_seat(seat_map, seat, cfg) is None
+
+
+def test_live_cells_sources_closed_set_membership():
+    # axis: recognizer keys on the closed tuple — member changes must update this pin
+    assert SM.LIVE_CELLS_SOURCES == ("probed", "synthesized", "unprobed")
+
+
+def test_unexcused_critical_diversity_corrupted_live_cells_source_fail_closed():
+    # axis: corrupted liveCellsSource must not excuse critical-diversity via vendor fall-through
+    seats = _full_seats_template()
+    receipt = {
+        "seats": seats,
+        "liveVendors": ["claude"],
+        "liveCellsSource": "bogus",
+        "livenessPinScoped": False,
+        "authorFamily": "anthropic",
+        "degradations": [{"constraint": "critical-diversity"}],
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    assert SM.unexcused_violations(receipt) == [
+        {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
+    ]
 
 
 def test_live_cells_fields_for_receipt_preserves_unprobed():

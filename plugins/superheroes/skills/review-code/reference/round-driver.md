@@ -649,9 +649,18 @@ is the home for the driver-or-park valve.
   `inspectedRoot`), or `unknown` when a receipt is present but its `status` is not one this
   build recognizes (degrading — not `absent`), `shapeDrivers` — sorted
   channel names that fired for the certification shape (`independence`, `base`, `same-family`,
-  `plugin-version-skew`, `seat-map-violation`, `unproven-liveness`, `seat-pin`))
+  `plugin-version-skew`, `seat-map-violation`, `unproven-liveness`, `seat-pin`, `seat-map-unavailable`))
 - `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapViolations`, `vacuousSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `orderVendorProvenanceGaps`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
+
+**Seat-map storage (#681).** The driver stores each round's submitted seat map as an append-only
+`state["seatMapReceipts"]` list (`{round, map}` entries). There is no shared accumulated
+`state["seatMap"]` blob — `_fold_panel` appends one receipt per non-empty submitted map; reads
+route through projection helpers (`_seat_map_receipts` and its family). A legacy persisted
+`state["seatMap"]` dict, when present, is prepended at read time as `round: "legacy"` (no write-side
+migration). `build_receipt`'s `seatMap` is a derived union projection (latest seats, degradations
+union by whole-row identity, other keys last-receipt-wins). `--seat-map` at fresh state seeds
+receipt round `"0"`.
 
 **Per-round fields and `degraded` disclosures (#563, #666, #668).** Machinery records these on the round when `_fold_panel` (or dispatch-provenance folding) detects them; `_finalize_receipt` mirrors each into a `degraded` line except `canaryVerified` (evidence-only, no disclosure).
 
@@ -659,7 +668,7 @@ is the home for the driver-or-park valve.
 | --- | --- | --- |
 | `fellOpen` | A `run` seat's `ranManifest` vendor differs from the seat map's configured vendor (cross-vendor seat fell open to Claude). | `reviewer-fell-open (round N): …` |
 | `fellOpenProvenanceMissing` | A cross-vendor seat ran but has no trusted `ranManifest` entry. | `reviewer-fell-open-provenance-unavailable (round N): …` |
-| `seatMapUnavailable` | Live cross-vendor vendor(s) ran but no `seatMap` was submitted. | `reviewer-fell-open-seatmap-unavailable (round N): …` |
+| `seatMapUnavailable` | No `seatMap` was submitted while the panel ran (live panel-vendor pool recorded; never empty — `["unknown"]` when unknowable). | `reviewer-fell-open-seatmap-unavailable (round N): …` |
 | `seatMapViolations` | The submitted seat map carries constraint violation(s) not excused by its own degradation channel (#680). | `seat-map constraint breach: …` (terminal `degraded` list; also recorded per round) |
 | *(pin excusal)* | A standing excusable violation was excused because a collapsed seat was owner-pinned (`classify_violations` → `excusedByPin`). | `seat-map pin excusal: seat(s) …` (terminal `degraded`; `shapeDrivers` includes `seat-pin` and certification shape uses `-degraded`, not a third suffix) |
 | `vacuousSeats` | Seat dict has `vacuous: true` or `reason: "vacuous"` (empty findings with no verifiable investigation record). The seat folds as `missing` in `seatStatus` — it cannot anchor a `full-panel-confirmed` certification. | `vacuous-seat (round N): …` |
@@ -701,7 +710,7 @@ as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry
 | --- | --- |
 | `full-panel-confirmed` | A qualifying full `reviewer-deep` confirmation panel ran before exit. |
 | `audited-chain` | Scoped certifying finish — fixes discharged via audits + scoped verification; **no** final full panel. Surface this honestly; never imply a pristine fresh pass. |
-| `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, the seat map disclosed same-family self-review, or compose disclosed `plugin-version-skew` (semantics-divergent or evidence-unreadable across `lib/model_registry.py`, `lib/seat_map.py`, and `lib/version_skew.py` against the superheroes source repo — detection only, not a version-string compare). |
+| `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, the seat map disclosed same-family self-review, compose disclosed `plugin-version-skew` (semantics-divergent or evidence-unreadable across `lib/model_registry.py`, `lib/seat_map.py`, and `lib/version_skew.py` against the superheroes source repo — detection only, not a version-string compare), no usable seat map was submitted (`seat-map-unavailable`), or a standing pin excused a constraint. |
 | `*-constraint-violated` | Appended when the seat map carries unexcused constraint violation(s) (#680); supersedes `*-degraded` when both would apply. |
 | `null` / withheld | Verify fail, stall unresolved (`stalled`), capped-with-open-Critical park, round-ceiling halt, owner `hold`, or `cannot-certify` (including an unresolvable `one-more-round` stall-target snapshot). |
 
