@@ -6294,12 +6294,31 @@ def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurren
     return payload_sha, None
 
 
-def _pending_of(session_dir, state, cmd):
-    """(phase, round, attempt, refusal) for the pending step every record/advance call works on."""
+def _pending_of(session_dir, state, cmd, expect_round=None, expect_phase=None):
+    """(phase, round, attempt, refusal) for the pending step every record/advance call works on.
+
+    Bite axis (#1177-C): optional ``expect_round`` / ``expect_phase`` must match the pending slot
+    before any durable-store write; mismatches refuse ``round-phase-not-pending``.
+    Bite-proof: WO 1177-C — four elements (round leg, phase leg, sweep coverage, record-missing
+    coverage); durable build record."""
     pending = state.get("pending")
     if not isinstance(pending, dict) or not pending.get("phase"):
         return None, None, None, _refuse_cmd(session_dir, cmd, "no-pending-phase")
-    return pending.get("phase"), pending.get("round"), pending.get("attempt"), None
+    phase = pending.get("phase")
+    rnd = pending.get("round")
+    attempt = pending.get("attempt")
+    mismatch_extra = {}
+    if expect_round is not None and expect_round != rnd:
+        mismatch_extra["expectedRound"] = expect_round
+        mismatch_extra["pendingRound"] = rnd
+    if expect_phase is not None and expect_phase != phase:
+        mismatch_extra["expectedPhase"] = expect_phase
+        mismatch_extra["pendingPhase"] = phase
+    if mismatch_extra:
+        return None, None, None, _refuse_cmd(
+            session_dir, cmd, "round-phase-not-pending", phase=phase, rnd=rnd, attempt=attempt,
+            **mismatch_extra)
+    return phase, rnd, attempt, None
 
 
 def _roster_of(session_dir, state, cmd, phase, rnd, attempt):
@@ -6312,7 +6331,7 @@ def _roster_of(session_dir, state, cmd, phase, rnd, attempt):
 
 
 def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, expect_sha256=None,
-                      sweep=False, occurrence=0):
+                      sweep=False, occurrence=0, expect_round=None, expect_phase=None):
     """Ingest ONE landed seat envelope (or, with `sweep`, every unclaimed landing) into the durable
     store, and journal the outcome carrying its `payloadSha256`.
 
@@ -6334,13 +6353,16 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
                 return refusal
             return _cmd_record_result_locked(session_dir, seat=seat, attempt=attempt,
                                              supersede=supersede, expect_sha256=expect_sha256,
-                                             sweep=sweep, occurrence=occurrence)
+                                             sweep=sweep, occurrence=occurrence,
+                                             expect_round=expect_round,
+                                             expect_phase=expect_phase)
     except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "record-result", held)
 
 
 def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=False,
-                              expect_sha256=None, sweep=False, occurrence=0):
+                              expect_sha256=None, sweep=False, occurrence=0,
+                              expect_round=None, expect_phase=None):
     state, refusal = _load_driver_state(session_dir, "record-result")
     if refusal is not None:
         return refusal
@@ -6353,7 +6375,9 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                     "or `record-result`."))
     if seat is None and not sweep:
         return _refuse_cmd(session_dir, "record-result", "seat-required")
-    phase, rnd, cur_attempt, refusal = _pending_of(session_dir, state, "record-result")
+    phase, rnd, cur_attempt, refusal = _pending_of(
+        session_dir, state, "record-result", expect_round=expect_round,
+        expect_phase=expect_phase)
     if refusal is not None:
         return refusal
     if attempt is not None and attempt != cur_attempt:
@@ -6534,7 +6558,8 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
     return {"ok": True, "phase": phase, "round": rnd, "attempt": attempt, "recorded": recorded}
 
 
-def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, occurrence=0):
+def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, occurrence=0,
+                       expect_round=None, expect_phase=None):
     """Record a seat that produced NO artifact: the driver writes the `seat-missing/1` envelope
     itself (there is, by definition, nothing for the seat to land) and ingests it through the same
     fences as a result — roster, attempt, session, phase, round, anchor.
@@ -6549,13 +6574,14 @@ def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, o
             if refusal is not None:
                 return refusal
             return _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path,
-                                              occurrence=occurrence)
+                                              occurrence=occurrence, expect_round=expect_round,
+                                              expect_phase=expect_phase)
     except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "record-missing", held)
 
 
 def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path=None,
-                               occurrence=0):
+                               occurrence=0, expect_round=None, expect_phase=None):
     state, refusal = _load_driver_state(session_dir, "record-missing")
     if refusal is not None:
         return refusal
@@ -6566,7 +6592,9 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
                     "hand-submit fold paths are mutually exclusive per session. For this phase, compile "
                     "the artifact and `submit` — do not use `advance` (this session's latch refuses it) "
                     "or `record-missing`."))
-    phase, rnd, cur_attempt, refusal = _pending_of(session_dir, state, "record-missing")
+    phase, rnd, cur_attempt, refusal = _pending_of(
+        session_dir, state, "record-missing", expect_round=expect_round,
+        expect_phase=expect_phase)
     if refusal is not None:
         return refusal
     if attempt is not None and attempt != cur_attempt:
@@ -7958,6 +7986,10 @@ def build_parser():
                               help="which roster SLOT of a repeated seat key this envelope is "
                                    "(default 0). Two distinct audit targets can legitimately "
                                    "share one id; without this the second is unaddressable")
+    cli_contract.add_argument(pr, "--round", contract="integer", default=None, type=int,
+                              help="expected pending round; when supplied, a mismatch refuses")
+    cli_contract.add_argument(pr, "--phase", contract="free-text", default=None,
+                              help="expected pending phase; when supplied, a mismatch refuses")
 
     pm = sub.add_parser("record-missing")
     cli_contract.add_argument(pm, "--session-dir", contract="existing-directory", required=True)
@@ -7969,6 +8001,10 @@ def build_parser():
                               help="which roster SLOT of a repeated seat key is absent (default 0), "
                                    "so one of two same-id targets can be recorded missing without "
                                    "claiming its twin is")
+    cli_contract.add_argument(pm, "--round", contract="integer", default=None, type=int,
+                              help="expected pending round; when supplied, a mismatch refuses")
+    cli_contract.add_argument(pm, "--phase", contract="free-text", default=None,
+                              help="expected pending phase; when supplied, a mismatch refuses")
 
     pa = sub.add_parser("advance")
     cli_contract.add_argument(pa, "--session-dir", contract="existing-directory", required=True)
@@ -8131,10 +8167,12 @@ def _dispatch(args):
     elif args.cmd == "record-result":
         out = cmd_record_result(args.session_dir, args.seat, attempt=args.attempt,
                                 supersede=args.supersede, expect_sha256=args.expect_sha256,
-                                sweep=args.sweep, occurrence=args.occurrence)
+                                sweep=args.sweep, occurrence=args.occurrence,
+                                expect_round=args.round, expect_phase=args.phase)
     elif args.cmd == "record-missing":
         out = cmd_record_missing(args.session_dir, args.seat, args.attempt, args.reason,
-                                 evidence_path=args.evidence, occurrence=args.occurrence)
+                                 evidence_path=args.evidence, occurrence=args.occurrence,
+                                 expect_round=args.round, expect_phase=args.phase)
     elif args.cmd == "advance":
         out = cmd_advance(args.session_dir, break_lock=args.break_lock,
                           owner_artifact_path=args.owner_artifact)
