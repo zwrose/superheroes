@@ -710,7 +710,10 @@ as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry
 `recordsPath`, `_persist_round_records` refreshes that file after every fold: each in-memory ledger
 record is written through `review_memory.summarize_record` (a skeleton — no evidence bodies) and
 carries the declared per-round disclosure block selected by `_declared_disclosures` from
-`RESUMABLE_DISCLOSURE_CHANNELS`. A destination the producer cannot read and a persist it cannot
+`RESUMABLE_DISCLOSURE_CHANNELS`. The producer writes the whole outgoing ledger in one atomic
+`persist_record` call — no intermediate strict-prefix state on disk. A caller that already owns
+`round-records.json` opts out with `persistRecords: False` (`eval/review_loop_runner.py` is the
+one in-repo caller that does). A destination the producer cannot read and a persist it cannot
 complete both park `cannot-certify` rather than certifying off a stale file; `_seed_resume` is the
 read path on the next invocation. `recordsPath` is not reachable from the `next` CLI today — this
 is the library / `run_loop` path only.

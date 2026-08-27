@@ -553,6 +553,8 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             # The driver reads these ONCE at new_state to resume from the durable seeds and to seed
             # the challenged-coverage breaker's accumulated decisions (#507 WO-D resume/records seam).
             "recordsPath": records_path,
+            # This harness owns round-records.json via _fold_panel_persist — not the driver producer.
+            "persistRecords": False,
             "coveragePath": coverage_path,
         }
         receipt = RD.run_loop(seams, config)
