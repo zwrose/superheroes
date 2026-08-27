@@ -296,6 +296,7 @@ JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
 
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
 POLICY_APPLIED_SOURCE_OWNER_SUPPLIED = "owner-supplied"
+POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED = "owner-unattributed"
 OWNER_ARTIFACT_TERMINAL_REFUSAL = "owner-artifact-terminal"
 OWNER_ARTIFACT_UNREADABLE_REFUSAL = "owner-artifact-unreadable"
 OWNER_ARTIFACT_SHAPE_REFUSAL = "owner-artifact-shape"
@@ -6761,8 +6762,32 @@ def _policy_applied_record(phase, resolution):
             "matches": list(resolution.get("matches") or []), "action": action}
 
 
+def _owner_artifact_provenance_well_formed(artifact):
+    if not isinstance(artifact, dict):
+        return False
+    block = artifact.get("_provenance")
+    if not isinstance(block, dict):
+        return False
+    ruled_by = block.get("ruledBy")
+    if not isinstance(ruled_by, str) or not ruled_by.strip():
+        return False
+    ruled_at = block.get("ruledAt")
+    if not isinstance(ruled_at, str) or not ruled_at.strip():
+        return False
+    records = block.get("records")
+    if not isinstance(records, list) or not records:
+        return False
+    for entry in records:
+        if not isinstance(entry, str) or not entry.strip():
+            return False
+    return True
+
+
 def _owner_supplied_applied_record(phase, artifact):
-    return {"phase": phase, "source": POLICY_APPLIED_SOURCE_OWNER_SUPPLIED, "layers": [],
+    source = (POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
+              if _owner_artifact_provenance_well_formed(artifact)
+              else POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED)
+    return {"phase": phase, "source": source, "layers": [],
             "matches": [], "action": artifact,
             "artifactSha256": _sha256(_canonical(artifact))}
 

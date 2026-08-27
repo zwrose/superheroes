@@ -205,9 +205,13 @@ the same JSON **object** shape hand `submit` takes for that gate: `{"disposition
 `present-judgment`, `{"choice": "<stall choice>"}` for `present-stall-menu`. The fold runs through
 the same `cmd_submit` chokepoint as every other fold (echo, state-hash, terminal-receipt gate, round
 ceiling, stall guards `stall-choice-retired:<name>`, `stall-choice-not-offered:<name>`,
-`stall-choice-missing`, `stall-accept-risk-not-eligible`). The resolution is journalled as **owner-supplied**: the
-`policyApplied` record carries `source: "owner-supplied"` (calibration-resolved carries
-`source: "gate-policy"`) plus `artifactSha256` naming the artifact folded, on the fold's own commit.
+`stall-choice-missing`, `stall-accept-risk-not-eligible`). The resolution is journalled under one of
+two owner-gate sources: the `policyApplied` record carries `source: "owner-supplied"` only when the
+folded artifact includes a well-formed `_provenance` object (`ruledBy` and `ruledAt` as non-empty
+strings, `records` a non-empty list of non-empty strings; unknown extra keys inside `_provenance`
+are tolerated); every other owner-gate fold carries `source: "owner-unattributed"`.
+Calibration-resolved folds carry `source: "gate-policy"`. Every fold also journals
+`artifactSha256` naming the artifact folded, on the fold's own commit.
 
 ```bash
 python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
@@ -244,6 +248,7 @@ owner-artifact-shape
 ```text
 gate-policy
 owner-supplied
+owner-unattributed
 ```
 
 **No dead ends.** Whichever fold path a session has committed to, that path's fold command stays
@@ -539,7 +544,8 @@ carries a `detail` cause distinct from the top-level reason so operators can tel
 On the orchestrator's `next`/`submit` path you still present the gate and submit the owner's choice;
 gate policy pre-authorization is what lets `advance` fold without stopping. On the `advance` path
 when policy has not pre-authorized, present the gate and fold the owner's resolution with
-`advance --owner-artifact` — the `policyApplied` record carries `source: "owner-supplied"` (vs
+`advance --owner-artifact` — the `policyApplied` record carries `source: "owner-supplied"` when the
+artifact's `_provenance` block is well-formed, `source: "owner-unattributed"` otherwise (vs
 `"gate-policy"` for a calibration-resolved fold).
 
 **Advance gate-policy park detail causes** (authoritative list — drift-tested against
