@@ -3558,14 +3558,15 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
         if rec.get("lensCoverage") is not None:
             rd["lensCoverage"] = rec.get("lensCoverage")
         # Fossil-channel census requires a literal per-channel round-record read — not a variable
-        # key through the generic loop — so this channel is consumed here (form-gated).
-        verify_passes = rec.get("verifyPasses")
-        if verify_passes and _round_entry_key_allowed("verifyPasses", form, state):
-            rd["verifyPasses"] = verify_passes
+        # key through the generic loop — so this channel is consumed here (form-gated, always-emit).
+        if _round_entry_key_allowed("verifyPasses", form, state):
+            verify_passes = rec.get("verifyPasses")
+            rd["verifyPasses"] = verify_passes if isinstance(verify_passes, list) else []
         # The per-round disclosure channels ride their ONE home (#720) — the same set a
         # `recordsPath` resume restores, so a resumed round's receipt discloses what its round
         # actually recorded. Emission is unchanged: truthiness, except the presence-emitting
-        # channels named by `_DISCLOSE_ON_PRESENCE`. `verifyPasses` emits above (form-gated).
+        # channels named by `_DISCLOSE_ON_PRESENCE`. `verifyPasses` emits above (form-gated,
+        # always-emit when permitted).
         for chan in RESUMABLE_DISCLOSURE_CHANNELS:
             if chan == "verifyPasses":
                 continue
@@ -3878,6 +3879,28 @@ def _write_interim_receipt(session_dir, state, stop_reason):
     return receipt
 
 
+def _receipt_requires_round_verify_passes(receipt):
+    """Whether round entries must carry verifyPasses (certified v3, attested, interim only)."""
+    kind = receipt_kind(receipt)
+    return kind in (RECEIPT_ATTESTED_SCHEMA, RECEIPT_INTERIM_SCHEMA,
+                    RECEIPT_CERTIFIED_SCHEMA % 3)
+
+
+def _validate_round_entries_verify_passes(receipt):
+    """Every round entry on forms that permit the channel must carry verifyPasses as a list."""
+    if not _receipt_requires_round_verify_passes(receipt):
+        return True, None
+    for idx, rd in enumerate(receipt.get("rounds") or []):
+        if not isinstance(rd, dict):
+            continue
+        rnd = rd.get("round", idx)
+        if "verifyPasses" not in rd:
+            return False, "round %s missing verifyPasses" % rnd
+        if not isinstance(rd.get("verifyPasses"), list):
+            return False, "round %s verifyPasses must be a list" % rnd
+    return True, None
+
+
 def validate_receipt(receipt):
     """Validate a driver receipt's SHAPE — version-dispatched since #723.
 
@@ -3928,6 +3951,9 @@ def _validate_attested_receipt(receipt):
     for key in ("rounds", "findings", "decisions", "degraded", "skippedBlockers"):
         if not isinstance(receipt.get(key), list):
             return False, "receipt %s must be a list" % key
+    ok, reason = _validate_round_entries_verify_passes(receipt)
+    if not ok:
+        return ok, reason
     return True, None
 
 
@@ -3961,12 +3987,9 @@ def _validate_interim_receipt(receipt):
     for key in ("rounds", "findings", "decisions", "degraded", "skippedBlockers"):
         if not isinstance(receipt.get(key), list):
             return False, "receipt %s must be a list" % key
-    for idx, rd in enumerate(receipt.get("rounds") or []):
-        if not isinstance(rd, dict):
-            continue
-        vp = rd.get("verifyPasses")
-        if vp is not None and not isinstance(vp, list):
-            return False, "round %s verifyPasses must be a list" % rd.get("round", idx)
+    ok, reason = _validate_round_entries_verify_passes(receipt)
+    if not ok:
+        return ok, reason
     return True, None
 
 
@@ -4079,6 +4102,9 @@ def _validate_certified_receipt(receipt):
     if not receipt.get("verdict"):
         return False, "receipt verdict is empty"
     ok, reason = _validate_rounds_lens_coverage(receipt)
+    if not ok:
+        return ok, reason
+    ok, reason = _validate_round_entries_verify_passes(receipt)
     if not ok:
         return ok, reason
     return True, None
