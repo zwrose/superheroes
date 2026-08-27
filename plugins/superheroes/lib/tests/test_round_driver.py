@@ -4648,10 +4648,63 @@ def test_seat_map_unavailable_round1_map_round2_absent():
     })
     assert "seatMapUnavailable" not in state["rounds"]["1"]
     state["round"] = 2
-    RD._fold_panel(state, state["config"], {"seats": seats})
+    RD._fold_panel(state, state["config"], {
+        "seats": seats,
+        "canaryResult": _canary_probes_for(seat_map),
+    })
     assert "seatMapUnavailable" not in state["rounds"]["2"]
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert "seat-map-unavailable" not in state["certification"]["shapeDrivers"]
+
+
+def test_seat_map_round2_no_map_no_canary_withholds_certification():
+    """Round 2 with no seat map and no canary probe withholds certification (#681)."""
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
+    seat_map = _verified_clean_seat_map(["claude", "codex"])
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": seat_map,
+        "canaryResult": _canary_probes_for(seat_map),
+    })
+    assert "seatMapUnavailable" not in state["rounds"]["1"]
+    state["round"] = 2
+    RD._fold_panel(state, state["config"], {"seats": seats})
+    assert "seatMapUnavailable" not in state["rounds"]["2"]
+    assert state["_incompletePanel"] is True
+    assert "canaryUnverified" in state["rounds"]["2"]
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["terminal"] == "cannot-certify"
+    assert state["certification"]["shape"] is None
+
+
+@pytest.mark.parametrize("bad_manifest", [
+    pytest.param(None, id="absent"),
+    pytest.param("not-a-dict", id="string"),
+    pytest.param([], id="list"),
+])
+def test_canary_round2_no_map_malformed_ran_manifest_demands_liveness(bad_manifest):
+    """Round 2 with no map but malformed ranManifest still resolves cross-vendor seats (#681)."""
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": seat_map,
+        "canaryResult": _canary_probes_for(seat_map),
+    })
+    state["round"] = 2
+    round2_art = {"seats": seats}
+    if bad_manifest is not None:
+        round2_art["ranManifest"] = bad_manifest
+    RD._fold_panel(state, state["config"], round2_art)
+    r2 = state["rounds"]["2"]
+    assert r2["canaryUnverified"] == ["code-reviewer"]
+    assert state["_incompletePanel"] is True
+    live = RD.canary_liveness(
+        list(RD.DIMENSIONS), r2["seatStatus"], seats,
+        RD._sm_canary_map(state, {}), {}, None)
+    assert live["byDim"]["code-reviewer"] == "unproven"
+    assert live["byDim"]["code-reviewer"] != "n/a"
 
 
 def test_seat_map_unavailable_rounds_arm_with_seats_present():
@@ -4796,21 +4849,82 @@ def test_seat_map_receipts_projection_family_census_positive():
     assert callers == set(_SEAT_MAP_RECEIPTS_CALLERS)
 
 
-def test_seat_map_blob_read_sites_census_negative():
-    """No `state[\"seatMap\"]` / `state.get(\"seatMap\")` outside `_seat_map_receipts` (#681)."""
-    allowed = 1  # the lone site inside `_seat_map_receipts`
-    pattern = re.compile(r'state\.get\("seatMap"\)|state\["seatMap"\]')
-    paths = [
-        os.path.join(_LIB, "round_driver.py"),
-        os.path.join(_LIB, "round_adapters.py"),
-    ]
-    hits = []
+_SEAT_MAP_STATE_READ_PATHS = (
+    os.path.join(_LIB, "round_driver.py"),
+    os.path.join(_LIB, "round_adapters.py"),
+)
+_ALLOWED_SEAT_MAP_STATE_READ_FN = "_seat_map_receipts"
+
+
+def _ast_string_constant(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _state_names_in_function(func_node):
+    """Names in *func_node* bound to the driver's ``state`` parameter."""
+    param_names = {a.arg for a in (
+        list(func_node.args.posonlyargs) + list(func_node.args.args)
+        + list(func_node.args.kwonlyargs))}
+    if "state" not in param_names:
+        return set()
+    names = {"state"}
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and isinstance(node.value, ast.Name):
+                    if node.value.id in names:
+                        names.add(target.id)
+    return names
+
+
+def _seat_map_state_read_sites(paths=_SEAT_MAP_STATE_READ_PATHS):
+    """Executable ``state[...]`` / ``state.get(...)`` reads of ``seatMap``, by enclosing function."""
+    sites = []
     for path in paths:
         with open(path, encoding="utf-8") as fh:
-            for lineno, line in enumerate(fh, 1):
-                if pattern.search(line):
-                    hits.append((path, lineno, line.strip()))
-    assert len(hits) == allowed, "unexpected seatMap reads: %r" % hits
+            tree = ast.parse(fh.read(), filename=path)
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef):
+                sites.extend(_seat_map_reads_in_function(node, path))
+            elif isinstance(node, ast.ClassDef):
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef):
+                        sites.extend(_seat_map_reads_in_function(item, path))
+    return sites
+
+
+def _seat_map_reads_in_function(func_node, path):
+    reads = []
+    state_names = _state_names_in_function(func_node)
+    if not state_names:
+        return reads
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Subscript):
+            if isinstance(node.value, ast.Name) and node.value.id in state_names:
+                if _ast_string_constant(node.slice) == "seatMap":
+                    reads.append((path, func_node.name))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr != "get":
+                continue
+            if not isinstance(node.func.value, ast.Name):
+                continue
+            if node.func.value.id not in state_names or not node.args:
+                continue
+            if _ast_string_constant(node.args[0]) == "seatMap":
+                reads.append((path, func_node.name))
+    return reads
+
+
+def test_seat_map_blob_read_sites_census_negative():
+    """No executable ``state[\"seatMap\"]`` read outside ``_seat_map_receipts`` (#681)."""
+    sites = _seat_map_state_read_sites()
+    by_fn = {fn for _path, fn in sites}
+    assert _ALLOWED_SEAT_MAP_STATE_READ_FN in by_fn, (
+        "allowed site %r not found in census %r" % (_ALLOWED_SEAT_MAP_STATE_READ_FN, sites))
+    unexpected = sorted({(p, f) for p, f in sites if f != _ALLOWED_SEAT_MAP_STATE_READ_FN})
+    assert not unexpected, "unexpected seatMap reads: %r" % unexpected
 
 
 def test_partial_round2_degradations_preserves_same_family_shape():
