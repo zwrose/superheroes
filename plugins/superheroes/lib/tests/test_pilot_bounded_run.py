@@ -21,6 +21,7 @@ import pilot_boundary as pb  # noqa: E402
 from grandchild_probe import (  # noqa: E402
     _observed_process_state,
     _wait_for_process_gone,
+    cleanup_grandchild_on_exit,
     probe_grandchild,
 )
 
@@ -542,9 +543,9 @@ def test_retain_output_false_timeout_kills_grandchild(private_tmp):
             "/bin/sleep 5\n" % pid_file
         )
 
-    def run(script_path, timeout_seconds):
+    def run(target, timeout_seconds):
         return pbr.run_bounded(
-            [script_path],
+            [target.script_path],
             run_cwd=run_cwd,
             env={},
             timeout_seconds=timeout_seconds,
@@ -553,17 +554,18 @@ def test_retain_output_false_timeout_kills_grandchild(private_tmp):
         )
 
     probe = probe_grandchild(tmp_dir=private_tmp, script_body=script_body, run=run)
-    assert probe.result["outcome"] == pbr.OUTCOME_TIMEOUT
-    if not _wait_for_process_gone(probe.pid, timeout=10):
-        state = _observed_process_state(probe.pid)
-        detail = f"observed state: {state}"
-        try:
-            detail += f"; pgid={os.getpgid(probe.pid)}"
-        except (ProcessLookupError, PermissionError):
-            pass
-        pytest.fail(
-            f"grandchild pid {probe.pid} still present after 10s poll; {detail}"
-        )
+    with cleanup_grandchild_on_exit(probe.pid):
+        assert probe.result["outcome"] == pbr.OUTCOME_TIMEOUT
+        if not _wait_for_process_gone(probe.pid, timeout=10):
+            state = _observed_process_state(probe.pid)
+            detail = f"observed state: {state}"
+            try:
+                detail += f"; pgid={os.getpgid(probe.pid)}"
+            except (ProcessLookupError, PermissionError):
+                pass
+            pytest.fail(
+                f"grandchild pid {probe.pid} still present after 10s poll; {detail}"
+            )
 
 
 def test_retain_output_false_read_error_refuses_spawn_failed(private_tmp, monkeypatch):

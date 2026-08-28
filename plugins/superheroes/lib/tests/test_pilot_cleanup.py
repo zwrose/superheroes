@@ -26,8 +26,8 @@ import pilot_cleanup as pc  # noqa: E402
 import pilot_slot  # noqa: E402
 from grandchild_probe import (  # noqa: E402
     _observed_process_state,
-    _read_grandchild_pid,
     _wait_for_process_gone,
+    cleanup_grandchild_on_exit,
     probe_grandchild,
 )
 
@@ -3284,24 +3284,25 @@ def test_run_bounded_kills_grandchild_on_timeout(private_tmp):
             "/bin/sleep 5\n" % pid_file
         )
 
-    def run(script_path, timeout_seconds):
+    def run(target, timeout_seconds):
         return pc.run_bounded(
-            [script_path],
+            [target.script_path],
             cwd=run_cwd,
             env={},
             timeout_seconds=timeout_seconds,
         )
 
     probe = probe_grandchild(tmp_dir=private_tmp, script_body=script_body, run=run)
-    assert probe.result["timedOut"] is True
-    if not _wait_for_process_gone(probe.pid, timeout=10):
-        state = _observed_process_state(probe.pid)
-        detail = f"observed state: {state}"
-        try:
-            detail += f"; pgid={os.getpgid(probe.pid)}"
-        except (ProcessLookupError, PermissionError):
-            pass
-        pytest.fail(f"grandchild pid {probe.pid} still present after 10s poll; {detail}")
+    with cleanup_grandchild_on_exit(probe.pid):
+        assert probe.result["timedOut"] is True
+        if not _wait_for_process_gone(probe.pid, timeout=10):
+            state = _observed_process_state(probe.pid)
+            detail = f"observed state: {state}"
+            try:
+                detail += f"; pgid={os.getpgid(probe.pid)}"
+            except (ProcessLookupError, PermissionError):
+                pass
+            pytest.fail(f"grandchild pid {probe.pid} still present after 10s poll; {detail}")
 
 
 def test_run_bounded_kills_orphan_grandchild_when_leader_exits_first(private_tmp):
@@ -3315,26 +3316,27 @@ def test_run_bounded_kills_orphan_grandchild_when_leader_exits_first(private_tmp
             "exit 0\n" % pid_file
         )
 
-    def run(script_path, timeout_seconds):
+    def run(target, timeout_seconds):
         return pc.run_bounded(
-            [script_path],
+            [target.script_path],
             cwd=run_cwd,
             env={},
             timeout_seconds=timeout_seconds,
         )
 
     probe = probe_grandchild(tmp_dir=private_tmp, script_body=script_body, run=run)
-    assert probe.result["timedOut"] is True
-    assert probe.elapsed < probe.timeout_used + 5
-    # Leader exits before timeout cleanup; reaping is async and zombies count as gone.
-    if not _wait_for_process_gone(probe.pid, timeout=10):
-        state = _observed_process_state(probe.pid)
-        detail = f"observed state: {state}"
-        try:
-            detail += f"; pgid={os.getpgid(probe.pid)}"
-        except (ProcessLookupError, PermissionError):
-            pass
-        pytest.fail(f"grandchild pid {probe.pid} still present after 10s poll; {detail}")
+    with cleanup_grandchild_on_exit(probe.pid):
+        assert probe.result["timedOut"] is True
+        assert probe.elapsed < probe.timeout_used + 5
+        # Leader exits before timeout cleanup; reaping is async and zombies count as gone.
+        if not _wait_for_process_gone(probe.pid, timeout=10):
+            state = _observed_process_state(probe.pid)
+            detail = f"observed state: {state}"
+            try:
+                detail += f"; pgid={os.getpgid(probe.pid)}"
+            except (ProcessLookupError, PermissionError):
+                pass
+            pytest.fail(f"grandchild pid {probe.pid} still present after 10s poll; {detail}")
 
 
 def test_run_bounded_kills_sigterm_ignoring_orphan_grandchild_when_leader_exits_first(
@@ -3354,29 +3356,30 @@ def test_run_bounded_kills_sigterm_ignoring_orphan_grandchild_when_leader_exits_
             "exit 0\n" % pid_file
         )
 
-    def run(script_path, timeout_seconds):
+    def run(target, timeout_seconds):
         return pc.run_bounded(
-            [script_path],
+            [target.script_path],
             cwd=run_cwd,
             env={},
             timeout_seconds=timeout_seconds,
         )
 
     probe = probe_grandchild(tmp_dir=private_tmp, script_body=script_body, run=run)
-    assert probe.result["timedOut"] is True
-    assert probe.elapsed < probe.timeout_used + 5
-    # Kill escalation and reaping are async under CPU load (first seen as a 4-of-6
-    # failure rate on xdist CI runners): poll like the sibling test above rather than
-    # asserting the instant state. The invariant is that the SIGTERM-ignoring
-    # grandchild dies, not that it is already gone the moment run_bounded returns.
-    if not _wait_for_process_gone(probe.pid, timeout=10):
-        state = _observed_process_state(probe.pid)
-        detail = f"observed state: {state}"
-        try:
-            detail += f"; pgid={os.getpgid(probe.pid)}"
-        except (ProcessLookupError, PermissionError):
-            pass
-        pytest.fail(f"grandchild pid {probe.pid} still present after 10s poll; {detail}")
+    with cleanup_grandchild_on_exit(probe.pid):
+        assert probe.result["timedOut"] is True
+        assert probe.elapsed < probe.timeout_used + 5
+        # Kill escalation and reaping are async under CPU load (first seen as a 4-of-6
+        # failure rate on xdist CI runners): poll like the sibling test above rather than
+        # asserting the instant state. The invariant is that the SIGTERM-ignoring
+        # grandchild dies, not that it is already gone the moment run_bounded returns.
+        if not _wait_for_process_gone(probe.pid, timeout=10):
+            state = _observed_process_state(probe.pid)
+            detail = f"observed state: {state}"
+            try:
+                detail += f"; pgid={os.getpgid(probe.pid)}"
+            except (ProcessLookupError, PermissionError):
+                pass
+            pytest.fail(f"grandchild pid {probe.pid} still present after 10s poll; {detail}")
 
 
 # --- WO8 FIX-1: partial plant failure ------------------------------------------

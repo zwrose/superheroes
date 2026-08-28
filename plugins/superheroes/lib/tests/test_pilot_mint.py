@@ -27,6 +27,7 @@ import pilot_slot  # noqa: E402
 from grandchild_probe import (  # noqa: E402
     _observed_process_state,
     _wait_for_process_gone,
+    cleanup_grandchild_on_exit,
     probe_grandchild,
 )
 
@@ -561,15 +562,11 @@ def test_gate_off_invalid_bounds(private_tmp):
 
 def test_gate_off_grandchild_timeout_reaps_process_group(private_tmp):
     def script_body(pid_file):
+        # Mint command is Python argv, not shell — deliberate no-op fixture file.
         return "#!/bin/sh\ntrue\n"
 
-    def run(script_path, timeout_seconds):
-        attempt_index = os.path.basename(script_path).replace("fixture-", "").replace(
-            ".sh", ""
-        )
-        pid_path = os.path.join(
-            os.path.dirname(script_path), f"grandchild-{attempt_index}.pid"
-        )
+    def run(target, timeout_seconds):
+        pid_path = target.pid_path
         envelope = dict(SAMPLE_ENVELOPE)
         envelope["gateOffTestCommand"] = [
             sys.executable, "-c",
@@ -605,17 +602,18 @@ def test_gate_off_grandchild_timeout_reaps_process_group(private_tmp):
         return result_holder["result"]
 
     probe = probe_grandchild(tmp_dir=private_tmp, script_body=script_body, run=run)
-    assert probe.result["reason"] == pm.REFUSAL_GATE_OFF_TIMEOUT
-    if not _wait_for_process_gone(probe.pid, timeout=10):
-        state = _observed_process_state(probe.pid)
-        detail = f"observed state: {state}"
-        try:
-            detail += f"; pgid={os.getpgid(probe.pid)}"
-        except (ProcessLookupError, PermissionError):
-            pass
-        pytest.fail(
-            f"grandchild pid {probe.pid} still alive after gate-off timeout reap; {detail}"
-        )
+    with cleanup_grandchild_on_exit(probe.pid):
+        assert probe.result["reason"] == pm.REFUSAL_GATE_OFF_TIMEOUT
+        if not _wait_for_process_gone(probe.pid, timeout=10):
+            state = _observed_process_state(probe.pid)
+            detail = f"observed state: {state}"
+            try:
+                detail += f"; pgid={os.getpgid(probe.pid)}"
+            except (ProcessLookupError, PermissionError):
+                pass
+            pytest.fail(
+                f"grandchild pid {probe.pid} still alive after gate-off timeout reap; {detail}"
+            )
 
 
 def test_gate_off_receipt_pass_requires_exit_code_zero():

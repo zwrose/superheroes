@@ -4,15 +4,21 @@ import signal
 import subprocess
 import time
 from collections import namedtuple
+from contextlib import contextmanager
 from unittest import mock
 
 import pytest
 
-ATTEMPT_TIMEOUTS = (1, 2, 4, 8)  # seconds; escalating budgets for the setup race
+# Escalating budgets for the setup race. p50 spawn latency is ~0.148 s, so the first
+# rung still covers the common case; longer rungs are paid only when the host cannot
+# start /bin/sh inside the previous budget — a machine that cannot do it in 45 s has a
+# problem this test should report loudly as a setup race, not hide.
+ATTEMPT_TIMEOUTS = (1, 2, 5, 15, 45)
 
 GrandchildProbe = namedtuple(
     "GrandchildProbe", ("pid", "result", "elapsed", "timeout_used", "pgid")
 )
+ProbeTarget = namedtuple("ProbeTarget", ("script_path", "pid_path"))
 
 
 def _write_executable(path, content):
@@ -32,21 +38,6 @@ def _try_read_grandchild_pid(pid_file):
         return int(raw)
     except ValueError:
         return None
-
-
-def _read_grandchild_pid(pid_file):
-    if not os.path.isfile(pid_file):
-        pytest.fail(f"grandchild pid file missing: {pid_file!r}")
-    with open(pid_file, encoding="utf-8") as handle:
-        raw = handle.read().strip()
-    if not raw:
-        pytest.fail(f"grandchild pid file empty: {pid_file!r}")
-    try:
-        return int(raw)
-    except ValueError:
-        pytest.fail(
-            f"grandchild pid file not an integer: {pid_file!r} contents {raw!r}"
-        )
 
 
 def _observed_process_state(pid):
@@ -114,19 +105,54 @@ def _best_effort_kill_pid(pid):
         pass
 
 
+@contextmanager
+def cleanup_grandchild_on_exit(pid):
+    """Best-effort SIGKILL of ``pid`` on every exit path; never masks exceptions."""
+    try:
+        yield
+    finally:
+        _best_effort_kill_pid(pid)
+
+
+def _compact_result(result):
+    if not isinstance(result, dict):
+        return repr(result)
+    parts = []
+    for key in ("outcome", "timedOut", "exit", "reason"):
+        if key in result:
+            parts.append(f"{key}={result[key]!r}")
+    if parts:
+        return "{" + ", ".join(parts) + "}"
+    return repr(result)
+
+
+def _format_attempt_diagnostics_table(attempt_records):
+    lines = ["Per-attempt diagnostics:"]
+    for record in attempt_records:
+        lines.append(
+            "  attempt {index}: budget={budget}s elapsed={elapsed:.2f}s "
+            "pgid={pgid!r} group_gone={group_gone} result={result}".format(
+                **record
+            )
+        )
+    return "\n".join(lines)
+
+
 def probe_grandchild(*, tmp_dir, script_body, run, attempt_timeouts=ATTEMPT_TIMEOUTS):
     """Drive `run(target, timeout_seconds)` until the fixture records a grandchild pid.
 
-    `script_body(pid_file_path) -> str` is supplied BY THE CALLER and returns that attempt's
-    fixture text, so each test keeps its own fixture shape verbatim and only the pid-file path
-    varies per attempt.
+    ``run`` receives a ``ProbeTarget`` with ``script_path`` (the written fixture) and
+    ``pid_path`` (where the grandchild should record its pid). ``script_body(pid_path)``
+    is supplied by the caller and returns that attempt's fixture text.
     Returns GrandchildProbe(pid, result, elapsed, timeout_used, pgid).
     """
     budgets_tried = []
+    attempt_records = []
     for attempt_index, budget in enumerate(attempt_timeouts):
         budgets_tried.append(budget)
         pid_path = os.path.join(tmp_dir, f"grandchild-{attempt_index}.pid")
         script_path = os.path.join(tmp_dir, f"fixture-{attempt_index}.sh")
+        target = ProbeTarget(script_path=script_path, pid_path=pid_path)
         _write_executable(script_path, script_body(pid_path))
 
         captured_pgid = [None]
@@ -144,7 +170,7 @@ def probe_grandchild(*, tmp_dir, script_body, run, attempt_timeouts=ATTEMPT_TIME
         try:
             popen_patcher.start()
             started = time.monotonic()
-            result = run(script_path, budget)
+            result = run(target, budget)
             elapsed = time.monotonic() - started
         finally:
             popen_patcher.stop()
@@ -166,10 +192,24 @@ def probe_grandchild(*, tmp_dir, script_body, run, attempt_timeouts=ATTEMPT_TIME
                 f"{attempt_index} (budget {budget}s); nothing spawned"
             )
 
-        if not _wait_for_pgid_gone(pgid, timeout=10):
+        group_gone = _wait_for_pgid_gone(pgid, timeout=10)
+        attempt_records.append(
+            {
+                "index": attempt_index,
+                "budget": budget,
+                "elapsed": elapsed,
+                "pgid": pgid,
+                "group_gone": group_gone,
+                "result": _compact_result(result),
+            }
+        )
+
+        if not group_gone:
+            diagnostics = _format_attempt_diagnostics_table(attempt_records)
             pytest.fail(
                 "process group still alive after miss — teardown evidence, not a setup race "
-                f"(pgid={pgid}, budget={budget}s, attempt={attempt_index})"
+                f"(pgid={pgid}, budget={budget}s, attempt={attempt_index})\n"
+                f"{diagnostics}"
             )
 
         missed_pid = _try_read_grandchild_pid(pid_path)
@@ -177,8 +217,9 @@ def probe_grandchild(*, tmp_dir, script_body, run, attempt_timeouts=ATTEMPT_TIME
             _best_effort_kill_pid(missed_pid)
 
     budget_list = ",".join(str(b) for b in budgets_tried)
+    diagnostics = _format_attempt_diagnostics_table(attempt_records)
     pytest.fail(
         f"grandchild never recorded its pid in any attempt (budgets {budget_list}s); "
         "every attempt's process group was proven gone, so this is the setup race, "
-        "not a surviving grandchild"
+        f"not a surviving grandchild\n{diagnostics}"
     )
