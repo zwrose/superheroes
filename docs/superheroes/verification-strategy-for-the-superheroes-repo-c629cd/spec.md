@@ -6,6 +6,7 @@ workItem: verification-strategy-for-the-superheroes-repo-c629cd
 issue: 1105
 size: medium
 status: approved
+approved: "2026-08-28"
 gates: {review: passed}
 producedBy: "the-architect@0.31.0"
 created: "2026-08-23"
