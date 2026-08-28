@@ -3032,6 +3032,23 @@ def test_producer_skips_block_for_non_integral_round_without_aliasing(tmp_path):
     assert all("disclosures" not in r for r in on_disk)
 
 
+def test_restorer_skips_junk_round_values_through_the_shared_key():
+    """Junk rounds through `_restore_round_disclosures` itself — a regression that swapped the
+    shared helper back to bare `str(int(...))` must fail HERE, not only at the unit level:
+    `1.5` must not alias round 1's entry, bools and `inf` must be skipped without raising."""
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    records = [
+        {"round": 1, "disclosures": {"vacuousSeats": ["test-reviewer"]}},
+        {"round": 1.5, "disclosures": {"vacuousSeats": ["ALIASED"]}},
+        {"round": True, "disclosures": {"vacuousSeats": ["BOOL"]}},
+        {"round": float("inf"), "disclosures": {"vacuousSeats": ["INF"]}},
+        {"round": None, "disclosures": {"vacuousSeats": ["NONE"]}},
+    ]
+    RD._restore_round_disclosures(state, records)
+    assert state["rounds"]["1"] == {"vacuousSeats": ["test-reviewer"]}
+    assert set(state["rounds"]) == {"1"}
+
+
 def test_producer_carries_empty_canary_verified_but_omits_empty_channels(tmp_path):
     records = tmp_path / "round-records.json"
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
