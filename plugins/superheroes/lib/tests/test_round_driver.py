@@ -3215,7 +3215,7 @@ def test_producer_respects_persist_records_false(tmp_path):
 
 def test_producer_empty_ledger_leaves_destination_unchanged(tmp_path):
     records = tmp_path / "round-records.json"
-    initial_text = json.dumps([_seed_record(1)], indent=2) + "\n"
+    initial_text = RD.review_memory.records_bytes([_seed_record(1)]).decode("utf-8")
     records.write_text(initial_text)
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
     state["_records"] = []

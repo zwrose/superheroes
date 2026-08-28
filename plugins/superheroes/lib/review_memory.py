@@ -33,7 +33,7 @@ def records_bytes(records):
     """The ONE producer of the durable round-records byte form. Every landing path — the library
     `persist_record` write and (WO-B) the transactional submit-accept part — writes exactly these
     bytes, so the two can never drift in format."""
-    return (json.dumps(records, indent=2) + "\n").encode("utf-8")
+    return (json.dumps(records, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
 _MAX_TITLE = 160
