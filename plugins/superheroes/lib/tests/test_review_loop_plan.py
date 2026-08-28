@@ -1000,3 +1000,149 @@ def test_haltkind_max_iterations_unchanged_vs_round_ceiling(tmp_path, monkeypatc
     assert ans_ceiling["breaker"]["reason"] == circuit_breaker.ROUND_CEILING_REASON
     assert ans_ceiling["haltKind"] == "other"
     assert ans_ceiling["haltKind"] != ans_cap["haltKind"]
+
+
+# ── #1195c-A: shared round arbiter + seven-site junk sweep ───────────────────
+
+_JUNK_CASES = [
+    pytest.param(float("inf"), id="inf"),
+    pytest.param(float("-inf"), id="neg_inf"),
+    pytest.param(float("nan"), id="nan"),
+    pytest.param(True, id="bool"),
+    pytest.param(1.5, id="non_integral"),
+    pytest.param("abc", id="unparseable"),
+]
+
+_WELL_FORMED_CASES = [
+    pytest.param(1, id="int"),
+    pytest.param(1.0, id="float"),
+    pytest.param("1", id="str"),
+]
+
+
+def _qualifying_confirmation(round_no, **over):
+    rec = _skeleton_round(round_no, {n: _dim() for n in FULL_ROSTER}, kind="confirmation")
+    rec.update(over)
+    return rec
+
+
+@pytest.mark.parametrize("junk", _JUNK_CASES)
+def test_resume_round_skips_junk_never_raises(junk):
+    """Site 116 — junk round skipped; inf must not raise OverflowError."""
+    assert rlp._resume_round([{"round": 1}, {"round": junk}]) == 2
+    assert rlp._resume_round([{"round": junk}]) == 1
+
+
+@pytest.mark.parametrize("junk", _JUNK_CASES)
+def test_panel_window_last_round_junk_becomes_zero(junk):
+    """Site 197 — junk on the last qualifying panel → last_round 0."""
+    recs = [_qualifying_confirmation(junk)]
+    qualifying, since = rlp._panel_window(recs)
+    assert qualifying
+    assert since == recs
+
+
+@pytest.mark.parametrize("junk", _JUNK_CASES)
+def test_panel_window_round_no_junk_becomes_zero(junk):
+    """Site 203 — junk round treated as 0 in the since window filter."""
+    junk_rec = {"round": junk, "kind": "baseline"}
+    recs = [_qualifying_confirmation(2), junk_rec]
+    qualifying, since = rlp._panel_window(recs)
+    assert qualifying
+    assert junk_rec not in since
+    assert len(since) == 1
+
+
+@pytest.mark.parametrize("junk", _JUNK_CASES)
+def test_confirmation_ready_round_no_junk_becomes_zero(junk):
+    """Site 253 — junk on a marked confirmationPending record → round 0."""
+    marked = {"round": junk, "confirmationPending": True, "kind": "baseline"}
+    ready = rlp._confirmation_ready([marked, {"round": 1, "kind": "baseline"}], 2, False)
+    assert ready is True
+
+
+@pytest.mark.parametrize("junk", _JUNK_CASES)
+def test_assemble_rounds_junk_passes_raw_value(junk):
+    """Site 295 — junk round kept raw in breaker input, never raises."""
+    out = rlp._assemble_rounds([{"round": junk, "findings": []}], {})
+    assert len(out) == 1
+    assert out[0]["round"] is junk
+
+
+@pytest.mark.parametrize("junk", _JUNK_CASES)
+def test_latest_coverage_ids_junk_becomes_zero(junk):
+    """Site 343 — junk round ignored; latest valid round wins."""
+    recs = [
+        {"round": junk, "coverageDecisions": [{"id": "junk"}]},
+        {"round": 2, "coverageDecisions": [{"id": "good"}]},
+    ]
+    assert rlp._latest_coverage_ids(recs) == ["good"]
+
+
+@pytest.mark.parametrize("junk", _JUNK_CASES)
+def test_entry_bootstrap_marked_round_junk_becomes_zero(tmp_path, junk):
+    """Site 392 — junk on confirmationPending record → markedRound 0."""
+    rec = _skeleton_round(junk, {"code-reviewer": _dim()}, confirmation_pending=True)
+    path = _write_records(tmp_path, [rec])
+    ans = rlp.entry_bootstrap(path, DIMS)
+    assert ans["ok"] is True
+    assert ans["markedRound"] == 0
+
+
+@pytest.mark.parametrize("well_formed", _WELL_FORMED_CASES)
+def test_resume_round_well_formed_unchanged(well_formed):
+    assert rlp._resume_round([{"round": well_formed}]) == 2
+
+
+@pytest.mark.parametrize("well_formed", _WELL_FORMED_CASES)
+def test_panel_window_well_formed_last_round_unchanged(well_formed):
+    recs = [_qualifying_confirmation(well_formed)]
+    _, since = rlp._panel_window(recs)
+    assert since == recs
+
+
+@pytest.mark.parametrize("well_formed", _WELL_FORMED_CASES)
+def test_assemble_rounds_well_formed_normalizes_to_int(well_formed):
+    out = rlp._assemble_rounds([{"round": well_formed, "findings": []}], {})
+    assert out[0]["round"] == 1
+
+
+@pytest.mark.parametrize("well_formed", _WELL_FORMED_CASES)
+def test_latest_coverage_ids_well_formed_unchanged(well_formed):
+    recs = [{"round": well_formed, "coverageDecisions": [{"id": "x"}]}]
+    assert rlp._latest_coverage_ids(recs) == ["x"]
+
+
+def _round_int_call_sites_outside_arbiter():
+    import ast
+    mod_path = os.path.join(os.path.dirname(__file__), "..", "review_loop_plan.py")
+    with open(mod_path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=mod_path)
+    arbiter = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_round_number")
+    allowed = range(arbiter.lineno, arbiter.end_lineno + 1)
+
+    def _arg_reads_round(arg):
+        for sub in ast.walk(arg):
+            if isinstance(sub, ast.Constant) and sub.value == "round":
+                return True
+        return False
+
+    violations = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (isinstance(node.func, ast.Name) and node.func.id == "int"):
+            continue
+        if not node.args or not _arg_reads_round(node.args[0]):
+            continue
+        if node.lineno not in allowed:
+            violations.append(node.lineno)
+    return violations
+
+
+def test_round_value_int_calls_census_only_inside_arbiter():
+    """Census — no bare int(rec.get(\"round\")) outside _round_number."""
+    violations = _round_int_call_sites_outside_arbiter()
+    assert violations == [], "bare int(round) at lines %r" % violations

@@ -226,3 +226,46 @@ def test_f5_prior_vs_fresh_collision_keeps_higher_severity(tmp_path):
     assert merged[0]["severity"] == "Critical"
     assert merged[0]["dimension"] == "Code + Architecture"
     assert state.get("terminal") == "cannot-certify"
+
+
+# --- #1195c-A: junk-round park on resume path ---
+
+
+def test_junk_infinity_round_parks_resume_corrupt(tmp_path):
+    """Junk round parks _seed_resume — no OverflowError, non-empty corrupt reason."""
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(float("inf"))]))
+    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
+    state = _fresh_state()
+    RD._seed_resume(state, cfg)
+    assert isinstance(state.get("_resumeCorrupt"), str)
+    assert state["_resumeCorrupt"]
+    assert "cannot certify" in state["_resumeCorrupt"]
+
+
+def test_legacy_none_round_does_not_park_and_resumes(tmp_path):
+    """None round is legacy/absent — must not park; resume round stays 2 after round 1."""
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([{"schemaVersion": 2, "round": None, "kind": "baseline",
+                                    "dimensions": {"test-reviewer": {"status": "run",
+                                                                       "confidence": "high",
+                                                                       "tier": "reviewer-deep",
+                                                                       "findings": []}},
+                                    "findings": [], "coverageDecisions": []},
+                                   _seed_record(1)]))
+    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
+    state = _fresh_state()
+    RD._seed_resume(state, cfg)
+    assert state.get("_resumeCorrupt") is None
+    assert state.get("round") == 2
+
+
+def test_well_formed_round_resume_unchanged(tmp_path):
+    """Well-formed round 1 still resumes at round 2."""
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1)]))
+    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
+    state = _fresh_state()
+    RD._seed_resume(state, cfg)
+    assert state.get("_resumeCorrupt") is None
+    assert state.get("round") == 2

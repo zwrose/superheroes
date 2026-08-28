@@ -478,15 +478,10 @@ def _round_disclosure_key(value):
     Int-normalized so `1`, `1.0`, and `"1"` key the same round. Junk returns None (no disclosure
     block persisted or restored, never a crash): bools, non-integral floats (a `1.5` must not alias
     round 1's evidence), non-finite floats (`int(inf)` raises OverflowError), and unparseable values."""
-    if isinstance(value, bool):
+    n = review_loop_plan._round_number(value)
+    if n is None:
         return None
-    try:
-        i = int(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if isinstance(value, float) and i != value:
-        return None
-    return str(i)
+    return str(n)
 
 
 def _declared_disclosures(entry):
@@ -1351,6 +1346,14 @@ def _seed_resume(state, cfg):
     _restore_round_disclosures(state, records)
     if not records:
         return
+    for rec in records:
+        rnd = rec.get("round")
+        if rnd is not None and review_loop_plan._round_number(rnd) is None:
+            state["_resumeCorrupt"] = (
+                "resume state corrupt (record round %s: round value is not a valid round number) — "
+                "cannot certify; a fresh full reviewer-deep round is owed"
+                % (rnd,))
+            return
     resume_round = review_loop_plan._resume_round(records)
     if resume_round <= 1:
         return
