@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.32.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.31.0...superheroes-v0.32.0) (2026-08-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **superheroes:** retire the presence flag — provisional-default plus disclosure at every question site (release re-statement of #1142) ([#1208](https://github.com/zwrose/superheroes/issues/1208))
+* **superheroes:** remove review-code --post — zero recorded consumers; resolve_diff_lines.py goes with it ([#1137](https://github.com/zwrose/superheroes/issues/1137))
+
+### Features
+
+* **superheroes:** dispatch the grounding seat behind one trust boundary ([#609](https://github.com/zwrose/superheroes/issues/609) stage 2) ([#1130](https://github.com/zwrose/superheroes/issues/1130)) ([5607de0](https://github.com/zwrose/superheroes/commit/5607de09963003f82550e41373cf1f49095b49c4))
+* **superheroes:** dogfood version-skew guard — named degradation when the installed plugin is behind the repo's own semantics ([#677](https://github.com/zwrose/superheroes/issues/677)) ([#1117](https://github.com/zwrose/superheroes/issues/1117)) ([91cdb85](https://github.com/zwrose/superheroes/commit/91cdb85011058f300eea11459be1d6fc4f233372))
+* **superheroes:** encode the three surviving trap classes as review lenses ([#1099](https://github.com/zwrose/superheroes/issues/1099)) ([f731745](https://github.com/zwrose/superheroes/commit/f731745c2bbb52960c5360482bcde3fdde58ee14))
+* **superheroes:** grounding-seat PR-body staging machinery, fail-closed ([#609](https://github.com/zwrose/superheroes/issues/609) stage 1) ([#1106](https://github.com/zwrose/superheroes/issues/1106)) ([5aa1e2f](https://github.com/zwrose/superheroes/commit/5aa1e2f7242dd4c36ab02e2aa5a72263b047e8cf))
+* **superheroes:** launcher pins Opus builders to effort medium — CLAUDE_EFFORT injected at spawn, --effort overrides ([#1159](https://github.com/zwrose/superheroes/issues/1159)) ([19fb379](https://github.com/zwrose/superheroes/commit/19fb379f57ce453797c3f682a4efd02077be359c))
+* **superheroes:** one owner each for session-mode and the skew status vocabulary ([#1151](https://github.com/zwrose/superheroes/issues/1151)) ([#1160](https://github.com/zwrose/superheroes/issues/1160)) ([abe1075](https://github.com/zwrose/superheroes/commit/abe10757133d3e8c990dd0b063941315a6ab316f))
+* **superheroes:** per-round seat-map receipts replace the shared accumulator (release re-statement of [#1183](https://github.com/zwrose/superheroes/issues/1183)) ([#1207](https://github.com/zwrose/superheroes/issues/1207)) ([1914afe](https://github.com/zwrose/superheroes/commit/1914afe146758973a568fd127903df08e84b0dc2))
+* **superheroes:** receipt truth by construction — liveness provenance, disclosure reconcile, severity normalize-on-ingest ([#1119](https://github.com/zwrose/superheroes/issues/1119)) ([0806527](https://github.com/zwrose/superheroes/commit/0806527b904a7bacee13174297bde46bb51c3057))
+* **superheroes:** remove review-code --post — zero recorded consumers; resolve_diff_lines.py goes with it ([#1137](https://github.com/zwrose/superheroes/issues/1137)) ([88d9eac](https://github.com/zwrose/superheroes/commit/88d9eac50ffc6b4f2d80a4cfc7513f7b9e15f33e))
+* **superheroes:** retire the presence flag — provisional-default plus disclosure at every question site (release re-statement of [#1142](https://github.com/zwrose/superheroes/issues/1142)) ([#1208](https://github.com/zwrose/superheroes/issues/1208)) ([3e1395d](https://github.com/zwrose/superheroes/commit/3e1395d732e7c1fb317a50d41a093bc090b29693))
+* **superheroes:** review-payload grading gets a per-dispatch nonce — key-spelling and echo forfeits of engaged reviews end ([#1145](https://github.com/zwrose/superheroes/issues/1145)) ([#1173](https://github.com/zwrose/superheroes/issues/1173)) ([0c12ab7](https://github.com/zwrose/superheroes/commit/0c12ab7394f260d62f4a1ea7581b6652804ec0ce))
+* **superheroes:** state-schema v4 with a version-spelling census; one home for seat-map resolution; the _provenance producer ([#1194](https://github.com/zwrose/superheroes/issues/1194)) ([7696d37](https://github.com/zwrose/superheroes/commit/7696d37221a35fef76cd739a3cb2bbb3f4497cd0))
+* **superheroes:** the driver mandate — bridge the loop-skip excuses now, flip non-driver full-lane review to a vet finding at the milestone close ([#1103](https://github.com/zwrose/superheroes/issues/1103)) ([f9910f7](https://github.com/zwrose/superheroes/commit/f9910f7d9b8c0ebac435b5cd6aa114946ea805c0))
+* **superheroes:** the safety-machinery route — guard refuses the fixer, ordered work orders or park ([#1127](https://github.com/zwrose/superheroes/issues/1127)) ([06777cd](https://github.com/zwrose/superheroes/commit/06777cd0122600c2b35870b157a94499e6740f67))
+* **superheroes:** the worth-it gate and the venue ladder — unified residual-triage doctrine ([#1113](https://github.com/zwrose/superheroes/issues/1113)) ([#1118](https://github.com/zwrose/superheroes/issues/1118)) ([616be23](https://github.com/zwrose/superheroes/commit/616be2317b5dae165f74c10d10efc97c49bc8135))
+
+
+### Bug Fixes
+
+* **superheroes:** anchor source_guard's shipped-source match to the operation's own dir_fd ([#1171](https://github.com/zwrose/superheroes/issues/1171)) ([0aa064a](https://github.com/zwrose/superheroes/commit/0aa064a29fcd7c7f7ef1aa3d284508218e488779))
+* **superheroes:** certification-receipt surfaces consume the shared machinery (release re-statement of [#1201](https://github.com/zwrose/superheroes/issues/1201)) ([#1211](https://github.com/zwrose/superheroes/issues/1211)) ([5a6ae1d](https://github.com/zwrose/superheroes/commit/5a6ae1d546dacdcbeefbdbbd25f904dc923f94b8))
+* **superheroes:** certified-record fidelity — per-round verifyPasses, owner-fold provenance vocabulary, record-result round/phase fences ([#1184](https://github.com/zwrose/superheroes/issues/1184)) ([d3be3be](https://github.com/zwrose/superheroes/commit/d3be3be4eb368665540e3c1177f0777bb6180628))
+* **superheroes:** de-time the answer_at_exit pair and decouple the pilot-cleanup sentinel budget ([#1146](https://github.com/zwrose/superheroes/issues/1146)) ([#1150](https://github.com/zwrose/superheroes/issues/1150)) ([7268870](https://github.com/zwrose/superheroes/commit/7268870202c71d5dc89c0a5e3bf9d691d409b2a9))
+* **superheroes:** de-time two wall-clock test assertions ([#1132](https://github.com/zwrose/superheroes/issues/1132)) ([#1134](https://github.com/zwrose/superheroes/issues/1134)) ([0ca10ec](https://github.com/zwrose/superheroes/commit/0ca10ecfac7c174514e7c70f4042860297595c92))
+* **superheroes:** decide panel liveness per cell, not per vendor ([#1101](https://github.com/zwrose/superheroes/issues/1101)) ([e5f2861](https://github.com/zwrose/superheroes/commit/e5f28612e8c0647d5c3200b35115de64059b76d7))
+* **superheroes:** dirt probe proves the guard teardown arm fires end-to-end (release re-statement of [#1128](https://github.com/zwrose/superheroes/issues/1128)) ([#1209](https://github.com/zwrose/superheroes/issues/1209)) ([93f57ad](https://github.com/zwrose/superheroes/commit/93f57adb844654b2062368ef4a4acb6d9ff3039e))
+* **superheroes:** dispatch receiver minors — stream-honest markers, one cap-arithmetic home, diagnosable rewrite failure ([#1124](https://github.com/zwrose/superheroes/issues/1124)) ([#1157](https://github.com/zwrose/superheroes/issues/1157)) ([afbaeb4](https://github.com/zwrose/superheroes/commit/afbaeb4c9f805677cb253f103631a750aa5c2e38))
+* **superheroes:** dispatch result path — payload-semantics registry, contracts below the transport core ([#1123](https://github.com/zwrose/superheroes/issues/1123)) ([#1129](https://github.com/zwrose/superheroes/issues/1129)) ([503dee9](https://github.com/zwrose/superheroes/commit/503dee91e2c0906a3ffab4cb414bb28f5ed307ee))
+* **superheroes:** dispatch runner honesty — grade by declared payload contract, name the stdout cap, stop counting sibling worktrees as dirt ([#1120](https://github.com/zwrose/superheroes/issues/1120)) ([59bf510](https://github.com/zwrose/superheroes/commit/59bf5107cd7a97071b23ee9e084f8f81369768fc))
+* **superheroes:** literal-pin the findings-example marker; investigated-echo reuses _build_placeholder_set ([#1180](https://github.com/zwrose/superheroes/issues/1180)) ([afd0f44](https://github.com/zwrose/superheroes/commit/afd0f44c04ebdd3e9cb6f11c42a86fca134a0720))
+* **superheroes:** one severity vocabulary on the review driver's fold path ([#1102](https://github.com/zwrose/superheroes/issues/1102)) ([30a6321](https://github.com/zwrose/superheroes/commit/30a6321bec1081f2dd7f012bb4bd273483262c89))
+* **superheroes:** partial clones fail fast in sanitized-view construction ([#1100](https://github.com/zwrose/superheroes/issues/1100)) ([4d7a4cf](https://github.com/zwrose/superheroes/commit/4d7a4cf5fc5f173905f7402475ac04bd96530f07))
+* **superheroes:** post-[#1121](https://github.com/zwrose/superheroes/issues/1121) fast-follows — reap cache-only probe mode, three accuracy fixes ([#1139](https://github.com/zwrose/superheroes/issues/1139)) ([c63992a](https://github.com/zwrose/superheroes/commit/c63992af887f4f22fbf895ce36539aaf9c697aaf))
+* **superheroes:** recordsPath reaches the CLI — the disclosure-faithful producer rides submit-accept and the corrupt-resume park fires from next ([#1196](https://github.com/zwrose/superheroes/issues/1196)) ([#1200](https://github.com/zwrose/superheroes/issues/1200)) ([5a2a3a6](https://github.com/zwrose/superheroes/commit/5a2a3a616034706ccc01b05c251075e42d423965))
+* **superheroes:** review-only headless — prose degradation instead of a stall ([#1133](https://github.com/zwrose/superheroes/issues/1133)) ([#1135](https://github.com/zwrose/superheroes/issues/1135)) ([e5caf38](https://github.com/zwrose/superheroes/commit/e5caf38a259086ab570f48e8f5e6622195b75b0c))
+* **superheroes:** round_adapters joins SAFETY_MACHINERY; retire the self-comparing VERDICTS test ([#1147](https://github.com/zwrose/superheroes/issues/1147)) ([#1149](https://github.com/zwrose/superheroes/issues/1149)) ([7aa5b94](https://github.com/zwrose/superheroes/commit/7aa5b9414881716f2335e75f1e1694fdae8a40ff))
+* **superheroes:** round_records presence checks ask about the entry, not the target (release re-statement of [#1192](https://github.com/zwrose/superheroes/issues/1192)) ([#1206](https://github.com/zwrose/superheroes/issues/1206)) ([2f35e36](https://github.com/zwrose/superheroes/commit/2f35e3693194c059dcee0664e079655bca145fd8))
+* **superheroes:** separate what a submitted seat map is trusted to assert from what it may reveal ([#1190](https://github.com/zwrose/superheroes/issues/1190)) ([#1202](https://github.com/zwrose/superheroes/issues/1202)) ([156e66b](https://github.com/zwrose/superheroes/commit/156e66b3eb389bd150690e2f8f6ba695d8e4f34f))
+* **superheroes:** seven review-driver defects on the hand-maintained-mirror seam, plus the drift pins that stop the class returning ([#1107](https://github.com/zwrose/superheroes/issues/1107)) ([#1169](https://github.com/zwrose/superheroes/issues/1169)) ([84c612b](https://github.com/zwrose/superheroes/commit/84c612be7b7917e22a5fa54690c6d00bfa8d0064))
+* **superheroes:** stall fix batch unions the not-discharged audit targets ([#1165](https://github.com/zwrose/superheroes/issues/1165)) ([#1176](https://github.com/zwrose/superheroes/issues/1176)) ([6c74c1f](https://github.com/zwrose/superheroes/commit/6c74c1f30e81a0a3c9502f34f18759277f7c9395))
+* **superheroes:** stop the test suite disabling handback-gate guards under -n auto ([#1153](https://github.com/zwrose/superheroes/issues/1153)) ([4a9efbb](https://github.com/zwrose/superheroes/commit/4a9efbbf2680f2418758d7413076c7edd1b83420))
+* **superheroes:** the decision-point census says what it checks — final enumerated-set pass, with the unproven legs proven ([#1144](https://github.com/zwrose/superheroes/issues/1144)) ([#1163](https://github.com/zwrose/superheroes/issues/1163)) ([c62d50e](https://github.com/zwrose/superheroes/commit/c62d50ea3c98bfd527d47c8f72ff363ef83e732a))
+* **superheroes:** the driver persists the per-round disclosure block its resume path restores ([#1193](https://github.com/zwrose/superheroes/issues/1193)) ([871e1b7](https://github.com/zwrose/superheroes/commit/871e1b72498a3c07b0d565e4fc68affd73ab5a5a))
+* **superheroes:** the review loop's record verbs stop lying about what landed ([#1131](https://github.com/zwrose/superheroes/issues/1131)) ([#1179](https://github.com/zwrose/superheroes/issues/1179)) ([7bf4ac3](https://github.com/zwrose/superheroes/commit/7bf4ac35330c24d708e380af038366666c46d051))
+* **superheroes:** truncation grading — a stamped pre-cap stdoutBytes outranks marker text ([#1125](https://github.com/zwrose/superheroes/issues/1125)) ([#1143](https://github.com/zwrose/superheroes/issues/1143)) ([3d84bc2](https://github.com/zwrose/superheroes/commit/3d84bc28dedef22ae607137a56145e4ba8f510df))
+* **superheroes:** walk-9 test-quality bundle — loose assertions tightened, tautologies replaced, producer round-key spelling pinned ([#1199](https://github.com/zwrose/superheroes/issues/1199)) ([72aad7d](https://github.com/zwrose/superheroes/commit/72aad7d8ba87b3f00417a2ea40888c5d3479dd3f))
+
+
+### Chores
+
+* **superheroes:** walk-10 cleanup bundle — detector pins, dead alias, one decode home, doc drift-pin ([#1214](https://github.com/zwrose/superheroes/issues/1214)) ([32704af](https://github.com/zwrose/superheroes/commit/32704af68f389d0e0d469c3c0bbf908e9a602caf))
+
 ## [0.31.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.30.0...superheroes-v0.31.0) (2026-08-21)
 
 
