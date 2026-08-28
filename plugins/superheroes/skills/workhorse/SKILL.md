@@ -835,6 +835,9 @@ shell edit — and revert it before moving on. **Before you run any mutation pro
 implementer work** — a probe's revert (a subagent's `git checkout --`) has wiped a prior order's
 uncommitted work five times across recent waves despite the memory of it, so the commit itself is the
 mechanical tripwire, not the memory of it (the mutation-probe sibling of §6's commit-between-orders rule).
+Run the probe in a **detached worktree of its own** pinned to the commit under proof — never in a
+tree where live read-only seats are concurrently reading the paths you mutate
+(`reference/dispatch-mechanics.md` § *Mutation probes — own detached worktree*).
 
 **A new or changed detector ships with a recorded bite-proof.** The canonical statement — the
 obligation, the four ways a bite-proof is vacuous, the record shape, and the disclosures owed when
