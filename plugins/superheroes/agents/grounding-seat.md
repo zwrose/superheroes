@@ -39,7 +39,9 @@ a verdict when the support is absent, stale, or contradicts the claim:
   nothing (missing file/symbol/test), or a `deferred` row with no issue, is **REFUTED**.
 - **"verify passed" / gate claims.** A PR that asserts the project's verify command (or a
   review gate) passed must have the artifact backing it. If the claim cannot be grounded
-  in the repo, flag it **REFUTED**.
+  in the repo, flag it **REFUTED**. A verify receipt does **not** ground a claim that
+  tests passed — calibration may run no tests; for test-pass claims, look for CI (workflow
+  + head sha) or the build's ordered suite run.
 - **Stub markers** (`# STUB(#NNN)`, per CONVENTIONS §10.7). A self-claim that a seam is
   wired while a live `STUB` marker on that seam says otherwise (or a marker with no valid
   issue reference) is a grounding contradiction — **REFUTED**.
