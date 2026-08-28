@@ -2952,6 +2952,274 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
                for line in receipt["degraded"])
 
 
+def test_driver_persists_round_disclosures_for_resume(tmp_path):
+    """The driver writes per-round disclosure channels to round-records.json after each fold so a
+    recordsPath resume restores what the run actually recorded — not only what a hand-seeded file
+    carries."""
+    records = tmp_path / "round-records.json"
+    records.write_text("[]")
+    cfg = _cfg(dimensions=["test-reviewer", "code-reviewer"], recordsPath=str(records),
+               maxRounds=8)
+    RD.run_loop(_vacuous_round1_seams(), cfg)
+
+    on_disk = json.loads(records.read_text())
+    round1 = next(r for r in on_disk if r.get("round") == 1)
+    assert round1.get("disclosures", {}).get("vacuousSeats") == ["test-reviewer"]
+
+    resumed = RD.run_loop(_seams(), cfg)
+    assert _round_channels(resumed, 1).get("vacuousSeats") == ["test-reviewer"]
+    prose = "\n".join(_round_disclosures(resumed, 1))
+    assert "vacuous-seat (round 1): seat(s) test-reviewer" in prose
+
+
+def test_producer_emits_the_whole_declared_channel_set(tmp_path):
+    assert set(_ALL_CHANNELS) == set(RD.RESUMABLE_DISCLOSURE_CHANNELS), \
+        "this fixture must cover exactly the restorable channel set"
+    records = tmp_path / "round-records.json"
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["rounds"]["1"] = dict(_ALL_CHANNELS)
+    state["_records"] = [_seed_record(1)]
+    RD._persist_round_records(state, state["config"])
+    on_disk = json.loads(records.read_text())
+    rec = next(r for r in on_disk if r.get("round") == 1)
+    assert rec["disclosures"] == _ALL_CHANNELS
+    state2 = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert RD._declared_disclosures(state2["rounds"]["1"]) == _ALL_CHANNELS
+
+
+def test_producer_carries_empty_canary_verified_but_omits_empty_channels(tmp_path):
+    records = tmp_path / "round-records.json"
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["rounds"]["1"] = {"canaryVerified": {}, "vacuousSeats": [], "fellOpen": []}
+    state["_records"] = [_seed_record(1)]
+    RD._persist_round_records(state, state["config"])
+    rec = next(r for r in json.loads(records.read_text()) if r.get("round") == 1)
+    assert rec["disclosures"] == {"canaryVerified": {}}
+
+
+def test_producer_omits_the_disclosures_key_when_no_channel_survives(tmp_path):
+    records = tmp_path / "round-records.json"
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["rounds"]["1"] = {"seatStatus": {"test-reviewer": "run"}, "roundKind": "baseline"}
+    state["_records"] = [_seed_record(1)]
+    RD._persist_round_records(state, state["config"])
+    rec = next(r for r in json.loads(records.read_text()) if r.get("round") == 1)
+    assert "disclosures" not in rec
+
+
+def test_producer_writes_skeletons_not_evidence_bodies(tmp_path):
+    big = "evidence-body-" + ("X" * 400)
+    finding = {"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
+               "dimension": "Code", "body": big, "evidence": big}
+    records = tmp_path / "round-records.json"
+    record = _seed_record(1, {"vacuousSeats": ["test-reviewer"]})
+    record["findings"] = [finding]
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["_records"] = [record]
+    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    RD._persist_round_records(state, state["config"])
+    raw = records.read_text()
+    assert big not in raw
+    persisted = next(r for r in json.loads(raw) if r.get("round") == 1)
+    assert persisted["findings"][0]["title"] == "bug"
+    assert persisted["findings"][0]["file"] == "f.py"
+
+
+def test_producer_preserves_durable_records_outside_the_ledger(tmp_path):
+    records = tmp_path / "round-records.json"
+    seed7 = _seed_record(7, {"vacuousSeats": ["stale-seat"]})
+    records.write_text(json.dumps([_seed_record(1, {"vacuousSeats": ["x"]}), seed7]))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["_records"] = [r for r in state["_records"] if r.get("round") == 1]
+    RD._persist_round_records(state, state["config"])
+    round7 = next(r for r in json.loads(records.read_text()) if r.get("round") == 7)
+    assert round7 == seed7
+
+
+def test_producer_parks_and_preserves_a_destination_that_went_corrupt(tmp_path):
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1)]))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert not state.get("_resumeCorrupt")
+    corrupt = "{not valid json at all"
+    records.write_text(corrupt)
+    state["_records"] = [_seed_record(2)]
+    state["rounds"]["2"] = {"vacuousSeats": ["test-reviewer"]}
+    RD._persist_round_records(state, state["config"])
+    assert state["terminal"] == "cannot-certify"
+    assert state["certification"]["shape"] is None
+    assert records.read_text() == corrupt
+    assert any(d["kind"] == "cannot-certify" for d in state["decisions"])
+
+
+def test_producer_parks_on_a_structurally_corrupt_destination(tmp_path):
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1)]))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert not state.get("_resumeCorrupt")
+    corrupt = "[null]"
+    records.write_text(corrupt)
+    state["_records"] = [_seed_record(2)]
+    state["rounds"]["2"] = {"vacuousSeats": ["test-reviewer"]}
+    RD._persist_round_records(state, state["config"])
+    assert state["terminal"] == "cannot-certify"
+    assert state["certification"]["shape"] is None
+    assert records.read_text() == corrupt
+    assert any(d["kind"] == "cannot-certify" for d in state["decisions"])
+
+
+def test_producer_parks_when_the_durable_write_fails(tmp_path, monkeypatch):
+    records = tmp_path / "round-records.json"
+    initial_text = json.dumps(
+        [_seed_record(1, {"vacuousSeats": ["x"]}), _seed_record(7, {"vacuousSeats": ["y"]})],
+        indent=2) + "\n"
+    records.write_text(initial_text)
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["_records"] = [
+        _seed_record(1, {"vacuousSeats": ["a"]}),
+        _seed_record(2, {"vacuousSeats": ["b"]}),
+    ]
+    state["rounds"]["1"] = {"vacuousSeats": ["a"]}
+    state["rounds"]["2"] = {"vacuousSeats": ["b"]}
+    monkeypatch.setattr(
+        RD.review_memory, "persist_record",
+        lambda path, accum, rec: {"ok": False, "reason": "write-failed"})
+    RD._persist_round_records(state, state["config"])
+    assert state["terminal"] == "cannot-certify"
+    detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
+    assert "write-failed" in detail
+    assert records.read_text() == initial_text
+
+
+def test_producer_parks_when_persist_record_raises_oserror(tmp_path, monkeypatch):
+    records = tmp_path / "round-records.json"
+    records.write_text("[]")
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["_records"] = [_seed_record(1)]
+    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    def _raise_oserror(path, accum, rec):
+        raise OSError(13, "permission denied")
+
+    monkeypatch.setattr(RD.review_memory, "persist_record", _raise_oserror)
+    RD._persist_round_records(state, state["config"])
+    assert state["terminal"] == "cannot-certify"
+    assert "permission denied" in next(
+        d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
+
+
+def test_producer_park_after_panel_fold_carries_toverify_findings(tmp_path, monkeypatch):
+    records = tmp_path / "round-records.json"
+    records.write_text("[]")
+    finding = {"title": "panel-bug", "severity": "Important", "file": "f.py", "line": 1,
+               "dimension": "Code"}
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["findings"] = []
+    state["_toVerify"] = [finding]
+    state["_records"] = [_seed_record(1)]
+    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    monkeypatch.setattr(
+        RD.review_memory, "persist_record",
+        lambda path, accum, rec: {"ok": False, "reason": "write-failed"})
+    RD._persist_round_records(state, state["config"])
+    receipt = RD.build_receipt(state)
+    assert receipt["findings"]
+    assert any(f.get("title") == "panel-bug" for f in receipt["findings"])
+
+
+def test_producer_respects_persist_records_false(tmp_path):
+    records = tmp_path / "round-records.json"
+    state = RD.new_state(
+        _cfg(dimensions=["test-reviewer"], recordsPath=str(records), persistRecords=False))
+    state["_records"] = [_seed_record(1)]
+    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    RD._persist_round_records(state, state["config"])
+    assert state.get("terminal") is None
+    assert not records.exists()
+
+    records_default = tmp_path / "round-records-default.json"
+    state_default = RD.new_state(
+        _cfg(dimensions=["test-reviewer"], recordsPath=str(records_default)))
+    state_default["_records"] = [_seed_record(1)]
+    state_default["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    RD._persist_round_records(state_default, state_default["config"])
+    assert records_default.exists()
+
+
+def test_producer_empty_ledger_leaves_destination_unchanged(tmp_path):
+    records = tmp_path / "round-records.json"
+    initial_text = json.dumps([_seed_record(1)], indent=2) + "\n"
+    records.write_text(initial_text)
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["_records"] = []
+    RD._persist_round_records(state, state["config"])
+    assert records.read_text() == initial_text
+    assert state.get("terminal") is None
+
+
+def test_producer_is_inert_without_a_records_path(tmp_path):
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["_records"] = [_seed_record(1)]
+    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    RD._persist_round_records(state, state["config"])
+    assert state.get("terminal") is None
+    assert not any(tmp_path.iterdir())
+
+
+def _two_round_disclosure_seams():
+    """Round 1 baseline panel and round 2 scoped-finder delta — each records disclosure channels."""
+    f1 = {"title": "bug", "severity": "Important", "file": "f.py", "line": 2,
+          "dimension": "Code"}
+    f2 = {"title": "bug2", "severity": "Important", "file": "f.py", "line": 3,
+          "dimension": "Code"}
+
+    def reviewer(dim, tier, rnd, ctx):
+        if dim == "scoped-finder":
+            return [dict(f2)] if rnd == 2 else []
+        if rnd == 1 and dim == "code-reviewer":
+            return {"findings": [dict(f1)]}
+        return []
+
+    def fix_step(batch, rnd, payload):
+        return {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Code"]}
+
+    return _seams(reviewer=reviewer, fix_step=fix_step)
+
+
+def test_resumed_and_unresumed_receipts_disclose_the_same_channels(tmp_path):
+    """DoD row 3: resumed-vs-unresumed equivalence for disclosures in both halves of a session.
+
+    Deliberately excluded from comparison: scriptRan, the decision ledger, seatMap, and the
+    non-restored round bookkeeping in UNRESTORED_PANEL_ROUND_KEYS (seatStatus, lensCoverage,
+    compileDrops, unverified, missingSeats, verify) plus roundKind / blockingCount / verifyResult —
+    resume restores the declared disclosure channels by design and nothing else.
+
+    Round-numbering diverges after resume (unbroken live round 3 vs resumed live round 4) — so
+    equivalence is scoped to the shared rounds {1, 2} only."""
+    dims = ["test-reviewer", "code-reviewer"]
+    seams = _two_round_disclosure_seams()
+
+    records_a = tmp_path / "a.json"
+    receipt_a = RD.run_loop(
+        seams, _cfg(dimensions=dims, recordsPath=str(records_a), maxRounds=8))
+    assert _round_channels(receipt_a, 1)
+    assert _round_channels(receipt_a, 2)
+
+    records_b = tmp_path / "b.json"
+    RD.run_loop(
+        seams, _cfg(dimensions=dims, recordsPath=str(records_b), maxRounds=2))
+    receipt_b = RD.run_loop(
+        seams, _cfg(dimensions=dims, recordsPath=str(records_b), maxRounds=8))
+
+    shared = {r["round"] for r in receipt_a["rounds"]} & {r["round"] for r in receipt_b["rounds"]}
+    assert shared >= {1, 2}
+    for rnd in shared:
+        assert _round_channels(receipt_a, rnd) == _round_channels(receipt_b, rnd)
+        assert _round_disclosures(receipt_a, rnd) == _round_disclosures(receipt_b, rnd)
+
+    b_only = {r["round"] for r in receipt_b["rounds"]} - {r["round"] for r in receipt_a["rounds"]}
+    assert any(_round_channels(receipt_b, rnd) for rnd in b_only)
+
+
 def _vacuous_round1_seams():
     """Round 1: one vacuous seat (a real `vacuousSeats` + `seatMapUnavailable` record) plus a
     blocking finding so the run continues past round 1 to a terminal."""

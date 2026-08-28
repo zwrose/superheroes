@@ -444,6 +444,27 @@ UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "un
 _DISCLOSE_ON_PRESENCE = ("canaryVerified",)
 
 
+def _declared_disclosures(entry):
+    """The per-round disclosure channels the emission rule selects from a round entry (or a durable
+    record's `disclosures` block — same channel keys, same presence/truthiness/shape rule)."""
+    if not isinstance(entry, dict):
+        entry = {}
+    out = {}
+    for chan, shape_ok in RESUMABLE_DISCLOSURE_CHANNELS.items():
+        if chan in _DISCLOSE_ON_PRESENCE:
+            if chan not in entry:
+                continue
+            value = entry.get(chan)
+        else:
+            value = entry.get(chan)
+            if not value:
+                continue
+        if not shape_ok(value):
+            continue
+        out[chan] = value
+    return out
+
+
 # =============================================================================================
 # canonical json + hashing + journal
 # =============================================================================================
@@ -1125,7 +1146,14 @@ def _default_config(overrides=None):
         # entry-bootstrap / _resume_round twins); a corrupt/mangled record state fails closed to a
         # cannot-certify park. `coveragePath` seeds the accumulated coverage decisions the
         # challenged-coverage breaker reads. Absent → a fresh round-1 run (the library-test shape).
+        # The durable producer lives in `run_loop`'s post-fold step; any future wiring of
+        # `recordsPath` into the CLI (`next`) must route the producer through `cmd_submit`'s
+        # `round_commit` submit-accept transaction rather than calling it from `_fold`, because
+        # `_fold` runs before that transaction opens.
         "recordsPath": None,
+        # A caller that already owns round-records.json — e.g. a harness with its own producer —
+        # sets this False; the driver then never writes that file.
+        "persistRecords": True,
         "coveragePath": None,
         # PR-mode prior review comments (a list) for the author-justification post-filter. Wired from
         # the CLI's `--prior-comments` (#507 v7); None → the filter never fires.
@@ -1290,22 +1318,88 @@ def _restore_round_disclosures(state, records):
         except (TypeError, ValueError):
             continue
         target = state["rounds"].setdefault(key, {})
-        for chan, shape_ok in RESUMABLE_DISCLOSURE_CHANNELS.items():
-            if chan in _DISCLOSE_ON_PRESENCE:
-                if chan not in raw:
-                    continue
-                value = raw.get(chan)
-            else:
-                value = raw.get(chan)
-                if not value:
-                    continue
-            if not shape_ok(value):
-                continue
-            target.setdefault(chan, value)
+        declared = _declared_disclosures(raw)
+        for chan in RESUMABLE_DISCLOSURE_CHANNELS:
+            if chan in declared:
+                target.setdefault(chan, declared[chan])
         if not target:
             # Nothing survived: leave `rounds` exactly as an older (channel-less) file leaves it,
             # so a resume never invents an empty round entry in the receipt.
             state["rounds"].pop(key, None)
+
+
+def _persist_round_records(state, config):
+    """Keep the durable round-records file equal to the in-memory ledger, disclosures included.
+
+    Runs after every folded phase in `run_loop` when `recordsPath` is set. A run that could not
+    refresh or persist its disclosures must park `cannot-certify` — the degraded line in a
+    terminal receipt lives only in the current run, while the stale file is the only thing a later
+    `_seed_resume` reads, so certifying after a failed persist would recreate the quiet-evidence-loss
+    class #720 closes."""
+    path = config.get("recordsPath")
+    if not path:
+        return
+    if not config.get("persistRecords"):
+        return
+    if state.get("_resumeCorrupt"):
+        return
+
+    def _seed_findings_before_park():
+        # A park between the panel fold and synthesis leaves compiled findings in _toVerify
+        # only; without this copy build_receipt would under-report what the round gathered.
+        if not state.get("findings") and state.get("_toVerify"):
+            state["findings"] = state["_toVerify"]
+
+    try:
+        loaded = review_memory.load_records_state(path, _panel_dimensions(config))
+    except (AttributeError, TypeError) as exc:
+        _seed_findings_before_park()
+        _park_cannot_certify(
+            state,
+            "durable round records at %s could not be refreshed (%s) — cannot certify"
+            % (path, exc))
+        return
+    if not loaded.get("ok"):
+        _seed_findings_before_park()
+        _park_cannot_certify(
+            state,
+            "durable round records at %s (%s) could not be refreshed — cannot certify"
+            % (path, loaded.get("state") or loaded.get("reason") or "unreadable"))
+        return
+    ledger = state.get("_records") or []
+    ledger_rounds = {r.get("round") for r in ledger if isinstance(r, dict)}
+    kept = [r for r in (loaded.get("records") or [])
+            if isinstance(r, dict) and r.get("round") not in ledger_rounds]
+    outgoing = list(kept)
+    for record in ledger:
+        if not isinstance(record, dict):
+            continue
+        durable = review_memory.summarize_record(record)
+        block = _declared_disclosures(state["rounds"].get(str(record.get("round"))) or {})
+        if block:
+            durable[review_memory.DISCLOSURES_FIELD] = block
+        outgoing.append(durable)
+    outgoing.sort(key=lambda r: r.get("round") if isinstance(r.get("round"), int) else 0)
+    if not outgoing:
+        return
+    records_arg = outgoing[:-1]
+    last = outgoing[-1]
+    try:
+        result = review_memory.persist_record(path, records_arg, last)
+    except OSError as exc:
+        _seed_findings_before_park()
+        _park_cannot_certify(
+            state,
+            "durable round records at %s could not be persisted (%s)"
+            % (path, exc))
+        return
+    if not result.get("ok"):
+        _seed_findings_before_park()
+        _park_cannot_certify(
+            state,
+            "durable round records at %s could not be persisted (%s)"
+            % (path, result.get("reason") or result.get("detail") or "write-failed"))
+        return
 
 
 def load_state(session_dir):
@@ -3535,7 +3629,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
         # `recordsPath` resume restores, so a resumed round's receipt discloses what its round
         # actually recorded. Emission is unchanged: truthiness, except the presence-emitting
         # channels named by `_DISCLOSE_ON_PRESENCE`. `verifyPasses` emits above (form-gated,
-        # always-emit when permitted).
+        # always-emit when permitted). Selection rule home: `_declared_disclosures`.
         for chan in RESUMABLE_DISCLOSURE_CHANNELS:
             if chan == "verifyPasses":
                 continue
@@ -4198,6 +4292,7 @@ def run_loop(seams, config=None):
             # handle the gap-sweep re-entry (verifiers → synthesis carries the merge back).
             artifact = _run_seam(seams, action, step["payload"], state, state["config"])
             _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
+            _persist_round_records(state, state["config"])
             # a delta round routes scoped candidates through verifiers; when that path is armed the
             # synthesis fold must re-settle the delta rather than the round-1 path.
             if state.pop("_settleDeltaAfterSynthesis", False):
