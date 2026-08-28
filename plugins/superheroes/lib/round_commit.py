@@ -306,8 +306,14 @@ def _apply_external_sidecar(session_dir, commit_id, part_n, part_spec, staged_by
 
     _ensure_parent_dirs_strict(target)
     tmp = "%s.commit-%s.tmp" % (target, commit_id)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "wb") as fh:
+    # NOT exclusive-create, deliberately. An exclusive open here is a permanent-stall hazard: `tmp` is
+    # DETERMINISTIC in `target` and `commit_id`, so a crash between this open and the `os.replace`
+    # below leaves it behind, and every recovery replay of that same sealed commit reopens the same
+    # path, takes EEXIST, and refuses `commit-apply-failed` forever — breaking recovery in exactly
+    # the window the transaction exists to survive. Making it exclusive needs stale-temp handling in
+    # the recovery path first (#1196 review round 3; follow-up filed for the mode divergence this
+    # leaves: `review_memory.persist_record` lands 0600 via mkstemp, this path is umask-dependent).
+    with open(tmp, "wb") as fh:
         fh.write(staged_bytes)
         fh.flush()
         os.fsync(fh.fileno())

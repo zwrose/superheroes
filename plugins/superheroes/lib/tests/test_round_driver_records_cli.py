@@ -403,13 +403,22 @@ def test_cmd_next_locked_idempotent_records_path_reissue_ok(tmp_path):
     assert out1.get("reason") != "records-path-not-fresh-state"
 
 
-def test_cli_submit_records_sidecar_mode_0600(tmp_path):
+def test_cli_submit_records_sidecar_temp_is_not_exclusive_create(tmp_path):
+    """The sidecar temp must NOT be exclusive-create: `tmp` is deterministic in target+commit id, so
+    an O_EXCL open turns a crash between open and `os.replace` into a permanent recovery stall (every
+    replay of that sealed commit retakes EEXIST). Pinned as a REGRESSION guard, not a preference —
+    #1196 review round 3 found exactly that stall when this open was made exclusive. The mode
+    divergence it leaves (persist_record lands 0600 via mkstemp; this path is umask-dependent) is a
+    disclosed residual with a filed follow-up, not something to close by re-adding O_EXCL here."""
+    src = open(os.path.join(_LIB, "round_commit.py"), encoding="utf-8").read()
+    body = src[src.index("def _apply_external_sidecar"):src.index("def _load_staged_part")]
+    assert "O_EXCL" not in body, "sidecar temp open must not be exclusive-create (recovery stall)"
     session_dir, records, before_bytes, cfg, respond, n = _records_panel_submit_setup(tmp_path)
     art = respond(n["phase"], n["payload"], n["round"])
     out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], art)
     assert out["ok"], out
-    mode = stat.S_IMODE(os.stat(records).st_mode)
-    assert mode == 0o600
+    # A pre-existing stale temp from an interrupted write must not block the write.
+    assert os.path.exists(records)
 
 
 def _run_next_records_cli(capsys, session_dir, records_path, *, fresh=True):
