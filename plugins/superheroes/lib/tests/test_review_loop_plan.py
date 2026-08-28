@@ -1113,36 +1113,132 @@ def test_latest_coverage_ids_well_formed_unchanged(well_formed):
     assert rlp._latest_coverage_ids(recs) == ["x"]
 
 
-def _round_int_call_sites_outside_arbiter():
-    import ast
-    mod_path = os.path.join(os.path.dirname(__file__), "..", "review_loop_plan.py")
-    with open(mod_path, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read(), filename=mod_path)
-    arbiter = next(
-        node for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_round_number")
-    allowed = range(arbiter.lineno, arbiter.end_lineno + 1)
+_ROUND_RESUME_CENSUS_MODULES = (
+    "review_loop_plan.py",
+    "round_driver.py",
+)
 
-    def _arg_reads_round(arg):
-        for sub in ast.walk(arg):
-            if isinstance(sub, ast.Constant) and sub.value == "round":
-                return True
+# Closed allowlist: (enclosing function name, normalized int() call source). Each entry must
+# match a live guarded conversion; stale entries fail the census (fail-open on shrink).
+_ROUND_INT_ALLOWLIST = (
+    ("build_receipt", "int(k)"),
+    ("build_receipt", "int(k)"),
+    ("build_receipt", "int(key)"),
+    ("_round_num", "int(r)"),
+)
+
+
+def _round_int_conversions_outside_arbiter():
+    """Census — resume-path round int() conversions outside _round_number.
+
+    Scans review_loop_plan.py and round_driver.py. Flags int() on a durable record's round
+    value (direct .get(\"round\") read or one-hop local alias). Pre-existing guarded sites
+    in round_driver are allowlisted by function name + normalized call source."""
+    import ast
+    import re
+
+    lib_dir = os.path.join(os.path.dirname(__file__), "..")
+
+    def _normalize(node):
+        return re.sub(r"\s+", "", ast.unparse(node))
+
+    def _expr_reads_round_key(expr):
+        for sub in ast.walk(expr):
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
+                if sub.func.attr != "get" or len(sub.args) < 1:
+                    continue
+                key = sub.args[0]
+                if isinstance(key, ast.Constant) and key.value == "round":
+                    return True
+            if isinstance(sub, ast.Subscript):
+                key = sub.slice
+                if isinstance(key, ast.Constant) and key.value == "round":
+                    return True
         return False
 
+    def _iter_functions(node):
+        if isinstance(node, ast.FunctionDef):
+            yield node
+            for child in node.body:
+                if isinstance(child, ast.FunctionDef):
+                    yield from _iter_functions(child)
+
+    def _own_scope_nodes(func_node):
+        for stmt in func_node.body:
+            if isinstance(stmt, ast.FunctionDef):
+                continue
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.FunctionDef):
+                    continue
+                yield node
+
+    def _tainted_names(func_node):
+        tainted = set()
+        for node in _own_scope_nodes(func_node):
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                targets, value = [node.target], node.value
+            else:
+                continue
+            if not _expr_reads_round_key(value):
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    tainted.add(target.id)
+        return tainted
+
+    def _arg_is_round_tainted(arg, tainted):
+        if isinstance(arg, ast.Name) and arg.id in tainted:
+            return True
+        return _expr_reads_round_key(arg)
+
+    allowlist_remaining = list(_ROUND_INT_ALLOWLIST)
     violations = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if not (isinstance(node.func, ast.Name) and node.func.id == "int"):
-            continue
-        if not node.args or not _arg_reads_round(node.args[0]):
-            continue
-        if node.lineno not in allowed:
-            violations.append(node.lineno)
+
+    for modname in _ROUND_RESUME_CENSUS_MODULES:
+        mod_path = os.path.join(lib_dir, modname)
+        with open(mod_path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read(), filename=mod_path)
+
+        arbiter_span = None
+        if modname == "review_loop_plan.py":
+            arbiter = next(
+                node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "_round_number")
+            arbiter_span = (arbiter.lineno, arbiter.end_lineno)
+
+        module_functions = []
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef):
+                module_functions.extend(_iter_functions(node))
+
+        for func in module_functions:
+            tainted = _tainted_names(func)
+            for node in _own_scope_nodes(func):
+                if not isinstance(node, ast.Call):
+                    continue
+                if not (isinstance(node.func, ast.Name) and node.func.id == "int"):
+                    continue
+                if not node.args:
+                    continue
+                key = (func.name, _normalize(node))
+                if key in allowlist_remaining:
+                    allowlist_remaining.remove(key)
+                    continue
+                if not _arg_is_round_tainted(node.args[0], tainted):
+                    continue
+                if arbiter_span and arbiter_span[0] <= node.lineno <= arbiter_span[1]:
+                    continue
+                violations.append("%s:%s (%s)" % (modname, node.lineno, func.name))
+
+    for func_name, norm in allowlist_remaining:
+        violations.append(
+            "stale allowlist entry (%s, %r)" % (func_name, norm))
     return violations
 
 
 def test_round_value_int_calls_census_only_inside_arbiter():
-    """Census — no bare int(rec.get(\"round\")) outside _round_number."""
-    violations = _round_int_call_sites_outside_arbiter()
-    assert violations == [], "bare int(round) at lines %r" % violations
+    """Census — no round int() outside _round_number except the closed allowlist."""
+    violations = _round_int_conversions_outside_arbiter()
+    assert violations == [], "round int() violations: %r" % violations
