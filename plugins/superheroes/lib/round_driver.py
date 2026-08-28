@@ -420,6 +420,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "fellOpen": _dict_list,
     "fellOpenProvenanceMissing": _str_list,
     "seatMapUnavailable": _str_list,
+    "seatMapUnjudgeable": _str_list,
     "seatMapViolations": _dict_list,
     "pluginVersionSkew": _plugin_version_skew_shape,
     "vacuousSeats": _str_list,
@@ -958,8 +959,15 @@ _sm_skew_records = seat_map_receipts.skew_records
 _sm_plugin_version_skew_status = seat_map_receipts.plugin_version_skew_status
 _sm_canary_map = seat_map_receipts.canary_map
 _emit_receipt_seat_map = seat_map_receipts.emit_receipt_seat_map
+_sm_unjudgeable_receipts = seat_map_receipts.unjudgeable_receipts
 _skew_record_identity = seat_map_receipts._skew_record_identity
 _skew_records_from_seat_map = seat_map_receipts._skew_records_from_seat_map
+
+
+def _driver_author_family(state):
+    """The author family the DRIVER owns — never the submitted map's self-assertion."""
+    cfg = state.get("config") or {}
+    return model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
 
 
 def _same_family_seats(state):
@@ -968,7 +976,7 @@ def _same_family_seats(state):
     but a panel that reviewed itself must never certify as plainly clean, so it joins independence
     and base provenance in the certification shape. Read off the seat map's own receipt; never
     recomputed here."""
-    return _sm_same_family_seats(state)
+    return _sm_same_family_seats(state, _driver_author_family(state))
 
 
 def _same_family_degraded(state):
@@ -1070,7 +1078,7 @@ def _seat_map_violations(state):
                 continue
             seen.add(key)
             merged.append(v)
-    for v in _sm_unexcused_violations(state):
+    for v in _sm_unexcused_violations(state, _driver_author_family(state)):
         key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
         if key in seen:
             continue
@@ -1107,12 +1115,12 @@ def _seat_map_violation_breach_prose(v: dict) -> str:
 
 
 def _seat_pin_excused(state):
-    return bool(_sm_pin_excused_records(state))
+    return bool(_sm_pin_excused_records(state, _driver_author_family(state)))
 
 
 def _seat_pin_excused_seats(state):
     seats: set[str] = set()
-    for rec in _sm_pin_excused_records(state):
+    for rec in _sm_pin_excused_records(state, _driver_author_family(state)):
         for s in rec.get("excusedSeats") or []:
             if isinstance(s, str) and s:
                 seats.add(s)
@@ -1142,6 +1150,16 @@ def _seat_map_unavailable(state):
     return not _sm_any_seats(state)
 
 
+def _seat_map_unjudgeable(state):
+    """Whether any submitted seat map's violation basis is incomplete — rounds ∪ receipts union."""
+    for rec in (state.get("rounds") or {}).values():
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("seatMapUnjudgeable"):
+            return True
+    return bool(_sm_unjudgeable_receipts(state, _driver_author_family(state)))
+
+
 def _certification_base(state):
     """Tri-state base provenance for certification — never infer fetched from absence."""
     if _base_degraded(state):
@@ -1165,6 +1183,7 @@ def _cert_shape(state, base):
         or _seat_pin_excused(state)
         # bite-axis: absent seat map never certifies unqualified-clean — projection 1 of 3 (#681).
         or _seat_map_unavailable(state)
+        or _seat_map_unjudgeable(state)
     ):
         return base + "-degraded"
     return base
@@ -2153,7 +2172,12 @@ def _fold_panel(state, config, artifact):
         if not _live_panel:
             _live_panel = ["unknown"]
         _record_round(state, "seatMapUnavailable", _live_panel)
-    _sm_violations = _sm_unexcused_violations(state)
+    _unjudgeable = _sm_unjudgeable_receipts(state, _driver_author_family(state))
+    if _unjudgeable:
+        _bases = sorted({entry["basis"] for entry in _unjudgeable if isinstance(entry, dict)})
+        if _bases:
+            _record_round(state, "seatMapUnjudgeable", _bases)
+    _sm_violations = _sm_unexcused_violations(state, _driver_author_family(state))
     if _sm_violations:
         _record_round(state, "seatMapViolations", _sm_violations)
         _parts = []
@@ -3605,7 +3629,7 @@ def _terminal_converged(state, config, full_panel, note=None):
     if _seat_pin_excused(state):
         shape_drivers.append("seat-pin")
     # bite-axis: absent seat map names shapeDrivers — projection 2 of 3 (#681).
-    if _seat_map_unavailable(state):
+    if _seat_map_unavailable(state) or _seat_map_unjudgeable(state):
         shape_drivers.append("seat-map-unavailable")
     if _seat_map_violated(state):
         shape_drivers.append("seat-map-violation")
@@ -3775,6 +3799,12 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                 "reviewer-fell-open-seatmap-unavailable (round %s): live panel vendor(s) %s "
                 "but no seat map submitted — fall-open provenance unverified for the panel" % (
                     rkey, ", ".join(smu)))
+        smuj = rrec.get("seatMapUnjudgeable")
+        if smuj:
+            degraded.append(
+                "seat-map-unjudgeable (round %s): a seat map was submitted and is readable, but "
+                "its violation basis is incomplete (%s) — \"no breach\" is unproven rather than clean"
+                % (rkey, ", ".join(smuj)))
         vac = rrec.get("vacuousSeats")
         if vac:
             degraded.append(
@@ -3906,7 +3936,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
         "rounds": rounds,
         "findings": findings,
         "decisions": list(state.get("decisions") or []),
-        "seatMap": _emit_receipt_seat_map(state),
+        "seatMap": _emit_receipt_seat_map(state, _driver_author_family(state)),
         "scriptRan": scriptran,
         "degraded": degraded,
         "skippedBlockers": skipped_blockers,

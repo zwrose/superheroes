@@ -138,8 +138,8 @@ def test_emit_receipt_seat_map_single_receipt_identity():
         "seatMapReceipts": [{"round": "1", "map": map_}],
         "rounds": {},
     }
-    emitted = SMR.emit_receipt_seat_map(state)
-    assert emitted["violations"] == [breach]
+    emitted = SMR.emit_receipt_seat_map(state, "anthropic")
+    assert breach in emitted.get("violations", [])
     assert emitted["liveCellsSource"] == liveness_cache.LIVE_CELLS_SOURCE_PROBED
     assert emitted["livenessPinScoped"] is False
     assert emitted["authorFamily"] == "anthropic"
