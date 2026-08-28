@@ -37,8 +37,8 @@ requires a child to build or check something is owned by that child**, never lis
 
 | Criterion | Owner | Consumers / notes |
 | --- | --- | --- |
-| FR-1 — removal only on cannot-bite evidence (all four bullets) | **P7** — the cut list is where the policy first executes; every cut carries its evidence | P5 (FR-18a classes; UFR-5 re-run encoding), P2 (FR-26 grounds). Shared vocabulary bound as R17 |
-| FR-2 — rail definition | **P7** — the rail inventory is the operational rail set (seeded from `rail-census-v3`); the definition's mechanical form IS inventory membership | P3a derives the rail lane **from the inventory** (R3's direction — authority runs inventory → classifier, never the reverse) |
+| FR-1 — removal only on cannot-bite evidence (all four bullets) | **P7** — the cut list is where the policy first executes; every cut carries its evidence | P5 (FR-18a classes; UFR-5 re-run encoding). **FR-26 removals are FR-1's stated exception, not a consumer** — owner-authorized coverage obligations on diagnosis evidence, outside the cannot-bite bar (R17 carve-out). Shared vocabulary bound as R17 |
+| FR-2 — rail definition (a rail recognized by **what it tests**, independent of any list — FR-18c must catch a rail *absent from* the inventory, so membership can never be the definition) | the definition is **spec-resident vocabulary** (like R17); its three operational arms are singly owned: **recognition** (the lens flags an undeclared/unlisted rail, FR-18c) → **P5**; **membership** (the inventory, seeded from `rail-census-v3`) → **P7**; **lane derivation** (rail lane = the inventory, R3) → **P3a** | corrected twice: round 1 (circularity) and round 2 (over-correction to membership-as-definition) |
 | FR-2 — rails exempt from failure-frequency retention | **P7** | vet |
 | FR-3 — inventory seeded (53), advisor corrections additions-only | **P7** | P3a (R3), P5 (FR-18c lens arm), P2 (FR-26 rail exclusion) |
 | FR-3 — entry-removal / de-laning bar | **P7** | vet |
@@ -47,7 +47,7 @@ requires a child to build or check something is owned by that child**, never lis
 | FR-3 — the guard, two-phase | **P7** owns phase 1 (entry-disappearance arm, lands with or before any cut); **P3a** owns phase 2 (the re-laning arm — inexpressible before the lane classification exists) | R3 |
 | FR-4 — tiers, lanes, always-run set; every file in exactly one lane; classification versioned + guarded; validators-not-a-lane | **P3a** | P3b (selects under it), P2 (records version-in-force), P5 (R1) |
 | FR-4b — risk profile + depth grading + named-edit bar on the table | **P5** | vet; table edits use R2's form (P5 is an R2 consumer) |
-| FR-5 — selection semantics for `.py`-only changes, **operative only after FR-10's enablement flip** | **P3b** — including the duty to read the enablement state and skip nothing before it is true (R6's fourth trust state) | P2 records the flip |
+| FR-5 — selection semantics for `.py`-only changes, **operative only after FR-10's enablement flip** | **P3b** — including the duty to read the enablement state and skip nothing unless a recorded enablement is read **true** (an absent or unreadable record is not-enabled — R6) | P2 records the flip |
 | FR-6 — fail-open to full on any non-`.py` touch | **P3b** | — |
 | FR-7 — merge tier runs full; nothing reduces CI | **P3b** — verified as a no-change constraint on the gate-driver diff | package read re-checks at verification |
 | FR-8 — nightly tier runs every lane in full; the receipt lists every lane and instrument as executed | **P3b** — the spec's own change-set row places FR-8 in P3 (the tier runner is the gate driver's nightly mode); **P6 extends the same nightly with the instruments** and is a consumer of its receipt structure | corrected from round-1 finding grounding-006 — the map's first draft assigned P6 against the spec's delivery table without saying why |
@@ -58,6 +58,7 @@ requires a child to build or check something is owned by that child**, never lis
 | FR-11 — the gate's behavior under suspension (runs full; the pinned phrase; **the suspended receipt is the Show-it surface**) | **P3b** | R15, R16 |
 | FR-12 — one pinned Python; provisioning; refusal-not-fallback with park route | **P1** | P3b, P6, P4, R7 |
 | FR-13 ch. 1 + ch. 2's dissolution-by-pin | **P1** | — |
+| FR-13 ch. 2 — **the gate command carries the bytecode-safety flags** (the production half) | **P3b** — R8's producer duty | P4's census is the check, not the flags |
 | FR-13 ch. 2's census arm + ch. 3 + ch. 4 + the traceability bullet | **P4** | R8 |
 | FR-13 ch. 5–6 — the two practice rules and their named vet-graded fields | **P5** | vet |
 | FR-13 ch. 5–6 — **the no-vet-lane presence check at the nightly refresh** ("either channel's named field absent … the ledger's nightly refresh performs the presence check") | **P2** — a build | corrected: round-1 ALLOCATION-003 |
@@ -66,7 +67,8 @@ requires a child to build or check something is owned by that child**, never lis
 | FR-17 — bulk-removal checkpoint, decision-only, ≥45 ledger days, **its Show-it named item ("first line states the number of complete ledger days")** | **P8** | P2 (day count); R16 carries P8's presentation duty |
 | FR-18a–f — the six authoring rules (a–d and f name an example finding; **e is a prohibition and names the finding it bars**) | **P5** | — |
 | FR-18c — **the no-vet-lane body check at the nightly refresh** | **P2** — a build | corrected: round-1 ALLOCATION-004 |
-| FR-18g — stage rule + detector bite-proofing + rule-set versioning + drift check | **P5** | P2 (nightly reads the version, UFR-7 fallback), R11 |
+| FR-18g — the calibration-side integrity rules: stage rule, rule-set versioning + drift check, the lens rules' named example findings | **P5** | P2 (nightly reads the version, UFR-7 fallback), R11 |
+| FR-18g — **detector bite-proof specimens**: every guard, census, drift test, and the classifier this policy introduces carries its seeded-violation specimen **in the build that ships the detector** | each detector's owner — **P3a** (classification guard), **P1** (pin drift check), **P4** (censuses), **P2** (classifier, per class and per disjunction branch), **P7** (inventory guard) | bound as R20; corrected round 2 (both vendors) — specimens are not P5's to ship |
 | FR-19 — the ledger core: classes, per (run × item), overrides, dispatch audit, unlinked fixes, H4 | **P2** | R10, R12, R13 |
 | FR-19 — protected-artifact edits: **the vet-check encoding** (replay record checked at a vetted lane) | **P5**; the artifacts, replay records, and nightly re-check → **P2** | corrected: round-1 ALLOCATION-005; R12 |
 | FR-20 — mutation sweep (budgeted via an R2 named edit, advisory, partial-marked) | **P6** | P1; P6 is an R2 consumer |
@@ -88,7 +90,8 @@ requires a child to build or check something is owned by that child**, never lis
 | --- | --- | --- |
 | UFR-1 — unclassifiable → full, phrase | **P3b** | P3a input |
 | UFR-2 — receiptless claim = no receipt; vet-check encoding → **P5**; nightly fallback → **P2** | split as stated | — |
-| UFR-3 — **instrument-failure recording + owner notification** (the tracking item carries the dated record and the sent notification) | **P2** — the plan's own row places UFR-3 in P2, and the ledger's tracking item is the recording surface; **P6's workflow must surface its own failures into that record** (consumer duty stated in its issue) | corrected: round-1 ALLOCATION-008/premortem-005 — the first draft gave this to P6, contradicting the plan |
+| UFR-3 — **instrument-failure recording + owner notification** (the tracking item carries the dated record and the sent notification) | **P2** — the plan's own row places UFR-3 in P2; the ledger's tracking item is the recording surface | corrected round 1 (was P6) |
+| UFR-3 — **failure emission**: each nightly participant must surface its own failure or partial completion into P2's record | **P6** for the instruments; **P3b** for the nightly tier runner itself | corrected round 2 (both vendors) — emission is an owned build in each participant, never consumption |
 | UFR-3 — ledger-refresh isolation from sweeps; three-stale-nights rule | **P2** (isolation contract R14 with P6); the gate's stale-instruments behavior + phrase → **P3b** | R6, R14 |
 | UFR-4 — lens+vet encoding → **P5**; nightly fallback + block record → **P2** | split as stated | — |
 | UFR-5 — finding + no-vet-lane bar + independent re-run | **P5** (encoding; the vet performs the re-run) | P7 (primary subject), R17 |
@@ -97,7 +100,7 @@ requires a child to build or check something is owned by that child**, never lis
 | UFR-6 — the P7 warm-up carve-out (cannot-bite deletions proceed during warm-up on the owner's 2026-08-28 ruling) | **P7** — its issue states the carve-out and its bound | R19 |
 | UFR-7 — vet encoding → **P5**; nightly resolution → **P2** | split as stated | R11 |
 | UFR-8 — CI validator-step drift check | **P1** | — |
-| UFR-9 — trust state unreadable → full, naming which (all **four** states — R6) | **P3b** | R6 |
+| UFR-9 — trust state unreadable → full, naming which — the spec's **three** named states (suspension, staleness, calibration home), exactly as UFR-9 enumerates them | **P3b** | R6. The enablement state is deliberately **not** a UFR-9 state: an unreadable enablement record resolves through FR-5/FR-10 (selection simply stays off), not through UFR-9's phrase — corrected round 2 |
 
 ## Non-functional requirements, risk profile, presentation
 
@@ -116,6 +119,7 @@ None, after the round-1 repair pass: 45 round-1 findings dispositioned (see
 [package-read.md](package-read.md)) — the systematic repairs were (1) P2's nightly no-vet-lane
 fallback duties converted from consumer-reads to owned bullets; (2) Show-it surfaces reassigned to
 their producing children including P8; (3) FR-8 and UFR-3 realigned to the spec's and plan's own
-delivery rows; (4) the FR-10 enablement seam split and bound (R6's fourth state); (5) the FR-2/R3
-authority direction made consistent (inventory → classifier). The read's verification pass
-re-checks this claim in both directions.
+delivery rows; (4) the FR-10 enablement seam split and bound in R6; (5) the FR-2 definition made
+spec-resident vocabulary with three singly-owned arms. Round 2 (both vendors, 22 findings, one
+refuted) drove the further repairs annotated "corrected round 2" above and in the register.
+The read's verification pass re-checks this claim in both directions.
