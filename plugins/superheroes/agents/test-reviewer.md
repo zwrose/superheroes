@@ -139,7 +139,8 @@ Collect findings under these named smells; **every finding cites its smell by na
   environment-dependent) without saying what production shape the pin makes unobservable.
 - **literal-pin** — a diff-added test that reaches an external-contract constant through the
   symbol that defines it rather than pinning the literal. The rule and its reason are stated once
-  in `rubric/bite-proof.md` § *The obligation*; grade the case from there, on the `+` lines alone.
+  in the **`unproven-detector`** smell in **Named test-smell taxonomy** (§ *The obligation* in the
+  bite-proof reference that smell names); grade the case from there, on the `+` lines alone.
 
 **Environment-supplied posture (diff-only — you cannot see the build record).**
 
