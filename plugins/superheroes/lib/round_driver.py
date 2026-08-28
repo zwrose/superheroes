@@ -4530,6 +4530,30 @@ def _receipt_fault_response(detail):
     return {"ok": False, "reason": "receipt-fault", "detail": detail}
 
 
+def _records_path_is_reserved(session_dir, records_path):
+    """Return True when records_path resolves to a destination the driver already owns."""
+    if not records_path:
+        return False
+    resolved = os.path.realpath(os.path.abspath(records_path))
+    session_real = os.path.realpath(session_dir)
+    reserved = (
+        os.path.join(session_real, STATE_FILE),
+        os.path.join(session_real, JOURNAL_FILE),
+        os.path.join(session_real, JOURNAL_FAULT_FILE),
+        os.path.join(session_real, RECEIPT_FILE),
+        os.path.join(session_real, RECEIPT_INTERIM_FILE),
+        os.path.join(session_real, round_records.META_FILE),
+    )
+    for path in reserved:
+        if resolved == os.path.realpath(path):
+            return True
+    commits_real = os.path.realpath(round_commit.commits_root(session_dir))
+    try:
+        return os.path.commonpath([resolved, commits_real]) == commits_real
+    except ValueError:
+        return False
+
+
 def _refuse_base_guard(session_dir, reason, detail=None, value=None):
     """#648: a base-guard refusal — journalled first (so the refusal is durable evidence, not just a
     console line), then surfaced on stdout, nonzero. Journal-first matters: when the journal AND its
@@ -8333,6 +8357,8 @@ def build_parser():
                                    "config/state so round 1 has a vendor source. Unparseable / "
                                    "non-object / on non-fresh state → fails loud (nonzero), never "
                                    "a silent default")
+    cli_contract.add_argument(pn, "--records-path", contract="free-text", default=None,
+                              help="durable round-records file path (fresh state only)")
 
     ps = sub.add_parser("submit")
     cli_contract.add_argument(ps, "--session-dir", contract="existing-directory", required=True)
@@ -8531,6 +8557,20 @@ def _dispatch(args):
                         overrides["priorComments"] = loaded
             except (OSError, ValueError):
                 pass
+        if args.records_path is not None:
+            if _records_path_is_reserved(args.session_dir, args.records_path):
+                sys.stdout.write(json.dumps({"ok": False, "reason": "records-path-reserved",
+                                             "value": args.records_path}) + "\n")
+                return 1
+            # Same fresh-state-only discipline as `--seat-map`: recordsPath is read ONCE at
+            # new_state via `_seed_resume`; a later `next` on existing state would silently ignore
+            # it (#1196).
+            st_ok, st = load_state(args.session_dir)
+            if not (st_ok and st is None):
+                sys.stdout.write(json.dumps({"ok": False, "reason": "records-path-not-fresh-state",
+                                             "value": args.records_path}) + "\n")
+                return 1
+            overrides["recordsPath"] = args.records_path
         out = cmd_next(args.session_dir, overrides or None)
     elif args.cmd == "record-result":
         out = cmd_record_result(args.session_dir, args.seat, attempt=args.attempt,

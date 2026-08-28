@@ -5,6 +5,8 @@ import os
 
 import pytest
 
+from test_round_driver import _guard_argv
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 
@@ -18,6 +20,7 @@ def _load(name):
 
 RD = _load("round_driver")
 RM = _load("review_memory")
+RR = _load("round_records")
 RC = RD.round_commit
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
@@ -179,3 +182,114 @@ def test_cli_and_run_loop_records_files_are_byte_identical(tmp_path):
   state_loop["rounds"] = json.loads(json.dumps(state_cli["rounds"]))
   RD._persist_round_records(state_loop, state_loop["config"])
   assert records_cli.read_bytes() == records_loop.read_bytes()
+
+
+def _run_next_records_cli(capsys, session_dir, records_path, *, fresh=True):
+    argv = ["next", "--session-dir", session_dir, "--records-path", records_path]
+    argv += _guard_argv(session_dir, fresh=fresh)
+    rc = RD.main(argv)
+    out = capsys.readouterr().out.strip()
+    parsed = json.loads(out.splitlines()[-1]) if out else None
+    return rc, parsed
+
+
+def test_records_path_on_non_fresh_state_refuses(tmp_path, capsys):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    records = str(tmp_path / "records.json")
+    open(records, "wb").write(RM.records_bytes([]))
+    rc0, out0 = _run_next_records_cli(capsys, session_dir, records, fresh=True)
+    assert rc0 == 0 and out0["ok"]
+    rc, out = _run_next_records_cli(capsys, session_dir, records, fresh=False)
+    assert rc == 1
+    assert out == {"ok": False, "reason": "records-path-not-fresh-state", "value": records}
+
+
+def test_records_path_on_fresh_state_lands_in_config(tmp_path, capsys):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    records = str(tmp_path / "records.json")
+    open(records, "wb").write(RM.records_bytes([]))
+    rc, out = _run_next_records_cli(capsys, session_dir, records, fresh=True)
+    assert rc == 0 and out["ok"]
+    ok, state = RD.load_state(session_dir)
+    assert ok and state["config"]["recordsPath"] == records
+
+
+@pytest.mark.parametrize("rel_path", [
+    RD.STATE_FILE,
+    RD.JOURNAL_FILE,
+    RD.JOURNAL_FAULT_FILE,
+    RD.RECEIPT_FILE,
+    RD.RECEIPT_INTERIM_FILE,
+    RR.META_FILE,
+])
+def test_records_path_reserved_session_files_refuse(tmp_path, capsys, rel_path):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    target = os.path.join(session_dir, rel_path)
+    rc, out = _run_next_records_cli(capsys, session_dir, target, fresh=True)
+    assert rc == 1
+    assert out == {"ok": False, "reason": "records-path-reserved", "value": target}
+
+
+def test_records_path_reserved_loop_state_refuses(tmp_path, capsys):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    target = os.path.join(session_dir, RD.STATE_FILE)
+    rc, out = _run_next_records_cli(capsys, session_dir, target, fresh=True)
+    assert rc == 1
+    assert out == {"ok": False, "reason": "records-path-reserved", "value": target}
+
+
+def test_records_path_reserved_via_traversal_refuses(tmp_path, capsys):
+    session_dir = str(tmp_path / "session")
+    inner = os.path.join(session_dir, "inner")
+    os.makedirs(inner)
+    traversal = os.path.join(inner, "..", RD.STATE_FILE)
+    rc, out = _run_next_records_cli(capsys, session_dir, traversal, fresh=True)
+    assert rc == 1
+    assert out == {"ok": False, "reason": "records-path-reserved", "value": traversal}
+
+
+def test_records_path_reserved_at_commits_root_refuses(tmp_path, capsys):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    commits = RC.commits_root(session_dir)
+    os.makedirs(commits)
+    rc, out = _run_next_records_cli(capsys, session_dir, commits, fresh=True)
+    assert rc == 1
+    assert out == {"ok": False, "reason": "records-path-reserved", "value": commits}
+
+
+def test_records_path_reserved_under_commits_refuses(tmp_path, capsys):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    under = os.path.join(RC.commits_root(session_dir), "abc", "intent.json")
+    os.makedirs(os.path.dirname(under))
+    rc, out = _run_next_records_cli(capsys, session_dir, under, fresh=True)
+    assert rc == 1
+    assert out == {"ok": False, "reason": "records-path-reserved", "value": under}
+
+
+def test_records_path_commits_backup_sibling_accepted(tmp_path, capsys):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    records = os.path.join(session_dir, "commits-backup", "x.json")
+    os.makedirs(os.path.dirname(records))
+    open(records, "wb").write(RM.records_bytes([]))
+    rc, out = _run_next_records_cli(capsys, session_dir, records, fresh=True)
+    assert rc == 0 and out["ok"]
+    ok, state = RD.load_state(session_dir)
+    assert ok and state["config"]["recordsPath"] == records
+
+
+def test_records_path_outside_session_accepted(tmp_path, capsys):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    records = str(tmp_path / "outside-records.json")
+    open(records, "wb").write(RM.records_bytes([]))
+    rc, out = _run_next_records_cli(capsys, session_dir, records, fresh=True)
+    assert rc == 0 and out["ok"]
+    ok, state = RD.load_state(session_dir)
+    assert ok and state["config"]["recordsPath"] == records
