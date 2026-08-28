@@ -746,7 +746,7 @@ receipt round `"0"`.
 `rounds`/`findings`/`skippedBlockers` rejects the receipt; on certified v3+, attested, and interim
 forms, a round entry missing `verifyPasses` or carrying a non-list `verifyPasses` is refused too
 (stale receipts written before the requirement shipped are refused with guidance to re-run the
-review). This summary is hand-maintained — there is no drift pin for refusal enumeration.
+review).
 
 ### Handback receipt gate (Claude host, Bash tool)
 

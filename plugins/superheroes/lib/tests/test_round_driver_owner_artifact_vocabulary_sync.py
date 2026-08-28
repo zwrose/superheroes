@@ -289,3 +289,65 @@ def test_rounds_enumeration_drift_pinned_to_disclosure_channel_registry():
     missing = sorted(registry - documented)
     assert not missing, (
         "disclosure channels missing from round-driver.md's `rounds` enumeration: %s" % missing)
+
+
+def _verify_passes_required_form_labels():
+    """Human labels for receipt forms that require verifyPasses per ROUND_ENTRY_KEY_FORMS."""
+    decl = RD.ROUND_ENTRY_KEY_FORMS["verifyPasses"]
+    labels = {"certified-v%d+" % decl["min_certified_version"]}
+    for schema in decl["non_certified_schemas"]:
+        if schema == RD.RECEIPT_ATTESTED_SCHEMA:
+            labels.add("attested")
+        elif schema == RD.RECEIPT_INTERIM_SCHEMA:
+            labels.add("interim")
+        else:
+            raise AssertionError("unmapped non_certified_schema %r — extend label mapping" % schema)
+    return decl, labels
+
+
+def test_verify_passes_required_forms_match_round_driver_doc():
+    """round-driver.md verifyPasses refusal prose ↔ ROUND_ENTRY_KEY_FORMS (both directions)."""
+    text = _read(_REF)
+    decl, required_labels = _verify_passes_required_form_labels()
+    min_v = decl["min_certified_version"]
+    out_of_scope_v = min_v - 1
+
+    validate_lines = [
+        line for line in text.splitlines()
+        if line.startswith("`validate_receipt(receipt)` returns")
+    ]
+    rounds_lines = [
+        line for line in text.splitlines()
+        if "verifyPasses` is required, not optional" in line
+    ]
+    assert validate_lines, "validate_receipt summary missing from round-driver.md"
+    assert rounds_lines, "verifyPasses requirement bullet missing from round-driver.md"
+    prose = "\n".join(validate_lines + rounds_lines)
+
+    assert ("schemaVersion` ≥ %d" % min_v) in prose or ("schemaVersion` >= %d" % min_v) in prose, (
+        "round-driver.md must name certified schemaVersion floor %d from ROUND_ENTRY_KEY_FORMS"
+        % min_v
+    )
+    for label in sorted(required_labels - {"certified-v%d+" % min_v}):
+        assert label in prose.lower(), (
+            "round-driver.md missing required verifyPasses form label %r" % label
+        )
+    assert "certified v%d" % out_of_scope_v in prose.lower(), (
+        "round-driver.md must name certified v%d as out of scope" % out_of_scope_v
+    )
+    assert "no drift pin for refusal enumeration" not in prose, (
+        "round-driver.md still discloses an absent drift pin after verifyPasses pin landed"
+    )
+
+    # Code → doc: every form the declaration requires must be named in the prose.
+    for schema in decl["non_certified_schemas"]:
+        assert RD._round_entry_key_declared("verifyPasses", schema, None), (
+            "test setup: expected %r to require verifyPasses" % schema
+        )
+    for version in range(min_v, min_v + 3):
+        assert RD._round_entry_key_declared("verifyPasses", None, version), (
+            "test setup: expected certified v%d to require verifyPasses" % version
+        )
+    assert not RD._round_entry_key_declared("verifyPasses", None, out_of_scope_v), (
+        "test setup: certified v%d must remain out of scope" % out_of_scope_v
+    )

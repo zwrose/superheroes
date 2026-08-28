@@ -110,8 +110,10 @@ overrunning or silently truncating.
   your scope, failures, ambiguities), and any **echo your order's rules require** — per-edge
   disposition of an enumerated fail-closed surface (validity rule 2), echo of an order-authorized
   test change, and the **bite-proof record for every detector your order adds or changes** — one
-  entry per element of **the guarded-element set the order declared**: the element and the axis it
-  claims, the exact neutralization applied, the
+  entry per element of **the guarded-element set the order declared** — when the order declared no
+  set (or an empty set / aggregate label), enumerate every independently neutralizable element the
+  detector guards yourself, flag the order gap per rule 6, and apply the ceilings over that
+  enumeration: the element and the axis it claims, the exact neutralization applied, the
   detector's own **red** output word-for-word (run the detector alone — a narrowed command, e.g. the
   single test node — never a filtered suite log), the restore, the **green** output, and **the
   restored lines quoted back** — the same targeted, reversible edit shown undone — as the restore
@@ -120,7 +122,7 @@ overrunning or silently truncating.
   only as a **targeted, reversible edit**; restore **only by the inverse edit** — never
   `git checkout --`, `git restore`, `git reset`, or `git stash`, which have destroyed uncommitted
   work in the field. **Bite-proof red and green captures** are bounded — at most **32 KiB** per
-  element of that declared set and **128 KiB** across the whole return over those elements for a
+  element of that enumeration and **128 KiB** across the whole return over those elements for a
   **passing** green half and for the red half of a proof;
   a **green half that fails** is a rung-2 failure and its output comes back word-for-word, however long —
   because a failed restore is the one outcome nobody may summarize. An over-ceiling bite-proof capture
