@@ -153,6 +153,84 @@ def unjudgeable_receipts(state, driver_author_family=None):
     return out
 
 
+def _per_round_disclosed_unjudgeable_rounds(state):
+    """Round keys whose ``seatMapUnjudgeable`` record would emit a per-round disclosure line."""
+    out: set[str] = set()
+    for rkey, rrec in (state.get("rounds") or {}).items():
+        if isinstance(rrec, dict) and rrec.get("seatMapUnjudgeable"):
+            out.add(str(rkey))
+    return out
+
+
+def unjudgeable_run_level_disclosure(
+    state,
+    driver_author_family=None,
+    *,
+    per_round_emitted=False,
+    no_seat_map_submitted=False,
+):
+    """Run-level ``seat-map-unjudgeable`` degraded prose when the terminal predicate arms without
+    per-round disclosure (#714 NR-C / #1204 same-round re-fold).
+
+    Returns ``None`` when every unjudgeable receipt round is already covered by a per-round line,
+    or when no unjudgeable receipt exists.
+
+    ``per_round_emitted`` and ``no_seat_map_submitted`` are legacy kwargs from ``build_receipt``;
+    disclosed rounds and empty-receipt gating are derived here instead."""
+    del per_round_emitted, no_seat_map_submitted  # dominated — see wo_r1_1204.md
+    disclosed = _per_round_disclosed_unjudgeable_rounds(state)
+    unj = unjudgeable_receipts(state, driver_author_family)
+    uncovered = [
+        entry for entry in unj
+        if isinstance(entry, dict) and str(entry.get("round", "")) not in disclosed
+    ]
+    if not uncovered:
+        return None
+    bases = sorted(
+        {entry["basis"] for entry in uncovered if isinstance(entry, dict) and entry.get("basis")},
+    )
+    if not bases:
+        return None
+    rounds = sorted(
+        {str(entry["round"]) for entry in uncovered if isinstance(entry, dict) and entry.get("round")},
+        key=lambda r: int(r) if str(r).isdigit() else 0,
+    )
+    round_part = ", ".join(rounds) if rounds else "?"
+    return (
+        "seat-map-unjudgeable (rounds %s): a seat map was submitted and is readable, but "
+        "its violation basis is incomplete (%s) — \"no breach\" is unproven rather than clean"
+        % (round_part, ", ".join(bases))
+    )
+
+
+def round_governing_unjudgeable(state, round_id, driver_author_family=None):
+    """Per-round judgeability for the map governing *this round* — not the terminal predicate.
+
+    Own-submission wins: the last receipt whose ``round`` label equals ``round_id`` is judged when
+    present. Otherwise the round is judged on ``effective_seat_map(state)`` so the record never goes
+    silent while an earlier map still governs.
+
+    This is **not** ``unjudgeable_receipts``: that reader keeps the whole-history union so an
+    earlier bad map is never dropped from the run's disclosure (#714 NR-B)."""
+    round_label = str(round_id)
+    selected_map = None
+    selected_round_label = round_label
+    for entry in reversed(receipts(state)):
+        if str(entry.get("round", "")) == round_label:
+            selected_map = entry.get("map")
+            selected_round_label = str(entry.get("round", ""))
+            break
+    if selected_map is None:
+        selected_map = effective_seat_map(state)
+        selected_round_label = round_label
+    if not isinstance(selected_map, dict) or not selected_map:
+        return []
+    basis = seat_map.violation_basis(selected_map, driver_author_family)
+    if basis == seat_map.VIOLATION_BASIS_COMPLETE:
+        return []
+    return [{"round": selected_round_label, "basis": basis}]
+
+
 def skew_records(state):
     """Skew projection — per-receipt skew degradations, deduped by ``_skew_record_identity``."""
     seen: set[tuple] = set()
