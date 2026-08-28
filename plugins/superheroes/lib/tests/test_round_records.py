@@ -740,9 +740,8 @@ def test_sweep_refuses_out_of_session_dangling_landing_symlink_at_path_build(tmp
     lpath = RR.landing_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
     _dangling_symlink_outside_session(sd, lpath)
     out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
-    seat_results = [r for r in out if r.get("seatKey") == SEAT]
-    assert [r.get("reason") for r in seat_results] == ["bad-argument"]
-    assert seat_results[0]["ok"] is False
+    assert [r.get("reason") for r in out] == ["bad-argument"]
+    assert out[0]["seatKey"] == SEAT and out[0]["ok"] is False
 
 
 def test_sweep_refuses_out_of_session_dangling_bare_payload_symlink_at_path_build(tmp_path):
@@ -751,9 +750,8 @@ def test_sweep_refuses_out_of_session_dangling_bare_payload_symlink_at_path_buil
     bare = RR.bare_payload_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
     _dangling_symlink_outside_session(sd, bare)
     out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
-    seat_results = [r for r in out if r.get("seatKey") == SEAT]
-    assert [r.get("reason") for r in seat_results] == ["bad-argument"]
-    assert seat_results[0]["ok"] is False
+    assert [r.get("reason") for r in out] == ["bad-argument"]
+    assert out[0]["seatKey"] == SEAT and out[0]["ok"] is False
 
 
 def test_probe_store_entry_outcomes(tmp_path, monkeypatch):

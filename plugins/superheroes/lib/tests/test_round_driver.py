@@ -3002,6 +3002,36 @@ def test_producer_normalizes_non_int_round_key_like_the_restorer(tmp_path):
     assert out.get("disclosures", {}).get("vacuousSeats") == ["test-reviewer"]
 
 
+def test_round_disclosure_key_rejects_junk_and_never_aliases():
+    """One home for the round key: ints/integral floats/int-strings normalize; a non-integral
+    float must NOT truncate onto a real round's evidence; junk returns None, never raises."""
+    assert RD._round_disclosure_key(1) == "1"
+    assert RD._round_disclosure_key(1.0) == "1"
+    assert RD._round_disclosure_key("1") == "1"
+    assert RD._round_disclosure_key(1.5) is None
+    assert RD._round_disclosure_key(float("inf")) is None
+    assert RD._round_disclosure_key(True) is None
+    assert RD._round_disclosure_key(None) is None
+    assert RD._round_disclosure_key("junk") is None
+
+
+def test_producer_skips_block_for_non_integral_round_without_aliasing(tmp_path):
+    """A `1.5` ledger record persists NO disclosure block (and does not crash on `inf`) —
+    round 1's evidence must never be duplicated onto a junk-round record."""
+    records = tmp_path / "round-records.json"
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    rec_half = _seed_record(1)
+    rec_half["round"] = 1.5
+    rec_inf = _seed_record(2)
+    rec_inf["round"] = float("inf")
+    state["_records"] = [rec_half, rec_inf]
+    RD._persist_round_records(state, state["config"])
+    assert state.get("terminal") is None
+    on_disk = json.loads(records.read_text())
+    assert all("disclosures" not in r for r in on_disk)
+
+
 def test_producer_carries_empty_canary_verified_but_omits_empty_channels(tmp_path):
     records = tmp_path / "round-records.json"
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
