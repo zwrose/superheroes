@@ -124,8 +124,9 @@ def test_load_state_accepts_supported_versions_unchanged(tmp_path, version):
         json.dump(payload, fh)
     ok, loaded = RD.load_state(d)
     assert ok is True
-    assert loaded["schemaVersion"] == version
-    assert set(loaded) == set(payload)
+    # Full-value equality (#1194 FU6): a reader that rewrites any persisted VALUE — not just one
+    # that adds or drops a key — must go red here.
+    assert loaded == payload
 
 
 def test_legacy_refusal_plain_session_names_next_submit(tmp_path):

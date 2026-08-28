@@ -840,3 +840,19 @@ def test_synthetic_injection_embedded_string_literal():
         "string-literal leg must find an embedded `receipt-certified/<n>`, "
         "not only a whole-string match"
     )
+
+
+def test_allowlist_max_count_budget_reports_extras():
+    """BP-R5 (#1194 FU2): live sites beyond an entry's ``max_count`` budget are unexpected.
+
+    Synthetic findings against a real allowlist key: exactly ``max_count`` findings pass; one
+    more makes the extras (and only the extras) unexpected, sorted last by (line, leg)."""
+    key = next(k for k, v in _SPELLING_ALLOWLIST.items() if v.get("max_count"))
+    relpath, segment = key
+    budget = _SPELLING_ALLOWLIST[key]["max_count"]
+    within = [Finding(relpath, line, segment, "comparison") for line in range(1, budget + 1)]
+    assert _unexpected_findings(within) == []
+    extra = Finding(relpath, budget + 1000, segment, "comparison")
+    reported = _unexpected_findings(within + [extra])
+    assert reported == [extra], (
+        "expected exactly the over-budget finding to be unexpected, got %r" % (reported,))

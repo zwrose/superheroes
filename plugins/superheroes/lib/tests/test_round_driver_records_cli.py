@@ -1,5 +1,6 @@
 """#1196 WO-B: CLI-path round-records producer, submit-accept atomicity, corrupt-resume park."""
 import ast
+import errno
 import importlib.util
 import json
 import os
@@ -713,3 +714,22 @@ def test_cmd_advance_recover_uses_injected_git_seam_for_legacy_sidecar(
     assert os.path.exists(sidecar)
     root = RC.commits_root(session_dir)
     assert not os.path.exists(root) or os.listdir(root) == []
+
+
+def test_sidecar_temp_refuses_a_planted_symlink_and_leaves_victim_intact(tmp_path):
+    """#1200 vet-197 named finding: the ``O_NOFOLLOW`` half of the sidecar temp open is behavior,
+    not spelling — a symlink pre-planted at the deterministic temp name is refused (ELOOP), the
+    symlink's victim keeps its bytes, and the target is never created."""
+    target = str(tmp_path / "replay-target.json")
+    victim = str(tmp_path / "victim.txt")
+    with open(victim, "wb") as fh:
+        fh.write(b"PRECIOUS")
+    commit_id = "0123456789abcdef0123456789abcdef"
+    planted = "%s.commit-%s.tmp" % (target, commit_id)
+    os.symlink(victim, planted)
+    with pytest.raises(OSError) as excinfo:
+        RC._apply_external_sidecar(str(tmp_path), commit_id, 0,
+                                   {"sha256": RC._sha256_bytes(b"NEW")}, b"NEW", lambda: target)
+    assert excinfo.value.errno == errno.ELOOP
+    assert open(victim, "rb").read() == b"PRECIOUS"
+    assert not os.path.exists(target)
