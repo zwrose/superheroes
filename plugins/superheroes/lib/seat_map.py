@@ -63,6 +63,8 @@ VIOLATION_BASIS_NO_SEATS = "no-seats"
 VIOLATION_BASIS_NO_AUTHOR_FAMILY = "no-author-family"
 VIOLATION_BASIS_SELF_ASSERTED_AUTHOR_FAMILY = "self-asserted-author-family"
 
+EVIDENCE_UNPROVEN_BASIS = "unproven-basis"
+
 
 def _same_family_record(seat: str, family: str) -> dict:
     """The disclosed-degradation record for a seat that had to take the maker's own family because no
@@ -855,7 +857,7 @@ def derived_violations(
         if key not in union:
             rec = dict(v)
             if "evidence" not in rec:
-                rec["evidence"] = "unproven-basis"
+                rec["evidence"] = EVIDENCE_UNPROVEN_BASIS
             rec["derived"] = True
             union[key] = rec
 
@@ -885,11 +887,11 @@ def classify_violations(
     excused_by_liveness: list[dict] = []
 
     for v in violations:
-        if v.get("derived") is True:
-            unexcused.append(dict(v))
-            continue
         if not isinstance(v, dict):
             unexcused.append({"constraint": "malformed-violation-record"})
+            continue
+        if v.get("derived") is True:
+            unexcused.append(dict(v))
             continue
         constraint = v.get("constraint")
         seat = v.get("seat") if isinstance(v.get("seat"), str) else None
@@ -951,7 +953,7 @@ def classify_violations(
                 achievable = None
                 break
             if cfg.get("source") == "pinned":
-                fam = cfg.get("family")
+                fam = _seat_family(cs, cfg)
                 if isinstance(fam, str) and fam:
                     achievable.add(fam)
             else:

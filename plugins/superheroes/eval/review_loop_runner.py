@@ -264,10 +264,11 @@ def _eval_clean_seat_map(fixer_vendor=_EVAL_FIXER_VENDOR):
                 for cell in (receipt.get("seats") or {}).values()
                 if isinstance(cell, dict) and cell.get("vendor")
             }
-            assert len(seated_vendors) >= 2, (
-                "eval harness baseline seat map must seat at least two distinct vendors "
-                "(single-vendor collapse breaks liveness-gate preconditions; INV-15)"
-            )
+            if len(seated_vendors) < 2:
+                raise RuntimeError(
+                    "eval harness baseline seat map must seat at least two distinct vendors "
+                    "(single-vendor collapse breaks liveness-gate preconditions; INV-15)"
+                )
             return receipt
     raise RuntimeError(
         "eval harness seat map must have no unexcused violations for "
@@ -638,7 +639,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             "dimensions": reviewer_set,
             "maxRounds": max_rounds,
             "diff": _EVAL_DIFF,
-            "vendors": ["claude", "codex"],
+            "vendors": list(_EVAL_LIVE_POOL),
             "fixerVendor": fixer_vendor,
             "verifyCommand": "none",
             # The driver reads these ONCE at new_state to resume from the durable seeds and to seed

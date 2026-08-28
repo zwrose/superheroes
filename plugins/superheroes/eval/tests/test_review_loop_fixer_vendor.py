@@ -67,3 +67,19 @@ def test_rejection_set_matches_registry_pool_families():
     cursor_family = model_registry.family_for("code-fixer", "cursor")
     assert cursor_family not in pool_families
     harness._validate_fixer_vendor_override("cursor")
+
+
+def test_run_fixture_driver_vendors_match_eval_live_pool():
+    captured = {}
+
+    def capture_run_loop(seams, config):
+        captured["vendors"] = config.get("vendors")
+        return {"verdict": "halted"}
+
+    orig = harness.RD.run_loop
+    harness.RD.run_loop = capture_run_loop
+    try:
+        harness.run_fixture(_MINIMAL_FIXTURE, supply_seat_map=False)
+    finally:
+        harness.RD.run_loop = orig
+    assert captured["vendors"] == list(harness._EVAL_LIVE_POOL)

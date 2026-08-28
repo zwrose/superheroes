@@ -2825,3 +2825,104 @@ def test_inv16_self_asserted_basis_reaches_unjudgeable_receipts():
     }
     result = smr.unjudgeable_receipts(state, None)
     assert result == [{"round": "1", "basis": SM.VIOLATION_BASIS_SELF_ASSERTED_AUTHOR_FAMILY}]
+
+
+def _assert_side_family_read_offenders():
+    """Return function names outside ``build()`` that read submitted ``family`` via get/subscript."""
+    import ast
+
+    with open(_MOD, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=_MOD)
+    offenders = []
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or node.name == "build":
+            continue
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call):
+                func = child.func
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "get"
+                    and child.args
+                    and isinstance(child.args[0], ast.Constant)
+                    and child.args[0].value == "family"
+                ):
+                    offenders.append(node.name)
+                    break
+            elif isinstance(child, ast.Subscript):
+                sl = child.slice
+                if isinstance(sl, ast.Constant) and sl.value == "family":
+                    offenders.append(node.name)
+                    break
+    return offenders
+
+
+def test_assert_side_no_cfg_family_reads_outside_build():
+    offenders = _assert_side_family_read_offenders()
+    assert offenders == [], (
+        "assert-side family read outside build() in: %s"
+        % ", ".join(sorted(set(offenders)))
+    )
+
+
+def _pinned_critical_seats_without_family(seats):
+    pin_anthropic = {
+        "vendor": "claude",
+        "model": "opus-5",
+        "effort": "xhigh",
+        "tier": "reviewer-deep",
+        "source": "pinned",
+    }
+    pin_openai = {
+        "vendor": "codex",
+        "model": "gpt-5.6-sol",
+        "effort": "xhigh",
+        "tier": "reviewer-deep",
+        "source": "pinned",
+    }
+    seats["code-reviewer"] = dict(pin_anthropic)
+    seats["security-reviewer"] = dict(pin_anthropic)
+    seats["premortem-reviewer"] = dict(pin_openai)
+    return seats
+
+
+def test_critical_diversity_pinned_omitted_family_not_excused_by_pin():
+    seats = _pinned_critical_seats_without_family(_full_seats_template())
+    receipt = {
+        "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+        "authorFamily": "xai",
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    classified = SM.classify_violations(receipt, "xai")
+    unexcused = [v.get("constraint") for v in classified["unexcused"]]
+    excused_pin = [v.get("constraint") for v in classified["excusedByPin"]]
+    assert "critical-diversity" in unexcused
+    assert "critical-diversity" not in excused_pin
+
+
+def test_critical_diversity_pinned_with_family_still_excused_by_pin():
+    seats = _full_seats_template()
+    for seat in SM.CRITICAL_SEATS:
+        cfg = dict(seats[seat])
+        cfg["source"] = "pinned"
+        cfg["vendor"] = "claude"
+        cfg["family"] = "anthropic"
+        seats[seat] = cfg
+    receipt = {
+        "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+        "authorFamily": "xai",
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    classified = SM.classify_violations(receipt, "xai")
+    assert "critical-diversity" not in [
+        v.get("constraint") for v in classified["unexcused"]
+    ]
+    assert "critical-diversity" in [
+        v.get("constraint") for v in classified["excusedByPin"]
+    ]
