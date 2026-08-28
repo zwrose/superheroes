@@ -110,3 +110,13 @@ every child token (P1–P8, F2, F1, F3) — a machine receipt no model round cou
 one-line content fixes (FR-3's entry-metadata phrase; R19 binding the freeze to P8's checkpoint
 per UFR-6's own halt list; R20's consumers enumerated as child tokens; FR-11's post-lift receipt
 citation owned by P3b).
+
+**Round 6 (owner-extended by a third ruling b; 4 unique findings: codex 3, grok 2, both vendors
+converging on the same top defect):** R19 conflated UFR-6's two halt modes — its third defect in
+three rounds, read as the third-rework tripwire firing on one sentence's *shape*. Structural
+repair: **R19 split into R19 (breach freeze: halts everything including P7's cuts and P8's
+checkpoint, owner-only lift) and R21 (insufficient-sample park: same holds except the owner-ruled
+P7 warm-up carve-out; condition-based end when the window becomes readable)** — the conflation
+removed by construction. Plus two map rows: P8's UFR-6 checkpoint-hold, and FR-8's per-participant
+status production allocated to P6/P2 per R14. Register re-parse-proven after the split (21
+entries, all child tokens resolve).

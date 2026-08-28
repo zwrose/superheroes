@@ -22,7 +22,7 @@ P3 seam split applied:
 | P5 | Test-lens calibration + vet-checks encoding |
 | P6 | Nightly instruments (mutation sweep, flake differential, vitals) |
 | P7 | First cut list + rail inventory (the named-edit record's first shipping home) |
-| P8 | Bulk-removal checkpoint — **decision row, not a build**; owns exactly FR-17, including its Show-it named item |
+| P8 | Bulk-removal checkpoint — **decision row, not a build**; owns FR-17 (including its Show-it named item) and its own UFR-6 hold |
 
 Lane-1 items (F1–F3, PA–PD, LP) are **not children of this spec** — its Out-of-scope excludes the
 plugin-harvest track; they anchor to the dated adoption rulings and appear here where a cross-lane
@@ -53,7 +53,8 @@ requires a child to build or check something is owned by that child**, never lis
 | FR-5 — selection semantics for `.py`-only changes, **operative only after FR-10's enablement flip** | **P3b** — including the duty to read the enablement state and skip nothing unless a recorded enablement is read **true** (an absent or unreadable record is not-enabled — R6) | P2 records the flip |
 | FR-6 — fail-open to full on any non-`.py` touch | **P3b** | — |
 | FR-7 — merge tier runs full; nothing reduces CI | **P3b** — verified as a no-change constraint on the gate-driver diff | package read re-checks at verification |
-| FR-8 — nightly tier runs every lane in full; the receipt lists every lane and instrument as executed | **P3b** — the spec's own change-set row places FR-8 in P3 (the tier runner is the gate driver's nightly mode); **P6 extends the same nightly with the instruments** and is a consumer of its receipt structure | corrected from round-1 finding grounding-006 — the map's first draft assigned P6 against the spec's delivery table without saying why |
+| FR-8 — nightly tier runs every lane in full; the receipt's structure and assembly | **P3b** — the spec's own change-set row places FR-8 in P3 (the tier runner is the gate driver's nightly mode) | corrected round 1 (was P6) |
+| FR-8 — each participant's executed-with-result / failed-with-reason status line in that receipt | **P6** for the instruments; **P2** for the refresh — production duties per R14, never consumption (round-6 correction) | R14 |
 | FR-9 — machine-written gate receipt, field set, unreceipted conditions | **P3b** | P5 (UFR-2 vet check), R4 |
 | FR-9 — receipts travel in the PR body; **the ledger reads handed-back receipts at its nightly refresh** | first half **P3b** (the receipt lands in the body at handback); ingestion half **P2** — a build, not a read | corrected: round-1 ALLOCATION-002 |
 | FR-10 — observation mode counted at CI; immutable would-have-skipped sets; thresholds, reset, 30-day decision; **owner enablement recorded in the ledger** | **P2** | **P3b consumes the enablement state through R6** and must not skip before it (its own FR-5 bullet above); advisor brings the decisions |
@@ -99,9 +100,10 @@ requires a child to build or check something is owned by that child**, never lis
 | UFR-3 — ledger-refresh isolation from sweeps; three-stale-nights rule | **P2** (isolation contract R14 with P6); the gate's stale-instruments behavior + phrase → **P3b** | R6, R14 |
 | UFR-4 — lens+vet encoding → **P5**; nightly fallback + block record → **P2** | split as stated | — |
 | UFR-5 — finding + no-vet-lane bar + independent re-run | **P5** (encoding; the vet performs the re-run) | P7 (primary subject), R17 |
-| UFR-6 — rate, sample floor, provisional-window exclusion, **and the merge-time re-check's ledger cross-check** | **P2** | R19 binds the freeze mechanics |
-| UFR-6 — the vet-park encoding | **P5** | R19 |
-| UFR-6 — the P7 warm-up carve-out (cannot-bite deletions proceed during warm-up on the owner's 2026-08-28 ruling) | **P7** — its issue states the carve-out and its bound | R19 |
+| UFR-6 — rate, sample floor, provisional-window exclusion, **and the merge-time re-check's ledger cross-check** | **P2** | R19 (breach) + R21 (park) bind the mechanics |
+| UFR-6 — the vet-park encoding | **P5** | R19, R21 |
+| UFR-6 — the P7 warm-up carve-out (cannot-bite deletions proceed during the insufficient-sample park on the owner's 2026-08-28 ruling; a breach parks them like everything else) | **P7** — its issue states the carve-out and its bound | R21 |
+| UFR-6 — **the checkpoint hold**: P8's FR-17 decision checks the freeze/park state and does not proceed under either (breach lifts owner-only; the park ends when the window reads) | **P8** — the checkpoint item states the check | R19, R21 — round-6 addition |
 | UFR-7 — vet encoding → **P5**; nightly resolution → **P2** | split as stated | R11 |
 | UFR-8 — CI validator-step drift check | **P1** | — |
 | UFR-9 — trust state unreadable → full, naming which — the spec's **three** named states (suspension, staleness, calibration home), exactly as UFR-9 enumerates them | **P3b** | R6. The enablement state is deliberately **not** a UFR-9 state: an unreadable enablement record resolves through FR-5/FR-10 (selection simply stays off), not through UFR-9's phrase — corrected round 2 |

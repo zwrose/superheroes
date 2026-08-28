@@ -58,7 +58,7 @@ coverage map allocates criteria; this file binds contracts.
 *Producer:* P2
 *Consumers:* P2, P5
 
-**R13 — The ledger's publication surface.** The ledger publishes to one tracking item's body, refreshed nightly: the class counts, the provisional-7-day marking, the low-confidence flag, the complete-ledger-day count (the number P8's checkpoint item quotes in its first line), the escape-candidate rate with its merge-count sample size (the numbers R19's freeze reads), and — once FR-10 enablement is recorded — the local-loop trailing-20 median (the NFR's measurement home); UFR-6 reads settled rows only.
+**R13 — The ledger's publication surface.** The ledger publishes to one tracking item's body, refreshed nightly: the class counts, the provisional-7-day marking, the low-confidence flag, the complete-ledger-day count (the number P8's checkpoint item quotes in its first line), the escape-candidate rate with its merge-count sample size (the numbers the R19 freeze and R21 park read), and — once FR-10 enablement is recorded — the local-loop trailing-20 median (the NFR's measurement home); UFR-6 reads settled rows only.
 *Producer:* P2
 *Consumers:* P2, P8, P3b
 
@@ -82,13 +82,17 @@ coverage map allocates criteria; this file binds contracts.
 *Producer:* P6
 *Consumers:* P6, P2
 
-**R19 — UFR-6's freeze mechanics.** UFR-6's freeze mechanics are one contract: the 17.4%-baseline rate over the trailing 60 calendar days, read over settled rows only (the provisional most-recent-seven excluded — exclusion never extends the window), on ≥100 merges (P2 computes and publishes, R13), the insufficient-sample park, the merge-time re-check of a removing change's clearance (P2's nightly cross-check + the recorded actor identity), the vet-park encoding (P5), and the P7 warm-up carve-out (cannot-bite deletions with independently re-run evidence proceed during warm-up, owner-ruled 2026-08-28 — stated with its bound in P7's issue). A breach or an insufficient-sample park halts every removal including P7's and holds P8's FR-17 checkpoint — the spec's own halt list names the checkpoint, so the decision does not proceed until the owner's recorded decision or a readable clean rate — except an owner-authorized FR-26 removal, which UFR-6 explicitly exempts (a coverage obligation, not a cut); only the owner's recorded decision lifts the freeze.
+**R19 — UFR-6's breach freeze.** When the ledger's escape-candidate rate over the trailing 60 calendar days, read over settled rows only (the provisional most-recent-seven excluded — exclusion never extends the window), exceeds the 17.4% baseline on ≥100 merges (P2 computes and publishes the rate and sample size, R13), **all test removal halts** — FR-14 deletions, FR-15 burndown (suspended into debt), P7's cuts including its warm-up class, and P8's FR-17 checkpoint (UFR-6's own halt list names the checkpoint) — with exactly one exception: an owner-authorized FR-26 removal, which UFR-6 explicitly exempts (a coverage obligation, not a cut). **A breach freeze lifts only by the owner's recorded decision** — never by the rate later reading clean. The enforcement points are the vet-park encoding (P5) and the merge-time re-check of a removing change's clearance (P2's nightly cross-check + the recorded actor identity).
 *Producer:* P2
 *Consumers:* P2, P5, P7, P8
 
 **R20 — A detector ships with its specimen.** Every guard, census, drift test, and classifier this policy introduces carries its bite-proof specimen (a seeded violation it demonstrably flags) in the build that ships the detector — P3a's classification guard, P1's pin drift check, P4's censuses, P7's inventory guard, P2's classifier (one specimen per class and per disjunction branch, FR-18g), and P5's own rule-set drift check — itself a detector, itself bite-proofed, its specimen shipping in P5. No child's specimen stands in for another's.
 *Producer:* each detector's owner
 *Consumers:* P3a, P1, P4, P2, P7, P5
+
+**R21 — UFR-6's insufficient-sample park.** While the trailing window holds fewer than 100 merged changes, or unlinked fixes outnumber linked candidates (FR-19's low-confidence flag), the ledger reads "insufficient sample" and **the same holds apply as under a breach — including P8's FR-17 checkpoint — with one further exception beyond FR-26: the P7 warm-up carve-out** (cannot-bite deletions carrying FR-14's independently re-run evidence proceed during the ledger's warm-up, by the owner's 2026-08-28 ruling, stated with its bound in P7's issue — their safety argument is structural, not statistical). **The park is condition-based, not owner-lifted: it ends when the window becomes readable** (≥100 merges, linked majority) — and if the then-readable rate breaches, R19's freeze takes over, owner-lift and all.
+*Producer:* P2
+*Consumers:* P2, P5, P7, P8
 
 ---
 
