@@ -2616,6 +2616,7 @@ def test_build_roundtrip_honest_maps_do_not_move(seed, live_vendors):
         assert cfg.get("family") == SM._seat_family(seat, cfg)
     receipt = SM.to_receipt(m, author)
     assert SM.derived_violations(receipt) == SM.verify(m, author)
+    assert SM.violation_basis(receipt, author) == SM.VIOLATION_BASIS_COMPLETE
 
 
 # --- trusted-assert invariants (#1190 WO-2a) ---------------------------------------------------
@@ -2675,3 +2676,152 @@ def test_author_family_mismatch_derived_unexcused():
     assert not any(
         v.get("constraint") == "author-family-mismatch" for v in classified["excusedByLiveness"]
     )
+
+
+# --- trusted-assert invariants (#1190 WO-R1) ---------------------------------------------------
+
+
+def _all_claude_roster_seats():
+    """Every roster seat on claude (anthropic family) — the measured INV-16/A case substrate."""
+    anthropic_cfg = {
+        "vendor": "claude",
+        "model": "opus-5",
+        "effort": "xhigh",
+        "tier": "reviewer-deep",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    seats = {}
+    for seat in SM.PANEL_ROSTER:
+        cfg = dict(anthropic_cfg)
+        if seat == "grounding-seat":
+            cfg["tier"] = "reviewer"
+            cfg["model"] = "sonnet-5"
+            cfg["effort"] = "high"
+        seats[seat] = cfg
+    return seats
+
+
+def test_inv16_a_self_asserted_author_family_basis():
+    seat_map = {
+        "seats": _all_claude_roster_seats(),
+        "authorFamily": "xai",
+        "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+    }
+    assert SM.violation_basis(seat_map, None) == SM.VIOLATION_BASIS_SELF_ASSERTED_AUTHOR_FAMILY
+
+
+def test_inv16_a_driver_family_yields_complete_basis():
+    seat_map = {
+        "seats": _all_claude_roster_seats(),
+        "authorFamily": "xai",
+        "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+    }
+    assert SM.violation_basis(seat_map, "anthropic") == SM.VIOLATION_BASIS_COMPLETE
+
+
+def test_inv16_a_no_author_family_basis():
+    seat_map = {
+        "seats": _all_claude_roster_seats(),
+        "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+    }
+    assert SM.violation_basis(seat_map, None) == SM.VIOLATION_BASIS_NO_AUTHOR_FAMILY
+
+
+@pytest.mark.parametrize("seat", ["test-reviewer", "grounding-seat"])
+def test_inv16_c_unresolvable_vendor_violation_unexcused(seat):
+    tier = "reviewer" if seat == "grounding-seat" else "reviewer-deep"
+    model = "sonnet-5" if seat == "grounding-seat" else "opus-5"
+    effort = "high" if seat == "grounding-seat" else "xhigh"
+    seats = _full_seats_template()
+    seats[seat] = {
+        "vendor": "nosuchvendor",
+        "model": model,
+        "effort": effort,
+        "tier": tier,
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    seat_map = {
+        "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+        "authorFamily": "anthropic",
+    }
+    violations = SM.verify(seat_map, "anthropic")
+    assert any(
+        v.get("constraint") == "unresolvable-seat-vendor" and v.get("seat") == seat
+        for v in violations
+    )
+    classified = SM.classify_violations(seat_map, "anthropic")
+    assert any(
+        v.get("constraint") == "unresolvable-seat-vendor" and v.get("seat") == seat
+        for v in classified["unexcused"]
+    )
+
+
+def test_inv16_d_same_family_when_canonical_matches_maker_but_declared_differs():
+    seats = _full_seats_template()
+    for seat in SM.PANEL_ROSTER:
+        seats[seat] = {
+            "vendor": "cursor",
+            "model": "cursor-grok-4.6",
+            "effort": "xhigh",
+            "tier": "reviewer-deep" if seat != "grounding-seat" else "reviewer",
+            "family": "openai",
+            "source": "rotated",
+        }
+    seat_map = {
+        "seats": seats,
+        "liveVendors": ["cursor"],
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+    }
+    author = "xai"
+    degradations = SM.same_family_degradations(seat_map, author)
+    for seat in SM.PANEL_ROSTER:
+        assert any(
+            d.get("constraint") == "same-family" and d.get("seat") == seat
+            for d in degradations
+        ), seat
+
+
+def test_inv16_d_no_same_family_when_canonical_not_maker():
+    seats = _full_seats_template()
+    for seat in SM.PANEL_ROSTER:
+        seats[seat] = {
+            "vendor": "codex",
+            "model": "gpt-5.6-sol",
+            "effort": "xhigh",
+            "tier": "reviewer-deep" if seat != "grounding-seat" else "reviewer",
+            "family": "anthropic",
+            "source": "rotated",
+        }
+    seat_map = {
+        "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+    }
+    assert SM.same_family_degradations(seat_map, "xai") == []
+
+
+def test_inv16_self_asserted_basis_reaches_unjudgeable_receipts():
+    import seat_map_receipts as smr
+
+    seat_map = {
+        "seats": _all_claude_roster_seats(),
+        "authorFamily": "xai",
+    }
+    state = {
+        "seatMapReceipts": [{"round": "1", "map": seat_map}],
+    }
+    result = smr.unjudgeable_receipts(state, None)
+    assert result == [{"round": "1", "basis": SM.VIOLATION_BASIS_SELF_ASSERTED_AUTHOR_FAMILY}]

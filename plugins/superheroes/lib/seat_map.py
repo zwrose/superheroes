@@ -61,6 +61,7 @@ ALT_UNUSABLE = "evidence-unusable"
 VIOLATION_BASIS_COMPLETE = "complete"
 VIOLATION_BASIS_NO_SEATS = "no-seats"
 VIOLATION_BASIS_NO_AUTHOR_FAMILY = "no-author-family"
+VIOLATION_BASIS_SELF_ASSERTED_AUTHOR_FAMILY = "self-asserted-author-family"
 
 
 def _same_family_record(seat: str, family: str) -> dict:
@@ -272,8 +273,11 @@ def same_family_degradations(seat_map: dict, author_family: str | None) -> list[
     out: list[dict] = []
     for seat in PANEL_ROSTER:
         cfg = seats.get(seat)
-        if not isinstance(cfg, dict) or cfg.get("family") != author_family:
+        if not isinstance(cfg, dict):
             continue
+        seat_fam = _seat_family(seat, cfg)
+        if seat_fam != author_family:
+            continue  # unresolvable vendor: verify() owns unresolvable-seat-vendor
         if _alternative_family_live(seat_map, seat, cfg, author_family):
             continue
         out.append(_same_family_record(seat, author_family))
@@ -804,8 +808,13 @@ def violation_basis(seat_map: dict, driver_author_family: str | None = None) -> 
     seats = seat_map.get("seats")
     if not isinstance(seats, dict) or not seats:
         return VIOLATION_BASIS_NO_SEATS
-    if not effective_author_family(seat_map, driver_author_family):
+    a_d = driver_author_family if isinstance(driver_author_family, str) and driver_author_family else None
+    a_m = seat_map.get("authorFamily")
+    a_m = a_m if isinstance(a_m, str) and a_m else None
+    if not a_d and not a_m:
         return VIOLATION_BASIS_NO_AUTHOR_FAMILY
+    if not a_d and a_m:
+        return VIOLATION_BASIS_SELF_ASSERTED_AUTHOR_FAMILY
     return VIOLATION_BASIS_COMPLETE
 
 
@@ -1011,7 +1020,11 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
             cfg = seats[seat]
             if not isinstance(cfg, dict):
                 continue
-            if _seat_family(seat, cfg) != author_family:
+            seat_fam = _seat_family(seat, cfg)
+            if seat_fam is None:
+                violations.append({"seat": seat, "constraint": "unresolvable-seat-vendor"})
+                continue
+            if seat_fam != author_family:
                 continue
             if _alternative_family_live(seat_map, seat, cfg, author_family):
                 # an alternative family was reachable and the maker seated anyway — a VIOLATION
