@@ -226,7 +226,27 @@ def load_records_state(path, dimensions):
         return {"ok": False, "state": "corrupt", "records": [], "contentHash": content_hash(text), "reason": str(exc)}
     if not isinstance(data, list):
         return {"ok": False, "state": "corrupt", "records": [], "contentHash": content_hash(text), "reason": "not a list"}
-    return {"ok": True, "state": "loaded", "records": [promote_record(r, dimensions) for r in data], "contentHash": content_hash(text)}
+    records = []
+    for index, item in enumerate(data):
+        if not isinstance(item, dict):
+            return {
+                "ok": False,
+                "state": "corrupt",
+                "records": [],
+                "contentHash": content_hash(text),
+                "reason": "element %d is not an object" % index,
+            }
+        try:
+            records.append(promote_record(item, dimensions))
+        except (AttributeError, TypeError) as exc:
+            return {
+                "ok": False,
+                "state": "corrupt",
+                "records": [],
+                "contentHash": content_hash(text),
+                "reason": "element %d: %s" % (index, exc),
+            }
+    return {"ok": True, "state": "loaded", "records": records, "contentHash": content_hash(text)}
 
 
 def load_records(path, dimensions):

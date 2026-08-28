@@ -1311,7 +1311,7 @@ def _seed_resume(state, cfg):
         loaded = review_memory.load_records_state(records_path, dims)
     except (AttributeError, TypeError) as exc:
         state["_resumeCorrupt"] = (
-            "resume state unreadable (%s) — cannot certify; a fresh full reviewer-deep round is owed"
+            "resume state corrupt (%s) — cannot certify; a fresh full reviewer-deep round is owed"
             % exc)
         return
     if not loaded.get("ok"):
@@ -1334,7 +1334,16 @@ def _seed_resume(state, cfg):
             coverage = []
     if not coverage:
         for rec in records:
-            for d in rec.get("coverageDecisions") or []:
+            raw_cov = rec.get("coverageDecisions")
+            if raw_cov is None:
+                continue
+            if not isinstance(raw_cov, list):
+                state["_resumeCorrupt"] = (
+                    "resume state corrupt (record round %s: coverageDecisions is not a list) — "
+                    "cannot certify; a fresh full reviewer-deep round is owed"
+                    % (rec.get("round"),))
+                return
+            for d in raw_cov:
                 if isinstance(d, dict):
                     coverage.append(d)
     state["_records"] = records
@@ -1436,17 +1445,29 @@ def _persist_round_records(state, config):
             return
         existing = state.get("findings") or []
         seen = set()
-        for f in existing:
+        key_to_idx = {}
+        for idx, f in enumerate(existing):
             key = _park_finding_key(f)
             if key is not None:
                 seen.add(key)
+                key_to_idx[key] = idx
         merged = list(existing)
         for f in fresh:
             key = _park_finding_key(f)
             if key is not None and key in seen:
+                prior_idx = key_to_idx.get(key)
+                if prior_idx is not None:
+                    prior = merged[prior_idx]
+                    if circuit_breaker.severity_rank(f.get("severity")) \
+                            < circuit_breaker.severity_rank(prior.get("severity")):
+                        replacement = dict(f)
+                        replacement["dimension"] = panel_tally._merge_dims(prior, f)
+                        replacement["tradeoff"] = bool(prior.get("tradeoff") or f.get("tradeoff"))
+                        merged[prior_idx] = replacement
                 continue
             if key is not None:
                 seen.add(key)
+                key_to_idx[key] = len(merged)
             merged.append(f)
         state["findings"] = merged
 

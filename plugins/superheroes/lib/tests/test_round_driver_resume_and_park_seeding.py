@@ -68,6 +68,21 @@ def test_f1_corrupt_records_resume_parks_instead_of_raising(tmp_path):
     assert receipt["certificationShape"] is None
 
 
+def test_f1_nested_record_field_corruption_parks_instead_of_raising(tmp_path):
+    """F1 extension — schema-v2 record with non-list coverageDecisions parks, never crashes."""
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([{"schemaVersion": 2, "round": 1, "coverageDecisions": 7}]))
+    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
+    state = _fresh_state()
+    RD._seed_resume(state, cfg)
+    assert state.get("_resumeCorrupt")
+    assert isinstance(state["_resumeCorrupt"], str)
+    assert state.get("_records") == []
+    receipt = RD.run_loop(_seams(), cfg)
+    assert receipt["verdict"] == "cannot-certify"
+    assert receipt["certificationShape"] is None
+
+
 # --- F2: structured refusals unchanged ---
 
 
@@ -114,6 +129,20 @@ def test_f2_structured_refusals_pin_exact_resume_corrupt_messages(tmp_path):
     state = _fresh_state()
     RD._seed_resume(state, _cfg(dimensions=dims, recordsPath=str(missing)))
     assert state.get("_resumeCorrupt") is None
+
+
+def test_f2_except_branch_corrupt_vocabulary(tmp_path, monkeypatch):
+    """F2 — defence-in-depth except branch uses corrupt vocabulary, not unreadable."""
+
+    def _raise_type_error(path, dims):
+        raise TypeError("'int' object is not iterable")
+
+    monkeypatch.setattr(RD.review_memory, "load_records_state", _raise_type_error)
+    state = _fresh_state()
+    RD._seed_resume(state, _cfg(dimensions=["test-reviewer"], recordsPath=str(tmp_path / "x.json")))
+    assert state["_resumeCorrupt"] == (
+        "resume state corrupt ('int' object is not iterable) — cannot certify; "
+        "a fresh full reviewer-deep round is owed")
 
 
 # --- F3: delta-fold park carries fresh candidates ---
@@ -173,3 +202,27 @@ def test_f4_park_findings_merge_dedupe_and_round1(tmp_path):
     state2["_toVerify"] = list(only_fresh)
     RD._persist_round_records(state2, cfg)
     assert state2.get("findings") == only_fresh
+
+
+# --- F5: prior-vs-fresh severity on location collision ---
+
+
+def test_f5_prior_vs_fresh_collision_keeps_higher_severity(tmp_path):
+    """F5 — prior Important at a location is replaced by fresh Critical on park merge."""
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1), "oops"]))
+    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["config"] = cfg
+    prior = {"id": "v0", "file": "f.py", "line": 4, "title": "same",
+             "severity": "Important", "dimension": "Code"}
+    fresh = {"id": "v1", "file": "f.py", "line": 4, "title": "same",
+             "severity": "Critical", "dimension": "Architecture"}
+    state["findings"] = [prior]
+    state["_toVerify"] = [fresh]
+    RD._persist_round_records(state, cfg)
+    merged = state.get("findings") or []
+    assert len(merged) == 1
+    assert merged[0]["severity"] == "Critical"
+    assert merged[0]["dimension"] == "Code + Architecture"
+    assert state.get("terminal") == "cannot-certify"
