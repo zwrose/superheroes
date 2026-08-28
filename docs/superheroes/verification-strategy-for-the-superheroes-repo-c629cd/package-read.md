@@ -99,3 +99,14 @@ execution bullet moved to P3b. Repairs in the commit carrying this file.
 ## Round 4 — convergence round
 
 *(recorded below when terminal)*
+
+**Round 4 (owner-extended by ruling b; 5 findings: codex 4, grok 1, cross-vendor convergent on the
+map/R20 inconsistency):** repairs in `90b52fed`. **Round 5 (owner-extended by a second ruling b;
+5 findings: codex 2, grok 3):** the read's most consequential catch — the register's table format
+parsed to **zero entries** under `register_check.py`, which would have blocked every child filing
+fail-closed; the register was reformatted to the checker's canonical entry shape and **proven
+mechanically**: `register_check.py` now parses all 20 entries and resolves a required set for
+every child token (P1–P8, F2, F1, F3) — a machine receipt no model round could give. Plus four
+one-line content fixes (FR-3's entry-metadata phrase; R19 binding the freeze to P8's checkpoint
+per UFR-6's own halt list; R20's consumers enumerated as child tokens; FR-11's post-lift receipt
+citation owned by P3b).

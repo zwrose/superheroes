@@ -42,7 +42,7 @@ requires a child to build or check something is owned by that child**, never lis
 | FR-2 — rail definition: **membership** (the inventory, seeded from `rail-census-v3`, is the operational rail set) | **P7** | R3 |
 | FR-2 — rail definition: **lane derivation** (rail lane = the inventory) | **P3a** | R3 |
 | FR-2 — rails exempt from failure-frequency retention | **P7** | vet |
-| FR-3 — inventory seeded (53), advisor corrections additions-only | **P7** | P3a (R3), P5 (FR-18c lens arm), P2 (FR-26 rail exclusion) |
+| FR-3 — inventory seeded (53), advisor corrections cover additions and entry metadata only — never a removal or re-laning | **P7** | P3a (R3), P5 (FR-18c lens arm), P2 (FR-26 rail exclusion) |
 | FR-3 — entry-removal / de-laning bar | **P7** | vet |
 | FR-3 — named-edit machine-checkable record form | **P7** carries the form's first shipping home; the form itself is **decided in R2** (no open decide-by) | P3a, P2, P5, P6 — every named-edit surface (R2) |
 | FR-3 — the PR-body naming duty (a PR editing the inventory or classification names the edit and reason in its body) | **P7** for inventory-editing PRs; **P3a** for classification-editing PRs — each child's guard documentation states it | vet reads the body; the committed record (R2) is the mechanical half |
@@ -58,7 +58,7 @@ requires a child to build or check something is owned by that child**, never lis
 | FR-9 — receipts travel in the PR body; **the ledger reads handed-back receipts at its nightly refresh** | first half **P3b** (the receipt lands in the body at handback); ingestion half **P2** — a build, not a read | corrected: round-1 ALLOCATION-002 |
 | FR-10 — observation mode counted at CI; immutable would-have-skipped sets; thresholds, reset, 30-day decision; **owner enablement recorded in the ledger** | **P2** | **P3b consumes the enablement state through R6** and must not skip before it (its own FR-5 bullet above); advisor brings the decisions |
 | FR-11 — false-negative detection (ledger set **or** the change's handed-back receipt), replay record, lift authority, second-strike | **P2** | R5, R6 |
-| FR-11 — the gate's behavior under suspension (runs full; the pinned phrase; **the suspended receipt is the Show-it surface**) | **P3b** | R15, R16 |
+| FR-11 — the gate's behavior under suspension (runs full; the pinned phrase; **the suspended receipt is the Show-it surface**), and after a lift, **the receipt cites the lifting record** | **P3b** | R15, R16; P2 records the lift (previous row) |
 | FR-12 — one pinned Python; provisioning; the pin home and drift validator | **P1** | P3b, P6, P4, R7 |
 | FR-12 — the gate's two refusal arms: refuse to run when the out-of-repo calibration home disagrees with the pin, and refuse (never fall back) when the pinned interpreter cannot be provisioned — with the park route | **P3b** — bound in R7 (round-3 addition) | P1's pin is the input |
 | FR-13 ch. 1 + ch. 2's dissolution-by-pin | **P1** | — |
