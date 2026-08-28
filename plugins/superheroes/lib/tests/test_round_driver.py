@@ -7385,3 +7385,15 @@ def test_on_disk_receipt_class_rejects_invalid_known_schema(tmp_path):
     assert RD._receipt_write_refusal(
         d, terminal_reason="terminal-receipt-exists",
         untrusted_reason="terminal-receipt-unreadable") == "terminal-receipt-unreadable"
+
+
+def test_owner_provenance_every_declared_shape_has_a_predicate():
+    """#1194 FU7: every shape string in OWNER_PROVENANCE_FIELD_SHAPES resolves to a validator.
+
+    An unrecognized shape fails closed (owner-supplied becomes unreachable) — safe but SILENT.
+    This pin turns adding a shape string without its predicate into a red test instead."""
+    predicates = RD._owner_provenance_shape_predicates()
+    missing = sorted(set(RD.OWNER_PROVENANCE_FIELD_SHAPES.values()) - set(predicates))
+    assert not missing, "declared shapes with no predicate (owner-supplied unreachable): %s" % missing
+    for shape, predicate in predicates.items():
+        assert callable(predicate), "predicate for %r is not callable" % shape

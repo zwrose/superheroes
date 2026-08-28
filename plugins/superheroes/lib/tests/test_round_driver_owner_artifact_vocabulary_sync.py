@@ -259,3 +259,33 @@ def test_round_phase_refusal_causes_match_docs():
     assert not only_docs, (
         "round-driver.md refusal table lists round-phase tokens the driver cannot emit: %s"
         % sorted(only_docs))
+
+
+def test_provenance_parser_raises_on_duplicate_field():
+    """BP-R6 (#1194 FU2): a duplicated field line in the fenced block raises, never overwrites."""
+    synthetic = (
+        "prose before\n"
+        + _PROVENANCE_MARKER
+        + "\n\n```text\nruledBy — non-empty string\nruledBy — some other shape\n```\n"
+    )
+    try:
+        _parse_provenance_field_shapes(synthetic)
+    except RuntimeError as exc:
+        assert "duplicate provenance field 'ruledBy'" in str(exc)
+    else:
+        raise AssertionError("duplicate provenance field did not raise — it was overwritten")
+
+
+def test_rounds_enumeration_drift_pinned_to_disclosure_channel_registry():
+    """#1202 FU5: round-driver.md's per-round `rounds` bullet names every registered disclosure
+    channel. The registry is the code home (`RESUMABLE_DISCLOSURE_CHANNELS`); the doc line is the
+    hand-maintained mirror — this pin turns a silently-stale mirror into a red test."""
+    text = _read(_REF)
+    rounds_lines = [line for line in text.splitlines()
+                    if line.startswith("- `rounds` — per-round")]
+    assert len(rounds_lines) == 1, "expected exactly one per-round `rounds` enumeration bullet"
+    documented = set(re.findall(r"`([^`]+)`", rounds_lines[0]))
+    registry = set(RD.RESUMABLE_DISCLOSURE_CHANNELS)
+    missing = sorted(registry - documented)
+    assert not missing, (
+        "disclosure channels missing from round-driver.md's `rounds` enumeration: %s" % missing)

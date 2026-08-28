@@ -240,13 +240,29 @@ def _round_entry_form_schema(form, state):
     raise ValueError("unknown receipt form %r" % form)
 
 
-def _round_entry_key_allowed(key, form, state):
+def _round_entry_key_declared(key, schema, certified_version):
+    """The ONE decode of ``ROUND_ENTRY_KEY_FORMS``: does ``key`` apply to a receipt of ``schema``?
+
+    ``certified_version`` is the integer version when the receipt is the certified form, else
+    ``None`` (then ``schema`` is matched against the declaration's non-certified set). Both
+    readers — the live-state form gate and the persisted-receipt validator — route through this
+    so the declaration cannot grow a second, divergent decoding (#1194 FU8)."""
     decl = ROUND_ENTRY_KEY_FORMS.get(key)
     if decl is None:
         return True
+    if certified_version is not None:
+        return certified_version >= decl["min_certified_version"]
+    return schema in decl["non_certified_schemas"]
+
+
+def _round_entry_key_allowed(key, form, state):
+    if key not in ROUND_ENTRY_KEY_FORMS:
+        # Preserve the pre-refactor short-circuit: an undeclared key is allowed everywhere,
+        # BEFORE the form is resolved — an unknown form must not raise for undeclared keys.
+        return True
     if form == RECEIPT_FORM_CERTIFIED:
-        return _receipt_version(state) >= decl["min_certified_version"]
-    return _round_entry_form_schema(form, state) in decl["non_certified_schemas"]
+        return _round_entry_key_declared(key, None, _receipt_version(state))
+    return _round_entry_key_declared(key, _round_entry_form_schema(form, state), None)
 
 
 ATTESTED_VERDICT = "uncertified-manual"
@@ -956,7 +972,6 @@ def _base_degraded(state):
 # call sites and existing tests.
 _seat_map_receipts = seat_map_receipts.receipts
 _sm_latest_with_seats = seat_map_receipts.latest_with_seats
-_sm_effective_seat_map = seat_map_receipts.effective_seat_map
 _sm_any_seats = seat_map_receipts.any_seats
 _sm_same_family_seats = seat_map_receipts.same_family_seats
 _sm_unexcused_violations = seat_map_receipts.unexcused_violations
@@ -4122,21 +4137,24 @@ def _write_interim_receipt(session_dir, state, stop_reason):
 
 
 def _receipt_requires_round_verify_passes(receipt):
-    """Whether round entries must carry verifyPasses (certified v3+, attested, interim only)."""
-    decl = ROUND_ENTRY_KEY_FORMS.get("verifyPasses")
-    if decl is None:
+    """Whether round entries must carry verifyPasses (certified v3+, attested, interim only).
+
+    Decodes ``ROUND_ENTRY_KEY_FORMS`` only through ``_round_entry_key_declared`` — the shared
+    home with the live-state form gate (#1194 FU8); this function owns only the persisted-receipt
+    identification (kind and version extraction), never the declaration's semantics."""
+    if "verifyPasses" not in ROUND_ENTRY_KEY_FORMS:
         return True
     kind = receipt_kind(receipt)
     if kind is None:
         return False
-    if kind in decl["non_certified_schemas"]:
+    if _round_entry_key_declared("verifyPasses", kind, None):
         return True
     version = receipt.get("schemaVersion")
     if isinstance(version, bool) or not isinstance(version, int):
         return False
     if kind != RECEIPT_CERTIFIED_SCHEMA % version:
         return False
-    return version >= decl["min_certified_version"]
+    return _round_entry_key_declared("verifyPasses", None, version)
 
 
 def _validate_round_entries_verify_passes(receipt):
@@ -5580,7 +5598,8 @@ def _reviewer_engine_vendor(repo_root):
 
 def effective_seat_map(state):
     """Seat map for order emission — delegates to ``seat_map_receipts.effective_seat_map`` (#723).
-    Cross-module caller: round_adapters._assemble_panel."""
+    ``round_adapters._assemble_panel`` calls the ``seat_map_receipts`` home directly; this wrapper
+    exists for in-module call sites and tests."""
     return seat_map_receipts.effective_seat_map(state)
 
 
