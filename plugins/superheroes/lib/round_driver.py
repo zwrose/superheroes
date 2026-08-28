@@ -981,6 +981,7 @@ _sm_plugin_version_skew_status = seat_map_receipts.plugin_version_skew_status
 _sm_canary_map = seat_map_receipts.canary_map
 _emit_receipt_seat_map = seat_map_receipts.emit_receipt_seat_map
 _sm_unjudgeable_receipts = seat_map_receipts.unjudgeable_receipts
+_sm_unjudgeable_run_level_disclosure = seat_map_receipts.unjudgeable_run_level_disclosure
 _sm_round_governing_unjudgeable = seat_map_receipts.round_governing_unjudgeable
 _skew_record_identity = seat_map_receipts._skew_record_identity
 _skew_records_from_seat_map = seat_map_receipts._skew_records_from_seat_map
@@ -3906,6 +3907,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                                  "severity": s.get("severity"), "reason": s.get("reason")})
         degraded.append("skipped-blocker: %r (%s:%s) owner-skipped as a product-choice tradeoff — "
                         "reason: %s" % (s.get("title"), s.get("file"), s.get("line"), s.get("reason")))
+    _emitted_seat_map_unjudgeable = False
     for rkey in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
         rrec = state["rounds"][rkey]
         declared = _receipt_round_disclosures(rrec, form, state)
@@ -3929,6 +3931,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                     rkey, ", ".join(smu)))
         smuj = declared.get("seatMapUnjudgeable")
         if smuj:
+            _emitted_seat_map_unjudgeable = True
             degraded.append(
                 "seat-map-unjudgeable (round %s): a seat map was submitted and is readable, but "
                 "its violation basis is incomplete (%s) — \"no breach\" is unproven rather than clean"
@@ -4039,6 +4042,16 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                 degraded.append(
                     "adapter-provenance (round %s, %s): vendor echo mismatch on seat(s): %s"
                     % (rkey, phase_name, "; ".join(parts)))
+    # #714 NR-C / #1204: predicate armed via whole-history receipts but per-round record cleared
+    # (same-round re-fold bad→good) — run-level fallback so disclosure never goes silent.
+    _run_unj = _sm_unjudgeable_run_level_disclosure(
+        state,
+        _driver_author_family(state),
+        per_round_emitted=_emitted_seat_map_unjudgeable,
+        no_seat_map_submitted=not _sm_any_seats(state),
+    )
+    if _run_unj and _seat_map_unjudgeable(state):
+        degraded.append(_run_unj)
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
     base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "baseRepo",

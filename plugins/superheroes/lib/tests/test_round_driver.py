@@ -5380,6 +5380,30 @@ def test_seat_map_unjudgeable_double_fold_bad_then_good_clears_record():
     assert RD._seat_map_unjudgeable(state) is True
 
 
+def test_seat_map_unjudgeable_double_fold_bad_then_good_receipt_disclosure_fallback():
+    """#714 NR-C / #1204: bad→good re-fold clears per-round record but receipt still discloses basis."""
+    SM = _load("seat_map")
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg["fixerVendor"] = "cursor"
+    state = RD.new_state(cfg)
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    bad = {"seats": {}}
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": bad})
+    good = _assertable_seat_map(["claude", "codex"], fixer_vendor="cursor")
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": good,
+        "canaryResult": _canary_probes_for(good),
+    })
+    assert "seatMapUnjudgeable" not in state["rounds"]["1"]
+    assert RD._seat_map_unjudgeable(state) is True
+    RD._terminal_converged(state, cfg, full_panel=True)
+    assert state["certification"]["shape"].endswith("-degraded")
+    receipt = RD.build_receipt(state)
+    unj_lines = [d for d in receipt["degraded"] if d.startswith("seat-map-unjudgeable")]
+    assert len(unj_lines) == 1
+    assert SM.VIOLATION_BASIS_NO_SEATS in unj_lines[0]
+
+
 def test_seat_map_unjudgeable_double_fold_good_then_bad_records_basis():
     """#1204: double fold in one round — good then bad records basis on the round."""
     SM = _load("seat_map")
