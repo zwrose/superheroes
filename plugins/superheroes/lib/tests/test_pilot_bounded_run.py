@@ -554,7 +554,7 @@ def test_retain_output_false_timeout_kills_grandchild(private_tmp):
         )
 
     probe = probe_grandchild(tmp_dir=private_tmp, script_body=script_body, run=run)
-    with cleanup_grandchild_on_exit(probe.pid):
+    with cleanup_grandchild_on_exit(probe.pid, probe.pgid):
         assert probe.result["outcome"] == pbr.OUTCOME_TIMEOUT
         if not _wait_for_process_gone(probe.pid, timeout=10):
             state = _observed_process_state(probe.pid)

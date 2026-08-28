@@ -3293,7 +3293,7 @@ def test_run_bounded_kills_grandchild_on_timeout(private_tmp):
         )
 
     probe = probe_grandchild(tmp_dir=private_tmp, script_body=script_body, run=run)
-    with cleanup_grandchild_on_exit(probe.pid):
+    with cleanup_grandchild_on_exit(probe.pid, probe.pgid):
         assert probe.result["timedOut"] is True
         if not _wait_for_process_gone(probe.pid, timeout=10):
             state = _observed_process_state(probe.pid)
@@ -3325,7 +3325,7 @@ def test_run_bounded_kills_orphan_grandchild_when_leader_exits_first(private_tmp
         )
 
     probe = probe_grandchild(tmp_dir=private_tmp, script_body=script_body, run=run)
-    with cleanup_grandchild_on_exit(probe.pid):
+    with cleanup_grandchild_on_exit(probe.pid, probe.pgid):
         assert probe.result["timedOut"] is True
         assert probe.elapsed < probe.timeout_used + 5
         # Leader exits before timeout cleanup; reaping is async and zombies count as gone.
@@ -3365,7 +3365,7 @@ def test_run_bounded_kills_sigterm_ignoring_orphan_grandchild_when_leader_exits_
         )
 
     probe = probe_grandchild(tmp_dir=private_tmp, script_body=script_body, run=run)
-    with cleanup_grandchild_on_exit(probe.pid):
+    with cleanup_grandchild_on_exit(probe.pid, probe.pgid):
         assert probe.result["timedOut"] is True
         assert probe.elapsed < probe.timeout_used + 5
         # Kill escalation and reaping are async under CPU load (first seen as a 4-of-6

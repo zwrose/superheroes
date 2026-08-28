@@ -602,7 +602,7 @@ def test_gate_off_grandchild_timeout_reaps_process_group(private_tmp):
         return result_holder["result"]
 
     probe = probe_grandchild(tmp_dir=private_tmp, script_body=script_body, run=run)
-    with cleanup_grandchild_on_exit(probe.pid):
+    with cleanup_grandchild_on_exit(probe.pid, probe.pgid):
         assert probe.result["reason"] == pm.REFUSAL_GATE_OFF_TIMEOUT
         if not _wait_for_process_gone(probe.pid, timeout=10):
             state = _observed_process_state(probe.pid)
