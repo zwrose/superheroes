@@ -58,6 +58,10 @@ ALT_LIVE = "alternative-live"
 ALT_NONE = "no-alternative-live"
 ALT_UNUSABLE = "evidence-unusable"
 
+VIOLATION_BASIS_COMPLETE = "complete"
+VIOLATION_BASIS_NO_SEATS = "no-seats"
+VIOLATION_BASIS_NO_AUTHOR_FAMILY = "no-author-family"
+
 
 def _same_family_record(seat: str, family: str) -> dict:
     """The disclosed-degradation record for a seat that had to take the maker's own family because no
@@ -229,6 +233,22 @@ def _alternative_family_live(seat_map: dict, seat: str, cfg: dict, author_family
     return _alternative_family_evidence(seat_map, seat, cfg, author_family) != ALT_NONE
 
 
+def _seat_family(seat: str, cfg) -> str | None:
+    """Registry-canonical family for one seat record; ``None`` when it cannot be derived."""
+    if not isinstance(cfg, dict):
+        return None
+    vendor = cfg.get("vendor")
+    if not isinstance(vendor, str) or not vendor:
+        return None
+    tier = cfg.get("tier")
+    if not isinstance(tier, str) or not tier:
+        tier = DEFAULT_TIER_BY_SEAT.get(seat, "reviewer")
+    fam = family_for(tier, vendor)
+    if fam is not None:
+        return fam
+    return family_for("reviewer", vendor)
+
+
 def _critical_families(seats: dict) -> set[str]:
     """The distinct families across the seated CRITICAL_SEATS — verify()'s counting rule extracted
     for clarity. classify_violations asks a different question (families reachable, not seated); the
@@ -237,8 +257,8 @@ def _critical_families(seats: dict) -> set[str]:
         fam
         for s in CRITICAL_SEATS
         if s in seats
-        for fam in [seats[s].get("family") if isinstance(seats.get(s), dict) else None]
-        if isinstance(fam, str) and fam
+        for fam in [_seat_family(s, seats[s])]
+        if fam is not None
     }
 
 
@@ -767,14 +787,83 @@ def build(
 EXCUSABLE_RELAXATIONS = frozenset({"strong-tier", "critical-diversity"})
 
 
-def classify_violations(seat_map: dict) -> dict:
+def effective_author_family(
+    seat_map: dict, driver_author_family: str | None = None,
+) -> str | None:
+    a_d = driver_author_family if isinstance(driver_author_family, str) and driver_author_family else None
+    if not isinstance(seat_map, dict):
+        return a_d
+    a_m = seat_map.get("authorFamily")
+    a_m = a_m if isinstance(a_m, str) and a_m else None
+    return a_d if a_d else a_m
+
+
+def violation_basis(seat_map: dict, driver_author_family: str | None = None) -> str:
+    if not isinstance(seat_map, dict):
+        return VIOLATION_BASIS_NO_SEATS
+    seats = seat_map.get("seats")
+    if not isinstance(seats, dict) or not seats:
+        return VIOLATION_BASIS_NO_SEATS
+    if not effective_author_family(seat_map, driver_author_family):
+        return VIOLATION_BASIS_NO_AUTHOR_FAMILY
+    return VIOLATION_BASIS_COMPLETE
+
+
+def _normalize_submitted_violation(v) -> dict:
+    if not isinstance(v, dict):
+        return {"constraint": "malformed-violation-record"}
+    constraint = v.get("constraint")
+    if not isinstance(constraint, str) or not constraint:
+        return {"constraint": "malformed-violation-record"}
+    return dict(v)
+
+
+def derived_violations(
+    seat_map: dict, driver_author_family: str | None = None,
+) -> list[dict]:
+    author_family = effective_author_family(seat_map, driver_author_family)
+    rederived = verify(seat_map, author_family)
+
+    mismatch: list[dict] = []
+    if isinstance(seat_map, dict):
+        a_d = driver_author_family if isinstance(driver_author_family, str) and driver_author_family else None
+        a_m = seat_map.get("authorFamily")
+        a_m = a_m if isinstance(a_m, str) and a_m else None
+        if a_d and a_m and a_d != a_m:
+            mismatch.append({"constraint": "author-family-mismatch"})
+
+    submitted_raw = seat_map.get("violations") if isinstance(seat_map, dict) else None
+    submitted: list[dict] = []
+    if isinstance(submitted_raw, list):
+        submitted = [_normalize_submitted_violation(v) for v in submitted_raw]
+
+    union: dict[tuple[str, str], dict] = {}
+    for v in itertools.chain(rederived, mismatch):
+        key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
+        if key not in union:
+            rec = dict(v)
+            if "evidence" not in rec:
+                rec["evidence"] = "unproven-basis"
+            rec["derived"] = True
+            union[key] = rec
+
+    for v in submitted:
+        key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
+        union[key] = dict(v)
+
+    out = list(union.values())
+    out.sort(key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")))
+    return out
+
+
+def classify_violations(
+    seat_map: dict, driver_author_family: str | None = None,
+) -> dict:
     """{'unexcused': [...], 'excusedByPin': [...], 'excusedByLiveness': [...]} (#680 R-A/R-B)."""
     empty = {"unexcused": [], "excusedByPin": [], "excusedByLiveness": []}
     if not isinstance(seat_map, dict):
         return empty
-    violations = seat_map.get("violations")
-    if not isinstance(violations, list) or not violations:
-        return empty
+    violations = derived_violations(seat_map, driver_author_family)
     raw_seats = seat_map.get("seats")
     seats = raw_seats if isinstance(raw_seats, dict) else {}
     author_family = seat_map.get("authorFamily")
@@ -786,6 +875,9 @@ def classify_violations(seat_map: dict) -> dict:
     excused_by_liveness: list[dict] = []
 
     for v in violations:
+        if v.get("derived") is True:
+            unexcused.append(dict(v))
+            continue
         if not isinstance(v, dict):
             unexcused.append({"constraint": "malformed-violation-record"})
             continue
@@ -891,9 +983,11 @@ def classify_violations(seat_map: dict) -> dict:
     }
 
 
-def unexcused_violations(seat_map: dict) -> list[dict]:
+def unexcused_violations(
+    seat_map: dict, driver_author_family: str | None = None,
+) -> list[dict]:
     """Back-compat thin wrapper — the violations that STAND."""
-    return classify_violations(seat_map)["unexcused"]
+    return classify_violations(seat_map, driver_author_family)["unexcused"]
 
 
 def verify(seat_map: dict, author_family: str | None) -> list[dict]:
@@ -906,13 +1000,17 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
     for seat in PANEL_ROSTER:
         if seat not in seats:
             violations.append({"seat": seat, "constraint": "missing-seat"})
+        elif not isinstance(seats[seat], dict):
+            violations.append({"seat": seat, "constraint": "malformed"})
 
-    if author_family:
+    if isinstance(author_family, str) and author_family:
         for seat in sorted(MAKER_EXCLUDED_SEATS):
             if seat not in seats:
                 continue
             cfg = seats[seat]
-            if not isinstance(cfg, dict) or cfg.get("family") != author_family:
+            if not isinstance(cfg, dict):
+                continue
+            if _seat_family(seat, cfg) != author_family:
                 continue
             if _alternative_family_live(seat_map, seat, cfg, author_family):
                 # an alternative family was reachable and the maker seated anyway — a VIOLATION
@@ -920,7 +1018,12 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
             # else: unavoidable — carried as the `same-family` DEGRADATION, not a violation (#670)
 
     for seat in STRONG_TIER_SEATS:
-        if seat in seats and seats[seat].get("tier") != STRONG_TIER_REQUIRED:
+        if seat not in seats:
+            continue
+        cfg = seats[seat]
+        if not isinstance(cfg, dict):
+            continue
+        if cfg.get("tier") != STRONG_TIER_REQUIRED:
             violations.append({"seat": seat, "constraint": "strong-tier"})
 
     critical_families = _critical_families(seats)

@@ -2334,3 +2334,151 @@ def test_compose_skew_record_appends_degradation_only_when_degraded(
         assert skew[0]["detail"] == detail
     else:
         assert skew == []
+
+
+# --- trusted-assert invariants (#1190 WO-1) ---------------------------------------------------
+
+
+def test_inv1_no_assertion_by_omission():
+    seats = _full_seats_template()
+    seats["security-reviewer"] = {
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "effort": "high",
+        "tier": "reviewer",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    seat_map = {"seats": seats, "authorFamily": "xai"}
+    derived = SM.derived_violations(seat_map)
+    assert any(
+        v.get("constraint") == "strong-tier" and v.get("seat") == "security-reviewer"
+        for v in derived
+    )
+    classified = SM.classify_violations(seat_map)
+    assert any(
+        v.get("constraint") == "strong-tier" and v.get("seat") == "security-reviewer"
+        for v in classified["unexcused"]
+    )
+
+
+def test_inv2_monotone_union():
+    seats = _full_seats_template()
+    seat_map = {
+        "seats": seats,
+        "authorFamily": "xai",
+        "violations": [{"constraint": "author-family-mismatch"}],
+    }
+    derived = {v.get("constraint") for v in SM.derived_violations(seat_map, "anthropic")}
+    verified = {v.get("constraint") for v in SM.verify(seat_map, "xai")}
+    assert "author-family-mismatch" in derived
+    assert "author-family-mismatch" not in verified
+    assert verified <= derived
+
+
+def test_inv3_canonical_families():
+    seats = {
+        seat: {
+            "vendor": "claude",
+            "model": "opus-5",
+            "effort": "xhigh",
+            "tier": "reviewer-deep",
+            "family": f"invented-{i}",
+            "source": "rotated",
+        }
+        for i, seat in enumerate(SM.PANEL_ROSTER)
+    }
+    seat_map = {"seats": seats, "authorFamily": "xai"}
+    derived = SM.derived_violations(seat_map)
+    assert any(v.get("constraint") == "critical-diversity" for v in derived)
+
+
+@pytest.mark.parametrize(
+    "seat,vendor,tier,expected",
+    [
+        ("code-reviewer", "claude", "reviewer-deep", "anthropic"),
+        ("code-reviewer", "codex", "reviewer-deep", "openai"),
+        ("code-reviewer", "cursor", "reviewer-deep", "xai"),
+        ("grounding-seat", "claude", None, "anthropic"),
+        ("grounding-seat", "nosuchvendor", "reviewer", None),
+        ("code-reviewer", 42, "reviewer-deep", None),
+    ],
+)
+def test_inv3_seat_family_unit_table(seat, vendor, tier, expected):
+    cfg = {"vendor": vendor}
+    if tier is not None:
+        cfg["tier"] = tier
+    assert SM._seat_family(seat, cfg) == expected
+
+
+_INV4_HOSTILE_SHAPES = [
+    {},
+    {"seats": None},
+    {"seats": []},
+    {"seats": {"code-reviewer": "claude"}},
+    {"seats": {"code-reviewer": 7}},
+    {"seats": {"security-reviewer": 7}},
+    {"violations": "nope"},
+    {"violations": [None, 3, {}, {"constraint": ""}]},
+    {"seats": {"code-reviewer": {"vendor": "nosuchvendor"}}},
+]
+
+
+@pytest.mark.parametrize("shape", _INV4_HOSTILE_SHAPES)
+def test_inv4_totality_no_raise(shape):
+    SM.verify(shape, None)
+    SM.verify(shape, "")
+    SM.classify_violations(shape)
+    SM.unexcused_violations(shape)
+    SM.derived_violations(shape)
+    SM.effective_author_family(shape)
+    SM.violation_basis(shape)
+
+
+def test_inv5_derived_undeclared_is_unexcusable():
+    seats = _full_seats_template()
+    seats["architecture-reviewer"] = {
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "effort": "high",
+        "tier": "reviewer",
+        "family": "anthropic",
+        "source": "pinned",
+    }
+    seat_map = {
+        "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+        "authorFamily": "xai",
+    }
+    classified = SM.classify_violations(seat_map)
+    assert any(
+        v.get("constraint") == "strong-tier" and v.get("seat") == "architecture-reviewer"
+        for v in classified["unexcused"]
+    )
+    assert not any(
+        v.get("constraint") == "strong-tier" and v.get("seat") == "architecture-reviewer"
+        for v in classified["excusedByPin"]
+    )
+
+    declared = dict(seat_map)
+    declared["violations"] = [
+        {"constraint": "strong-tier", "seat": "architecture-reviewer"},
+    ]
+    classified_declared = SM.classify_violations(declared)
+    assert any(
+        v.get("constraint") == "strong-tier" and v.get("seat") == "architecture-reviewer"
+        for v in classified_declared["excusedByPin"]
+    )
+
+
+@pytest.mark.parametrize("seed", [0, 1, 42])
+@pytest.mark.parametrize("live_vendors", [THREE_VENDORS, ["claude"], ["claude", "codex"]])
+def test_build_roundtrip_honest_maps_do_not_move(seed, live_vendors):
+    author = "xai"
+    m = SM.build(SM.PANEL_ROSTER, live_vendors, author, "anthropic", seed)
+    for seat, cfg in m["seats"].items():
+        assert cfg.get("family") == SM._seat_family(seat, cfg)
+    receipt = SM.to_receipt(m, author)
+    assert SM.derived_violations(receipt) == SM.verify(m, author)
