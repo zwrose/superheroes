@@ -256,6 +256,10 @@ def _round_entry_key_declared(key, schema, certified_version):
 
 
 def _round_entry_key_allowed(key, form, state):
+    if key not in ROUND_ENTRY_KEY_FORMS:
+        # Preserve the pre-refactor short-circuit: an undeclared key is allowed everywhere,
+        # BEFORE the form is resolved — an unknown form must not raise for undeclared keys.
+        return True
     if form == RECEIPT_FORM_CERTIFIED:
         return _round_entry_key_declared(key, None, _receipt_version(state))
     return _round_entry_key_declared(key, _round_entry_form_schema(form, state), None)
