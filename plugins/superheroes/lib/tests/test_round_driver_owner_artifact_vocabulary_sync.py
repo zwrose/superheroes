@@ -305,6 +305,23 @@ def _verify_passes_required_form_labels():
     return decl, labels
 
 
+def _documented_verify_passes_form_labels(prose, min_v):
+    """Human labels for required forms named in round-driver.md verifyPasses prose."""
+    lower = prose.lower()
+    labels = set()
+    if "attested" in lower:
+        labels.add("attested")
+    if "interim" in lower:
+        labels.add("interim")
+    if (
+        ("schemaversion` ≥ %d" % min_v) in lower
+        or ("schemaversion` >= %d" % min_v) in lower
+        or ("certified v%d+" % min_v) in lower
+    ):
+        labels.add("certified-v%d+" % min_v)
+    return labels
+
+
 def test_verify_passes_required_forms_match_round_driver_doc():
     """round-driver.md verifyPasses refusal prose ↔ ROUND_ENTRY_KEY_FORMS (both directions)."""
     text = _read(_REF)
@@ -337,6 +354,12 @@ def test_verify_passes_required_forms_match_round_driver_doc():
     )
     assert "no drift pin for refusal enumeration" not in prose, (
         "round-driver.md still discloses an absent drift pin after verifyPasses pin landed"
+    )
+
+    documented_labels = _documented_verify_passes_form_labels(prose, min_v)
+    assert documented_labels == required_labels, (
+        "round-driver.md verifyPasses form labels %s do not match ROUND_ENTRY_KEY_FORMS %s"
+        % (sorted(documented_labels), sorted(required_labels))
     )
 
     # Code → doc: every form the declaration requires must be named in the prose.

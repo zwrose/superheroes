@@ -381,7 +381,7 @@ The orchestrator's verify gate (loop step 12) and the fixer (prompt step 3) both
 
 `meta.json` records the verify story (`verify`: the command string, or `"unverified"` / `"review-only"`) so a cold-resumed orchestrator recovers it without re-reading the profile.
 
-A green verify exit is **not** evidence the test suite passed — calibration may run no tests at all. Test-receipt evidence policy: `rubric/test-receipt-evidence.md`.
+Test-receipt evidence policy: `rubric/test-receipt-evidence.md`.
 
 ## Learning Loop & Staleness Nudge
 

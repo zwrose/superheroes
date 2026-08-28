@@ -36,7 +36,15 @@ _CLAUSE_ROWS = [
         "home_section": "## Verify receipt is not a test receipt",
     },
     {
+        "clause": "successful CI conclusion",
+        "home_section": "## What does ground a test-pass claim",
+    },
+    {
         "clause": "build's ordered suite run",
+        "home_section": "## What does ground a test-pass claim",
+    },
+    {
+        "clause": "does not ground the claim",
         "home_section": "## What does ground a test-pass claim",
     },
 ]

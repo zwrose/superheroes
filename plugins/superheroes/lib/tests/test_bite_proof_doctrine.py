@@ -156,6 +156,18 @@ _CLAUSE_ROWS = [
         "copy_holder": "agents/test-reviewer.md",
         "copy_holder_section": "## Named test-smell taxonomy",
     },
+    {
+        "clause": "external-contract constant",
+        "home_section": "## The obligation",
+        "copy_holder": "agents/test-reviewer.md",
+        "copy_holder_section": "## What to Flag",
+    },
+    {
+        "clause": "guarded-element set",
+        "home_section": "## The record",
+        "copy_holder": "agents/implementer.md",
+        "copy_holder_section": "## Validating your work order",
+    },
 ]
 
 

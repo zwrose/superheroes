@@ -40,7 +40,7 @@ a verdict when the support is absent, stale, or contradicts the claim:
 - **"verify passed" / gate claims.** A PR that asserts the project's verify command (or a
   review gate) passed must have the artifact backing it. If the claim cannot be grounded
   in the repo, flag it **REFUTED**. For test-pass claims, apply the test-receipt evidence policy
-  in `rubric/test-receipt-evidence.md` — a verify receipt does not ground a test-pass claim.
+  in `rubric/test-receipt-evidence.md`.
 - **Stub markers** (`# STUB(#NNN)`, per CONVENTIONS §10.7). A self-claim that a seam is
   wired while a live `STUB` marker on that seam says otherwise (or a marker with no valid
   issue reference) is a grounding contradiction — **REFUTED**.
