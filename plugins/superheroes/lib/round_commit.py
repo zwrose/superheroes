@@ -306,14 +306,22 @@ def _apply_external_sidecar(session_dir, commit_id, part_n, part_spec, staged_by
 
     _ensure_parent_dirs_strict(target)
     tmp = "%s.commit-%s.tmp" % (target, commit_id)
-    # NOT exclusive-create, deliberately. An exclusive open here is a permanent-stall hazard: `tmp` is
-    # DETERMINISTIC in `target` and `commit_id`, so a crash between this open and the `os.replace`
-    # below leaves it behind, and every recovery replay of that same sealed commit reopens the same
-    # path, takes EEXIST, and refuses `commit-apply-failed` forever — breaking recovery in exactly
-    # the window the transaction exists to survive. Making it exclusive needs stale-temp handling in
-    # the recovery path first (#1196 review round 3; follow-up filed for the mode divergence this
-    # leaves: `review_memory.persist_record` lands 0600 via mkstemp, this path is umask-dependent).
-    with open(tmp, "wb") as fh:
+    # TRUNC, never EXCL — and the distinction is load-bearing. `tmp` is DETERMINISTIC in `target` and
+    # `commit_id`, so a crash between this open and the `os.replace` below leaves it behind and the
+    # recovery replay of that same sealed commit reopens the same path. Under `O_EXCL` that replay
+    # takes EEXIST and refuses `commit-apply-failed` forever — breaking recovery in exactly the window
+    # the transaction exists to survive (#1196 review round 3 found that stall; `round_commit` has no
+    # EEXIST handling anywhere). `O_TRUNC` overwrites the stale temp instead, so replay is unaffected.
+    # The explicit 0o600 keeps this landing path's mode equal to `review_memory.persist_record`'s
+    # (mkstemp, 0600) rather than umask-derived, and `O_NOFOLLOW` refuses a symlink pre-planted at the
+    # predictable temp name instead of following it to an arbitrary write.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    # `O_CREAT`'s mode applies only when the open CREATES the file, so a stale temp left by a crashed
+    # write would otherwise keep its old (umask-derived) mode and carry it onto the target through
+    # `os.replace`. fchmod the descriptor we already hold — never a path-based chmod, which would be
+    # a TOCTOU on the very name `O_NOFOLLOW` is guarding.
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "wb") as fh:
         fh.write(staged_bytes)
         fh.flush()
         os.fsync(fh.fileno())

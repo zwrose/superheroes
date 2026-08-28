@@ -403,22 +403,38 @@ def test_cmd_next_locked_idempotent_records_path_reissue_ok(tmp_path):
     assert out1.get("reason") != "records-path-not-fresh-state"
 
 
-def test_cli_submit_records_sidecar_temp_is_not_exclusive_create(tmp_path):
-    """The sidecar temp must NOT be exclusive-create: `tmp` is deterministic in target+commit id, so
-    an O_EXCL open turns a crash between open and `os.replace` into a permanent recovery stall (every
-    replay of that sealed commit retakes EEXIST). Pinned as a REGRESSION guard, not a preference —
-    #1196 review round 3 found exactly that stall when this open was made exclusive. The mode
-    divergence it leaves (persist_record lands 0600 via mkstemp; this path is umask-dependent) is a
-    disclosed residual with a filed follow-up, not something to close by re-adding O_EXCL here."""
-    src = open(os.path.join(_LIB, "round_commit.py"), encoding="utf-8").read()
-    body = src[src.index("def _apply_external_sidecar"):src.index("def _load_staged_part")]
-    assert "O_EXCL" not in body, "sidecar temp open must not be exclusive-create (recovery stall)"
+def test_cli_submit_records_sidecar_temp_survives_a_stale_temp_and_lands_0600(tmp_path):
+    """The sidecar temp is opened TRUNC (never EXCL) at mode 0600.
+
+    Both halves are regression guards with receipts behind them. **Never EXCL**: `tmp` is
+    deterministic in target+commit id, so under `O_EXCL` a crash between open and `os.replace`
+    leaves it behind and every replay of that sealed commit retakes EEXIST and refuses
+    `commit-apply-failed` forever — `round_commit` has no EEXIST handling (#1196 review round 3
+    found exactly that stall). **0600**: the other landing path, `review_memory.persist_record`,
+    lands 0600 via mkstemp, so a umask-derived mode here would widen an existing records file on
+    the first CLI-path submit (#1196 review round 2, security seat).
+    """
+    # Assert the BEHAVIOUR, not the spelling. An earlier version of this guard grepped the source for
+    # "O_EXCL", which a mere mention of the token in a comment turned red — a detector that grades
+    # prose instead of code. Plant the exact residue a crash leaves (a stale temp at the deterministic
+    # name, with a wider mode) and require the replay to succeed anyway, at 0600.
+    target = str(tmp_path / "replay-target.json")
+    commit_id = "0123456789abcdef0123456789abcdef"
+    stale = "%s.commit-%s.tmp" % (target, commit_id)
+    with open(stale, "wb") as fh:
+        fh.write(b"STALE RESIDUE FROM AN INTERRUPTED WRITE")
+    os.chmod(stale, 0o644)
+    RC._apply_external_sidecar(str(tmp_path), commit_id, 0,
+                               {"sha256": RC._sha256_bytes(b"NEW")}, b"NEW", lambda: target)
+    assert open(target, "rb").read() == b"NEW", "replay must overwrite a stale temp, never EEXIST"
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+
     session_dir, records, before_bytes, cfg, respond, n = _records_panel_submit_setup(tmp_path)
     art = respond(n["phase"], n["payload"], n["round"])
     out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], art)
     assert out["ok"], out
-    # A pre-existing stale temp from an interrupted write must not block the write.
     assert os.path.exists(records)
+    assert stat.S_IMODE(os.stat(records).st_mode) == 0o600
 
 
 def _run_next_records_cli(capsys, session_dir, records_path, *, fresh=True):
