@@ -410,15 +410,7 @@ def _assemble_panel(roster, indexed, state, dispatch_manifest, probes, disclosur
         seats[dim] = dict(entry["payload"])
     artifact = {"seats": seats}
     if isinstance(state, dict):
-        sm = seat_map_receipts.latest_with_seats(state)
-        if isinstance(sm.get("seats"), dict) and sm.get("seats"):
-            seat_map = sm
-        else:
-            cfg_sm = (state.get("config") or {}).get("seatMap")
-            if isinstance(cfg_sm, dict):
-                seat_map = cfg_sm
-            else:
-                seat_map = sm if isinstance(sm, dict) else {}
+        seat_map = seat_map_receipts.effective_seat_map(state)
     else:
         seat_map = None
     if isinstance(seat_map, dict) and seat_map:

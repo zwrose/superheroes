@@ -145,6 +145,42 @@ def test_emit_receipt_seat_map_single_receipt_identity():
     assert emitted["authorFamily"] == "anthropic"
 
 
+def test_effective_seat_map_prefers_latest_receipt_with_seats():
+    receipt_map = _minimal_map(seats={"receipt": {"vendor": "codex"}})
+    state = {
+        "seatMapReceipts": [{"round": "1", "map": receipt_map}],
+        "config": {"seatMap": _minimal_map(seats={"config": {"vendor": "claude"}})},
+        "rounds": {},
+    }
+    assert SMR.effective_seat_map(state) == receipt_map
+
+
+def test_effective_seat_map_falls_back_to_config_seat_map():
+    config_map = _minimal_map(seats={"config": {"vendor": "claude"}})
+    state = {
+        "seatMapReceipts": [{"round": "1", "map": {"seats": {}}}],
+        "config": {"seatMap": config_map},
+        "rounds": {},
+    }
+    assert SMR.effective_seat_map(state) == config_map
+
+
+def test_effective_seat_map_returns_empty_when_neither_present():
+    state = {"seatMapReceipts": [], "config": {}, "rounds": {}}
+    assert SMR.effective_seat_map(state) == {}
+
+
+def test_effective_seat_map_prefers_receipt_over_config_when_both_present():
+    receipt_map = _minimal_map(seats={"receipt": {"vendor": "codex"}})
+    config_map = _minimal_map(seats={"config": {"vendor": "claude"}})
+    state = {
+        "seatMapReceipts": [{"round": "1", "map": receipt_map}],
+        "config": {"seatMap": config_map},
+        "rounds": {},
+    }
+    assert SMR.effective_seat_map(state) == receipt_map
+
+
 def test_emit_receipt_seat_map_non_list_violations_do_not_erase():
     """axis: malformed violations on one receipt do not erase another receipt's list."""
     breach = {"constraint": "maker-family", "seat": "a", "reason": "kept"}

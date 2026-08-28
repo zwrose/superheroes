@@ -203,21 +203,57 @@ shape guard's own fault. `manifest-anchor-unanchored` stays reserved for seat ph
 `present-stall-menu` because gate policy has not pre-authorized the resolution
 (`advance-judgment-park` / `advance-stall-park`), fold the owner's choice with `--owner-artifact` —
 the same JSON **object** shape hand `submit` takes for that gate: `{"dispositions": [...]}` for
-`present-judgment`, `{"choice": "<stall choice>"}` for `present-stall-menu`. The fold runs through
-the same `cmd_submit` chokepoint as every other fold (echo, state-hash, terminal-receipt gate, round
-ceiling, stall guards `stall-choice-retired:<name>`, `stall-choice-not-offered:<name>`,
-`stall-choice-missing`, `stall-accept-risk-not-eligible`). The resolution is journalled under one of
-two owner-gate sources: the `policyApplied` record carries `source: "owner-supplied"` only when the
-folded artifact includes a well-formed `_provenance` object (`ruledBy` and `ruledAt` as non-empty
-strings, `records` a non-empty list of non-empty strings; unknown extra keys inside `_provenance`
-are tolerated); every other owner-gate fold carries `source: "owner-unattributed"`.
-Calibration-resolved folds carry `source: "gate-policy"`. Every fold also journals
-`artifactSha256` naming the artifact folded, on the fold's own commit.
+`present-judgment`, `{"choice": "<stall choice>"}` for `present-stall-menu`. Whenever an owner
+genuinely rules, the folded artifact **MUST** carry a `_provenance` block whose values are
+**transcribed from the real owner interaction** — never composed by the orchestrator to satisfy the
+gate. When no owner ruled, **omit** `_provenance` entirely; the fold is journalled
+`owner-unattributed`, which is the truthful answer, not a degraded one. Fabricating any provenance
+field is forbidden and worse than omission (the driver's validator is shape-only and cannot detect
+it). The fold
+runs through the same `cmd_submit` chokepoint as every other fold (echo, state-hash, terminal-receipt
+gate, round ceiling, stall guards `stall-choice-retired:<name>`,
+`stall-choice-not-offered:<name>`, `stall-choice-missing`, `stall-accept-risk-not-eligible`). The
+resolution is journalled under one of two owner-gate sources: the `policyApplied` record carries
+`source: "owner-supplied"` only when the folded artifact includes a well-formed `_provenance` object
+(unknown extra keys inside `_provenance` are tolerated); every other owner-gate fold carries
+`source: "owner-unattributed"`. Calibration-resolved folds carry `source: "gate-policy"`. Every fold
+also journals `artifactSha256` naming the artifact folded, on the fold's own commit.
+
+**Owner-gate `_provenance` required fields** (authoritative list — drift-tested against
+`round_driver` `OWNER_PROVENANCE_FIELD_SHAPES`):
+
+```text
+ruledBy — non-empty string
+ruledAt — non-empty string
+records — non-empty list of non-empty strings
+```
+
+`ruledBy` is the owner who ruled (transcribed, not invented). `ruledAt` is the ISO-8601 time
+the owner ruled (not when the artifact is written). `records` is a non-empty list of URLs of
+durable records a third party can open (e.g. the issue or PR comment where the owner ruled, a
+dated decision record) — never a file name the recipe invented.
 
 ```bash
 python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
   --session-dir "$SESSION_DIR" \
   --owner-artifact "$SESSION_DIR/round-<N>/<phase>-artifact.json"
+```
+
+Example `present-judgment` gate artifact (gate shape plus a filled-in `_provenance` block):
+
+SHAPE ILLUSTRATION — deliberately NOT submittable; `null` fails the non-empty shape check, so submitting unchanged folds as `owner-unattributed` rather than falsely attributing a ruling. Replace each `null` with a value transcribed from the real ruling.
+
+```json
+{
+  "dispositions": [
+    {"id": "finding-1", "disposition": "fix-as-suggested"}
+  ],
+  "_provenance": {
+    "ruledBy": null,
+    "ruledAt": null,
+    "records": [null]
+  }
+}
 ```
 
 **Refusal tokens when paths interleave.** One token can be returned by more than one command — the
@@ -659,9 +695,9 @@ is the home for the driver-or-park valve.
 
 **Receipt (`round-receipt.json`).** Required keys (shape-checked by `validate_receipt`, fail-closed):
 
-- `schemaVersion` — `2` or `3` (`validate_receipt` accepts both). It is the **state's** version, not
-  a constant: a session bootstrapped at v2 still terminates to a v2 receipt, while a fresh session
-  (`STATE_SCHEMA_VERSION` = 3) emits 3.
+- `schemaVersion` — `2`, `3` or `4` (`validate_receipt` accepts all). It is the **state's** version,
+  not a constant: a session bootstrapped at v2 still terminates to a v2 receipt, while a fresh session
+  (`STATE_SCHEMA_VERSION` = 4) emits 4.
 - `verdict` — `converged`, `halted`, `held`, `stalled`, `cannot-certify`, `capped-with-open-critical`, …
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |

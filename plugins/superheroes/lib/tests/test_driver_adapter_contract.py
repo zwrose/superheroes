@@ -22,6 +22,7 @@ if _LIB not in sys.path:
 import round_adapters  # noqa: E402
 import round_driver  # noqa: E402
 import round_records  # noqa: E402
+import seat_map_receipts  # noqa: E402
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
         "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
@@ -259,6 +260,31 @@ def test_driver_call_sites_cover_records_entry_points():
 
 def _signature_params(fn):
     return list(inspect.signature(fn).parameters)
+
+
+_EFFECTIVE_SEAT_MAP_SENTINEL = {
+    "seats": {"sentinel-seat": {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}},
+    "_resolution_pin": True,
+}
+
+
+def test_effective_seat_map_resolution_through_one_home_adapter(panel_ready, monkeypatch):
+    """axis: round_adapters._assemble_panel resolves through seat_map_receipts.effective_seat_map."""
+    monkeypatch.setattr(
+        seat_map_receipts, "effective_seat_map", lambda _state: dict(_EFFECTIVE_SEAT_MAP_SENTINEL))
+    vals = _driver_boundary_values(panel_ready)
+    artifact, reason = round_adapters.assemble(
+        vals["phase"], vals["envelopes"], vals["state"], vals["config"],
+        dispatch_manifest=vals["dispatch_manifest"], canary=vals["canary"])
+    assert reason is None, reason
+    assert artifact["seatMap"] == _EFFECTIVE_SEAT_MAP_SENTINEL
+
+
+def test_effective_seat_map_resolution_through_one_home_driver(monkeypatch):
+    """axis: round_driver.effective_seat_map delegates to seat_map_receipts.effective_seat_map."""
+    monkeypatch.setattr(
+        seat_map_receipts, "effective_seat_map", lambda _state: dict(_EFFECTIVE_SEAT_MAP_SENTINEL))
+    assert round_driver.effective_seat_map({"config": {}}) == _EFFECTIVE_SEAT_MAP_SENTINEL
 
 
 def test_fake_adapters_methods_match_round_adapters_signatures():

@@ -108,6 +108,7 @@ _SELF_RECOVERY_FIXER_EFFORT = "high"
 # Fix-batch guidance key — single source shared with order templates (dispatch-fixer.md).
 FIX_BATCH_GUIDANCE_KEY = "userGuidance"
 
+# --- version spelling: pinned declaration block (BEGIN) ---
 SCHEMA_VERSION = 2
 STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"
@@ -117,24 +118,37 @@ RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 
 # --- the #723 schema matrix -------------------------------------------------------------------
 # `SCHEMA_VERSION` stays the version a v2 RECEIPT keys off (and the version an in-flight v2 state
-# carries). NEW state is minted at `STATE_SCHEMA_VERSION`; `load_state` accepts BOTH.
+# carries). NEW state is minted at `STATE_SCHEMA_VERSION`; `load_state` accepts every member of
+# `SUPPORTED_STATE_VERSIONS`.
 #
-# THE HASH-PRESERVATION RULE. A loaded state's `schemaVersion` is NEVER mutated and NO v3 default
-# field is written into the dict on load: `state_hash` hashes the WHOLE canonical state, so
-# injecting a v3 key on load would change the hash of an already-emitted `expectedStateHash` and
-# every in-flight v2 session's next `submit` would fail its echo fence. Every v3-only field is
-# therefore read with `.get()` at its read site, never seeded on load.
-STATE_SCHEMA_VERSION = 3
-SUPPORTED_STATE_VERSIONS = (2, 3)
+# THE HASH-PRESERVATION RULE. A loaded state's `schemaVersion` is NEVER mutated and NO default
+# field for the current version is written into the dict on load: `state_hash` hashes the WHOLE
+# canonical state, so injecting a key on load would change the hash of an already-emitted
+# `expectedStateHash` and every in-flight session's next `submit` would fail its echo fence.
+# Version-gated fields are therefore read with `.get()` at their read sites, never seeded on load.
+#
+# Rollback residual (#1185): this bump protects state minted from here on; state already persisted
+# at `schemaVersion: 3` by a post-#681 build carries the new shape under the old number and a
+# rolled-back v3 reader will still accept it. A scoped migration is technically POSSIBLE — `advance`
+# recomputes `state_hash`, so re-versioning that population would not break the echo fence; the
+# hash-preservation rule above binds the hand-submit path, which this population is already refused.
+# It is declined as not worth the machinery (owner ruling 2026-08-27): a persisted `schemaVersion: 3`
+# is SHAPE-AMBIGUOUS after #681 — a genuine pre-#681 v3 state and a post-#681 state carrying the v4
+# shape under the old number are indistinguishable on disk — so a migration would have to guess which
+# one it is holding. The residual is disclosed rather than fixed.
+STATE_SCHEMA_VERSION = 4
+SUPPORTED_STATE_VERSIONS = (2, 3, 4)
 
 # The receipt VERSION derives from the STATE's version: a v2 state terminates to
 # `receipt-certified/2` (today's shape, byte-for-byte unchanged — no key added), a v3 state to
-# `receipt-certified/3`. `attest` writes `receipt-attested/1`, which carries an `attestation` block
+# `receipt-certified/3`, a v4 state to `receipt-certified/4`. `attest` writes `receipt-attested/1`,
+# which carries an `attestation` block
 # and NO `certification`/`certificationShape` — so the certified and attested shapes are
 # structurally un-confusable and `validate_receipt` dispatches on that.
 RECEIPT_CERTIFIED_SCHEMA = "receipt-certified/%d"
 RECEIPT_ATTESTED_SCHEMA = "receipt-attested/1"
 RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
+# --- version spelling: pinned declaration block (END) ---
 RECEIPT_FORM_CERTIFIED = "certified"
 RECEIPT_FORM_ATTESTED = "attested"
 RECEIPT_FORM_INTERIM = "interim"
@@ -204,13 +218,15 @@ def _receipt_forbidden_keys(form):
                  if form not in forms)
 
 
-# Per-round receipt entry keys gated by certified schema version (v2 omits `verifyPasses`).
+# Per-round receipt entry keys gated by minimum certified version and non-certified schemas.
+# Each gated key maps to:
+#   min_certified_version — certified receipts at this state version or later carry the key
+#   non_certified_schemas — attested/interim receipt schemas that also carry the key
 ROUND_ENTRY_KEY_FORMS = {
-    "verifyPasses": (
-        RECEIPT_CERTIFIED_SCHEMA % 3,
-        RECEIPT_ATTESTED_SCHEMA,
-        RECEIPT_INTERIM_SCHEMA,
-    ),
+    "verifyPasses": {
+        "min_certified_version": 3,
+        "non_certified_schemas": (RECEIPT_ATTESTED_SCHEMA, RECEIPT_INTERIM_SCHEMA),
+    },
 }
 
 
@@ -225,10 +241,12 @@ def _round_entry_form_schema(form, state):
 
 
 def _round_entry_key_allowed(key, form, state):
-    allowed = ROUND_ENTRY_KEY_FORMS.get(key)
-    if allowed is None:
+    decl = ROUND_ENTRY_KEY_FORMS.get(key)
+    if decl is None:
         return True
-    return _round_entry_form_schema(form, state) in allowed
+    if form == RECEIPT_FORM_CERTIFIED:
+        return _receipt_version(state) >= decl["min_certified_version"]
+    return _round_entry_form_schema(form, state) in decl["non_certified_schemas"]
 
 
 ATTESTED_VERDICT = "uncertified-manual"
@@ -295,6 +313,16 @@ JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
 POLICY_APPLIED_SOURCE_OWNER_SUPPLIED = "owner-supplied"
 POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED = "owner-unattributed"
+
+# ONE declaration of the owner-gate ``_provenance`` block: required field → the shape it must satisfy.
+# ``_owner_artifact_provenance_well_formed`` is the only reader; the review-code gate-artifact recipe
+# documents this same set, drift-pinned by a test. Unknown extra keys inside ``_provenance`` are tolerated.
+OWNER_PROVENANCE_FIELD_SHAPES = {
+    "ruledBy": "non-empty string",
+    "ruledAt": "non-empty string",
+    "records": "non-empty list of non-empty strings",
+}
+
 OWNER_ARTIFACT_TERMINAL_REFUSAL = "owner-artifact-terminal"
 OWNER_ARTIFACT_UNREADABLE_REFUSAL = "owner-artifact-unreadable"
 OWNER_ARTIFACT_SHAPE_REFUSAL = "owner-artifact-shape"
@@ -676,8 +704,8 @@ def _state_version(state):
 
 
 def _receipt_version(state):
-    """The receipt schemaVersion for a state: the STATE's version drives it, so a v2 session still
-    terminates to today's `receipt-certified/2` and only a v3 session emits `receipt-certified/3`."""
+    """The receipt schemaVersion for a state: the STATE's version drives it via
+    ``RECEIPT_CERTIFIED_SCHEMA % _state_version(state)``."""
     return _state_version(state) or SCHEMA_VERSION
 
 
@@ -921,6 +949,7 @@ def _base_degraded(state):
 # call sites and existing tests.
 _seat_map_receipts = seat_map_receipts.receipts
 _sm_latest_with_seats = seat_map_receipts.latest_with_seats
+_sm_effective_seat_map = seat_map_receipts.effective_seat_map
 _sm_any_seats = seat_map_receipts.any_seats
 _sm_same_family_seats = seat_map_receipts.same_family_seats
 _sm_unexcused_violations = seat_map_receipts.unexcused_violations
@@ -1425,12 +1454,13 @@ def load_state(session_dir):
     """(ok, state_or_reason). A missing file → (True, None) fresh. A v1 file is REFUSED — session
     dirs are per-invocation, there is no migration; the caller must start fresh.
 
-    #723: BOTH `SCHEMA_VERSION` (2, an in-flight session) and `STATE_SCHEMA_VERSION` (3, a session
-    minted after #723) are accepted, and a loaded state is returned EXACTLY as it was persisted:
-    `schemaVersion` is never rewritten and no v3 default field is injected. `state_hash` hashes the
-    whole canonical state, so seeding one v3 key here would invalidate the `expectedStateHash` a v2
-    session's last `next` already handed out and break its next `submit`. v3-only fields are read
-    with `.get()` at their read sites instead. (`_migrate_judgment_step` is the ONE pre-existing
+    #723: every member of `SUPPORTED_STATE_VERSIONS` is accepted — `SCHEMA_VERSION` (2, an in-flight
+    session) through `STATE_SCHEMA_VERSION` (the current mint version) — and a loaded state is
+    returned EXACTLY as it was persisted: `schemaVersion` is never rewritten and no default field
+    for the current version is injected. `state_hash` hashes the whole canonical state, so seeding
+    one gated key here would invalidate the `expectedStateHash` a session's last `next` already
+    handed out and break its next `submit`. Version-gated fields are read with `.get()` at their
+    read sites instead. (`_migrate_judgment_step` is the ONE pre-existing
     in-place migration; it is unchanged, fires only for the #507 R2a stall/judgment state, and
     predates the hash-preservation rule it deliberately trades against.)"""
     path = os.path.join(session_dir, STATE_FILE)
@@ -3963,8 +3993,21 @@ def _write_interim_receipt(session_dir, state, stop_reason):
 
 
 def _receipt_requires_round_verify_passes(receipt):
-    """Whether round entries must carry verifyPasses (certified v3, attested, interim only)."""
-    return receipt_kind(receipt) in ROUND_ENTRY_KEY_FORMS["verifyPasses"]
+    """Whether round entries must carry verifyPasses (certified v3+, attested, interim only)."""
+    decl = ROUND_ENTRY_KEY_FORMS.get("verifyPasses")
+    if decl is None:
+        return True
+    kind = receipt_kind(receipt)
+    if kind is None:
+        return False
+    if kind in decl["non_certified_schemas"]:
+        return True
+    version = receipt.get("schemaVersion")
+    if isinstance(version, bool) or not isinstance(version, int):
+        return False
+    if kind != RECEIPT_CERTIFIED_SCHEMA % version:
+        return False
+    return version >= decl["min_certified_version"]
 
 
 def _validate_round_entries_verify_passes(receipt):
@@ -3993,7 +4036,8 @@ def validate_receipt(receipt):
     """Validate a driver receipt's SHAPE — version-dispatched since #723.
 
     Two shapes are valid and they are structurally UN-CONFUSABLE, which is the point: a CERTIFIED
-    receipt (`receipt-certified/2` or `/3`) carries its `certification` block and an allowlisted
+    receipt (``RECEIPT_CERTIFIED_SCHEMA % <v>`` for a supported ``v``) carries its
+    ``certification`` block and an allowlisted
     verdict; an ATTESTED receipt (`receipt-attested/1`, written by `attest`) carries an
     `attestation` block, the `uncertified-manual` verdict, and NO certification block at all. A
     reader can therefore never mistake a hand attestation for a certification, and a certified
@@ -5071,6 +5115,40 @@ def _state_load_fault(session_dir):
     return "state-schema-unsupported", FAULT_CALLER, None
 
 
+def _legacy_session_has_durable_pending_records(session_dir, state):
+    """True when durable seat records exist at the pending slot and ``_submitUsed`` is not set."""
+    if state.get("_submitUsed"):
+        return False
+    pending = state.get("pending")
+    if not isinstance(pending, dict):
+        return False
+    phase = pending.get("phase")
+    if phase not in _adapters().ADAPTER_PHASES:
+        return False
+    rnd = pending.get("round")
+    attempt = pending.get("attempt")
+    roster, roster_reason = _adapters().roster_for(
+        phase, state, state.get("config") or {})
+    if roster_reason is not None or not isinstance(roster, (list, tuple)):
+        return False
+    roster = [s for s in roster if isinstance(s, str)]
+    return bool(_durable_slot_records(session_dir, rnd, phase, attempt, roster))
+
+
+def _legacy_session_refusal_detail(session_dir, loaded):
+    version = loaded.get("schemaVersion")
+    if loaded.get("_advanceUsed"):
+        return ("loop-state.json is schemaVersion %r with `_advanceUsed` set — hand `submit` "
+                "refuses `advance-submit-interleaved`; start a fresh session dir to continue"
+                % (version,))
+    if _legacy_session_has_durable_pending_records(session_dir, loaded):
+        return ("loop-state.json is schemaVersion %r with durable seat record(s) at the pending "
+                "slot — hand `submit` refuses `record-submit-interleaved`; start a fresh session "
+                "dir to continue" % (version,))
+    return ("loop-state.json is schemaVersion %r; `next`/`submit` "
+            "finish it" % (version,))
+
+
 def _load_driver_state(session_dir, cmd):
     """(state, refusal) — the front door every #723 subcommand shares."""
     ok, loaded = load_state(session_dir)
@@ -5084,8 +5162,7 @@ def _load_driver_state(session_dir, cmd):
         return None, _refuse_cmd(session_dir, cmd, "bootstrap-required")
     if _state_version(loaded) != STATE_SCHEMA_VERSION:
         return None, _refuse_cmd(session_dir, cmd, LEGACY_SESSION_REFUSAL,
-                                 detail="loop-state.json is schemaVersion %r; `next`/`submit` "
-                                        "finish it" % (loaded.get("schemaVersion"),))
+                                 detail=_legacy_session_refusal_detail(session_dir, loaded))
     return loaded, None
 
 
@@ -5300,15 +5377,9 @@ def _reviewer_engine_vendor(repo_root):
 
 
 def effective_seat_map(state):
-    """Seat map for order emission: latest receipt with seats wins; otherwise the seeded config (#723).
+    """Seat map for order emission — delegates to ``seat_map_receipts.effective_seat_map`` (#723).
     Cross-module caller: round_adapters._assemble_panel."""
-    sm = _sm_latest_with_seats(state)
-    if isinstance(sm.get("seats"), dict) and sm.get("seats"):
-        return sm
-    cfg_sm = (state.get("config") or {}).get("seatMap")
-    if isinstance(cfg_sm, dict):
-        return cfg_sm
-    return sm if isinstance(sm, dict) else {}
+    return seat_map_receipts.effective_seat_map(state)
 
 
 def _effective_seat_map(state):
@@ -7005,11 +7076,23 @@ def _policy_applied_record(phase, resolution):
             "matches": list(resolution.get("matches") or []), "action": action}
 
 
+def _owner_provenance_shape_predicates():
+    """Shape-description strings for ``OWNER_PROVENANCE_FIELD_SHAPES`` → per-field validators."""
+    return {
+        "non-empty string": lambda value: isinstance(value, str) and value.strip(),
+        "non-empty list of non-empty strings": lambda value: (
+            isinstance(value, list) and value
+            and all(isinstance(entry, str) and entry.strip() for entry in value)
+        ),
+    }
+
+
 def _owner_artifact_provenance_well_formed(artifact):
     """Return whether ``artifact`` carries a well-formed ``_provenance`` block.
 
     Bite axis (#1177-B): the ``owner-supplied`` source is reachable only through a well-formed
-    ``_provenance`` block; every other shape is unattributed.
+    ``_provenance`` block; every other shape is unattributed. Required fields derive from
+    ``OWNER_PROVENANCE_FIELD_SHAPES`` — the single declaration of shapes this validator enforces.
     Bite-proof: WO 1177-B — object-type check, ``ruledBy`` check, ``ruledAt`` check, ``records``
     check, and the branch in ``_owner_supplied_applied_record``; durable build record."""
     if not isinstance(artifact, dict):
@@ -7017,17 +7100,10 @@ def _owner_artifact_provenance_well_formed(artifact):
     block = artifact.get("_provenance")
     if not isinstance(block, dict):
         return False
-    ruled_by = block.get("ruledBy")
-    if not isinstance(ruled_by, str) or not ruled_by.strip():
-        return False
-    ruled_at = block.get("ruledAt")
-    if not isinstance(ruled_at, str) or not ruled_at.strip():
-        return False
-    records = block.get("records")
-    if not isinstance(records, list) or not records:
-        return False
-    for entry in records:
-        if not isinstance(entry, str) or not entry.strip():
+    predicates = _owner_provenance_shape_predicates()
+    for field, shape in OWNER_PROVENANCE_FIELD_SHAPES.items():
+        predicate = predicates.get(shape)
+        if predicate is None or not predicate(block.get(field)):
             return False
     return True
 

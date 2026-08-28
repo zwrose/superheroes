@@ -495,9 +495,9 @@ def test_v2_state_hash_is_unchanged_by_this_change(tmp_path):
     assert set(loaded) == set(V2_STATE)
 
 
-def test_new_state_is_v3_and_load_accepts_both(tmp_path):
-    assert RD.new_state(_cfg())["schemaVersion"] == RD.STATE_SCHEMA_VERSION == 3
-    assert RD.SUPPORTED_STATE_VERSIONS == (2, 3)
+def test_new_state_mints_at_the_current_version_and_load_accepts_every_supported_one(tmp_path):
+    assert RD.new_state(_cfg())["schemaVersion"] == RD.STATE_SCHEMA_VERSION
+    assert RD.STATE_SCHEMA_VERSION in RD.SUPPORTED_STATE_VERSIONS
     d = str(tmp_path / "v1")
     os.makedirs(d)
     with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:
@@ -551,18 +551,26 @@ def test_next_and_submit_still_finish_a_v2_session_unchanged(tmp_path):
 
 
 def test_receipt_version_derives_from_the_state_version():
-    v3 = RD.new_state(_cfg())
-    v3["terminal"] = "converged"
-    v3["certification"] = {"shape": "audited-chain"}
-    r3 = RD.build_receipt(v3)
-    assert r3["schemaVersion"] == 3 and RD.receipt_kind(r3) == "receipt-certified/3"
-    assert RD.validate_receipt(r3) == (True, None)
+    fresh = RD.new_state(_cfg())
+    fresh["terminal"] = "converged"
+    fresh["certification"] = {"shape": "audited-chain"}
+    r_fresh = RD.build_receipt(fresh)
+    current = RD.STATE_SCHEMA_VERSION
+    assert (r_fresh["schemaVersion"] == current
+            and RD.receipt_kind(r_fresh) == RD.RECEIPT_CERTIFIED_SCHEMA % current)
+    assert RD.validate_receipt(r_fresh) == (True, None)
 
-    v2 = copy.deepcopy(v3)
+    v2 = copy.deepcopy(fresh)
     v2["schemaVersion"] = 2
     r2 = RD.build_receipt(v2)
     assert r2["schemaVersion"] == 2 and RD.receipt_kind(r2) == "receipt-certified/2"
     assert RD.validate_receipt(r2) == (True, None)
+
+    v3 = copy.deepcopy(fresh)
+    v3["schemaVersion"] = 3
+    r3 = RD.build_receipt(v3)
+    assert r3["schemaVersion"] == 3 and RD.receipt_kind(r3) == "receipt-certified/3"
+    assert RD.validate_receipt(r3) == (True, None)
     # today's shape, unchanged: no key was added to the v2 receipt
     assert set(r2) == set(r3)
 
@@ -588,7 +596,7 @@ def test_validate_receipt_certified_requires_certification_and_an_allowlisted_ve
     assert ok is False and "not one of" in why
 
     smuggled = dict(receipt)
-    smuggled["schemaVersion"] = 4
+    smuggled["schemaVersion"] = max(RD.SUPPORTED_STATE_VERSIONS) + 1
     ok, why = RD.validate_receipt(smuggled)
     assert ok is False and "schemaVersion" in why
 
@@ -2960,7 +2968,7 @@ def test_terminal_advance_writes_the_receipt_and_publishes_the_sidecar(tmp_path,
     with open(receipt_path, "rb") as fh:
         receipt_bytes = fh.read()
     receipt = json.loads(receipt_bytes.decode("utf-8"))
-    assert RD.receipt_kind(receipt) == "receipt-certified/3"
+    assert RD.receipt_kind(receipt) == RD.RECEIPT_CERTIFIED_SCHEMA % RD.STATE_SCHEMA_VERSION
     assert RD.validate_receipt(receipt) == (True, None)
 
     sidecar_path = os.path.join(gitdir, "superheroes", "review-receipt.json")
