@@ -66,6 +66,7 @@ Status vocabulary: *cut* (the *first-run-clean* stamp on the older rows is histo
 | **0.29.1** | Naming-hygiene patch | — | Superpowers mentions retired from plugin surfaces (#1050 re-stated via #1051). | (patch lane) | **cut 2026-08-16** (superheroes-v0.29.1) |
 | **0.30.0** | The exact-text checker + dispatch hygiene | — | The exact-text checker — one script, three invocation points (seam child 2, #1056). Orchestrator-fulfilled run-verify fold writes its seat record and refuses landing-ambiguous (#1059); surface overlap becomes a recorded, disclosed warning (#1058); `seat_map compose --pins` accepts a string vendor shorthand and refuses other shapes by name (#1057); the safe-gh-body-read / pycache-prefix / fixture-mode hygiene trio (#1053). | (cut on receipts — every PR advisor-vetted) | **cut 2026-08-16** (superheroes-v0.30.0) |
 | **0.31.0** | The front-half SDLC doctrine ships whole (epic #941 closes) | #941 | The owner-approved front-half core lands end to end: the anchor invariant at all three layers (#1065), four-route intake + the builder's discovery boundary (#1068), discovery — consent-gated investigation, adaptive elicitation, three exits (#1067), spec content rules (#1075), decomposition + the epic contract — coverage map, register, package read, verbatim injection (#1073), spec closure — the closure receipt and the owner's delivery decision (#1081), the approval path owning the `approved:` date (#1069), and the pre-doctrine issue on-ramp so an adopting project's backlog has its escape recipes and the intake stop-report carries its own repair (#1090, which also folded the owner-stamped FR-40 amendment and the venue-citation convention at the merge sitting). Alongside: the package-read audit validator's declared per-kind schemas (#1086), the hard review-round ceiling (#1064), `advance --owner-artifact` (#1076), detector hygiene under the byte-literal-floor ruling (#1072), `set_gate` managed-key refusal (#1074), the run-dir re-statement (#1087), and three fail-closed fixes (#1083, #1084, #1085). | (cut on receipts — the overnight six-lane wave plus the on-ramp lane, vet ordinals 145–151, every PR full-lane advisor-vetted with biting reverted probes; one lane double-parked on its own tripwire and shipped stripped to ratified shape on owner ruling; the epic's closure receipt posted with a passing validation run, and the owner's delivery decision — partial, with the two named deferrals filed — recorded on it before the cut) | **cut 2026-08-21** (superheroes-v0.31.0) |
+| **0.32.0** | Review panels can't silently degrade | — | The certified cross-vendor loop becomes real and demonstrated: schema v4 + the version census + the `_provenance` owner-supplied member with the first driver-certified terminal receipt on a real build (#1185); resumed-receipt fidelity — the per-round disclosure channels ride the durable record and survive resume (#1187); `recordsPath` reaches the CLI with the transactional producer and the corrupt-resume park (#1196); the certification-receipt surfaces consume the shared machinery — receipt build, resume park, halted-delta carry, and the junk-round arbiter (#1195); the seat map splits what it is trusted to assert from what it may reveal — breaches re-derived from the registry, submitters can only add, unjudgeable maps cannot clear the backstop (#1190); four-site presence-check hardening (#1189); per-dispatch grading nonce ends the echo-forfeit class (#1145); stall-fix batch unions the not-discharged audit targets (#1131); plus the walk-10 cleanup micro (#1214). | The milestone exit as amended by walk-8 item 11-a: at least one full-lane build actually reaches a driver-certified terminal receipt — demonstrated by receipt, not by mandate. | **cut 2026-08-28** (superheroes-v0.32.0) — the certified receipt demonstrated on #1185's third loop (verdict converged, audited-chain, independent, base fetched, on the installed driver); five parser-dropped squash commits re-stated per the #674 pattern before the cut. **Closing the milestone armed the driver mandate's flip (#1095).** |
 
 
 
@@ -82,7 +83,11 @@ know what's in a milestone right now, read the milestone, not this file. (**Fron
 doctrine shipped** — priority 1 of the 2026-08-15 order — closed 2026-08-21 with the 0.31.0
 cut: exit met, the doctrine landed across 0.29.0–0.31.0 and the detective went live; the
 owner accepted delivery partial, with the named deferrals recorded on the closing epic's
-receipt and filed to the Backlog.)
+receipt and filed to the Backlog.) (**Review panels can't silently
+degrade** — priority 1 of the 2026-08-21 re-order — closed 2026-08-28 with the 0.32.0 cut:
+exit met including the demonstrated driver-certified receipt, and the close armed the driver
+mandate's flip (#1095): a non-driver full-lane review is now a vet finding, driver-or-park
+the only valve.)
 
 **The order is a draw priority, not a step ladder.** When a wave forms it draws from the top;
 work lower down interleaves freely wherever its builders don't collide with work above it
@@ -92,39 +97,31 @@ reason: the hardening milestones (review panels, engine dispatch, unattended wav
 machinery that is working well enough today, so they defer behind the two lingering features
 the owner is the direct consumer of.
 
-1. **Review panels can't silently degrade** — a full-lane review either runs the promised
-   cross-vendor panel or discloses loudly; certification is reachable when the loop
-   converges; a stale liveness verdict can never quietly collapse a panel to one vendor.
-   *(Moved to 1 on 2026-08-21, owner-ruled: weekly-eats field report #6 falsified the
-   2026-08-15 "working well enough" rationale — three builds skipped the certified loop on
-   excuses that fail against the skill text, and the driver's synthesis merge silently
-   downgraded a blocker. The next themed release cuts from this milestone, and its close
-   arms the driver mandate's flip.)*
-2. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
+1. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
    harnesses that actually deliver the click, plans derived from the spec, CLI-project
    coverage; the parallel authenticated-pilot epic closes.
-3. **Review-spec keeps pace** — every review-code/review-spec divergence itemized and either
+2. **Review-spec keeps pace** — every review-code/review-spec divergence itemized and either
    ratified as deliberate or closed; recent spec rounds reviewed with findings dispositioned;
    owner-delta and section-scoped delta rounds land. *(Opened 2026-08-24, owner-ruled at the
    0.32.0 planning sitting: the driver mandate rebuilt review-code around the certified loop and
    review-spec inherited none of it; the divergence discovery gates the delta-round pair's
    shape.)*
-4. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
+3. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
    re-verification: the result contract is test-bound, the run-dir failure class is deleted,
    the dispatch guard is hard-wired, seat bundles travel intact.
-5. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
+4. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
    hands back with zero human unsticks: launcher, auth canaries, the posture probe, workspace
    garbage collection, the owner-authority gate's remaining side doors.
-6. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
+5. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
    two largest charters finally under one; the activation record bound to what it certifies;
    the harness tripwire leaving a durable result.
-7. **Cross-session messaging** — a discovery starter: where the host's cross-session
+6. **Cross-session messaging** — a discovery starter: where the host's cross-session
    messaging primitive replaces the deaf-session workarounds, per surface.
-8. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
+7. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
    actually is, for the owner first. Low priority.
-9. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
+8. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
    trimmed) and the two live security-grade bugs fixed. Owner-ruled lower priority; revisit.
-10. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
+9. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
    Owner-ruled lower priority; revisit.
 
 **Backlog** (permanent by design, unranked) — real someday-work only: debt with a reopen
