@@ -767,7 +767,6 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
             results.append(_refuse("bad-argument", seatKey=seat_key, occurrence=occurrence,
                                    message=str(exc)))
             continue
-        bare_path = None
         try:
             bare_path = bare_payload_path(session_dir, rnd, phase, skey, current_attempt)
         except ValueError as exc:
@@ -775,7 +774,7 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
                                    message=str(exc)))
             continue
         # `lexists`, never `exists`: presence is the DIRECTORY ENTRY, not whether its target resolves.
-        has_landing = os.path.lexists(lpath) or (bare_path is not None and os.path.lexists(bare_path))
+        has_landing = os.path.lexists(lpath) or os.path.lexists(bare_path)
         if not has_landing:
             continue
         present, present_refusal = _probe_store_entry(spath)

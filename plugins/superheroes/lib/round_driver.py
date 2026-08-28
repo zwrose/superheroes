@@ -444,6 +444,23 @@ UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "un
 _DISCLOSE_ON_PRESENCE = ("canaryVerified",)
 
 
+def _round_disclosure_key(value):
+    """The rounds-map key for a durable record's round value — one home for producer and restorer.
+
+    Int-normalized so `1`, `1.0`, and `"1"` key the same round. Junk returns None (no disclosure
+    block persisted or restored, never a crash): bools, non-integral floats (a `1.5` must not alias
+    round 1's evidence), non-finite floats (`int(inf)` raises OverflowError), and unparseable values."""
+    if isinstance(value, bool):
+        return None
+    try:
+        i = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if isinstance(value, float) and i != value:
+        return None
+    return str(i)
+
+
 def _declared_disclosures(entry):
     """The per-round disclosure channels the emission rule selects from a round entry (or a durable
     record's `disclosures` block — same channel keys, same presence/truthiness/shape rule)."""
@@ -1313,9 +1330,8 @@ def _restore_round_disclosures(state, records):
         raw = rec.get(review_memory.DISCLOSURES_FIELD)
         if not isinstance(raw, dict):
             continue
-        try:
-            key = str(int(rec.get("round")))
-        except (TypeError, ValueError):
+        key = _round_disclosure_key(rec.get("round"))
+        if key is None:
             continue
         target = state["rounds"].setdefault(key, {})
         declared = _declared_disclosures(raw)
@@ -1375,7 +1391,10 @@ def _persist_round_records(state, config):
         if not isinstance(record, dict):
             continue
         durable = review_memory.summarize_record(record)
-        block = _declared_disclosures(state["rounds"].get(str(record.get("round"))) or {})
+        # Key spelling shares `_round_disclosure_key` with `_restore_round_disclosures` —
+        # a `1.0` round must not silently persist no disclosures while the restorer keys "1".
+        rkey = _round_disclosure_key(record.get("round"))
+        block = _declared_disclosures(state["rounds"].get(rkey) or {}) if rkey else {}
         if block:
             durable[review_memory.DISCLOSURES_FIELD] = block
         outgoing.append(durable)
