@@ -129,6 +129,11 @@ the owner is the direct consumer of.
    trimmed) and the two live security-grade bugs fixed. Owner-ruled lower priority; revisit.
 10. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
    Owner-ruled lower priority; revisit.
+11. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
+   structured self-improvement of the plugin from its own operational record looks like —
+   literature survey first (the WikiSkill paper is the seed, not the boundary), then scope
+   what if anything earns building. *(Opened 2026-08-28 by owner word, in-session;
+   deliberately unprioritized — on the docket, ranked last.)*
 
 **Backlog** (permanent by design, unranked) — real someday-work only: debt with a reopen
 condition, parked options with a tripwire, parking citations, the eval story, doc hygiene,
