@@ -3905,7 +3905,7 @@ def test_base_guard_wrong_base_diff_refuses_no_state(tmp_path, capsys):
 
 def test_base_guard_healthy_next_stat_bound_receipt(tmp_path, capsys):
     d = str(tmp_path)
-    ga = _guard_argv(d) + ["--vendors", "codex,cursor"]
+    ga = _guard_argv(d) + ["--vendors", "codex,cursor", "--fixer-vendor", "codex"]
     rc, out = _cli_next_json(d, ga, capsys)
     assert rc == 0 and out["ok"]
     pin = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))["baseRef"]
@@ -5267,7 +5267,6 @@ def test_seat_map_unjudgeable_terminal_converged_shape_drivers_consumer():
     cfg = _cfg(leg="panel", vendors=["claude", "codex"])
     cfg.pop("fixerVendor")
     seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
-    author_family = seat_map.get("authorFamily")
     unjudgeable_map = dict(seat_map)
     unjudgeable_map.pop("authorFamily", None)
     driver_fam = model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
@@ -5278,11 +5277,11 @@ def test_seat_map_unjudgeable_terminal_converged_shape_drivers_consumer():
     assert RD._seat_map_unjudgeable(state) is True
     RD._terminal_converged(state, cfg, full_panel=True)
     assert "seat-map-unavailable" in state["certification"]["shapeDrivers"]
-    control_state = RD.new_state(cfg)
-    control_map = dict(unjudgeable_map)
-    control_map["authorFamily"] = author_family
-    _set_seat_map(control_state, control_map)
-    RD._terminal_converged(control_state, cfg, full_panel=True)
+    control_cfg = dict(cfg)
+    control_cfg["fixerVendor"] = "claude"  # driver family — map-only authorFamily is self-asserted
+    control_state = RD.new_state(control_cfg)
+    _set_seat_map(control_state, unjudgeable_map)
+    RD._terminal_converged(control_state, control_cfg, full_panel=True)
     assert "seat-map-unavailable" not in control_state["certification"]["shapeDrivers"]
 
 
@@ -5292,7 +5291,6 @@ def test_seat_map_unjudgeable_cert_shape_degraded_consumer():
     cfg = _cfg(leg="panel", vendors=["claude", "codex"])
     cfg.pop("fixerVendor")
     seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
-    author_family = seat_map.get("authorFamily")
     unjudgeable_map = dict(seat_map)
     unjudgeable_map.pop("authorFamily", None)
     driver_fam = model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
@@ -5303,11 +5301,11 @@ def test_seat_map_unjudgeable_cert_shape_degraded_consumer():
     assert RD._seat_map_unjudgeable(state) is True
     RD._terminal_converged(state, cfg, full_panel=True)
     assert state["certification"]["shape"].endswith("-degraded")
-    control_state = RD.new_state(cfg)
-    control_map = dict(unjudgeable_map)
-    control_map["authorFamily"] = author_family
-    _set_seat_map(control_state, control_map)
-    RD._terminal_converged(control_state, cfg, full_panel=True)
+    control_cfg = dict(cfg)
+    control_cfg["fixerVendor"] = "claude"  # driver family — map-only authorFamily is self-asserted
+    control_state = RD.new_state(control_cfg)
+    _set_seat_map(control_state, unjudgeable_map)
+    RD._terminal_converged(control_state, control_cfg, full_panel=True)
     assert not control_state["certification"]["shape"].endswith("-degraded")
 
 

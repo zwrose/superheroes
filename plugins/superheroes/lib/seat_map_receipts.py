@@ -106,17 +106,23 @@ def same_family_seats(state, driver_author_family=None):
     return sorted(set(seats))
 
 
+def _merge_violations_conservative(by_key: dict, violation: dict) -> None:
+    """INV-17: derived wins over submitted for the same (constraint, seat) key."""
+    key = (str(violation.get("constraint", "")), str(violation.get("seat") or ""))
+    existing = by_key.get(key)
+    if existing is None:
+        by_key[key] = violation
+    elif violation.get("derived"):
+        by_key[key] = violation
+
+
 def unexcused_violations(state, driver_author_family=None):
     """Violations projection — per-receipt ``unexcused_violations``, deduped by (constraint, seat)."""
-    seen: set[tuple] = set()
-    merged: list[dict] = []
+    by_key: dict[tuple, dict] = {}
     for entry in receipts(state):
         for v in seat_map.unexcused_violations(entry["map"], driver_author_family):
-            key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(v)
+            _merge_violations_conservative(by_key, v)
+    merged = list(by_key.values())
     merged.sort(key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")))
     return merged
 
@@ -217,15 +223,11 @@ def emit_receipt_seat_map(state, driver_author_family=None):
             merged_degs.append(row)
     if merged_degs:
         base["degradations"] = merged_degs
-    violation_seen: set[tuple] = set()
-    merged_violations: list[dict] = []
+    violation_by_key: dict[tuple, dict] = {}
     for entry in receipt_list:
         for v in seat_map.derived_violations(entry["map"], driver_author_family):
-            key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
-            if key in violation_seen:
-                continue
-            violation_seen.add(key)
-            merged_violations.append(v)
+            _merge_violations_conservative(violation_by_key, v)
+    merged_violations = list(violation_by_key.values())
     merged_violations.sort(
         key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")),
     )

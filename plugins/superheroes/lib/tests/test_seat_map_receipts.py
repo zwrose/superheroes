@@ -12,6 +12,7 @@ if _LIB not in sys.path:
 
 import liveness_cache
 import round_driver as RD
+import seat_map
 import seat_map_receipts as SMR
 import version_skew
 
@@ -195,3 +196,72 @@ def test_emit_receipt_seat_map_non_list_violations_do_not_erase():
     }
     emitted = SMR.emit_receipt_seat_map(state)
     assert breach in emitted.get("violations", [])
+
+
+def _inv17_two_round_fixture():
+    """Round 1 submitted pin-excusable strong-tier; round 2 omits violations and re-derives."""
+    built = seat_map.build(
+        seat_map.PANEL_ROSTER, ["codex", "cursor"], "anthropic", "anthropic", 0,
+    )
+    map1 = seat_map.to_receipt(built, "anthropic")
+    map1["seats"] = dict(map1["seats"])
+    map1["seats"]["security-reviewer"] = {
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "effort": "high",
+        "tier": "reviewer",
+        "family": "anthropic",
+        "source": "pinned",
+    }
+    map1["violations"] = [{"constraint": "strong-tier", "seat": "security-reviewer"}]
+    map1["livenessPinScoped"] = False
+    map2 = dict(map1)
+    map2["seats"] = dict(map1["seats"])
+    map2.pop("violations", None)
+    return map1, map2
+
+
+def test_emit_receipt_seat_map_inv17_conservative_violation_merge():
+    """INV-17: derived violation wins over earlier submitted pin-excusable record."""
+    map1, map2 = _inv17_two_round_fixture()
+    state = {
+        "seatMapReceipts": [
+            {"round": "1", "map": map1},
+            {"round": "2", "map": map2},
+        ],
+        "rounds": {},
+    }
+    driver_fam = "anthropic"
+    emitted = SMR.emit_receipt_seat_map(state, driver_fam)
+    strong = [
+        v for v in emitted.get("violations", [])
+        if v.get("constraint") == "strong-tier" and v.get("seat") == "security-reviewer"
+    ]
+    assert len(strong) == 1
+    assert strong[0].get("derived") is True
+    classified = seat_map.classify_violations(emitted, driver_fam)
+    assert strong[0] in classified["unexcused"]
+    assert not any(
+        r.get("constraint") == "strong-tier" and r.get("seat") == "security-reviewer"
+        for r in classified.get("excusedByPin") or []
+    )
+
+
+def test_unjudgeable_receipts_quantifier_both_orders():
+    """INV-9 receipts-only: any unjudgeable receipt arms — not first-wins or last-wins."""
+    judgeable = _minimal_map(authorFamily="anthropic")
+    unjudgeable = _minimal_map(seats={})
+    orderings = [
+        [{"round": "1", "map": judgeable}, {"round": "2", "map": unjudgeable}],
+        [{"round": "1", "map": unjudgeable}, {"round": "2", "map": judgeable}],
+    ]
+    cfg = {"leg": "panel", "vendors": ["codex", "cursor"], "fixerVendor": "claude"}
+    driver_fam = RD._driver_author_family(RD.new_state(cfg))
+    for receipts in orderings:
+        state = RD.new_state(cfg)
+        state["seatMapReceipts"] = receipts
+        state["rounds"] = {}
+        unj = SMR.unjudgeable_receipts(state, driver_fam)
+        assert len(unj) == 1
+        assert unj[0]["basis"] == seat_map.VIOLATION_BASIS_NO_SEATS
+        assert RD._seat_map_unjudgeable(state) is True
