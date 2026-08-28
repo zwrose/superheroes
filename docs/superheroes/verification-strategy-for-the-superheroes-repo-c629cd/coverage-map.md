@@ -38,14 +38,17 @@ requires a child to build or check something is owned by that child**, never lis
 | Criterion | Owner | Consumers / notes |
 | --- | --- | --- |
 | FR-1 — removal only on cannot-bite evidence (all four bullets) | **P7** — the cut list is where the policy first executes; every cut carries its evidence | P5 (FR-18a classes; UFR-5 re-run encoding). **FR-26 removals are FR-1's stated exception, not a consumer** — owner-authorized coverage obligations on diagnosis evidence, outside the cannot-bite bar (R17 carve-out). Shared vocabulary bound as R17 |
-| FR-2 — rail definition (a rail recognized by **what it tests**, independent of any list — FR-18c must catch a rail *absent from* the inventory, so membership can never be the definition) | the definition is **spec-resident vocabulary** (like R17); its three operational arms are singly owned: **recognition** (the lens flags an undeclared/unlisted rail, FR-18c) → **P5**; **membership** (the inventory, seeded from `rail-census-v3`) → **P7**; **lane derivation** (rail lane = the inventory, R3) → **P3a** | corrected twice: round 1 (circularity) and round 2 (over-correction to membership-as-definition) |
+| FR-2 — rail definition: **recognition** (the lens flags an undeclared or uninventoried rail by what it tests — FR-18c's arm; the definition itself is spec-resident vocabulary, since a rail *absent from* the inventory must still be recognizable) | **P5** | corrected rounds 1–3: recognition, membership, and lane-derivation are three singly-owned rows |
+| FR-2 — rail definition: **membership** (the inventory, seeded from `rail-census-v3`, is the operational rail set) | **P7** | R3 |
+| FR-2 — rail definition: **lane derivation** (rail lane = the inventory) | **P3a** | R3 |
 | FR-2 — rails exempt from failure-frequency retention | **P7** | vet |
 | FR-3 — inventory seeded (53), advisor corrections additions-only | **P7** | P3a (R3), P5 (FR-18c lens arm), P2 (FR-26 rail exclusion) |
 | FR-3 — entry-removal / de-laning bar | **P7** | vet |
 | FR-3 — named-edit machine-checkable record form | **P7** carries the form's first shipping home; the form itself is **decided in R2** (no open decide-by) | P3a, P2, P5, P6 — every named-edit surface (R2) |
 | FR-3 — the PR-body naming duty (a PR editing the inventory or classification names the edit and reason in its body) | **P7** for inventory-editing PRs; **P3a** for classification-editing PRs — each child's guard documentation states it | vet reads the body; the committed record (R2) is the mechanical half |
 | FR-3 — the guard, two-phase | **P7** owns phase 1 (entry-disappearance arm, lands with or before any cut); **P3a** owns phase 2 (the re-laning arm — inexpressible before the lane classification exists) | R3 |
-| FR-4 — tiers, lanes, always-run set; every file in exactly one lane; classification versioned + guarded; validators-not-a-lane | **P3a** | P3b (selects under it), P2 (records version-in-force), P5 (R1) |
+| FR-4 — lanes and classification: every file in exactly one lane; classification versioned + guarded; the rail lane is the always-run set's definition | **P3a** | P3b, P2 (records version-in-force), P5 (R1) |
+| FR-4 — tier execution: the always-run set and the four validators actually run on every Local-tier invocation (validators-not-a-lane) | **P3b** — execution is the gate's, not the classifier's (round-3 correction) | R1 |
 | FR-4b — risk profile + depth grading + named-edit bar on the table | **P5** | vet; table edits use R2's form (P5 is an R2 consumer) |
 | FR-5 — selection semantics for `.py`-only changes, **operative only after FR-10's enablement flip** | **P3b** — including the duty to read the enablement state and skip nothing unless a recorded enablement is read **true** (an absent or unreadable record is not-enabled — R6) | P2 records the flip |
 | FR-6 — fail-open to full on any non-`.py` touch | **P3b** | — |
@@ -56,7 +59,8 @@ requires a child to build or check something is owned by that child**, never lis
 | FR-10 — observation mode counted at CI; immutable would-have-skipped sets; thresholds, reset, 30-day decision; **owner enablement recorded in the ledger** | **P2** | **P3b consumes the enablement state through R6** and must not skip before it (its own FR-5 bullet above); advisor brings the decisions |
 | FR-11 — false-negative detection (ledger set **or** the change's handed-back receipt), replay record, lift authority, second-strike | **P2** | R5, R6 |
 | FR-11 — the gate's behavior under suspension (runs full; the pinned phrase; **the suspended receipt is the Show-it surface**) | **P3b** | R15, R16 |
-| FR-12 — one pinned Python; provisioning; refusal-not-fallback with park route | **P1** | P3b, P6, P4, R7 |
+| FR-12 — one pinned Python; provisioning; the pin home and drift validator | **P1** | P3b, P6, P4, R7 |
+| FR-12 — the gate's two refusal arms: refuse to run when the out-of-repo calibration home disagrees with the pin, and refuse (never fall back) when the pinned interpreter cannot be provisioned — with the park route | **P3b** — bound in R7 (round-3 addition) | P1's pin is the input |
 | FR-13 ch. 1 + ch. 2's dissolution-by-pin | **P1** | — |
 | FR-13 ch. 2 — **the gate command carries the bytecode-safety flags** (the production half) | **P3b** — R8's producer duty | P4's census is the check, not the flags |
 | FR-13 ch. 2's census arm + ch. 3 + ch. 4 + the traceability bullet | **P4** | R8 |
