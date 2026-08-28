@@ -106,15 +106,32 @@ def _verify_tail(records_path, round_no):
 
 
 # ── faithful ports of the shell's in-memory record consumers (Phase-0 census) ──
+def _round_number(value):
+    """Parse a durable record's round value to int, or None if junk.
+
+    Junk (returns None): bools; non-integral floats; non-finite floats;
+    unparseable values. Well-formed ints and integral floats/strings normalize
+    to int. None is junk for parsing (returns None) — each caller maps that to
+    its own fail direction (skip, 0, raw pass-through, or park)."""
+    if isinstance(value, bool):
+        return None
+    try:
+        i = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if isinstance(value, float) and i != value:
+        return None
+    return i
+
+
 def _resume_round(records):
     """The next round to run = max persisted round + 1."""
     best = 0
     for rec in records or []:
         if not isinstance(rec, dict):
             continue
-        try:
-            n = int(rec.get("round"))
-        except (TypeError, ValueError):
+        n = _round_number(rec.get("round"))
+        if n is None:
             continue
         if n > best:
             best = n
@@ -193,16 +210,12 @@ def _panel_window(records):
     qualifying = [r for r in allr if r.get("kind") == "confirmation" and _confirmation_qualifies(r)]
     if not qualifying:
         return qualifying, []
-    try:
-        last_round = int(qualifying[-1].get("round") or 0)
-    except (TypeError, ValueError):
-        last_round = 0
+    n = _round_number(qualifying[-1].get("round"))
+    last_round = n if n is not None else 0
 
     def _round_no(rec):
-        try:
-            return int(rec.get("round") or 0)
-        except (TypeError, ValueError):
-            return 0
+        rn = _round_number(rec.get("round"))
+        return rn if rn is not None else 0
     since = [r for r in allr if _round_no(r) >= last_round]
     return qualifying, since
 
@@ -249,10 +262,8 @@ def _confirmation_ready(records, round_no, just_marked, doc_mode=False):
         return False
 
     def _round_no(rec):
-        try:
-            return int(rec.get("round") or 0)
-        except (TypeError, ValueError):
-            return 0
+        rn = _round_number(rec.get("round"))
+        return rn if rn is not None else 0
     marked_round = max(_round_no(r) for r in marked)
     has_intermediate_after = any(_round_no(r) > marked_round for r in (records or []) if isinstance(r, dict))
     if not has_intermediate_after:
@@ -291,10 +302,8 @@ def _assemble_rounds(records, deferred_set):
             continue
         findings = [f for f in (rec.get("findings") or [])
                     if circuit_breaker.finding_identity(f) not in skip]
-        try:
-            rnd = int(rec.get("round"))
-        except (TypeError, ValueError):
-            rnd = rec.get("round")
+        rn = _round_number(rec.get("round"))
+        rnd = rec.get("round") if rn is None else rn
         out.append({"round": rnd, "findings": findings,
                     "dimensions": rec.get("dimensions"),
                     "coverageDecisions": rec.get("coverageDecisions")})
@@ -339,10 +348,8 @@ def _latest_coverage_ids(records):
     for rec in records or []:
         if not isinstance(rec, dict):
             continue
-        try:
-            n = int(rec.get("round") or 0)
-        except (TypeError, ValueError):
-            n = 0
+        n = _round_number(rec.get("round"))
+        n = n if n is not None else 0
         if best is None or n >= best:
             best = n
             latest = rec
@@ -388,10 +395,8 @@ def entry_bootstrap(path, dimensions, extras_path=None):
     marked = [r for r in records if isinstance(r, dict) and r.get("confirmationPending")]
 
     def _round_no(rec):
-        try:
-            return int(rec.get("round") or 0)
-        except (TypeError, ValueError):
-            return 0
+        rn = _round_number(rec.get("round"))
+        return rn if rn is not None else 0
     marked_round = max((_round_no(r) for r in marked), default=None)
     return {
         "ok": True,

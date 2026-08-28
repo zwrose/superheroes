@@ -124,6 +124,44 @@ def recurrent_classes(records, coverage_decisions=None):
 # absent block must never materialize as fabricated empty channels ("checked and clean").
 DISCLOSURES_FIELD = "disclosures"
 
+# Round-record fields downstream consumers iterate as collections or mappings. Absent/None is
+# legal (records are sparse); a present value of the wrong shape is corrupt.
+_RECORD_FIELD_SHAPES = {
+    "findings": "list",
+    "carriedFindings": "list",
+    "coverageDecisions": "list",
+    "dimensions": "dict",
+}
+
+
+def _record_field_shape_reason(field, value):
+    """Return a detail string when a present field has the wrong shape, else None."""
+    expected = _RECORD_FIELD_SHAPES.get(field)
+    if expected is None or value is None:
+        return None
+    if expected == "list":
+        if not isinstance(value, list):
+            return "not a list"
+        for index, item in enumerate(value):
+            if not isinstance(item, dict):
+                return "element %d is not an object" % index
+        return None
+    if expected == "dict":
+        if not isinstance(value, dict):
+            return "not an object"
+        return None
+    return None
+
+
+def _validate_record_field_shapes(record, index):
+    for field in _RECORD_FIELD_SHAPES:
+        if field not in record:
+            continue
+        detail = _record_field_shape_reason(field, record[field])
+        if detail:
+            return "record %d, field %s: %s" % (index, field, detail)
+    return None
+
 
 def _skeleton_disclosures(value):
     if not isinstance(value, dict):
@@ -233,16 +271,37 @@ def load_records_state(path, dimensions):
         return {"ok": False, "state": "corrupt", "records": [], "contentHash": content_hash(text), "reason": str(exc)}
     if not isinstance(data, list):
         return {"ok": False, "state": "corrupt", "records": [], "contentHash": content_hash(text), "reason": "not a list"}
-    for index, member in enumerate(data):
-        if not isinstance(member, dict):
+    records = []
+    for index, item in enumerate(data):
+        if not isinstance(item, dict):
             return {
                 "ok": False,
                 "state": "corrupt",
                 "records": [],
                 "contentHash": content_hash(text),
-                "reason": "member at index %d is not an object" % index,
+                "reason": "element %d is not an object" % index,
             }
-    return {"ok": True, "state": "loaded", "records": [promote_record(r, dimensions) for r in data], "contentHash": content_hash(text)}
+        try:
+            promoted = promote_record(item, dimensions)
+        except (AttributeError, TypeError) as exc:
+            return {
+                "ok": False,
+                "state": "corrupt",
+                "records": [],
+                "contentHash": content_hash(text),
+                "reason": "element %d: %s" % (index, exc),
+            }
+        shape_reason = _validate_record_field_shapes(promoted, index)
+        if shape_reason:
+            return {
+                "ok": False,
+                "state": "corrupt",
+                "records": [],
+                "contentHash": content_hash(text),
+                "reason": shape_reason,
+            }
+        records.append(promoted)
+    return {"ok": True, "state": "loaded", "records": records, "contentHash": content_hash(text)}
 
 
 def load_records(path, dimensions):
