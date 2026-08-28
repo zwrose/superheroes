@@ -2469,17 +2469,45 @@ def test_inv1_no_assertion_by_omission():
 
 
 def test_inv2_monotone_union():
+    # Planted constraint must be one the library cannot emit — else we measure mismatch/verify, not union.
     seats = _full_seats_template()
+    seats["security-reviewer"] = {
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "effort": "high",
+        "tier": "reviewer",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    driver = "xai"
     seat_map = {
         "seats": seats,
-        "authorFamily": "xai",
-        "violations": [{"constraint": "author-family-mismatch"}],
+        "authorFamily": driver,
+        "violations": [
+            {"constraint": "submitter-only-breach", "seat": "code-reviewer"},
+            {
+                "constraint": "strong-tier",
+                "seat": "security-reviewer",
+                "pin": "pinned-model",
+            },
+        ],
     }
-    derived = {v.get("constraint") for v in SM.derived_violations(seat_map, "anthropic")}
-    verified = {v.get("constraint") for v in SM.verify(seat_map, "xai")}
-    assert "author-family-mismatch" in derived
-    assert "author-family-mismatch" not in verified
-    assert verified <= derived
+    derived = SM.derived_violations(seat_map, driver)
+    derived_keys = {(v.get("constraint"), v.get("seat") or "") for v in derived}
+    verified_keys = {
+        (v.get("constraint"), v.get("seat") or "") for v in SM.verify(seat_map, driver)
+    }
+
+    assert ("submitter-only-breach", "code-reviewer") in derived_keys
+    assert ("author-family-mismatch", "") not in derived_keys
+    assert verified_keys <= derived_keys
+
+    collision = next(
+        v for v in derived
+        if v.get("constraint") == "strong-tier" and v.get("seat") == "security-reviewer"
+    )
+    assert collision.get("pin") == "pinned-model"
+    assert collision.get("derived") is not True
 
 
 def test_inv3_canonical_families():
