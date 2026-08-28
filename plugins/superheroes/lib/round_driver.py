@@ -510,6 +510,17 @@ def _declared_disclosures(entry):
     return out
 
 
+def _receipt_round_disclosures(entry, form, state):
+    """The ONE per-round disclosure view `build_receipt` reads: the shared selection rule
+    (`_declared_disclosures` — presence/truthiness plus the registered SHAPE predicate) narrowed by
+    the receipt form gate. Composes two existing rules; invents neither. A channel that fails its
+    shape predicate is absent here exactly as it is absent from what the producer persists and what
+    a `recordsPath` resume restores."""
+    return {chan: value
+            for chan, value in _declared_disclosures(entry).items()
+            if _round_entry_key_allowed(chan, form, state)}
+
+
 # =============================================================================================
 # canonical json + hashing + journal
 # =============================================================================================
@@ -1011,7 +1022,10 @@ def _skew_records(state):
     for rec in (state.get("rounds") or {}).values():
         if not isinstance(rec, dict):
             continue
-        for row in rec.get("pluginVersionSkew") or []:
+        skew = rec.get("pluginVersionSkew")
+        if not isinstance(skew, list):
+            continue
+        for row in skew:
             key = _skew_record_identity(row)
             if key is None:
                 continue
@@ -1062,7 +1076,10 @@ def _seat_map_violations(state):
     for rec in (state.get("rounds") or {}).values():
         if not isinstance(rec, dict):
             continue
-        for v in rec.get("seatMapViolations") or []:
+        violations = rec.get("seatMapViolations")
+        if not isinstance(violations, list):
+            continue
+        for v in violations:
             if not isinstance(v, dict):
                 continue
             key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
@@ -1088,7 +1105,7 @@ def _seat_map_violated(state):
 
 def _seat_map_violation_breach_prose(v: dict) -> str:
     """One-line breach prose for build_receipt — constraint, seat, and evidence class (#680 R3)."""
-    c = v.get("constraint") or "unknown"
+    c = str(v.get("constraint") or "unknown")
     s = v.get("seat")
     ev = v.get("evidence")
     if ev == "unproven-liveness":
@@ -3676,17 +3693,15 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
             rd["verifyPasses"] = verify_passes if isinstance(verify_passes, list) else []
         # The per-round disclosure channels ride their ONE home (#720) — the same set a
         # `recordsPath` resume restores, so a resumed round's receipt discloses what its round
-        # actually recorded. Emission is unchanged: truthiness, except the presence-emitting
-        # channels named by `_DISCLOSE_ON_PRESENCE`. `verifyPasses` emits above (form-gated,
-        # always-emit when permitted). Selection rule home: `_declared_disclosures`.
+        # actually recorded. `_receipt_round_disclosures` applies the shared selection rule
+        # (`_declared_disclosures` narrowed by the form gate) — same as producer and resume.
+        # `verifyPasses` emits above (form-gated, always-emit when permitted).
+        disclosures = _receipt_round_disclosures(rec, form, state)
         for chan in RESUMABLE_DISCLOSURE_CHANNELS:
             if chan == "verifyPasses":
                 continue
-            if not _round_entry_key_allowed(chan, form, state):
-                continue
-            value = rec.get(chan)
-            if value or (value is not None and chan in _DISCLOSE_ON_PRESENCE):
-                rd[chan] = value
+            if chan in disclosures:
+                rd[chan] = disclosures[chan]
         rounds.append(rd)
     findings = [{"id": f.get("id"), "file": f.get("file"), "line": f.get("line"),
                  "title": f.get("title"), "severity": f.get("severity"),
@@ -3757,6 +3772,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                         "reason: %s" % (s.get("title"), s.get("file"), s.get("line"), s.get("reason")))
     for rkey in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
         rrec = state["rounds"][rkey]
+        rrec = _receipt_round_disclosures(rrec, form, state)
         for row in (rrec.get("fellOpen") or []):
             degraded.append(
                 "reviewer-fell-open (round %s): seat %s configured %s forfeited (%s) → re-ran on %s; "
