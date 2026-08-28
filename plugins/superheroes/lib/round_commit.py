@@ -27,6 +27,8 @@ _PART_REPLACE = "replace-file"
 _PART_JOURNAL = "journal-append"
 _PART_SIDECAR = "external-sidecar"
 
+SIDECAR_KIND_ROUND_RECORDS = "round-records"
+
 _SEALED = "SEALED"
 _DONE = "DONE"
 _INTENT = "intent.json"
@@ -304,7 +306,22 @@ def _apply_external_sidecar(session_dir, commit_id, part_n, part_spec, staged_by
 
     _ensure_parent_dirs_strict(target)
     tmp = "%s.commit-%s.tmp" % (target, commit_id)
-    with open(tmp, "wb") as fh:
+    # TRUNC, never EXCL — and the distinction is load-bearing. `tmp` is DETERMINISTIC in `target` and
+    # `commit_id`, so a crash between this open and the `os.replace` below leaves it behind and the
+    # recovery replay of that same sealed commit reopens the same path. Under `O_EXCL` that replay
+    # takes EEXIST and refuses `commit-apply-failed` forever — breaking recovery in exactly the window
+    # the transaction exists to survive (#1196 review round 3 found that stall; `round_commit` has no
+    # EEXIST handling anywhere). `O_TRUNC` overwrites the stale temp instead, so replay is unaffected.
+    # The explicit 0o600 keeps this landing path's mode equal to `review_memory.persist_record`'s
+    # (mkstemp, 0600) rather than umask-derived, and `O_NOFOLLOW` refuses a symlink pre-planted at the
+    # predictable temp name instead of following it to an arbitrary write.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    # `O_CREAT`'s mode applies only when the open CREATES the file, so a stale temp left by a crashed
+    # write would otherwise keep its old (umask-derived) mode and carry it onto the target through
+    # `os.replace`. fchmod the descriptor we already hold — never a path-based chmod, which would be
+    # a TOCTOU on the very name `O_NOFOLLOW` is guarding.
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "wb") as fh:
         fh.write(staged_bytes)
         fh.flush()
         os.fsync(fh.fileno())
@@ -345,10 +362,18 @@ def _apply_parts(session_dir, commit_id, commit_dir, intent, sidecar_resolver, s
             targets.append(_apply_journal_append(session_dir, part_spec, entry))
         elif ptype == _PART_SIDECAR:
             staged = _load_staged_part(commit_dir, part_n, part_spec["sha256"])
-            if sidecar_resolver_for is not None:
+            target_kind = part_spec.get("targetKind")
+            if target_kind is not None:
+                if sidecar_resolver_for is None:
+                    raise CommitRefused("sidecar-target-unresolvable")
                 resolver = sidecar_resolver_for(part_spec)
             else:
-                resolver = sidecar_resolver
+                if sidecar_resolver is not None:
+                    resolver = sidecar_resolver
+                elif sidecar_resolver_for is not None:
+                    resolver = sidecar_resolver_for(part_spec)
+                else:
+                    resolver = None
             if resolver is None:
                 raise CommitRefused("sidecar-target-unresolvable")
             targets.append(_apply_external_sidecar(session_dir, commit_id, part_n,
@@ -393,7 +418,8 @@ def _cleanup_commit(session_dir, commit_id, commit_dir, stop_at):
         raise CommitRefused("commit-cleanup-failed", str(exc))
 
 
-def _replay_commit(session_dir, commit_id, commit_dir, sidecar_resolver, stop_at=None):
+def _replay_commit(session_dir, commit_id, commit_dir, sidecar_resolver, stop_at=None,
+                   sidecar_resolver_for=None):
     intent_path = os.path.join(commit_dir, _INTENT)
     intent, err = _read_intent(intent_path)
     if err or not isinstance(intent, dict):
@@ -401,7 +427,7 @@ def _replay_commit(session_dir, commit_id, commit_dir, sidecar_resolver, stop_at
 
     try:
         _apply_parts(session_dir, commit_id, commit_dir, intent,
-                       sidecar_resolver, stop_at)
+                       sidecar_resolver, stop_at, sidecar_resolver_for=sidecar_resolver_for)
     except OSError as exc:
         raise CommitRefused("commit-apply-failed", str(exc))
     except StopPoint:
@@ -482,7 +508,7 @@ class Commit(object):
         self._parts.append(part)
         return part_n
 
-    def add_external_sidecar(self, data, resolve_target):
+    def add_external_sidecar(self, data, resolve_target, target_kind=None):
         if isinstance(data, str):
             data = data.encode("utf-8")
         part = {
@@ -492,6 +518,8 @@ class Commit(object):
             "_bytes": data,
             "_resolver": resolve_target,
         }
+        if target_kind is not None:
+            part["targetKind"] = target_kind
         self._next_n += 1
         self._parts.append(part)
         return part["n"]
@@ -520,11 +548,15 @@ class Commit(object):
                     fh.write(data)
                     fh.flush()
                     os.fsync(fh.fileno())
+                sidecar_extra = {}
+                if part["type"] == _PART_SIDECAR and "targetKind" in part:
+                    sidecar_extra["targetKind"] = part["targetKind"]
                 intent_parts.append({
                     "n": part["n"],
                     "type": part["type"],
                     "sha256": part["sha256"],
                     **({"target": part["target"]} if part["type"] == _PART_REPLACE else {}),
+                    **sidecar_extra,
                 })
             elif part["type"] == _PART_JOURNAL:
                 intent_parts.append({
@@ -616,7 +648,7 @@ def begin(session_dir, kind, *, stop_at=None, commit_id=None):
     return Commit(session_dir, kind, cid, parsed_stop, sidecar_resolver=None)
 
 
-def recover(session_dir, *, sidecar_target=None):
+def recover(session_dir, *, sidecar_target=None, sidecar_resolver_for=None):
     """Classify and finish every entry under ``commits/`` before a new commit begins."""
     root = commits_root(session_dir)
     if not os.path.isdir(root):
@@ -669,7 +701,8 @@ def recover(session_dir, *, sidecar_target=None):
             continue
 
         try:
-            _replay_commit(session_dir, commit_id, path, sidecar_target, stop_at=None)
+            _replay_commit(session_dir, commit_id, path, sidecar_target, stop_at=None,
+                           sidecar_resolver_for=sidecar_resolver_for)
         except OSError as exc:
             raise CommitRefused("commit-apply-failed", str(exc))
         replayed.append(commit_id)
