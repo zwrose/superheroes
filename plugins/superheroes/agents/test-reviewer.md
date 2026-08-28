@@ -143,7 +143,7 @@ Collect findings under these named smells; **every finding cites its smell by na
   env-var name, a marker or token another tool matches on — through the symbol that defines it
   rather than pinning the literal spelled out: that proof stays green under *any* value of the
   constant, so it proves the plumbing and nothing about the contract. The fix is one test asserting
-  the literal, spelled out, not a stronger assertion on the symbol — see `rubric/bite-proof.md`.
+  the literal, spelled out, not a stronger assertion on the symbol.
 
 **Environment-supplied posture (diff-only — you cannot see the build record).**
 
