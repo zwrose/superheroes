@@ -822,7 +822,10 @@ def derived_violations(
     seat_map: dict, driver_author_family: str | None = None,
 ) -> list[dict]:
     author_family = effective_author_family(seat_map, driver_author_family)
-    rederived = verify(seat_map, author_family)
+    if violation_basis(seat_map, driver_author_family) != VIOLATION_BASIS_NO_SEATS:
+        rederived = verify(seat_map, author_family)
+    else:
+        rederived = []
 
     mismatch: list[dict] = []
     if isinstance(seat_map, dict):
@@ -866,9 +869,7 @@ def classify_violations(
     violations = derived_violations(seat_map, driver_author_family)
     raw_seats = seat_map.get("seats")
     seats = raw_seats if isinstance(raw_seats, dict) else {}
-    author_family = seat_map.get("authorFamily")
-    if not isinstance(author_family, str) or not author_family:
-        author_family = None
+    author_family = effective_author_family(seat_map, driver_author_family)
 
     unexcused: list[dict] = []
     excused_by_pin: list[dict] = []
