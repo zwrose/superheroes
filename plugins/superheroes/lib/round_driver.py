@@ -1307,7 +1307,13 @@ def _seed_resume(state, cfg):
     if not records_path:
         return
     dims = _panel_dimensions(cfg)
-    loaded = review_memory.load_records_state(records_path, dims)
+    try:
+        loaded = review_memory.load_records_state(records_path, dims)
+    except (AttributeError, TypeError) as exc:
+        state["_resumeCorrupt"] = (
+            "resume state unreadable (%s) — cannot certify; a fresh full reviewer-deep round is owed"
+            % exc)
+        return
     if not loaded.get("ok"):
         state["_resumeCorrupt"] = (
             "resume state %s (%s) — cannot certify; a fresh full reviewer-deep round is owed"
@@ -1390,6 +1396,19 @@ def _restore_round_disclosures(state, records):
             state["rounds"].pop(key, None)
 
 
+def _park_finding_key(finding):
+    """Stable dedupe identity for the park-time findings merge — the module's EXISTING per-location
+    key (`_location_id`: `finding_identity` plus line), so two same-title candidates at different
+    lines stay distinct. Returns None when no key can be derived, and an unidentifiable candidate is
+    KEPT rather than dropped: a halted receipt owes over-reporting before under-reporting."""
+    if not isinstance(finding, dict):
+        return None
+    try:
+        return _location_id(finding)
+    except Exception:
+        return None
+
+
 def _persist_round_records(state, config):
     """Keep the durable round-records file equal to the in-memory ledger, disclosures included.
 
@@ -1407,10 +1426,29 @@ def _persist_round_records(state, config):
         return
 
     def _seed_findings_before_park():
-        # A park between the panel fold and synthesis leaves compiled findings in _toVerify
-        # only; without this copy build_receipt would under-report what the round gathered.
-        if not state.get("findings") and state.get("_toVerify"):
-            state["findings"] = state["_toVerify"]
+        # A park between a fold and synthesis leaves that round's compiled candidates in _toVerify
+        # only. On round 1 `findings` is empty and this is a copy; on a DELTA or GAP-SWEEP fold
+        # `findings` already carries the prior round's open findings while `_toVerify` holds this
+        # round's FRESH candidates — so this merges rather than assigns, or the halted receipt
+        # under-reports exactly the candidates the round just gathered.
+        fresh = state.get("_toVerify")
+        if not isinstance(fresh, list) or not fresh:
+            return
+        existing = state.get("findings") or []
+        seen = set()
+        for f in existing:
+            key = _park_finding_key(f)
+            if key is not None:
+                seen.add(key)
+        merged = list(existing)
+        for f in fresh:
+            key = _park_finding_key(f)
+            if key is not None and key in seen:
+                continue
+            if key is not None:
+                seen.add(key)
+            merged.append(f)
+        state["findings"] = merged
 
     try:
         loaded = review_memory.load_records_state(path, _panel_dimensions(config))
@@ -3772,39 +3810,39 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                         "reason: %s" % (s.get("title"), s.get("file"), s.get("line"), s.get("reason")))
     for rkey in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
         rrec = state["rounds"][rkey]
-        rrec = _receipt_round_disclosures(rrec, form, state)
-        for row in (rrec.get("fellOpen") or []):
+        declared = _receipt_round_disclosures(rrec, form, state)
+        for row in (declared.get("fellOpen") or []):
             degraded.append(
                 "reviewer-fell-open (round %s): seat %s configured %s forfeited (%s) → re-ran on %s; "
                 "that seat's cross-vendor mix degraded" % (
                     rkey, row.get("seat"), row.get("configured"), row.get("reason"), row.get("ran")))
-        miss = rrec.get("fellOpenProvenanceMissing")
+        miss = declared.get("fellOpenProvenanceMissing")
         if miss:
             degraded.append(
                 "reviewer-fell-open-provenance-unavailable (round %s): cross-vendor seat(s) %s ran "
                 "without a trusted ranManifest entry — fall-open provenance unverified" % (
                     rkey, ", ".join(miss)))
-        smu = rrec.get("seatMapUnavailable")
+        smu = declared.get("seatMapUnavailable")
         if smu:
             # bite-axis: honest whether pool is cross-vendor, claude-only, or unknown — projection 3 of 3 (#681).
             degraded.append(
                 "reviewer-fell-open-seatmap-unavailable (round %s): live panel vendor(s) %s "
                 "but no seat map submitted — fall-open provenance unverified for the panel" % (
                     rkey, ", ".join(smu)))
-        vac = rrec.get("vacuousSeats")
+        vac = declared.get("vacuousSeats")
         if vac:
             degraded.append(
                 "vacuous-seat (round %s): seat(s) %s returned no findings and no verifiable "
                 "investigation record — classed as never-ran" % (rkey, ", ".join(vac)))
-        eng_art = rrec.get("engagedArtifactSeats")
+        eng_art = declared.get("engagedArtifactSeats")
         if eng_art:
             degraded.append(
                 "engaged-artifact-seat (round %s): seat(s) %s produced a review our transport "
                 "could not carry — they do not count toward certification; salvaged artifacts "
                 "are available for independent verification" % (rkey, ", ".join(eng_art)))
-        cuv = rrec.get("canaryUnverified")
+        cuv = declared.get("canaryUnverified")
         if cuv:
-            cv = rrec.get("canaryVerified")
+            cv = declared.get("canaryVerified")
             verified_vendors = []
             if isinstance(cv, dict):
                 if cv and all(isinstance(v, dict) for v in cv.values()):
@@ -3818,7 +3856,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                 "canary-unverified (round %s): cross-vendor seat(s) %s returned zero findings "
                 "with no engaged control probe for their vendor%s — external-seat liveness unverified"
                 % (rkey, ", ".join(cuv), probe_note))
-        cf = rrec.get("canaryFailed")
+        cf = declared.get("canaryFailed")
         if cf:
             seats_down = cf.get("seats") if isinstance(cf, dict) else []
             detail = cf.get("detail") if isinstance(cf, dict) else None
@@ -3844,20 +3882,20 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                 "canary-failed (round %s): the control probe showed no engagement (%s) — "
                 "cross-vendor seat(s) %s downgraded to never-ran" % (
                     rkey, detail_str, ", ".join(seats_down or [])))
-        roi = rrec.get("recordOrphansIgnored")
+        roi = declared.get("recordOrphansIgnored")
         if roi:
             degraded.append(
                 "record-orphans-ignored (round %s): hand submit folded with durable seat record(s) "
                 "%s still at this slot — records ignored (session already on hand-submit path)"
                 % (rkey, ", ".join(roi)))
-        pcu = rrec.get("priorCommentsUnavailable")
+        pcu = declared.get("priorCommentsUnavailable")
         if pcu:
             degraded.append(
                 "prior-comments-unavailable (round %s): orchestrator did not supply "
                 "prior-comments.json in PR mode — panel ran without prior PR comments; any claim "
                 "that prior comments were considered is not supported for this round"
                 % rkey)
-        ovg = rrec.get("orderVendorProvenanceGaps")
+        ovg = declared.get("orderVendorProvenanceGaps")
         if ovg:
             # Provenance-NEUTRAL wording: since the collector spans every read-only phase, a gap
             # can come from an absent seat-map entry OR from a DEFAULTED engine-preference read,
@@ -3881,7 +3919,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                 degraded.append(
                     "order-vendor-provenance-gap (round %s): seat(s) %s emitted without a resolved "
                     "vendor" % (rkey, ", ".join(seats)))
-        prov_by_phase = _normalize_adapter_provenance(rrec.get("adapterProvenance"))
+        prov_by_phase = _normalize_adapter_provenance(declared.get("adapterProvenance"))
         for phase_name, prov in prov_by_phase.items():
             if not isinstance(prov, dict):
                 continue

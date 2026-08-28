@@ -3592,7 +3592,7 @@ def test_disclosure_channels_have_one_home_read_by_receipt_and_resume():
     with open(os.path.join(_LIB, "round_driver.py"), encoding="utf-8") as fh:
         src = fh.read()
     for chan in RD.RESUMABLE_DISCLOSURE_CHANNELS:
-        assert source_obj_accesses_key(src, "rec|rrec", chan), \
+        assert source_obj_accesses_key(src, "rec|rrec|declared", chan), \
             "%r is named restorable but no round record read consumes it" % chan
 
 

@@ -140,7 +140,9 @@ def _build_receipt_channel_get_reads():
         func = node.func
         if not isinstance(func, ast.Attribute) or func.attr != "get":
             continue
-        if not isinstance(func.value, ast.Name) or func.value.id != "rec":
+        if not isinstance(func.value, ast.Name):
+            continue
+        if func.value.id == "declared":
             continue
         if len(node.args) != 1 or not isinstance(node.args[0], ast.Constant):
             continue
