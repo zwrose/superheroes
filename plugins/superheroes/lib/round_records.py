@@ -30,6 +30,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -565,6 +566,22 @@ def _read_landing_envelope(session_dir, rnd, phase, skey, attempt, occurrence):
     return None, _refuse("landing-missing", landingPath=env_path)
 
 
+def _probe_store_entry(spath):
+    """Return (present, refusal) for a store-path existence probe — fail-closed on ambiguity.
+
+    Only ``ENOENT`` counts as absent. Every other ``lstat`` outcome is either present or an
+    indeterminate ``store-exists`` refusal (the token names the store seam, not whether the entry
+    definitely exists — see ``ingest_landing``'s reason roster) rather than a silent absent."""
+    try:
+        os.lstat(spath)
+        return True, None
+    except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            return False, None
+        return None, _refuse("store-exists", storePath=spath,
+                             message="store entry state is indeterminate: %s" % exc)
+
+
 def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                      supersede=False, expect_sha256=None, anchor=None, occurrence=0):
     """Every check `ingest_landing` performs, with NO write.
@@ -650,7 +667,10 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
         return None, _refuse(anchor_reason, manifestSha256=envelope.get("manifestSha256"),
                              orderSha256=envelope.get("orderSha256"))
 
-    exists = os.path.exists(spath)
+    present, present_refusal = _probe_store_entry(spath)
+    if present_refusal is not None:
+        return None, present_refusal
+    exists = present
     if exists and not supersede:
         return None, _refuse("store-exists", storePath=spath)
     if supersede:
@@ -684,7 +704,8 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
 
       bootstrap-required, reserved-seat-name, unknown-seat, unknown-occurrence, stale-attempt,
       landing-missing, landing-ambiguous, landing-torn, envelope-stub-missing, attempt-mismatch, seat-mismatch, occurrence-mismatch,
-      session-mismatch, phase-mismatch, round-mismatch, schema-unknown, missing-reason, store-exists,
+      session-mismatch, phase-mismatch, round-mismatch, schema-unknown, missing-reason,
+      store-exists (definite entry present, or indeterminate probe — see ``_probe_store_entry``),
       cas-expect-required, cas-mismatch, manifest-anchor-mismatch, manifest-anchor-unanchored
 
     plus two defensive reasons outside that roster: `invalid-path` (a crafted phase/seat/round
@@ -738,26 +759,44 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
     for seat_key, occurrence in roster_slots(_roster_keys(roster)):
         try:
             skey = storage_key(seat_key, occurrence)
+            claimed.add(_seat_filename(skey, current_attempt))
+            claimed.add("%s.a%d.payload.json" % (skey, current_attempt))
             lpath = landing_path(session_dir, rnd, phase, skey, current_attempt)
             spath = store_path(session_dir, rnd, phase, skey, current_attempt)
         except ValueError as exc:
             results.append(_refuse("bad-argument", seatKey=seat_key, occurrence=occurrence,
                                    message=str(exc)))
             continue
-        claimed.add(os.path.basename(lpath))
         bare_path = None
         try:
             bare_path = bare_payload_path(session_dir, rnd, phase, skey, current_attempt)
-            claimed.add(os.path.basename(bare_path))
-        except ValueError:
-            bare_path = None
-        has_landing = os.path.exists(lpath) or (bare_path is not None and os.path.exists(bare_path))
+        except ValueError as exc:
+            results.append(_refuse("bad-argument", seatKey=seat_key, occurrence=occurrence,
+                                   message=str(exc)))
+            continue
+        # `lexists`, never `exists`: presence is the DIRECTORY ENTRY, not whether its target resolves.
+        has_landing = os.path.lexists(lpath) or (bare_path is not None and os.path.lexists(bare_path))
         if not has_landing:
             continue
-        if os.path.exists(spath):
-            results.append({"ok": True, "reason": "already-stored", "seatKey": seat_key,
-                            "storageKey": skey, "storePath": spath, "occurrence": occurrence})
+        present, present_refusal = _probe_store_entry(spath)
+        if present_refusal is not None:
+            present_refusal.setdefault("seatKey", seat_key)
+            present_refusal.setdefault("storageKey", skey)
+            present_refusal.setdefault("occurrence", occurrence)
+            results.append(present_refusal)
             continue
+        if present:
+            try:
+                os.stat(spath)
+                results.append({"ok": True, "reason": "already-stored", "seatKey": seat_key,
+                                "storageKey": skey, "storePath": spath, "occurrence": occurrence})
+                continue
+            except OSError:
+                results.append(_refuse("store-exists", storePath=spath, seatKey=seat_key,
+                                       storageKey=skey, occurrence=occurrence,
+                                       message=("store entry %r is present but its target does not "
+                                                "resolve" % spath)))
+                continue
         out = ingest_landing(session_dir, rnd, phase, seat_key, current_attempt,
                              current_attempt=current_attempt, roster=roster, anchor=anchor,
                              occurrence=occurrence)
@@ -779,7 +818,11 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
     for name in names:
         if name in claimed or name.startswith(RESERVED_PREFIX) or env_suffix is None:
             continue
-        if ldir is None or not os.path.isfile(os.path.join(ldir, name)):
+        entry_path = os.path.join(ldir, name)
+        try:
+            if stat.S_ISDIR(os.lstat(entry_path).st_mode):
+                continue
+        except OSError:
             continue
         skey = None
         if name.endswith(env_suffix):
