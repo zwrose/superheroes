@@ -24,6 +24,12 @@ import pilot_probe  # noqa: E402
 import pilot_provision as pp  # noqa: E402
 import pilot_seed  # noqa: E402
 import pilot_slot  # noqa: E402
+from grandchild_probe import (  # noqa: E402
+    _observed_process_state,
+    _wait_for_process_gone,
+    cleanup_grandchild_on_exit,
+    probe_grandchild,
+)
 
 NOW = "2026-01-01T00:00:00Z"
 
@@ -555,78 +561,59 @@ def test_gate_off_invalid_bounds(private_tmp):
 
 
 def test_gate_off_grandchild_timeout_reaps_process_group(private_tmp):
-    pid_file = os.path.join(private_tmp, "grandchild.pid")
-    envelope = dict(SAMPLE_ENVELOPE)
-    envelope["gateOffTestCommand"] = [
-        sys.executable, "-c",
-        "import os, signal, subprocess, sys; "
-        "pid_path = sys.argv[1]; "
-        "subprocess.Popen([sys.executable, '-c', "
-        "'import os, signal, sys, time, tempfile; "
-        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-        "pid_path = sys.argv[1]; "
-        "fd, tmp = tempfile.mkstemp(dir=os.path.dirname(pid_path) or \".\"); "
-        "os.write(fd, str(os.getpid()).encode()); "
-        "os.close(fd); "
-        "os.replace(tmp, pid_path); "
-        "time.sleep(120)', "
-        "pid_path], stdout=sys.stdout); "
-        "os._exit(0)",
-        pid_file,
-    ]
-    gpid = None
-    result_holder = {}
-    try:
+    def script_body(pid_file):
+        # Mint command is Python argv, not shell — deliberate no-op fixture file.
+        return "#!/bin/sh\ntrue\n"
+
+    def run(target, timeout_seconds):
+        pid_path = target.pid_path
+        envelope = dict(SAMPLE_ENVELOPE)
+        envelope["gateOffTestCommand"] = [
+            sys.executable, "-c",
+            "import os, signal, subprocess, sys; "
+            "pid_path = sys.argv[1]; "
+            "subprocess.Popen([sys.executable, '-c', "
+            "'import os, signal, sys, time, tempfile; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "pid_path = sys.argv[1]; "
+            "fd, tmp = tempfile.mkstemp(dir=os.path.dirname(pid_path) or \".\"); "
+            "os.write(fd, str(os.getpid()).encode()); "
+            "os.close(fd); "
+            "os.replace(tmp, pid_path); "
+            "time.sleep(120)', "
+            "pid_path], stdout=sys.stdout); "
+            "os._exit(0)",
+            pid_path,
+        ]
+        result_holder = {}
+
         def _run_gate_off():
             result_holder["result"] = pm.run_gate_off_test(
                 envelope,
                 run_cwd=private_tmp,
                 environment={},
-                timeout_seconds=2,
+                timeout_seconds=timeout_seconds,
             )
 
         runner = threading.Thread(target=_run_gate_off)
         runner.start()
-
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            if os.path.isfile(pid_file):
-                with open(pid_file) as f:
-                    content = f.read().strip()
-                if content:
-                    try:
-                        gpid = int(content)
-                        break
-                    except ValueError:
-                        pass
-            time.sleep(0.02)
-        else:
-            pytest.fail("grandchild never started: pid file never appeared")
-
-        runner.join(timeout=10)
+        runner.join(timeout=timeout_seconds + 10)
         assert runner.is_alive() is False, "run_gate_off_test did not finish"
-        result = result_holder["result"]
-        assert result["reason"] == pm.REFUSAL_GATE_OFF_TIMEOUT
+        return result_holder["result"]
 
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
+    probe = probe_grandchild(tmp_dir=private_tmp, script_body=script_body, run=run)
+    with cleanup_grandchild_on_exit(probe.pid, probe.pgid):
+        assert probe.result["reason"] == pm.REFUSAL_GATE_OFF_TIMEOUT
+        if not _wait_for_process_gone(probe.pid, timeout=10):
+            state = _observed_process_state(probe.pid)
+            detail = f"observed state: {state}"
             try:
-                os.kill(gpid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.05)
-        else:
-            pytest.fail(
-                "grandchild pid %d still alive after gate-off timeout reap" % gpid
-            )
-    finally:
-        if gpid is not None:
-            try:
-                os.kill(gpid, signal.SIGKILL)
-            except ProcessLookupError:
+                detail += f"; pgid={os.getpgid(probe.pid)}"
+            except (ProcessLookupError, PermissionError):
                 pass
-        if os.path.isfile(pid_file):
-            os.remove(pid_file)
+            pytest.fail(
+                f"grandchild pid {probe.pid} still alive after gate-off timeout reap; {detail}"
+            )
 
 
 def test_gate_off_receipt_pass_requires_exit_code_zero():
