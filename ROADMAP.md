@@ -97,14 +97,15 @@ reason: the hardening milestones (review panels, engine dispatch, unattended wav
 machinery that is working well enough today, so they defer behind the two lingering features
 the owner is the direct consumer of.
 
-1. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
-   harnesses that actually deliver the click, plans derived from the spec, CLI-project
-   coverage; the parallel authenticated-pilot epic closes.
-2. **new verification strategy** — the approved verification-strategy spec (#1105) delivered
+1. **new verification strategy** — the approved verification-strategy spec (#1105) delivered
    across both adoption lanes: one trustworthy local gate that says what it ran and skipped,
    one pinned Python, review-enforced authoring rules and depth grading, and the nightly
    instruments publishing numbers the owner can read. *(Opened 2026-08-28, owner-ruled at the
-   walk-11 sitting after the adoption plan's advisor review and the weekly-eats consumer read.)*
+   walk-11 sitting after the adoption plan's advisor review and the weekly-eats consumer read;
+   set to priority 1 by owner word the same sitting.)*
+2. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
+   harnesses that actually deliver the click, plans derived from the spec, CLI-project
+   coverage; the parallel authenticated-pilot epic closes.
 3. **Review-spec keeps pace** — every review-code/review-spec divergence itemized and either
    ratified as deliberate or closed; recent spec rounds reviewed with findings dispositioned;
    owner-delta and section-scoped delta rounds land. *(Opened 2026-08-24, owner-ruled at the
