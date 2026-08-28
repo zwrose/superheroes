@@ -1,9 +1,21 @@
 import base64
+import ast
 import importlib.util
 import json
 import os
 
 LIB = os.path.join(os.path.dirname(__file__), "..")
+_RECORD_CONSUMER_SOURCES = (
+    os.path.join(LIB, "review_memory.py"),
+    os.path.join(LIB, "review_loop_plan.py"),
+    os.path.join(LIB, "round_driver.py"),
+)
+# Fields the consumer modules read with a defensive isinstance before non-for use only.
+_CENSUS_EXCLUDE = frozenset({"changedSubjects"})
+_RECORD_FIELD_SHAPE_INVARIANT = (
+    "review_memory.load_records_state never returns ok: true for a record whose known "
+    "collection- or mapping-shaped fields are structurally wrong"
+)
 
 
 def load_memory():
@@ -20,6 +32,201 @@ def test_corrupt_round_records_report_corrupt(tmp_path):
     state = rm.load_records_state(str(path), ["test-reviewer"])
     assert state["ok"] is False
     assert state["state"] == "corrupt"
+
+
+def test_load_records_state_refuses_malformed_findings_field(tmp_path):
+    """#1195 — a present non-list findings value refuses at load, never ok: true."""
+    rm = load_memory()
+    path = tmp_path / "round-records.json"
+    path.write_text(json.dumps([{"schemaVersion": 2, "round": 1, "kind": "baseline",
+                                 "dimensions": {}, "findings": 7, "coverageDecisions": []}]),
+                    encoding="utf-8")
+    state = rm.load_records_state(str(path), [])
+    assert state["ok"] is False
+    assert state["state"] == "corrupt"
+    assert state["reason"] == "record 0, field findings: not a list"
+    assert state["records"] == []
+
+
+def _unwrap_or_default(node):
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or) and node.values:
+        return node.values[0]
+    return node
+
+
+def _iterates_round_records(node):
+    node = _unwrap_or_default(node)
+    if isinstance(node, ast.Name) and node.id == "records":
+        return True
+    if isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "sorted" and node.args:
+            return _iterates_round_records(node.args[0])
+        if isinstance(func, ast.Name) and func.id == "reversed" and node.args:
+            return _iterates_round_records(node.args[0])
+        if isinstance(func, ast.Attribute) and func.attr == "get":
+            if isinstance(func.value, ast.Name) and func.value.id == "state" and node.args:
+                key = node.args[0]
+                return isinstance(key, ast.Constant) and key.value == "_records"
+    return False
+
+
+def _record_receiver(node, round_loop_vars, record_params):
+    if isinstance(node, ast.Name):
+        if node.id in round_loop_vars:
+            return True
+        if node.id in record_params and node.id in {"record", "rec", "r"}:
+            return True
+    return False
+
+
+def _field_from_receiver_get(node, round_loop_vars, record_params):
+    if not isinstance(node, ast.Call):
+        return None
+    func = node.func
+    if not isinstance(func, ast.Attribute) or func.attr != "get":
+        return None
+    if not _record_receiver(func.value, round_loop_vars, record_params):
+        return None
+    if not node.args:
+        return None
+    key = node.args[0]
+    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+        return key.value
+    return None
+
+
+def _field_from_iterable_use(node, round_loop_vars, record_params):
+    node = _unwrap_or_default(node)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        if node.func.attr == "get":
+            return _field_from_receiver_get(node, round_loop_vars, record_params)
+        if node.func.attr == "items":
+            return _field_from_iterable_use(node.func.value, round_loop_vars, record_params)
+    return _field_from_receiver_get(node, round_loop_vars, record_params)
+
+
+def _expects_list_shape(test_node):
+    if isinstance(test_node, ast.Name):
+        return test_node.id == "list"
+    if isinstance(test_node, ast.Tuple):
+        return any(isinstance(elt, ast.Name) and elt.id == "list" for elt in test_node.elts)
+    return False
+
+
+class _RecordFieldCensus(ast.NodeVisitor):
+    def __init__(self):
+        self.fields = set()
+        self._round_loop_vars = set()
+        self._record_params = set()
+        self._assignments = {}
+
+    def visit_FunctionDef(self, node):
+        saved_params = self._record_params
+        saved_vars = self._round_loop_vars
+        saved_assign = dict(self._assignments)
+        self._record_params = {a.arg for a in node.args.args if a.arg in ("record", "records")}
+        self._round_loop_vars = set()
+        self._assignments = {}
+        self.generic_visit(node)
+        self._record_params = saved_params
+        self._round_loop_vars = saved_vars
+        self._assignments = saved_assign
+
+    def _active(self):
+        return bool(self._record_params or self._round_loop_vars)
+
+    def _note_field(self, field):
+        if field and self._active():
+            self.fields.add(field)
+
+    def visit_Assign(self, node):
+        if self._active() and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            target = node.targets[0].id
+            field = _field_from_receiver_get(node.value, self._round_loop_vars, self._record_params)
+            if field:
+                self._assignments[target] = field
+            body = node.value
+            if isinstance(body, ast.IfExp):
+                body = body.body
+            if isinstance(body, ast.Name) and body.id in self._record_params:
+                self._round_loop_vars = self._round_loop_vars | {target}
+        self.generic_visit(node)
+
+    def _visit_generators(self, generators):
+        for gen in generators:
+            saved_vars = self._round_loop_vars
+            if _iterates_round_records(gen.iter) and isinstance(gen.target, ast.Name):
+                self._round_loop_vars = saved_vars | {gen.target.id}
+            self._note_field(_field_from_iterable_use(gen.iter, self._round_loop_vars, self._record_params))
+            if isinstance(gen.iter, ast.Call) and isinstance(gen.iter.func, ast.Attribute):
+                if gen.iter.func.attr == "items":
+                    base = gen.iter.func.value
+                    if isinstance(base, ast.Name) and base.id in self._assignments:
+                        self._note_field(self._assignments[base.id])
+            self.generic_visit(gen)
+            self._round_loop_vars = saved_vars
+
+    def visit_ListComp(self, node):
+        self._visit_generators(node.generators)
+        self.visit(node.elt)
+
+    def visit_SetComp(self, node):
+        self._visit_generators(node.generators)
+        self.visit(node.elt)
+
+    def visit_DictComp(self, node):
+        self._visit_generators(node.generators)
+        self.visit(node.key)
+        self.visit(node.value)
+
+    def visit_For(self, node):
+        saved_vars = self._round_loop_vars
+        if _iterates_round_records(node.iter) and isinstance(node.target, ast.Name):
+            self._round_loop_vars = saved_vars | {node.target.id}
+        self._note_field(_field_from_iterable_use(node.iter, self._round_loop_vars, self._record_params))
+        if isinstance(node.iter, ast.Call) and isinstance(node.iter.func, ast.Attribute):
+            if node.iter.func.attr == "items":
+                base = node.iter.func.value
+                if isinstance(base, ast.Name) and base.id in self._assignments:
+                    self._note_field(self._assignments[base.id])
+        self.generic_visit(node)
+        self._round_loop_vars = saved_vars
+
+    def visit_comprehension(self, node):
+        self._note_field(_field_from_iterable_use(node.iter, self._round_loop_vars, self._record_params))
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        if self._active() and isinstance(node.func, ast.Name) and node.func.id == "isinstance":
+            if len(node.args) == 2 and _expects_list_shape(node.args[1]):
+                subject = node.args[0]
+                if isinstance(subject, ast.Name) and subject.id in self._assignments:
+                    self._note_field(self._assignments[subject.id])
+                else:
+                    self._note_field(_field_from_receiver_get(subject, self._round_loop_vars, self._record_params))
+        self.generic_visit(node)
+
+
+def census_record_collection_fields(module_path):
+    with open(module_path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=module_path)
+    visitor = _RecordFieldCensus()
+    visitor.visit(tree)
+    return visitor.fields - _CENSUS_EXCLUDE
+
+
+def test_record_field_shapes_cover_consumer_census():
+    """Declared _RECORD_FIELD_SHAPES must match fields the three consumer modules iterate."""
+    rm = load_memory()
+    declared = set(rm._RECORD_FIELD_SHAPES)
+    observed = set()
+    for path in _RECORD_CONSUMER_SOURCES:
+        observed |= census_record_collection_fields(path)
+    assert declared == observed, (
+        "%s — declared %s, consumer census %s"
+        % (_RECORD_FIELD_SHAPE_INVARIANT, sorted(declared), sorted(observed))
+    )
 
 
 def test_stale_round_record_write_leaves_file_unchanged(tmp_path):
