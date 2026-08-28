@@ -27,6 +27,8 @@ _PART_REPLACE = "replace-file"
 _PART_JOURNAL = "journal-append"
 _PART_SIDECAR = "external-sidecar"
 
+SIDECAR_KIND_ROUND_RECORDS = "round-records"
+
 _SEALED = "SEALED"
 _DONE = "DONE"
 _INTENT = "intent.json"
@@ -350,15 +352,13 @@ def _apply_parts(session_dir, commit_id, commit_dir, intent, sidecar_resolver, s
                 if sidecar_resolver_for is None:
                     raise CommitRefused("sidecar-target-unresolvable")
                 resolver = sidecar_resolver_for(part_spec)
-                if resolver is None:
-                    raise CommitRefused("sidecar-target-unresolvable")
             else:
                 if sidecar_resolver_for is not None:
                     resolver = sidecar_resolver_for(part_spec)
                 else:
                     resolver = sidecar_resolver
-                if resolver is None:
-                    raise CommitRefused("sidecar-target-unresolvable")
+            if resolver is None:
+                raise CommitRefused("sidecar-target-unresolvable")
             targets.append(_apply_external_sidecar(session_dir, commit_id, part_n,
                                                    part_spec, staged, resolver))
         else:

@@ -4409,11 +4409,7 @@ def cmd_next(session_dir, config_overrides=None):
     record layer refuse `bootstrap-required` per seat later."""
     try:
         with round_records.session_lock(session_dir):
-            sidecar_target = _sidecar_target_for_recover(session_dir)
-            refusal = _commit_recover_or_refuse(session_dir, "next",
-                                                sidecar_target=sidecar_target,
-                                                sidecar_resolver_for=
-                                                _sidecar_resolver_for_recover_dispatch(session_dir))
+            refusal = _commit_recover_or_refuse(session_dir, "next")
             if refusal is not None:
                 return refusal
             return _cmd_next_locked(session_dir, config_overrides)
@@ -4531,25 +4527,15 @@ def _receipt_fault_response(detail):
 
 
 def _records_path_is_reserved(session_dir, records_path):
-    """Return True when records_path resolves to a destination the driver already owns."""
+    """Return True when records_path lies inside the session directory."""
     if not records_path:
         return False
     resolved = os.path.realpath(os.path.abspath(records_path))
-    session_real = os.path.realpath(session_dir)
-    reserved = (
-        os.path.join(session_real, STATE_FILE),
-        os.path.join(session_real, JOURNAL_FILE),
-        os.path.join(session_real, JOURNAL_FAULT_FILE),
-        os.path.join(session_real, RECEIPT_FILE),
-        os.path.join(session_real, RECEIPT_INTERIM_FILE),
-        os.path.join(session_real, round_records.META_FILE),
-    )
-    for path in reserved:
-        if resolved == os.path.realpath(path):
-            return True
-    commits_real = os.path.realpath(round_commit.commits_root(session_dir))
+    session_real = os.path.realpath(os.path.abspath(session_dir))
+    if resolved == session_real:
+        return True
     try:
-        return os.path.commonpath([resolved, commits_real]) == commits_real
+        return os.path.commonpath([resolved, session_real]) == session_real
     except ValueError:
         return False
 
@@ -4623,11 +4609,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
     evidence."""
     try:
         with round_records.session_lock(session_dir):
-            sidecar_target = _sidecar_target_for_recover(session_dir)
-            refusal = _commit_recover_or_refuse(session_dir, "submit",
-                                                sidecar_target=sidecar_target,
-                                                sidecar_resolver_for=
-                                                _sidecar_resolver_for_recover_dispatch(session_dir))
+            refusal = _commit_recover_or_refuse(session_dir, "submit")
             if refusal is not None:
                 return refusal
             prep = _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact,
@@ -4677,7 +4659,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 if round_records_sidecar is not None:
                     rr_path, rr_bytes = round_records_sidecar
                     c.add_external_sidecar(rr_bytes, lambda p=rr_path: p,
-                                           target_kind="round-records")
+                                           target_kind=round_commit.SIDECAR_KIND_ROUND_RECORDS)
                 # axis: ATOMICITY with the fold — that the record cannot land without the state
                 # advance, or the advance without the record. Asserting the record merely exists
                 # after a successful fold would pass against a second, separate commit.
@@ -5098,6 +5080,10 @@ def _lock_held_refusal(session_dir, cmd, held):
 
 
 def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_resolver_for=None):
+    if sidecar_resolver_for is None:
+        sidecar_resolver_for = _sidecar_resolver_for_recover_dispatch(session_dir)
+    if sidecar_target is None:
+        sidecar_target = _sidecar_target_for_recover(session_dir)
     try:
         round_commit.recover(session_dir, sidecar_target=sidecar_target,
                              sidecar_resolver_for=sidecar_resolver_for)
@@ -5115,7 +5101,7 @@ def _sidecar_resolver_for_recover_dispatch(session_dir):
 
     def dispatch(part_spec):
         kind = part_spec.get("targetKind")
-        if kind == "round-records":
+        if kind == round_commit.SIDECAR_KIND_ROUND_RECORDS:
             def resolve():
                 ok, loaded = load_state(session_dir)
                 if not ok or loaded is None:
@@ -6636,9 +6622,7 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
     superseded by it."""
     try:
         with round_records.session_lock(session_dir):
-            sidecar_target = _sidecar_target_for_recover(session_dir)
-            refusal = _commit_recover_or_refuse(session_dir, "record-result",
-                                                sidecar_target=sidecar_target)
+            refusal = _commit_recover_or_refuse(session_dir, "record-result")
             if refusal is not None:
                 return refusal
             return _cmd_record_result_locked(session_dir, seat=seat, attempt=attempt,
@@ -6948,9 +6932,7 @@ def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, o
     of two audit targets sharing an id can be recorded missing WITHOUT claiming its twin is."""
     try:
         with round_records.session_lock(session_dir):
-            sidecar_target = _sidecar_target_for_recover(session_dir)
-            refusal = _commit_recover_or_refuse(session_dir, "record-missing",
-                                                sidecar_target=sidecar_target)
+            refusal = _commit_recover_or_refuse(session_dir, "record-missing")
             if refusal is not None:
                 return refusal
             return _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path,
@@ -7066,9 +7048,9 @@ def cmd_advance(session_dir, break_lock=False, git=None, owner_artifact_path=Non
         _journal_event(session_dir, "advance", "lock-broken", fault=FAULT_CALLER, holder=broke)
     try:
         with round_records.session_lock(session_dir):
-            sidecar_target = _sidecar_target_for_recover(session_dir, git=git)
-            refusal = _commit_recover_or_refuse(session_dir, "advance",
-                                                sidecar_target=sidecar_target)
+            refusal = _commit_recover_or_refuse(
+                session_dir, "advance",
+                sidecar_target=_sidecar_target_for_recover(session_dir, git=git))
             if refusal is not None:
                 return refusal
             state, refusal = _load_driver_state(session_dir, "advance")
@@ -8126,9 +8108,9 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
         return _refuse_cmd(session_dir, "attest", "attest-note-required")
     try:
         with round_records.session_lock(session_dir):
-            sidecar_target = _sidecar_target_for_recover(session_dir, git=git)
-            refusal = _commit_recover_or_refuse(session_dir, "attest",
-                                                sidecar_target=sidecar_target)
+            refusal = _commit_recover_or_refuse(
+                session_dir, "attest",
+                sidecar_target=_sidecar_target_for_recover(session_dir, git=git))
             if refusal is not None:
                 return refusal
             state, refusal = _load_driver_state(session_dir, "attest")
@@ -8570,7 +8552,7 @@ def _dispatch(args):
                 sys.stdout.write(json.dumps({"ok": False, "reason": "records-path-not-fresh-state",
                                              "value": args.records_path}) + "\n")
                 return 1
-            overrides["recordsPath"] = args.records_path
+            overrides["recordsPath"] = os.path.abspath(args.records_path)
         out = cmd_next(args.session_dir, overrides or None)
     elif args.cmd == "record-result":
         out = cmd_record_result(args.session_dir, args.seat, attempt=args.attempt,

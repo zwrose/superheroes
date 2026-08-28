@@ -1,4 +1,5 @@
 """#1196 WO-B: CLI-path round-records producer, submit-accept atomicity, corrupt-resume park."""
+import ast
 import importlib.util
 import json
 import os
@@ -68,6 +69,65 @@ def _responder(round1_findings=None):
     return respond
 
 
+def _expected_panel_records_bytes(session_dir, respond, n):
+    art = respond(n["phase"], n["payload"], n["round"])
+    ok, state = RD.load_state(session_dir)
+    assert ok and state is not None
+    RD._fold(state, state["config"], n["phase"], art)
+    payload = RD._round_records_payload(state, state["config"])
+    assert payload["outcome"] == "ready", payload
+    return RM.records_bytes(payload["records"])
+
+
+def test_commit_recover_call_sites_always_use_kind_dispatch(capsys):
+    """F1 census: every ``_commit_recover_or_refuse`` call recovers with kind dispatch in force."""
+    driver_path = os.path.join(_LIB, "round_driver.py")
+    source = open(driver_path, encoding="utf-8").read()
+    tree = ast.parse(source, filename=driver_path)
+    recover_fn = None
+    calls = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "_commit_recover_or_refuse":
+            recover_fn = node
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "_commit_recover_or_refuse":
+            calls.append(node)
+        elif (isinstance(func, ast.Attribute)
+              and func.attr == "_commit_recover_or_refuse"):
+            calls.append(node)
+    assert recover_fn is not None, "_commit_recover_or_refuse must exist"
+    fn_source = ast.get_source_segment(source, recover_fn)
+    assert fn_source is not None
+    assert "_sidecar_resolver_for_recover_dispatch" in fn_source, (
+        "chokepoint must default sidecar_resolver_for to kind dispatch")
+    assert calls, "expected at least one _commit_recover_or_refuse call site"
+    census_lines = []
+    for call in calls:
+        resolver_kw = None
+        for kw in call.keywords:
+            if kw.arg == "sidecar_resolver_for":
+                resolver_kw = kw
+                break
+        if resolver_kw is None:
+            census_lines.append("ok: default kind dispatch via chokepoint")
+            continue
+        if (isinstance(resolver_kw.value, ast.Call)
+                and isinstance(resolver_kw.value.func, ast.Name)
+                and resolver_kw.value.func.id == "_sidecar_resolver_for_recover_dispatch"):
+            census_lines.append("ok: explicit kind dispatch resolver")
+            continue
+        pytest.fail("call site passes a non-dispatch sidecar_resolver_for: %s"
+                    % ast.get_source_segment(source, call))
+    print("commit_recover_or_refuse census (%d call sites):" % len(calls))
+    for line in census_lines:
+        print("  %s" % line)
+    captured = capsys.readouterr()
+    assert "chokepoint must default" not in captured.out
+
+
 def _stop_at_kind(monkeypatch, kind, stop_at, n=0):
     real = RC.begin
     counts = {}
@@ -132,9 +192,10 @@ def test_submit_records_staged_crash_leaves_file_byte_identical(tmp_path, monkey
   assert records.read_bytes() == before_bytes
 
 
-def test_submit_records_sealed_crash_recovers_bytes_and_state(tmp_path, monkeypatch):
+def test_submit_records_sealed_crash_recovers_exact_bytes(tmp_path, monkeypatch):
   session_dir, records, before_bytes, cfg, respond, n = _records_panel_submit_setup(tmp_path)
   art = respond(n["phase"], n["payload"], n["round"])
+  expected_bytes = _expected_panel_records_bytes(session_dir, respond, n)
   before_state = open(os.path.join(session_dir, RD.STATE_FILE), "rb").read()
   _stop_at_kind(monkeypatch, "submit-accept", "sealed")
   with pytest.raises(RC.StopPoint):
@@ -143,7 +204,38 @@ def test_submit_records_sealed_crash_recovers_bytes_and_state(tmp_path, monkeypa
   assert open(os.path.join(session_dir, RD.STATE_FILE), "rb").read() == before_state
   out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], art)
   assert out["ok"], out
-  assert records.read_bytes() != before_bytes
+  assert records.read_bytes() == expected_bytes
+  assert open(os.path.join(session_dir, RD.STATE_FILE), "rb").read() != before_state
+
+
+def test_submit_records_part0_crash_recovers_exact_bytes(tmp_path, monkeypatch):
+  session_dir, records, before_bytes, cfg, respond, n = _records_panel_submit_setup(tmp_path)
+  art = respond(n["phase"], n["payload"], n["round"])
+  expected_bytes = _expected_panel_records_bytes(session_dir, respond, n)
+  before_state = open(os.path.join(session_dir, RD.STATE_FILE), "rb").read()
+  _stop_at_kind(monkeypatch, "submit-accept", "part:0")
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], art)
+  assert records.read_bytes() == before_bytes
+  assert open(os.path.join(session_dir, RD.STATE_FILE), "rb").read() != before_state
+  out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], art)
+  assert out["ok"], out
+  assert records.read_bytes() == expected_bytes
+
+
+def test_next_records_sealed_crash_recovers_exact_bytes(tmp_path, monkeypatch):
+  session_dir, records, before_bytes, cfg, respond, n = _records_panel_submit_setup(tmp_path)
+  art = respond(n["phase"], n["payload"], n["round"])
+  expected_bytes = _expected_panel_records_bytes(session_dir, respond, n)
+  before_state = open(os.path.join(session_dir, RD.STATE_FILE), "rb").read()
+  _stop_at_kind(monkeypatch, "submit-accept", "sealed")
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], art)
+  assert records.read_bytes() == before_bytes
+  assert open(os.path.join(session_dir, RD.STATE_FILE), "rb").read() == before_state
+  out = RD.cmd_next(session_dir)
+  assert out["ok"], out
+  assert records.read_bytes() == expected_bytes
   assert open(os.path.join(session_dir, RD.STATE_FILE), "rb").read() != before_state
 
 
@@ -213,7 +305,7 @@ def test_records_path_on_fresh_state_lands_in_config(tmp_path, capsys):
     rc, out = _run_next_records_cli(capsys, session_dir, records, fresh=True)
     assert rc == 0 and out["ok"]
     ok, state = RD.load_state(session_dir)
-    assert ok and state["config"]["recordsPath"] == records
+    assert ok and state["config"]["recordsPath"] == os.path.abspath(records)
 
 
 @pytest.mark.parametrize("rel_path", [
@@ -223,6 +315,8 @@ def test_records_path_on_fresh_state_lands_in_config(tmp_path, capsys):
     RD.RECEIPT_FILE,
     RD.RECEIPT_INTERIM_FILE,
     RR.META_FILE,
+    RR.LOCK_FILE,
+    "prior-comments.json",
 ])
 def test_records_path_reserved_session_files_refuse(tmp_path, capsys, rel_path):
     session_dir = str(tmp_path / "session")
@@ -272,16 +366,14 @@ def test_records_path_reserved_under_commits_refuses(tmp_path, capsys):
     assert out == {"ok": False, "reason": "records-path-reserved", "value": under}
 
 
-def test_records_path_commits_backup_sibling_accepted(tmp_path, capsys):
+def test_records_path_inside_session_refuses(tmp_path, capsys):
     session_dir = str(tmp_path / "session")
     os.makedirs(session_dir)
-    records = os.path.join(session_dir, "commits-backup", "x.json")
-    os.makedirs(os.path.dirname(records))
-    open(records, "wb").write(RM.records_bytes([]))
-    rc, out = _run_next_records_cli(capsys, session_dir, records, fresh=True)
-    assert rc == 0 and out["ok"]
-    ok, state = RD.load_state(session_dir)
-    assert ok and state["config"]["recordsPath"] == records
+    target = os.path.join(session_dir, "commits-backup", "x.json")
+    os.makedirs(os.path.dirname(target))
+    rc, out = _run_next_records_cli(capsys, session_dir, target, fresh=True)
+    assert rc == 1
+    assert out == {"ok": False, "reason": "records-path-reserved", "value": target}
 
 
 def test_records_path_outside_session_accepted(tmp_path, capsys):
@@ -292,4 +384,34 @@ def test_records_path_outside_session_accepted(tmp_path, capsys):
     rc, out = _run_next_records_cli(capsys, session_dir, records, fresh=True)
     assert rc == 0 and out["ok"]
     ok, state = RD.load_state(session_dir)
-    assert ok and state["config"]["recordsPath"] == records
+    assert ok and state["config"]["recordsPath"] == os.path.abspath(records)
+
+
+def test_records_path_relative_persisted_absolute_and_submit_from_other_cwd(tmp_path, capsys):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    records_rel = "outside-records.json"
+    records_abs = os.path.abspath(os.path.join(tmp_path, records_rel))
+    open(records_abs, "wb").write(RM.records_bytes([]))
+    cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        argv = ["next", "--session-dir", session_dir, "--records-path", records_rel]
+        argv += _guard_argv(session_dir, fresh=True)
+        rc = RD.main(argv)
+        assert rc == 0
+        ok, state = RD.load_state(session_dir)
+        assert ok and state["config"]["recordsPath"] == records_abs
+        n = state.get("pending") or {}
+        assert n.get("phase") == RD.P_PANEL
+        respond = _responder(round1_findings=[_A_FINDING])
+        art = respond(n["phase"], n.get("payload"), n.get("round"))
+        os.chdir(session_dir)
+        out = RD.cmd_submit(session_dir, n["phase"], n["attempt"],
+                            RD.state_hash(state), art)
+        assert out["ok"], out
+        expected = _expected_panel_records_bytes(session_dir, respond, {
+            "phase": n["phase"], "payload": n.get("payload"), "round": n.get("round")})
+        assert open(records_abs, "rb").read() == expected
+    finally:
+        os.chdir(cwd)

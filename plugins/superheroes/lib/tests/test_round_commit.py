@@ -635,15 +635,15 @@ def test_target_kind_sidecar_round_trips_intent_and_resolves_on_recovery(tmp_pat
       return target
 
   c = RC.begin(sd, "kind-sidecar", commit_id="1" * 32, stop_at="sealed")
-  c.add_external_sidecar(b'{"round":1}', _resolve, target_kind="round-records")
+  c.add_external_sidecar(b'{"round":1}', _resolve, target_kind=RC.SIDECAR_KIND_ROUND_RECORDS)
   with pytest.raises(RC.StopPoint):
       c.run()
   intent_path = os.path.join(RC.commits_root(sd), "1" * 32, "intent.json")
   intent = json.loads(open(intent_path, encoding="utf-8").read())
-  assert intent["parts"][0]["targetKind"] == "round-records"
+  assert intent["parts"][0]["targetKind"] == RC.SIDECAR_KIND_ROUND_RECORDS
 
   def _resolver_for(part_spec):
-      if part_spec.get("targetKind") == "round-records":
+      if part_spec.get("targetKind") == RC.SIDECAR_KIND_ROUND_RECORDS:
           return _resolve
       return None
 
@@ -673,12 +673,12 @@ def test_target_kind_sidecar_refuses_when_resolver_returns_none(tmp_path):
   target = str(tmp_path / "records.json")
 
   c = RC.begin(sd, "kind-refuse-null", commit_id="3" * 32, stop_at="sealed")
-  c.add_external_sidecar(b"data", lambda: target, target_kind="round-records")
+  c.add_external_sidecar(b"data", lambda: target, target_kind=RC.SIDECAR_KIND_ROUND_RECORDS)
   with pytest.raises(RC.StopPoint):
       c.run()
 
   def _resolver_for(part_spec):
-      if part_spec.get("targetKind") == "round-records":
+      if part_spec.get("targetKind") == RC.SIDECAR_KIND_ROUND_RECORDS:
           return None
       return lambda: target
 
@@ -718,14 +718,14 @@ def test_two_target_kind_sidecars_land_on_distinct_targets(tmp_path):
       return receipt
 
   c = RC.begin(sd, "dual-sidecar", commit_id="5" * 32, stop_at="sealed")
-  c.add_external_sidecar(b'{"kind":"records"}', _records, target_kind="round-records")
+  c.add_external_sidecar(b'{"kind":"records"}', _records, target_kind=RC.SIDECAR_KIND_ROUND_RECORDS)
   c.add_external_sidecar(b'{"kind":"receipt"}', _receipt, target_kind="review-receipt")
   with pytest.raises(RC.StopPoint):
       c.run()
 
   def _resolver_for(part_spec):
       kind = part_spec.get("targetKind")
-      if kind == "round-records":
+      if kind == RC.SIDECAR_KIND_ROUND_RECORDS:
           return _records
       if kind == "review-receipt":
           return _receipt
