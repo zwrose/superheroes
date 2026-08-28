@@ -5380,6 +5380,34 @@ def test_seat_map_unjudgeable_double_fold_bad_then_good_clears_record():
     assert RD._seat_map_unjudgeable(state) is True
 
 
+def test_seat_map_unjudgeable_bad_good_round1_then_bad_round2_discloses_both():
+    """#1204: bad→good round 1 plus unjudgeable round 2 — receipt must disclose both receipt rounds."""
+    SM = _load("seat_map")
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg["fixerVendor"] = "cursor"
+    state = RD.new_state(cfg)
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    bad = {"seats": {}}
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": bad})
+    good = _assertable_seat_map(["claude", "codex"], fixer_vendor="cursor")
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": good,
+        "canaryResult": _canary_probes_for(good),
+    })
+    assert "seatMapUnjudgeable" not in state["rounds"]["1"]
+    state["round"] = 2
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": bad})
+    assert state["rounds"]["2"]["seatMapUnjudgeable"] == [SM.VIOLATION_BASIS_NO_SEATS]
+    assert RD._seat_map_unjudgeable(state) is True
+    RD._terminal_converged(state, cfg, full_panel=True)
+    receipt = RD.build_receipt(state)
+    unj_lines = [d for d in receipt["degraded"] if d.startswith("seat-map-unjudgeable")]
+    degraded_text = " ".join(unj_lines)
+    assert "rounds 1" in degraded_text or "(round 1)" in degraded_text, unj_lines
+    assert "(round 2)" in degraded_text, unj_lines
+    assert SM.VIOLATION_BASIS_NO_SEATS in degraded_text
+
+
 def test_seat_map_unjudgeable_double_fold_bad_then_good_receipt_disclosure_fallback():
     """#714 NR-C / #1204: bad→good re-fold clears per-round record but receipt still discloses basis."""
     SM = _load("seat_map")

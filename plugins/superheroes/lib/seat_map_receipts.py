@@ -153,6 +153,15 @@ def unjudgeable_receipts(state, driver_author_family=None):
     return out
 
 
+def _per_round_disclosed_unjudgeable_rounds(state):
+    """Round keys whose ``seatMapUnjudgeable`` record would emit a per-round disclosure line."""
+    out: set[str] = set()
+    for rkey, rrec in (state.get("rounds") or {}).items():
+        if isinstance(rrec, dict) and rrec.get("seatMapUnjudgeable"):
+            out.add(str(rkey))
+    return out
+
+
 def unjudgeable_run_level_disclosure(
     state,
     driver_author_family=None,
@@ -163,21 +172,27 @@ def unjudgeable_run_level_disclosure(
     """Run-level ``seat-map-unjudgeable`` degraded prose when the terminal predicate arms without
     per-round disclosure (#714 NR-C / #1204 same-round re-fold).
 
-    Returns ``None`` when the fallback must not fire: a per-round line was already emitted, no
-    seat map was submitted anywhere in the run (the unavailable case), or no unjudgeable receipt
-    exists."""
-    if per_round_emitted or no_seat_map_submitted:
-        return None
+    Returns ``None`` when every unjudgeable receipt round is already covered by a per-round line,
+    or when no unjudgeable receipt exists.
+
+    ``per_round_emitted`` and ``no_seat_map_submitted`` are legacy kwargs from ``build_receipt``;
+    disclosed rounds and empty-receipt gating are derived here instead."""
+    del per_round_emitted, no_seat_map_submitted  # dominated — see wo_r1_1204.md
+    disclosed = _per_round_disclosed_unjudgeable_rounds(state)
     unj = unjudgeable_receipts(state, driver_author_family)
-    if not unj:
+    uncovered = [
+        entry for entry in unj
+        if isinstance(entry, dict) and str(entry.get("round", "")) not in disclosed
+    ]
+    if not uncovered:
         return None
     bases = sorted(
-        {entry["basis"] for entry in unj if isinstance(entry, dict) and entry.get("basis")},
+        {entry["basis"] for entry in uncovered if isinstance(entry, dict) and entry.get("basis")},
     )
     if not bases:
         return None
     rounds = sorted(
-        {str(entry["round"]) for entry in unj if isinstance(entry, dict) and entry.get("round")},
+        {str(entry["round"]) for entry in uncovered if isinstance(entry, dict) and entry.get("round")},
         key=lambda r: int(r) if str(r).isdigit() else 0,
     )
     round_part = ", ".join(rounds) if rounds else "?"
