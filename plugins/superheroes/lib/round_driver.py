@@ -1429,6 +1429,11 @@ def _round_records_payload(state, config):
     outgoing.sort(key=lambda r: r.get("round") if isinstance(r.get("round"), int) else 0)
     if not outgoing:
         return {"outcome": "nothing"}
+    # Mirror ``persist_record``'s single merge so CLI-path bytes and library-path bytes agree.
+    record = outgoing[-1]
+    outgoing = [r for r in outgoing[:-1] if r.get("round") != record.get("round")]
+    outgoing.append(record)
+    outgoing.sort(key=lambda r: r.get("round") if isinstance(r.get("round"), int) else 0)
     return {"outcome": "ready", "path": path, "records": outgoing}
 
 
@@ -4455,6 +4460,14 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             return _next_response(pending, state_hash(state))
     else:
         state = loaded
+        if config_overrides and config_overrides.get("recordsPath") is not None:
+            loaded_path = (loaded.get("config") or {}).get("recordsPath")
+            override_path = config_overrides.get("recordsPath")
+            if override_path != loaded_path:
+                _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
+                                              "attempt": None,
+                                              "outcome": "refused-records-path-not-fresh"})
+                return {"ok": False, "reason": "records-path-not-fresh-state"}
         if _ceiling_blocks_loaded(state, state["config"]):
             pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
                        "attempt": 0,

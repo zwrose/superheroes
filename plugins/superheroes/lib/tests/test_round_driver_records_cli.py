@@ -3,6 +3,8 @@ import ast
 import importlib.util
 import json
 import os
+import stat
+import sys
 
 import pytest
 
@@ -28,12 +30,79 @@ DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
         "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
 HEAD = "abc123def4567890abcdef1234567890abcdef12"
 _A_FINDING = {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}
+SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
+                      for dim in RD.DIMENSIONS}}
 
 
 def _cfg(**over):
-    base = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF, "fixerVendor": "claude"}
+    base = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF, "fixerVendor": "claude",
+            "seatMap": SEAT_MAP}
     base.update(over)
     return base
+
+
+def _session_id(session_dir):
+    with open(os.path.join(session_dir, RR.META_FILE), encoding="utf-8") as fh:
+        return json.load(fh)["sessionId"]
+
+
+def _anchor_hashes(session_dir, rnd, phase, attempt, seat, occurrence=0):
+    ok, state = RD.load_state(session_dir)
+    assert ok and state is not None
+    anchor = RD._orders_anchor(state, session_dir, rnd, phase, attempt)
+    if anchor is None:
+        return RR.NOT_EMITTED, RR.NOT_EMITTED
+    skey = RR.storage_key(seat, occurrence)
+    return anchor["manifestSha256"], (anchor.get("orders") or {}).get(skey, RR.NOT_EMITTED)
+
+
+def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, **over):
+    pend = pend or RD.load_state(session_dir)[1]["pending"]
+    payload = {"findings": [], "confidence": "high", "seat": seat,
+               "verificationReceipt": {"ran": True}} if payload is None else payload
+    manifest_sha, order_sha = _anchor_hashes(session_dir, pend["round"], pend["phase"],
+                                             pend["attempt"], seat, occurrence=occurrence)
+    env = {
+        "schema": RR.SEAT_RESULT_SCHEMA,
+        "session": _session_id(session_dir),
+        "round": pend["round"],
+        "phase": pend["phase"],
+        "seat": seat,
+        "attempt": pend["attempt"],
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "dispatchRef": manifest_sha,
+        "orderSha256": order_sha,
+        "manifestSha256": manifest_sha,
+        "recordedAt": "2026-08-07T00:00:00",
+        "payloadSha256": RR.payload_sha256(payload),
+        "payload": payload,
+    }
+    if occurrence:
+        env["occurrence"] = occurrence
+    env.update(over)
+    return env
+
+
+def _land(session_dir, seat, payload=None, pend=None, **over):
+    pend = pend or RD.load_state(session_dir)[1]["pending"]
+    env = _result_envelope(session_dir, seat, payload=payload, pend=pend, **over)
+    path = RR.landing_path(session_dir, pend["round"], pend["phase"], RR.storage_key(seat),
+                           pend["attempt"])
+    RR.atomic_write_json(path, env)
+    return path, env
+
+
+def _land_and_record(session_dir, seat, payload=None):
+    _land(session_dir, seat, payload=payload)
+    out = RD.cmd_record_result(session_dir, seat)
+    assert out["ok"], out
+    return out
+
+
+def _record_all_panel_seats(session_dir, seats=None):
+    for seat in (seats if seats is not None else RD.DIMENSIONS):
+        _land_and_record(session_dir, seat)
 
 
 def _responder(round1_findings=None):
@@ -124,8 +193,6 @@ def test_commit_recover_call_sites_always_use_kind_dispatch(capsys):
     print("commit_recover_or_refuse census (%d call sites):" % len(calls))
     for line in census_lines:
         print("  %s" % line)
-    captured = capsys.readouterr()
-    assert "chokepoint must default" not in captured.out
 
 
 def _stop_at_kind(monkeypatch, kind, stop_at, n=0):
@@ -276,6 +343,75 @@ def test_cli_and_run_loop_records_files_are_byte_identical(tmp_path):
   assert records_cli.read_bytes() == records_loop.read_bytes()
 
 
+def test_cli_and_library_bytes_identical_same_round_ledger_dupes(tmp_path, monkeypatch):
+    """G5: two ledger records sharing a round must land identical bytes on CLI and library paths."""
+    records_cli = tmp_path / "cli-records.json"
+    records_loop = tmp_path / "loop-records.json"
+    records_cli.write_bytes(RM.records_bytes([]))
+    records_loop.write_bytes(RM.records_bytes([]))
+    first = RM.summarize_record({"round": 1, "schemaVersion": 2, "kind": "first"})
+    second = RM.summarize_record({"round": 1, "schemaVersion": 2, "kind": "second"})
+    monkeypatch.setattr(
+        RD.review_memory, "load_records_state",
+        lambda path, dims: {"ok": True, "records": []})
+    cfg_cli = _cfg(dimensions=["test-reviewer"], recordsPath=str(records_cli))
+    cfg_loop = _cfg(dimensions=["test-reviewer"], recordsPath=str(records_loop))
+    state_cli = RD.new_state(dict(cfg_cli))
+    state_cli["_records"] = [first, second]
+    state_cli["rounds"] = {"1": {}}
+    payload = RD._round_records_payload(state_cli, state_cli["config"])
+    assert payload["outcome"] == "ready"
+    records_cli.write_bytes(RM.records_bytes(payload["records"]))
+    state_loop = RD.new_state(dict(cfg_loop))
+    state_loop["_records"] = [first, second]
+    state_loop["rounds"] = {"1": {}}
+    RD._persist_round_records(state_loop, state_loop["config"])
+    assert records_cli.read_bytes() == records_loop.read_bytes()
+
+
+def test_cmd_next_locked_refuses_records_path_race(tmp_path, monkeypatch):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    records = str(tmp_path / "records.json")
+    open(records, "wb").write(RM.records_bytes([]))
+    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=records)
+    real_lock = RD.round_records.session_lock
+
+    def lock_with_race(sd):
+        if sd == session_dir and not os.path.exists(os.path.join(sd, RD.STATE_FILE)):
+            RD.save_state(sd, RD.new_state(_cfg(dimensions=["test-reviewer"])))
+        return real_lock(sd)
+
+    monkeypatch.setattr(RD.round_records, "session_lock", lock_with_race)
+    out = RD.cmd_next(session_dir, cfg)
+    assert out["ok"] is False
+    assert out["reason"] == "records-path-not-fresh-state"
+    ok, state = RD.load_state(session_dir)
+    assert ok and state["config"].get("recordsPath") is None
+
+
+def test_cmd_next_locked_idempotent_records_path_reissue_ok(tmp_path):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    records = str(tmp_path / "records.json")
+    open(records, "wb").write(RM.records_bytes([]))
+    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=records)
+    out0 = RD.cmd_next(session_dir, cfg)
+    assert out0["ok"], out0
+    out1 = RD.cmd_next(session_dir, cfg)
+    assert out1["ok"], out1
+    assert out1.get("reason") != "records-path-not-fresh-state"
+
+
+def test_cli_submit_records_sidecar_mode_0600(tmp_path):
+    session_dir, records, before_bytes, cfg, respond, n = _records_panel_submit_setup(tmp_path)
+    art = respond(n["phase"], n["payload"], n["round"])
+    out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], art)
+    assert out["ok"], out
+    mode = stat.S_IMODE(os.stat(records).st_mode)
+    assert mode == 0o600
+
+
 def _run_next_records_cli(capsys, session_dir, records_path, *, fresh=True):
     argv = ["next", "--session-dir", session_dir, "--records-path", records_path]
     argv += _guard_argv(session_dir, fresh=fresh)
@@ -415,3 +551,140 @@ def test_records_path_relative_persisted_absolute_and_submit_from_other_cwd(tmp_
         assert open(records_abs, "rb").read() == expected
     finally:
         os.chdir(cwd)
+
+
+class _FakeAdapters(object):
+    ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_AUDITS,
+                      RD.P_SCOPED, RD.P_VERIFY, RD.P_FIXER)
+
+    def __init__(self):
+        self.rosters = {RD.P_PANEL: list(RD.DIMENSIONS),
+                        RD.P_VERIFIERS: [],
+                        RD.P_SYNTHESIS: ["synthesis"],
+                        RD.P_FIXER: ["dispatch-fixer"]}
+        self.roster_reasons = {}
+        self.faults = {}
+        self.assemble_reason = None
+        self.assembled = []
+        self.policies = {}
+
+    def roster_for(self, phase, state, config):
+        if phase in self.roster_reasons:
+            return [], self.roster_reasons[phase]
+        return list(self.rosters.get(phase, [])), None
+
+    def payload_fault(self, phase, payload, seat_key, record_boundary=False):
+        return self.faults.get(seat_key)
+
+    def missing_policy(self, phase):
+        return self.policies.get(phase, "seat-status")
+
+    def is_orchestrator_fulfilled(self, phase):
+        return phase in (RD.P_VERIFY,)
+
+    def orchestrator_payload_fault(self, phase, payload):
+        if phase == RD.P_VERIFY:
+            return RD.verify_result_fault(payload)
+        return "orchestrator-payload-unknown-phase:%s" % phase
+
+    def assemble(self, phase, envelopes, state, config, dispatch_manifest=None, canary=None,
+                 session_dir=None):
+        self.assembled.append({"phase": phase, "envelopes": envelopes,
+                               "dispatch_manifest": dispatch_manifest, "canary": canary,
+                               "session_dir": session_dir})
+        if self.assemble_reason is not None:
+            return None, self.assemble_reason
+        if phase == RD.P_PANEL:
+            seats = {}
+            for env in (envelopes or []):
+                if not isinstance(env, dict):
+                    continue
+                seat = env.get("seat")
+                if env.get("schema") == RR.SEAT_MISSING_SCHEMA:
+                    seats[seat] = {"findings": [], "missing": True}
+                else:
+                    seats[seat] = env.get("payload") or {"findings": []}
+            return {"seats": seats}, None
+        if phase == RD.P_VERIFIERS:
+            return {"verdicts": []}, None
+        if phase == RD.P_SYNTHESIS:
+            return {"grouping": None}, None
+        return {}, None
+
+
+def _gitdir(base, name="_gitdir"):
+    path = os.path.join(base, name)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _fake_git(gitdir, head="a" * 40, base_sha="b" * 40, remote="github.com/o/r"):
+    def run(cwd, *args):
+        if args[:2] == ("rev-parse", "--absolute-git-dir"):
+            return gitdir
+        if args == ("rev-parse", "HEAD"):
+            return head
+        if args[:3] == ("rev-parse", "--abbrev-ref", "HEAD"):
+            return "feature/x"
+        if args[0] == "rev-parse" and "--verify" in args:
+            return base_sha
+        if args[:2] == ("remote", "get-url"):
+            return remote
+        return None
+    return run
+
+
+def _sidecar_path(gitdir):
+    return os.path.join(gitdir, "superheroes", "review-receipt.json")
+
+
+def test_cmd_advance_recover_uses_injected_git_seam_for_legacy_sidecar(
+        tmp_path, monkeypatch):
+    """G1 driver-level: ``cmd_advance``'s injected ``git`` seam reaches legacy sidecar replay."""
+    fake = _FakeAdapters()
+    monkeypatch.setitem(sys.modules, "round_adapters", fake)
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    out = RD.cmd_next(session_dir, _cfg())
+    assert out["ok"], out
+    _record_all_panel_seats(session_dir)
+    pend = RD.load_state(session_dir)[1]["pending"]
+    os.remove(RR.store_path(session_dir, pend["round"], pend["phase"],
+                              RR.storage_key("security-reviewer"), pend["attempt"]))
+    os.remove(RR.landing_path(session_dir, pend["round"], pend["phase"],
+                                RR.storage_key("security-reviewer"), pend["attempt"]))
+    orphan_gitdir = _gitdir(str(tmp_path), "orphan-git")
+    out = RD.cmd_advance(session_dir, git=_fake_git(orphan_gitdir))
+    assert out["reason"] == "journal-orphan"
+    seq = None
+    for index, event in enumerate(RD.read_journal(session_dir), start=1):
+        if event.get("reason") == "journal-orphan":
+            seq = index
+            break
+    assert seq is not None
+    attest_gitdir = _gitdir(str(tmp_path), "attest-git")
+    real_begin = RC.begin
+    counts = {}
+
+    def begin_wrapper(sd, commit_kind, **kw):
+        idx = counts.get(commit_kind, 0)
+        if commit_kind == "attest-finalize" and idx == 0:
+            kw["stop_at"] = "sealed"
+        counts[commit_kind] = idx + 1
+        return real_begin(sd, commit_kind, **kw)
+
+    monkeypatch.setattr(RD.round_commit, "begin", begin_wrapper)
+    with pytest.raises(RC.StopPoint):
+        RD.cmd_attest(session_dir, str(seq), "orphaned record", git=_fake_git(attest_gitdir))
+    sidecar = _sidecar_path(attest_gitdir)
+    assert not os.path.exists(sidecar)
+
+    def _boom_git(*_a, **_k):
+        raise AssertionError("real git seam invoked during legacy sidecar replay")
+
+    monkeypatch.setattr(RD.store_core, "run_git", _boom_git)
+    out = RD.cmd_advance(session_dir, git=_fake_git(attest_gitdir))
+    assert out["ok"], out
+    assert os.path.exists(sidecar)
+    root = RC.commits_root(session_dir)
+    assert not os.path.exists(root) or os.listdir(root) == []

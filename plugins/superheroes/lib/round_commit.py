@@ -306,7 +306,8 @@ def _apply_external_sidecar(session_dir, commit_id, part_n, part_spec, staged_by
 
     _ensure_parent_dirs_strict(target)
     tmp = "%s.commit-%s.tmp" % (target, commit_id)
-    with open(tmp, "wb") as fh:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as fh:
         fh.write(staged_bytes)
         fh.flush()
         os.fsync(fh.fileno())
@@ -353,10 +354,12 @@ def _apply_parts(session_dir, commit_id, commit_dir, intent, sidecar_resolver, s
                     raise CommitRefused("sidecar-target-unresolvable")
                 resolver = sidecar_resolver_for(part_spec)
             else:
-                if sidecar_resolver_for is not None:
+                if sidecar_resolver is not None:
+                    resolver = sidecar_resolver
+                elif sidecar_resolver_for is not None:
                     resolver = sidecar_resolver_for(part_spec)
                 else:
-                    resolver = sidecar_resolver
+                    resolver = None
             if resolver is None:
                 raise CommitRefused("sidecar-target-unresolvable")
             targets.append(_apply_external_sidecar(session_dir, commit_id, part_n,

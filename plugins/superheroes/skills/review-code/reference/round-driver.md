@@ -792,10 +792,10 @@ that already owns `round-records.json` opts out with `persistRecords: False`
 cannot read and a persist it cannot complete both park `cannot-certify` rather than certifying off a
 stale file; `_seed_resume` is the read path on the next invocation. The `next --records-path` flag
 seeds `recordsPath` on fresh state only — supplying it on existing state refuses
-`records-path-not-fresh-state`. The guard is not session containment: a fresh resuming session may
-name a previous session's records file, but the destination must not be driver-owned storage —
-`loop-state.json`, the journals, the receipts, `meta.json`, or anything at or under `commits/` —
-or `next` refuses `records-path-reserved` before any work. On the CLI path the write rides
+`records-path-not-fresh-state`. The guard is session-directory containment: a records file must
+outlive the producing session so a **fresh** session can resume from it, which a path inside that
+session can never do — so any path at or inside `$SESSION_DIR` refuses `records-path-reserved`
+before any work. On the CLI path the write rides
 `cmd_submit`'s `submit-accept` commit as a `targetKind: "round-records"` sidecar, so the file
 changes only if that commit sealed and then rolls forward with the state; recovery dispatches
 sidecar replay by `targetKind` and refuses rather than falling back. The corrupt-resume

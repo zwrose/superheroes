@@ -688,6 +688,32 @@ def test_target_kind_sidecar_refuses_when_resolver_returns_none(tmp_path):
   assert not os.path.exists(target)
 
 
+def test_legacy_sidecar_explicit_target_wins_over_resolver_for(tmp_path):
+  sd = _session(tmp_path)
+  explicit = str(tmp_path / "explicit.json")
+  dispatcher = str(tmp_path / "dispatcher.json")
+
+  def _explicit():
+      return explicit
+
+  def _dispatcher():
+      return dispatcher
+
+  c = RC.begin(sd, "legacy-precedence", commit_id="6" * 32, stop_at="sealed")
+  c.add_external_sidecar(b'{"explicit":true}', _dispatcher)
+  with pytest.raises(RC.StopPoint):
+      c.run()
+
+  def _resolver_for(part_spec):
+      if part_spec.get("targetKind") is None:
+          return _dispatcher
+      return None
+
+  RC.recover(sd, sidecar_target=_explicit, sidecar_resolver_for=_resolver_for)
+  assert open(explicit, "rb").read() == b'{"explicit":true}'
+  assert not os.path.exists(dispatcher)
+
+
 def test_sidecar_without_target_kind_recovers_via_sidecar_target(tmp_path):
   sd = _session(tmp_path)
   sidecar = str(tmp_path / "legacy.json")
