@@ -265,3 +265,124 @@ def test_unjudgeable_receipts_quantifier_both_orders():
         assert len(unj) == 1
         assert unj[0]["basis"] == seat_map.VIOLATION_BASIS_NO_SEATS
         assert RD._seat_map_unjudgeable(state) is True
+
+
+def test_round_governing_unjudgeable_seeded_round_zero_receipt():
+    """Selector: round ``0`` seeded receipt is judged on its own submission."""
+    judgeable = _minimal_map(authorFamily="anthropic")
+    state = {
+        "seatMapReceipts": [{"round": "0", "map": judgeable}],
+        "config": {"seatMap": _minimal_map(seats={})},
+        "rounds": {},
+    }
+    driver_fam = "anthropic"
+    assert SMR.round_governing_unjudgeable(state, "0", driver_fam) == []
+    unjudgeable = _minimal_map(seats={})
+    state["seatMapReceipts"] = [{"round": "0", "map": unjudgeable}]
+    result = SMR.round_governing_unjudgeable(state, "0", driver_fam)
+    assert result == [{"round": "0", "basis": seat_map.VIOLATION_BASIS_NO_SEATS}]
+
+
+def test_round_governing_unjudgeable_legacy_prepend_then_empty_seats_receipt():
+    """Selector: legacy ``state["seatMap"]`` prepend does not mask the round's own submission."""
+    judgeable = _minimal_map(authorFamily="anthropic")
+    unjudgeable = _minimal_map(seats={})
+    state = {
+        "seatMap": judgeable,
+        "seatMapReceipts": [{"round": "1", "map": unjudgeable}],
+        "rounds": {},
+    }
+    driver_fam = "anthropic"
+    assert SMR.round_governing_unjudgeable(state, "1", driver_fam) == [
+        {"round": "1", "basis": seat_map.VIOLATION_BASIS_NO_SEATS},
+    ]
+
+
+def test_round_governing_unjudgeable_config_fallback_without_receipts():
+    """Selector: ``config["seatMap"]`` fallback when the round submitted no map."""
+    config_map = _minimal_map(authorFamily="anthropic")
+    state = {"config": {"seatMap": config_map}, "rounds": {}}
+    driver_fam = "anthropic"
+    assert SMR.round_governing_unjudgeable(state, "2", driver_fam) == []
+    bad_config = _minimal_map(seats={})
+    state["config"]["seatMap"] = bad_config
+    assert SMR.round_governing_unjudgeable(state, "2", driver_fam) == [
+        {"round": "2", "basis": seat_map.VIOLATION_BASIS_NO_SEATS},
+    ]
+
+
+def test_round_governing_unjudgeable_last_receipt_wins_same_round_label():
+    """Selector: list order decides last receipt for a round label — not numeric sort."""
+    first = _minimal_map(authorFamily="anthropic")
+    second = _minimal_map(seats={})
+    state = {
+        "seatMapReceipts": [
+            {"round": "10", "map": first},
+            {"round": "2", "map": second},
+            {"round": "10", "map": second},
+        ],
+        "rounds": {},
+    }
+    driver_fam = "anthropic"
+    assert SMR.round_governing_unjudgeable(state, "10", driver_fam) == [
+        {"round": "10", "basis": seat_map.VIOLATION_BASIS_NO_SEATS},
+    ]
+
+
+def test_round_governing_unjudgeable_return_shape_complete_vs_one_element():
+    """Selector: ``[]`` when complete; one-element list with round and basis otherwise."""
+    complete = _minimal_map(authorFamily="anthropic")
+    incomplete = _minimal_map(seats={})
+    state = {
+        "seatMapReceipts": [{"round": "3", "map": complete}],
+        "rounds": {},
+    }
+    driver_fam = "anthropic"
+    assert SMR.round_governing_unjudgeable(state, "3", driver_fam) == []
+    state["seatMapReceipts"] = [{"round": "3", "map": incomplete}]
+    result = SMR.round_governing_unjudgeable(state, "3", driver_fam)
+    assert len(result) == 1
+    assert result[0]["round"] == "3"
+    assert result[0]["basis"] == seat_map.VIOLATION_BASIS_NO_SEATS
+
+
+def test_round_governing_unjudgeable_own_submission_wins_over_effective_map():
+    """Selector: own submission wins — not ``effective_seat_map`` when the round submitted."""
+    judgeable = _minimal_map(authorFamily="anthropic")
+    unjudgeable = _minimal_map(seats={})
+    state = {
+        "seatMapReceipts": [
+            {"round": "1", "map": unjudgeable},
+            {"round": "2", "map": judgeable},
+        ],
+        "rounds": {},
+    }
+    driver_fam = "anthropic"
+    assert SMR.round_governing_unjudgeable(state, "2", driver_fam) == []
+    state["seatMapReceipts"] = [
+        {"round": "1", "map": judgeable},
+        {"round": "2", "map": unjudgeable},
+    ]
+    assert SMR.round_governing_unjudgeable(state, "2", driver_fam) == [
+        {"round": "2", "basis": seat_map.VIOLATION_BASIS_NO_SEATS},
+    ]
+
+
+def test_unjudgeable_receipts_whole_history_not_round_scoped():
+    """Whole-history reader still returns every unjudgeable receipt across rounds (#1204)."""
+    judgeable = _minimal_map(authorFamily="anthropic")
+    unjudgeable = _minimal_map(seats={})
+    state = {
+        "seatMapReceipts": [
+            {"round": "1", "map": unjudgeable},
+            {"round": "2", "map": judgeable},
+            {"round": "3", "map": unjudgeable},
+        ],
+        "rounds": {},
+    }
+    driver_fam = "anthropic"
+    result = SMR.unjudgeable_receipts(state, driver_fam)
+    assert len(result) == 2
+    assert result[0] == {"round": "1", "basis": seat_map.VIOLATION_BASIS_NO_SEATS}
+    assert result[1] == {"round": "3", "basis": seat_map.VIOLATION_BASIS_NO_SEATS}
+    assert SMR.round_governing_unjudgeable(state, "2", driver_fam) == []

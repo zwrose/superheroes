@@ -5309,6 +5309,102 @@ def test_seat_map_unjudgeable_cert_shape_degraded_consumer():
     assert not control_state["certification"]["shape"].endswith("-degraded")
 
 
+# =============================================================================
+# #1204 — per-round seatMapUnjudgeable reflects governing map for that round
+# =============================================================================
+
+def test_seat_map_unjudgeable_per_round_unjudgeable_then_judgeable():
+    """#1204: round 1 unjudgeable then round 2 judgeable — per-round record clears, terminal stays."""
+    SM = _load("seat_map")
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg["fixerVendor"] = "cursor"
+    state = RD.new_state(cfg)
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    round1 = {"seats": {}}
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round1})
+    assert state["rounds"]["1"]["seatMapUnjudgeable"] == [SM.VIOLATION_BASIS_NO_SEATS]
+    state["round"] = 2
+    round2 = _assertable_seat_map(["claude", "codex"], fixer_vendor="cursor")
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": round2,
+        "canaryResult": _canary_probes_for(round2),
+    })
+    assert "seatMapUnjudgeable" not in state["rounds"]["2"]
+    assert RD._seat_map_unjudgeable(state) is True
+
+
+def test_seat_map_unjudgeable_per_round_judgeable_then_unjudgeable():
+    """#1204 mirror: round 1 judgeable then round 2 unjudgeable — per-round basis on round 2 only."""
+    SM = _load("seat_map")
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg["fixerVendor"] = "cursor"
+    state = RD.new_state(cfg)
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    round1 = _assertable_seat_map(["claude", "codex"], fixer_vendor="cursor")
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": round1,
+        "canaryResult": _canary_probes_for(round1),
+    })
+    assert "seatMapUnjudgeable" not in state["rounds"]["1"]
+    state["round"] = 2
+    round2 = {"seats": {}}
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round2})
+    assert state["rounds"]["2"]["seatMapUnjudgeable"] == [SM.VIOLATION_BASIS_NO_SEATS]
+    assert RD._seat_map_unjudgeable(state) is True
+
+
+def test_seat_map_unjudgeable_double_fold_bad_then_good_clears_record():
+    """#1204: double fold in one round — bad then good clears ``seatMapUnjudgeable`` (#1204 / A3)."""
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg["fixerVendor"] = "cursor"
+    state = RD.new_state(cfg)
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    bad = {"seats": {}}
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": bad})
+    assert state["rounds"]["1"]["seatMapUnjudgeable"] == [_load("seat_map").VIOLATION_BASIS_NO_SEATS]
+    good = _assertable_seat_map(["claude", "codex"], fixer_vendor="cursor")
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": good,
+        "canaryResult": _canary_probes_for(good),
+    })
+    assert "seatMapUnjudgeable" not in state["rounds"]["1"]
+    assert RD._seat_map_unjudgeable(state) is True
+
+
+def test_seat_map_unjudgeable_double_fold_good_then_bad_records_basis():
+    """#1204: double fold in one round — good then bad records basis on the round."""
+    SM = _load("seat_map")
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg["fixerVendor"] = "cursor"
+    state = RD.new_state(cfg)
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    good = _assertable_seat_map(["claude", "codex"], fixer_vendor="cursor")
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": good,
+        "canaryResult": _canary_probes_for(good),
+    })
+    assert "seatMapUnjudgeable" not in state["rounds"]["1"]
+    bad = {"seats": {}}
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": bad})
+    assert state["rounds"]["1"]["seatMapUnjudgeable"] == [SM.VIOLATION_BASIS_NO_SEATS]
+    assert RD._seat_map_unjudgeable(state) is True
+
+
+def test_seat_map_unjudgeable_no_submission_judged_on_effective_map():
+    """#1204: round with no ``seatMap`` submission is judged on ``effective_seat_map``."""
+    SM = _load("seat_map")
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg.pop("fixerVendor")
+    state = RD.new_state(cfg)
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    round1 = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round1})
+    state["round"] = 2
+    RD._fold_panel(state, state["config"], {"seats": seats})
+    assert state["rounds"]["2"]["seatMapUnjudgeable"] == [SM.VIOLATION_BASIS_NO_AUTHOR_FAMILY]
+    assert RD._seat_map_unjudgeable(state) is True
+
+
 def test_emit_receipt_seat_map_derived_violations_replay_no_breach_lost():
     """INV-11: emitted ``seatMap`` carries derived violations — replay cannot read clean."""
     SM = _load("seat_map")
@@ -5466,6 +5562,7 @@ _SEAT_MAP_RECEIPTS_CALLERS = frozenset({
     "unexcused_violations",
     "pin_excused_records",
     "unjudgeable_receipts",
+    "round_governing_unjudgeable",
     "skew_records",
     "plugin_version_skew_status",
     "emit_receipt_seat_map",

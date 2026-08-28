@@ -981,6 +981,7 @@ _sm_plugin_version_skew_status = seat_map_receipts.plugin_version_skew_status
 _sm_canary_map = seat_map_receipts.canary_map
 _emit_receipt_seat_map = seat_map_receipts.emit_receipt_seat_map
 _sm_unjudgeable_receipts = seat_map_receipts.unjudgeable_receipts
+_sm_round_governing_unjudgeable = seat_map_receipts.round_governing_unjudgeable
 _skew_record_identity = seat_map_receipts._skew_record_identity
 _skew_records_from_seat_map = seat_map_receipts._skew_records_from_seat_map
 
@@ -1178,7 +1179,10 @@ def _seat_map_unavailable(state):
 
 
 def _seat_map_unjudgeable(state):
-    """Whether any submitted seat map's violation basis is incomplete — rounds ∪ receipts union."""
+    """Whether any submitted seat map's violation basis is incomplete — rounds ∪ receipts union.
+
+    The per-round ``seatMapUnjudgeable`` record is round-scoped (#1204); this predicate keeps the
+    whole-history union."""
     for rec in (state.get("rounds") or {}).values():
         if not isinstance(rec, dict):
             continue
@@ -1806,6 +1810,13 @@ def _record_round(state, key, value):
     rec[key] = value
 
 
+def _clear_round(state, key):
+    """Remove one per-round key — the inverse of `_record_round`, so a channel recomputed on a
+    later fold of the SAME round cannot leave a stale value behind (#1204)."""
+    rec = state["rounds"].setdefault(str(state["round"]), {})
+    rec.pop(key, None)
+
+
 def _record_round_append(state, key, value):
     """Append one value to a per-round list without disturbing `_record_round`'s overwrite semantics."""
     rec = state["rounds"].setdefault(str(state["round"]), {})
@@ -2287,11 +2298,14 @@ def _fold_panel(state, config, artifact):
         if not _live_panel:
             _live_panel = ["unknown"]
         _record_round(state, "seatMapUnavailable", _live_panel)
-    _unjudgeable = _sm_unjudgeable_receipts(state, _driver_author_family(state))
-    if _unjudgeable:
-        _bases = sorted({entry["basis"] for entry in _unjudgeable if isinstance(entry, dict)})
-        if _bases:
-            _record_round(state, "seatMapUnjudgeable", _bases)
+    # #1204: per-round record reflects the map governing THIS round; terminal predicate stays whole-history.
+    _unjudgeable = _sm_round_governing_unjudgeable(
+        state, state["round"], _driver_author_family(state))
+    _bases = sorted({entry["basis"] for entry in _unjudgeable if isinstance(entry, dict)})
+    if _bases:
+        _record_round(state, "seatMapUnjudgeable", _bases)
+    else:
+        _clear_round(state, "seatMapUnjudgeable")
     _sm_violations = _sm_unexcused_violations(state, _driver_author_family(state))
     if _sm_violations:
         _record_round(state, "seatMapViolations", _sm_violations)

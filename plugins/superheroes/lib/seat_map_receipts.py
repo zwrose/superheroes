@@ -153,6 +153,34 @@ def unjudgeable_receipts(state, driver_author_family=None):
     return out
 
 
+def round_governing_unjudgeable(state, round_id, driver_author_family=None):
+    """Per-round judgeability for the map governing *this round* — not the terminal predicate.
+
+    Own-submission wins: the last receipt whose ``round`` label equals ``round_id`` is judged when
+    present. Otherwise the round is judged on ``effective_seat_map(state)`` so the record never goes
+    silent while an earlier map still governs.
+
+    This is **not** ``unjudgeable_receipts``: that reader keeps the whole-history union so an
+    earlier bad map is never dropped from the run's disclosure (#714 NR-B)."""
+    round_label = str(round_id)
+    selected_map = None
+    selected_round_label = round_label
+    for entry in reversed(receipts(state)):
+        if str(entry.get("round", "")) == round_label:
+            selected_map = entry.get("map")
+            selected_round_label = str(entry.get("round", ""))
+            break
+    if selected_map is None:
+        selected_map = effective_seat_map(state)
+        selected_round_label = round_label
+    if not isinstance(selected_map, dict) or not selected_map:
+        return []
+    basis = seat_map.violation_basis(selected_map, driver_author_family)
+    if basis == seat_map.VIOLATION_BASIS_COMPLETE:
+        return []
+    return [{"round": selected_round_label, "basis": basis}]
+
+
 def skew_records(state):
     """Skew projection — per-receipt skew degradations, deduped by ``_skew_record_identity``."""
     seen: set[tuple] = set()
