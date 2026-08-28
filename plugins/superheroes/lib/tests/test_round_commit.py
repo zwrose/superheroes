@@ -623,3 +623,140 @@ def test_r6_stage_oserror_becomes_commit_staging_failed(tmp_path, monkeypatch):
     result = RC.recover(sd)
     assert "c" * 32 in result["discarded"]
     assert not os.path.exists(os.path.join(sd, "one.txt"))
+
+
+# --- targetKind sidecar recovery (#1196 WO-A) -------------------------------------------------
+
+def test_target_kind_sidecar_round_trips_intent_and_resolves_on_recovery(tmp_path):
+  sd = _session(tmp_path)
+  target = str(tmp_path / "records.json")
+
+  def _resolve():
+      return target
+
+  c = RC.begin(sd, "kind-sidecar", commit_id="1" * 32, stop_at="sealed")
+  c.add_external_sidecar(b'{"round":1}', _resolve, target_kind=RC.SIDECAR_KIND_ROUND_RECORDS)
+  with pytest.raises(RC.StopPoint):
+      c.run()
+  intent_path = os.path.join(RC.commits_root(sd), "1" * 32, "intent.json")
+  intent = json.loads(open(intent_path, encoding="utf-8").read())
+  assert intent["parts"][0]["targetKind"] == RC.SIDECAR_KIND_ROUND_RECORDS
+
+  def _resolver_for(part_spec):
+      if part_spec.get("targetKind") == RC.SIDECAR_KIND_ROUND_RECORDS:
+          return _resolve
+      return None
+
+  RC.recover(sd, sidecar_resolver_for=_resolver_for)
+  assert open(target, "rb").read() == b'{"round":1}'
+
+
+def test_target_kind_sidecar_refuses_without_sidecar_resolver_for(tmp_path):
+  sd = _session(tmp_path)
+  fallback = str(tmp_path / "fallback.json")
+
+  def _resolve():
+      return fallback
+
+  c = RC.begin(sd, "kind-refuse-none", commit_id="2" * 32, stop_at="sealed")
+  c.add_external_sidecar(b"data", _resolve, target_kind="review-receipt")
+  with pytest.raises(RC.StopPoint):
+      c.run()
+  with pytest.raises(RC.CommitRefused) as exc:
+      RC.recover(sd, sidecar_target=lambda: fallback)
+  assert exc.value.reason == "sidecar-target-unresolvable"
+  assert not os.path.exists(fallback)
+
+
+def test_target_kind_sidecar_refuses_when_resolver_returns_none(tmp_path):
+  sd = _session(tmp_path)
+  target = str(tmp_path / "records.json")
+
+  c = RC.begin(sd, "kind-refuse-null", commit_id="3" * 32, stop_at="sealed")
+  c.add_external_sidecar(b"data", lambda: target, target_kind=RC.SIDECAR_KIND_ROUND_RECORDS)
+  with pytest.raises(RC.StopPoint):
+      c.run()
+
+  def _resolver_for(part_spec):
+      if part_spec.get("targetKind") == RC.SIDECAR_KIND_ROUND_RECORDS:
+          return None
+      return lambda: target
+
+  with pytest.raises(RC.CommitRefused) as exc:
+      RC.recover(sd, sidecar_resolver_for=_resolver_for)
+  assert exc.value.reason == "sidecar-target-unresolvable"
+  assert not os.path.exists(target)
+
+
+def test_legacy_sidecar_explicit_target_wins_over_resolver_for(tmp_path):
+  sd = _session(tmp_path)
+  explicit = str(tmp_path / "explicit.json")
+  dispatcher = str(tmp_path / "dispatcher.json")
+
+  def _explicit():
+      return explicit
+
+  def _dispatcher():
+      return dispatcher
+
+  c = RC.begin(sd, "legacy-precedence", commit_id="6" * 32, stop_at="sealed")
+  c.add_external_sidecar(b'{"explicit":true}', _dispatcher)
+  with pytest.raises(RC.StopPoint):
+      c.run()
+
+  def _resolver_for(part_spec):
+      if part_spec.get("targetKind") is None:
+          return _dispatcher
+      return None
+
+  RC.recover(sd, sidecar_target=_explicit, sidecar_resolver_for=_resolver_for)
+  assert open(explicit, "rb").read() == b'{"explicit":true}'
+  assert not os.path.exists(dispatcher)
+
+
+def test_sidecar_without_target_kind_recovers_via_sidecar_target(tmp_path):
+  sd = _session(tmp_path)
+  sidecar = str(tmp_path / "legacy.json")
+
+  def _resolve():
+      return sidecar
+
+  c = RC.begin(sd, "legacy-sidecar", commit_id="4" * 32, stop_at="sealed")
+  c.add_external_sidecar(b'{"legacy":true}', _resolve)
+  with pytest.raises(RC.StopPoint):
+      c.run()
+  intent_path = os.path.join(RC.commits_root(sd), "4" * 32, "intent.json")
+  intent = json.loads(open(intent_path, encoding="utf-8").read())
+  assert "targetKind" not in intent["parts"][0]
+  RC.recover(sd, sidecar_target=_resolve)
+  assert open(sidecar, "rb").read() == b'{"legacy":true}'
+
+
+def test_two_target_kind_sidecars_land_on_distinct_targets(tmp_path):
+  sd = _session(tmp_path)
+  records = str(tmp_path / "records.json")
+  receipt = str(tmp_path / "receipt.json")
+
+  def _records():
+      return records
+
+  def _receipt():
+      return receipt
+
+  c = RC.begin(sd, "dual-sidecar", commit_id="5" * 32, stop_at="sealed")
+  c.add_external_sidecar(b'{"kind":"records"}', _records, target_kind=RC.SIDECAR_KIND_ROUND_RECORDS)
+  c.add_external_sidecar(b'{"kind":"receipt"}', _receipt, target_kind="review-receipt")
+  with pytest.raises(RC.StopPoint):
+      c.run()
+
+  def _resolver_for(part_spec):
+      kind = part_spec.get("targetKind")
+      if kind == RC.SIDECAR_KIND_ROUND_RECORDS:
+          return _records
+      if kind == "review-receipt":
+          return _receipt
+      return None
+
+  RC.recover(sd, sidecar_resolver_for=_resolver_for)
+  assert open(records, "rb").read() == b'{"kind":"records"}'
+  assert open(receipt, "rb").read() == b'{"kind":"receipt"}'

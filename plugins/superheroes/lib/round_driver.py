@@ -1373,44 +1373,43 @@ def _restore_round_disclosures(state, records):
             state["rounds"].pop(key, None)
 
 
-def _persist_round_records(state, config):
-    """Keep the durable round-records file equal to the in-memory ledger, disclosures included.
+def _seed_findings_before_record_park(state):
+    # A park between the panel fold and synthesis leaves compiled findings in _toVerify
+    # only; without this copy build_receipt would under-report what the round gathered.
+    if not state.get("findings") and state.get("_toVerify"):
+        state["findings"] = state["_toVerify"]
 
-    Runs after every folded phase in `run_loop` when `recordsPath` is set. A run that could not
-    refresh or persist its disclosures must park `cannot-certify` — the degraded line in a
-    terminal receipt lives only in the current run, while the stale file is the only thing a later
-    `_seed_resume` reads, so certifying after a failed persist would recreate the quiet-evidence-loss
-    class #720 closes."""
+
+def _round_records_payload(state, config):
+    """The ONE producer of the outgoing round-records list (#1196 WO-B).
+
+    Returns a tagged outcome: ``nothing`` (no path, persist disabled, corrupt resume, or empty
+    outgoing), ``park`` (detail string — park receipts are verbatim), or ``ready`` (path + full
+    records list for ``records_bytes`` / ``persist_record``)."""
     path = config.get("recordsPath")
     if not path:
-        return
+        return {"outcome": "nothing"}
     if not config.get("persistRecords"):
-        return
+        return {"outcome": "nothing"}
     if state.get("_resumeCorrupt"):
-        return
-
-    def _seed_findings_before_park():
-        # A park between the panel fold and synthesis leaves compiled findings in _toVerify
-        # only; without this copy build_receipt would under-report what the round gathered.
-        if not state.get("findings") and state.get("_toVerify"):
-            state["findings"] = state["_toVerify"]
+        return {"outcome": "nothing"}
 
     try:
         loaded = review_memory.load_records_state(path, _panel_dimensions(config))
     except (AttributeError, TypeError) as exc:
-        _seed_findings_before_park()
-        _park_cannot_certify(
-            state,
-            "durable round records at %s could not be refreshed (%s) — cannot certify"
-            % (path, exc))
-        return
+        _seed_findings_before_record_park(state)
+        return {
+            "outcome": "park",
+            "detail": "durable round records at %s could not be refreshed (%s) — cannot certify"
+                      % (path, exc),
+        }
     if not loaded.get("ok"):
-        _seed_findings_before_park()
-        _park_cannot_certify(
-            state,
-            "durable round records at %s (%s) could not be refreshed — cannot certify"
-            % (path, loaded.get("state") or loaded.get("reason") or "unreadable"))
-        return
+        _seed_findings_before_record_park(state)
+        return {
+            "outcome": "park",
+            "detail": "durable round records at %s (%s) could not be refreshed — cannot certify"
+                      % (path, loaded.get("state") or loaded.get("reason") or "unreadable"),
+        }
     ledger = state.get("_records") or []
     ledger_rounds = {r.get("round") for r in ledger if isinstance(r, dict)}
     kept = [r for r in (loaded.get("records") or [])
@@ -1429,20 +1428,42 @@ def _persist_round_records(state, config):
         outgoing.append(durable)
     outgoing.sort(key=lambda r: r.get("round") if isinstance(r.get("round"), int) else 0)
     if not outgoing:
+        return {"outcome": "nothing"}
+    # Mirror ``persist_record``'s single merge so CLI-path bytes and library-path bytes agree.
+    record = outgoing[-1]
+    outgoing = [r for r in outgoing[:-1] if r.get("round") != record.get("round")]
+    outgoing.append(record)
+    outgoing.sort(key=lambda r: r.get("round") if isinstance(r.get("round"), int) else 0)
+    return {"outcome": "ready", "path": path, "records": outgoing}
+
+
+def _persist_round_records(state, config):
+    """Keep the durable round-records file equal to the in-memory ledger, disclosures included.
+
+    Runs after every folded phase in `run_loop` when `recordsPath` is set. A run that could not
+    refresh or persist its disclosures must park `cannot-certify` — the degraded line in a
+    terminal receipt lives only in the current run, while the stale file is the only thing a later
+    `_seed_resume` reads, so certifying after a failed persist would recreate the quiet-evidence-loss
+    class #720 closes."""
+    payload = _round_records_payload(state, config)
+    if payload["outcome"] == "nothing":
         return
-    records_arg = outgoing[:-1]
-    last = outgoing[-1]
+    if payload["outcome"] == "park":
+        _park_cannot_certify(state, payload["detail"])
+        return
+    path = payload["path"]
+    records = payload["records"]
     try:
-        result = review_memory.persist_record(path, records_arg, last)
+        result = review_memory.persist_record(path, records[:-1], records[-1])
     except OSError as exc:
-        _seed_findings_before_park()
+        _seed_findings_before_record_park(state)
         _park_cannot_certify(
             state,
             "durable round records at %s could not be persisted (%s)"
             % (path, exc))
         return
     if not result.get("ok"):
-        _seed_findings_before_park()
+        _seed_findings_before_record_park(state)
         _park_cannot_certify(
             state,
             "durable round records at %s could not be persisted (%s)"
@@ -4393,9 +4414,7 @@ def cmd_next(session_dir, config_overrides=None):
     record layer refuse `bootstrap-required` per seat later."""
     try:
         with round_records.session_lock(session_dir):
-            sidecar_target = _sidecar_target_for_recover(session_dir)
-            refusal = _commit_recover_or_refuse(session_dir, "next",
-                                                sidecar_target=sidecar_target)
+            refusal = _commit_recover_or_refuse(session_dir, "next")
             if refusal is not None:
                 return refusal
             return _cmd_next_locked(session_dir, config_overrides)
@@ -4424,8 +4443,31 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                           "attempt": None, "outcome": "refused-round-ceiling",
                                           "reason": refusal.reason})
             return {"ok": False, "reason": refusal.reason, "value": refusal.value}
+        if state.get("_resumeCorrupt"):
+            _park_cannot_certify(state, state["_resumeCorrupt"])
+            pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
+                       "attempt": 0,
+                       "payload": {"verdict": state["terminal"],
+                                   "certification": state.get("certification")}}
+            state["pending"] = pending
+            save_state(session_dir, state)
+            _journal_append(session_dir, {"cmd": "next", "phase": P_TERMINAL,
+                                          "round": state["round"], "attempt": 0,
+                                          "outcome": "resume-corrupt-park"})
+            fail = _terminal_receipt_gate(session_dir, state)
+            if fail:
+                return _receipt_fault_response(fail)
+            return _next_response(pending, state_hash(state))
     else:
         state = loaded
+        if config_overrides and config_overrides.get("recordsPath") is not None:
+            loaded_path = (loaded.get("config") or {}).get("recordsPath")
+            override_path = config_overrides.get("recordsPath")
+            if override_path != loaded_path:
+                _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
+                                              "attempt": None,
+                                              "outcome": "refused-records-path-not-fresh"})
+                return {"ok": False, "reason": "records-path-not-fresh-state"}
         if _ceiling_blocks_loaded(state, state["config"]):
             pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
                        "attempt": 0,
@@ -4497,6 +4539,20 @@ def _receipt_fault_response(detail):
     return {"ok": False, "reason": "receipt-fault", "detail": detail}
 
 
+def _records_path_is_reserved(session_dir, records_path):
+    """Return True when records_path lies inside the session directory."""
+    if not records_path:
+        return False
+    resolved = os.path.realpath(os.path.abspath(records_path))
+    session_real = os.path.realpath(os.path.abspath(session_dir))
+    if resolved == session_real:
+        return True
+    try:
+        return os.path.commonpath([resolved, session_real]) == session_real
+    except ValueError:
+        return False
+
+
 def _refuse_base_guard(session_dir, reason, detail=None, value=None):
     """#648: a base-guard refusal — journalled first (so the refusal is durable evidence, not just a
     console line), then surfaced on stdout, nonzero. Journal-first matters: when the journal AND its
@@ -4566,9 +4622,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
     evidence."""
     try:
         with round_records.session_lock(session_dir):
-            sidecar_target = _sidecar_target_for_recover(session_dir)
-            refusal = _commit_recover_or_refuse(session_dir, "submit",
-                                                sidecar_target=sidecar_target)
+            refusal = _commit_recover_or_refuse(session_dir, "submit")
             if refusal is not None:
                 return refusal
             prep = _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact,
@@ -4588,6 +4642,14 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 state["_advanceUsed"] = True
             state["lastAccepted"] = {"phase": phase, "attempt": attempt, "round": round_no,
                                      "artifactHash": art_hash}
+            records_payload = _round_records_payload(state, state["config"])
+            if records_payload["outcome"] == "park":
+                _park_cannot_certify(state, records_payload["detail"])
+            round_records_sidecar = None
+            if records_payload["outcome"] == "ready":
+                rr_path = records_payload["path"]
+                rr_bytes = review_memory.records_bytes(records_payload["records"])
+                round_records_sidecar = (rr_path, rr_bytes)
             journal_entry = _journal_entry_for_commit(session_dir, "submit", "accepted",
                                                       phase=phase, round=round_no, attempt=attempt)
             orphan_journal = None
@@ -4607,6 +4669,10 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 c = round_commit.begin(session_dir, "submit-accept")
                 c.add_replace_file(os.path.join(session_dir, STATE_FILE),
                                    _canonical(state).encode("utf-8"))
+                if round_records_sidecar is not None:
+                    rr_path, rr_bytes = round_records_sidecar
+                    c.add_external_sidecar(rr_bytes, lambda p=rr_path: p,
+                                           target_kind=round_commit.SIDECAR_KIND_ROUND_RECORDS)
                 # axis: ATOMICITY with the fold — that the record cannot land without the state
                 # advance, or the advance without the record. Asserting the record merely exists
                 # after a successful fold would pass against a second, separate commit.
@@ -5026,13 +5092,41 @@ def _lock_held_refusal(session_dir, cmd, held):
                        holder={"pid": held.pid, "createdAt": held.created_at})
 
 
-def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None):
+def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_resolver_for=None):
+    if sidecar_resolver_for is None:
+        sidecar_resolver_for = _sidecar_resolver_for_recover_dispatch(session_dir)
+    if sidecar_target is None:
+        sidecar_target = _sidecar_target_for_recover(session_dir)
     try:
-        round_commit.recover(session_dir, sidecar_target=sidecar_target)
+        round_commit.recover(session_dir, sidecar_target=sidecar_target,
+                             sidecar_resolver_for=sidecar_resolver_for)
     except round_commit.CommitRefused as exc:
         return _refuse_cmd(session_dir, cmd, "commit-recovery-failed", fault=FAULT_INTERNAL,
                            detail="%s: %s" % (exc.reason, exc.detail))
     return None
+
+
+def _sidecar_resolver_for_recover_dispatch(session_dir):
+    """Dispatch ``recover`` sidecar replay by ``targetKind``: round-records paths resolve lazily
+    from persisted session config; legacy parts without a kind use the review-receipt resolver;
+    any other kind refuses."""
+    receipt_resolver = _sidecar_target_for_recover(session_dir)
+
+    def dispatch(part_spec):
+        kind = part_spec.get("targetKind")
+        if kind == round_commit.SIDECAR_KIND_ROUND_RECORDS:
+            def resolve():
+                ok, loaded = load_state(session_dir)
+                if not ok or loaded is None:
+                    return None
+                path = (loaded.get("config") or {}).get("recordsPath")
+                return path if path else None
+            return resolve
+        if kind is None:
+            return receipt_resolver
+        return None
+
+    return dispatch
 
 
 def _sidecar_target_for_recover(session_dir, state=None, git=None):
@@ -6541,9 +6635,7 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
     superseded by it."""
     try:
         with round_records.session_lock(session_dir):
-            sidecar_target = _sidecar_target_for_recover(session_dir)
-            refusal = _commit_recover_or_refuse(session_dir, "record-result",
-                                                sidecar_target=sidecar_target)
+            refusal = _commit_recover_or_refuse(session_dir, "record-result")
             if refusal is not None:
                 return refusal
             return _cmd_record_result_locked(session_dir, seat=seat, attempt=attempt,
@@ -6853,9 +6945,7 @@ def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, o
     of two audit targets sharing an id can be recorded missing WITHOUT claiming its twin is."""
     try:
         with round_records.session_lock(session_dir):
-            sidecar_target = _sidecar_target_for_recover(session_dir)
-            refusal = _commit_recover_or_refuse(session_dir, "record-missing",
-                                                sidecar_target=sidecar_target)
+            refusal = _commit_recover_or_refuse(session_dir, "record-missing")
             if refusal is not None:
                 return refusal
             return _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path,
@@ -6971,9 +7061,9 @@ def cmd_advance(session_dir, break_lock=False, git=None, owner_artifact_path=Non
         _journal_event(session_dir, "advance", "lock-broken", fault=FAULT_CALLER, holder=broke)
     try:
         with round_records.session_lock(session_dir):
-            sidecar_target = _sidecar_target_for_recover(session_dir, git=git)
-            refusal = _commit_recover_or_refuse(session_dir, "advance",
-                                                sidecar_target=sidecar_target)
+            refusal = _commit_recover_or_refuse(
+                session_dir, "advance",
+                sidecar_target=_sidecar_target_for_recover(session_dir, git=git))
             if refusal is not None:
                 return refusal
             state, refusal = _load_driver_state(session_dir, "advance")
@@ -8031,9 +8121,9 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
         return _refuse_cmd(session_dir, "attest", "attest-note-required")
     try:
         with round_records.session_lock(session_dir):
-            sidecar_target = _sidecar_target_for_recover(session_dir, git=git)
-            refusal = _commit_recover_or_refuse(session_dir, "attest",
-                                                sidecar_target=sidecar_target)
+            refusal = _commit_recover_or_refuse(
+                session_dir, "attest",
+                sidecar_target=_sidecar_target_for_recover(session_dir, git=git))
             if refusal is not None:
                 return refusal
             state, refusal = _load_driver_state(session_dir, "attest")
@@ -8262,6 +8352,8 @@ def build_parser():
                                    "config/state so round 1 has a vendor source. Unparseable / "
                                    "non-object / on non-fresh state → fails loud (nonzero), never "
                                    "a silent default")
+    cli_contract.add_argument(pn, "--records-path", contract="free-text", default=None,
+                              help="durable round-records file path (fresh state only)")
 
     ps = sub.add_parser("submit")
     cli_contract.add_argument(ps, "--session-dir", contract="existing-directory", required=True)
@@ -8460,6 +8552,20 @@ def _dispatch(args):
                         overrides["priorComments"] = loaded
             except (OSError, ValueError):
                 pass
+        if args.records_path is not None:
+            if _records_path_is_reserved(args.session_dir, args.records_path):
+                sys.stdout.write(json.dumps({"ok": False, "reason": "records-path-reserved",
+                                             "value": args.records_path}) + "\n")
+                return 1
+            # Same fresh-state-only discipline as `--seat-map`: recordsPath is read ONCE at
+            # new_state via `_seed_resume`; a later `next` on existing state would silently ignore
+            # it (#1196).
+            st_ok, st = load_state(args.session_dir)
+            if not (st_ok and st is None):
+                sys.stdout.write(json.dumps({"ok": False, "reason": "records-path-not-fresh-state",
+                                             "value": args.records_path}) + "\n")
+                return 1
+            overrides["recordsPath"] = os.path.abspath(args.records_path)
         out = cmd_next(args.session_dir, overrides or None)
     elif args.cmd == "record-result":
         out = cmd_record_result(args.session_dir, args.seat, attempt=args.attempt,
