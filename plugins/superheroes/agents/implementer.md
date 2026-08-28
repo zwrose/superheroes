@@ -213,7 +213,7 @@ order is the likeliest defect source, so catching one early is high-value.
    bite-proof it expects: the guarded element, the neutralization to apply, and the detector
    expected to go red, and **declare the guarded-element set** — an explicit enumeration of every
    independently neutralizable element the detector claims to guard, never an aggregate label and
-   never the empty set (`rubric/bite-proof.md`). If it does not name a bite-proof, **flag the gap**
+   never the empty set. If it does not name a bite-proof, **flag the gap**
    — and an order that names a bite-proof but **declares no element set**, or declares an empty set
    or aggregate label, is a **gap to flag** the same way — and still produce the proof, per the
    **Short structured return rule above** (`rubric/bite-proof.md`
