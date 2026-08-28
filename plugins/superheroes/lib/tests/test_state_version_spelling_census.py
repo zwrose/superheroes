@@ -79,6 +79,9 @@ _SPELLING_ALLOWLIST = {
     ("mode_registry.py", "SCHEMA_VERSION = 1"): {
         "reason": "mode-registry meta schema, not the driver state/receipt version",
     },
+    ("mode_registry.py", "ver < 1"): {
+        "reason": "mode-registry meta schemaVersion shape check, not the driver state/receipt version",
+    },
     ("panel_tally.py", "SCHEMA_VERSION = 1"): {
         "reason": "panel-tally verdict schema, not the driver state/receipt version",
     },
@@ -212,11 +215,43 @@ def _is_version_accessor_call(node):
     return False
 
 
-def _is_schema_version_read(node):
-    # Comparison leg (narrowed): a schema-version read counts only when it appears
-    # syntactically inside the comparison operand. A read bound to a local first
-    # (e.g. version = state.get("schemaVersion") then version == 99) is NOT
-    # reported — closing that gap needs alias resolution, deliberately not built.
+def _walk_skip_nested_functions(node):
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        yield child
+        yield from _walk_skip_nested_functions(child)
+
+
+def _all_scopes(tree):
+    scopes = [tree]
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            scopes.append(node)
+    return scopes
+
+
+def _schema_version_aliases_in_scope(scope):
+    aliases = set()
+    for node in _walk_skip_nested_functions(scope):
+        if isinstance(node, ast.Assign) and _is_schema_version_read(node.value):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    aliases.add(target.id)
+    return aliases
+
+
+def _compares_in_scope(scope):
+    compares = []
+    for node in _walk_skip_nested_functions(scope):
+        if isinstance(node, ast.Compare):
+            compares.append(node)
+    return compares
+
+
+def _is_schema_version_read(node, aliases=None):
+    if aliases and isinstance(node, ast.Name) and node.id in aliases:
+        return True
     if _is_version_accessor_call(node):
         return True
     if isinstance(node, ast.Subscript):
@@ -282,30 +317,28 @@ def _binding_segment(source, key_node, val_node):
 
 
 def _scan_comparisons(tree, source, relpath):
-    # Comparison leg: only operands that are syntactically a schema-version read
-    # (see _is_schema_version_read); aliased locals are out of scope.
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Compare):
-            continue
-        operands = [node.left] + list(node.comparators)
-        for i, opnd in enumerate(operands):
-            if not _is_schema_version_read(opnd):
-                continue
-            for j, other in enumerate(operands):
-                if i == j:
+    for scope in _all_scopes(tree):
+        aliases = _schema_version_aliases_in_scope(scope)
+        for node in _compares_in_scope(scope):
+            operands = [node.left] + list(node.comparators)
+            for i, opnd in enumerate(operands):
+                if not _is_schema_version_read(opnd, aliases):
                     continue
-                ints = _int_constants_from_container(other)
-                if ints is not None:
-                    yield Finding(
-                        relpath,
-                        node.lineno,
-                        _segment(source, node),
-                        "comparison",
-                    )
-                    break
-            else:
-                continue
-            break
+                for j, other in enumerate(operands):
+                    if i == j:
+                        continue
+                    ints = _int_constants_from_container(other)
+                    if ints is not None:
+                        yield Finding(
+                            relpath,
+                            node.lineno,
+                            _segment(source, node),
+                            "comparison",
+                        )
+                        break
+                else:
+                    continue
+                break
 
 
 def _scan_bindings(tree, source, relpath):
@@ -377,7 +410,11 @@ def _scan_constant_assignments(tree, source, relpath, pinned_begin, pinned_end):
             if _line_in_pinned_block(node.lineno, pinned_begin, pinned_end):
                 continue
             for target in node.targets:
-                if not isinstance(target, ast.Name) or target.id not in _PINNED_SYMBOLS:
+                if isinstance(target, ast.Name) and target.id in _PINNED_SYMBOLS:
+                    pass
+                elif isinstance(target, ast.Attribute) and target.attr in _PINNED_SYMBOLS:
+                    pass
+                else:
                     continue
                 yield Finding(
                     relpath,
@@ -389,7 +426,11 @@ def _scan_constant_assignments(tree, source, relpath, pinned_begin, pinned_end):
             if _line_in_pinned_block(node.lineno, pinned_begin, pinned_end):
                 continue
             target = node.target
-            if not isinstance(target, ast.Name) or target.id not in _PINNED_SYMBOLS:
+            if isinstance(target, ast.Name) and target.id in _PINNED_SYMBOLS:
+                pass
+            elif isinstance(target, ast.Attribute) and target.attr in _PINNED_SYMBOLS:
+                pass
+            else:
                 continue
             yield Finding(
                 relpath,
@@ -626,6 +667,35 @@ def test_synthetic_injection_comparison():
     findings = census_module(path, injected)
     hits = [f for f in findings if f.leg == "comparison"]
     assert hits, "expected comparison leg on injected schemaVersion == 99"
+
+
+def test_synthetic_injection_aliased_comparison():
+    path = os.path.join(_LIB, "build_lane.py")
+    source = (
+        "def check(state):\n"
+        "    version = state.get(\"schemaVersion\")\n"
+        "    return version == 99\n"
+    )
+    findings = census_module(path, source)
+    hits = [f for f in findings if f.leg == "comparison"]
+    assert hits, (
+        "expected comparison leg on aliased local (version = state.get then version == 99)"
+    )
+
+
+def test_synthetic_injection_constant_assignment_attribute():
+    path = os.path.join(_LIB, "round_state_io.py")
+    source = (
+        "import round_driver\n"
+        "def current_version():\n"
+        "    return round_driver.STATE_SCHEMA_VERSION\n"
+        "round_driver.STATE_SCHEMA_VERSION = 99\n"
+    )
+    findings = census_module(path, source)
+    hits = [f for f in findings if f.leg == "constant-assignment"]
+    assert hits, (
+        "expected constant-assignment leg on round_driver.STATE_SCHEMA_VERSION = 99"
+    )
 
 
 def test_synthetic_injection_constant_assignment_other_module():
