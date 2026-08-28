@@ -161,6 +161,71 @@ def test_e5_build_receipt_only_sanctioned_verify_passes_raw_read():
         "%s Found raw channel reads: %r" % (_INVARIANT_A, reads))
 
 
+# --- E8: build_receipt round-entry name never rebound ---
+
+_INVARIANT_E8 = (
+    "Inside build_receipt, the name rrec is bound exactly once, from the round-entry lookup "
+    "state[\"rounds\"][rkey]. It is never rebound to anything else."
+)
+
+
+def _is_state_rounds_rkey_subscript(node):
+    if not isinstance(node, ast.Subscript):
+        return False
+    if not isinstance(node.slice, ast.Name) or node.slice.id != "rkey":
+        return False
+    inner = node.value
+    if not isinstance(inner, ast.Subscript):
+        return False
+    if not isinstance(inner.value, ast.Name) or inner.value.id != "state":
+        return False
+    if not isinstance(inner.slice, ast.Constant) or inner.slice.value != "rounds":
+        return False
+    return True
+
+
+def _build_receipt_rrec_binding_sites():
+    source = open(
+        os.path.join(_LIB, "round_driver.py"), encoding="utf-8").read()
+    tree = ast.parse(source)
+    fn = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "build_receipt")
+    sites = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "rrec":
+                    sites.append(node)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == "rrec":
+                sites.append(node)
+        elif isinstance(node, ast.AugAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == "rrec":
+                sites.append(node)
+    return sites
+
+
+def _rrec_binding_initializer(site):
+    if isinstance(site, ast.Assign):
+        return site.value
+    if isinstance(site, ast.AnnAssign):
+        return site.value
+    return None
+
+
+def test_e8_build_receipt_round_entry_name_is_never_rebound():
+    """E8 — rrec in build_receipt is bound exactly once to state[\"rounds\"][rkey]."""
+    sites = _build_receipt_rrec_binding_sites()
+    msg = (
+        "%s A shadowed rrec makes every non-channel round-entry read return None silently on "
+        "the certification receipt." % _INVARIANT_E8
+    )
+    assert len(sites) == 1, msg + " Found %d rrec binding(s)." % len(sites)
+    value = _rrec_binding_initializer(sites[0])
+    assert value is not None and _is_state_rounds_rkey_subscript(value), msg
+
+
 # --- E6: helper-reached readers do not crash ---
 
 
