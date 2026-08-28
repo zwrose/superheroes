@@ -2984,7 +2984,22 @@ def test_producer_emits_the_whole_declared_channel_set(tmp_path):
     rec = next(r for r in on_disk if r.get("round") == 1)
     assert rec["disclosures"] == _ALL_CHANNELS
     state2 = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert RD._declared_disclosures(state2["rounds"]["1"]) == _ALL_CHANNELS
+    assert state2["rounds"]["1"] == _ALL_CHANNELS
+
+
+def test_producer_normalizes_non_int_round_key_like_the_restorer(tmp_path):
+    """A ledger record carrying round `1.0` must persist round 1's disclosures — the producer keys
+    the rounds map the way `_restore_round_disclosures` does (int-normalized), never `str(1.0)`."""
+    records = tmp_path / "round-records.json"
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    rec = _seed_record(1)
+    rec["round"] = 1.0
+    state["_records"] = [rec]
+    RD._persist_round_records(state, state["config"])
+    on_disk = json.loads(records.read_text())
+    out = next(r for r in on_disk if int(r.get("round")) == 1)
+    assert out.get("disclosures", {}).get("vacuousSeats") == ["test-reviewer"]
 
 
 def test_producer_carries_empty_canary_verified_but_omits_empty_channels(tmp_path):
@@ -3156,13 +3171,16 @@ def test_producer_empty_ledger_leaves_destination_unchanged(tmp_path):
     assert state.get("terminal") is None
 
 
-def test_producer_is_inert_without_a_records_path(tmp_path):
+def test_producer_is_inert_without_a_records_path(tmp_path, monkeypatch):
     state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
     state["_records"] = [_seed_record(1)]
     state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    persisted = []
+    monkeypatch.setattr(RD.review_memory, "persist_record",
+                        lambda *a, **k: persisted.append(a) or {"ok": True})
     RD._persist_round_records(state, state["config"])
     assert state.get("terminal") is None
-    assert not any(tmp_path.iterdir())
+    assert persisted == []
 
 
 def _two_round_disclosure_seams():

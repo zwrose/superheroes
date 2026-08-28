@@ -1375,7 +1375,13 @@ def _persist_round_records(state, config):
         if not isinstance(record, dict):
             continue
         durable = review_memory.summarize_record(record)
-        block = _declared_disclosures(state["rounds"].get(str(record.get("round"))) or {})
+        # Key spelling mirrors `_restore_round_disclosures`: int-normalized, non-int skipped —
+        # a `1.0` round must not silently persist no disclosures while the restorer keys "1".
+        try:
+            rkey = str(int(record.get("round")))
+        except (TypeError, ValueError):
+            rkey = None
+        block = _declared_disclosures(state["rounds"].get(rkey) or {}) if rkey else {}
         if block:
             durable[review_memory.DISCLOSURES_FIELD] = block
         outgoing.append(durable)
