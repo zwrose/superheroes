@@ -215,8 +215,7 @@ gate, round ceiling, stall guards `stall-choice-retired:<name>`,
 `stall-choice-not-offered:<name>`, `stall-choice-missing`, `stall-accept-risk-not-eligible`). The
 resolution is journalled under one of two owner-gate sources: the `policyApplied` record carries
 `source: "owner-supplied"` only when the folded artifact includes a well-formed `_provenance` object
-(`ruledBy` and `ruledAt` as non-empty strings, `records` a non-empty list of non-empty strings;
-unknown extra keys inside `_provenance` are tolerated); every other owner-gate fold carries
+(unknown extra keys inside `_provenance` are tolerated); every other owner-gate fold carries
 `source: "owner-unattributed"`. Calibration-resolved folds carry `source: "gate-policy"`. Every fold
 also journals `artifactSha256` naming the artifact folded, on the fold's own commit.
 
