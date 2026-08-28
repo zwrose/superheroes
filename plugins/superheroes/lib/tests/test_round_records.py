@@ -14,6 +14,7 @@ must-not-clobber of the SKILL-written meta.json, and the handback sidecar.
 import importlib.util
 import json
 import os
+import errno
 
 import pytest
 
@@ -609,6 +610,252 @@ def test_sweep_journals_roster_seats_before_stale_landing_refusals(tmp_path):
     assert stale[0]["reason"] == "stale-landing"
     assert out.index(roster_results[0]) < out.index(stale[0])
     assert os.path.exists(roster_results[0]["storePath"])
+
+
+def _dangling_symlink_inside_session(session_dir, path):
+    """Dead symlink target inside session_dir — inside edge 1's _guard_within boundary."""
+    target = os.path.join(session_dir, "no-such-in-session-target")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.lexists(path):
+        os.remove(path)
+    os.symlink(target, path)
+    assert os.path.lexists(path) and not os.path.exists(path)
+
+
+def _dangling_symlink_outside_session(session_dir, path):
+    """Dead symlink target outside session_dir — refuses at path-build time (edge 1)."""
+    outside = os.path.join(os.path.dirname(session_dir), "outside-no-such-target")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.lexists(path):
+        os.remove(path)
+    os.symlink(outside, path)
+    assert os.path.lexists(path) and not os.path.exists(path)
+
+
+def test_sweep_reports_dangling_roster_landing_symlink_as_landing_torn(tmp_path):
+    """T1 — site 1: a roster slot whose landing is a dangling symlink is swept, not skipped."""
+    sd = _session(tmp_path)
+    lpath = RR.landing_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    _dangling_symlink_inside_session(sd, lpath)
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    slot_results = [r for r in out if r.get("seatKey") == SEAT]
+    assert len(slot_results) == 1
+    assert slot_results[0]["ok"] is False
+    assert slot_results[0]["reason"] == "landing-torn"
+
+
+def test_sweep_reports_dangling_bare_payload_landing_symlink_as_landing_torn(tmp_path):
+    """site 1, bare arm: a roster slot whose BARE PAYLOAD landing is a dangling symlink is swept, not skipped."""
+    sd = _session(tmp_path)
+    bare = RR.bare_payload_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    _dangling_symlink_inside_session(sd, bare)
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    slot_results = [r for r in out if r.get("seatKey") == SEAT]
+    assert len(slot_results) == 1
+    assert slot_results[0]["ok"] is False
+    assert slot_results[0]["reason"] == "landing-torn"
+
+
+def test_ingest_refuses_dangling_symlink_store_entry(tmp_path):
+    """T2 — site 2: a store entry that is a dangling symlink refuses store-exists, never clobbers."""
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    spath = RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    _dangling_symlink_inside_session(sd, spath)
+    out = _ingest(sd)
+    assert out["ok"] is False
+    assert out["reason"] == "store-exists"
+    assert os.path.islink(spath)
+    assert os.path.lexists(spath)
+
+
+def test_sweep_reports_dangling_stray_landing_symlink_as_stale_landing(tmp_path):
+    """T3 — site 4: a stray landing that is a dangling symlink matches real-stray vocabulary."""
+    sd = _session(tmp_path)
+    stray = RR.landing_path(sd, 1, PHASE, "stray-seat", 1)
+    _dangling_symlink_inside_session(sd, stray)
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    stale = [r for r in out if r.get("reason") == "stale-landing"]
+    sd_real = _session(tmp_path, name="session-real-stray")
+    real_stray = RR.landing_path(sd_real, 1, PHASE, "stray-seat", 1)
+    RR.atomic_write_json(real_stray, _env(seat="stray-seat"))
+    real_out = RR.sweep_landing(sd_real, 1, PHASE, current_attempt=1, roster=ROSTER)
+    real_stale = [r for r in real_out if r.get("reason") == "stale-landing"]
+    assert len(stale) == 1
+    assert stale[0]["ok"] is False
+    assert stale[0]["reason"] == "stale-landing"
+    assert stale[0]["storageKey"] == "stray-seat"
+    assert os.path.basename(stray) in stale[0]["landingPaths"]
+    assert set(stale[0].keys()) == set(real_stale[0].keys())
+
+
+def test_sweep_skips_real_directory_named_like_landing_file(tmp_path):
+    """T3b — site 4: a real directory named like a landing file is still skipped silently."""
+    sd = _session(tmp_path)
+    skey = "stray-seat"
+    ldir = RR.landing_dir(sd, 1, PHASE)
+    os.makedirs(ldir, exist_ok=True)
+    os.mkdir(os.path.join(ldir, "%s.a1.json" % skey))
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    stale = [r for r in out if r.get("reason") == "stale-landing"]
+    assert stale == []
+
+
+def test_sweep_already_stored_when_store_file_is_unparseable_not_a_symlink(tmp_path):
+    """T4 — site 3: readability is not the discriminator; a resolving store file is already-stored."""
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    spath = RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    os.makedirs(os.path.dirname(spath), exist_ok=True)
+    bad_bytes = b"{not valid json"
+    with open(spath, "wb") as fh:
+        fh.write(bad_bytes)
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    slot_results = [r for r in out if r.get("seatKey") == SEAT]
+    assert len(slot_results) == 1
+    assert slot_results[0]["ok"] is True
+    assert slot_results[0]["reason"] == "already-stored"
+    with open(spath, "rb") as fh:
+        assert fh.read() == bad_bytes
+
+
+def test_sweep_refuses_dangling_symlink_store_entry_not_already_stored(tmp_path):
+    """T4b — site 3: a dangling store entry refuses store-exists, never a false already-stored."""
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    spath = RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    _dangling_symlink_inside_session(sd, spath)
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    slot_results = [r for r in out if r.get("seatKey") == SEAT]
+    assert len(slot_results) == 1
+    assert slot_results[0]["ok"] is False
+    assert slot_results[0]["reason"] == "store-exists"
+    assert spath in slot_results[0]["message"]
+    assert not any(r.get("reason") == "already-stored" for r in slot_results)
+
+
+def test_sweep_refuses_out_of_session_dangling_landing_symlink_at_path_build(tmp_path):
+    """T5 — edge 1: out-of-session dangling landing refuses bad-argument from sweep_landing."""
+    sd = _session(tmp_path)
+    lpath = RR.landing_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    _dangling_symlink_outside_session(sd, lpath)
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    assert [r.get("reason") for r in out] == ["bad-argument"]
+    assert out[0]["seatKey"] == SEAT and out[0]["ok"] is False
+
+
+def test_sweep_refuses_out_of_session_dangling_bare_payload_symlink_at_path_build(tmp_path):
+    """T5b — edge 1, bare arm: out-of-session dangling bare payload refuses bad-argument."""
+    sd = _session(tmp_path)
+    bare = RR.bare_payload_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    _dangling_symlink_outside_session(sd, bare)
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    assert [r.get("reason") for r in out] == ["bad-argument"]
+    assert out[0]["seatKey"] == SEAT and out[0]["ok"] is False
+
+
+def test_probe_store_entry_outcomes(tmp_path, monkeypatch):
+    """_probe_store_entry: present, absent (ENOENT), and indeterminate (other errno)."""
+    present_path = tmp_path / "present.json"
+    present_path.write_text("{}", encoding="utf-8")
+    absent_path = tmp_path / "missing.json"
+    indeterminate_path = tmp_path / "blocked.json"
+
+    present, refusal = RR._probe_store_entry(str(present_path))
+    assert present is True and refusal is None
+
+    present, refusal = RR._probe_store_entry(str(absent_path))
+    assert present is False and refusal is None
+
+    real_lstat = os.lstat
+
+    def deny_lstat(path):
+        if path == str(indeterminate_path):
+            raise OSError(errno.EACCES, "permission denied")
+        return real_lstat(path)
+
+    monkeypatch.setattr(RR.os, "lstat", deny_lstat)
+    present, refusal = RR._probe_store_entry(str(indeterminate_path))
+    assert present is None
+    assert refusal["ok"] is False
+    assert refusal["reason"] == "store-exists"
+    assert "indeterminate" in refusal["message"]
+
+
+def test_ingest_refuses_indeterminate_store_probe(tmp_path, monkeypatch):
+    """Indeterminate store probe refuses store-exists rather than clobbering."""
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    spath = RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    real_lstat = RR.os.lstat
+
+    def deny_store_lstat(path):
+        if path == spath:
+            raise OSError(errno.EACCES, "permission denied")
+        return real_lstat(path)
+
+    monkeypatch.setattr(RR.os, "lstat", deny_store_lstat)
+    out = _ingest(sd)
+    assert out["ok"] is False
+    assert out["reason"] == "store-exists"
+    assert "indeterminate" in out["message"]
+
+
+def test_sweep_refuses_indeterminate_store_probe(tmp_path, monkeypatch):
+    """Sweep decorates an indeterminate store probe and never reports already-stored."""
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    spath = RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    real_lstat = RR.os.lstat
+
+    def deny_store_lstat(path):
+        if path == spath:
+            raise OSError(errno.EACCES, "permission denied")
+        return real_lstat(path)
+
+    monkeypatch.setattr(RR.os, "lstat", deny_store_lstat)
+    out = RR.sweep_landing(sd, 1, PHASE, current_attempt=1, roster=ROSTER)
+    slot_results = [r for r in out if r.get("seatKey") == SEAT]
+    assert len(slot_results) == 1
+    assert slot_results[0]["ok"] is False
+    assert slot_results[0]["reason"] == "store-exists"
+    assert "indeterminate" in slot_results[0]["message"]
+    assert not any(r.get("reason") == "already-stored" for r in out)
+
+
+def test_ingest_refuses_enotdir_store_directory_ancestor(tmp_path):
+    """ENOTDIR on the store path refuses store-exists rather than treating the entry as absent."""
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    spath = RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    store_parent = os.path.dirname(spath)
+    os.makedirs(os.path.dirname(store_parent), exist_ok=True)
+    with open(store_parent, "w", encoding="utf-8") as fh:
+        fh.write("not a directory")
+    out = _ingest(sd)
+    assert out["ok"] is False
+    assert out["reason"] == "store-exists"
+    assert "indeterminate" in out["message"]
+    with open(store_parent, encoding="utf-8") as fh:
+        assert fh.read() == "not a directory"
+
+
+def test_ingest_refuses_out_of_session_dangling_store_symlink_at_path_build(tmp_path):
+    """T6 — edge 1: out-of-session dangling store entry refuses invalid-path from ingest_landing."""
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    spath = RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    _dangling_symlink_outside_session(sd, spath)
+    out = _ingest(sd)
+    assert out["reason"] == "invalid-path"
+
+
+def test_round_records_presence_checks_use_entry_not_target():
+    """T7 — census: exists/isfile follow the symlink target; presence here is about the entry."""
+    with open(RR.__file__, encoding="utf-8") as fh:
+        src = fh.read()
+    assert "os.path.isfile(" not in src
+    assert "os.path.exists(" not in src
 
 
 def test_ingest_unknown_seat_unchanged_for_addressed_off_roster_seat(tmp_path):
