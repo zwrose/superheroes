@@ -2884,6 +2884,7 @@ _ALL_CHANNELS = {
     }],
     "verifyPasses": [{"CONFIRMED": 1, "PLAUSIBLE": 0, "REFUTED": 0, "drops": 0,
                       "downgrades": 0, "unverified": 0, "ambiguous": 0}],
+    "seatMapUnjudgeable": [_load("seat_map").VIOLATION_BASIS_NO_AUTHOR_FAMILY],
 }
 
 
@@ -2933,7 +2934,9 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
                      "engaged-artifact-seat (round 1): seat(s) premortem-reviewer",
                      "canary-unverified (round 1): cross-vendor seat(s) code-reviewer",
                      "engaged probe recorded for vendor(s) codex",
-                     "canary-failed (round 1): the control probe showed no engagement"):
+                     "canary-failed (round 1): the control probe showed no engagement",
+                     "seat-map-unjudgeable (round 1): a seat map was submitted and is readable, "
+                     "but its violation basis is incomplete (no-author-family)"):
         assert marker in prose, marker
     assert (
         "record-orphans-ignored (round 1): hand submit folded with durable seat record(s) "
@@ -4154,12 +4157,13 @@ def test_seat_map_unproven_liveness_shape_driver():
 def test_certification_shape_drivers_lists_every_fired_channel():
     seat_map = _seat_map_receipt_with_unexcused_maker_family()
     seat_map = dict(seat_map)
+    # same-family and unexcused maker-family on one seat are mutually exclusive in projections.
     seat_map["degradations"] = list(seat_map.get("degradations") or []) + [{
         "constraint": "same-family",
-        "seat": "code-reviewer",
+        "seat": "security-reviewer",
         "reason": "test",
     }]
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"], fixerVendor="codex")
     cfg["baseDegraded"] = True
     state = RD.new_state(cfg)
     state["independenceDegraded"] = True
@@ -4169,6 +4173,28 @@ def test_certification_shape_drivers_lists_every_fired_channel():
     assert drivers == ["base", "independence", "same-family", "seat-map-violation"]
     assert state["certification"]["shape"].endswith("-constraint-violated")
     assert state["certification"]["shape"].count("-degraded") == 0
+
+
+def test_same_family_seats_suppresses_when_maker_family_on_same_seat():
+    """Pin: same-family projection drops seats with unexcused maker-family on that seat (#1190)."""
+    SMR = _load("seat_map_receipts")
+    base = _seat_map_receipt_with_unexcused_maker_family()
+    collided = dict(base)
+    collided["degradations"] = [{
+        "constraint": "same-family",
+        "seat": "code-reviewer",
+        "reason": "test",
+    }]
+    state_collided = {"seatMapReceipts": _seat_map_receipts(collided)}
+    assert "code-reviewer" not in SMR.same_family_seats(state_collided)
+    separated = dict(base)
+    separated["degradations"] = [{
+        "constraint": "same-family",
+        "seat": "security-reviewer",
+        "reason": "test",
+    }]
+    state_separated = {"seatMapReceipts": _seat_map_receipts(separated)}
+    assert "security-reviewer" in SMR.same_family_seats(state_separated)
 
 
 def _write_meta_json(session_dir, payload):
@@ -4809,25 +4835,29 @@ def _verified_clean_seat_map(vendors):
 
 
 def _assertable_seat_map(vendors, fixer_vendor="claude"):
-    """Receipt-shaped seat map — ``derived_violations`` empty at construction (#1190)."""
+    """Receipt-shaped seat map — ``unexcused_violations`` empty at construction (#1190)."""
     SM = _load("seat_map")
     live = sorted({v for v in (vendors or []) if isinstance(v, str) and v})
     if not live:
         live = ["claude"]
     driver_author_family = model_registry.family_for("code-fixer", fixer_vendor)
-    live_sets = [live]
-    if live == ["claude", "codex"]:
-        live_sets.append(["codex", "cursor"])
-    for live_try in live_sets:
-        for author in ("xai", "anthropic", "openai"):
-            for narrative in ("anthropic", "openai"):
-                m = SM.build(SM.PANEL_ROSTER, live_try, author, narrative, 0)
-                receipt = SM.to_receipt(m, author)
-                if SM.derived_violations(receipt, driver_author_family) == []:
-                    return receipt
+    for author in ("xai", "anthropic", "openai"):
+        for narrative in ("anthropic", "openai"):
+            m = SM.build(SM.PANEL_ROSTER, live, author, narrative, 0)
+            receipt = SM.to_receipt(m, author)
+            if SM.unexcused_violations(receipt, driver_author_family) == []:
+                return receipt
     raise AssertionError(
         "no assertable seat map for vendors %r driver_author_family=%r"
         % (vendors, driver_author_family))
+
+
+def test_assertable_seat_map_allows_excused_derived_violations():
+    """INV-13 pin: baseline bar is unexcused violations, not raw derived ones (#1190)."""
+    SM = _load("seat_map")
+    m = _assertable_seat_map(["claude", "codex"], "codex")
+    assert SM.unexcused_violations(m, "openai") == []
+    assert SM.derived_violations(m, "openai") != []
 
 
 def _all_run_status(dims=None):
@@ -6224,6 +6254,9 @@ def _panel_seat_map_with_skew(
             "detail": detail,
             "inspectedRoot": inspected_root,
         }
+    else:
+        # ``to_receipt`` emits ``pluginVersionSkew`` unconditionally — pop for absent case.
+        seat_map.pop("pluginVersionSkew", None)
     return seat_map
 
 
