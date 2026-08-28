@@ -123,6 +123,15 @@ In micro the advisor is the maker, so the advisor's independent vet-from-artifac
 not exist for that PR; the whole independent check is the one non-Anthropic reviewer
 plus the owner's per-change authorization.
 
+**Durable home.** Micro is already recorded in the PR, not an issue — the **micro PR
+itself** is the one named home for both halves of the independent check. The **reviewer
+receipt** — the cross-vendor reviewer's result, including the mandatory planted-defect
+control probe's **engaged** reading — is posted as a **comment on the micro PR**,
+durably, not left in the advisor's session. The owner's **per-change authorization** —
+the explicit authorization, and the stated risk when the quiet-failure waiver was used
+— is recorded in the **micro PR's body**, alongside the lane call the showrunner
+charter already records there.
+
 **Resolution:** per-change owner authorization means the owner reads the owner-facing
 half of the change before authorizing, and the owner is independent of the maker.
 
