@@ -229,6 +229,52 @@ def test_record_field_shapes_cover_consumer_census():
     )
 
 
+def test_persist_record_bytes_match_records_bytes_chokepoint(tmp_path):
+    """Invariant: every byte on disk is exactly records_bytes(result['records'])."""
+    rm = load_memory()
+    path = tmp_path / "round-records.json"
+    record = {"round": 1, "schemaVersion": 2, "kind": "baseline", "findings": []}
+    result = rm.persist_record(str(path), [], record, run_id="run-1")
+    assert result["ok"] is True
+    on_disk = path.read_bytes()
+    expected = rm.records_bytes(result["records"])
+    assert on_disk == expected
+    assert result["contentHash"] == rm.content_hash(expected.decode("utf-8"))
+
+
+def test_load_records_state_rejects_non_object_members(tmp_path):
+    """Invariant: load_records_state never raises; non-object members yield corrupt."""
+    rm = load_memory()
+    dims = ["code"]
+
+    def _assert_corrupt(path_text):
+        path = tmp_path / "bad.json"
+        path.write_text(path_text, encoding="utf-8")
+        state = rm.load_records_state(str(path), dims)
+        assert state["ok"] is False
+        assert state["state"] == "corrupt"
+        assert state["records"] == []
+
+    _assert_corrupt("[null]")
+    _assert_corrupt("[1]")
+    _assert_corrupt('["x"]')
+    valid = {"round": 1, "schemaVersion": 2, "kind": "baseline", "findings": []}
+    _assert_corrupt(json.dumps([valid, None]))
+
+    empty_path = tmp_path / "empty.json"
+    empty_path.write_text("[]", encoding="utf-8")
+    empty_state = rm.load_records_state(str(empty_path), dims)
+    assert empty_state["ok"] is True
+    assert empty_state["state"] == "loaded"
+
+    valid_path = tmp_path / "valid.json"
+    valid_path.write_text(json.dumps([valid]), encoding="utf-8")
+    valid_state = rm.load_records_state(str(valid_path), dims)
+    assert valid_state["ok"] is True
+    assert valid_state["state"] == "loaded"
+    assert len(valid_state["records"]) == 1
+
+
 def test_stale_round_record_write_leaves_file_unchanged(tmp_path):
     rm = load_memory()
     path = tmp_path / "round-records.json"

@@ -29,6 +29,7 @@ if str(LIB) not in sys.path:
 
 import circuit_breaker as CB  # noqa: E402
 import coverage_decisions as cov  # noqa: E402
+import model_registry  # noqa: E402
 import review_loop_plan as RLP  # noqa: E402
 import review_memory as RM  # noqa: E402
 import review_telemetry as RT  # noqa: E402
@@ -111,6 +112,38 @@ _TERMINAL_MAP = {
     "capped-with-open-critical": "halted",
     "cannot-certify": "halted",
 }
+
+# INV-15: the harness's simulated maker vendor must not be seated on its review panel —
+# choose a vendor whose family is absent from the live pool so barring it yields a mixed panel.
+_EVAL_FIXER_VENDOR = "cursor"
+_EVAL_LIVE_POOL = ["claude", "codex"]
+
+
+def _eval_live_pool_families():
+    out = set()
+    for vendor in _EVAL_LIVE_POOL:
+        fam = model_registry.family_for("code-fixer", vendor)
+        if fam is not None:
+            out.add(fam)
+    return out
+
+
+def _validate_fixer_vendor_override(vendor):
+    """INV-18: refuse fixture fixerVendor before seat-map build when its family is in the pool."""
+    family = model_registry.family_for("code-fixer", vendor)
+    pool_families = _eval_live_pool_families()
+    if family is None:
+        raise ValueError(
+            "fixture fixerVendor %r is not a registered code-fixer vendor "
+            "(eval harness live pool %r seats families %s)"
+            % (vendor, _EVAL_LIVE_POOL, sorted(pool_families))
+        )
+    if family in pool_families:
+        raise ValueError(
+            "fixture fixerVendor %r resolves to family %r, which the eval harness "
+            "live pool %r already seats — barring it would collapse the panel to one vendor"
+            % (vendor, family, _EVAL_LIVE_POOL)
+        )
 
 
 def _receipt(run_id, round_no, coverage_decisions=None):
@@ -217,16 +250,31 @@ def _compose_worklist(run_dir, round_no, batch, roster):
         return worklist_path, json.load(fh)
 
 
-def _eval_clean_seat_map():
-    """All-claude+codex seat map verified clean — models a clean eval harness run (#681)."""
-    live = ["claude", "codex"]
-    for author in ("xai", "anthropic", "openai"):
-        for narrative in ("anthropic", "openai"):
-            m = SM.build(SM.PANEL_ROSTER, live, author, narrative, 0)
-            violations = SM.verify(m, author)
-            if violations == []:
-                return SM.to_receipt(m, author)
-    raise RuntimeError("eval harness seat map must verify clean for claude+codex")
+def _eval_clean_seat_map(fixer_vendor=_EVAL_FIXER_VENDOR):
+    """Seat map with no unexcused violations for the run's driver-derived maker family (#1190 INV-14)."""
+    live = _EVAL_LIVE_POOL
+    driver_author_family = model_registry.family_for("code-fixer", fixer_vendor)
+    for narrative in ("anthropic", "openai"):
+        m = SM.build(SM.PANEL_ROSTER, live, driver_author_family, narrative, 0)
+        receipt = SM.to_receipt(m, driver_author_family)
+        if SM.unexcused_violations(receipt, driver_author_family) == []:
+            assert receipt.get("authorFamily") == driver_author_family
+            seated_vendors = {
+                cell.get("vendor")
+                for cell in (receipt.get("seats") or {}).values()
+                if isinstance(cell, dict) and cell.get("vendor")
+            }
+            if len(seated_vendors) < 2:
+                raise RuntimeError(
+                    "eval harness baseline seat map must seat at least two distinct vendors "
+                    "(single-vendor collapse breaks liveness-gate preconditions; INV-15)"
+                )
+            return receipt
+    raise RuntimeError(
+        "eval harness seat map must have no unexcused violations for "
+        "fixer_vendor=%r driver_author_family=%r"
+        % (fixer_vendor, driver_author_family)
+    )
 
 
 def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=False,
@@ -569,8 +617,10 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
     try:
         io = {"stall_menu": lambda payload: "hold"}
         eval_seat_map = None
+        fixer_vendor = fixture.get("fixerVendor") or _EVAL_FIXER_VENDOR
+        _validate_fixer_vendor_override(fixer_vendor)
         if supply_seat_map:
-            eval_seat_map = _eval_clean_seat_map()
+            eval_seat_map = _eval_clean_seat_map(fixer_vendor)
             io["seatMap"] = eval_seat_map
         if supply_canary_probes and eval_seat_map is not None:
             io["canaryResult"] = fabricate_canary_probes_for(eval_seat_map)
@@ -589,8 +639,8 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             "dimensions": reviewer_set,
             "maxRounds": max_rounds,
             "diff": _EVAL_DIFF,
-            "vendors": ["claude", "codex"],
-            "fixerVendor": "claude",
+            "vendors": list(_EVAL_LIVE_POOL),
+            "fixerVendor": fixer_vendor,
             "verifyCommand": "none",
             # The driver reads these ONCE at new_state to resume from the durable seeds and to seed
             # the challenged-coverage breaker's accumulated decisions (#507 WO-D resume/records seam).

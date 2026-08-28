@@ -728,6 +728,7 @@ receipt round `"0"`.
 | `fellOpen` | A `run` seat's `ranManifest` vendor differs from the seat map's configured vendor (cross-vendor seat fell open to Claude). | `reviewer-fell-open (round N): …` |
 | `fellOpenProvenanceMissing` | A cross-vendor seat ran but has no trusted `ranManifest` entry. | `reviewer-fell-open-provenance-unavailable (round N): …` |
 | `seatMapUnavailable` | No `seatMap` was submitted while the panel ran (live panel-vendor pool recorded; never empty — `["unknown"]` when unknowable). | `reviewer-fell-open-seatmap-unavailable (round N): …` |
+| `seatMapUnjudgeable` | A seat map was submitted and is readable, but its violation basis is incomplete (basis literal(s) recorded). | `seat-map-unjudgeable (round N): …` (terminal `degraded`; `shapeDrivers` includes `seat-map-unavailable` and certification shape uses `-degraded`, not a third suffix) |
 | `seatMapViolations` | The submitted seat map carries constraint violation(s) not excused by its own degradation channel (#680). | `seat-map constraint breach: …` (terminal `degraded` list; also recorded per round) |
 | *(pin excusal)* | A standing excusable violation was excused because a collapsed seat was owner-pinned (`classify_violations` → `excusedByPin`). | `seat-map pin excusal: seat(s) …` (terminal `degraded`; `shapeDrivers` includes `seat-pin` and certification shape uses `-degraded`, not a third suffix) |
 | `vacuousSeats` | Seat dict has `vacuous: true` or `reason: "vacuous"` (empty findings with no verifiable investigation record). The seat folds as `missing` in `seatStatus` — it cannot anchor a `full-panel-confirmed` certification. | `vacuous-seat (round N): …` |
@@ -769,7 +770,7 @@ as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry
 | --- | --- |
 | `full-panel-confirmed` | A qualifying full `reviewer-deep` confirmation panel ran before exit. |
 | `audited-chain` | Scoped certifying finish — fixes discharged via audits + scoped verification; **no** final full panel. Surface this honestly; never imply a pristine fresh pass. |
-| `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, the seat map disclosed same-family self-review, compose disclosed `plugin-version-skew` (semantics-divergent or evidence-unreadable across `lib/model_registry.py`, `lib/seat_map.py`, and `lib/version_skew.py` against the superheroes source repo — detection only, not a version-string compare), no usable seat map was submitted (`seat-map-unavailable`), or a standing pin excused a constraint. |
+| `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, the seat map disclosed same-family self-review, compose disclosed `plugin-version-skew` (semantics-divergent or evidence-unreadable across `lib/model_registry.py`, `lib/seat_map.py`, and `lib/version_skew.py` against the superheroes source repo — detection only, not a version-string compare), no usable seat map was submitted (`seat-map-unavailable`), the submitted seat map's violation basis is incomplete (`seat-map-unavailable` shape driver — same token as absent-map), or a standing pin excused a constraint. |
 | `*-constraint-violated` | Appended when the seat map carries unexcused constraint violation(s) (#680); supersedes `*-degraded` when both would apply. |
 | `null` / withheld | Verify fail, stall unresolved (`stalled`), capped-with-open-Critical park, round-ceiling halt, owner `hold`, or `cannot-certify` (including an unresolvable `one-more-round` stall-target snapshot). |
 
@@ -782,17 +783,25 @@ as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry
 - **Capped-with-open-Critical park** — confirmation budget exhausted with a Critical still owed.
 - **Round-ceiling halt** — a hard bound on the round counter (default 10, config `maxRoundsAbsolute`): the round **at** the ceiling **runs to completion**, then the loop **refuses to begin** the next round — unconditional in that **no finding state can buy another round**, not in that it preempts the current round's own terminal; terminal `halted` with certification **withheld**; reason token `round-ceiling` (**distinct from** `max-iterations`, whose ratified meaning — the cap reached *with an open finding* — is unchanged); the receipt states the **ceiling** and the **rounds reached**, and names the round not begun. A fold answer from `cmd_submit` carries `foldLanded` only when a fold actually committed; an `advance` whose nested submit parked at the ceiling answers `notFolded` with the terminal halt rather than a `folded` receipt, and the durable seat record is either written in the fold's commit or its absence is stated on the receipt.
 
-**Library `recordsPath` / `round-records.json` seam (#720, #1187).** When `run_loop` config carries
-`recordsPath`, `_persist_round_records` refreshes that file after every fold: each in-memory ledger
-record is written through `review_memory.summarize_record` (a skeleton — no evidence bodies) and
-carries the declared per-round disclosure block selected by `_declared_disclosures` from
-`RESUMABLE_DISCLOSURE_CHANNELS`. The producer writes the whole outgoing ledger in one atomic
-`persist_record` call — no intermediate strict-prefix state on disk. A caller that already owns
-`round-records.json` opts out with `persistRecords: False` (`eval/review_loop_runner.py` is the
-one in-repo caller that does). A destination the producer cannot read and a persist it cannot
-complete both park `cannot-certify` rather than certifying off a stale file; `_seed_resume` is the
-read path on the next invocation. `recordsPath` is not reachable from the `next` CLI today — this
-is the library / `run_loop` path only.
+**Library `recordsPath` / `round-records.json` seam (#720, #1187).** When config carries
+`recordsPath`, each in-memory ledger record is written through `review_memory.summarize_record` (a
+skeleton — no evidence bodies) and carries the declared per-round disclosure block selected by
+`_declared_disclosures` from `RESUMABLE_DISCLOSURE_CHANNELS`. The producer writes the whole outgoing
+ledger in one atomic `persist_record` call — no intermediate strict-prefix state on disk. A caller
+that already owns `round-records.json` opts out with `persistRecords: False`
+(`eval/review_loop_runner.py` is the one in-repo caller that does). A destination the producer
+cannot read and a persist it cannot complete both park `cannot-certify` rather than certifying off a
+stale file; `_seed_resume` is the read path on the next invocation. The `next --records-path` flag
+seeds `recordsPath` on fresh state only — supplying it on existing state refuses
+`records-path-not-fresh-state`. The guard is session-directory containment: a records file must
+outlive the producing session so a **fresh** session can resume from it, which a path inside that
+session can never do — so any path at or inside `$SESSION_DIR` refuses `records-path-reserved`
+before any work. On the CLI path the write rides
+`cmd_submit`'s `submit-accept` commit as a `targetKind: "round-records"` sidecar, so the file
+changes only if that commit sealed and then rolls forward with the state; recovery dispatches
+sidecar replay by `targetKind` and refuses rather than falling back. The corrupt-resume
+`cannot-certify` park fires from `_cmd_next_locked` as well as `run_loop`. The library
+`run_loop` path still calls `_persist_round_records` after every fold.
 
 ## Invariants
 

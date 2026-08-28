@@ -43,6 +43,7 @@ LPC = _load("loop_plan_common")
 FI = _load("finding_identity")
 LC = _load("liveness_cache")
 version_skew = _load("version_skew")
+model_registry = _load("model_registry")
 SC_CANARY = _load("seat_canary")
 _canary_probes_for = SC_CANARY.canary_probes_for
 
@@ -93,7 +94,7 @@ def _big_diff(n_files=25):
 # --- default scripted seams ---------------------------------------------------
 
 def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=None,
-           verify_runner=None, io=None, vendors=None):
+           verify_runner=None, io=None, vendors=None, fixer_vendor="claude"):
     def default_reviewer(dim, tier, rnd, ctx):
         return []
 
@@ -118,7 +119,7 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
 
     io_out = dict(io or {})
     if vendors is not None:
-        io_out.setdefault("seatMap", _verified_clean_seat_map(vendors))
+        io_out.setdefault("seatMap", _assertable_seat_map(vendors, fixer_vendor))
         io_out.setdefault("canaryResult", _canary_probes_for(io_out["seatMap"]))
 
     return {
@@ -392,7 +393,8 @@ def _drive_cli(session_dir, cfg, respond, max_steps=80):
 
 
 def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pass",
-               head=HEAD, verdict="CONFIRMED", seat_map=None, vendors=None):
+               head=HEAD, verdict="CONFIRMED", seat_map=None, vendors=None,
+               fixer_vendor="claude"):
     scoped_state = {"fired": False}
 
     def respond(phase, payload, rnd):
@@ -405,7 +407,7 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
                 art["seatMap"] = seat_map
                 art["canaryResult"] = _canary_probes_for(seat_map)
             elif vendors is not None:
-                art["seatMap"] = _verified_clean_seat_map(vendors)
+                art["seatMap"] = _assertable_seat_map(vendors, fixer_vendor)
                 art["canaryResult"] = _canary_probes_for(art["seatMap"])
             return art
         if phase == RD.P_VERIFIERS:
@@ -1794,7 +1796,8 @@ def _delta_state_ready(confirmations, surfaced, findings=None, not_discharged=No
     state["auditRounds"] = [{"round": 2, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
     state["_auditOutcome"] = {"notDischarged": nd, "discharged": ["x"]}
     state["_changedSubjects"] = ["Code"]
-    state["seatMapReceipts"] = _seat_map_receipts(_verified_clean_seat_map(state["config"]["vendors"]))
+    state["seatMapReceipts"] = _seat_map_receipts(
+        _assertable_seat_map(state["config"]["vendors"], state["config"].get("fixerVendor")))
     return state
 
 
@@ -1948,10 +1951,10 @@ def test_explicit_cross_family_fixer_still_independent_two_vendor(tmp_path):
 
     cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF, "fixerVendor": "codex"}
     receipt = RD.run_loop(_seams(
-        reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
-             if rnd == 1 and dim == "code-reviewer" else []),
-        auditor=auditor, vendors=["claude", "codex"]), cfg)
+            reviewer=lambda dim, tier, rnd, ctx:
+                ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+                 if rnd == 1 and dim == "code-reviewer" else []),
+            auditor=auditor, vendors=["claude", "codex"], fixer_vendor="codex"), cfg)
     assert receipt["verdict"] == "converged"
     t = captured["targets"][0]
     assert t["independence"] == "independent"
@@ -2881,6 +2884,7 @@ _ALL_CHANNELS = {
     }],
     "verifyPasses": [{"CONFIRMED": 1, "PLAUSIBLE": 0, "REFUTED": 0, "drops": 0,
                       "downgrades": 0, "unverified": 0, "ambiguous": 0}],
+    "seatMapUnjudgeable": [_load("seat_map").VIOLATION_BASIS_NO_AUTHOR_FAMILY],
 }
 
 
@@ -2930,7 +2934,9 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
                      "engaged-artifact-seat (round 1): seat(s) premortem-reviewer",
                      "canary-unverified (round 1): cross-vendor seat(s) code-reviewer",
                      "engaged probe recorded for vendor(s) codex",
-                     "canary-failed (round 1): the control probe showed no engagement"):
+                     "canary-failed (round 1): the control probe showed no engagement",
+                     "seat-map-unjudgeable (round 1): a seat map was submitted and is readable, "
+                     "but its violation basis is incomplete (no-author-family)"):
         assert marker in prose, marker
     assert (
         "record-orphans-ignored (round 1): hand submit folded with durable seat record(s) "
@@ -3209,7 +3215,7 @@ def test_producer_respects_persist_records_false(tmp_path):
 
 def test_producer_empty_ledger_leaves_destination_unchanged(tmp_path):
     records = tmp_path / "round-records.json"
-    initial_text = json.dumps([_seed_record(1)], indent=2) + "\n"
+    initial_text = RD.review_memory.records_bytes([_seed_record(1)]).decode("utf-8")
     records.write_text(initial_text)
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
     state["_records"] = []
@@ -3899,7 +3905,7 @@ def test_base_guard_wrong_base_diff_refuses_no_state(tmp_path, capsys):
 
 def test_base_guard_healthy_next_stat_bound_receipt(tmp_path, capsys):
     d = str(tmp_path)
-    ga = _guard_argv(d) + ["--vendors", "codex,cursor"]
+    ga = _guard_argv(d) + ["--vendors", "codex,cursor", "--fixer-vendor", "codex"]
     rc, out = _cli_next_json(d, ga, capsys)
     assert rc == 0 and out["ok"]
     pin = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))["baseRef"]
@@ -4004,7 +4010,7 @@ def test_base_degraded_does_not_false_claim_independence(tmp_path, capsys):
 
 
 def _panel_seat_map_with_same_family(seat="code-reviewer"):
-    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map = _assertable_seat_map(["codex", "cursor"])
     seat_map["degradations"] = [{
         "constraint": "same-family",
         "seat": seat,
@@ -4015,12 +4021,20 @@ def _panel_seat_map_with_same_family(seat="code-reviewer"):
 
 def test_same_family_seat_map_degrades_cert_shape():
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    seat_map_clean = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
-    receipt_clean = RD.run_loop(_seams(io={"seatMap": seat_map_clean}), cfg)
+    seat_map_clean = _assertable_seat_map(cfg["vendors"])
+    io_clean = {
+        "seatMap": seat_map_clean,
+        "canaryResult": _canary_probes_for(seat_map_clean),
+    }
+    receipt_clean = RD.run_loop(_seams(io=io_clean), cfg)
     assert receipt_clean["verdict"] == "converged"
     assert "-degraded" not in receipt_clean["certificationShape"]
     seat_map_deg = _panel_seat_map_with_same_family()
-    receipt_deg = RD.run_loop(_seams(io={"seatMap": seat_map_deg}), cfg)
+    io_deg = {
+        "seatMap": seat_map_deg,
+        "canaryResult": _canary_probes_for(seat_map_deg),
+    }
+    receipt_deg = RD.run_loop(_seams(io=io_deg), cfg)
     assert receipt_deg["verdict"] == "converged"
     assert receipt_deg["certificationShape"] == receipt_clean["certificationShape"] + "-degraded"
     assert receipt_deg["certificationShape"].count("-degraded") == 1
@@ -4090,7 +4104,7 @@ def test_seat_map_unexcused_violation_constraint_violated_cert_shape():
 def test_seat_map_excused_only_violation_unchanged_cert_shape():
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state_clean = RD.new_state(cfg)
-    state_clean["seatMap"] = _verified_clean_seat_map(cfg["vendors"])
+    state_clean["seatMap"] = _assertable_seat_map(cfg["vendors"], cfg.get("fixerVendor"))
     RD._terminal_converged(state_clean, cfg, full_panel=True)
     shape_clean = state_clean["certification"]["shape"]
     SM = _load("seat_map")
@@ -4105,19 +4119,13 @@ def test_seat_map_excused_only_violation_unchanged_cert_shape():
 
 def test_seat_map_pin_excusal_degraded_shape_and_disclosure():
     SM = _load("seat_map")
-    seats = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seats = _assertable_seat_map(["codex", "cursor"])
     seats["violations"] = [{"constraint": "strong-tier", "seat": "security-reviewer"}]
-    seats["liveVendors"] = ["claude", "codex", "cursor"]
     seats["livenessPinScoped"] = False
-    seats["authorFamily"] = "xai"
-    seats["seats"]["security-reviewer"] = {
-        "vendor": "claude",
-        "model": "opus-5",
-        "effort": "xhigh",
-        "tier": "reviewer",
-        "family": "anthropic",
-        "source": "pinned",
-    }
+    sr = dict(seats["seats"]["security-reviewer"])
+    sr["source"] = "pinned"
+    seats["seats"] = dict(seats["seats"])
+    seats["seats"]["security-reviewer"] = sr
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
     state = RD.new_state(cfg)
     _set_seat_map(state, seats)
@@ -4128,7 +4136,7 @@ def test_seat_map_pin_excusal_degraded_shape_and_disclosure():
     pin_lines = [d for d in receipt["degraded"] if d.startswith("seat-map pin excusal:")]
     assert len(pin_lines) == 1
     assert "security-reviewer" in pin_lines[0]
-    assert SM.classify_violations(seats)["excusedByPin"]
+    assert SM.classify_violations(seats, model_registry.family_for("code-fixer", "claude"))["excusedByPin"]
 
 
 def test_seat_map_unproven_liveness_shape_driver():
@@ -4149,12 +4157,13 @@ def test_seat_map_unproven_liveness_shape_driver():
 def test_certification_shape_drivers_lists_every_fired_channel():
     seat_map = _seat_map_receipt_with_unexcused_maker_family()
     seat_map = dict(seat_map)
+    # same-family and unexcused maker-family on one seat are mutually exclusive in projections.
     seat_map["degradations"] = list(seat_map.get("degradations") or []) + [{
         "constraint": "same-family",
-        "seat": "code-reviewer",
+        "seat": "security-reviewer",
         "reason": "test",
     }]
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"], fixerVendor="codex")
     cfg["baseDegraded"] = True
     state = RD.new_state(cfg)
     state["independenceDegraded"] = True
@@ -4164,6 +4173,28 @@ def test_certification_shape_drivers_lists_every_fired_channel():
     assert drivers == ["base", "independence", "same-family", "seat-map-violation"]
     assert state["certification"]["shape"].endswith("-constraint-violated")
     assert state["certification"]["shape"].count("-degraded") == 0
+
+
+def test_same_family_seats_suppresses_when_maker_family_on_same_seat():
+    """Pin: same-family projection drops seats with unexcused maker-family on that seat (#1190)."""
+    SMR = _load("seat_map_receipts")
+    base = _seat_map_receipt_with_unexcused_maker_family()
+    collided = dict(base)
+    collided["degradations"] = [{
+        "constraint": "same-family",
+        "seat": "code-reviewer",
+        "reason": "test",
+    }]
+    state_collided = {"seatMapReceipts": _seat_map_receipts(collided)}
+    assert "code-reviewer" not in SMR.same_family_seats(state_collided)
+    separated = dict(base)
+    separated["degradations"] = [{
+        "constraint": "same-family",
+        "seat": "security-reviewer",
+        "reason": "test",
+    }]
+    state_separated = {"seatMapReceipts": _seat_map_receipts(separated)}
+    assert "security-reviewer" in SMR.same_family_seats(state_separated)
 
 
 def _write_meta_json(session_dir, payload):
@@ -4530,7 +4561,8 @@ def test_skip_with_reason_records_ledger_and_rides_disclosure():
     the dedicated top-level `skippedBlockers` channel. With nothing left to fix, the run converges —
     but CLEAN EXCEPT FOR SKIPPED, never a plain success (the reason leads with clean-except-skipped)."""
     state = RD.new_state(_cfg())
-    state["seatMapReceipts"] = _seat_map_receipts(_verified_clean_seat_map(state["config"]["vendors"]))
+    state["seatMapReceipts"] = _seat_map_receipts(
+        _assertable_seat_map(state["config"]["vendors"], state["config"].get("fixerVendor")))
     RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
     RD._fold_judgment(state, state["config"], {"dispositions": [
         {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "shipping v1 narrow on purpose"}]})
@@ -4800,6 +4832,32 @@ def _verified_clean_seat_map(vendors):
             if violations == []:
                 return SM.to_receipt(m, author)
     raise AssertionError("no verify-clean seat map for vendors %r" % vendors)
+
+
+def _assertable_seat_map(vendors, fixer_vendor="claude"):
+    """Receipt-shaped seat map — ``unexcused_violations`` empty at construction (#1190)."""
+    SM = _load("seat_map")
+    live = sorted({v for v in (vendors or []) if isinstance(v, str) and v})
+    if not live:
+        live = ["claude"]
+    driver_author_family = model_registry.family_for("code-fixer", fixer_vendor)
+    for author in ("xai", "anthropic", "openai"):
+        for narrative in ("anthropic", "openai"):
+            m = SM.build(SM.PANEL_ROSTER, live, author, narrative, 0)
+            receipt = SM.to_receipt(m, author)
+            if SM.unexcused_violations(receipt, driver_author_family) == []:
+                return receipt
+    raise AssertionError(
+        "no assertable seat map for vendors %r driver_author_family=%r"
+        % (vendors, driver_author_family))
+
+
+def test_assertable_seat_map_allows_excused_derived_violations():
+    """INV-13 pin: baseline bar is unexcused violations, not raw derived ones (#1190)."""
+    SM = _load("seat_map")
+    m = _assertable_seat_map(["claude", "codex"], "codex")
+    assert SM.unexcused_violations(m, "openai") == []
+    assert SM.derived_violations(m, "openai") != []
 
 
 def _all_run_status(dims=None):
@@ -5072,6 +5130,210 @@ def test_seat_map_unavailable_constraint_violated_supersedes_shape():
 
 
 # =============================================================================
+# #1190 — seatMapUnjudgeable backstop + assert-library wiring
+# =============================================================================
+
+def test_seat_map_unjudgeable_rounds_ledger_has_reader():
+    """NR-A: ``seatMapUnjudgeable`` round records arm ``_seat_map_unjudgeable`` (#1190)."""
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg.pop("fixerVendor")
+    state = RD.new_state(cfg)
+    seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
+    _set_seat_map(state, seat_map)
+    state["rounds"] = {"1": {"seatMapUnjudgeable": ["no-author-family"]}}
+    assert RD._seat_map_unjudgeable(state) is True
+
+
+def test_seat_map_unjudgeable_rounds_arm_with_judgeable_receipts():
+    """NR-B rounds arm: round record alone arms the backstop (#1190)."""
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg.pop("fixerVendor")
+    state = RD.new_state(cfg)
+    seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
+    _set_seat_map(state, seat_map)
+    state["rounds"] = {"1": {"seatMapUnjudgeable": ["no-author-family"]}}
+    assert RD._seat_map_unjudgeable(state) is True
+
+
+def test_seat_map_unjudgeable_receipts_arm_without_round_record():
+    """NR-B receipts arm: unjudgeable receipt alone arms the backstop (#1190)."""
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg.pop("fixerVendor")
+    state = RD.new_state(cfg)
+    _set_seat_map(state, _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS}))
+    assert RD._seat_map_unjudgeable(state) is True
+    assert "seatMapUnjudgeable" not in (state.get("rounds") or {}).get("1", {})
+
+
+def test_seat_map_unjudgeable_disclosure_not_unavailable_prose():
+    """NR-C: present-but-unjudgeable map discloses unjudgeable, not unavailable (#1190)."""
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg.pop("fixerVendor")
+    state = RD.new_state(cfg)
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": seat_map})
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    receipt = RD.build_receipt(state)
+    unj_lines = [d for d in receipt["degraded"] if d.startswith("seat-map-unjudgeable")]
+    unav_lines = [d for d in receipt["degraded"]
+                  if d.startswith("reviewer-fell-open-seatmap-unavailable")]
+    assert len(unj_lines) == 1
+    assert "no-author-family" in unj_lines[0]
+    assert unav_lines == []
+
+
+def test_seat_map_unavailable_disclosure_not_unjudgeable_prose():
+    """NR-C: absent map discloses unavailable, not unjudgeable (#1190)."""
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    RD._fold_panel(state, state["config"], {"seats": seats})
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    receipt = RD.build_receipt(state)
+    unj_lines = [d for d in receipt["degraded"] if d.startswith("seat-map-unjudgeable")]
+    unav_lines = [d for d in receipt["degraded"]
+                  if d.startswith("reviewer-fell-open-seatmap-unavailable")]
+    assert len(unav_lines) == 1
+    assert unj_lines == []
+
+
+def test_unattested_cross_vendor_map_without_canary_still_parks():
+    """NR-D: submitted cross-vendor map without canary still parks — never certifies (#714)."""
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    seat_map = _seat_map_vendors({
+        "code-reviewer": "codex",
+        "security-reviewer": "cursor",
+        "architecture-reviewer": "claude",
+        "test-reviewer": "codex",
+        "premortem-reviewer": "cursor",
+    })
+    receipt = RD.run_loop(_seams(io={"seatMap": seat_map}), cfg)
+    assert receipt["verdict"] == "cannot-certify"
+    assert receipt["rounds"][0]["canaryUnverified"]
+    assert receipt["certificationShape"] is None or "-constraint-violated" not in (
+        receipt.get("certificationShape") or "")
+
+
+def test_unattested_map_still_drives_fell_open_and_effective_seat_map():
+    """NR-E: basis-incomplete map still feeds Contract B reveal consumers (#1190)."""
+    seat_map = _seat_map_vendors({"code-reviewer": "codex"})
+    state = RD.new_state(_cfg(leg="panel", vendors=["codex", "cursor"]))
+    _set_seat_map(state, seat_map)
+    rows, miss = RD._fell_open_rows(
+        seat_map, {"code-reviewer": "claude"}, {"code-reviewer": "run"})
+    assert rows == [{"seat": "code-reviewer", "configured": "codex", "ran": "claude",
+                     "reason": "forfeit-fell-open"}]
+    effective = RD.effective_seat_map(state)
+    assert effective["seats"]["code-reviewer"]["vendor"] == "codex"
+
+
+def test_seat_map_unjudgeable_quantifier_later_unjudgeable_arms():
+    """INV-9: judgeable round 1 then unjudgeable round 2 arms the terminal predicate."""
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    cfg.pop("fixerVendor")
+    state = RD.new_state(cfg)
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    round1 = _assertable_seat_map(["codex", "cursor"], fixer_vendor=None)
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": round1,
+        "canaryResult": _canary_probes_for(round1),
+    })
+    state["round"] = 2
+    round2 = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round2})
+    assert RD._seat_map_unjudgeable(state) is True
+
+
+def test_seat_map_unjudgeable_quantifier_earlier_unjudgeable_arms():
+    """INV-9: unjudgeable round 1 then judgeable round 2 still arms — not existential."""
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    cfg.pop("fixerVendor")
+    state = RD.new_state(cfg)
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    round1 = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round1})
+    state["round"] = 2
+    round2 = _assertable_seat_map(["codex", "cursor"], fixer_vendor=None)
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": round2,
+        "canaryResult": _canary_probes_for(round2),
+    })
+    assert RD._seat_map_unjudgeable(state) is True
+
+
+def test_seat_map_unjudgeable_terminal_converged_shape_drivers_consumer():
+    """Present-but-unjudgeable map wires ``_seat_map_unjudgeable`` into shapeDrivers (#1190)."""
+    SM = _load("seat_map")
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg.pop("fixerVendor")
+    seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
+    unjudgeable_map = dict(seat_map)
+    unjudgeable_map.pop("authorFamily", None)
+    driver_fam = model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+    assert SM.derived_violations(unjudgeable_map, driver_fam) == []
+    state = RD.new_state(cfg)
+    _set_seat_map(state, unjudgeable_map)
+    assert RD._seat_map_unavailable(state) is False
+    assert RD._seat_map_unjudgeable(state) is True
+    RD._terminal_converged(state, cfg, full_panel=True)
+    assert "seat-map-unavailable" in state["certification"]["shapeDrivers"]
+    control_cfg = dict(cfg)
+    control_cfg["fixerVendor"] = "claude"  # driver family — map-only authorFamily is self-asserted
+    control_state = RD.new_state(control_cfg)
+    _set_seat_map(control_state, unjudgeable_map)
+    RD._terminal_converged(control_state, control_cfg, full_panel=True)
+    assert "seat-map-unavailable" not in control_state["certification"]["shapeDrivers"]
+
+
+def test_seat_map_unjudgeable_cert_shape_degraded_consumer():
+    """Present-but-unjudgeable map wires ``_seat_map_unjudgeable`` into ``-degraded`` shape (#1190)."""
+    SM = _load("seat_map")
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg.pop("fixerVendor")
+    seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
+    unjudgeable_map = dict(seat_map)
+    unjudgeable_map.pop("authorFamily", None)
+    driver_fam = model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+    assert SM.derived_violations(unjudgeable_map, driver_fam) == []
+    state = RD.new_state(cfg)
+    _set_seat_map(state, unjudgeable_map)
+    assert RD._seat_map_unavailable(state) is False
+    assert RD._seat_map_unjudgeable(state) is True
+    RD._terminal_converged(state, cfg, full_panel=True)
+    assert state["certification"]["shape"].endswith("-degraded")
+    control_cfg = dict(cfg)
+    control_cfg["fixerVendor"] = "claude"  # driver family — map-only authorFamily is self-asserted
+    control_state = RD.new_state(control_cfg)
+    _set_seat_map(control_state, unjudgeable_map)
+    RD._terminal_converged(control_state, control_cfg, full_panel=True)
+    assert not control_state["certification"]["shape"].endswith("-degraded")
+
+
+def test_emit_receipt_seat_map_derived_violations_replay_no_breach_lost():
+    """INV-11: emitted ``seatMap`` carries derived violations — replay cannot read clean."""
+    SM = _load("seat_map")
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    cfg.pop("fixerVendor")
+    state = RD.new_state(cfg)
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    _set_seat_map(state, seat_map)
+    state["terminal"] = "converged"
+    state["certification"] = {"shape": "full-panel-confirmed-degraded"}
+    receipt = RD.build_receipt(state)
+    emitted = receipt["seatMap"]
+    driver_fam = model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+    replayed = SM.derived_violations(emitted, driver_fam)
+    emitted_violations = emitted.get("violations") or []
+    emitted_keys = {(str(v.get("constraint", "")), str(v.get("seat") or ""))
+                    for v in emitted_violations if isinstance(v, dict)}
+    replayed_keys = {(str(v.get("constraint", "")), str(v.get("seat") or ""))
+                     for v in replayed if isinstance(v, dict)}
+    # Replay must not discover a breach the emitted artifact omitted — subset runs the wrong way.
+    assert replayed_keys <= emitted_keys
+    assert replayed_keys
+
+
+# =============================================================================
 # #681 — seat-map receipt list (append-only, projection family)
 # =============================================================================
 
@@ -5203,6 +5465,7 @@ _SEAT_MAP_RECEIPTS_CALLERS = frozenset({
     "same_family_seats",
     "unexcused_violations",
     "pin_excused_records",
+    "unjudgeable_receipts",
     "skew_records",
     "plugin_version_skew_status",
     "emit_receipt_seat_map",
@@ -5342,9 +5605,13 @@ def test_partial_round2_degradations_preserves_same_family_shape():
     RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round1_map})
     assert RD._same_family_degraded(state) is True
     state["round"] = 2
-    round2_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    round2_map = _assertable_seat_map(state["config"]["vendors"])
     round2_map["degradations"] = []
-    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round2_map})
+    RD._fold_panel(state, state["config"], {
+        "seats": seats,
+        "seatMap": round2_map,
+        "canaryResult": _canary_probes_for(round2_map),
+    })
     assert RD._same_family_degraded(state) is True
     assert "security-reviewer" in RD._same_family_seats(state)
     RD._terminal_converged(state, state["config"], full_panel=True)
@@ -6024,7 +6291,7 @@ def _panel_seat_map_with_skew(
         reason="plugin-version-skew: plugin semantics differ from repo",
         plugin_version_skew_status=version_skew.STATUS_CHECKED_DEGRADED,
         inspected_root="/tmp/repo"):
-    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map = _assertable_seat_map(["codex", "cursor"])
     seat_map["degradations"] = [{
         "constraint": version_skew.CONSTRAINT,
         "detail": detail,
@@ -6036,6 +6303,9 @@ def _panel_seat_map_with_skew(
             "detail": detail,
             "inspectedRoot": inspected_root,
         }
+    else:
+        # ``to_receipt`` emits ``pluginVersionSkew`` unconditionally — pop for absent case.
+        seat_map.pop("pluginVersionSkew", None)
     return seat_map
 
 
