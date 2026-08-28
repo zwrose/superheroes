@@ -3,12 +3,13 @@
 1. [Dispatch mechanics — long dispatches you own](#dispatch-mechanics--long-dispatches-you-own)
 2. [Turn survival — the harness evidence](#turn-survival--the-harness-evidence)
 3. [Process cleanup — kill by the PID you recorded](#process-cleanup--kill-by-the-pid-you-recorded)
-4. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
-5. [Supervised review dispatch](#supervised-review-dispatch)
-6. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
-7. [Supervised write dispatch](#supervised-write-dispatch)
-8. [Declared items](#declared-items)
-9. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
+4. [Mutation probes — own detached worktree](#mutation-probes--own-detached-worktree)
+5. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
+6. [Supervised review dispatch](#supervised-review-dispatch)
+7. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
+8. [Supervised write dispatch](#supervised-write-dispatch)
+9. [Declared items](#declared-items)
+10. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
 
 ---
 
@@ -120,6 +121,36 @@ the **listener** also returns every client connected to it — so corroborate a 
 the run's own cwd or launch record before killing anything. **Zero verified candidates,
 or more than one, means you have no kill target** — stop there and say so rather than widening the
 match (charter §7).
+
+## Mutation probes — own detached worktree
+
+A bite-proof mutation probe runs in a **detached worktree of its own**, pinned to the commit under
+proof — never in a tree where **live read-only seats are reading** the paths the probe mutates.
+Review seats, auditors, and any concurrent reader dispatched against that path share the same
+prohibition: a reader that sees the tree mid-probe grades a state that never shipped, and the symptom
+— a seat reporting an inexplicable revert, or a file that disagrees with the diff — does not name its
+cause.
+
+Field record: on the **#1184** and **#1183** builds, bite-proof mutation probes ran in the **same
+worktree** concurrent read-only review seats were reading. Two auditors saw **transient state**; one
+reported that *"an external actor reverted the file mid-run."* No harm resulted either time — and
+that is exactly why it needs writing down: the failure mode is a seat grading a file that was
+mid-probe, which produces a confident finding about a state that never shipped, with nothing
+anywhere naming the cause.
+
+**This composes with, and does not replace, the charter's two standing rules:** commit the landed
+implementer work before probing (charter §8), and neutralize/restore by **targeted, reversible
+edits through the host's edit action** — never `git checkout --`, `git restore`, `git reset`, or
+`git stash`. A separate worktree is **where** the probe runs, not licence to revert by discarding.
+
+**The rule is unconditional** — it holds even when no seats are running right now. A seat can be
+dispatched while a probe is open, and the builder does not always control the timing.
+
+**When a probe cannot run in a separate tree** — the detector under proof is bound to a specific
+path or checkout — **disclose it and hold the seats off that tree**; never probe silently under live
+readers.
+
+**When the probe finishes**, remove the probe worktree with `git worktree` verbs — never `rm`.
 
 ## Launch slice vs continuation slice
 

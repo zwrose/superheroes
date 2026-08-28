@@ -381,6 +381,8 @@ The orchestrator's verify gate (loop step 12) and the fixer (prompt step 3) both
 
 `meta.json` records the verify story (`verify`: the command string, or `"unverified"` / `"review-only"`) so a cold-resumed orchestrator recovers it without re-reading the profile.
 
+Test-receipt evidence policy: `rubric/test-receipt-evidence.md`.
+
 ## Learning Loop & Staleness Nudge
 
 For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules. The subagent prompt templates, verification rules, and common mistakes for this skill are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md`.

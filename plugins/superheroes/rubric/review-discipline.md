@@ -123,6 +123,22 @@ In micro the advisor is the maker, so the advisor's independent vet-from-artifac
 not exist for that PR; the whole independent check is the one non-Anthropic reviewer
 plus the owner's per-change authorization.
 
+**Durable home.** Micro is already recorded in the PR, not an issue — the **micro PR
+itself** is the one named home for both halves of the independent check. The **reviewer
+receipt** — the cross-vendor reviewer's result, including the mandatory planted-defect
+control probe's **engaged** reading — is posted as a **comment on the micro PR**,
+durably, not left in the advisor's session. Every receipt **names the reviewed head
+commit sha** it covers — the same pin the vet receipt's spine requires — and each
+re-review after findings are fixed **posts or updates a receipt for the new sha**; a
+receipt pinned to an earlier head is not the final-head receipt this lane requires. The
+showrunner **compares the most recent receipt's sha with the current remote PR head**
+immediately before handback or merge and confirms the remote head contains it. The
+owner's **per-change authorization** — the explicit authorization, and the stated risk
+when the quiet-failure waiver was used — is recorded in the **micro PR's body**,
+alongside the lane call the showrunner charter already records there. Both exist
+**before** the micro PR is handed back or merged — a receipt or an authorization
+recorded after the fact is not the independent check this lane substitutes for the vet.
+
 **Resolution:** per-change owner authorization means the owner reads the owner-facing
 half of the change before authorizing, and the owner is independent of the maker.
 
