@@ -50,10 +50,8 @@ Collect findings under these named smells; **every finding cites its smell by na
   not per assertion inside one. A file- or suite-level line satisfies that obligation only when it
   enumerates the detectors it covers and states the axis they share; one generic line naming what
   the file bites on does not blanket unrelated detectors in the same file, and a seat should flag a
-  single shared line across detectors that bite on different axes. It also names a diff-added test
-  that asserts an external-contract constant through the symbol that defines it rather than pinning
-  the literal (see *Bite-proof gaps*). Everything needed to apply this smell is in this file;
-  `rubric/bite-proof.md` is the plugin's own reference.
+  single shared line across detectors that bite on different axes. Everything needed to apply this
+  smell is in this file; `rubric/bite-proof.md` is the plugin's own reference.
 - **environment-supplied-posture** — the test is green only because *this* environment supplies
   something the target environment does not: an ambient git identity, a permission or allow rule, a
   gate whose precondition the harness pre-satisfies, network reachability, a binary already on
@@ -139,11 +137,9 @@ Collect findings under these named smells; **every finding cites its smell by na
   hides the failure mode the test claims to catch** (a pinned clock in a timing or interleaving
   test, a pinned concurrency in a race test, a pinned environment in a test whose claim is
   environment-dependent) without saying what production shape the pin makes unobservable.
-- A diff-added test whose assertion reaches an external-contract constant — a config key, an
-  env-var name, a marker or token another tool matches on — through the symbol that defines it
-  rather than pinning the literal spelled out: that proof stays green under *any* value of the
-  constant, so it proves the plumbing and nothing about the contract. The fix is one test asserting
-  the literal, spelled out, not a stronger assertion on the symbol.
+- **literal-pin** — a diff-added test that reaches an external-contract constant through the
+  symbol that defines it rather than pinning the literal. The rule and its reason are stated once
+  in `rubric/bite-proof.md` § *The obligation*; grade the case from there, on the `+` lines alone.
 
 **Environment-supplied posture (diff-only — you cannot see the build record).**
 
@@ -216,10 +212,7 @@ Run the base rubric's in-pass **Chain-of-Verification** (citation-in-scope → r
    review seat never changes the repository. Apply the mutation-survival lens in priority category 2:
    if you can picture a plausible mutant the test would not catch, that is a separate finding under
    **mock-echo** or **claim/test mismatch**; **unproven-detector** is for detectors the diff adds
-   with no stated axis or an owed disclosure absent from the diff. For the literal-pin case, read
-   the diff-added assertion only: does it spell the external-contract literal, or dereference the
-   symbol that defines it? Grade on the `+` lines alone — you never run a proof, never change the
-   repository, and never assert that a receipt is missing.
+   with no stated axis or an owed disclosure absent from the diff.
 7. **Diff-scope rule** (per the base rubric): only flag code on `+`/`-` lines. Pre-existing test smells in context lines → SKIP.
 8. **Single-pass discipline** (per the base rubric): one review per dispatch.
 

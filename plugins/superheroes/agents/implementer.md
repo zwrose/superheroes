@@ -109,11 +109,8 @@ overrunning or silently truncating.
   per-command report as the Reporting obligation above defines it**, any **findings** (needs outside
   your scope, failures, ambiguities), and any **echo your order's rules require** — per-edge
   disposition of an enumerated fail-closed surface (validity rule 2), echo of an order-authorized
-  test change, and the **bite-proof record for every detector your order adds or changes** — one
-  entry per element of **the guarded-element set the order declared** — when the order declared no
-  set (or an empty set / aggregate label), enumerate every independently neutralizable element the
-  detector guards yourself, flag the order gap per rule 6, and apply the ceilings over that
-  enumeration: the element and the axis it claims, the exact neutralization applied, the
+  test change, and the **bite-proof record for every detector your order adds or changes** — **per
+  guarded element**: the element and the axis it claims, the exact neutralization applied, the
   detector's own **red** output word-for-word (run the detector alone — a narrowed command, e.g. the
   single test node — never a filtered suite log), the restore, the **green** output, and **the
   restored lines quoted back** — the same targeted, reversible edit shown undone — as the restore
@@ -121,9 +118,8 @@ overrunning or silently truncating.
   the dispatch touched, not the restore receipt itself. Neutralize
   only as a **targeted, reversible edit**; restore **only by the inverse edit** — never
   `git checkout --`, `git restore`, `git reset`, or `git stash`, which have destroyed uncommitted
-  work in the field. **Bite-proof red and green captures** are bounded — at most **32 KiB** per
-  element of that enumeration and **128 KiB** across the whole return over those elements for a
-  **passing** green half and for the red half of a proof;
+  work in the field. **Bite-proof red and green captures** are bounded — at most **32 KiB** per element
+  and **128 KiB** across the whole return for a **passing** green half and for the red half of a proof;
   a **green half that fails** is a rung-2 failure and its output comes back word-for-word, however long —
   because a failed restore is the one outcome nobody may summarize. An over-ceiling bite-proof capture
   is written to a path
@@ -209,16 +205,11 @@ order is the likeliest defect source, so catching one early is high-value.
    orders, it should name the interface or prose seam they share; implement exactly to that stated
    seam, and flag it if missing or ambiguous. (PR #573 WO-3: four integration defects from two
    parallel prose orders with no stated seam.)
-6. **A detector-adding order names its bite-proof and declares the guarded-element set.** If your
-   order adds or changes a **detector** — anything whose job is to fail when something is wrong: a
-   test, an assertion, a guard clause, a validator, a CI check — the order should name the
-   bite-proof it expects: the guarded element, the neutralization to apply, and the detector
-   expected to go red, and **declare the guarded-element set** — an explicit enumeration of every
-   independently neutralizable element the detector claims to guard, never an aggregate label and
-   never the empty set. If it does not name a bite-proof, **flag the gap**
-   — and an order that names a bite-proof but **declares no element set**, or declares an empty set
-   or aggregate label, is a **gap to flag** the same way — and still produce the proof, per the
-   **Short structured return rule above** (`rubric/bite-proof.md`
+6. **A detector-adding order names its bite-proof.** If your order adds or changes a **detector** —
+   anything whose job is to fail when something is wrong: a test, an assertion, a guard clause, a
+   validator, a CI check — the order should name the bite-proof it expects: the guarded element, the
+   neutralization to apply, and the detector expected to go red. If it does not, **flag the gap** —
+   and still produce the proof, per the **Short structured return rule above** (`rubric/bite-proof.md`
    is the plugin's own reference; the orchestrator supplies it if you need it): **N guarded elements
    owe N neutralizations and N reds; if you group them, group by distinct failure mode, name each
    class's representative element, and list any element in no class as unproven** — naming the
@@ -226,6 +217,9 @@ order is the likeliest defect source, so catching one early is high-value.
    must be mutated sits outside it, that is **stop and report** under the existing scope rule —
    flag it as the order defect it is, so the orchestrator can re-order, and do not wander. An order
    that names an existing test as "the proof" without a neutralization has not named a bite-proof.
+   **The guarded-element set is declared up front** — what an order must declare, what to do when it
+   declares nothing, and how the record's ceilings apply over that enumeration are stated once in
+   `rubric/bite-proof.md` § *The record*; read it there rather than here.
    (Field case: three non-discriminating assertions shipped in one file across three review rounds
    of one change, each passing against the very defect it was named for.)
 

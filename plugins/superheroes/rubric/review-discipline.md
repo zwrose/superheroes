@@ -130,7 +130,8 @@ control probe's **engaged** reading — is posted as a **comment on the micro PR
 durably, not left in the advisor's session. The owner's **per-change authorization** —
 the explicit authorization, and the stated risk when the quiet-failure waiver was used
 — is recorded in the **micro PR's body**, alongside the lane call the showrunner
-charter already records there.
+charter already records there. Both exist **before** the micro PR is handed back or merged — a receipt or an authorization
+recorded after the fact is not the independent check this lane substitutes for the vet.
 
 **Resolution:** per-change owner authorization means the owner reads the owner-facing
 half of the change before authorizing, and the owner is independent of the maker.

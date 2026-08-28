@@ -180,7 +180,7 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" record-result \
   --session-dir "$SESSION_DIR" --seat "<seat>" \
   --round <round from next> --phase "<phase from next>"  # or: record-result --sweep with same
 # … record-missing for any slot that forfeit/timeout — echo the same --round and --phase …
-# … write landing/<phase>/_dispatch.a<K>.json (seat phases only — run-verify emits none); shape: Dispatch manifest row
+# … write $SESSION_DIR/round-<N>/landing/<phase>/_dispatch.a<K>.json (seat phases only — run-verify emits none); shape: Dispatch manifest row
 python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
   --session-dir "$SESSION_DIR"
 ```
@@ -712,7 +712,7 @@ is the home for the driver-or-park valve.
   build recognizes (degrading — not `absent`), `shapeDrivers` — sorted
   channel names that fired for the certification shape (`independence`, `base`, `same-family`,
   `plugin-version-skew`, `seat-map-violation`, `unproven-liveness`, `seat-pin`, `seat-map-unavailable`))
-- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapUnjudgeable`, `seatMapViolations`, `pluginVersionSkew`, `vacuousSeats`, `engagedArtifactSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `adapterProvenance`, `recordOrphansIgnored`, `orderVendorProvenanceGaps`, `priorCommentsUnavailable`, `verifyPasses`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice` (the disclosure-channel names here are drift-pinned to `round_driver.RESUMABLE_DISCLOSURE_CHANNELS` by a test — a channel added to the registry must be added to this line). **`verifyPasses` is required, not optional:** on certified receipts at `schemaVersion` ≥ 3, attested receipts, and interim receipts, every round entry must carry `verifyPasses` **as a list** (possibly empty); `validate_receipt` refuses a round entry that omits the channel or carries a non-list — including receipts written before this requirement shipped, with guidance to re-run the review rather than trusting a stale receipt. Certified v2 receipts are out of scope.
+- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapUnjudgeable`, `seatMapViolations`, `pluginVersionSkew`, `vacuousSeats`, `engagedArtifactSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `adapterProvenance`, `recordOrphansIgnored`, `orderVendorProvenanceGaps`, `priorCommentsUnavailable`, `verifyPasses`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice` (the disclosure-channel names here are drift-pinned to `round_driver.RESUMABLE_DISCLOSURE_CHANNELS` by a test — a channel added to the registry must be added to this line)
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
 
 **Seat-map storage (#681).** The driver stores each round's submitted seat map as an append-only
@@ -743,10 +743,13 @@ receipt round `"0"`.
 - `skippedBlockers` — the dedicated skipped-blocking channel (`{id, title, severity, reason}` per owner-skipped judgment blocker; possibly empty). **Required** (possibly empty) so a receipt can never omit the channel — a converge over any skip is CLEAN EXCEPT FOR SKIPPED, never a plain success, and its certification `reason` leads with `clean-except-skipped: N blocker(s) skipped with citable reasons`.
 
 `validate_receipt(receipt)` returns `(ok, reason)` — a missing `scriptRan.byPhase` or non-list
-`rounds`/`findings`/`skippedBlockers` rejects the receipt; on certified v3+, attested, and interim
-forms, a round entry missing `verifyPasses` or carrying a non-list `verifyPasses` is refused too
-(stale receipts written before the requirement shipped are refused with guidance to re-run the
-review). This summary is hand-maintained — there is no drift pin for refusal enumeration.
+`rounds`/`findings`/`skippedBlockers` rejects the receipt.
+
+**This summary is deliberately non-exhaustive, and it is not pinned.** The authoritative field set
+and the complete refusal enumeration live in `lib/round_driver.py` — the `validate_receipt`
+implementation and the round-entry constants it reads (`ROUND_ENTRY_KEY_FORMS`,
+`RESUMABLE_DISCLOSURE_CHANNELS`). Read the code for the full list; do not treat the prose above as
+complete, and do not extend it into a second enumeration that would drift.
 
 ### Handback receipt gate (Claude host, Bash tool)
 
