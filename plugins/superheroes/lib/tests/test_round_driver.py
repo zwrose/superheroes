@@ -5134,24 +5134,31 @@ def test_seat_map_unavailable_constraint_violated_supersedes_shape():
 # =============================================================================
 
 def test_seat_map_unjudgeable_rounds_ledger_has_reader():
-    """NR-A: ``seatMapUnjudgeable`` round records arm ``_seat_map_unjudgeable`` (#1190)."""
+    """NR-A: rounds ledger arms only when receipts are judgeable — not via receipts alone (#1190)."""
     cfg = _cfg(leg="panel", vendors=["claude", "codex"])
-    cfg.pop("fixerVendor")
+    cfg["fixerVendor"] = "cursor"
     state = RD.new_state(cfg)
-    seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
+    seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor="cursor")
     _set_seat_map(state, seat_map)
+    assert RD._seat_map_unjudgeable(state) is False
     state["rounds"] = {"1": {"seatMapUnjudgeable": ["no-author-family"]}}
     assert RD._seat_map_unjudgeable(state) is True
 
 
 def test_seat_map_unjudgeable_rounds_arm_with_judgeable_receipts():
-    """NR-B rounds arm: round record alone arms the backstop (#1190)."""
+    """NR-B rounds arm: judgeable multi-round receipts stay clean until a round record arms (#1190)."""
     cfg = _cfg(leg="panel", vendors=["claude", "codex"])
-    cfg.pop("fixerVendor")
+    cfg["fixerVendor"] = "cursor"
     state = RD.new_state(cfg)
-    seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
-    _set_seat_map(state, seat_map)
-    state["rounds"] = {"1": {"seatMapUnjudgeable": ["no-author-family"]}}
+    round1 = _assertable_seat_map(["claude", "codex"], fixer_vendor="cursor")
+    round2 = _assertable_seat_map(["claude", "codex"], fixer_vendor="cursor")
+    state["seatMapReceipts"] = [
+        {"round": "1", "map": round1},
+        {"round": "2", "map": round2},
+    ]
+    state["rounds"] = {}
+    assert RD._seat_map_unjudgeable(state) is False
+    state["rounds"] = {"2": {"seatMapUnjudgeable": ["no-author-family"]}}
     assert RD._seat_map_unjudgeable(state) is True
 
 
@@ -5228,41 +5235,39 @@ def test_unattested_map_still_drives_fell_open_and_effective_seat_map():
 
 
 def test_seat_map_unjudgeable_quantifier_later_unjudgeable_arms():
-    """INV-9: judgeable round 1 then unjudgeable round 2 arms the terminal predicate."""
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    cfg.pop("fixerVendor")
+    """INV-9 receipts arm: judgeable round 1 then ``no-seats`` round 2 arms — ledger empty (#714)."""
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg["fixerVendor"] = "cursor"
     state = RD.new_state(cfg)
-    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
-    round1 = _assertable_seat_map(["codex", "cursor"], fixer_vendor=None)
-    RD._fold_panel(state, state["config"], {
-        "seats": seats, "seatMap": round1,
-        "canaryResult": _canary_probes_for(round1),
-    })
-    state["round"] = 2
-    round2 = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
-    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round2})
+    round1 = _assertable_seat_map(["claude", "codex"], fixer_vendor="cursor")
+    round2 = {"seats": {}}
+    state["seatMapReceipts"] = [
+        {"round": "1", "map": round1},
+        {"round": "2", "map": round2},
+    ]
+    state["rounds"] = {}
+    assert state["rounds"] == {}
     assert RD._seat_map_unjudgeable(state) is True
 
 
 def test_seat_map_unjudgeable_quantifier_earlier_unjudgeable_arms():
-    """INV-9: unjudgeable round 1 then judgeable round 2 still arms — not existential."""
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    cfg.pop("fixerVendor")
+    """INV-9 receipts arm: ``no-seats`` round 1 then judgeable round 2 still arms — not existential."""
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg["fixerVendor"] = "cursor"
     state = RD.new_state(cfg)
-    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
-    round1 = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
-    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": round1})
-    state["round"] = 2
-    round2 = _assertable_seat_map(["codex", "cursor"], fixer_vendor=None)
-    RD._fold_panel(state, state["config"], {
-        "seats": seats, "seatMap": round2,
-        "canaryResult": _canary_probes_for(round2),
-    })
+    round1 = {"seats": {}}
+    round2 = _assertable_seat_map(["claude", "codex"], fixer_vendor="cursor")
+    state["seatMapReceipts"] = [
+        {"round": "1", "map": round1},
+        {"round": "2", "map": round2},
+    ]
+    state["rounds"] = {}
+    assert state["rounds"] == {}
     assert RD._seat_map_unjudgeable(state) is True
 
 
 def test_seat_map_unjudgeable_terminal_converged_shape_drivers_consumer():
-    """Present-but-unjudgeable map wires ``_seat_map_unjudgeable`` into shapeDrivers (#1190)."""
+    """No driver family: authorFamily-stripped map arms shapeDrivers; cursor control stays clean (#1190)."""
     SM = _load("seat_map")
     cfg = _cfg(leg="panel", vendors=["claude", "codex"])
     cfg.pop("fixerVendor")
@@ -5278,15 +5283,18 @@ def test_seat_map_unjudgeable_terminal_converged_shape_drivers_consumer():
     RD._terminal_converged(state, cfg, full_panel=True)
     assert "seat-map-unavailable" in state["certification"]["shapeDrivers"]
     control_cfg = dict(cfg)
-    control_cfg["fixerVendor"] = "claude"  # driver family — map-only authorFamily is self-asserted
+    control_cfg["fixerVendor"] = "cursor"
     control_state = RD.new_state(control_cfg)
     _set_seat_map(control_state, unjudgeable_map)
     RD._terminal_converged(control_state, control_cfg, full_panel=True)
+    assert RD._seat_map_unjudgeable(control_state) is False
+    assert RD._seat_map_unavailable(control_state) is False
+    assert control_state["certification"]["shapeDrivers"] == []
     assert "seat-map-unavailable" not in control_state["certification"]["shapeDrivers"]
 
 
 def test_seat_map_unjudgeable_cert_shape_degraded_consumer():
-    """Present-but-unjudgeable map wires ``_seat_map_unjudgeable`` into ``-degraded`` shape (#1190)."""
+    """No driver family: authorFamily-stripped map degrades shape; cursor control stays ``full-panel-confirmed`` (#1190)."""
     SM = _load("seat_map")
     cfg = _cfg(leg="panel", vendors=["claude", "codex"])
     cfg.pop("fixerVendor")
@@ -5302,11 +5310,12 @@ def test_seat_map_unjudgeable_cert_shape_degraded_consumer():
     RD._terminal_converged(state, cfg, full_panel=True)
     assert state["certification"]["shape"].endswith("-degraded")
     control_cfg = dict(cfg)
-    control_cfg["fixerVendor"] = "claude"  # driver family — map-only authorFamily is self-asserted
+    control_cfg["fixerVendor"] = "cursor"
     control_state = RD.new_state(control_cfg)
     _set_seat_map(control_state, unjudgeable_map)
     RD._terminal_converged(control_state, control_cfg, full_panel=True)
-    assert not control_state["certification"]["shape"].endswith("-degraded")
+    assert RD._seat_map_unjudgeable(control_state) is False
+    assert control_state["certification"]["shape"] == "full-panel-confirmed"
 
 
 # =============================================================================
