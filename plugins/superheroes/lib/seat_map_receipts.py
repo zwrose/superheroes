@@ -81,44 +81,76 @@ def any_seats(state):
     return False
 
 
-def same_family_seats(state):
-    """Degradations projection — union of same-family seats across all receipts."""
+def same_family_seats(state, driver_author_family=None):
+    """Degradations projection — union of same-family seats across all receipts.
+
+    Suppresses a raw same-family record when the same receipt carries an unexcused maker-family
+    violation for that seat — submitted maps bypass ``to_receipt``, so both can coexist."""
     seats: list[str] = []
     for entry in receipts(state):
+        unexcused_maker = {
+            str(v.get("seat") or "")
+            for v in seat_map.unexcused_violations(entry["map"], driver_author_family)
+            if isinstance(v, dict) and v.get("constraint") == "maker-family"
+        }
         degradations = entry["map"].get("degradations")
         if not isinstance(degradations, list):
             continue
         for deg in degradations:
             if isinstance(deg, dict) and deg.get("constraint") == "same-family":
                 seat = deg.get("seat")
-                seats.append(seat if isinstance(seat, str) and seat else "unnamed-seat")
+                seat_name = seat if isinstance(seat, str) and seat else "unnamed-seat"
+                if seat_name in unexcused_maker:
+                    continue
+                seats.append(seat_name)
     return sorted(set(seats))
 
 
-def unexcused_violations(state):
+def _merge_violations_conservative(by_key: dict, violation: dict) -> None:
+    """INV-17: derived wins over submitted for the same (constraint, seat) key."""
+    key = (str(violation.get("constraint", "")), str(violation.get("seat") or ""))
+    existing = by_key.get(key)
+    if existing is None:
+        by_key[key] = violation
+    elif violation.get("derived"):
+        by_key[key] = violation
+
+
+def unexcused_violations(state, driver_author_family=None):
     """Violations projection — per-receipt ``unexcused_violations``, deduped by (constraint, seat)."""
-    seen: set[tuple] = set()
-    merged: list[dict] = []
+    by_key: dict[tuple, dict] = {}
     for entry in receipts(state):
-        for v in seat_map.unexcused_violations(entry["map"]):
-            key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(v)
+        for v in seat_map.unexcused_violations(entry["map"], driver_author_family):
+            _merge_violations_conservative(by_key, v)
+    merged = list(by_key.values())
     merged.sort(key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")))
     return merged
 
 
-def pin_excused_records(state):
+def pin_excused_records(state, driver_author_family=None):
     """Pin-excusal projection — per-receipt ``classify_violations`` excusedByPin lists."""
     records: list[dict] = []
     for entry in receipts(state):
-        classified = seat_map.classify_violations(entry["map"])
+        classified = seat_map.classify_violations(entry["map"], driver_author_family)
         for rec in classified.get("excusedByPin") or []:
             if isinstance(rec, dict):
                 records.append(rec)
     return records
+
+
+def unjudgeable_receipts(state, driver_author_family=None):
+    """Per-receipt judgeability — the receipts whose violation basis is INCOMPLETE.
+
+    Returns a list of {"round": <str>, "basis": <violation_basis literal>}, in receipt order.
+    Existential judgeability would be a fall-open: receipts are append-only, so one old complete
+    receipt would mask a newer unjudgeable map that actually governed dispatch.
+    """
+    out: list[dict] = []
+    for entry in receipts(state):
+        basis = seat_map.violation_basis(entry["map"], driver_author_family)
+        if basis != seat_map.VIOLATION_BASIS_COMPLETE:
+            out.append({"round": str(entry.get("round", "")), "basis": basis})
+    return out
 
 
 def skew_records(state):
@@ -172,7 +204,7 @@ def canary_map(state, round_map):
     return latest_with_seats(state)
 
 
-def emit_receipt_seat_map(state):
+def emit_receipt_seat_map(state, driver_author_family=None):
     """Derived read-time union for ``build_receipt`` — latest seats, merged evidence, last-wins scalars."""
     receipt_list = receipts(state)
     base = dict(latest_with_seats(state))
@@ -191,7 +223,19 @@ def emit_receipt_seat_map(state):
             merged_degs.append(row)
     if merged_degs:
         base["degradations"] = merged_degs
-    for key in _LIST_EVIDENCE_MAP_KEYS:
+    violation_by_key: dict[tuple, dict] = {}
+    for entry in receipt_list:
+        for v in seat_map.derived_violations(entry["map"], driver_author_family):
+            _merge_violations_conservative(violation_by_key, v)
+    merged_violations = list(violation_by_key.values())
+    merged_violations.sort(
+        key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")),
+    )
+    if merged_violations:
+        base["violations"] = merged_violations
+    else:
+        base.pop("violations", None)
+    for key in _LIST_EVIDENCE_MAP_KEYS - frozenset({"violations"}):
         seen_rows: set[str] = set()
         merged_rows: list = []
         for entry in receipt_list:
