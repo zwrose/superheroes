@@ -5261,6 +5261,56 @@ def test_seat_map_unjudgeable_quantifier_earlier_unjudgeable_arms():
     assert RD._seat_map_unjudgeable(state) is True
 
 
+def test_seat_map_unjudgeable_terminal_converged_shape_drivers_consumer():
+    """Present-but-unjudgeable map wires ``_seat_map_unjudgeable`` into shapeDrivers (#1190)."""
+    SM = _load("seat_map")
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg.pop("fixerVendor")
+    seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
+    author_family = seat_map.get("authorFamily")
+    unjudgeable_map = dict(seat_map)
+    unjudgeable_map.pop("authorFamily", None)
+    driver_fam = model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+    assert SM.derived_violations(unjudgeable_map, driver_fam) == []
+    state = RD.new_state(cfg)
+    _set_seat_map(state, unjudgeable_map)
+    assert RD._seat_map_unavailable(state) is False
+    assert RD._seat_map_unjudgeable(state) is True
+    RD._terminal_converged(state, cfg, full_panel=True)
+    assert "seat-map-unavailable" in state["certification"]["shapeDrivers"]
+    control_state = RD.new_state(cfg)
+    control_map = dict(unjudgeable_map)
+    control_map["authorFamily"] = author_family
+    _set_seat_map(control_state, control_map)
+    RD._terminal_converged(control_state, cfg, full_panel=True)
+    assert "seat-map-unavailable" not in control_state["certification"]["shapeDrivers"]
+
+
+def test_seat_map_unjudgeable_cert_shape_degraded_consumer():
+    """Present-but-unjudgeable map wires ``_seat_map_unjudgeable`` into ``-degraded`` shape (#1190)."""
+    SM = _load("seat_map")
+    cfg = _cfg(leg="panel", vendors=["claude", "codex"])
+    cfg.pop("fixerVendor")
+    seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
+    author_family = seat_map.get("authorFamily")
+    unjudgeable_map = dict(seat_map)
+    unjudgeable_map.pop("authorFamily", None)
+    driver_fam = model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+    assert SM.derived_violations(unjudgeable_map, driver_fam) == []
+    state = RD.new_state(cfg)
+    _set_seat_map(state, unjudgeable_map)
+    assert RD._seat_map_unavailable(state) is False
+    assert RD._seat_map_unjudgeable(state) is True
+    RD._terminal_converged(state, cfg, full_panel=True)
+    assert state["certification"]["shape"].endswith("-degraded")
+    control_state = RD.new_state(cfg)
+    control_map = dict(unjudgeable_map)
+    control_map["authorFamily"] = author_family
+    _set_seat_map(control_state, control_map)
+    RD._terminal_converged(control_state, cfg, full_panel=True)
+    assert not control_state["certification"]["shape"].endswith("-degraded")
+
+
 def test_emit_receipt_seat_map_derived_violations_replay_no_breach_lost():
     """INV-11: emitted ``seatMap`` carries derived violations — replay cannot read clean."""
     SM = _load("seat_map")
@@ -5280,7 +5330,8 @@ def test_emit_receipt_seat_map_derived_violations_replay_no_breach_lost():
                     for v in emitted_violations if isinstance(v, dict)}
     replayed_keys = {(str(v.get("constraint", "")), str(v.get("seat") or ""))
                      for v in replayed if isinstance(v, dict)}
-    assert emitted_keys <= replayed_keys
+    # Replay must not discover a breach the emitted artifact omitted — subset runs the wrong way.
+    assert replayed_keys <= emitted_keys
     assert replayed_keys
 
 
