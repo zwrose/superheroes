@@ -746,7 +746,9 @@ receipt round `"0"`.
 `rounds`/`findings`/`skippedBlockers` rejects the receipt; on certified v3+, attested, and interim
 forms, a round entry missing `verifyPasses` or carrying a non-list `verifyPasses` is refused too
 (stale receipts written before the requirement shipped are refused with guidance to re-run the
-review).
+review). The required-form enumeration here is drift-pinned to `round_driver.ROUND_ENTRY_KEY_FORMS`
+by `test_verify_passes_required_forms_match_round_driver_doc` — extend the test when the
+declaration changes.
 
 ### Handback receipt gate (Claude host, Bash tool)
 

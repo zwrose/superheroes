@@ -168,6 +168,18 @@ _CLAUSE_ROWS = [
         "copy_holder": "agents/implementer.md",
         "copy_holder_section": "## Validating your work order",
     },
+    {
+        "clause": "the guarded-element set the order declared",
+        "home_section": "## The record",
+        "copy_holder": "agents/implementer.md",
+        "copy_holder_section": "## The rules",
+    },
+    {
+        "clause": "bite-proof record for every detector",
+        "home_section": "## The record",
+        "copy_holder": "agents/implementer.md",
+        "copy_holder_section": "## The rules",
+    },
 ]
 
 

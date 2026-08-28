@@ -362,6 +362,31 @@ def test_verify_passes_required_forms_match_round_driver_doc():
         % (sorted(documented_labels), sorted(required_labels))
     )
 
+    # Doc → code: every form label named in the prose must map to a declaration entry.
+    label_to_schema = {
+        "attested": RD.RECEIPT_ATTESTED_SCHEMA,
+        "interim": RD.RECEIPT_INTERIM_SCHEMA,
+    }
+    for label, schema in label_to_schema.items():
+        if label in documented_labels:
+            assert schema in decl["non_certified_schemas"], (
+                "round-driver.md names %r receipts but %r is absent from "
+                "ROUND_ENTRY_KEY_FORMS['verifyPasses']['non_certified_schemas']"
+                % (label, schema)
+            )
+        else:
+            assert schema not in decl["non_certified_schemas"], (
+                "ROUND_ENTRY_KEY_FORMS requires %r but round-driver.md omits the %r label"
+                % (schema, label)
+            )
+    certified_label = "certified-v%d+" % min_v
+    if certified_label in documented_labels:
+        assert decl["min_certified_version"] == min_v
+    else:
+        raise AssertionError(
+            "round-driver.md must name certified schemaVersion floor %d" % min_v
+        )
+
     # Code → doc: every form the declaration requires must be named in the prose.
     for schema in decl["non_certified_schemas"]:
         assert RD._round_entry_key_declared("verifyPasses", schema, None), (

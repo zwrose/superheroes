@@ -36,6 +36,10 @@ _CLAUSE_ROWS = [
         "home_section": "## Verify receipt is not a test receipt",
     },
     {
+        "clause": "A green verify exit is not evidence the test suite passed",
+        "home_section": "## Verify receipt is not a test receipt",
+    },
+    {
         "clause": "successful CI conclusion",
         "home_section": "## What does ground a test-pass claim",
     },
@@ -48,6 +52,11 @@ _CLAUSE_ROWS = [
         "home_section": "## What does ground a test-pass claim",
     },
 ]
+
+# Home-only policy literals consumers must not restate — pointer to _POINTER is the contract.
+_HOME_ONLY_CLAUSES = [row["clause"] for row in _CLAUSE_ROWS]
+
+_ALL_CONSUMERS = [rel for rel, _, _ in _CONSUMER_ROSTER] + [rel for rel, _ in _WHOLE_FILE_CONSUMERS]
 
 
 def _read(rel):
@@ -136,3 +145,14 @@ def test_clause_present_in_home(row):
         raise AssertionError(
             f"{_HOME} (section {row['home_section']}): clause missing — re-sync: {row['clause']!r}"
         )
+
+
+@pytest.mark.parametrize("rel", _ALL_CONSUMERS)
+def test_consumer_does_not_restate_home_policy(rel):
+    """Consumers point at the home; they must not carry home-only policy literals."""
+    text = _normalized(_read(rel))
+    for clause in _HOME_ONLY_CLAUSES:
+        if _normalized(clause) in text:
+            raise AssertionError(
+                f"{rel} restates home-only policy {clause!r} — point at {_POINTER!r} instead"
+            )
