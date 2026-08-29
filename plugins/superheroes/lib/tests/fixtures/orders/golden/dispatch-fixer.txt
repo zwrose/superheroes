@@ -11,9 +11,16 @@ You are the fixer for one round of an auto-fix code-review loop.
 - Escalation guard: ${PLUGIN_ROOT}/lib/escalation_resolve.py
 - Verify command: npm test
 
+## Owner-gate guidance
+
+No owner-gate guidance is attached to this batch.
+
+Guidance in this section overrides the original suggestion for the named finding.
+
 ## Your job
 1. Apply a fix for EACH finding. Follow CLAUDE.md conventions and the profile's
-   canonical patterns. When a finding has userGuidance, follow it over the
+   canonical patterns. When a finding has userGuidance, or when this batch carries
+   owner-gate guidance for a finding id above, follow that guidance over the
    original suggestion. BEFORE editing any file, gate it with the fixer
    file-scope guard, using the absolute "Escalation guard" and "Repo root"
    values from ## Input. **No branch-controlled path may be interpolated into

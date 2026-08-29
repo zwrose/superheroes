@@ -666,9 +666,16 @@ You are the fixer for one round of an auto-fix code-review loop.
 - Escalation guard: <absolute ESC_WRAPPER path>
 - Verify command: <VERIFY_CMD, or the literal "none" when the profile is mode: unverified>
 
+## Owner-gate guidance
+
+<GATE_GUIDANCE block — one entry per guided finding, keyed by finding id; overrides suggestion>
+
+Guidance in this section overrides the original suggestion for the named finding.
+
 ## Your job
 1. Apply a fix for EACH finding. Follow CLAUDE.md conventions and the profile's
-   canonical patterns. When a finding has userGuidance, follow it over the
+   canonical patterns. When a finding has userGuidance, or when this batch carries
+   owner-gate guidance for a finding id above, follow that guidance over the
    original suggestion. BEFORE editing any file, gate it with the fixer
    file-scope guard, using the absolute "Escalation guard" and "Repo root"
    values from ## Input:

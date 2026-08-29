@@ -4739,6 +4739,103 @@ def test_judgment_conflicting_dispositions_same_id_parks():
     assert RD.JUDGMENT_DISPOSITION_COLLISION_CAUSE in (state["certification"]["reason"] or "")
 
 
+def test_judgment_conflicting_guidance_same_id_parks():
+    """Two fix-with-guidance rows for one id with different guidance park via collision cause."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "approach A"},
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "approach B"},
+    ]})
+    assert state["terminal"] == "cannot-certify"
+    assert RD.JUDGMENT_DISPOSITION_COLLISION_CAUSE in (state["certification"]["reason"] or "")
+
+
+def test_judgment_identical_guidance_same_id_collapses():
+    """Identical guidance for the same id folds normally — not a conflict."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "same text"},
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "same text"},
+    ]})
+    assert state["step"] == RD.P_FIXER
+    assert len(state["_fixBatch"]) == 1
+    assert state["_fixBatch"][0][RD.FIX_BATCH_GUIDANCE_KEY] == "same text"
+
+
+def test_fix_with_guidance_blank_records_disposition_without_guidance_value():
+    """fix-with-guidance with blank guidance records disposition only — no fabricated guidance."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "   "}]})
+    assert state["step"] == RD.P_FIXER
+    assert RD.FIX_BATCH_GUIDANCE_KEY not in state["_fixBatch"][0]
+    logged = state["rounds"]["1"]["judgmentDispositions"][0]
+    assert logged["disposition"] == "fix-with-guidance"
+    assert RD.FIX_BATCH_GUIDANCE_KEY not in logged
+
+
+def test_judgment_dispositions_record_carries_guidance_text():
+    """G3 axis: disposition_log carries userGuidance for fix-with-guidance folds."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
+         "guidance": "keep it backward compatible"}]})
+    logged = state["rounds"]["1"]["judgmentDispositions"][0]
+    assert logged[RD.FIX_BATCH_GUIDANCE_KEY] == "keep it backward compatible"
+
+
+def test_receipt_projects_judgment_dispositions_when_recorded():
+    """G4 axis: build_receipt carries judgmentDispositions when the round recorded one."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
+         "guidance": "narrow only"}]})
+    state["terminal"] = "converged"
+    receipt = RD.build_receipt(state)
+    rd = receipt["rounds"][0]
+    assert rd["judgmentDispositions"][0][RD.FIX_BATCH_GUIDANCE_KEY] == "narrow only"
+
+
+def test_two_guided_findings_same_title_distinguished_by_id(tmp_path):
+    """Edge 10: same title at different lines → both guided entries, distinct finding ids."""
+    a = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
+         "tradeoff": True}
+    b = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 20,
+         "tradeoff": True}
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(a), dict(b)])
+    step = RD._advance(state, state["config"])
+    ids = [f["id"] for f in step["payload"]["findings"]]
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": ids[0], "disposition": "fix-with-guidance", "guidance": "guidance A"},
+        {"id": ids[1], "disposition": "fix-with-guidance", "guidance": "guidance B"},
+    ]})
+    session_dir = str(tmp_path / "two-guided")
+    os.makedirs(session_dir)
+    state["reviewedDiff"] = "diff --git a/f b/f\n"
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RD.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 1, paths, RD.CHANNEL_FILE,
+    )
+    block = ph["GATE_GUIDANCE"]
+    assert ids[0] in block and ids[1] in block
+    assert "guidance A" in block and "guidance B" in block
+    assert ids[0] != ids[1]
+
+
 def test_stall_menu_payload_carries_no_judgment_findings():
     """The stall menu is the audit-stall TERMINAL only — its payload never carries judgment
     findings (they route to present-judgment)."""

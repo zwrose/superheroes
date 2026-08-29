@@ -92,6 +92,16 @@ def test_fix_batch_guidance_key_present_on_copy_surface(rel):
     )
 
 
+@pytest.mark.parametrize("rel", _GUIDANCE_COPY_SURFACES, ids=_GUIDANCE_COPY_SURFACES)
+def test_gate_guidance_heading_present_on_copy_surface(rel):
+    # axis: Owner-gate guidance section heading pinned on every copy surface
+    heading = "## Owner-gate guidance"
+    text = _read(rel)
+    assert heading in text, (
+        "expected %r on copy surface %s — GATE_GUIDANCE block drift" % (heading, rel)
+    )
+
+
 # --- guidance emission (bite axis: fold writes FIX_BATCH_GUIDANCE_KEY) ---------------------
 
 
@@ -104,6 +114,200 @@ def test_fold_judgment_writes_user_guidance_key():
     batch = state["_fixBatch"][0]
     assert batch[RD.FIX_BATCH_GUIDANCE_KEY] == "keep it backward compatible"
     assert "guidance" not in batch
+
+
+# --- gate guidance block (WO #1221) ------------------------------------------------------
+
+
+def test_gate_guidance_block_non_list_yields_no_guidance_form():
+    # edge 1: non-list input → no-guidance form, never crash or empty string
+    assert RD._gate_guidance_block(None) == RD._GATE_GUIDANCE_NO_GUIDANCE
+    assert RD._gate_guidance_block("not-a-list") == RD._GATE_GUIDANCE_NO_GUIDANCE
+
+
+def test_gate_guidance_block_empty_or_non_dict_rows_yields_no_guidance_form():
+    # edge 1: empty list or non-dict rows → no-guidance form
+    assert RD._gate_guidance_block([]) == RD._GATE_GUIDANCE_NO_GUIDANCE
+    assert RD._gate_guidance_block([None, "x"]) == RD._GATE_GUIDANCE_NO_GUIDANCE
+
+
+def test_gate_guidance_block_skips_non_guided_rows():
+    # edge 2: absent/None/non-string/whitespace userGuidance is not guided
+    rows = [
+        {"title": "a", "file": "f.py", "line": 1},
+        {"title": "b", "file": "f.py", "line": 2, RD.FIX_BATCH_GUIDANCE_KEY: None},
+        {"title": "c", "file": "f.py", "line": 3, RD.FIX_BATCH_GUIDANCE_KEY: 1},
+        {"title": "d", "file": "f.py", "line": 4, RD.FIX_BATCH_GUIDANCE_KEY: "   "},
+    ]
+    assert RD._gate_guidance_block(rows) == RD._GATE_GUIDANCE_NO_GUIDANCE
+
+
+def _minimal_render_ctx(session_dir, repo_root, ph, paths):
+    return {
+        "session_dir": session_dir,
+        "round": 2,
+        "attempt": 0,
+        "diff_path": os.path.join(session_dir, "round-2", "diff.txt"),
+        "rubric_path": RD._shipped_rubric_path(),
+        "core_path": "",
+        "layer_path": "",
+        "repo_root": repo_root,
+        "landing_path": paths["landing_path"],
+        "envelope_stub_path": paths["envelope_stub_path"],
+        "ratified_residuals": "",
+        "residuals_provenance": "",
+        "residuals_read_failure": None,
+        "payload": {},
+        "host_seat": True,
+        "placeholders": ph,
+    }
+
+
+def test_gate_guidance_block_renders_guided_row_verbatim():
+    rows = [{"title": "widen the API", "file": "f.py", "line": 1,
+             RD.FIX_BATCH_GUIDANCE_KEY: "keep backward compatible"}]
+    block = RD._gate_guidance_block(rows)
+    assert "f.py::widen the api@L1" in block
+    assert "widen the API" in block
+    assert "> keep backward compatible" in block
+    assert "BEGIN owner-gate guidance" in block
+    assert "END owner-gate guidance" in block
+
+
+def test_gate_guidance_round_placeholder_neutralized_in_rendered_order(tmp_path):
+    # edge 3: {{ROUND}} in guidance must not substitute into the order
+    import round_orders as RO
+    session_dir = str(tmp_path / "gate-round")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": str(tmp_path), "verifyCommand": "none"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+        "_fixBatch": [{"title": "leak", "file": "a.py", "line": 3,
+                       RD.FIX_BATCH_GUIDANCE_KEY: "use round {{ROUND}} here"}],
+    }
+    paths = _minimal_paths(session_dir)
+    ph = RD._order_placeholders(
+        RP.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 2, paths, RD.CHANNEL_FILE,
+    )
+    assert "{ {ROUND}}" in ph["GATE_GUIDANCE"]
+    assert "{{ROUND}}" not in ph["GATE_GUIDANCE"]
+    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None, reason
+    assert "use round { {ROUND}} here" in text
+    assert "use round 2 here" not in text
+
+
+def test_gate_guidance_unknown_placeholder_does_not_wedge_render(tmp_path):
+    # edge 4: unknown {{FOO}} in guidance must not trip unknown-placeholder-remaining
+    import round_orders as RO
+    session_dir = str(tmp_path / "gate-unknown")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": str(tmp_path), "verifyCommand": "none"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+        "_fixBatch": [{"title": "x", "file": "b.py", "line": 1,
+                       RD.FIX_BATCH_GUIDANCE_KEY: "see {{UNKNOWN_THING}}"}],
+    }
+    paths = _minimal_paths(session_dir)
+    ph = RD._order_placeholders(
+        RP.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 2, paths, RD.CHANNEL_FILE,
+    )
+    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None, reason
+    assert "{ {UNKNOWN_THING}}" in text
+
+
+def test_gate_guidance_markdown_in_guidance_stays_inside_delimiters(tmp_path):
+    # edge 5: fenced block, heading, backticks stay inside delimiters
+    import round_orders as RO
+    guidance = "# heading\n```py\nx = 1\n```\nuse `foo`"
+    session_dir = str(tmp_path / "gate-md")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": str(tmp_path), "verifyCommand": "none"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+        "_fixBatch": [{"title": "fmt", "file": "c.py", "line": 2,
+                       RD.FIX_BATCH_GUIDANCE_KEY: guidance}],
+    }
+    paths = _minimal_paths(session_dir)
+    ph = RD._order_placeholders(
+        RP.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 2, paths, RD.CHANNEL_FILE,
+    )
+    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None, reason
+    begin = text.index("BEGIN owner-gate guidance")
+    end = text.index("END owner-gate guidance")
+    section = text[begin:end]
+    assert "# heading" in section
+    assert "```py" in section
+    assert "`foo`" in section
+
+
+def test_gate_guidance_per_row_cap_emits_elision_notice():
+    # edge 6: per-row cap → explicit elision with withheld byte count and sidecar pointer
+    long_text = "x" * (RD.GATE_GUIDANCE_ROW_BYTE_CAP + 50)
+    rows = [{"title": "big", "file": "d.py", "line": 1,
+             RD.FIX_BATCH_GUIDANCE_KEY: long_text}]
+    block = RD._gate_guidance_block(rows)
+    assert "bytes withheld" in block
+    assert RD.FIX_BATCH_GUIDANCE_KEY in block
+    assert "fix-batch.json" in block
+
+
+def test_gate_guidance_aggregate_cap_emits_omission_notice():
+    # edge 7: aggregate cap → explicit notice naming rows not rendered in full
+    row = {"title": "t", "file": "e.py", "line": 1,
+           RD.FIX_BATCH_GUIDANCE_KEY: "y" * 500}
+    rows = [dict(row, line=i + 1, file="e%d.py" % i) for i in range(30)]
+    block = RD._gate_guidance_block(rows)
+    assert "not rendered in full" in block
+    assert RD.FIX_BATCH_GUIDANCE_KEY in block
+
+
+def test_fixer_order_placeholders_include_guided_gate_block(tmp_path):
+    # G1 axis: P_FIXER wiring emits guided guidance from state batch
+    session_dir = str(tmp_path / "guided-batch")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": str(tmp_path), "verifyCommand": "none"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+        "_fixBatch": [{"title": "widen the API", "file": "f.py", "line": 1,
+                       RD.FIX_BATCH_GUIDANCE_KEY: "ship narrow API"}],
+    }
+    paths = _minimal_paths(session_dir)
+    ph = RD._order_placeholders(
+        RP.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 2, paths, RD.CHANNEL_FILE,
+    )
+    assert "ship narrow API" in ph["GATE_GUIDANCE"]
+    assert ph["GATE_GUIDANCE"] != RD._GATE_GUIDANCE_NO_GUIDANCE
+
+
+def test_mechanical_batch_emits_no_guidance_form(tmp_path):
+    # edge 11: mechanical batch → no-guidance form without gate-ran claims
+    session_dir = str(tmp_path / "mech-batch")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": str(tmp_path), "verifyCommand": "none"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+        "_fixBatch": [{"title": "unchecked index", "file": "f.py", "line": 2,
+                       "severity": "Important"}],
+    }
+    paths = _minimal_paths(session_dir)
+    ph = RD._order_placeholders(
+        RP.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 2, paths, RD.CHANNEL_FILE,
+    )
+    assert ph["GATE_GUIDANCE"] == RD._GATE_GUIDANCE_NO_GUIDANCE
+    lowered = ph["GATE_GUIDANCE"].lower()
+    assert "gate ran" not in lowered
+    assert "gate did not" not in lowered
 
 
 # --- head diff materialization (bite axis: head.diff exists when cited) ---------------------
