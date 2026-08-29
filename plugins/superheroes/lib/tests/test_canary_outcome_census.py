@@ -227,6 +227,25 @@ def test_outcome_members_from_ast_includes_annotated_constant(tmp_path):
     assert "typed" in derived
 
 
+def test_normalize_declared_non_pass_never_upgrades_to_pass():
+    """axis: no declared non-pass member normalizes to a pass member when fields imply pass."""
+    for outcome in canary_outcome.NON_PASS_OUTCOMES:
+        probe = _minimal_probe(outcome, engaged=True, detected_plant=True)
+        norm_outcome, fault = canary_outcome.normalize(probe)
+        assert not canary_outcome.is_pass(norm_outcome), (
+            "declared %r with engaged/detected must not normalize to pass; got %r (fault=%r)"
+            % (outcome, norm_outcome, fault)
+        )
+
+
+def test_normalize_declared_ok_with_refusing_fields_reredives_downward():
+    """axis: declared ok with refusing fields still re-derives downward."""
+    probe = _minimal_probe(canary_outcome.OUTCOME_OK, engaged=False, detected_plant=False)
+    norm_outcome, fault = canary_outcome.normalize(probe)
+    assert norm_outcome == canary_outcome.OUTCOME_NOT_ENGAGED
+    assert fault == "canary-outcome-contradicts-fields"
+
+
 def test_contradictory_plant_undetected_probe_folds_dead():
     """axis: plant-undetected with engaged not true normalizes to not-engaged and folds dead."""
     probe = {

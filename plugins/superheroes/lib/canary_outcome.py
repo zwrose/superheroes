@@ -111,6 +111,9 @@ def normalize(probe):
         detected_plant=detected_plant,
     )
     if outcome != derived:
+        if is_pass(derived) and not is_pass(outcome):
+            # axis: a declared non-pass member must not normalize to pass
+            return outcome, "canary-outcome-contradicts-fields"
         # axis: a caller cannot assert an outcome its fields refuse
         return derived, "canary-outcome-contradicts-fields"
 
