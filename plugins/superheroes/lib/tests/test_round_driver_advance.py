@@ -1395,6 +1395,112 @@ def test_record_missing_refuses_an_attempt_that_is_not_pending(tmp_path, adapter
 
 
 # =============================================================================================
+# §3b record-dispatch
+# =============================================================================================
+
+def _dispatch_manifest_path(session_dir, pend=None):
+    pend = pend or _pending(session_dir)
+    return RR.dispatch_manifest_path(session_dir, pend["round"], pend["phase"], pend["attempt"])
+
+
+def _record_dispatch(d, seat, vendor="cursor", note="hand-dispatched for calibration", **kw):
+    return RD.cmd_record_dispatch(d, seat, vendor=vendor, note=note, **kw)
+
+
+def test_record_dispatch_refuses_non_seat_pending_phase(tmp_path, adapters):
+    d = _session(tmp_path)
+    assert _record_dispatch(d, "code-reviewer")["ok"] is True
+    _record_all_panel_seats(d)
+    assert _advance(d, tmp_path)["ok"] is True
+    _pending_at_run_verify(d)
+    out = _record_dispatch(d, "verify", vendor="cursor", note="orchestrator hand dispatch")
+    assert out["ok"] is False and out["reason"] == "dispatch-record-not-a-seat-phase"
+
+
+def test_record_dispatch_refuses_off_roster_seat(tmp_path, adapters):
+    d = _session(tmp_path)
+    assert _record_dispatch(d, "code-reviewer")["ok"] is True
+    out = _record_dispatch(d, "not-a-seat")
+    assert out["ok"] is False and out["reason"] == "dispatch-record-seat-not-on-roster"
+
+
+def test_record_dispatch_refuses_malformed_existing_manifest(tmp_path, adapters):
+    d = _session(tmp_path)
+    assert _record_dispatch(d, "code-reviewer")["ok"] is True
+    mpath = _dispatch_manifest_path(d)
+    with open(mpath, "w", encoding="utf-8") as fh:
+        fh.write("not json{")
+    with open(mpath, "rb") as fh:
+        before = fh.read()
+    out = _record_dispatch(d, "test-reviewer")
+    assert out["ok"] is False and out["reason"] == "dispatch-manifest-unreadable"
+    with open(mpath, "rb") as fh:
+        assert fh.read() == before
+
+
+def test_record_dispatch_refuses_conflicting_existing_row(tmp_path, adapters):
+    d = _session(tmp_path)
+    pend = _pending(d)
+    runner_row = {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
+    RR.atomic_write_json(_dispatch_manifest_path(d, pend),
+                         {"code-reviewer": runner_row})
+    assert _record_dispatch(d, "test-reviewer", vendor="codex", note="ok on another seat")["ok"] \
+        is True
+    out = _record_dispatch(d, "code-reviewer", vendor="cursor", note="hand override attempt")
+    assert out["ok"] is False and out["reason"] == "dispatch-record-conflict"
+    stored, _err = RR.read_json(_dispatch_manifest_path(d, pend))
+    assert stored["code-reviewer"] == runner_row
+
+
+def test_record_dispatch_byte_identical_replay_is_idempotent(tmp_path, adapters):
+    d = _session(tmp_path)
+    pend = _pending(d)
+    mpath = _dispatch_manifest_path(d, pend)
+    first = _record_dispatch(d, "code-reviewer", vendor="cursor", model="composer-2.5",
+                             engine="cursor", note="hand-dispatched seat")
+    assert first["ok"] is True
+    with open(mpath, "rb") as fh:
+        before = fh.read()
+    again = _record_dispatch(d, "code-reviewer", vendor="cursor", model="composer-2.5",
+                             engine="cursor", note="hand-dispatched seat")
+    assert again == {"ok": True, "idempotent": True, "phase": pend["phase"],
+                     "round": pend["round"], "attempt": pend["attempt"],
+                     "seat": "code-reviewer"}
+    with open(mpath, "rb") as fh:
+        assert fh.read() == before
+
+
+def test_record_dispatch_refuses_empty_vendor_or_note(tmp_path, adapters):
+    d = _session(tmp_path)
+    assert _record_dispatch(d, "code-reviewer")["ok"] is True
+    assert RD.cmd_record_dispatch(d, "test-reviewer", "", note="n")["reason"] \
+        == "dispatch-record-argument-invalid"
+    assert RD.cmd_record_dispatch(d, "test-reviewer", "cursor", note="")["reason"] \
+        == "dispatch-record-argument-invalid"
+    assert RD.cmd_record_dispatch(d, "test-reviewer", "   ", note="n")["reason"] \
+        == "dispatch-record-argument-invalid"
+    assert RD.cmd_record_dispatch(d, "test-reviewer", "cursor", note="   ")["reason"] \
+        == "dispatch-record-argument-invalid"
+
+
+def test_record_dispatch_merges_beside_runner_written_row_for_another_seat(tmp_path, adapters):
+    d = _session(tmp_path)
+    pend = _pending(d)
+    runner_row = {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
+    RR.atomic_write_json(_dispatch_manifest_path(d, pend),
+                         {"code-reviewer": runner_row})
+    out = _record_dispatch(d, "test-reviewer", vendor="codex", model="gpt-5", engine="codex",
+                           note="hand-dispatched verifier")
+    assert out["ok"] is True, out
+    stored, err = RR.read_json(_dispatch_manifest_path(d, pend))
+    assert err is None
+    assert stored["code-reviewer"] == runner_row
+    assert stored["test-reviewer"] == {
+        "vendor": "codex", "model": "gpt-5", "engine": "codex",
+        "handDispatched": True, "handDispatchNote": "hand-dispatched verifier"}
+
+
+# =============================================================================================
 # §4 advance
 # =============================================================================================
 

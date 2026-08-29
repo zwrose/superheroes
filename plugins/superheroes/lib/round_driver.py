@@ -1894,7 +1894,7 @@ def _record_adapter_provenance(state, artifact, phase):
         rec["adapterProvenance"] = {"byPhase": by_phase}
 
 
-def _fold(state, config, phase, artifact, changed_subjects_seam=None):
+def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_dir=None):
     """Fold one submitted artifact and advance state. Big switch on phase; each arm delegates the
     JUDGMENT to a pure decider and only records/sequences here. Returns the mutated state.
 
@@ -1908,21 +1908,21 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
     elif phase == P_VERIFIERS:
         _fold_verifiers(state, config, artifact)
     elif phase == P_SYNTHESIS:
-        _fold_synthesis(state, config, artifact)
+        _fold_synthesis(state, config, artifact, session_dir=session_dir)
     elif phase == P_GAPSWEEP:
-        _fold_gapsweep(state, config, artifact)
+        _fold_gapsweep(state, config, artifact, session_dir=session_dir)
     elif phase == P_AUDITS:
-        _fold_audits(state, config, artifact)
+        _fold_audits(state, config, artifact, session_dir=session_dir)
     elif phase == P_SCOPED:
-        _fold_scoped(state, config, artifact)
+        _fold_scoped(state, config, artifact, session_dir=session_dir)
     elif phase == P_VERIFY:
         _fold_verify(state, config, artifact)
     elif phase == P_FIXER:
         _fold_fixer(state, config, artifact, changed_subjects_seam)
     elif phase == P_JUDGMENT:
-        _fold_judgment(state, config, artifact)
+        _fold_judgment(state, config, artifact, session_dir=session_dir)
     elif phase == P_STALL:
-        _fold_stall(state, config, artifact)
+        _fold_stall(state, config, artifact, session_dir=session_dir)
     return state
 
 
@@ -2449,7 +2449,7 @@ def _fold_verifiers(state, config, artifact):
     state["step"] = P_SYNTHESIS
 
 
-def _fold_synthesis(state, config, artifact):
+def _fold_synthesis(state, config, artifact, session_dir=None):
     """Merge same-root-cause survivors (verification.merge_and_rank, coverage-guaranteed), then the
     author-justification POST-filter, then decide gap-sweep / fix / terminal."""
     grouping = artifact.get("grouping") if isinstance(artifact.get("grouping"), list) else None
@@ -2469,10 +2469,10 @@ def _fold_synthesis(state, config, artifact):
         state["_gapSweptRound"] = state["round"]
         state["step"] = P_GAPSWEEP
         return
-    _after_findings_settled(state, config)
+    _after_findings_settled(state, config, session_dir=session_dir)
 
 
-def _fold_gapsweep(state, config, artifact):
+def _fold_gapsweep(state, config, artifact, session_dir=None):
     """Big-diff gap sweep: candidate findings from the full-diff pass fold through the same
     stage/cluster/verify path, then re-settle."""
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
@@ -2485,7 +2485,7 @@ def _fold_gapsweep(state, config, artifact):
         # after verifiers → synthesis will merge with the already-settled findings.
         state["_verifiedCarry"] = state.get("findings") or []
         return
-    _after_findings_settled(state, config)
+    _after_findings_settled(state, config, session_dir=session_dir)
 
 
 def _location_id(finding):
@@ -2553,7 +2553,7 @@ def _skipped_note(state):
             "fixed: %s" % (len(skipped), "; ".join(s.get("title") or "?" for s in skipped)))
 
 
-def _fold_judgment(state, config, artifact):
+def _fold_judgment(state, config, artifact, session_dir=None):
     """Fold the owner's per-finding judgment dispositions (#507 R2a — the judgment gate is an
     INTERVENTION, not a terminal). The artifact is `{dispositions: [{id, disposition, guidance?,
     reason?}, ...]}`, keyed to each `present-judgment` finding's identity. Each judgment finding is
@@ -2639,10 +2639,10 @@ def _fold_judgment(state, config, artifact):
     # Everything skipped and no mechanical blocker: settle. The skipped blockers are owner-accepted
     # product-choice tradeoffs (cited in the ledger) — converge, naming them on the exit disclosure.
     _terminal_converged(state, config, full_panel=state.get("fullPanelRan"),
-                        note=_skipped_note(state))
+                        note=_skipped_note(state), session_dir=session_dir)
 
 
-def _after_findings_settled(state, config):
+def _after_findings_settled(state, config, session_dir=None):
     """After the round's findings are verified + merged + justification-filtered: route to the fix
     leg when there is a blocking finding, else to the terminal decision (round 1 clean = certify).
 
@@ -2656,7 +2656,7 @@ def _after_findings_settled(state, config):
         state["findings"] = (carry or []) + (state.get("findings") or [])
         state.pop("_gapMerge", None)
     if state.get("_settleDelta"):
-        _settle_delta(state, config)
+        _settle_delta(state, config, session_dir=session_dir)
         return
     blocking = _blocking(state.get("findings") or [])
     _record_round(state, "blockingCount", len(blocking))
@@ -2666,7 +2666,8 @@ def _after_findings_settled(state, config):
         state["_fixBatch"] = [dict(f) for f in blocking]
         state["step"] = P_FIXER
     else:
-        _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
+        _terminal_converged(state, config, full_panel=state.get("fullPanelRan"),
+                            session_dir=session_dir)
 
 
 # ---- fix + verify legs ----------------------------------------------------------------------
@@ -3164,7 +3165,7 @@ def _audit_targets(state, config, audit_targets_map):
     return targets
 
 
-def _fold_audits(state, config, artifact):
+def _fold_audits(state, config, artifact, session_dir=None):
     """Consume the fix-audit rulings deterministically (audits.apply_audit_results). Record the
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
     results = artifact.get("results") if isinstance(artifact.get("results"), list) else []
@@ -3226,10 +3227,10 @@ def _fold_audits(state, config, artifact):
     _decision(state, "scoped-finder-skipped",
               "scopedFinder: skipped-empty-surface — the delta split computed an empty new "
               "surface; the scoped new-finding scan was skipped (audit new-issues still routed)")
-    _fold_scoped(state, config, {})
+    _fold_scoped(state, config, {}, session_dir=session_dir)
 
 
-def _fold_scoped(state, config, artifact):
+def _fold_scoped(state, config, artifact, session_dir=None):
     """Fold the scoped new-finding scan over the fix's new surface; its candidates + the audits'
     new-issue candidates route through the same stage/cluster/verify fold."""
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
@@ -3245,10 +3246,10 @@ def _fold_scoped(state, config, artifact):
         state["_settleDelta"] = True
         return
     state["findings"] = []
-    _settle_delta(state, config)
+    _settle_delta(state, config, session_dir=session_dir)
 
 
-def _settle_delta(state, config):
+def _settle_delta(state, config, session_dir=None):
     """Delta-round terminal logic: audit-keyed breaker → self-recovery → stall menu; open-work →
     fix leg; else the converged decision (with the #174 confirmation re-arm)."""
     state.pop("_settleDelta", None)
@@ -3287,7 +3288,7 @@ def _settle_delta(state, config):
             state.setdefault("surfacedSinceLastPanel", []).append("Critical")
 
     if breaker.get("halt") and breaker.get("reason") == "audit-stall":
-        _handle_stall(state, config, breaker)
+        _handle_stall(state, config, breaker, session_dir=session_dir)
         return
     if breaker.get("halt") and breaker.get("reason") == "max-iterations":
         crit = _open_critical(state.get("findings") or []) or _stalled_critical(state, config, breaker)
@@ -3302,7 +3303,8 @@ def _settle_delta(state, config):
             _park_capped_open(state, (breaker.get("detail") or "reached the audit-round cap")
                               + " — blocking finding(s) remain not-discharged; certification withheld")
             return
-        _terminal_converged(state, config, full_panel=False, note=breaker.get("detail"))
+        _terminal_converged(state, config, full_panel=False, note=breaker.get("detail"),
+                            session_dir=session_dir)
         return
     if breaker.get("halt"):
         _park_cannot_certify(
@@ -3342,10 +3344,10 @@ def _settle_delta(state, config):
         state["step"] = P_FIXER
         return
 
-    _settle_delta_converged(state, config)
+    _settle_delta_converged(state, config, session_dir=session_dir)
 
 
-def _settle_delta_converged(state, config):
+def _settle_delta_converged(state, config, session_dir=None):
     """Converged candidate tail shared by `_settle_delta` and stall self-recovery when no open work
     remains — confirmation economics, then terminal converged or re-arm."""
     surfaced = list(state.get("surfacedSinceLastPanel") or [])
@@ -3367,7 +3369,8 @@ def _settle_delta_converged(state, config):
         state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
         state["step"] = P_PANEL
         return
-    _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
+    _terminal_converged(state, config, full_panel=state.get("fullPanelRan"),
+                        session_dir=session_dir)
 
 
 def _batch_severity_is_critical(state, target_id):
@@ -3641,7 +3644,7 @@ def _compose_stall_fix_batch(state, breaker):
     return batch, None
 
 
-def _route_stall_self_recovery(state, config, batch, refusal, breaker):
+def _route_stall_self_recovery(state, config, batch, refusal, breaker, session_dir=None):
     """Terminal routing for stall self-recovery — exhaustive over batch/refusal (#1107)."""
     if batch:
         if _route_judgment_blockers(state, batch):
@@ -3681,19 +3684,21 @@ def _route_stall_self_recovery(state, config, batch, refusal, breaker):
         # never asserted here: this branch cannot manufacture a full-panel claim (pinned by
         # test_empty_resolution_converge_never_claims_an_unrun_panel).
         if open_set.kind == "empty":
-            _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
+            _terminal_converged(state, config, full_panel=state.get("fullPanelRan"),
+                                session_dir=session_dir)
         else:
-            _settle_delta_converged(state, config)
+            _settle_delta_converged(state, config, session_dir=session_dir)
 
 
-def _handle_stall(state, config, breaker):
+def _handle_stall(state, config, breaker, session_dir=None):
     """audit-stall → ONE invisible self-recovery (fixer re-dispatched one rung up via
     model_registry.escalate and/or another vendor, once, journaled). Still stalled → the stall
     menu."""
     if not state.get("selfRecovered"):
         _commit_stall_self_recovery(state, config, breaker)
         batch, refusal = _compose_stall_fix_batch(state, breaker)
-        _route_stall_self_recovery(state, config, batch, refusal, breaker)
+        _route_stall_self_recovery(state, config, batch, refusal, breaker,
+                                   session_dir=session_dir)
         return
     # already self-recovered and still stalled → present the stall menu (never judge the dispute).
     accept_eligible = _accept_risk_eligible(state, breaker)
@@ -3729,7 +3734,7 @@ def _stall_targets_accept_risk_eligible(state):
     return False
 
 
-def _fold_stall(state, config, artifact):
+def _fold_stall(state, config, artifact, session_dir=None):
     """Fold the owner's stall choice; journal it. hold → park; accept-the-disclosed-risk → certify
     when eligible; one-more-round → re-enter the fix leg from the persisted stall-target snapshot."""
     choice = artifact.get("choice")
@@ -3740,7 +3745,8 @@ def _fold_stall(state, config, artifact):
         state["certification"] = {"shape": None, "reason": "owner chose to hold"}
     elif choice == ACCEPT_RISK_CHOICE and _stall_targets_accept_risk_eligible(state):
         _terminal_converged(state, config, full_panel=False,
-                            note="owner accepted the disclosed (CONFIRMED) risk")
+                            note="owner accepted the disclosed (CONFIRMED) risk",
+                            session_dir=session_dir)
         return
     elif choice == ONE_MORE_ROUND_CHOICE:
         targets = state.get("_stallTargets") or []
@@ -4826,7 +4832,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             state = prep["state"]
             round_no = prep["round_no"]
             art_hash = prep["art_hash"]
-            _fold(state, state["config"], phase, artifact)
+            _fold(state, state["config"], phase, artifact, session_dir=session_dir)
             if _via_advance and _pending_policy_applied is not None:
                 applied = state.get("_policyApplied")
                 if not isinstance(applied, list):
@@ -7254,6 +7260,108 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
             "occurrence": occurrence, "missingReason": reason, "storePath": out.get("storePath")}
 
 
+_DISPATCH_RECORD_ROW_KEYS = ("vendor", "model", "engine", "handDispatched", "handDispatchNote")
+
+
+def _hand_dispatch_row(vendor, model=None, engine=None, note=None):
+    row = {"vendor": vendor, "handDispatched": True, "handDispatchNote": note}
+    if model is not None:
+        row["model"] = model
+    if engine is not None:
+        row["engine"] = engine
+    return row
+
+
+def _dispatch_record_rows_equal(existing, new):
+    if not isinstance(existing, dict):
+        return False
+    for key in _DISPATCH_RECORD_ROW_KEYS:
+        if existing.get(key) != new.get(key):
+            return False
+    return True
+
+
+def cmd_record_dispatch(session_dir, seat, vendor, note, model=None, engine=None,
+                        expect_round=None, expect_phase=None):
+    """Record orchestrator hand-dispatch provenance for one seat into the dispatch manifest."""
+    try:
+        with round_records.session_lock(session_dir):
+            refusal = _commit_recover_or_refuse(session_dir, "record-dispatch")
+            if refusal is not None:
+                return refusal
+            return _cmd_record_dispatch_locked(session_dir, seat, vendor, note, model=model,
+                                               engine=engine, expect_round=expect_round,
+                                               expect_phase=expect_phase)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, "record-dispatch", held)
+
+
+def _cmd_record_dispatch_locked(session_dir, seat, vendor, note, model=None, engine=None,
+                                expect_round=None, expect_phase=None):
+    state, refusal = _load_driver_state(session_dir, "record-dispatch")
+    if refusal is not None:
+        return refusal
+    if not isinstance(vendor, str) or not vendor.strip() or not isinstance(note, str) \
+            or not note.strip():
+        return _refuse_cmd(session_dir, "record-dispatch", "dispatch-record-argument-invalid")
+    vendor = vendor.strip()
+    note = note.strip()
+    model = model.strip() if isinstance(model, str) and model.strip() else None
+    engine = engine.strip() if isinstance(engine, str) and engine.strip() else None
+    phase, rnd, cur_attempt, refusal = _pending_of(
+        session_dir, state, "record-dispatch", expect_round=expect_round,
+        expect_phase=expect_phase)
+    if refusal is not None:
+        return refusal
+    if not isinstance(phase, str) or not phase.startswith("dispatch-"):
+        return _refuse_cmd(session_dir, "record-dispatch", "dispatch-record-not-a-seat-phase",
+                           phase=phase, rnd=rnd, attempt=cur_attempt)
+    roster, refusal = _roster_of(session_dir, state, "record-dispatch", phase, rnd, cur_attempt)
+    if refusal is not None:
+        return refusal
+    if not isinstance(seat, str) or seat not in roster:
+        return _refuse_cmd(session_dir, "record-dispatch", "dispatch-record-seat-not-on-roster",
+                           phase=phase, rnd=rnd, attempt=cur_attempt, seat=seat)
+    manifest_path = round_records.dispatch_manifest_path(session_dir, rnd, phase, cur_attempt)
+    manifest, merr = _read_dispatch_manifest(manifest_path)
+    if merr is not None and merr != "missing":
+        return _refuse_cmd(session_dir, "record-dispatch", "dispatch-manifest-unreadable",
+                           phase=phase, rnd=rnd, attempt=cur_attempt, seat=seat, detail=merr)
+    if merr is None and not isinstance(manifest, dict):
+        return _refuse_cmd(session_dir, "record-dispatch", "dispatch-manifest-unreadable",
+                           phase=phase, rnd=rnd, attempt=cur_attempt, seat=seat)
+    if merr == "missing":
+        manifest = {}
+    new_row = _hand_dispatch_row(vendor, model=model, engine=engine, note=note)
+    existing = manifest.get(seat)
+    if existing is not None:
+        if _dispatch_record_rows_equal(existing, new_row):
+            return {"ok": True, "idempotent": True, "phase": phase, "round": rnd,
+                    "attempt": cur_attempt, "seat": seat}
+        return _refuse_cmd(session_dir, "record-dispatch", "dispatch-record-conflict",
+                           phase=phase, rnd=rnd, attempt=cur_attempt, seat=seat)
+    merged = dict(manifest)
+    merged[seat] = new_row
+    journal_entry = _journal_entry_for_commit(
+        session_dir, "record-dispatch", "recorded", phase=phase, round=rnd,
+        attempt=cur_attempt, seat=seat, vendor=vendor, model=model, engine=engine,
+        handDispatched=True, handDispatchNote=note,
+        **_journal_addressing_fields(expect_round, expect_phase),
+        **_journal_identity_fields(phase, seat, 0, cur_attempt))
+    try:
+        c = round_commit.begin(session_dir, "record-dispatch")
+        c.add_replace_file(manifest_path,
+                           round_records.canonical(merged).encode("utf-8"))
+        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, "record-dispatch", exc, phase=phase, rnd=rnd,
+                                        attempt=cur_attempt, seat=seat)
+    return {"ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
+            "vendor": vendor, "model": model, "engine": engine, "handDispatched": True,
+            "handDispatchNote": note}
+
+
 # --- advance -------------------------------------------------------------------------------------
 
 def cmd_advance(session_dir, break_lock=False, git=None, owner_artifact_path=None):
@@ -8604,6 +8712,18 @@ def build_parser():
     cli_contract.add_argument(pm, "--phase", contract="free-text", default=None,
                               help="expected pending phase; when supplied, a mismatch refuses")
 
+    pdr = sub.add_parser("record-dispatch")
+    cli_contract.add_argument(pdr, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(pdr, "--seat", contract="free-text", required=True)
+    cli_contract.add_argument(pdr, "--vendor", contract="free-text", required=True)
+    cli_contract.add_argument(pdr, "--model", contract="free-text", default=None)
+    cli_contract.add_argument(pdr, "--engine", contract="free-text", default=None)
+    pdr.add_argument("--note", required=True)
+    cli_contract.add_argument(pdr, "--round", contract="integer", default=None, type=int,
+                               help="expected pending round; when supplied, a mismatch refuses")
+    cli_contract.add_argument(pdr, "--phase", contract="free-text", default=None,
+                               help="expected pending phase; when supplied, a mismatch refuses")
+
     pa = sub.add_parser("advance")
     cli_contract.add_argument(pa, "--session-dir", contract="existing-directory", required=True)
     cli_contract.add_argument(pa, "--break-lock", contract="boolean-flag")
@@ -8785,6 +8905,10 @@ def _dispatch(args):
         out = cmd_record_missing(args.session_dir, args.seat, args.attempt, args.reason,
                                  evidence_path=args.evidence, occurrence=args.occurrence,
                                  expect_round=args.round, expect_phase=args.phase)
+    elif args.cmd == "record-dispatch":
+        out = cmd_record_dispatch(args.session_dir, args.seat, args.vendor, args.note,
+                                  model=args.model, engine=args.engine,
+                                  expect_round=args.round, expect_phase=args.phase)
     elif args.cmd == "advance":
         out = cmd_advance(args.session_dir, break_lock=args.break_lock,
                           owner_artifact_path=args.owner_artifact)
