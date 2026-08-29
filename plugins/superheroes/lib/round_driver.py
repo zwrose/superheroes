@@ -2034,17 +2034,26 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
             if isinstance(eng, str) and eng == vendor:
                 matching.append(probe)
 
-        # Fail-closed on disagreement: any non-engaged match makes the vendor dead regardless of
-        # list order (first-wins would let an engaged entry mask a failed duplicate).
-        failing = [p for p in matching if p.get("engaged") is not True]
-        engaged_ok = [p for p in matching if p.get("engaged") is True]
-        if failing:
-            deciding = sorted(failing, key=_canary_probe_sort_key)[0]
-            fault = None
+        # axis: every probe is normalized before status — self-asserted outcome cannot certify alone
+        normalized = []
+        for probe in matching:
+            outcome, fault = canary_outcome.normalize(probe)
+            normalized.append((probe, outcome, fault))
+
+        dead = [t for t in normalized if t[1] in _CANARY_DEAD_OUTCOMES]
+        plant_undetected = [
+            t for t in normalized if t[1] == canary_outcome.OUTCOME_PLANT_UNDETECTED]
+        passing = [t for t in normalized if canary_outcome.is_pass(t[1])]
+
+        if dead:
+            deciding, _, fault = sorted(dead, key=lambda t: _canary_probe_sort_key(t[0]))[0]
             st = "dead"
-        elif engaged_ok:
-            deciding = sorted(engaged_ok, key=_canary_probe_sort_key)[0]
-            fault = None
+        elif plant_undetected:
+            deciding, _, fault = sorted(
+                plant_undetected, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+            st = "plant-undetected"
+        elif passing:
+            deciding, _, fault = sorted(passing, key=lambda t: _canary_probe_sort_key(t[0]))[0]
             st = "proven"
         else:
             deciding = None
@@ -2053,7 +2062,11 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
 
         if deciding is not None:
             det = deciding.get("detail")
-            detail_s = det if isinstance(det, str) else None
+            probe_detail = det if isinstance(det, str) else None
+            if fault:
+                detail_s = fault
+            else:
+                detail_s = probe_detail
             ev = deciding.get("evidence")
             evidence = ev if isinstance(ev, dict) else None
         else:
