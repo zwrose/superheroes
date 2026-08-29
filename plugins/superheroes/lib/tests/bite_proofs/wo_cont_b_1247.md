@@ -248,3 +248,27 @@ FAILED plugins/superheroes/lib/tests/test_seat_canary.py::test_engaged_from_disp
 - **restore**: inverse edit back to the shipped body.
 - **restore receipt**: `git status --porcelain plugins/superheroes/lib/seat_canary.py` → empty.
 - **raw green** (whole file, post-restore): `45 passed in 0.92s`.
+
+### Final-head re-run (head `1fd7f8fc`, post-review)
+
+Both elements re-run again after the review's two fix rounds, detectors unedited.
+
+- **Element 1** (restore the `toolCalls >= 1` fallback in `_engaged_from_dispatch`) — raw red:
+
+```
+FAILED plugins/superheroes/lib/tests/test_seat_canary.py::test_tool_calls_without_investigated_not_engaged
+FAILED plugins/superheroes/lib/tests/test_seat_canary.py::test_vacuous_with_tool_calls_only_not_engaged
+FAILED plugins/superheroes/lib/tests/test_seat_canary.py::test_engaged_from_dispatch_investigation_evidence_table
+3 failed in 0.16s
+```
+
+- **Element 2** (`return bool(investigated)`) — raw red:
+
+```
+plugins/superheroes/lib/tests/test_seat_canary.py:609: AssertionError
+FAILED plugins/superheroes/lib/tests/test_seat_canary.py::test_engaged_from_dispatch_investigation_evidence_table
+1 failed in 0.13s
+```
+
+**restore receipt:** whole-worktree `git status --porcelain` → empty. **raw green:** `60 passed in 1.33s`
+(census + seat_canary files together).

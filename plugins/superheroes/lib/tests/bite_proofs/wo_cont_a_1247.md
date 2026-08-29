@@ -94,3 +94,19 @@ FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_canary_dead_and_
 - **restore**: inverse edit back to `"canaryOutcomeFailed"`.
 - **restore receipt**: `git status --porcelain plugins/superheroes/lib/round_driver.py` → empty.
 - **raw green**: `1 passed in 1.36s`.
+
+### Final-head re-run (head `1fd7f8fc`, post-review)
+
+Re-run again after the review's two fix rounds, per the re-run-every-proof-on-the-final-head rule.
+Same neutralization (`round_driver.py:2326` `"canaryOutcomeFailed"` → `"canaryFailed"`), detector
+unedited.
+
+**raw red:**
+
+```
+plugins/superheroes/lib/tests/test_round_driver.py:6400: AssertionError
+FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_canary_dead_and_outcome_failed_same_round_both_disclosed
+1 failed in 0.65s
+```
+
+**restore receipt:** whole-worktree `git status --porcelain` → empty. **raw green:** `1 passed in 0.56s`.

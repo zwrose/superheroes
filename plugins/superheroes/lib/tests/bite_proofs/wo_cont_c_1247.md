@@ -167,3 +167,30 @@ FAILED plugins/superheroes/lib/tests/test_canary_outcome_census.py::test_matcher
 - **restore**: inverse edit removing the `exempt_ids` machinery entirely.
 - **restore receipt**: `git status --porcelain` over the whole worktree → empty.
 - **raw green**: `10 passed in 1.70s`.
+
+### Final-head re-run (head `1fd7f8fc`, post-review)
+
+Both elements re-run again after the review's two fix rounds. This matters here specifically: the
+round-1 fixer edited this very file (docstring and violation-clause wording), so the earlier proof
+was no longer on the final head. The matcher logic it neutralizes is unchanged.
+
+- **Element 1** (dict-key exemption re-added to `census_violations_from_source`) — raw red:
+
+```
+plugins/superheroes/lib/tests/test_canary_outcome_census.py:328: AssertionError
+FAILED plugins/superheroes/lib/tests/test_canary_outcome_census.py::test_matcher_catches_banned_literal_as_dict_key_on_synthetic_source
+1 failed, 1 passed in 0.14s
+```
+
+- **Element 2** (`.get()`-first-argument exemption re-added) — raw red:
+
+```
+plugins/superheroes/lib/tests/test_canary_outcome_census.py:341: AssertionError
+FAILED plugins/superheroes/lib/tests/test_canary_outcome_census.py::test_matcher_catches_banned_literal_as_get_argument_on_synthetic_source
+1 failed, 1 passed in 0.13s
+```
+
+In each case the *other* position's test stayed green — the two positions remain independently
+guarded on the final head.
+
+**restore receipt:** whole-worktree `git status --porcelain` → empty. **raw green:** `60 passed in 1.33s`.
