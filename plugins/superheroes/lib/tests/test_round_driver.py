@@ -39,6 +39,8 @@ def _load(name):
 
 
 RD = _load("round_driver")
+RR = _load("round_records")
+RA = _load("round_adapters")
 LPC = _load("loop_plan_common")
 FI = _load("finding_identity")
 LC = _load("liveness_cache")
@@ -389,6 +391,228 @@ def _drive_cli(session_dir, cfg, respond, max_steps=80):
         art = respond(n["phase"], n["payload"], n["round"])
         s = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], art)
         assert s["ok"], s
+    raise AssertionError("driver did not reach a terminal within %d steps" % max_steps)
+
+
+def _records_state(session_dir):
+    ok, state = RD.load_state(session_dir)
+    assert ok, state
+    return state
+
+
+def _records_pending(session_dir):
+    return _records_state(session_dir)["pending"]
+
+
+def _records_session_id(session_dir):
+    with open(os.path.join(session_dir, RR.META_FILE), encoding="utf-8") as fh:
+        return json.load(fh)["sessionId"]
+
+
+def _records_anchor_hashes(session_dir, rnd, phase, attempt, seat, occurrence=0):
+    anchor = RD._orders_anchor(_records_state(session_dir), session_dir, rnd, phase, attempt)
+    if anchor is None:
+        return RR.NOT_EMITTED, RR.NOT_EMITTED
+    skey = RR.storage_key(seat, occurrence)
+    return anchor["manifestSha256"], (anchor.get("orders") or {}).get(skey, RR.NOT_EMITTED)
+
+
+def _records_result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, **over):
+    pend = pend or _records_pending(session_dir)
+    payload = ({"findings": [], "confidence": "high", "seat": seat,
+                "verificationReceipt": {"ran": True}} if payload is None else payload)
+    manifest_sha, order_sha = _records_anchor_hashes(session_dir, pend["round"], pend["phase"],
+                                                     pend["attempt"], seat, occurrence=occurrence)
+    env = {
+        "schema": RR.SEAT_RESULT_SCHEMA,
+        "session": _records_session_id(session_dir),
+        "round": pend["round"],
+        "phase": pend["phase"],
+        "seat": seat,
+        "attempt": pend["attempt"],
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "dispatchRef": manifest_sha,
+        "orderSha256": order_sha,
+        "manifestSha256": manifest_sha,
+        "recordedAt": "2026-08-07T00:00:00",
+        "payloadSha256": RR.payload_sha256(payload),
+        "payload": payload,
+    }
+    if occurrence:
+        env["occurrence"] = occurrence
+    env.update(over)
+    return env
+
+
+def _records_land(session_dir, seat, payload=None, pend=None, occurrence=0, **over):
+    pend = pend or _records_pending(session_dir)
+    env = _records_result_envelope(session_dir, seat, payload=payload, pend=pend,
+                                   occurrence=occurrence, **over)
+    path = RR.landing_path(session_dir, pend["round"], pend["phase"],
+                           RR.storage_key(seat, occurrence), pend["attempt"])
+    RR.atomic_write_json(path, env)
+    return path, env
+
+
+def _records_land_and_record(session_dir, seat, payload=None):
+    _records_land(session_dir, seat, payload=payload)
+    out = RD.cmd_record_result(session_dir, seat)
+    assert out["ok"], out
+    return out
+
+
+def _records_fake_git(gitdir, head="a" * 40, base_sha="b" * 40, remote="github.com/o/r"):
+    def run(cwd, *args):
+        if args[:2] == ("rev-parse", "--absolute-git-dir"):
+            return gitdir
+        if args == ("rev-parse", "HEAD"):
+            return head
+        if args[:3] == ("rev-parse", "--abbrev-ref", "HEAD"):
+            return "feature/x"
+        if args[0] == "rev-parse" and "--verify" in args:
+            return base_sha
+        if args[:2] == ("remote", "get-url"):
+            return remote
+        return None
+    return run
+
+
+def _records_gitdir(session_dir):
+    path = os.path.join(session_dir, "_records-gitdir")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _records_slots_of(roster):
+    seen = {}
+    slots = []
+    for seat in roster:
+        occurrence = seen.get(seat, 0)
+        seen[seat] = occurrence + 1
+        slots.append((seat, occurrence))
+    return slots
+
+
+def _records_vendor_for(session_dir, state, seat):
+    cfg = state.get("config") or {}
+    sm = cfg.get("seatMap") or {}
+    seats = sm.get("seats") if isinstance(sm, dict) else {}
+    entry = seats.get(seat) if isinstance(seats, dict) else {}
+    if isinstance(entry, dict) and entry.get("vendor"):
+        return entry["vendor"]
+    if seat in (state.get("_auditTargets") or []):
+        pass
+    for target in state.get("_auditTargets") or []:
+        if isinstance(target, dict) and target.get("id") == seat and target.get("auditorVendor"):
+            return target["auditorVendor"]
+    return "claude"
+
+
+def _records_write_dispatch_manifest(session_dir, pend, slots, vendor_for):
+    manifest = {seat: {"vendor": vendor_for(seat), "model": "sonnet-5", "engine": "claude"}
+                for seat, _occurrence in slots}
+    RR.atomic_write_json(
+        RR.dispatch_manifest_path(session_dir, pend["round"], pend["phase"], pend["attempt"]),
+        manifest)
+
+
+def _records_verifier_cluster(pend, seat):
+    key = seat[len(RA.VERIFIER_SEAT_PREFIX):]
+    for cluster in (pend.get("payload") or {}).get("clusters") or []:
+        if cluster.get("key") == key:
+            return cluster
+    return None
+
+
+def _records_seat_payload(phase, seat, art, pend):
+    if phase == RD.P_PANEL:
+        seats = art.get("seats") if isinstance(art.get("seats"), dict) else art
+        payload = seats.get(seat) if isinstance(seats, dict) else None
+        return payload if isinstance(payload, dict) else {"findings": []}
+    if phase == RD.P_VERIFIERS:
+        cluster = _records_verifier_cluster(pend, seat)
+        ids = set(cluster.get("ids") or []) if cluster else set()
+        verdicts = [v for v in (art.get("verdicts") or []) if v.get("id") in ids]
+        return {"verdicts": verdicts}
+    if phase == RD.P_AUDITS:
+        for result in art.get("results") or []:
+            if isinstance(result, dict) and result.get("id") == seat:
+                return dict(result)
+        return {"id": seat, "ruling": "discharged", "reason": "r", "evidence": "e",
+                "auditorVendor": "claude"}
+    return dict(art) if isinstance(art, dict) else {}
+
+
+def _records_write_verify_payload(session_dir, payload, attempt=None):
+    pend = _records_pending(session_dir)
+    attempt = pend["attempt"] if attempt is None else attempt
+    skey = RR.storage_key("verify")
+    path = RR.bare_payload_path(session_dir, pend["round"], pend["phase"], skey, attempt)
+    RR.atomic_write_json(path, payload)
+    return path
+
+
+def _records_write_owner_artifact(session_dir, artifact):
+    path = os.path.join(session_dir, "_owner-artifact.json")
+    RR.atomic_write_json(path, artifact)
+    return path
+
+
+def _records_write_canary_probes(session_dir, pend, vendors):
+    for vendor in vendors:
+        probe = {"engine": vendor, "engaged": True, "evidence": {"probe": "seat_canary"}}
+        path = RR.canary_path(session_dir, pend["round"], vendor, pend["attempt"])
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        RR.atomic_write_json(path, probe)
+
+
+def _records_advance_dispatch_phase(session_dir, phase, art, git):
+    state = _records_state(session_dir)
+    pend = state["pending"]
+    if phase == RD.P_PANEL:
+        _records_write_canary_probes(session_dir, pend, RD._live_vendors(state.get("config") or {}))
+    if RA.is_orchestrator_fulfilled(phase):
+        _records_write_verify_payload(session_dir, art)
+        out = RD.cmd_advance(session_dir, git=git)
+        assert out["ok"], out
+        return
+    roster, reason = RA.roster_for(phase, state, state.get("config") or {})
+    assert reason is None, (phase, reason)
+    slots = _records_slots_of(roster)
+    _records_write_dispatch_manifest(session_dir, pend, slots,
+                                     lambda seat: _records_vendor_for(session_dir, state, seat))
+    for seat, occurrence in slots:
+        payload = _records_seat_payload(phase, seat, art, pend)
+        _records_land(session_dir, seat, payload=payload, pend=pend, occurrence=occurrence)
+        out = RD.cmd_record_result(session_dir, seat, occurrence=occurrence)
+        assert out["ok"], (phase, seat, occurrence, out)
+    out = RD.cmd_advance(session_dir, git=git)
+    assert out["ok"], out
+
+
+def _drive_cli_records(session_dir, cfg, respond, max_steps=80):
+    """Drive next/advance (dispatch-*) or next/submit (other phases) to a terminal."""
+    gitdir = _records_gitdir(session_dir)
+    git = _records_fake_git(gitdir)
+    first = True
+    for _ in range(max_steps):
+        n = RD.cmd_next(session_dir, cfg if first else None)
+        first = False
+        assert n["ok"], n
+        if n["action"] == RD.P_TERMINAL:
+            return n["payload"]
+        phase = n["phase"]
+        art = respond(phase, n["payload"], n["round"])
+        if phase in RD.OWNER_GATE_PHASES:
+            out = RD.cmd_advance(session_dir, git=git,
+                                 owner_artifact_path=_records_write_owner_artifact(session_dir, art))
+            assert out["ok"], out
+        elif phase in RA.ADAPTER_PHASES:
+            _records_advance_dispatch_phase(session_dir, phase, art, git)
+        else:
+            s = RD.cmd_submit(session_dir, phase, n["attempt"], n["expectedStateHash"], art)
+            assert s["ok"], s
     raise AssertionError("driver did not reach a terminal within %d steps" % max_steps)
 
 
@@ -1047,7 +1271,7 @@ def test_happy_path_audited_chain_certification(tmp_path):
     """Round-1 panel → verify findings → fix → delta round → all discharged → audited-chain."""
     d = str(tmp_path)
     cfg = _cfg()
-    payload = _drive_cli(d, cfg, _responder(
+    payload = _drive_cli_records(d, cfg, _responder(
         round1_findings=[{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}],
         vendors=cfg["vendors"]))
     assert payload["verdict"] == "converged"
@@ -1064,7 +1288,7 @@ def test_clean_round1_certifies_full_panel_confirmed(tmp_path):
     """A clean full-deep baseline certifies off the qualifying panel (full-panel-confirmed)."""
     d = str(tmp_path)
     cfg = _cfg()
-    payload = _drive_cli(d, cfg, _responder(round1_findings=None, vendors=cfg["vendors"]))
+    payload = _drive_cli_records(d, cfg, _responder(round1_findings=None, vendors=cfg["vendors"]))
     assert payload["verdict"] == "converged"
     assert payload["certification"]["shape"] == "full-panel-confirmed"
 
@@ -1098,7 +1322,7 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path):
             return {"results": [], "findings": []}
         return {}
 
-    payload = _drive_cli(d, _cfg(), respond)
+    payload = _drive_cli_records(d, _cfg(), respond)
     assert seen["panel_r2"] is True
     assert payload["verdict"] == "converged"
 
@@ -1153,7 +1377,7 @@ def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
             return {"result": "pass"}
         return {}
 
-    payload = _drive_cli(d, _cfg(diff=_R2B_REVIEWED), respond)
+    payload = _drive_cli_records(d, _cfg(diff=_R2B_REVIEWED), respond)
     assert payload["verdict"] == "converged"
     assert captured["payload"] is not None, "the scoped finder was never dispatched"
     hunks = captured["payload"]["hunks"]
@@ -1180,7 +1404,7 @@ def test_empty_new_surface_skips_scoped_finder_with_note(tmp_path):
             seen["scoped"] = True
         return base(phase, payload, rnd)
 
-    payload = _drive_cli(d, _cfg(), respond)
+    payload = _drive_cli_records(d, _cfg(), respond)
     assert payload["verdict"] == "converged"
     assert seen["scoped"] is False, "the scoped finder was dispatched over an empty surface"
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
@@ -1242,7 +1466,7 @@ def test_fixer_head_diff_path_form_end_to_end(tmp_path):
     captured = {"payload": None}
     respond = _multifile_delta_respond(
         captured, {"fixes": [], "headDiffPath": str(head_file), "changedSubjects": ["Code"]})
-    payload = _drive_cli(d, _cfg(diff=_R2B_REVIEWED), respond)
+    payload = _drive_cli_records(d, _cfg(diff=_R2B_REVIEWED), respond)
     assert payload["verdict"] == "converged"
     assert captured["payload"] is not None, "the scoped finder was never dispatched"
     expected = RD.delta_surface.split_fix_surface(
@@ -1286,7 +1510,7 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
             return {"results": [], "findings": []}
         return {}
 
-    payload = _drive_cli(d, _cfg(), respond)
+    payload = _drive_cli_records(d, _cfg(), respond)
     assert seen["panel_r2"] is True, "an unreadable head diff must run a full panel, not a scoped scan"
     assert seen["scoped"] is False
     assert payload["verdict"] == "converged"
@@ -1306,7 +1530,7 @@ def test_fixer_inline_head_diff_wins_over_path(tmp_path):
     respond = _multifile_delta_respond(captured, {
         "fixes": [], "headDiff": _R2B_HEAD_MF, "headDiffPath": str(other),
         "changedSubjects": ["Code"]})
-    payload = _drive_cli(d, _cfg(diff=_R2B_REVIEWED), respond)
+    payload = _drive_cli_records(d, _cfg(diff=_R2B_REVIEWED), respond)
     assert payload["verdict"] == "converged"
     # inline won → the scoped finder fired over the inline diff's two-file surface.
     assert captured["payload"] is not None
@@ -2227,7 +2451,7 @@ def test_terminal_replay_with_intact_receipt_is_idempotent_ok(tmp_path):
     """A replayed terminal `next` with an intact on-disk receipt stays idempotent — same terminal
     payload, ok — the re-check adds no false alarm on a healthy receipt."""
     d = str(tmp_path)
-    _drive_cli(d, _cfg(), _responder(round1_findings=None))  # terminal + valid receipt written
+    _drive_cli_records(d, _cfg(), _responder(round1_findings=None))  # terminal + valid receipt written
     replay = RD.cmd_next(d)
     assert replay["ok"] is True
     assert replay["action"] == RD.P_TERMINAL
@@ -3909,14 +4133,7 @@ def test_base_guard_healthy_next_stat_bound_receipt(tmp_path, capsys):
     rc, out = _cli_next_json(d, ga, capsys)
     assert rc == 0 and out["ok"]
     pin = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))["baseRef"]
-    for _ in range(80):
-        n = RD.cmd_next(d)
-        assert n["ok"], n
-        if n["action"] == RD.P_TERMINAL:
-            break
-        art = _responder(round1_findings=None, vendors=["codex", "cursor"])(n["phase"], n["payload"], n["round"])
-        s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
-        assert s["ok"], s
+    _drive_cli_records(d, None, _responder(round1_findings=None, vendors=["codex", "cursor"]))
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert receipt["baseGuard"] == "checked-stat-bound"
@@ -3932,14 +4149,7 @@ def _guard_cli_to_terminal_receipt(d, capsys, guard_kwargs=None, next_extra=None
         ga = ga + list(next_extra)
     rc, out = _cli_next_json(d, ga, capsys)
     assert rc == 0 and out["ok"], out
-    for _ in range(80):
-        n = RD.cmd_next(d)
-        assert n["ok"], n
-        if n["action"] == RD.P_TERMINAL:
-            break
-        art = _responder(round1_findings=None, vendors=["codex", "cursor"])(n["phase"], n["payload"], n["round"])
-        s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
-        assert s["ok"], s
+    _drive_cli_records(d, None, _responder(round1_findings=None, vendors=["codex", "cursor"]))
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         return json.load(fh)
 
@@ -3973,14 +4183,7 @@ def test_base_degraded_absent_base_fetch(tmp_path, capsys):
     ga = ["--repo-root", repo, "--diff-path", diffpath]
     rc, out = _cli_next_json(d, ga, capsys)
     assert rc == 0 and out["ok"]
-    for _ in range(80):
-        n = RD.cmd_next(d)
-        assert n["ok"], n
-        if n["action"] == RD.P_TERMINAL:
-            break
-        art = _responder(round1_findings=None, vendors=["codex", "cursor"])(n["phase"], n["payload"], n["round"])
-        s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
-        assert s["ok"], s
+    _drive_cli_records(d, None, _responder(round1_findings=None, vendors=["codex", "cursor"]))
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert receipt["certification"]["base"] == "degraded"
@@ -7692,6 +7895,27 @@ def test_hand_graded_owner_gate_submit_does_not_latch_or_withhold(tmp_path):
                            session_dir=d)
     assert certify_state["terminal"] == "converged"
     assert certify_state["certification"]["shape"] is not None
+
+
+def test_hand_graded_owner_gate_submit_threaded_session_dir_certifies(tmp_path):
+    """Hand submit on owner gate certifies through the fold when session_dir is threaded (B2-1)."""
+    d = str(tmp_path)
+    state = RD.new_state(_cfg())
+    state["seatMapReceipts"] = _seat_map_receipts(
+        _assertable_seat_map(state["config"]["vendors"], state["config"].get("fixerVendor")))
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"] and n["phase"] == RD.P_JUDGMENT
+    out = RD.cmd_submit(
+        d, n["phase"], n["attempt"], n["expectedStateHash"],
+        {"dispositions": [{"id": _TRADEOFF_ID, "disposition": "skip",
+                           "reason": "shipping v1 narrow on purpose"}]})
+    assert out["ok"] is True
+    ok, reloaded = RD.load_state(d)
+    assert ok
+    assert reloaded["terminal"] == "converged"
+    assert reloaded["certification"]["shape"] is not None
 
 
 def test_hand_graded_seat_landing_session_dir_none_submit_used_withholds():

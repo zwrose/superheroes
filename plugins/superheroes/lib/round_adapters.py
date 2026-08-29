@@ -289,6 +289,7 @@ def _trusted_vendors(roster, indexed, dispatch_manifest, disclosures):
     trusted = {}
     unusable = []
     mismatch = []
+    hand_dispatched = []
     for seat, occurrence in _roster_slots(roster):
         entry_manifest = dispatch_manifest.get(seat)
         vendor = None
@@ -296,6 +297,8 @@ def _trusted_vendors(roster, indexed, dispatch_manifest, disclosures):
             candidate = entry_manifest.get("vendor")
             if isinstance(candidate, str) and candidate:
                 vendor = candidate
+            if entry_manifest.get("handDispatched"):
+                hand_dispatched.append(seat)
         if vendor is None:
             if seat not in unusable:
                 unusable.append(seat)
@@ -312,6 +315,8 @@ def _trusted_vendors(roster, indexed, dispatch_manifest, disclosures):
         disclosures["dispatchManifestEntryUnusable"] = unusable
     if mismatch:
         disclosures["vendorEchoMismatch"] = mismatch
+    if hand_dispatched:
+        disclosures["handDispatchedSeats"] = sorted(hand_dispatched)
     return trusted
 
 

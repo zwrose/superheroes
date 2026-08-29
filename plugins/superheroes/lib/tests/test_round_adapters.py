@@ -873,6 +873,38 @@ def test_manifest_entry_without_a_usable_vendor_is_disclosed_not_invented(tmp_pa
     assert artifact["provenance"]["dispatchManifestEntryUnusable"] == list(RD.DIMENSIONS)
 
 
+def test_hand_dispatched_row_yields_trusted_vendor_and_hand_dispatched_seats(tmp_path):
+    _d, _n, state = _at(tmp_path, RD.P_PANEL)
+    seat = RD.DIMENSIONS[0]
+    envelopes = [_result_env(dim, {"findings": []}, vendor="cursor") for dim in RD.DIMENSIONS]
+    manifest = {seat: {"vendor": "codex", "model": "gpt-5", "engine": "codex",
+                       "handDispatched": True, "handDispatchNote": "orchestrator hand dispatch"}}
+    for dim in RD.DIMENSIONS[1:]:
+        manifest[dim] = {"vendor": "codex", "model": "gpt-5", "engine": "codex"}
+    artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"],
+                                   dispatch_manifest=manifest)
+    assert reason is None
+    assert artifact["ranManifest"][seat] == "codex"
+    assert artifact["provenance"]["handDispatchedSeats"] == [seat]
+
+
+def test_hand_dispatched_row_still_discloses_vendor_echo_mismatch(tmp_path):
+    _d, _n, state = _at(tmp_path, RD.P_PANEL)
+    seat = RD.DIMENSIONS[0]
+    envelopes = [_result_env(dim, {"findings": []}, vendor="cursor") for dim in RD.DIMENSIONS]
+    manifest = {dim: {"vendor": "codex", "model": "gpt-5", "engine": "codex",
+                      "handDispatched": True, "handDispatchNote": "hand seat"}
+                for dim in RD.DIMENSIONS}
+    artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"],
+                                   dispatch_manifest=manifest)
+    assert reason is None
+    assert artifact["ranManifest"][seat] == "codex"
+    assert artifact["provenance"]["handDispatchedSeats"] == sorted(RD.DIMENSIONS)
+    mismatch = artifact["provenance"]["vendorEchoMismatch"]
+    assert {m["seat"] for m in mismatch} == set(RD.DIMENSIONS)
+    assert all(m["echo"] == "cursor" and m["manifest"] == "codex" for m in mismatch)
+
+
 def test_seat_map_comes_from_state_and_is_omitted_when_empty(tmp_path):
     _d, _n, state = _at(tmp_path, RD.P_PANEL)
     envelopes = [_result_env(dim, {"findings": []}) for dim in RD.DIMENSIONS]
