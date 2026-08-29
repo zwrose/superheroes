@@ -195,3 +195,56 @@ bringing up nodes...
 45 passed in 1.34s
 ```
 
+
+---
+
+## Orchestrator re-verification (final head `eb1e998d`)
+
+Verification authority never delegates: the orchestrator re-ran both declared elements itself on the
+final integrated head, with the detectors unedited.
+
+**A false-green worth recording (bite-proof trap 4).** The orchestrator's first attempt at element
+1's neutralization re-added the `toolCalls >= 1` fallback *below* the new
+`isinstance(investigated, (list, tuple))` type guard. Every fixture in this file omits
+`investigated` entirely, so the type guard short-circuited and the fallback was unreachable — all
+three tests stayed **green** where the reasoning said red. The cure was fixing the neutralization
+(restore the pre-change body exactly: `res.get("investigated") or []`, no type guard), never
+relaxing an assertion. A neutralization that does not reach the guarded branch proves nothing.
+
+### Element 1 — tool-call count without investigated paths
+
+- **neutralization**: `_engaged_from_dispatch` body restored to the pre-change form —
+  `investigated = res.get("investigated") or []; if investigated: return True;` then the
+  `toolCalls is not None and tool_calls >= 1` fallback.
+- **raw red** (three node-ids, exact names, no `-k`):
+
+```
+FAILED plugins/superheroes/lib/tests/test_seat_canary.py::test_tool_calls_without_investigated_not_engaged
+FAILED plugins/superheroes/lib/tests/test_seat_canary.py::test_vacuous_with_tool_calls_only_not_engaged
+FAILED plugins/superheroes/lib/tests/test_seat_canary.py::test_engaged_from_dispatch_investigation_evidence_table
+3 failed in 0.37s
+```
+
+- **restore**: inverse edit back to the shipped body.
+- **restore receipt**: `git status --porcelain plugins/superheroes/lib/seat_canary.py` → empty.
+
+### Element 2 — fail-closed `investigated` shapes
+
+- **neutralization** (distinct from element 1): the body replaced by
+  `investigated = res.get("investigated"); return bool(investigated)`.
+- **raw red**:
+
+```
+E           AssertionError: investigated bare string
+E           assert True is False
+E            +  where True = <function _engaged_from_dispatch at 0x10818c700>({'engagement': {'toolCalls': 1}, 'findings': [], 'investigated': 'lib/a.py'})
+plugins/superheroes/lib/tests/test_seat_canary.py:609: AssertionError
+FAILED plugins/superheroes/lib/tests/test_seat_canary.py::test_engaged_from_dispatch_investigation_evidence_table
+1 failed in 0.36s
+```
+
+  The red is on the declared axis: a bare string `investigated` is truthy, so a content-empty /
+  malformed value earns engagement under the neutralization and does not under the shipped code.
+- **restore**: inverse edit back to the shipped body.
+- **restore receipt**: `git status --porcelain plugins/superheroes/lib/seat_canary.py` → empty.
+- **raw green** (whole file, post-restore): `45 passed in 0.92s`.

@@ -70,3 +70,27 @@ FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_canary_dead_and_
 .                                                                        [100%]
 1 passed, 456 deselected in 1.05s
 ```
+
+---
+
+## Orchestrator re-verification (final head `eb1e998d`)
+
+Verification authority never delegates: the orchestrator re-ran this proof itself on the final
+integrated head, with the detector unedited.
+
+- **neutralization** (targeted, revertible, via the host edit action): `round_driver.py:2326`
+  `_record_round(state, "canaryOutcomeFailed", cof_rec)` → `_record_round(state, "canaryFailed", cof_rec)`.
+- **raw red** — `pytest plugins/superheroes/lib/tests/test_round_driver.py::test_canary_dead_and_outcome_failed_same_round_both_disclosed -q`:
+
+```
+E       AssertionError: assert 'canaryOutcomeFailed' in {'canaryFailed': {'detail': 'vacuous seat', 'engagedFailure': True, 'evidence': {'tokens': 50000, 'toolCalls': 30}, 's... [], 'fellOpenProvenanceMissing': ['security-reviewer'], 'lensCoverage': {'expected': 5, 'floor': True, 'ran': 4}, ...}
+plugins/superheroes/lib/tests/test_round_driver.py:6400: AssertionError
+FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_canary_dead_and_outcome_failed_same_round_both_disclosed
+1 failed in 1.58s
+```
+
+  The red is on the declared axis: with one channel the `dead` vendor's record is gone from the
+  round and only the outcome-failed record survives — the overwrite this change removes.
+- **restore**: inverse edit back to `"canaryOutcomeFailed"`.
+- **restore receipt**: `git status --porcelain plugins/superheroes/lib/round_driver.py` → empty.
+- **raw green**: `1 passed in 1.36s`.

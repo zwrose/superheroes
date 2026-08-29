@@ -125,3 +125,45 @@ FAILED plugins/superheroes/lib/tests/test_canary_outcome_census.py::test_matcher
 ..........                                                               [100%]
 10 passed in 5.56s
 ```
+
+---
+
+## Orchestrator re-verification (final head `eb1e998d`)
+
+Verification authority never delegates: the orchestrator re-ran both declared elements itself on the
+final integrated head. The neutralization goes in the **matcher**
+(`census_violations_from_source`'s exemption path); the assertions that go red are the **position
+tests** — distinct functions, so the detector is not editing itself.
+
+### Element 1 — dict-key position
+
+- **neutralization**: an `exempt_ids` set re-added to `census_violations_from_source`, populated
+  from every `ast.Dict` key constant, and skipped in the walk.
+- **raw red**:
+
+```
+plugins/superheroes/lib/tests/test_canary_outcome_census.py:268: AssertionError
+FAILED plugins/superheroes/lib/tests/test_canary_outcome_census.py::test_matcher_catches_banned_literal_as_dict_key_on_synthetic_source
+1 failed, 1 passed in 0.22s
+```
+
+  The `.get()` position test stayed **green** under this neutralization — evidence the two positions
+  are independently guarded, not one assertion standing for both.
+
+### Element 2 — `.get()` first-argument position
+
+- **neutralization** (distinct): the same `exempt_ids` set populated instead from every
+  `<expr>.get(<const>, …)` first argument.
+- **raw red**:
+
+```
+plugins/superheroes/lib/tests/test_canary_outcome_census.py:281: AssertionError
+FAILED plugins/superheroes/lib/tests/test_canary_outcome_census.py::test_matcher_catches_banned_literal_as_get_argument_on_synthetic_source
+1 failed, 1 passed in 0.26s
+```
+
+  Symmetrically, the dict-key test stayed green here.
+
+- **restore**: inverse edit removing the `exempt_ids` machinery entirely.
+- **restore receipt**: `git status --porcelain` over the whole worktree → empty.
+- **raw green**: `10 passed in 1.70s`.
