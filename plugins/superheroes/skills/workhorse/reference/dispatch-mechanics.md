@@ -625,9 +625,8 @@ list of every guarded element and its neutralization that makes the order long �
 obligation itself**. An order that adds or changes a detector still names the bite-proof it expects;
 the red and green runs still sit inside that order's command budget; the implementer still produces
 the proof record. What a proof record must contain lives in `rubric/bite-proof.md`; the obligation
-that is **unchanged** by this guidance is `agents/implementer.md` validity rule 6. State the **≤ 4** cap and the lane numbers
-above as **what was measured on one lane**, not as a ratified threshold — inventing doctrine from a
-measurement is worse than stating the measurement as a measurement.
+that is **unchanged** by this guidance is `agents/implementer.md` validity rule 6. The **≤ 4** cap and the lane numbers
+above are **one lane's measurement, not a ratified threshold** — cite them in an order as a measured observation.
 
 An external engine's shell availability is set **outside your build** — **never assume the
 implementer can run anything**; the engine CLI consults its own permission surface, not your order. It is

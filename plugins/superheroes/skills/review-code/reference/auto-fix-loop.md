@@ -653,8 +653,7 @@ structurally, every time** — the work may be complete and correct, and the dis
 the gate. Compose the fixer order with a verify suite **scoped to the surface the fixer touched**; the
 project's full verify gate runs at the orchestrator after the dispatch returns, where it is not racing a
 dispatch bound. This is the **fixer**-order instance of the same instinct as
-`agents/implementer.md` ("scope a full-suite or project-wide gate to your order's surface") — point
-there for the implementer rule; do not restate it.
+`agents/implementer.md` ("scope a full-suite or project-wide gate to your order's surface").
 
 **Where those findings go next.** A refusal here means this loop **cannot converge on that surface** —
 that is the guard's designed bound, not a defect, an engine failure, or an escalation trigger. The
@@ -840,13 +839,13 @@ but wrong-keyed** → `dispatchManifestEntryUnusable` (carrying the seat list). 
 to check only the absent token finds nothing and concludes the manifest is fine. **Symptom:** cleared
 targets re-presented as unfixed on a fix-audit stall, with no hint that the keys are wrong. Canonical
 key shape: `skills/review-code/reference/round-driver.md` *Durable-record artifacts* table, **Dispatch
-manifest** row — do not restate the field list here. On an unexplained fix-audit stall, check whether
+manifest** row. On an unexplained fix-audit stall, check whether
 the manifest's **keys** match the roster, not merely that the file exists.
 
 ### Hand-landing omissions the orchestrator forgets
 
 When landing an artifact by hand, two contracts are the most often omitted — both already live in
-`skills/review-code/reference/round-driver.md`; point at those rows, do not restate the tables.
+`skills/review-code/reference/round-driver.md`.
 
 1. **`payloadSha256` on a `seat-result/1` envelope** (`round-driver.md` *seat-result/1 envelope
    fields* table). Ingest compares the stored hash to `payload_sha256(envelope.get("payload"))`; an
