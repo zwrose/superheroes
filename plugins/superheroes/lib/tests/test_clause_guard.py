@@ -187,3 +187,50 @@ def test_cg10_mutation_helpers_raise_on_drifted_anchor():
     )
     with pytest.raises(AssertionError, match="not found"):
         plant_clause_elsewhere(no_source, REL, SECTION_A, SECTION_B, CLAUSE)
+
+
+def test_cg11_fence_aware_section_span():
+    """CG-11: fenced ``#`` / ``##`` lines are not headings; real headings after fences still end spans."""
+    clause_after_fence = "clause after the fence is guarded"
+    text = _doc(
+        "## Declared section",
+        "intro",
+        "```bash",
+        "# shell comment must not truncate",
+        "## fake heading inside fence",
+        "```",
+        f"Body with {clause_after_fence}.",
+        "## Next section",
+        "after",
+    )
+    assert count_clause_in_section(text, REL, "## Declared section", clause_after_fence) == 1
+    check_clause(text, REL, "## Declared section", clause_after_fence, 1)
+
+    fake_dup_heading = _doc(
+        "## Real heading",
+        "```",
+        "## Real heading",
+        "```",
+        "body",
+        "## Other",
+    )
+    dup_lines = fake_dup_heading.splitlines()
+    start, end = section_span(dup_lines, "## Real heading", REL)
+    assert dup_lines[start] == "## Real heading"
+    assert dup_lines[end] == "## Other"
+    assert "body" in "\n".join(dup_lines[start:end])
+
+    bounded = _doc(
+        "## Section with fence",
+        "```",
+        "# comment",
+        "```",
+        "more body",
+        "## Ends here",
+        "tail",
+    )
+    start, end = section_span(bounded.splitlines(), "## Section with fence", REL)
+    lines = bounded.splitlines()
+    assert lines[end] == "## Ends here"
+    assert "more body" in "\n".join(lines[start:end])
+    assert "tail" not in "\n".join(lines[start:end])

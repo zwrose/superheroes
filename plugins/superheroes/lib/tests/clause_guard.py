@@ -3,12 +3,56 @@
 A declared clause is a complete normalized sentence or an explicitly bounded block,
 not a bare fragment — a fragment can survive at its declared count while the obligation
 around it is deleted, which is the rejected substring shape at finer granularity.
+
+Heading detection is fence-aware: a ``#`` shell comment or ``##`` line inside a fenced
+code block is not a markdown heading. Fence-blind parsing can truncate a section at an
+in-fence ``#`` line and leave everything after the fence silently unguarded (fail-open).
 """
 import os
 import re
 
 
-def _heading_level(line):
+def _fence_opening(line):
+    stripped = line.strip()
+    for char in ("`", "~"):
+        if stripped.startswith(char):
+            count = 0
+            for c in stripped:
+                if c == char:
+                    count += 1
+                else:
+                    break
+            if count >= 3:
+                return char, count
+    return None
+
+
+def _advance_fence_state(line, fence_state):
+    marker = _fence_opening(line)
+    if marker is None:
+        return fence_state
+    char, count = marker
+    if fence_state is None:
+        return (char, count)
+    open_char, open_count = fence_state
+    if char == open_char and count >= open_count:
+        return None
+    return fence_state
+
+
+def _fence_states(lines):
+    """For each line index, whether that line lies inside an open fenced code block."""
+    in_fence = []
+    fence_state = None
+    for line in lines:
+        in_fence.append(fence_state is not None)
+        fence_state = _advance_fence_state(line, fence_state)
+    return in_fence
+
+
+def _heading_level(line, in_fence=False):
+    if in_fence:
+        return None
     stripped = line.strip()
     if not stripped.startswith("#"):
         return None
@@ -18,7 +62,12 @@ def _heading_level(line):
 
 def section_span(lines, heading, label):
     """Return (start, end) line indices for a bounded markdown section."""
-    indices = [i for i, line in enumerate(lines) if line.strip() == heading]
+    in_fence = _fence_states(lines)
+    indices = [
+        i
+        for i, line in enumerate(lines)
+        if not in_fence[i] and line.strip() == heading
+    ]
     if len(indices) == 0:
         raise RuntimeError(
             f"{label}: expected exactly one {heading!r} line, found 0"
@@ -28,10 +77,10 @@ def section_span(lines, heading, label):
             f"{label}: expected exactly one {heading!r} line, found {len(indices)}"
         )
     start = indices[0]
-    start_level = _heading_level(lines[start])
+    start_level = _heading_level(lines[start], in_fence[start])
     end = len(lines)
     for i in range(start + 1, len(lines)):
-        level = _heading_level(lines[i])
+        level = _heading_level(lines[i], in_fence[i])
         if level is not None and level <= start_level:
             end = i
             break
