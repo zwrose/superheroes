@@ -58,6 +58,12 @@ SEAT_MISSING_FIELDS = ("schema", "session", "round", "phase", "seat", "attempt",
                        "reason", "evidence")
 MISSING_REASONS = ("forfeit", "timeout", "refusal", "killed", "malformed-output")
 
+# Per-seat dispatch-manifest row fields (orchestrator-written `_dispatch` manifest).
+HAND_DISPATCH_FIELD = "handDispatched"
+HAND_DISPATCH_NOTE_FIELD = "handDispatchNote"
+DISPATCH_MANIFEST_ROW_FIELDS = ("vendor", "model", "engine", HAND_DISPATCH_FIELD,
+                                HAND_DISPATCH_NOTE_FIELD)
+
 SIDECAR_FIELDS = ("schema", "repoId", "branch", "headSha", "baseRef", "baseSha", "diffSha256",
                   "verdict", "certificationShape", "receiptPath", "receiptSha256",
                   "policySha256", "sessionDir")

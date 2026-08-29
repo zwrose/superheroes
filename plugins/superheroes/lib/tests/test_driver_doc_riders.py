@@ -193,6 +193,27 @@ def test_documented_seat_result_fields_match_authority():
     )
 
 
+def test_dispatch_manifest_row_field_literals_census():
+    # axis: dispatch-manifest row field names have one home in round_records
+    targets = (
+        os.path.join(_LIB, "round_driver.py"),
+        os.path.join(_LIB, "round_adapters.py"),
+    )
+    for field in (RR.HAND_DISPATCH_FIELD, RR.HAND_DISPATCH_NOTE_FIELD):
+        for path in targets:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            assert '"%s"' % field not in text and "'%s'" % field not in text, (
+                "%s spells %r as bare string literal — use round_records"
+                % (os.path.basename(path), field)
+            )
+    rd_spec = importlib.util.spec_from_file_location(
+        "round_driver", os.path.join(_LIB, "round_driver.py"))
+    rd_mod = importlib.util.module_from_spec(rd_spec)
+    rd_spec.loader.exec_module(rd_mod)
+    assert rd_mod._DISPATCH_RECORD_ROW_KEYS == RR.DISPATCH_MANIFEST_ROW_FIELDS
+
+
 def test_seat_missing_doc_excludes_payload_sha256():
     # axis: seat-missing shape is documented without payloadSha256 (not conflated with seat-result)
     text = _read(_ROUND_DRIVER)

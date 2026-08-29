@@ -711,6 +711,17 @@ def _validate_build_lane(obj, repo_root):
     return True, None
 
 
+def _review_session_is_branch_stale(obj, repo_root):
+    """True when the marker's branch disagrees with the worktree (staleness, not invalidity)."""
+    if not isinstance(obj, dict):
+        return False
+    branch = obj.get("branch")
+    if not isinstance(branch, str) or not branch.strip():
+        return False
+    ok, _ = _marker_branch_matches(branch, repo_root)
+    return ok is False
+
+
 def _validate_review_session(obj, repo_root):
     if obj.get("schema") != REVIEW_SESSION_SCHEMA:
         return False, "schema must be review-session/1"
@@ -747,6 +758,7 @@ def marker_state(gitdir, repo_root):
     super_dir = os.path.join(gitdir, _SIDECAR_DIR)
     markers = []
     stale = []
+    review_session_invalid_in_scope = False
     review_session = _review_session_marker_state(super_dir, repo_root)
     for name, validator in (
         (BUILD_LANE_FILE, _validate_build_lane),
@@ -757,16 +769,24 @@ def marker_state(gitdir, repo_root):
             continue
         obj, err = _read_json(path)
         if obj is None:
-            stale.append((path, err or "unreadable"))
+            if name == REVIEW_SESSION_FILE:
+                review_session_invalid_in_scope = True
+            else:
+                stale.append((path, err or "unreadable"))
             continue
         ok, reason = validator(obj, repo_root)
         if ok is True:
             markers.append(path)
         elif ok is False:
-            stale.append((path, reason))
+            if name == REVIEW_SESSION_FILE and _review_session_is_branch_stale(obj, repo_root):
+                stale.append((path, reason))
+            elif name == REVIEW_SESSION_FILE:
+                review_session_invalid_in_scope = True
+            else:
+                stale.append((path, reason))
         # ok is None → non-full build lane or other out-of-scope marker; ignore silently
     return {
-        "inScope": bool(markers),
+        "inScope": bool(markers) or review_session_invalid_in_scope,
         "markers": markers,
         "stale": stale,
         "reviewSession": review_session,

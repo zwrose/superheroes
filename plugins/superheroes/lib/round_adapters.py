@@ -297,7 +297,7 @@ def _trusted_vendors(roster, indexed, dispatch_manifest, disclosures):
             candidate = entry_manifest.get("vendor")
             if isinstance(candidate, str) and candidate:
                 vendor = candidate
-            if entry_manifest.get("handDispatched"):
+            if entry_manifest.get(round_records.HAND_DISPATCH_FIELD):
                 hand_dispatched.append(seat)
         if vendor is None:
             if seat not in unusable:

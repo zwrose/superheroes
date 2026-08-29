@@ -886,7 +886,8 @@ def test_hand_dispatched_row_yields_trusted_vendor_and_hand_dispatched_seats(tmp
     seat = RD.DIMENSIONS[0]
     envelopes = [_result_env(dim, {"findings": []}, vendor="cursor") for dim in RD.DIMENSIONS]
     manifest = {seat: {"vendor": "codex", "model": "gpt-5", "engine": "codex",
-                       "handDispatched": True, "handDispatchNote": "orchestrator hand dispatch"}}
+                       RR.HAND_DISPATCH_FIELD: True,
+                       RR.HAND_DISPATCH_NOTE_FIELD: "orchestrator hand dispatch"}}
     for dim in RD.DIMENSIONS[1:]:
         manifest[dim] = {"vendor": "codex", "model": "gpt-5", "engine": "codex"}
     artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"],
@@ -901,7 +902,8 @@ def test_hand_dispatched_row_still_discloses_vendor_echo_mismatch(tmp_path):
     seat = RD.DIMENSIONS[0]
     envelopes = [_result_env(dim, {"findings": []}, vendor="cursor") for dim in RD.DIMENSIONS]
     manifest = {dim: {"vendor": "codex", "model": "gpt-5", "engine": "codex",
-                      "handDispatched": True, "handDispatchNote": "hand seat"}
+                      RR.HAND_DISPATCH_FIELD: True,
+                      RR.HAND_DISPATCH_NOTE_FIELD: "hand seat"}
                 for dim in RD.DIMENSIONS}
     artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"],
                                    dispatch_manifest=manifest)

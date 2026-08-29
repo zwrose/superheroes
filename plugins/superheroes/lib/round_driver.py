@@ -7260,11 +7260,15 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
             "occurrence": occurrence, "missingReason": reason, "storePath": out.get("storePath")}
 
 
-_DISPATCH_RECORD_ROW_KEYS = ("vendor", "model", "engine", "handDispatched", "handDispatchNote")
+_DISPATCH_RECORD_ROW_KEYS = round_records.DISPATCH_MANIFEST_ROW_FIELDS
 
 
 def _hand_dispatch_row(vendor, model=None, engine=None, note=None):
-    row = {"vendor": vendor, "handDispatched": True, "handDispatchNote": note}
+    row = {
+        "vendor": vendor,
+        round_records.HAND_DISPATCH_FIELD: True,
+        round_records.HAND_DISPATCH_NOTE_FIELD: note,
+    }
     if model is not None:
         row["model"] = model
     if engine is not None:
@@ -7345,7 +7349,8 @@ def _cmd_record_dispatch_locked(session_dir, seat, vendor, note, model=None, eng
     journal_entry = _journal_entry_for_commit(
         session_dir, "record-dispatch", "recorded", phase=phase, round=rnd,
         attempt=cur_attempt, seat=seat, vendor=vendor, model=model, engine=engine,
-        handDispatched=True, handDispatchNote=note,
+        **{round_records.HAND_DISPATCH_FIELD: True,
+           round_records.HAND_DISPATCH_NOTE_FIELD: note},
         **_journal_addressing_fields(expect_round, expect_phase),
         **_journal_identity_fields(phase, seat, 0, cur_attempt))
     try:
@@ -7357,9 +7362,12 @@ def _cmd_record_dispatch_locked(session_dir, seat, vendor, note, model=None, eng
     except round_commit.CommitRefused as exc:
         return _commit_refused_response(session_dir, "record-dispatch", exc, phase=phase, rnd=rnd,
                                         attempt=cur_attempt, seat=seat)
-    return {"ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
-            "vendor": vendor, "model": model, "engine": engine, "handDispatched": True,
-            "handDispatchNote": note}
+    return {
+        "ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
+        "vendor": vendor, "model": model, "engine": engine,
+        round_records.HAND_DISPATCH_FIELD: True,
+        round_records.HAND_DISPATCH_NOTE_FIELD: note,
+    }
 
 
 # --- advance -------------------------------------------------------------------------------------
@@ -8718,7 +8726,7 @@ def build_parser():
     cli_contract.add_argument(pdr, "--vendor", contract="free-text", required=True)
     cli_contract.add_argument(pdr, "--model", contract="free-text", default=None)
     cli_contract.add_argument(pdr, "--engine", contract="free-text", default=None)
-    pdr.add_argument("--note", required=True)
+    cli_contract.add_argument(pdr, "--note", contract="free-text", required=True)
     cli_contract.add_argument(pdr, "--round", contract="integer", default=None, type=int,
                                help="expected pending round; when supplied, a mismatch refuses")
     cli_contract.add_argument(pdr, "--phase", contract="free-text", default=None,
