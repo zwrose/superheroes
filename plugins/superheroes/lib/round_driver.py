@@ -105,14 +105,13 @@ MAX_CONFIRMATIONS = review_round_policy.MAX_CONFIRMATIONS
 _SELF_RECOVERY_FIXER_MODEL = "sonnet-5"
 _SELF_RECOVERY_FIXER_EFFORT = "high"
 
-# Fix-batch guidance key — single source shared with order templates (dispatch-fixer.md).
-FIX_BATCH_GUIDANCE_KEY = "userGuidance"
-# Fold-stamped finding id for guided batch rows — minted once in _fold_judgment, consumed by
-# _gate_guidance_block (never re-derived over the fix batch).
-FIX_BATCH_GUIDANCE_ID_KEY = "userGuidanceFindingId"
+# Fold-owned guidance record key inside judgmentDispositions entries (dispatch-fixer.md).
+GATE_GUIDANCE_RECORD_KEY = "userGuidance"
 GATE_GUIDANCE_ROW_BYTE_CAP = 2000
 GATE_GUIDANCE_AGGREGATE_BYTE_CAP = 8000
 _GATE_GUIDANCE_NO_GUIDANCE = "No owner-gate guidance is attached to this batch."
+_GATE_GUIDANCE_ROW_CARRIED_CHANNEL = "gateGuidanceRowCarried"
+GATE_GUIDANCE_UNUSABLE_REFUSAL = "gate-guidance-unusable"
 
 # --- version spelling: pinned declaration block (BEGIN) ---
 SCHEMA_VERSION = 2
@@ -456,6 +455,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "priorCommentsUnavailable": _bool_value,
     "verifyPasses": _dict_list,
     "judgmentDispositions": _dict_list,
+    "gateGuidanceRowCarried": _dict_list,
 }
 
 # Per-round disclosure channels recorded during hand `submit` (not `_fold_panel`). Each name here
@@ -466,7 +466,9 @@ SUBMIT_DISCLOSURE_CHANNELS = ("recordOrphansIgnored",)
 # Per-round disclosure channels recorded during order emission (`orders-emit`, not `_fold_panel`).
 # Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt`
 # share the same one home.
-ORDER_EMISSION_DISCLOSURE_CHANNELS = ("orderVendorProvenanceGaps", "priorCommentsUnavailable")
+ORDER_EMISSION_DISCLOSURE_CHANNELS = (
+    "orderVendorProvenanceGaps", "priorCommentsUnavailable", "gateGuidanceRowCarried",
+)
 
 # Per-round disclosure channels `_fold_verifiers` records (not `_fold_panel`). Each name here must
 # also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
@@ -2510,34 +2512,65 @@ def _truncate_utf8_bytes(text, max_bytes):
     return "", len(raw)
 
 
-def _gate_guidance_block(batch):
-    """Derive the ``GATE_GUIDANCE`` substitution for dispatch-fixer orders.
-
-    The only producer of owner-gate guidance prose in rendered fixer orders. Input is the fix batch
-    list (same source as ``_ensure_fix_batch_file``). Wording never claims whether a gate ran."""
-    if not isinstance(batch, list):
-        return _GATE_GUIDANCE_NO_GUIDANCE
-    guided = []
-    for row in batch:
-        if not isinstance(row, dict):
+def _gate_guidance_entries(state, rnd):
+    """Return validated fold-owned guidance records for order rendering."""
+    rounds = state.get("rounds") if isinstance(state, dict) else None
+    if not isinstance(rounds, dict):
+        return []
+    round_entry = rounds.get(str(rnd))
+    if not isinstance(round_entry, dict):
+        return []
+    log = round_entry.get("judgmentDispositions")
+    if not isinstance(log, list):
+        return []
+    out = []
+    seen_ids = set()
+    for item in log:
+        if not isinstance(item, dict):
             continue
-        guidance = row.get(FIX_BATCH_GUIDANCE_KEY)
+        if item.get("disposition") != "fix-with-guidance":
+            continue
+        guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
         if not isinstance(guidance, str) or not guidance.strip():
             continue
-        stamped = row.get(FIX_BATCH_GUIDANCE_ID_KEY)
-        fid = stamped.strip() if isinstance(stamped, str) and stamped.strip() else None
-        guided.append((row, guidance.strip(), fid))
+        fid = item.get("id")
+        if not isinstance(fid, str) or not fid.strip():
+            raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
+        fid = fid.strip()
+        if fid in seen_ids:
+            raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
+        seen_ids.add(fid)
+        out.append({"id": fid, "title": item.get("title"), "guidance": guidance.strip()})
+    return out
+
+
+def _gate_guidance_block(entries):
+    """Derive the ``GATE_GUIDANCE`` substitution for dispatch-fixer orders.
+
+    The only producer of owner-gate guidance prose in rendered fixer orders. Input is the
+    pre-validated list from ``_gate_guidance_entries``. Wording never claims whether a gate ran."""
+    if not isinstance(entries, list):
+        return _GATE_GUIDANCE_NO_GUIDANCE
+    guided = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        guidance = entry.get("guidance")
+        if not isinstance(guidance, str) or not guidance.strip():
+            continue
+        fid = entry.get("id")
+        fid_stripped = fid.strip() if isinstance(fid, str) and fid.strip() else None
+        guided.append((entry, guidance.strip(), fid_stripped))
     if not guided:
         return _GATE_GUIDANCE_NO_GUIDANCE
-    sidecar = "fix-batch.json under the %r key" % FIX_BATCH_GUIDANCE_KEY
     parts = []
     aggregate_bytes = 0
     omitted = 0
-    for idx, (row, guidance, fid) in enumerate(guided):
+    for idx, (entry, guidance, fid) in enumerate(guided):
         if aggregate_bytes >= GATE_GUIDANCE_AGGREGATE_BYTE_CAP:
             omitted = len(guided) - idx
             break
-        title = _escape_guidance_placeholder_syntax(row.get("title") or "(no title)")
+        title = _escape_guidance_placeholder_syntax(entry.get("title") or "(no title)")
         id_label = _escape_guidance_placeholder_syntax(
             fid if fid is not None else "(no finding id)")
         header = "### %s — %s" % (id_label, title)
@@ -2547,21 +2580,21 @@ def _gate_guidance_block(batch):
         for line in escaped.splitlines() or [""]:
             body_lines.append("> " + line)
         if withheld:
-            body_lines.append("> (%d bytes withheld; full text in %s)" % (withheld, sidecar))
+            body_lines.append(
+                "> (%d bytes withheld; the remainder is not carried in this order)" % withheld)
         body_lines.append("END owner-gate guidance")
-        entry = "\n".join([header] + body_lines)
-        entry_bytes = len(entry.encode("utf-8"))
+        entry_text = "\n".join([header] + body_lines)
+        entry_bytes = len(entry_text.encode("utf-8"))
         remaining = GATE_GUIDANCE_AGGREGATE_BYTE_CAP - aggregate_bytes
         if entry_bytes > remaining:
             omitted = len(guided) - idx
             break
-        parts.append(entry)
+        parts.append(entry_text)
         aggregate_bytes += entry_bytes
     if omitted:
         parts.append(
-            "%d guided finding(s) not rendered in full; full text for each is in %s."
-            % (omitted, sidecar)
-        )
+            "%d guided finding(s) not rendered in full; the remainder is not carried in this order."
+            % omitted)
     result = "\n\n".join(parts)
     while "{{" in result:
         result = _escape_guidance_placeholder_syntax(result)
@@ -2677,9 +2710,7 @@ def _fold_judgment(state, config, artifact):
             guidance = d.get("guidance")
             entry = {"id": fid, "title": f.get("title"), "disposition": "fix-with-guidance"}
             if isinstance(guidance, str) and guidance.strip():
-                g[FIX_BATCH_GUIDANCE_KEY] = guidance.strip()
-                g[FIX_BATCH_GUIDANCE_ID_KEY] = fid
-                entry[FIX_BATCH_GUIDANCE_KEY] = guidance.strip()
+                entry[GATE_GUIDANCE_RECORD_KEY] = guidance.strip()
             disposition_log.append(entry)
         elif disposition == "fix-as-suggested":
             g["judgmentDisposition"] = "fix-as-suggested"
@@ -4109,8 +4140,12 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                 "prior-comments.json in PR mode — panel ran without prior PR comments; any claim "
                 "that prior comments were considered is not supported for this round"
                 % rkey)
-        if declared.get("judgmentDispositions"):
-            pass  # receipt-only; round entry emitted via generic disclosure loop in rounds[]
+        ggc = declared.get("gateGuidanceRowCarried")
+        if ggc:
+            degraded.append(
+                "gate-guidance-row-carried (round %s): %d fix-batch row(s) carried the guidance "
+                "key while the fold recorded none for them — row-carried text is never rendered "
+                "as owner guidance" % (rkey, len(ggc)))
         ovg = declared.get("orderVendorProvenanceGaps")
         if ovg:
             # Provenance-NEUTRAL wording: since the collector spans every read-only phase, a gap
@@ -6325,6 +6360,24 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             fix_batch = state.get("fixBatch")
         if not isinstance(fix_batch, list):
             fix_batch = []
+        guidance_entries = _gate_guidance_entries(state, rnd)
+        render_only = (
+            isinstance(state, dict) and "rounds" not in state and "round" not in state
+        )
+        if not render_only:
+            fold_titles = {e.get("title") for e in guidance_entries}
+            unaccounted = []
+            for idx, row in enumerate(fix_batch):
+                if not isinstance(row, dict):
+                    continue
+                row_guidance = row.get(GATE_GUIDANCE_RECORD_KEY)
+                if not isinstance(row_guidance, str) or not row_guidance.strip():
+                    continue
+                row_title = row.get("title")
+                if not guidance_entries or row_title not in fold_titles:
+                    unaccounted.append({"index": idx, "title": row_title})
+            if unaccounted:
+                _record_round(state, _GATE_GUIDANCE_ROW_CARRIED_CHANNEL, unaccounted)
         ph = {
             "FIX_BATCH_PATH": fix_batch_path,
             "PROFILE_PATH": _profile_path_for_orders(repo_root),
@@ -6334,7 +6387,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "ESCALATION_WRAPPER_PATH": _shell_quote_path(_shipped_escalation_wrapper_path()),
             "VERIFY_COMMAND": cfg.get("verifyCommand") or "none",
             "ROUND": str(rnd),
-            "GATE_GUIDANCE": _gate_guidance_block(fix_batch),
+            "GATE_GUIDANCE": _gate_guidance_block(guidance_entries),
         }
     return ph
 
