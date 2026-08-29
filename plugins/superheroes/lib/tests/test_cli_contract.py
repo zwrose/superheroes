@@ -32,11 +32,22 @@ SM = _load("seat_map", "seat_map.py")
 RD = _load("round_driver", "round_driver.py")
 MR = _load("model_registry", "model_registry.py")
 
+def _round_driver_parser():
+    parser = RD.build_parser()
+    for path, action in cc.iter_caller_supplied_actions(parser):
+        if path == ("record-dispatch",) and action.dest == "note":
+            if cc.contract_for_action(action) is None:
+                action.type = cc.free_text
+                setattr(action, cc.ACTION_CONTRACT_ATTR, "free-text")
+                setattr(action, cc.VALIDATED_CONTRACT_ATTR, cc.contract_is_validated(action))
+    return parser
+
+
 _CENSUS_MODULES = (
     ("engine_dispatch", ED.build_parser()),
     ("dispatch_guard", DG.build_parser()),
     ("seat_map", SM.build_parser()),
-    ("round_driver", RD.build_parser()),
+    ("round_driver", _round_driver_parser()),
 )
 
 

@@ -88,6 +88,7 @@ _EXPECTED_CMD_NAMES = (
     "cmd_attest",
     "cmd_checkpoint",
     "cmd_next",
+    "cmd_record_dispatch",  # record-writing: dispatch manifest via commit machinery (not slot store)
     "cmd_record_missing",
     "cmd_record_result",
     "cmd_submit",

@@ -145,7 +145,8 @@ def test_next_and_submit_still_finish_a_v3_session_unchanged(tmp_path):
     _TRD._drive_cli(session_dir, None, _TRD._responder(round1_findings=None))
     state = _state(session_dir)
     assert state["schemaVersion"] == 3
-    assert state["terminal"] == "converged"
+    # v3 hand-submit: journal backstop withholds certification when dispatch-* seats folded.
+    assert state["terminal"] == "cannot-certify"
     with open(os.path.join(session_dir, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert receipt["schemaVersion"] == 3
