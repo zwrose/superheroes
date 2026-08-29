@@ -132,6 +132,12 @@ _CLAUSE_ROWS = [
         "copy_holder_section": "## 6. Decompose into work orders",
     },
     {
+        "clause": "names the bite-proof it expects",
+        "home_section": "## Who owes what",
+        "copy_holder": "skills/workhorse/reference/dispatch-mechanics.md",
+        "copy_holder_section": "## Engine forfeits and order shape",
+    },
+    {
         "clause": "per guarded element",
         "home_section": "## The record",
         "copy_holder": "skills/workhorse/SKILL.md",

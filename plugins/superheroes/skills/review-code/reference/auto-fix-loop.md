@@ -645,15 +645,19 @@ orchestrator route it per `rubric/review-discipline.md` § *The safety-machinery
 refuses the fixer*. A `degraded:true`
 result also refuses (fail-closed). The fixer never pushes/merges/deploys (those stay user-gated).
 
-**Fixer verify scope — scoped suite in-dispatch, full gate at the orchestrator.** `rubric/orders/dispatch-fixer.md`
+**Fixer verify scope — single configured gate, dispatch-bound forfeit.** `rubric/orders/dispatch-fixer.md`
 step 3 tells the fixer to run `{{VERIFY_COMMAND}}` when provided — resolved from the project profile's
-`## Verify` section (`skills/review-code/SKILL.md` § *The verify command*). When that command is a long
-full-suite gate, a **bounded** fixer dispatch whose bound is shorter than the gate **forfeits
-structurally, every time** — the work may be complete and correct, and the dispatch still dies inside
-the gate. Compose the fixer order with a verify suite **scoped to the surface the fixer touched**; the
-project's full verify gate runs at the orchestrator after the dispatch returns, where it is not racing a
-dispatch bound. This is the **fixer**-order instance of the same instinct as
-`agents/implementer.md` ("scope a full-suite or project-wide gate to your order's surface").
+`## Verify` section (`skills/review-code/SKILL.md` § *The verify command*). The driver renders that
+placeholder from the session's single configured `verifyCommand` (`round_driver.py` `_order_placeholders`);
+there is no per-order override, and `skills/review-code/SKILL.md` binds the orchestrator to dispatch the
+emitted order text rather than hand-compose it. When that configured command is a long full-suite gate,
+a **bounded** fixer dispatch whose bound is shorter than the gate **forfeits structurally, every time** —
+the work may be complete and correct, and the dispatch still dies inside the gate. The lever is the
+**configured verify command itself** (the `## Verify` calibration in the project profile — name targeted
+files, never `-k`; the full suite is CI's receipt), not a scoped fixer order the orchestrator cannot
+currently emit. The implementer analogy in `agents/implementer.md` does not transfer directly: implementer
+orders are hand-composed and can scope verification to the order's surface; fixer orders are driver-emitted
+and inherit the one configured gate.
 
 **Where those findings go next.** A refusal here means this loop **cannot converge on that surface** —
 that is the guard's designed bound, not a defect, an engine failure, or an escalation trigger. The
@@ -845,31 +849,29 @@ the manifest's **keys** match the roster, not merely that the file exists.
 ### Hand-landing omissions the orchestrator forgets
 
 When landing an artifact by hand, two contracts are the most often omitted — both already live in
-`skills/review-code/reference/round-driver.md`.
+`skills/review-code/reference/round-driver.md`:
 
-1. **`payloadSha256` on a `seat-result/1` envelope** (`round-driver.md` *seat-result/1 envelope
-   fields* table). Ingest compares the stored hash to `payload_sha256(envelope.get("payload"))`; an
-   envelope that **omits** the field compares `None` against the computed hash and is refused
-   **`landing-torn`** — omission is not a tolerated absence.
-2. **`run-verify` bare payload** (`round-driver.md` *run-verify* row). Phase `run-verify` is
-   orchestrator-fulfilled: no dispatch manifest; `advance` folds from the bare payload at
-   `$SESSION_DIR/round-<N>/landing/run-verify/<skey>.a<K>.payload.json` where `<skey>` is
-   `round_records.storage_key("verify")`.
+1. **`payloadSha256` on a `seat-result/1` envelope** — `round-driver.md` *seat-result/1 envelope
+   fields* table. Omitting it is a **refusal** (`landing-torn`), not a tolerated absence or a
+   degradation; see that row for the ingest check.
+2. **`run-verify` bare payload** — `round-driver.md` *run-verify* row. Phase `run-verify` is
+   orchestrator-fulfilled and emits no dispatch manifest; see that row for the landing shape.
 
 ### Hand-dispatch provenance — assertion without runner authentication
 
-On a sanctioned **hand** dispatch, `ranManifest` and `seatMap` **can** be attached — `skills/review-code/SKILL.md`
-instructs the hand path to submit the panel with `ranManifest` built from the orchestrator's own
-dispatch records plus the composed `$SEAT_MAP` as `seatMap`, and `round_adapters` accepts them. What
-the hand path **cannot** produce is **runner-side authentication** of those fields: `round_adapters`
-treats `ranManifest` as dispatch provenance that comes **only** from the orchestrator's out-of-band
-record; a seat envelope's own `vendor`/`model` is a claimant-controlled advisory echo that
-authenticates nothing. With no dispatch manifest the key is omitted and the provenance-unavailable
-disclosure fires — a synthesized manifest would silently authenticate an unauthenticated run. On hand
-dispatch the provenance fields are therefore the orchestrator's **own assertion**, with no
-independent runner evidence behind them; the driver **correctly falls open** (discloses rather than
-certifies) instead of manufacturing authentication it does not have. That is a **named limitation**,
-not a defect in the driver. **Mitigation in practice:** a vet-time `seat_canary` probe run under the
-same configuration, which supplies independent evidence the hand dispatch could not. The **machinery**
-half — a provenance-attachment path for sanctioned hand dispatches — is issue #1248's, not this
-change's; this entry names the limitation and stops there.
+This section describes the **durable-record `advance` adapter path** (`round_adapters._trusted_vendors`),
+not the hand **`submit`** path. On `advance`, `ranManifest` is derived only from the orchestrator's
+dispatch manifest; with no manifest the key is omitted and `dispatchManifestUnavailable` fires — the
+driver discloses rather than certifying unauthenticated provenance. A synthesized manifest would silently
+authenticate an unauthenticated run, so the adapter falls open there by design.
+
+Hand **`submit`** is different: `cmd_submit` folds the caller-supplied artifact directly, and `_fold_panel`
+consumes the caller's `ranManifest` as trusted provenance without running `_trusted_vendors`. An orchestrator
+following `skills/review-code/SKILL.md`'s hand path can attach `ranManifest` and `seatMap` built from its
+own dispatch records; those fields are the orchestrator's **assertion**, with no runner-side authentication
+behind them — but hand submit **currently does not** attach an unauthenticated-provenance disclosure for
+that assertion. That gap is a **named limitation**, not a defect in the driver on the path this paragraph
+originally described. **Mitigation in practice:** a vet-time `seat_canary` probe run under the same
+configuration, which supplies independent evidence a hand dispatch could not. The **machinery** half —
+an honest provenance-attachment path for sanctioned hand dispatches — is issue #1248's, not this change's;
+this entry names the limitation and stops there.
