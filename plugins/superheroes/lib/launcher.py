@@ -233,7 +233,12 @@ def spawn_config_dir(env=None, cwd=None):
 
     An explicit caller-provided ``CLAUDE_CONFIG_DIR`` wins: the override branch below is
     read first, so the injection can never silently overwrite a deliberate export — it only
-    supplies the default the caller did not set.
+    supplies the default the caller did not set. The one normalization it does apply to an
+    override is the ``.strip()`` below, which the ``reserved`` record has carried since
+    #1036. Handing the child the RAW padded value instead would recreate exactly the
+    record/child divergence #1036 exists to prevent — the watcher would search the stripped
+    root while the child wrote to the padded one — and a padded export is in practice a
+    quoting slip, where stripping is also what the caller meant.
 
     Every branch resolves through the SUPPLIED env and the child's own ``cwd`` — never the
     launcher's ambient environment or working directory — because a root derived from the

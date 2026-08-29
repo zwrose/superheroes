@@ -1664,6 +1664,46 @@ def test_spawned_child_config_dir_pin_never_overrides_a_deliberate_export(
         pass
 
 
+def test_spawned_child_config_dir_pin_agrees_with_the_record_on_a_padded_export(
+    tmp_path, monkeypatch,
+):
+  # axis: #1246 review round 1 — an export carrying edge whitespace. `spawn_config_dir`
+  # strips before resolving, and the reserved record has carried that stripped form since
+  # #1036 — so handing the child the RAW padded value is precisely the record/child
+  # divergence #1036 exists to prevent: the watcher would search the stripped root while
+  # the child wrote to the padded one. The pin deliberately gives the child the same
+  # stripped root the record names, and this test is what stops a later "preserve the
+  # caller's exact bytes" change from silently reopening that divergence.
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    intended = str(tmp_path / "claude-padded")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", intended + "  ")
+    report = str(tmp_path / "child-config-dir.txt")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_config_dir_reporting_spawn(report),
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True, result
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    reported = _await_child_report(report)
+    # Still the caller's directory — the padding is normalized, the choice is not overridden.
+    assert reported == intended
+    assert reported == reserved["configDir"]
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
 def test_spawned_child_config_dir_pin_resolves_a_relative_export(tmp_path, monkeypatch):
   # axis: #1246 x #1036 — a relative export is handed to the child already resolved against
   # the build worktree it runs in. Same directory the child would have reached on its own,
