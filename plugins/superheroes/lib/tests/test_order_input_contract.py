@@ -241,6 +241,127 @@ def test_gate_guidance_unknown_placeholder_does_not_wedge_render(tmp_path):
     assert "{ {UNKNOWN_THING}}" in text
 
 
+def test_gate_guidance_triple_brace_round_placeholder_neutralized_in_rendered_order(tmp_path):
+    """E1: odd brace run {{{ROUND}}} must not leave live {{ROUND}} or substitute the round."""
+    import round_orders as RO
+    session_dir = str(tmp_path / "gate-triple")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": str(tmp_path), "verifyCommand": "none"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+        "_fixBatch": [{"title": "leak", "file": "a.py", "line": 3,
+                       RD.FIX_BATCH_GUIDANCE_KEY: "use {{{ROUND}} exactly"}],
+    }
+    paths = _minimal_paths(session_dir)
+    ph = RD._order_placeholders(
+        RP.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 2, paths, RD.CHANNEL_FILE,
+    )
+    assert "{{ROUND}}" not in ph["GATE_GUIDANCE"]
+    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None, reason
+    assert "{{ROUND}}" not in text
+    assert "use round 2" not in text
+
+
+def test_gate_guidance_long_odd_brace_run_neutralized_in_rendered_order(tmp_path):
+    """E2: long odd brace run must render without surviving {{ or wedging render."""
+    import round_orders as RO
+    session_dir = str(tmp_path / "gate-odd")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": str(tmp_path), "verifyCommand": "none"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+        "_fixBatch": [{"title": "x", "file": "b.py", "line": 1,
+                       RD.FIX_BATCH_GUIDANCE_KEY: "{{{{{FOO}}"}],
+    }
+    paths = _minimal_paths(session_dir)
+    ph = RD._order_placeholders(
+        RP.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 2, paths, RD.CHANNEL_FILE,
+    )
+    assert "{{" not in ph["GATE_GUIDANCE"]
+    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None, reason
+    assert "{{" not in text
+
+
+def test_gate_guidance_title_placeholder_neutralized_in_rendered_order(tmp_path):
+    """E3: {{UNKNOWN_THING}} in the finding title must not wedge render_order."""
+    import round_orders as RO
+    session_dir = str(tmp_path / "gate-title")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": str(tmp_path), "verifyCommand": "none"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+        "_fixBatch": [{"title": "review {{UNKNOWN_THING}} handling", "file": "b.py", "line": 1,
+                       RD.FIX_BATCH_GUIDANCE_KEY: "ship narrow",
+                       RD.FIX_BATCH_GUIDANCE_ID_KEY: "b.py::review@L1"}],
+    }
+    paths = _minimal_paths(session_dir)
+    ph = RD._order_placeholders(
+        RP.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 2, paths, RD.CHANNEL_FILE,
+    )
+    assert "review { {UNKNOWN_THING}} handling" in ph["GATE_GUIDANCE"]
+    assert "{{UNKNOWN_THING}}" not in ph["GATE_GUIDANCE"]
+    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None, reason
+    assert "review { {UNKNOWN_THING}} handling" in text
+
+
+def test_gate_guidance_stamped_id_placeholder_neutralized_in_rendered_order(tmp_path):
+    """E4: {{ROUND}} in the stamped finding id must not wedge render_order."""
+    import round_orders as RO
+    session_dir = str(tmp_path / "gate-id")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": str(tmp_path), "verifyCommand": "none"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+        "_fixBatch": [{"title": "leak", "file": "a.py", "line": 3,
+                       RD.FIX_BATCH_GUIDANCE_KEY: "keep narrow",
+                       RD.FIX_BATCH_GUIDANCE_ID_KEY: "a.py::{{ROUND}}@L3"}],
+    }
+    paths = _minimal_paths(session_dir)
+    ph = RD._order_placeholders(
+        RP.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 2, paths, RD.CHANNEL_FILE,
+    )
+    assert "a.py::{{ROUND}}@L3" not in ph["GATE_GUIDANCE"]
+    assert "a.py::{ {ROUND}}@L3" in ph["GATE_GUIDANCE"]
+    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None, reason
+    assert "a.py::{ {ROUND}}@L3" in text
+
+
+def test_gate_guidance_all_fields_placeholder_neutralized_in_rendered_order(tmp_path):
+    """E5: placeholder syntax in id, title, and guidance together still renders."""
+    import round_orders as RO
+    session_dir = str(tmp_path / "gate-all")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": str(tmp_path), "verifyCommand": "none"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+        "_fixBatch": [{"title": "review {{FOO}}", "file": "a.py", "line": 1,
+                       RD.FIX_BATCH_GUIDANCE_KEY: "use {{{ROUND}}}",
+                       RD.FIX_BATCH_GUIDANCE_ID_KEY: "a.py::{{BAR}}@L1"}],
+    }
+    paths = _minimal_paths(session_dir)
+    ph = RD._order_placeholders(
+        RP.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 2, paths, RD.CHANNEL_FILE,
+    )
+    assert "{{" not in ph["GATE_GUIDANCE"]
+    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None, reason
+    assert "{{" not in text
+
+
 def test_gate_guidance_markdown_in_guidance_stays_inside_delimiters(tmp_path):
     # edge 5: fenced block, heading, backticks stay inside delimiters
     import round_orders as RO
@@ -269,25 +390,35 @@ def test_gate_guidance_markdown_in_guidance_stays_inside_delimiters(tmp_path):
     assert "`foo`" in section
 
 
-def test_gate_guidance_per_row_cap_emits_elision_notice():
-    # edge 6: per-row cap → explicit elision with withheld byte count and sidecar pointer
-    long_text = "x" * (RD.GATE_GUIDANCE_ROW_BYTE_CAP + 50)
-    rows = [{"title": "big", "file": "d.py", "line": 1,
-             RD.FIX_BATCH_GUIDANCE_KEY: long_text}]
-    block = RD._gate_guidance_block(rows)
-    assert "bytes withheld" in block
-    assert RD.FIX_BATCH_GUIDANCE_KEY in block
-    assert "fix-batch.json" in block
+def test_gate_guidance_per_row_cap_renders_full_at_boundary():
+    """E7: guidance at the 2000-byte row cap renders in full; one byte over withholds exactly one."""
+    row = {"title": "big", "file": "d.py", "line": 1, RD.FIX_BATCH_GUIDANCE_KEY: "x"}
+    at_cap = dict(row, **{RD.FIX_BATCH_GUIDANCE_KEY: "x" * 2000})
+    block_full = RD._gate_guidance_block([at_cap])
+    assert "bytes withheld" not in block_full
+    assert "> %s" % ("x" * 2000) in block_full
+    over_cap = dict(row, **{RD.FIX_BATCH_GUIDANCE_KEY: "x" * 2001})
+    block_over = RD._gate_guidance_block([over_cap])
+    assert "(1 bytes withheld" in block_over
 
 
-def test_gate_guidance_aggregate_cap_emits_omission_notice():
-    # edge 7: aggregate cap → explicit notice naming rows not rendered in full
-    row = {"title": "t", "file": "e.py", "line": 1,
-           RD.FIX_BATCH_GUIDANCE_KEY: "y" * 500}
-    rows = [dict(row, line=i + 1, file="e%d.py" % i) for i in range(30)]
+def test_gate_guidance_aggregate_cap_admits_and_omits_at_boundary():
+    """E8: the 8000-byte aggregate cap renders fitting rows in full and names the rest."""
+    guidance = "y" * 500
+    rows = [{"title": "row-%02d" % i, "file": "e%d.py" % i, "line": i + 1,
+             RD.FIX_BATCH_GUIDANCE_KEY: guidance} for i in range(20)]
     block = RD._gate_guidance_block(rows)
     assert "not rendered in full" in block
-    assert RD.FIX_BATCH_GUIDANCE_KEY in block
+    rendered = [r for r in rows if "### (no finding id) — %s" % r["title"] in block]
+    omitted = [r for r in rows if r not in rendered]
+    assert rendered, "expected at least one row under the 8000-byte aggregate cap"
+    assert omitted, "expected at least one row omitted by the 8000-byte aggregate cap"
+    assert len(rendered) + len(omitted) == len(rows)
+    assert "%d guided finding(s) not rendered in full" % len(omitted) in block
+    for row in rendered:
+        assert "> %s" % guidance in block
+    for row in omitted:
+        assert row["title"] not in block
 
 
 def test_fixer_order_placeholders_include_guided_gate_block(tmp_path):

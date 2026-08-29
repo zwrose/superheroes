@@ -455,6 +455,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "orderVendorProvenanceGaps": _order_vendor_provenance_gaps_shape,
     "priorCommentsUnavailable": _bool_value,
     "verifyPasses": _dict_list,
+    "judgmentDispositions": _dict_list,
 }
 
 # Per-round disclosure channels recorded during hand `submit` (not `_fold_panel`). Each name here
@@ -475,6 +476,10 @@ VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses",)
 # not `_fold_panel`). Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume
 # and `build_receipt` share the same one home.
 FOLD_PROVENANCE_DISCLOSURE_CHANNELS = ("adapterProvenance",)
+
+# Per-round disclosure channels `_fold_judgment` records (not `_fold_panel`). Each name here must
+# also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
+JUDGMENT_FOLD_DISCLOSURE_CHANNELS = ("judgmentDispositions",)
 
 # Every OTHER per-round key `_fold_panel` or `_fold_verifiers` records, named here so the census can
 # close the set: a new `_record_round` key lands in one home or the other, deliberately, or the
@@ -2482,8 +2487,13 @@ def _judgment_row_ids(findings):
 
 
 def _escape_guidance_placeholder_syntax(text):
-    """Escape ``{{`` so owner guidance cannot inject order placeholders during render."""
-    return text.replace("{{", "{ {")
+    """Escape ``{{`` so owner guidance cannot inject order placeholders during render.
+
+    Fixed-point: each pass strictly increases length and strictly decreases ``{{`` count, so the
+    loop terminates on any finite input."""
+    while "{{" in text:
+        text = text.replace("{{", "{ {")
+    return text
 
 
 def _truncate_utf8_bytes(text, max_bytes):
@@ -2527,8 +2537,9 @@ def _gate_guidance_block(batch):
         if aggregate_bytes >= GATE_GUIDANCE_AGGREGATE_BYTE_CAP:
             omitted = len(guided) - idx
             break
-        title = row.get("title") or "(no title)"
-        id_label = fid if fid is not None else "(no finding id)"
+        title = _escape_guidance_placeholder_syntax(row.get("title") or "(no title)")
+        id_label = _escape_guidance_placeholder_syntax(
+            fid if fid is not None else "(no finding id)")
         header = "### %s — %s" % (id_label, title)
         text, withheld = _truncate_utf8_bytes(guidance, GATE_GUIDANCE_ROW_BYTE_CAP)
         escaped = _escape_guidance_placeholder_syntax(text)
@@ -2551,7 +2562,10 @@ def _gate_guidance_block(batch):
             "%d guided finding(s) not rendered in full; full text for each is in %s."
             % (omitted, sidecar)
         )
-    return "\n\n".join(parts)
+    result = "\n\n".join(parts)
+    while "{{" in result:
+        result = _escape_guidance_placeholder_syntax(result)
+    return result
 
 
 def _route_judgment_blockers(state, blocking):
@@ -3913,8 +3927,6 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
               "stallChoice": rec.get("stallChoice")}
         if rec.get("lensCoverage") is not None:
             rd["lensCoverage"] = rec.get("lensCoverage")
-        if rec.get("judgmentDispositions") is not None:
-            rd["judgmentDispositions"] = rec.get("judgmentDispositions")
         # Fossil-channel census requires a literal per-channel round-record read — not a variable
         # key through the generic loop — so this channel is consumed here (form-gated, always-emit).
         # Bite axis (#1177-A): every emitted round entry on a form permitting the channel carries
@@ -4097,6 +4109,8 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                 "prior-comments.json in PR mode — panel ran without prior PR comments; any claim "
                 "that prior comments were considered is not supported for this round"
                 % rkey)
+        if declared.get("judgmentDispositions"):
+            pass  # receipt-only; round entry emitted via generic disclosure loop in rounds[]
         ovg = declared.get("orderVendorProvenanceGaps")
         if ovg:
             # Provenance-NEUTRAL wording: since the collector spans every read-only phase, a gap

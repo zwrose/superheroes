@@ -2885,6 +2885,9 @@ _ALL_CHANNELS = {
     "verifyPasses": [{"CONFIRMED": 1, "PLAUSIBLE": 0, "REFUTED": 0, "drops": 0,
                       "downgrades": 0, "unverified": 0, "ambiguous": 0}],
     "seatMapUnjudgeable": [_load("seat_map").VIOLATION_BASIS_NO_AUTHOR_FAMILY],
+    "judgmentDispositions": [{"id": "f.py::tradeoff@L1", "title": "tradeoff",
+                              "disposition": "fix-with-guidance",
+                              "userGuidance": "keep narrow"}],
 }
 
 
@@ -3556,6 +3559,7 @@ def test_panel_round_channels_are_all_accounted_for():
             verifier_appended.add(key.value)
 
     fold_provenance = set(RD.FOLD_PROVENANCE_DISCLOSURE_CHANNELS)
+    judgment_fold = set(RD.JUDGMENT_FOLD_DISCLOSURE_CHANNELS)
     submit_disclosure = set(RD.SUBMIT_DISCLOSURE_CHANNELS)
     order_emission = set(RD.ORDER_EMISSION_DISCLOSURE_CHANNELS)
     verifier_fold = set(RD.VERIFIER_FOLD_DISCLOSURE_CHANNELS)
@@ -3573,10 +3577,13 @@ def test_panel_round_channels_are_all_accounted_for():
     assert verifier_fold <= restorable, (
         "verifier-fold disclosure channels must be restorable: %s"
         % sorted(verifier_fold - restorable))
+    assert judgment_fold <= restorable, (
+        "judgment-fold disclosure channels must be restorable: %s"
+        % sorted(judgment_fold - restorable))
     assert not (restorable & unrestored), \
         "a channel cannot be both restorable and not-restored: %s" % sorted(restorable & unrestored)
     accounted = restorable | unrestored
-    all_recorded = (recorded | fold_provenance | submit_disclosure | order_emission
+    all_recorded = (recorded | fold_provenance | judgment_fold | submit_disclosure | order_emission
                     | verifier_recorded | verifier_appended | verifier_fold)
     assert all_recorded == accounted, (
         "every per-round disclosure channel needs exactly one home — unaccounted (no resume path): %s; "
@@ -4799,6 +4806,26 @@ def test_receipt_projects_judgment_dispositions_when_recorded():
     receipt = RD.build_receipt(state)
     rd = receipt["rounds"][0]
     assert rd["judgmentDispositions"][0][RD.FIX_BATCH_GUIDANCE_KEY] == "narrow only"
+
+
+def test_judgment_dispositions_guidance_survives_records_path_resume(tmp_path):
+    """E6: fold guidance persists through recordsPath resume to terminal receipt."""
+    records = tmp_path / "round-records.json"
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
+         "guidance": "narrow only"}]})
+    state["_records"] = [_seed_record(1)]
+    RD._persist_round_records(state, state["config"])
+    on_disk = json.loads(records.read_text())
+    rec = next(r for r in on_disk if r.get("round") == 1)
+    assert rec["disclosures"]["judgmentDispositions"][0][RD.FIX_BATCH_GUIDANCE_KEY] == "narrow only"
+    resumed = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert resumed["rounds"]["1"]["judgmentDispositions"][0][RD.FIX_BATCH_GUIDANCE_KEY] == "narrow only"
+    resumed["terminal"] = "converged"
+    receipt = RD.build_receipt(resumed)
+    assert receipt["rounds"][0]["judgmentDispositions"][0][RD.FIX_BATCH_GUIDANCE_KEY] == "narrow only"
 
 
 def _gate_guidance_header_id(block):
