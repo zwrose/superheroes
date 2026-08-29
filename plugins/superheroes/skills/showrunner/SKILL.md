@@ -40,6 +40,8 @@ why you believe it will not, before the owner decides** — most of all when ask
 findings, the **non-Anthropic reviewer re-reviews the final head**, carrying the mandatory control
 probe on each re-review, until no blocking findings remain — or the change **parks**.
 
+A **mutation probe** runs in its own detached worktree, never in a tree live read-only seats are reading — `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/workhorse/reference/dispatch-mechanics.md` § *Mutation probes — own detached worktree*.
+
 **Resolving upward** stops the in-session micro change — **file the issue, disclose the
 already-typed work and its maker family**, then:
 - **Routine escalation** (the change outgrew micro): **route it as a normal build** and **call
