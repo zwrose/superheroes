@@ -68,8 +68,8 @@ def _finding_fields(f):
 
 def _detected_plant(findings):
     # Whether any returned finding *names* PLANT_MARKER in file/title/body — a model can score
-    # True by echoing the symbol from the fixture. Recorded for humans reading a probe result;
-    # deliberately never a branch anywhere (do not gate on this field).
+    # True by echoing the symbol from the fixture. Recorded and drives the outcome axis via
+    # canary_outcome.classify; never drives the engaged/liveness axis.
     for f in findings or []:
         file_s, title_s, body_s = _finding_fields(f)
         if PLANT_MARKER in file_s or PLANT_MARKER in title_s or PLANT_MARKER in body_s:
@@ -181,8 +181,8 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
             engaged = _engaged_from_dispatch(res)
 
         findings = res.get("findings") or []
-        # Record detection only; never branch on it (PR #667 round-1 probe and codex seam probe both
-        # missed the planted defect while demonstrably alive).
+        # Detection decides the outcome axis, never the liveness axis (PR #667 round-1 probe and
+        # codex seam probe both missed the planted defect while demonstrably alive).
         detected_plant = _detected_plant(findings)
 
         outcome = canary_outcome.classify(

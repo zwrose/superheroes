@@ -52,6 +52,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cli_contract  # noqa: E402
 import audits  # noqa: E402
 import calibration_resolve  # noqa: E402
+import canary_outcome  # noqa: E402
 import core_md  # noqa: E402
 import circuit_breaker  # noqa: E402
 import mode_registry  # noqa: E402
@@ -443,6 +444,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "engagedArtifactSeats": _str_list,
     "canaryUnverified": _str_list,
     "canaryFailed": _canary_failed_shape,
+    "canaryPlantUndetected": _canary_failed_shape,
     "canaryVerified": _canary_verified_shape,
     "adapterProvenance": _adapter_provenance_shape,
     "recordOrphansIgnored": _str_list,
@@ -1986,6 +1988,10 @@ def _canary_probe_sort_key(probe):
     return (eng_s, engaged_s, stable)
 
 
+_CANARY_DEAD_OUTCOMES = (
+    canary_outcome.NON_PASS_OUTCOMES - {canary_outcome.OUTCOME_PLANT_UNDETECTED})
+
+
 def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, canary_result):
     """Per-vendor liveness judgement for a panel's cross-vendor seats.
 
@@ -2034,12 +2040,15 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
         engaged_ok = [p for p in matching if p.get("engaged") is True]
         if failing:
             deciding = sorted(failing, key=_canary_probe_sort_key)[0]
+            fault = None
             st = "dead"
         elif engaged_ok:
             deciding = sorted(engaged_ok, key=_canary_probe_sort_key)[0]
+            fault = None
             st = "proven"
         else:
             deciding = None
+            fault = None
             st = "unproven"
 
         if deciding is not None:
@@ -2205,6 +2214,7 @@ def _fold_panel(state, config, artifact):
         ran_manifest_canary, artifact.get("canaryResult"))
     unverified_dims = []
     failed_vendors = {}
+    plant_undetected_vendors = {}
     verified_by_vendor = {}
     for vendor, info in (live.get("byVendor") or {}).items():
         if not isinstance(info, dict):
@@ -2219,6 +2229,8 @@ def _fold_panel(state, config, artifact):
                     missing_dims.append(dim)
                 seat_status[dim] = "missing"
             failed_vendors[vendor] = info
+        elif st == "plant-undetected":
+            plant_undetected_vendors[vendor] = info
         elif st == "proven":
             ev = info.get("evidence")
             verified_by_vendor[vendor] = ev if isinstance(ev, dict) else {}
@@ -2254,6 +2266,34 @@ def _fold_panel(state, config, artifact):
             _decision(state, "canary-failed",
                       "control probe for vendor %s showed no engagement (%s) — cross-vendor "
                       "seat(s) %s downgraded to never-ran"
+                      % (vendor, detail, ", ".join(vdims)))
+    if plant_undetected_vendors:
+        # axis: a non-pass canary withholds panel certification
+        canary_panel_gap = True
+        if len(plant_undetected_vendors) == 1:
+            only = next(iter(plant_undetected_vendors.values()))
+            cpu_rec = {
+                "seats": sorted({d for info in plant_undetected_vendors.values()
+                                 for d in (info.get("seats") or [])}),
+                "detail": only.get("detail"),
+                "evidence": only.get("evidence"),
+            }
+        else:
+            cpu_rec = {
+                "seats": sorted({d for info in plant_undetected_vendors.values()
+                                 for d in (info.get("seats") or [])}),
+                "vendors": {
+                    v: {"detail": info.get("detail"), "evidence": info.get("evidence")}
+                    for v, info in sorted(plant_undetected_vendors.items())
+                },
+            }
+        _record_round(state, "canaryPlantUndetected", cpu_rec)
+        for vendor, info in sorted(plant_undetected_vendors.items()):
+            vdims = sorted(info.get("seats") or [])
+            detail = info.get("detail") or "plant not detected"
+            _decision(state, "canary-plant-undetected",
+                      "control probe for vendor %s was engaged but missed the planted defect "
+                      "(%s) — cross-vendor seat(s) %s remain run; panel certification withheld"
                       % (vendor, detail, ", ".join(vdims)))
     if verified_by_vendor:
         if len(live.get("byVendor") or {}) == 1:
@@ -2342,13 +2382,14 @@ def _fold_panel(state, config, artifact):
                 if isinstance(info, dict) and info.get("status") == "unproven"
                 for d in (info.get("seats") or [])
             })
-            vendors = sorted(
-                v for v, info in (live.get("byVendor") or {}).items()
-                if isinstance(info, dict) and info.get("status") == "unproven")
-            _decision(state, "panel-incomplete-canary-gap",
-                      "panel incomplete — cross-vendor seat(s) %s lack an engaged control probe "
-                      "for vendor(s) %s; certification cannot be full-panel-confirmed"
-                      % (", ".join(unv), ", ".join(vendors)))
+            if unv:
+                vendors = sorted(
+                    v for v, info in (live.get("byVendor") or {}).items()
+                    if isinstance(info, dict) and info.get("status") == "unproven")
+                _decision(state, "panel-incomplete-canary-gap",
+                          "panel incomplete — cross-vendor seat(s) %s lack an engaged control probe "
+                          "for vendor(s) %s; certification cannot be full-panel-confirmed"
+                          % (", ".join(unv), ", ".join(vendors)))
     # Only a COMPLETE panel can anchor a full-panel-confirmed certification. A missing seat leaves
     # fullPanelRan False so a clean finish downgrades to audited-chain and names the gap.
     state["fullPanelRan"] = not incomplete
@@ -3989,6 +4030,33 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                 "canary-failed (round %s): the control probe showed no engagement (%s) — "
                 "cross-vendor seat(s) %s downgraded to never-ran" % (
                     rkey, detail_str, ", ".join(seats_down or [])))
+        cpu = declared.get("canaryPlantUndetected")
+        if cpu:
+            seats_undetected = cpu.get("seats") if isinstance(cpu, dict) else []
+            detail = cpu.get("detail") if isinstance(cpu, dict) else None
+            evidence = cpu.get("evidence") if isinstance(cpu, dict) else None
+            if isinstance(cpu, dict) and isinstance(cpu.get("vendors"), dict):
+                parts = []
+                for vendor, vinfo in sorted(cpu["vendors"].items()):
+                    if not isinstance(vinfo, dict):
+                        continue
+                    ev = vinfo.get("evidence")
+                    ev_note = ""
+                    if isinstance(ev, dict) and ev:
+                        ev_note = "; evidence=%s" % ev
+                    parts.append(
+                        "vendor %s (%s%s)" % (
+                            vendor, vinfo.get("detail") or "plant not detected", ev_note))
+                detail_str = "; ".join(parts) if parts else (detail or "plant not detected")
+            else:
+                detail_str = detail or "plant not detected"
+                if evidence and isinstance(evidence, dict):
+                    detail_str = "%s; evidence=%s" % (detail_str, evidence)
+            degraded.append(
+                "canary-plant-undetected (round %s): the control probe was engaged but missed "
+                "the planted defect (%s) — cross-vendor seat(s) %s remain run; panel "
+                "certification withheld" % (
+                    rkey, detail_str, ", ".join(seats_undetected or [])))
         roi = declared.get("recordOrphansIgnored")
         if roi:
             degraded.append(

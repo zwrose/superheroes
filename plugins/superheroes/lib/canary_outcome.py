@@ -24,6 +24,13 @@ A canary probe result is a mapping with:
 - ``model`` (str).
 - ``sanitizedView`` (mapping).
 """
+import os
+import sys
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
 from dispatch_outcome import (
     REASON_FORFEIT_ENGAGED_ARTIFACT,
     REASON_FORFEITED,

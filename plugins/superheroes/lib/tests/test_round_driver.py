@@ -2868,6 +2868,8 @@ _ALL_CHANNELS = {
     "canaryUnverified": ["code-reviewer"],
     "canaryFailed": {"seats": ["security-reviewer"], "detail": "engaged not true",
                      "evidence": {"probe": "none"}},
+    "canaryPlantUndetected": {"seats": ["code-reviewer"], "detail": "plant not detected",
+                              "evidence": {"probe": "engaged"}},
     "canaryVerified": {"codex": {"probe": "engaged"}},
     "adapterProvenance": {"vendorEchoMismatch": [{"seat": "test-reviewer", "echo": "cursor",
                                                   "manifest": "codex"}]},
@@ -4816,7 +4818,14 @@ def test_canary_probes_for_duplicate_vendor_single_probe():
         "security-reviewer": "codex",
         "architecture-reviewer": "claude",
     })
-    assert _canary_probes_for(seat_map) == [{"engine": "codex", "engaged": True}]
+    assert _canary_probes_for(seat_map) == [{
+        "engine": "codex",
+        "outcome": "ok",
+        "engaged": True,
+        "detectedPlant": True,
+        "evidence": {},
+        "detail": "",
+    }]
 
 
 def _verified_clean_seat_map(vendors):
@@ -5987,7 +5996,7 @@ def test_canary_verified_cross_vendor_empty_stays_run():
     seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
     canary = {
         "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
-        "evidence": {"tokens": 14980}, "detectedPlant": False, "detail": "live",
+        "evidence": {"tokens": 14980}, "detectedPlant": True, "detail": "live",
     }
     RD._fold_panel(state, state["config"], {
         "seats": seats, "seatMap": seat_map, "canaryResult": canary,
@@ -6001,7 +6010,7 @@ def test_canary_verified_cross_vendor_empty_stays_run():
     assert not any("canary-" in d for d in receipt["degraded"])
 
 
-def test_canary_plant_miss_does_not_block_verification():
+def test_canary_plant_undetected_engaged_miss_withholds_certification():
     state = RD.new_state(_cfg(leg="panel"))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
@@ -6013,11 +6022,15 @@ def test_canary_plant_miss_does_not_block_verification():
     RD._fold_panel(state, state["config"], {
         "seats": seats, "seatMap": seat_map, "canaryResult": canary,
     })
-    assert state["rounds"]["1"]["seatStatus"]["code-reviewer"] == "run"
-    assert state["fullPanelRan"] is True
-    assert "canaryVerified" in state["rounds"]["1"]
+    r1 = state["rounds"]["1"]
+    assert r1["seatStatus"]["code-reviewer"] == "run"
+    assert state["fullPanelRan"] is False
+    assert state["_incompletePanel"] is True
+    assert "canaryPlantUndetected" in r1
+    assert "canaryVerified" not in r1
+    assert "canary-plant-undetected" in _decision_kinds(state)
     receipt = RD.build_receipt(state)
-    assert not any("canary-" in d for d in receipt["degraded"])
+    assert any(d.startswith("canary-plant-undetected (round 1):") for d in receipt["degraded"])
 
 
 def test_canary_per_vendor_codex_finding_cursor_empty_still_unverified():
@@ -6056,7 +6069,7 @@ def test_canary_mixed_panel_only_codex_probed_cursor_unverified():
     seat_map["seats"]["security-reviewer"] = {"vendor": "cursor"}
     canary = {
         "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
-        "evidence": {"tokens": 100}, "detectedPlant": False, "detail": "live",
+        "evidence": {"tokens": 100}, "detectedPlant": True, "detail": "live",
     }
     RD._fold_panel(state, state["config"], {
         "seats": seats, "seatMap": seat_map, "canaryResult": canary,
@@ -6085,8 +6098,14 @@ def test_io_seam_forwards_multi_probe_canary_result_list():
     seat_map["seats"]["security-reviewer"] = {"vendor": "cursor"}
     probes = _canary_probes_for(seat_map)
     assert probes == [
-        {"engine": "codex", "engaged": True},
-        {"engine": "cursor", "engaged": True},
+        {
+            "engine": "codex", "outcome": "ok", "engaged": True,
+            "detectedPlant": True, "evidence": {}, "detail": "",
+        },
+        {
+            "engine": "cursor", "outcome": "ok", "engaged": True,
+            "detectedPlant": True, "evidence": {}, "detail": "",
+        },
     ]
     seams = _seams(io={"seatMap": seat_map, "canaryResult": probes})
     receipt = RD.run_loop(seams, _cfg(leg="panel", vendors=["codex", "cursor"]))
@@ -6106,11 +6125,11 @@ def test_canary_list_two_engaged_probes_full_panel():
     canary = [
         {
             "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
-            "evidence": {"tokens": 1}, "detectedPlant": False, "detail": "live",
+            "evidence": {"tokens": 1}, "detectedPlant": True, "detail": "live",
         },
         {
             "engine": "cursor", "model": "c", "outcome": "ok", "engaged": True,
-            "evidence": {"tokens": 2}, "detectedPlant": False, "detail": "live",
+            "evidence": {"tokens": 2}, "detectedPlant": True, "detail": "live",
         },
     ]
     RD._fold_panel(state, state["config"], {
@@ -6166,7 +6185,7 @@ def test_canary_list_ignores_non_dict_members():
         "seats": seats, "seatMap": seat_map,
         "canaryResult": [None, "x", {
             "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
-            "evidence": {"tokens": 9}, "detectedPlant": False, "detail": "live",
+            "evidence": {"tokens": 9}, "detectedPlant": True, "detail": "live",
         }],
     })
     assert state["rounds"]["1"]["canaryVerified"] == {"tokens": 9}
@@ -6184,7 +6203,7 @@ def test_canary_failed_one_vendor_only_downgrades_that_vendor_seats():
     canary = [
         {
             "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
-            "evidence": {"tokens": 1}, "detectedPlant": False, "detail": "live",
+            "evidence": {"tokens": 1}, "detectedPlant": True, "detail": "live",
         },
         {
             "engine": "cursor", "model": "c", "outcome": "vacuous", "engaged": False,
@@ -6211,7 +6230,7 @@ def test_canary_liveness_duplicate_codex_probes_dead_both_orders():
     status = {d: "run" for d in dims}
     engaged = {
         "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
-        "evidence": {"tokens": 1}, "detectedPlant": False, "detail": "live",
+        "evidence": {"tokens": 1}, "detectedPlant": True, "detail": "live",
     }
     failed = {
         "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": False,
@@ -6221,6 +6240,92 @@ def test_canary_liveness_duplicate_codex_probes_dead_both_orders():
         out = RD.canary_liveness(dims, status, seats, seat_map, {}, canary)
         assert out["byVendor"]["codex"]["status"] == "dead"
         assert out["byDim"]["code-reviewer"] == "dead"
+
+
+def test_canary_engaged_plant_detecting_probe_yields_proven():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    canary = {
+        "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
+        "evidence": {"tokens": 42}, "detectedPlant": True, "detail": "plant found",
+    }
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": seat_map, "canaryResult": canary,
+    })
+    r1 = state["rounds"]["1"]
+    assert r1["canaryVerified"] == {"tokens": 42}
+    assert state["fullPanelRan"] is True
+    assert "canaryPlantUndetected" not in r1
+
+
+def test_canary_ok_contradicts_fields_not_proven():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    canary = {
+        "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
+        "evidence": {}, "detectedPlant": False, "detail": "claimed ok",
+    }
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": seat_map, "canaryResult": canary,
+    })
+    r1 = state["rounds"]["1"]
+    assert "canaryVerified" not in r1
+    assert "canaryPlantUndetected" in r1
+    assert r1["canaryPlantUndetected"]["detail"] == "canary-outcome-contradicts-fields"
+    assert state["fullPanelRan"] is False
+
+
+def test_canary_unknown_outcome_not_proven():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    canary = {
+        "engine": "codex", "model": "gpt", "outcome": "bogus", "engaged": True,
+        "evidence": {}, "detectedPlant": False, "detail": "unknown outcome",
+    }
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": seat_map, "canaryResult": canary,
+    })
+    r1 = state["rounds"]["1"]
+    assert "canaryVerified" not in r1
+    assert "canaryPlantUndetected" in r1
+    assert r1["canaryPlantUndetected"]["detail"].startswith("canary-outcome-unknown:")
+    assert state["fullPanelRan"] is False
+
+
+def test_canary_dead_beats_plant_undetected_beats_proven_both_orders():
+    dims = list(RD.DIMENSIONS)
+    seat_map = _seat_map_vendors({d: "claude" for d in dims})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    seats = {d: {"findings": []} for d in dims}
+    status = {d: "run" for d in dims}
+    proven = {
+        "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
+        "evidence": {"tokens": 1}, "detectedPlant": True, "detail": "live",
+    }
+    plant_miss = {
+        "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
+        "evidence": {}, "detectedPlant": False, "detail": "missed",
+    }
+    dead = {
+        "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": False,
+        "evidence": {}, "detectedPlant": False, "detail": "dead",
+    }
+    for canary in (
+        [proven, plant_miss, dead],
+        [dead, plant_miss, proven],
+        [plant_miss, proven],
+        [proven, plant_miss],
+    ):
+        out = RD.canary_liveness(dims, status, seats, seat_map, {}, canary)
+        expected = "dead" if dead in canary else (
+            "plant-undetected" if plant_miss in canary else "proven")
+        assert out["byVendor"]["codex"]["status"] == expected
 
 
 def test_canary_codex_configured_cursor_ran_needs_cursor_probe():
@@ -6406,11 +6511,11 @@ def test_canary_verified_record_stable_two_engaged_probe_orders():
     seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
     probe_a = {
         "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
-        "evidence": {"tokens": 1}, "detectedPlant": False, "detail": "alpha",
+        "evidence": {"tokens": 1}, "detectedPlant": True, "detail": "alpha",
     }
     probe_b = {
         "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
-        "evidence": {"tokens": 2}, "detectedPlant": False, "detail": "beta",
+        "evidence": {"tokens": 2}, "detectedPlant": True, "detail": "beta",
     }
     records = []
     for canary in ([probe_a, probe_b], [probe_b, probe_a]):
