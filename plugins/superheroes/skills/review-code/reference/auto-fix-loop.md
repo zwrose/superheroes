@@ -6,6 +6,7 @@
 3. [Fixer Subagent Prompt](#fixer-subagent-prompt)
 4. [Verification Rules (for subagents)](#verification-rules-for-subagents)
 5. [Common Mistakes](#common-mistakes)
+6. [Orchestrator-written landings and provenance](#orchestrator-written-landings-and-provenance)
 
 ---
 
@@ -644,6 +645,17 @@ orchestrator route it per `rubric/review-discipline.md` § *The safety-machinery
 refuses the fixer*. A `degraded:true`
 result also refuses (fail-closed). The fixer never pushes/merges/deploys (those stay user-gated).
 
+**Fixer verify scope — scoped suite in-dispatch, full gate at the orchestrator.** `rubric/orders/dispatch-fixer.md`
+step 3 tells the fixer to run `{{VERIFY_COMMAND}}` when provided — resolved from the project profile's
+`## Verify` section (`skills/review-code/SKILL.md` § *The verify command*). When that command is a long
+full-suite gate, a **bounded** fixer dispatch whose bound is shorter than the gate **forfeits
+structurally, every time** — the work may be complete and correct, and the dispatch still dies inside
+the gate. Compose the fixer order with a verify suite **scoped to the surface the fixer touched**; the
+project's full verify gate runs at the orchestrator after the dispatch returns, where it is not racing a
+dispatch bound. This is the **fixer**-order instance of the same instinct as
+`agents/implementer.md` ("scope a full-suite or project-wide gate to your order's surface") — point
+there for the implementer rule; do not restate it.
+
 **Where those findings go next.** A refusal here means this loop **cannot converge on that surface** —
 that is the guard's designed bound, not a defect, an engine failure, or an escalation trigger. The
 route from the refusal to a fix — ordered implementer work orders on advisor or builder authority
@@ -810,3 +822,55 @@ carries `{vendor, model, effort, tier, family, source}`:
   alternative was reachable) from that unavoidable **degradation**; unusable liveness evidence
   fails closed to violation. Every degradation / unhonorable-pin fallback is recorded in the
   seat-map receipt, so a downgraded composition is visible at vet time, never silent.
+
+---
+
+## Orchestrator-written landings and provenance
+
+### Dispatch manifest key-shape trap
+
+**The trap.** `round_adapters._trusted_vendors` builds `ranManifest` from the orchestrator's dispatch
+manifest by looking up each roster seat key — **not** the filename-safe storage key. A manifest keyed
+by storage keys instead resolves nothing for every seat; every clearing audit ruling then fails closed
+to unauthenticated, and `ranManifest` is omitted from the artifact — the same outward shape as a
+missing manifest — but under a **different** disclosure token.
+
+**Two tokens, one symptom.** Manifest **absent** → `dispatchManifestUnavailable`. Manifest **present
+but wrong-keyed** → `dispatchManifestEntryUnusable` (carrying the seat list). An orchestrator trained
+to check only the absent token finds nothing and concludes the manifest is fine. **Symptom:** cleared
+targets re-presented as unfixed on a fix-audit stall, with no hint that the keys are wrong. Canonical
+key shape: `skills/review-code/reference/round-driver.md` *Durable-record artifacts* table, **Dispatch
+manifest** row — do not restate the field list here. On an unexplained fix-audit stall, check whether
+the manifest's **keys** match the roster, not merely that the file exists.
+
+### Hand-landing omissions the orchestrator forgets
+
+When landing an artifact by hand, two contracts are the most often omitted — both already live in
+`skills/review-code/reference/round-driver.md`; point at those rows, do not restate the tables.
+
+1. **`payloadSha256` on a `seat-result/1` envelope** (`round-driver.md` *seat-result/1 envelope
+   fields* table). Ingest compares the stored hash to `payload_sha256(envelope.get("payload"))`; an
+   envelope that **omits** the field compares `None` against the computed hash and is refused
+   **`landing-torn`** — omission is not a tolerated absence.
+2. **`run-verify` bare payload** (`round-driver.md` *run-verify* row). Phase `run-verify` is
+   orchestrator-fulfilled: no dispatch manifest; `advance` folds from the bare payload at
+   `$SESSION_DIR/round-<N>/landing/run-verify/<skey>.a<K>.payload.json` where `<skey>` is
+   `round_records.storage_key("verify")`.
+
+### Hand-dispatch provenance — assertion without runner authentication
+
+On a sanctioned **hand** dispatch, `ranManifest` and `seatMap` **can** be attached — `skills/review-code/SKILL.md`
+instructs the hand path to submit the panel with `ranManifest` built from the orchestrator's own
+dispatch records plus the composed `$SEAT_MAP` as `seatMap`, and `round_adapters` accepts them. What
+the hand path **cannot** produce is **runner-side authentication** of those fields: `round_adapters`
+treats `ranManifest` as dispatch provenance that comes **only** from the orchestrator's out-of-band
+record; a seat envelope's own `vendor`/`model` is a claimant-controlled advisory echo that
+authenticates nothing. With no dispatch manifest the key is omitted and the provenance-unavailable
+disclosure fires — a synthesized manifest would silently authenticate an unauthenticated run. On hand
+dispatch the provenance fields are therefore the orchestrator's **own assertion**, with no
+independent runner evidence behind them; the driver **correctly falls open** (discloses rather than
+certifies) instead of manufacturing authentication it does not have. That is a **named limitation**,
+not a defect in the driver. **Mitigation in practice:** a vet-time `seat_canary` probe run under the
+same configuration, which supplies independent evidence the hand dispatch could not. The **machinery**
+half — a provenance-attachment path for sanctioned hand dispatches — is issue #1248's, not this
+change's; this entry names the limitation and stops there.
