@@ -93,7 +93,14 @@ def test_fabricate_canary_probes_for_claude_and_invalid_vendors_skipped():
             "e": {"vendor": "codex"},
         }
     }
-    assert fabricate(seat_map) == [{"engine": "codex", "engaged": True}]
+    assert fabricate(seat_map) == [{
+        "engine": "codex",
+        "outcome": "ok",
+        "engaged": True,
+        "detectedPlant": True,
+        "evidence": {},
+        "detail": "",
+    }]
 
 
 def _repo(tmp_path):

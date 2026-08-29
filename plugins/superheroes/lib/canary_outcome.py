@@ -61,6 +61,14 @@ ALL_OUTCOMES = frozenset({
 })
 NON_PASS_OUTCOMES = ALL_OUTCOMES - PASS_OUTCOMES
 
+# Repo-relative paths of every module that imports this vocabulary. A module that imports
+# ``canary_outcome`` and is not listed here is a census failure, not a warning.
+CONSUMERS = frozenset({
+    "plugins/superheroes/lib/seat_canary.py",
+    "plugins/superheroes/lib/round_driver.py",
+    "plugins/superheroes/eval/review_loop_runner.py",
+})
+
 
 def classify(*, dispatch_reason_outcome, engaged, detected_plant):
     """Ordered, total precedence for the producer's outcome decision."""

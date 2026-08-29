@@ -2051,7 +2051,7 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
         elif plant_undetected:
             deciding, _, fault = sorted(
                 plant_undetected, key=lambda t: _canary_probe_sort_key(t[0]))[0]
-            st = "plant-undetected"
+            st = canary_outcome.OUTCOME_PLANT_UNDETECTED
         elif passing:
             deciding, _, fault = sorted(passing, key=lambda t: _canary_probe_sort_key(t[0]))[0]
             st = "proven"
@@ -2065,6 +2065,8 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
             probe_detail = det if isinstance(det, str) else None
             if fault:
                 detail_s = fault
+                if probe_detail:
+                    detail_s = "%s; %s" % (fault, probe_detail)
             else:
                 detail_s = probe_detail
             ev = deciding.get("evidence")
@@ -2242,7 +2244,7 @@ def _fold_panel(state, config, artifact):
                     missing_dims.append(dim)
                 seat_status[dim] = "missing"
             failed_vendors[vendor] = info
-        elif st == "plant-undetected":
+        elif st == canary_outcome.OUTCOME_PLANT_UNDETECTED:
             plant_undetected_vendors[vendor] = info
         elif st == "proven":
             ev = info.get("evidence")
