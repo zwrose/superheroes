@@ -559,19 +559,29 @@ def _records_write_owner_artifact(session_dir, artifact):
     return path
 
 
-def _records_write_canary_probes(session_dir, pend, vendors):
-    for vendor in vendors:
-        probe = {"engine": vendor, "engaged": True, "evidence": {"probe": "seat_canary"}}
+def _records_write_canary_probes(session_dir, pend, state):
+    sm = (state.get("config") or {}).get("seatMap")
+    probes = _canary_probes_for(sm) if isinstance(sm, dict) and sm else []
+    if not probes:
+        for vendor in RD._live_vendors(state.get("config") or {}):
+            probes.append({"engine": vendor, "engaged": True,
+                           "evidence": {"probe": "seat_canary"}})
+    for probe in probes:
+        vendor = probe.get("engine")
+        if not isinstance(vendor, str) or not vendor:
+            continue
         path = RR.canary_path(session_dir, pend["round"], vendor, pend["attempt"])
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        RR.atomic_write_json(path, probe)
+        landed = dict(probe)
+        landed.setdefault("evidence", {"probe": "seat_canary"})
+        RR.atomic_write_json(path, landed)
 
 
 def _records_advance_dispatch_phase(session_dir, phase, art, git):
     state = _records_state(session_dir)
     pend = state["pending"]
     if phase == RD.P_PANEL:
-        _records_write_canary_probes(session_dir, pend, RD._live_vendors(state.get("config") or {}))
+        _records_write_canary_probes(session_dir, pend, state)
     if RA.is_orchestrator_fulfilled(phase):
         _records_write_verify_payload(session_dir, art)
         out = RD.cmd_advance(session_dir, git=git)
@@ -591,13 +601,55 @@ def _records_advance_dispatch_phase(session_dir, phase, art, git):
     assert out["ok"], out
 
 
+def _records_derive_seat_map(session_dir, cfg, respond):
+    effective_cfg = dict(cfg) if cfg else {}
+    ok, state = RD.load_state(session_dir)
+    if ok and state and isinstance(state.get("config"), dict):
+        for key, val in state["config"].items():
+            effective_cfg.setdefault(key, val)
+    if isinstance(effective_cfg.get("seatMap"), dict) and effective_cfg["seatMap"]:
+        return effective_cfg["seatMap"]
+    vendors = effective_cfg.get("vendors")
+    fixer = effective_cfg.get("fixerVendor", "claude")
+    if vendors:
+        return _assertable_seat_map(vendors, fixer)
+    peek = respond(RD.P_PANEL, {"tier": RD.DEEP, "dimensions": list(RD.DIMENSIONS)}, 1)
+    sm = peek.get("seatMap") if isinstance(peek, dict) else None
+    return sm if isinstance(sm, dict) and sm else None
+
+
+def _records_seed_seat_map_if_missing(session_dir, seat_map):
+    if not isinstance(seat_map, dict) or not seat_map:
+        return
+    ok, state = RD.load_state(session_dir)
+    if not ok or not state or state.get("seatMapReceipts"):
+        return
+    state["seatMapReceipts"] = [{"round": "0", "map": dict(seat_map)}]
+    cfg = state.get("config")
+    if isinstance(cfg, dict) and not cfg.get("seatMap"):
+        cfg = dict(cfg)
+        cfg["seatMap"] = dict(seat_map)
+        state["config"] = cfg
+    RD.save_state(session_dir, state)
+
+
 def _drive_cli_records(session_dir, cfg, respond, max_steps=80):
     """Drive next/advance (dispatch-*) or next/submit (other phases) to a terminal."""
     gitdir = _records_gitdir(session_dir)
     git = _records_fake_git(gitdir)
+    sm = _records_derive_seat_map(session_dir, cfg, respond)
+    first_cfg = dict(cfg) if cfg else {}
+    if isinstance(sm, dict) and sm and not first_cfg.get("seatMap"):
+        first_cfg["seatMap"] = sm
+    ok, existing = RD.load_state(session_dir)
+    if ok and existing:
+        _records_seed_seat_map_if_missing(session_dir, sm)
+        first_next_cfg = None
+    else:
+        first_next_cfg = first_cfg if first_cfg else None
     first = True
     for _ in range(max_steps):
-        n = RD.cmd_next(session_dir, cfg if first else None)
+        n = RD.cmd_next(session_dir, first_next_cfg if first else None)
         first = False
         assert n["ok"], n
         if n["action"] == RD.P_TERMINAL:
@@ -1481,6 +1533,7 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
     """An unreadable `headDiffPath` (no inline diff) is an UNKNOWN surface, not an empty one: the
     delta round runs a FULL reviewer-deep panel (unknown→run-everything), never a silent scoped skip
     over nothing. The source is journaled `unknown` and an `unknown-surface` decision is recorded."""
+    # Hand path only: record-result refuses an unreadable headDiffPath before that state is reachable.
     d = str(tmp_path)
     missing = str(tmp_path / "does-not-exist.txt")
     seen = {"panel_r2": False, "scoped": False}
@@ -1510,10 +1563,10 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
             return {"results": [], "findings": []}
         return {}
 
-    payload = _drive_cli_records(d, _cfg(), respond)
+    payload = _drive_cli(d, _cfg(), respond)
     assert seen["panel_r2"] is True, "an unreadable head diff must run a full panel, not a scoped scan"
     assert seen["scoped"] is False
-    assert payload["verdict"] == "converged"
+    assert payload["verdict"] == "cannot-certify"
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert any(r.get("headDiffSource") == "unknown" for r in receipt["rounds"]), receipt["rounds"]
