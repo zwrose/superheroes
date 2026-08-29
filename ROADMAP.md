@@ -112,28 +112,28 @@ the owner is the direct consumer of.
    0.32.0 planning sitting: the driver mandate rebuilt review-code around the certified loop and
    review-spec inherited none of it; the divergence discovery gates the delta-round pair's
    shape.)*
-4. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
-   re-verification: the result contract is test-bound, the run-dir failure class is deleted,
-   the dispatch guard is hard-wired, seat bundles travel intact.
-5. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
-   hands back with zero human unsticks: launcher, auth canaries, the posture probe, workspace
-   garbage collection, the owner-authority gate's remaining side doors.
-6. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
-   two largest charters finally under one; the activation record bound to what it certifies;
-   the harness tripwire leaving a durable result.
-7. **Cross-session messaging** — a discovery starter: where the host's cross-session
-   messaging primitive replaces the deaf-session workarounds, per surface.
-8. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
-   actually is, for the owner first. Low priority.
-9. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
-   trimmed) and the two live security-grade bugs fixed. Owner-ruled lower priority; revisit.
-10. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
-   Owner-ruled lower priority; revisit.
-11. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
+4. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
    structured self-improvement of the plugin from its own operational record looks like —
    literature survey first (the WikiSkill paper is the seed, not the boundary), then scope
-   what if anything earns building. *(Opened 2026-08-28 by owner word, in-session;
-   deliberately unprioritized — on the docket, ranked last.)*
+   what if anything earns building. *(Opened 2026-08-28 by owner word, in-session; placed
+   under Review-spec keeps pace by the same word.)*
+5. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
+   re-verification: the result contract is test-bound, the run-dir failure class is deleted,
+   the dispatch guard is hard-wired, seat bundles travel intact.
+6. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
+   hands back with zero human unsticks: launcher, auth canaries, the posture probe, workspace
+   garbage collection, the owner-authority gate's remaining side doors.
+7. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
+   two largest charters finally under one; the activation record bound to what it certifies;
+   the harness tripwire leaving a durable result.
+8. **Cross-session messaging** — a discovery starter: where the host's cross-session
+   messaging primitive replaces the deaf-session workarounds, per surface.
+9. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
+   actually is, for the owner first. Low priority.
+10. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
+   trimmed) and the two live security-grade bugs fixed. Owner-ruled lower priority; revisit.
+11. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
+   Owner-ruled lower priority; revisit.
 
 **Backlog** (permanent by design, unranked) — real someday-work only: debt with a reopen
 condition, parked options with a tripwire, parking citations, the eval story, doc hygiene,
