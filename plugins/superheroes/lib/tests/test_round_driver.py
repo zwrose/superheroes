@@ -7555,3 +7555,184 @@ def test_owner_provenance_every_declared_shape_has_a_predicate():
     assert not missing, "declared shapes with no predicate (owner-supplied unreachable): %s" % missing
     for shape, predicate in predicates.items():
         assert callable(predicate), "predicate for %r is not callable" % shape
+
+
+# =============================================================================
+# #1248 WO-B — hand-graded seat landing cannot reach a certified receipt
+# =============================================================================
+
+def _panel_hand_submit_artifact():
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _assertable_seat_map(["claude", "codex"])
+    return {"seats": seats, "seatMap": seat_map, "canaryResult": _canary_probes_for(seat_map)}
+
+
+def test_hand_graded_seat_submit_folds_dispatch_panel_terminal_cannot_certify(tmp_path):
+    """A hand submit folding dispatch-panel latches and the session terminal is cannot-certify."""
+    d = str(tmp_path)
+    _drive_cli(d, _cfg(), _responder(round1_findings=None))
+    ok, state = RD.load_state(d)
+    assert ok
+    assert state["terminal"] == "cannot-certify"
+    assert state["certification"]["shape"] is None
+    assert state["terminal"] != "converged"
+
+
+def test_hand_graded_seat_submit_certification_eligible_false(tmp_path):
+    """Hand submit on a seat phase returns and journals certificationEligible: False at the fold."""
+    d = str(tmp_path)
+    n = _first_next(d, _cfg())
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                        _panel_hand_submit_artifact())
+    assert out["ok"] is True
+    assert out.get("certificationEligible") is False
+    journal = RD.read_journal(d)
+    accepted = [e for e in journal if e.get("cmd") == "submit" and e.get("outcome") == "accepted"]
+    assert len(accepted) == 1
+    assert accepted[0].get("certificationEligible") is False
+    ok, state = RD.load_state(d)
+    assert ok
+    assert state.get("_handGradedSeatPhases") == ["1:dispatch-panel"]
+
+
+def test_advance_path_session_still_reaches_converged_with_certification(tmp_path):
+    """Advance-path sessions (_advanceUsed) still certify — rule 2 regression."""
+    RR = _load("round_records")
+    d = str(tmp_path)
+    n = _first_next(d, _cfg())
+    pend = n
+    session_id = json.load(open(os.path.join(d, RR.META_FILE), encoding="utf-8"))["sessionId"]
+    ok, boot_state = RD.load_state(d)
+    assert ok
+    anchor = RD._orders_anchor(boot_state, d, pend["round"], pend["phase"], pend["attempt"])
+    for seat in RD.DIMENSIONS:
+        payload = {"findings": [], "confidence": "high", "seat": seat,
+                   "verificationReceipt": {"ran": True}}
+        manifest_sha, order_sha = RR.NOT_EMITTED, RR.NOT_EMITTED
+        if anchor is not None:
+            skey = RR.storage_key(seat, 0)
+            manifest_sha = anchor["manifestSha256"]
+            order_sha = (anchor.get("orders") or {}).get(skey, RR.NOT_EMITTED)
+        env = {
+            "schema": RR.SEAT_RESULT_SCHEMA,
+            "session": session_id,
+            "round": pend["round"], "phase": pend["phase"], "seat": seat,
+            "attempt": pend["attempt"], "vendor": "claude", "model": "sonnet-5",
+            "dispatchRef": manifest_sha, "orderSha256": order_sha,
+            "manifestSha256": manifest_sha, "recordedAt": "2026-08-07T00:00:00",
+            "payloadSha256": RR.payload_sha256(payload), "payload": payload,
+        }
+        path = RR.landing_path(d, pend["round"], pend["phase"], RR.storage_key(seat, 0),
+                               pend["attempt"])
+        RR.atomic_write_json(path, env)
+        rec = RD.cmd_record_result(d, seat)
+        assert rec["ok"], rec
+    adv = RD.cmd_advance(d)
+    assert adv["ok"], adv
+    ok, state = RD.load_state(d)
+    assert ok
+    assert state.get("_advanceUsed") is True
+    assert state.get("_handGradedSeatPhases") is None
+    adv2 = RD.cmd_advance(d)
+    assert adv2["ok"], adv2
+    ok, state = RD.load_state(d)
+    pend = state["pending"]
+    synth_payload = {"grouping": None}
+    synth_anchor = RD._orders_anchor(state, d, pend["round"], pend["phase"], pend["attempt"])
+    manifest_sha = synth_anchor["manifestSha256"] if synth_anchor else RR.NOT_EMITTED
+    order_sha = RR.NOT_EMITTED
+    if synth_anchor is not None:
+        order_sha = (synth_anchor.get("orders") or {}).get(
+            RR.storage_key("synthesis", 0), RR.NOT_EMITTED)
+    synth_env = {
+        "schema": RR.SEAT_RESULT_SCHEMA,
+        "session": session_id,
+        "round": pend["round"], "phase": pend["phase"], "seat": "synthesis",
+        "attempt": pend["attempt"], "vendor": "claude", "model": "sonnet-5",
+        "dispatchRef": manifest_sha, "orderSha256": order_sha,
+        "manifestSha256": manifest_sha, "recordedAt": "2026-08-07T00:00:00",
+        "payloadSha256": RR.payload_sha256(synth_payload), "payload": synth_payload,
+    }
+    path = RR.landing_path(d, pend["round"], pend["phase"], RR.storage_key("synthesis", 0),
+                           pend["attempt"])
+    RR.atomic_write_json(path, synth_env)
+    rec = RD.cmd_record_result(d, "synthesis")
+    assert rec["ok"], rec
+    adv3 = RD.cmd_advance(d)
+    assert adv3["ok"], adv3
+    ok, state = RD.load_state(d)
+    assert ok
+    assert state["terminal"] == "converged"
+    assert state["certification"]["shape"] is not None
+
+
+def test_hand_graded_owner_gate_submit_does_not_latch_or_withhold(tmp_path):
+    """Hand submit on a non-seat owner gate does not latch and does not withhold certification."""
+    d = str(tmp_path)
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"] and n["phase"] == RD.P_JUDGMENT
+    out = RD.cmd_submit(
+        d, n["phase"], n["attempt"], n["expectedStateHash"],
+        {"dispositions": [{"id": _TRADEOFF_ID, "disposition": "fix-as-suggested"}]})
+    assert out["ok"] is True
+    assert "certificationEligible" not in out
+    ok, reloaded = RD.load_state(d)
+    assert ok
+    assert reloaded.get("_handGradedSeatPhases") is None
+    RD._journal_append(d, {"cmd": "submit", "phase": RD.P_JUDGMENT, "round": 1,
+                           "attempt": n["attempt"], "outcome": "accepted"})
+    withhold, _ = RD._hand_graded_seat_landing(reloaded, d)
+    assert withhold is False
+    certify_state = RD.new_state(_cfg())
+    certify_state["_submitUsed"] = True
+    RD._terminal_converged(certify_state, certify_state["config"], full_panel=True,
+                           session_dir=d)
+    assert certify_state["terminal"] == "converged"
+    assert certify_state["certification"]["shape"] is not None
+
+
+def test_hand_graded_seat_landing_session_dir_none_submit_used_withholds():
+    """session_dir None with _submitUsed and no latch — withhold (fail-closed edge 1)."""
+    state = RD.new_state(_cfg())
+    state["_submitUsed"] = True
+    withhold, why = RD._hand_graded_seat_landing(state, None)
+    assert withhold is True
+    assert "unestablishable" in why
+
+
+def test_hand_graded_seat_landing_unreadable_journal_withholds(tmp_path):
+    """Unreadable journal line withholds certification (fail-closed edge 3)."""
+    d = str(tmp_path)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, RD.JOURNAL_FILE), "w", encoding="utf-8") as fh:
+        fh.write("{ not json\n")
+    state = {"schemaVersion": 2, "_submitUsed": True}
+    withhold, why = RD._hand_graded_seat_landing(state, d)
+    assert withhold is True
+    assert "unestablishable" in why
+
+
+def test_hand_graded_seat_landing_v2_journal_dispatch_submit_withholds(tmp_path):
+    """Legacy v2 state: journal accepted dispatch-* submit withholds (fail-closed edge 4)."""
+    d = str(tmp_path)
+    os.makedirs(d, exist_ok=True)
+    state = {"schemaVersion": 2, "round": 1}
+    RD._journal_append(d, {"cmd": "submit", "phase": "dispatch-panel", "round": 1,
+                           "attempt": 0, "outcome": "accepted"})
+    withhold, why = RD._hand_graded_seat_landing(state, d)
+    assert withhold is True
+    assert "dispatch-panel" in why
+
+
+def test_hand_graded_seat_landing_v2_clean_journal_does_not_withhold(tmp_path):
+    """Legacy v2 state with a clean journal (no dispatch submit) does not withhold."""
+    d = str(tmp_path)
+    os.makedirs(d, exist_ok=True)
+    state = {"schemaVersion": 2, "round": 1}
+    RD._journal_append(d, {"cmd": "next", "phase": "dispatch-panel", "round": 1,
+                           "attempt": 0, "outcome": "emitted"})
+    withhold, _ = RD._hand_graded_seat_landing(state, d)
+    assert withhold is False

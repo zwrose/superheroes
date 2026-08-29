@@ -36,6 +36,14 @@ refuses ``handback-subject-unresolvable`` — the same class as an explicit sele
 
 **Segment cwd residual:** guarded ``gh`` in a segment whose working directory cannot be established
 (any preceding ``cd``/``pushd``, or a subshell wrapper) refuses ``handback-inspection-failed``.
+
+**Driver-state residuals:** when a validated ``review-session.json`` scope marker is present, the
+gate reads ``loop-state.json`` under the marker's ``sessionDir`` before the receipt path. A missing
+or unreadable marker, a missing or unreadable ``loop-state.json``, or a null/absent/empty
+``terminal`` refuses ``handback-driver-abandoned``. After the sidecar validates, a
+``sessionDir`` mismatch between marker and sidecar refuses ``handback-session-mismatch``. Both
+checks fail closed and run ahead of receipt binding; no review-session marker leaves behaviour
+unchanged.
 """
 import hashlib
 import json
@@ -720,11 +728,26 @@ def _validate_review_session(obj, repo_root):
     return True, None
 
 
+def _review_session_marker_state(super_dir, repo_root):
+    """Typed read of ``review-session.json`` beside the sidecar, or ``None`` if absent."""
+    path = os.path.join(super_dir, REVIEW_SESSION_FILE)
+    if not os.path.isfile(path):
+        return None
+    obj, err = _read_json(path)
+    if obj is None:
+        return {"ok": False, "why": err or "unreadable", "path": path}
+    ok, reason = _validate_review_session(obj, repo_root)
+    if ok is True:
+        return {"ok": True, "obj": obj, "path": path}
+    return {"ok": False, "why": reason, "path": path}
+
+
 def marker_state(gitdir, repo_root):
     """Return scope markers beside the sidecar under ``gitdir``."""
     super_dir = os.path.join(gitdir, _SIDECAR_DIR)
     markers = []
     stale = []
+    review_session = _review_session_marker_state(super_dir, repo_root)
     for name, validator in (
         (BUILD_LANE_FILE, _validate_build_lane),
         (REVIEW_SESSION_FILE, _validate_review_session),
@@ -742,7 +765,12 @@ def marker_state(gitdir, repo_root):
         elif ok is False:
             stale.append((path, reason))
         # ok is None → non-full build lane or other out-of-scope marker; ignore silently
-    return {"inScope": bool(markers), "markers": markers, "stale": stale}
+    return {
+        "inScope": bool(markers),
+        "markers": markers,
+        "stale": stale,
+        "reviewSession": review_session,
+    }
 
 
 def _sidecar_path(gitdir):
@@ -856,7 +884,34 @@ def _receipt_bindings_ok(sidecar, receipt):
     return True, None
 
 
-def _validate_binding(invocation, cwd, environ, run_git, gitdir):
+def _driver_state_refusal(review_session, *, subject, sidecar_path, head_sha):
+    """Refuse when a review-session marker exists but driver loop did not reach terminal."""
+    if review_session is None:
+        return None
+    if not review_session.get("ok"):
+        return _refuse("handback-driver-abandoned",
+                        "%s: %s" % (review_session["path"], review_session["why"]),
+                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
+    session_dir = review_session["obj"]["sessionDir"]
+    loop_path = os.path.join(session_dir, RD.STATE_FILE)
+    if not os.path.isfile(loop_path):
+        return _refuse("handback-driver-abandoned",
+                        "loop-state.json is missing",
+                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
+    loop_state, err = _read_json(loop_path)
+    if loop_state is None:
+        return _refuse("handback-driver-abandoned",
+                        "loop-state.json unreadable: %s" % err,
+                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
+    terminal = loop_state.get("terminal")
+    if not isinstance(terminal, str) or not terminal:
+        return _refuse("handback-driver-abandoned",
+                        "driver loop terminal is null",
+                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
+    return None
+
+
+def _validate_binding(invocation, cwd, environ, run_git, gitdir, *, scope=None):
     subject = command_subject(invocation, environ)
     sidecar_path = _sidecar_path(gitdir)
     head_sha = run_git(cwd, "rev-parse", "HEAD")
@@ -870,6 +925,15 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
                         "working directory for this gh invocation cannot be established "
                         "(preceding cd/pushd or subshell)",
                         subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
+
+    if scope is None:
+        scope = marker_state(gitdir, cwd)
+    driver_refusal = _driver_state_refusal(
+        scope.get("reviewSession"),
+        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha,
+    )
+    if driver_refusal is not None:
+        return driver_refusal
 
     if not os.path.isfile(sidecar_path):
         return _refuse("handback-no-receipt", "",
@@ -886,6 +950,16 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
         return _refuse("handback-receipt-unreadable",
                         "sidecar invalid: %s" % why,
                         subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
+
+    review_session = scope.get("reviewSession")
+    if review_session and review_session.get("ok"):
+        marker_dir = os.path.realpath(review_session["obj"]["sessionDir"])
+        sidecar_dir = os.path.realpath(sidecar.get("sessionDir") or "")
+        if marker_dir != sidecar_dir:
+            return _refuse("handback-session-mismatch",
+                            "review-session sessionDir %r != sidecar sessionDir %r"
+                            % (review_session["obj"]["sessionDir"], sidecar.get("sessionDir")),
+                            subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
 
     if _LEGACY_BASE_SHA.match(sidecar.get("baseRef") or ""):
         return _refuse("handback-receipt-unreadable",
@@ -1067,7 +1141,7 @@ def validate_handback(command, cwd, *, environ=None, run_git=None):
                             "graphql markPullRequestReadyForReview is refused conservatively",
                             subject=subject, sidecar_path=_sidecar_path(gitdir),
                             head_sha=head_sha)
-        result = _validate_binding(inv, cwd, environ, run_git, gitdir)
+        result = _validate_binding(inv, cwd, environ, run_git, gitdir, scope=scope)
         if result["decision"] == "refuse":
             return result
 

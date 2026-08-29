@@ -171,6 +171,11 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" submit \
   --artifact "$SESSION_DIR/round-<N>/<phase>-artifact.json"
 ```
 
+A hand `submit` that folds a **seat phase** (`dispatch-*`) records that the landing was graded by
+hand, and that session can no longer reach a **certified** terminal — the fold still succeeds and
+the session still terminates honestly, but certification is withheld. See
+`rubric/review-discipline.md` § *The driver mandate — the certified loop, its skips, and the flip*.
+
 **Durable-record path** (panel and other record-capable phases):
 
 ```bash

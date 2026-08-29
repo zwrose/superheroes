@@ -50,6 +50,17 @@ _VALVE_COPY = (
     "remainder; `rubric/review-discipline.md` is the home for the driver-or-park valve."
 )
 
+_ABANDON_HOME = (
+    '"no blocker was perceived" is the name of the violation, not an excuse'
+)
+_ABANDON_POINTER = (
+    "A hand `submit` that folds a **seat phase** (`dispatch-*`) records that the landing was "
+    "graded by hand, and that session can no longer reach a **certified** terminal — the fold "
+    "still succeeds and the session still terminates honestly, but certification is withheld. "
+    "See `rubric/review-discipline.md` § *The driver mandate — the certified loop, its skips, "
+    "and the flip*."
+)
+
 _SEAT_RESULT_TABLE_MARKER = "**`seat-result/1` envelope fields**"
 _SEAT_MISSING_TABLE_MARKER = "The **`seat-missing/1`** shape is deliberately different"
 
@@ -146,6 +157,31 @@ def test_valve_sentence_present_in_journal_section_copy():
     assert _normalized(_VALVE_HOME) in home_section_text
     journal_section_text = _section_text(_ROUND_DRIVER, _JOURNAL_SECTION)
     assert _normalized(_VALVE_COPY) in journal_section_text
+
+
+def test_abandon_started_loop_operative_clause_present_in_home_and_pointer_in_durable_record_path():
+    # axis: presence of the abandon-started-loop clause in review-discipline.md home section
+    # and the Hand-path pointer in round-driver.md Durable-record path section
+    home_section_text = _section_text(_HOME, _DRIVER_MANDATE_SECTION)
+    assert _normalized(_ABANDON_HOME) in home_section_text
+    round_driver_text = _read(_ROUND_DRIVER)
+    hand_path_start = round_driver_text.find(
+        "**Hand path** (every phase that accepts a compiled artifact):"
+    )
+    assert hand_path_start != -1, (
+        f"{_ROUND_DRIVER} missing Hand path description marker"
+    )
+    durable_record_path_start = round_driver_text.find(
+        "**Durable-record path** (panel and other record-capable phases):",
+        hand_path_start + 1,
+    )
+    assert durable_record_path_start != -1, (
+        f"{_ROUND_DRIVER} missing Durable-record path description marker after Hand path"
+    )
+    hand_path_slice = _normalized(
+        round_driver_text[hand_path_start:durable_record_path_start]
+    )
+    assert _normalized(_ABANDON_POINTER) in hand_path_slice
 
 
 def test_documented_seat_result_fields_match_authority():

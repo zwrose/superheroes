@@ -214,6 +214,17 @@ record; the citation is an exact permalink to a dated record) — the second and
 citation class. **A skip citing nothing, and a skip citing a closed issue, are each a vet
 finding.** This binds now, on every full-lane PR — it does not wait for the flip below.
 
+**A third shape is a violation: abandoning a started loop.** A full-lane build that started the
+certified loop and then completed the review by hand — with no blocker perceived — did not find an
+uncovered case. "no blocker was perceived" is the name of the violation, not an excuse: a skip
+with nothing to cite is already graded as a finding by the citation rule above, and abandoning a
+**started** loop is worse than never starting one because the driver's own record shows the build
+knew the loop existed. The honest endings are exactly two — finish the loop to a terminal, or
+park — and a build that perceives no blocker has, by its own account, no reason not to finish. The
+specimen: a full-lane build ran `dispatch-panel` correctly, then completed the review by hand; the
+driver's journal held two rows, `loop-state.json` carried `terminal: null`, and there was no error
+and no perceived blocker. A controlled contrast in the same wave converged normally.
+
 **The `driver-blocker` label is the standing view of what still blocks the loop.** Any bug that
 prevents proper use of the driver carries the project's `driver-blocker` label, and the label query
 — not anyone's memory — is what says whether the blockers are cleared. That is what makes the skip
