@@ -27,6 +27,7 @@ from clause_guard import (
     add_one_occurrence_in_section,
     census_excluded,
     check_clause,
+    iter_headings,
     plant_clause_elsewhere,
     section_span,
     without_clause_in_section,
@@ -108,16 +109,10 @@ def _read(rel):
         return fh.read()
 
 
-def _heading_level(line):
-    stripped = line.strip()
-    if not stripped.startswith("#"):
-        return None
-    match = re.match(r"^(#+)\s", stripped)
-    return len(match.group(1)) if match else None
-
-
 def _check_home_heading(text, heading):
-    if heading not in text.splitlines():
+    lines = text.splitlines()
+    found = any(lines[i] == heading for i, _ in iter_headings(lines))
+    if not found:
         raise AssertionError(
             f"{_HOME}: heading {heading!r} missing — re-add or update "
             f"test_test_receipt_evidence_doctrine.py"
@@ -152,10 +147,10 @@ def _sections_with_pointer(rel, text):
         return set()
     lines = text.splitlines()
     found = set()
-    for line in lines:
-        heading = line.strip()
-        if _heading_level(line) != 2:
+    for i, level in iter_headings(lines):
+        if level != 2:
             continue
+        heading = lines[i].strip()
         start, end = section_span(lines, heading, rel)
         if _POINTER in "\n".join(lines[start:end]):
             found.add((rel, heading))

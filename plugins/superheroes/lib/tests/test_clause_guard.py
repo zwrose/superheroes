@@ -234,3 +234,29 @@ def test_cg11_fence_aware_section_span():
     assert lines[end] == "## Ends here"
     assert "more body" in "\n".join(lines[start:end])
     assert "tail" not in "\n".join(lines[start:end])
+
+
+def test_cg12_unclosed_fence_section_span_raises():
+    """CG-12: unclosed fence makes section_span raise rather than extending to EOF."""
+    lines = _doc(
+        "## A",
+        "```text",
+        "unclosed",
+        "## B",
+        "target",
+    ).splitlines()
+    with pytest.raises(RuntimeError, match="unclosed fenced code block"):
+        section_span(lines, "## A", REL)
+
+
+def test_cg12_unclosed_fence_check_clause_does_not_pass():
+    """CG-12: clause beneath a later heading cannot satisfy the source section."""
+    text = _doc(
+        "## A",
+        "```text",
+        "unclosed",
+        "## B",
+        f"only in B: {CLAUSE}.",
+    )
+    with pytest.raises(RuntimeError, match="unclosed fenced code block"):
+        check_clause(text, REL, "## A", CLAUSE, 1)

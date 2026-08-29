@@ -47,7 +47,16 @@ def _fence_states(lines):
     for line in lines:
         in_fence.append(fence_state is not None)
         fence_state = _advance_fence_state(line, fence_state)
-    return in_fence
+    return in_fence, fence_state
+
+
+def iter_headings(lines):
+    """Yield ``(line_index, heading_level)`` for each fence-aware markdown heading."""
+    in_fence, _ = _fence_states(lines)
+    for i, line in enumerate(lines):
+        level = _heading_level(line, in_fence[i])
+        if level is not None:
+            yield i, level
 
 
 def _heading_level(line, in_fence=False):
@@ -62,7 +71,11 @@ def _heading_level(line, in_fence=False):
 
 def section_span(lines, heading, label):
     """Return (start, end) line indices for a bounded markdown section."""
-    in_fence = _fence_states(lines)
+    in_fence, terminal_fence = _fence_states(lines)
+    if terminal_fence is not None:
+        raise RuntimeError(
+            f"{label}: unclosed fenced code block — trailing content may be misclassified"
+        )
     indices = [
         i
         for i, line in enumerate(lines)
