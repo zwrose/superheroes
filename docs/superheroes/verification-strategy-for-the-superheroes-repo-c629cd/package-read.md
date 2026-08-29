@@ -120,3 +120,11 @@ P7 warm-up carve-out; condition-based end when the window becomes readable)** �
 removed by construction. Plus two map rows: P8's UFR-6 checkpoint-hold, and FR-8's per-participant
 status production allocated to P6/P2 per R14. Register re-parse-proven after the split (21
 entries, all child tokens resolve).
+
+**Round 7 (owner-extended by a fourth ruling b; 3 unique findings: codex 2, grok 1):** all
+one-line precision fixes on the UFR-6 complex — R19's trigger now requires a *readable* window
+(no unlinked-fix majority; a low-confidence window is R21's regime, so the two entries are
+mutually exclusive by construction — grok's catch); R21's park-end boundary corrected to the
+spec's own low-confidence line (unlinked must OUTNUMBER linked; equality is readable — codex's
+catch); the UFR-6 breach-decision delivery allocated explicitly as advisor process with R13 as
+its input (codex's catch).

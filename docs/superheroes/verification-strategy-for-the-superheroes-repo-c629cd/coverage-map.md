@@ -103,6 +103,7 @@ requires a child to build or check something is owned by that child**, never lis
 | UFR-6 — rate, sample floor, provisional-window exclusion, **and the merge-time re-check's ledger cross-check** | **P2** | R19 (breach) + R21 (park) bind the mechanics |
 | UFR-6 — the vet-park encoding | **P5** | R19, R21 |
 | UFR-6 — the P7 warm-up carve-out (cannot-bite deletions proceed during the insufficient-sample park on the owner's 2026-08-28 ruling; a breach parks them like everything else) | **P7** — its issue states the carve-out and its bound | R21 |
+| UFR-6 — **the breach-decision delivery** ("the advisor shall bring the owner the ledger for a decision") | **advisor process, not a child build** — deliberately unowned by any child; P2's R13 publication is its input, and the map says so precisely so this duty cannot read as forgotten (round-7 addition) | R13, R19 |
 | UFR-6 — **the checkpoint hold**: P8's FR-17 decision checks the freeze/park state and does not proceed under either (breach lifts owner-only; the park ends when the window reads) | **P8** — the checkpoint item states the check | R19, R21 — round-6 addition |
 | UFR-7 — vet encoding → **P5**; nightly resolution → **P2** | split as stated | R11 |
 | UFR-8 — CI validator-step drift check | **P1** | — |
