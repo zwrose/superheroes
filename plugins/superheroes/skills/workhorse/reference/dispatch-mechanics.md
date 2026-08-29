@@ -547,6 +547,13 @@ something went wrong. The block never affects `ok`, `terminal`, or `reason`.
   carrying `attempts: 0` means **nothing was ever spawned** — the runner refused the call. **Read the
   reason before blaming the engine.** This matters because the reflex on a failed dispatch is to
   escalate or re-dispatch against a different engine, and neither fixes a caller error.
+- **Trap 3 — `--pr-body-path` and `--session-dir` are an inseparable pair.** Supplying **either flag
+  without the other** is refused **`unrunnable`** with `detail: "pr-body-args-unpaired"`, `attempts:
+  0`, `terminal: true` — nothing is spawned (Trap 2's class: a caller error, not an engine forfeit).
+  Why the two travel together is in `skills/review-code/reference/grounding-seat.md` § *Vendor paths
+  and reachability*; this trap carries only the refusal token and the caller-facing consequence.
+  Field record: **two launch calls** burned on one build because the pairing was not documented at
+  dispatch compose time.
 
 An external engine can forfeit *after* writing files — characteristically with cursor's
 **`NonRetriableError "Agent Looping Detected"`** while the engine is producing a long report, with
@@ -608,6 +615,19 @@ Author orders so the forfeit does not fire: keep in-dispatch verification target
 and structured. The implementer template `agents/implementer.md` states this to the implementer
 directly, so an order that additionally demands a full-suite run, a pasted diff, or a long verbatim
 report is **overriding the template against its own purpose**.
+
+**Split bite-proof matrices, not proof obligations.** Composer forfeits on long write dispatches
+**correlate with orders carrying inline bite-proof matrices** — on one observed weekly-eats lane,
+**8 of 20** write dispatches forfeited. The counter-data: orders carrying an explicit one-at-a-time
+prohibition, an enumerated command budget, and **at most 4 bite-proofs per order** ran clean
+**twice**. What gets split out is the **long inline enumerated per-element matrix** — the tabulated
+list of every guarded element and its neutralization that makes the order long — **never the proof
+obligation itself**. An order that adds or changes a detector still names the bite-proof it expects;
+the red and green runs still sit inside that order's command budget; the implementer still produces
+the proof record. What a proof record must contain lives in `rubric/bite-proof.md`; the obligation
+that is **unchanged** by this guidance is `agents/implementer.md` validity rule 6. State the **≤ 4** cap and the lane numbers
+above as **what was measured on one lane**, not as a ratified threshold — inventing doctrine from a
+measurement is worse than stating the measurement as a measurement.
 
 An external engine's shell availability is set **outside your build** — **never assume the
 implementer can run anything**; the engine CLI consults its own permission surface, not your order. It is
