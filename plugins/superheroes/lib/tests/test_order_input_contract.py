@@ -165,13 +165,33 @@ def _minimal_render_ctx(session_dir, repo_root, ph, paths):
 
 def test_gate_guidance_block_renders_guided_row_verbatim():
     rows = [{"title": "widen the API", "file": "f.py", "line": 1,
-             RD.FIX_BATCH_GUIDANCE_KEY: "keep backward compatible"}]
+             RD.FIX_BATCH_GUIDANCE_KEY: "keep backward compatible",
+             RD.FIX_BATCH_GUIDANCE_ID_KEY: "f.py::widen the api@L1"}]
     block = RD._gate_guidance_block(rows)
     assert "f.py::widen the api@L1" in block
     assert "widen the API" in block
     assert "> keep backward compatible" in block
     assert "BEGIN owner-gate guidance" in block
     assert "END owner-gate guidance" in block
+
+
+def test_gate_guidance_block_missing_stamped_id_uses_no_finding_id_label():
+    # E1: guided row with no stamped id → "(no finding id)" label; row still appears
+    rows = [{"title": "widen the API", "file": "f.py", "line": 1,
+             RD.FIX_BATCH_GUIDANCE_KEY: "keep backward compatible"}]
+    block = RD._gate_guidance_block(rows)
+    assert "### (no finding id) — widen the API" in block
+    assert "> keep backward compatible" in block
+
+
+def test_gate_guidance_block_non_string_stamped_id_uses_no_finding_id_label():
+    # E2: non-string stamped id → same as E1
+    rows = [{"title": "widen the API", "file": "f.py", "line": 1,
+             RD.FIX_BATCH_GUIDANCE_KEY: "keep backward compatible",
+             RD.FIX_BATCH_GUIDANCE_ID_KEY: 1}]
+    block = RD._gate_guidance_block(rows)
+    assert "### (no finding id) — widen the API" in block
+    assert "> keep backward compatible" in block
 
 
 def test_gate_guidance_round_placeholder_neutralized_in_rendered_order(tmp_path):

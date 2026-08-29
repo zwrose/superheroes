@@ -107,6 +107,9 @@ _SELF_RECOVERY_FIXER_EFFORT = "high"
 
 # Fix-batch guidance key — single source shared with order templates (dispatch-fixer.md).
 FIX_BATCH_GUIDANCE_KEY = "userGuidance"
+# Fold-stamped finding id for guided batch rows — minted once in _fold_judgment, consumed by
+# _gate_guidance_block (never re-derived over the fix batch).
+FIX_BATCH_GUIDANCE_ID_KEY = "userGuidanceFindingId"
 GATE_GUIDANCE_ROW_BYTE_CAP = 2000
 GATE_GUIDANCE_AGGREGATE_BYTE_CAP = 8000
 _GATE_GUIDANCE_NO_GUIDANCE = "No owner-gate guidance is attached to this batch."
@@ -2504,15 +2507,15 @@ def _gate_guidance_block(batch):
     list (same source as ``_ensure_fix_batch_file``). Wording never claims whether a gate ran."""
     if not isinstance(batch, list):
         return _GATE_GUIDANCE_NO_GUIDANCE
-    row_ids = _judgment_row_ids(batch)
     guided = []
-    for i, row in enumerate(batch):
+    for row in batch:
         if not isinstance(row, dict):
             continue
         guidance = row.get(FIX_BATCH_GUIDANCE_KEY)
         if not isinstance(guidance, str) or not guidance.strip():
             continue
-        fid = row_ids[i] if i < len(row_ids) else None
+        stamped = row.get(FIX_BATCH_GUIDANCE_ID_KEY)
+        fid = stamped.strip() if isinstance(stamped, str) and stamped.strip() else None
         guided.append((row, guidance.strip(), fid))
     if not guided:
         return _GATE_GUIDANCE_NO_GUIDANCE
@@ -2661,6 +2664,7 @@ def _fold_judgment(state, config, artifact):
             entry = {"id": fid, "title": f.get("title"), "disposition": "fix-with-guidance"}
             if isinstance(guidance, str) and guidance.strip():
                 g[FIX_BATCH_GUIDANCE_KEY] = guidance.strip()
+                g[FIX_BATCH_GUIDANCE_ID_KEY] = fid
                 entry[FIX_BATCH_GUIDANCE_KEY] = guidance.strip()
             disposition_log.append(entry)
         elif disposition == "fix-as-suggested":

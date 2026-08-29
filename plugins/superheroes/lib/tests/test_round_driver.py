@@ -4801,6 +4801,84 @@ def test_receipt_projects_judgment_dispositions_when_recorded():
     assert rd["judgmentDispositions"][0][RD.FIX_BATCH_GUIDANCE_KEY] == "narrow only"
 
 
+def _gate_guidance_header_id(block):
+    import re
+    m = re.search(r"^### (.+?) — ", block, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def test_guided_order_block_id_matches_judgment_dispositions_record(tmp_path):
+    """E3: mechanical row sharing location with guided row — order id equals record id."""
+    mech = {"title": "widen the API", "severity": "Critical", "file": "f.py", "line": 1}
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [mech, dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
+         "guidance": "keep it backward compatible"}]})
+    record = state["rounds"]["1"]["judgmentDispositions"][0]
+    record_id = record["id"]
+    assert state["_fixBatch"][1][RD.FIX_BATCH_GUIDANCE_ID_KEY] == record_id
+    session_dir = str(tmp_path / "e3-id-match")
+    os.makedirs(session_dir)
+    state["reviewedDiff"] = "diff --git a/f b/f\n"
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RD.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 1, paths, RD.CHANNEL_FILE,
+    )
+    order_id = _gate_guidance_header_id(ph["GATE_GUIDANCE"])
+    assert order_id == record_id
+
+
+def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
+    """E4: two guided tradeoffs at the same location — distinct ids each match its record entry."""
+    a = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
+         "tradeoff": True}
+    b = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
+         "tradeoff": True}
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(a), dict(b)])
+    step = RD._advance(state, state["config"])
+    ids = [f["id"] for f in step["payload"]["findings"]]
+    assert ids[0] != ids[1]
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": ids[0], "disposition": "fix-with-guidance", "guidance": "guidance A"},
+        {"id": ids[1], "disposition": "fix-with-guidance", "guidance": "guidance B"},
+    ]})
+    records = state["rounds"]["1"]["judgmentDispositions"]
+    record_by_guidance = {r[RD.FIX_BATCH_GUIDANCE_KEY]: r["id"] for r in records}
+    session_dir = str(tmp_path / "e4-same-loc")
+    os.makedirs(session_dir)
+    state["reviewedDiff"] = "diff --git a/f b/f\n"
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RD.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 1, paths, RD.CHANNEL_FILE,
+    )
+    block = ph["GATE_GUIDANCE"]
+    for guidance, record_id in record_by_guidance.items():
+        assert record_id in block
+        assert "> %s" % guidance in block
+    guided_batch = [r for r in state["_fixBatch"] if RD.FIX_BATCH_GUIDANCE_KEY in r]
+    assert len(guided_batch) == 2
+    stamped = {r[RD.FIX_BATCH_GUIDANCE_ID_KEY] for r in guided_batch}
+    assert stamped == set(record_by_guidance.values())
+
+
 def test_two_guided_findings_same_title_distinguished_by_id(tmp_path):
     """Edge 10: same title at different lines → both guided entries, distinct finding ids."""
     a = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
