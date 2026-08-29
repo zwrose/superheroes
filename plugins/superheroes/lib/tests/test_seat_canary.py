@@ -22,8 +22,17 @@ def _load_engine_adapter():
     return mod
 
 
+def _load_canary_outcome():
+    spec = importlib.util.spec_from_file_location(
+        "canary_outcome", os.path.join(_HERE, "..", "canary_outcome.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 SC = _load()
 EA = _load_engine_adapter()
+CO = _load_canary_outcome()
 
 _PLUGIN_ROOT = os.path.join(_HERE, "..", "..")
 
@@ -124,6 +133,7 @@ def test_findings_with_plant_engaged_and_detected():
                 "title": SC.PLANT_MARKER,
                 "body": "fails open",
             }],
+            investigated=["lib/gate.py"],
             engagement={"tokens": 100, "toolCalls": None, "stdoutBytes": 50, "wallSeconds": 1.0},
         )
 
@@ -132,7 +142,7 @@ def test_findings_with_plant_engaged_and_detected():
         repo_root="/tmp/fake", dispatch=dispatch,
     )
     assert out["engaged"] is True
-    assert out["outcome"] == "ok"
+    assert out["outcome"] == CO.OUTCOME_OK
     assert out["detectedPlant"] is True
     assert out["evidence"]["findings"] == 1
 
@@ -177,7 +187,7 @@ def test_high_token_spend_alone_not_engaged():
         "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
-    assert out["outcome"] == "ok"
+    assert out["outcome"] == CO.OUTCOME_NOT_ENGAGED
 
 
 def test_wall_time_alone_not_engaged():
@@ -195,7 +205,7 @@ def test_wall_time_alone_not_engaged():
         "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
-    assert out["outcome"] == "ok"
+    assert out["outcome"] == CO.OUTCOME_NOT_ENGAGED
 
 
 def test_vacuous_with_tool_calls_still_engaged_path_alive():
@@ -227,6 +237,7 @@ def test_finding_with_fast_wall_engaged():
     def dispatch_finding(engine, **kwargs):
         return _base_dispatch_result(
             findings=[{"id": "f", "file": "a.py", "title": "t", "body": "b"}],
+            investigated=["a.py"],
             engagement={
                 "tokens": 10,
                 "toolCalls": None,
@@ -522,15 +533,147 @@ def test_dispatch_exception_still_cleans_temp_file(tmp_path):
     assert not os.path.exists(created[0])
 
 
-def test_engaged_from_dispatch_equivalent_to_engagement_read():
-    cases = [
-        {"findings": [{"id": "f"}], "investigated": [], "engagement": {"toolCalls": None}},
-        {"findings": [], "investigated": ["lib/a.py"], "engagement": {"toolCalls": None}},
-        {"findings": [], "investigated": [], "engagement": {"toolCalls": 2}},
-        {"findings": [], "investigated": [], "engagement": {"toolCalls": None}},
+def test_engaged_from_dispatch_diverges_from_engagement_read():
+    findings_only = {
+        "findings": [{"id": "f"}],
+        "investigated": [],
+        "engagement": {"toolCalls": None},
+    }
+    assert EA.engagement_read(findings_only) == "engaged"
+    assert SC._engaged_from_dispatch(findings_only) is False
+
+    investigated_case = {
+        "findings": [],
+        "investigated": ["lib/a.py"],
+        "engagement": {"toolCalls": None},
+    }
+    assert SC._engaged_from_dispatch(investigated_case) is True
+    assert EA.engagement_read(investigated_case) == "engaged"
+
+    tool_calls_case = {
+        "findings": [],
+        "investigated": [],
+        "engagement": {"toolCalls": 2},
+    }
+    assert SC._engaged_from_dispatch(tool_calls_case) is True
+    assert EA.engagement_read(tool_calls_case) == "engaged"
+
+    no_evidence_case = {
+        "findings": [],
+        "investigated": [],
+        "engagement": {"toolCalls": None},
+    }
+    assert SC._engaged_from_dispatch(no_evidence_case) is False
+    assert EA.engagement_read(no_evidence_case) != "engaged"
+
+
+def test_dod_row1_field_recurrence_specimen_not_engaged():
+    def dispatch(engine, **kwargs):
+        return _base_dispatch_result(
+            findings=[{"id": "f", "file": "x.py", "title": "t", "body": "b"}],
+            investigated=[],
+            engagement={
+                "tokens": None,
+                "toolCalls": None,
+                "stdoutBytes": 0,
+                "wallSeconds": 20.0,
+            },
+        )
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["engaged"] is False
+    assert out["outcome"] == CO.OUTCOME_NOT_ENGAGED
+    assert out["detail"] == "no-investigation-evidence"
+
+
+def test_dod_row2_engaged_dispatch_plant_undetected_when_marker_missing():
+    def dispatch(engine, **kwargs):
+        return _base_dispatch_result(
+            findings=[{"id": "f", "file": "lib/gate.py", "title": "other", "body": "b"}],
+            investigated=["lib/gate.py"],
+            engagement={"tokens": 10, "toolCalls": 1, "stdoutBytes": 1, "wallSeconds": 1.0},
+        )
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["engaged"] is True
+    assert out["detectedPlant"] is False
+    assert out["outcome"] == CO.OUTCOME_PLANT_UNDETECTED
+    assert CO.is_pass(out["outcome"]) is False
+    assert out["detail"] == "plant-undetected"
+
+
+def test_classify_totality_cross_product():
+    dispatch_members = [
+        CO.REASON_FORFEITED,
+        CO.REASON_VACUOUS,
+        CO.REASON_FORFEIT_ENGAGED_ARTIFACT,
+        CO.REASON_UNRUNNABLE,
+        None,
     ]
-    for res in cases:
-        assert SC._engaged_from_dispatch(res) == (EA.engagement_read(res) == "engaged")
+    boolish = (True, False, None, "yes")
+    for dispatch_member in dispatch_members:
+        for engaged in boolish:
+            for detected_plant in boolish:
+                outcome = CO.classify(
+                    dispatch_reason_outcome=dispatch_member,
+                    engaged=engaged,
+                    detected_plant=detected_plant,
+                )
+                assert outcome in CO.ALL_OUTCOMES
+                assert outcome is not None
+
+
+def test_normalize_probe_not_a_mapping():
+    outcome, fault = CO.normalize("not-a-map")
+    assert outcome == CO.OUTCOME_NOT_ENGAGED
+    assert fault == "canary-probe-not-a-mapping"
+
+
+def test_normalize_outcome_absent():
+    outcome, fault = CO.normalize({"engaged": False, "detectedPlant": False})
+    assert outcome == CO.OUTCOME_NOT_ENGAGED
+    assert fault == "canary-outcome-absent"
+
+
+def test_normalize_outcome_unknown():
+    outcome, fault = CO.normalize({
+        "outcome": "bogus",
+        "engaged": True,
+        "detectedPlant": True,
+    })
+    assert outcome == CO.OUTCOME_OK
+    assert fault == "canary-outcome-unknown:'bogus'"
+
+
+def test_normalize_outcome_ok_contradicts_fields():
+    outcome, fault = CO.normalize({
+        "outcome": CO.OUTCOME_OK,
+        "engaged": True,
+        "detectedPlant": False,
+    })
+    assert outcome == CO.OUTCOME_PLANT_UNDETECTED
+    assert fault == "canary-outcome-contradicts-fields"
+    assert CO.is_pass(outcome) is False
+
+
+def test_normalize_valid_probe_passes_through():
+    outcome, fault = CO.normalize({
+        "outcome": CO.OUTCOME_NOT_ENGAGED,
+        "engaged": False,
+        "detectedPlant": False,
+    })
+    assert outcome == CO.OUTCOME_NOT_ENGAGED
+    assert fault is None
+
+
+def test_canary_outcome_member_literals_pinned():
+    assert CO.OUTCOME_OK == "ok"
+    assert CO.OUTCOME_NOT_ENGAGED == "not-engaged"
+    assert CO.OUTCOME_PLANT_UNDETECTED == "plant-undetected"
 
 
 def _run_main(monkeypatch, argv):

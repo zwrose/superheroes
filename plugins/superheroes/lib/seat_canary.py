@@ -11,6 +11,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import canary_outcome  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
@@ -41,6 +42,11 @@ Review ONLY this diff hunk:
 ```
 
 The function `check_receipt` above must not fail open — flag it as Critical if you engage.
+
+In addition, ground your review in the repository you are running in: name one existing
+repo-relative file path from that repository and the top-level definition it contains, and
+list that path in `investigated`. A review that lists nothing in `investigated` has not grounded
+itself and will be graded as not engaged.
 """ % review_findings_schema.example_prompt_block()
 
 
@@ -73,7 +79,7 @@ def _detected_plant(findings):
 
 def _map_outcome(res):
     if res.get("ok") is True:
-        return "ok", ""
+        return None, ""
     reason = res.get("reason")
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
         return engine_adapter.REVIEW_FORFEIT_VACUOUS, (res.get("disclosure") or "vacuous-forfeit")
@@ -94,7 +100,16 @@ def _map_outcome(res):
 
 
 def _engaged_from_dispatch(res):
-    return engine_adapter.engagement_read(res) == "engaged"
+    # axis: investigation evidence required for engagement
+    # Canary diverges from engagement_read: findings alone are not proof of investigation.
+    if engine_adapter.engagement_read(res) != "engaged":
+        return False
+    investigated = res.get("investigated") or []
+    if investigated:
+        return True
+    eng = _safe_engagement(res.get("engagement"))
+    tool_calls = eng.get("toolCalls")
+    return tool_calls is not None and tool_calls >= 1
 
 
 def _evidence_from_dispatch(res):
@@ -142,7 +157,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
             return {
                 "engine": engine,
                 "model": engine_model,
-                "outcome": dispatch_outcome.REASON_UNRUNNABLE,
+                "outcome": canary_outcome.REASON_UNRUNNABLE,
                 "engaged": False,
                 "evidence": {
                     "findings": 0,
@@ -156,33 +171,41 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
                 "detail": "internal-%s" % type(exc).__name__,
             }
 
-        outcome, detail_hint = _map_outcome(res)
-        if outcome == dispatch_outcome.REASON_UNRUNNABLE:
+        dispatch_mapped, detail_hint = _map_outcome(res)
+        if dispatch_mapped == dispatch_outcome.REASON_UNRUNNABLE:
             engaged = False
-        elif outcome == dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT:
+        elif dispatch_mapped == dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT:
             # Fail-closed: artifact engaged but delivery failed — probe cannot score passed.
             engaged = False
         else:
             engaged = _engaged_from_dispatch(res)
 
+        findings = res.get("findings") or []
+        # Record detection only; never branch on it (PR #667 round-1 probe and codex seam probe both
+        # missed the planted defect while demonstrably alive).
+        detected_plant = _detected_plant(findings)
+
+        outcome = canary_outcome.classify(
+            dispatch_reason_outcome=dispatch_mapped,
+            engaged=engaged,
+            detected_plant=detected_plant,
+        )
+
         detail = ""
-        if not engaged:
+        if outcome == canary_outcome.OUTCOME_PLANT_UNDETECTED:
+            detail = "plant-undetected"
+        elif outcome == canary_outcome.OUTCOME_NOT_ENGAGED:
+            detail = "no-investigation-evidence"
+        elif not engaged:
             if outcome == dispatch_outcome.REASON_UNRUNNABLE:
                 detail = detail_hint
-            elif outcome == engine_adapter.REVIEW_FORFEIT_VACUOUS:
+            elif outcome == dispatch_outcome.REASON_VACUOUS:
                 detail = detail_hint or "vacuous-forfeit"
             elif outcome == dispatch_outcome.REASON_FORFEITED:
                 detail = detail_hint or dispatch_outcome.REASON_FORFEITED
             elif outcome == dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT:
                 detail = detail_hint or (
                     "engaged artifact, delivery failed — re-dispatch required")
-            elif outcome == "ok":
-                detail = "no-engagement-evidence"
-
-        findings = res.get("findings") or []
-        # Record detection only; never branch on it (PR #667 round-1 probe and codex seam probe both
-        # missed the planted defect while demonstrably alive).
-        detected_plant = _detected_plant(findings)
 
         return {
             "engine": engine,
