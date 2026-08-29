@@ -10,7 +10,9 @@ The rest pin the fail-closed edges (each names its exact reason string), the thr
 `missing_policy` values, and the trust rule: a manifest comes ONLY from the orchestrator's
 out-of-band dispatch record, never from a seat's own vendor echo.
 """
+import importlib.util
 import os
+import sys
 
 import pytest
 
@@ -20,6 +22,13 @@ import round_adapters as RA
 import round_driver as RD
 import round_records as RR
 import verification
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_TRD_SPEC = importlib.util.spec_from_file_location(
+    "test_round_driver", os.path.join(_HERE, "test_round_driver.py"))
+_TRD = importlib.util.module_from_spec(_TRD_SPEC)
+sys.modules[_TRD_SPEC.name] = _TRD
+_TRD_SPEC.loader.exec_module(_TRD)
 
 # --- diffs (same shapes test_round_driver.py drives with) ---------------------
 
@@ -547,11 +556,10 @@ def test_missing_scoped_finder_refuses_where_an_empty_artifact_would_certify(tmp
     assert artifact is None, "a missing scoped-finder must never assemble a success artifact"
     assert reason == "missing-seat-refuse-fold:%s" % RA.SEAT_SCOPED
 
-    d2, n2, _state2 = _at(tmp_path, RD.P_SCOPED, respond=_responder(
-        round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE), name="counterfactual")
-    assert RD.cmd_submit(d2, n2["phase"], n2["attempt"], n2["expectedStateHash"],
-                         {"findings": []})["ok"]
-    payload = _drive_on(d2, _responder(round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE))
+    d2 = str(tmp_path / "counterfactual")
+    os.makedirs(d2)
+    payload = _TRD._drive_cli_records(
+        d2, _cfg(), _responder(round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE))
     assert payload["verdict"] == "converged", payload
     assert payload["certification"]["shape"] is not None, payload
 
