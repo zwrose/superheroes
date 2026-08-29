@@ -102,6 +102,11 @@ guarded element**, with any element in no class **listed as unproven**. A class 
 mode**, never a convenience bucket; **"there were a lot of them" is not a class**. This does not
 weaken trap 3 — trap 3 forbids an *unnamed* representative standing for elements nobody enumerated.
 
+A neutralization that applies more than one replacement must assert that each replacement landed,
+never that the aggregate diff is merely non-empty. When one anchor drifts, a single replacement can
+silently no-op while the aggregate diff still looks applied and the detector goes red for the other
+replacement's sake — the proof is vacuous. An aggregate-only assertion is the rejected shape.
+
 **Where each part lives, and why the split matters:**
 
 - **The axis line lives in the code** — one line at the detector saying what it bites on. A review
