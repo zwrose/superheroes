@@ -1422,6 +1422,91 @@ def test_mode_refusal_tokens_in_auto_fix_loop_doc():
     )
 
 
+# --- Cluster: hand-landing disclosure tokens (round_adapters + round_records →
+#     auto-fix-loop.md) ---
+
+
+def _hand_landing_disclosure_tokens_from_home():
+    """Dispatch-manifest disclosure keys from round_adapters._trusted_vendors plus
+    the landing-torn refusal for a payloadSha256 mismatch in round_records.py.
+
+    No importable constant for the disclosure keys — they are string literals in
+    disclosures[...] assignments; extracted via scoped regex on the function source.
+    """
+    import inspect
+
+    import round_adapters
+
+    src = inspect.getsource(round_adapters._trusted_vendors)
+    adapter_tokens = set(re.findall(
+        r'disclosures\["(dispatchManifest[^"]+)"\]',
+        src,
+    ))
+    assert adapter_tokens, (
+        "round_adapters._trusted_vendors: no dispatchManifest disclosure keys "
+        "discovered (vacuous extraction — pin would agree with everything)"
+    )
+    records_src = _read("lib/round_records.py")
+    assert '_refuse("landing-torn", computed=stored_sha' in records_src, (
+        "round_records.py: expected literal landing-torn payloadSha256 mismatch "
+        "refusal not found (renamed/refactored?)"
+    )
+    return adapter_tokens | {"landing-torn"}
+
+
+def _hand_landing_disclosure_tokens_from_auto_fix_loop_doc(doc, *, anchor=None):
+    """Dispatch-manifest and hand-landing disclosure tokens — scoped to the
+    Orchestrator-written landings section only."""
+    anchor_label = anchor if anchor is not None else (
+        "## Orchestrator-written landings and provenance"
+    )
+    m = re.search(
+        re.escape(anchor_label) + r"\s*(.*)\Z",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "auto-fix-loop.md: Orchestrator-written landings and provenance section "
+        "not found (anchor %r moved or reworded?)" % anchor_label
+    )
+    block = m.group(1)
+    tokens = {
+        t for t in re.findall(r"`([^`]+)`", block)
+        if t.startswith("dispatchManifest") or t == "landing-torn"
+    }
+    assert tokens, (
+        "auto-fix-loop.md: hand-landing disclosure tokens parsed to zero tokens "
+        "(regex drift or section emptied?)"
+    )
+    return tokens
+
+
+def test_hand_landing_disclosure_tokens_in_auto_fix_loop_doc():
+    """§11: auto-fix-loop.md restates dispatch-manifest and hand-landing disclosure
+    tokens from round_adapters._trusted_vendors and round_records.py."""
+    home = _hand_landing_disclosure_tokens_from_home()
+    doc = _read("skills/review-code/reference/auto-fix-loop.md")
+    doc_tokens = _hand_landing_disclosure_tokens_from_auto_fix_loop_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "auto-fix-loop.md hand-landing disclosure vocabulary drift from "
+        "round_adapters._trusted_vendors / round_records.py — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+def test_hand_landing_disclosure_tokens_biteproof_doc_anchor_non_vacuous():
+    _expect_assertion_error(
+        lambda: _hand_landing_disclosure_tokens_from_auto_fix_loop_doc(
+            _read("skills/review-code/reference/auto-fix-loop.md"),
+            anchor="## NO SUCH ANCHOR",
+        ),
+        match=r"anchor '## NO SUCH ANCHOR' moved or reworded",
+    )
+
+
 # --- Cluster: wave-watch vocabulary (wave_watch → wave-watch.md) --------------
 
 
