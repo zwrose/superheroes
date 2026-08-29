@@ -1,4 +1,8 @@
-"""Static AST census: canary outcome tokens live only in canary_outcome.py (#1247)."""
+"""Static AST census: canary outcome tokens live only in canary_outcome.py (#1247).
+
+A banned member literal is a violation in any syntactic position — dict keys and
+``.get()`` arguments are not exempt.
+"""
 import ast
 import glob
 import os
@@ -50,47 +54,10 @@ def _parse_source(source, source_path):
         ) from exc
 
 
-def _dict_key_constant_ids(tree):
-    exempt = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Dict):
-            for key in node.keys:
-                if isinstance(key, ast.Constant):
-                    exempt.add(id(key))
-    return exempt
-
-
-def _field_lookup_constant_ids(tree):
-    exempt = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not (isinstance(func, ast.Attribute) and func.attr == "get"):
-            continue
-        if not node.args:
-            continue
-        first = node.args[0]
-        if isinstance(first, ast.Constant):
-            exempt.add(id(first))
-        if len(node.args) > 1 and isinstance(node.args[0], ast.Constant):
-            if node.args[0].value == "state" and isinstance(node.args[1], ast.Constant):
-                exempt.add(id(node.args[1]))
-    return exempt
-
-
-def _exempt_constant_ids(tree):
-    exempt = set()
-    exempt.update(_dict_key_constant_ids(tree))
-    exempt.update(_field_lookup_constant_ids(tree))
-    return exempt
-
-
 def census_violations_from_source(source, source_path, *, member_set=None):
     if member_set is None:
         member_set = _LIVE_BANNED_LITERALS
     tree = _parse_source(source, source_path)
-    exempt_ids = _exempt_constant_ids(tree)
     violations = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant):
@@ -99,10 +66,9 @@ def census_violations_from_source(source, source_path, *, member_set=None):
             continue
         if node.value not in member_set:
             continue
-        if id(node) in exempt_ids:
-            continue
         violations.append(
-            "%s: literal '%s' (clause: canary outcome tokens live only in canary_outcome.py)"
+            "%s: literal '%s' (clause: canary outcome tokens live only in "
+            "canary_outcome.py regardless of syntactic position)"
             % (_lineno(source_path, node), node.value)
         )
     return violations
@@ -280,6 +246,57 @@ def test_matcher_catches_ok_literal_on_synthetic_source():
         source, path, member_set=canary_outcome.ALL_OUTCOMES)
     assert violations, violations
     assert any("'ok'" in v for v in violations), violations
+
+
+def test_matcher_catches_banned_literal_as_dict_key_on_synthetic_source():
+    """axis: a banned member spelled as a dict key is reported."""
+    source = (
+        "def bad():\n"
+        "    return {\"plant-undetected\": 1}\n"
+    )
+    path = os.path.join(_LIB, "fake_consumer_dict_key.py")
+    violations = census_violations_from_source(
+        source, path, member_set=canary_outcome.ALL_OUTCOMES)
+    assert violations, violations
+    assert any("'plant-undetected'" in v for v in violations), violations
+
+
+def test_matcher_catches_banned_literal_as_get_argument_on_synthetic_source():
+    """axis: a banned member spelled as a .get() argument is reported."""
+    source = (
+        "def bad(probe):\n"
+        "    return probe.get(\"not-engaged\")\n"
+    )
+    path = os.path.join(_LIB, "fake_consumer_get_arg.py")
+    violations = census_violations_from_source(
+        source, path, member_set=canary_outcome.ALL_OUTCOMES)
+    assert violations, violations
+    assert any("'not-engaged'" in v for v in violations), violations
+
+
+def test_matcher_one_violation_per_occurrence_on_synthetic_source():
+    """axis: duplicate literals yield one violation each, not one per file or value."""
+    source = (
+        "def bad():\n"
+        "    a = \"not-engaged\"\n"
+        "    b = \"not-engaged\"\n"
+    )
+    path = os.path.join(_LIB, "fake_consumer_dup.py")
+    violations = census_violations_from_source(
+        source, path, member_set=canary_outcome.ALL_OUTCOMES)
+    assert len(violations) == 2, violations
+
+
+def test_matcher_ignores_non_str_constants_on_synthetic_source():
+    """axis: non-str constants are not census violations."""
+    source = (
+        "def bad():\n"
+        "    return 42\n"
+    )
+    path = os.path.join(_LIB, "fake_consumer_int.py")
+    violations = census_violations_from_source(
+        source, path, member_set=canary_outcome.ALL_OUTCOMES)
+    assert violations == [], violations
 
 
 def test_leg4_non_pass_fail_closed_cross_product():

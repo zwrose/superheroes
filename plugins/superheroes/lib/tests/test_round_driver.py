@@ -2868,6 +2868,8 @@ _ALL_CHANNELS = {
     "canaryUnverified": ["code-reviewer"],
     "canaryFailed": {"seats": ["security-reviewer"], "detail": "engaged not true",
                      "evidence": {"probe": "none"}},
+    "canaryOutcomeFailed": {"seats": ["test-reviewer"], "detail": "outcome failure",
+                            "evidence": {"probe": "engaged"}, "engagedFailure": True},
     "canaryPlantUndetected": {"seats": ["code-reviewer"], "detail": "plant not detected",
                               "evidence": {"probe": "engaged"}},
     "canaryVerified": {"codex": {"probe": "engaged"}},
@@ -6360,7 +6362,7 @@ def test_canary_engaged_dispatch_failure_outcome_failed_not_never_ran():
     r1 = state["rounds"]["1"]
     assert r1["seatStatus"]["code-reviewer"] == "run"
     assert "canaryVerified" not in r1
-    assert r1["canaryFailed"]["engagedFailure"] is True
+    assert r1["canaryOutcomeFailed"]["engagedFailure"] is True
     assert state["fullPanelRan"] is False
     assert "canary-outcome-failed" in _decision_kinds(state)
     assert "canary-failed" not in _decision_kinds(state)
@@ -6369,6 +6371,45 @@ def test_canary_engaged_dispatch_failure_outcome_failed_not_never_ran():
     assert len(cof_lines) == 1
     assert "no engagement" not in cof_lines[0]
     assert "outcome failure" in cof_lines[0]
+
+
+def test_canary_dead_and_outcome_failed_same_round_both_disclosed():
+    # axis: two distinct canary non-pass conditions in one round are both disclosed
+    """One vendor dead and another outcome-failed record separate per-round channels."""
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    seat_map["seats"]["security-reviewer"] = {"vendor": "cursor"}
+    canary = [
+        {
+            "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": False,
+            "evidence": {"tokens": 0}, "detectedPlant": False, "detail": "no engagement",
+        },
+        {
+            "engine": "cursor", "model": "c", "outcome": "vacuous", "engaged": True,
+            "evidence": {"tokens": 50000, "toolCalls": 30}, "detectedPlant": False,
+            "detail": "vacuous seat",
+        },
+    ]
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": seat_map, "canaryResult": canary,
+    })
+    r1 = state["rounds"]["1"]
+    assert "canaryFailed" in r1
+    assert "canaryOutcomeFailed" in r1
+    assert sorted(r1["canaryFailed"]["seats"]) == ["code-reviewer"]
+    assert r1["canaryOutcomeFailed"]["engagedFailure"] is True
+    assert sorted(r1["canaryOutcomeFailed"]["seats"]) == ["security-reviewer"]
+    assert r1["seatStatus"]["code-reviewer"] == "missing"
+    assert r1["seatStatus"]["security-reviewer"] == "run"
+    receipt = RD.build_receipt(state)
+    cf_lines = [d for d in receipt["degraded"] if d.startswith("canary-failed (round 1):")]
+    cof_lines = [d for d in receipt["degraded"] if d.startswith("canary-outcome-failed (round 1):")]
+    assert len(cf_lines) == 1
+    assert len(cof_lines) == 1
+    assert "code-reviewer" in cf_lines[0]
+    assert "security-reviewer" in cof_lines[0]
 
 
 def test_canary_liveness_engaged_dispatch_failure_status_outcome_failed():

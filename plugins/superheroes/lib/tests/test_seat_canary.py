@@ -224,7 +224,33 @@ def test_wall_time_alone_not_engaged():
     assert out["outcome"] == CO.OUTCOME_NOT_ENGAGED
 
 
-def test_vacuous_with_tool_calls_still_engaged_path_alive():
+def test_vacuous_with_investigation_still_engaged_path_alive():
+    def dispatch(engine, **kwargs):
+        return {
+            "ok": False,
+            "reason": "vacuous",
+            "attempts": 2,
+            "forfeited": True,
+            "findings": [],
+            "investigated": ["lib/gate.py"],
+            "engagement": {
+                "tokens": 50000,
+                "toolCalls": 30,
+                "stdoutBytes": 999,
+                "wallSeconds": 600.0,
+            },
+            "disclosure": "vacuous seat",
+        }
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["engaged"] is True
+    assert out["outcome"] == "vacuous"
+    assert out["detail"] == ""
+
+
+def test_vacuous_with_tool_calls_only_not_engaged():
     def dispatch(engine, **kwargs):
         return {
             "ok": False,
@@ -244,9 +270,9 @@ def test_vacuous_with_tool_calls_still_engaged_path_alive():
     out = SC.run_canary(
         "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
     )
-    assert out["engaged"] is True
+    assert out["engaged"] is False
     assert out["outcome"] == "vacuous"
-    assert out["detail"] == ""
+    assert out["detail"] == "vacuous seat"
 
 
 def test_finding_with_fast_wall_engaged():
@@ -268,7 +294,7 @@ def test_finding_with_fast_wall_engaged():
     assert out["engaged"] is True
 
 
-def test_tool_calls_engagement_ladder():
+def test_tool_calls_without_investigated_not_engaged():
     def dispatch_one(engine, **kwargs):
         return _base_dispatch_result(
             engagement={"tokens": None, "toolCalls": 1, "stdoutBytes": 0, "wallSeconds": 0.0},
@@ -276,7 +302,7 @@ def test_tool_calls_engagement_ladder():
 
     assert SC.run_canary(
         "cursor", engine_model="c", effort="high", repo_root="/r", dispatch=dispatch_one,
-    )["engaged"] is True
+    )["engaged"] is False
 
     def dispatch_zero(engine, **kwargs):
         return _base_dispatch_result(
@@ -551,6 +577,38 @@ def test_dispatch_exception_still_cleans_temp_file(tmp_path):
     assert not os.path.exists(created[0])
 
 
+def test_engaged_from_dispatch_investigation_evidence_table():
+    engaged_base = {
+        "findings": [],
+        "engagement": {"toolCalls": 1},
+    }
+    cases = [
+        ("investigated absent", {}, False),
+        ("investigated None", {"investigated": None}, False),
+        ("investigated bare string", {"investigated": "lib/a.py"}, False),
+        ("investigated dict", {"investigated": {"path": "lib/a.py"}}, False),
+        ("investigated number", {"investigated": 1}, False),
+        ("investigated empty list", {"investigated": []}, False),
+        ("investigated non-string entries", {"investigated": [1, None]}, False),
+        ("investigated whitespace-only strings", {"investigated": ["", "  "]}, False),
+        (
+            "toolCalls with no qualifying investigated",
+            {"investigated": [], "engagement": {"toolCalls": 5}},
+            False,
+        ),
+        (
+            "one non-empty investigated path",
+            {"investigated": ["lib/a.py"], "engagement": {"toolCalls": None}},
+            True,
+        ),
+    ]
+    for label, overrides, expected in cases:
+        res = dict(engaged_base)
+        res.update(overrides)
+        assert EA.engagement_read(res) == "engaged", label
+        assert SC._engaged_from_dispatch(res) is expected, label
+
+
 def test_engaged_from_dispatch_diverges_from_engagement_read():
     findings_only = {
         "findings": [{"id": "f"}],
@@ -573,7 +631,7 @@ def test_engaged_from_dispatch_diverges_from_engagement_read():
         "investigated": [],
         "engagement": {"toolCalls": 2},
     }
-    assert SC._engaged_from_dispatch(tool_calls_case) is True
+    assert SC._engaged_from_dispatch(tool_calls_case) is False
     assert EA.engagement_read(tool_calls_case) == "engaged"
 
     no_evidence_case = {

@@ -444,6 +444,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "engagedArtifactSeats": _str_list,
     "canaryUnverified": _str_list,
     "canaryFailed": _canary_failed_shape,
+    "canaryOutcomeFailed": _canary_failed_shape,
     "canaryPlantUndetected": _canary_failed_shape,
     "canaryVerified": _canary_verified_shape,
     "adapterProvenance": _adapter_provenance_shape,
@@ -2322,7 +2323,7 @@ def _fold_panel(state, config, artifact):
                     for v, info in sorted(outcome_failed_vendors.items())
                 },
             }
-        _record_round(state, "canaryFailed", cof_rec)
+        _record_round(state, "canaryOutcomeFailed", cof_rec)
         for vendor, info in sorted(outcome_failed_vendors.items()):
             vdims = sorted(info.get("seats") or [])
             detail = info.get("detail") or "outcome failure"
@@ -4104,6 +4105,33 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                     "canary-failed (round %s): the control probe showed no engagement (%s) — "
                     "cross-vendor seat(s) %s downgraded to never-ran" % (
                         rkey, detail_str, ", ".join(seats_down or [])))
+        cof = declared.get("canaryOutcomeFailed")
+        if cof:
+            seats_outcome_failed = cof.get("seats") if isinstance(cof, dict) else []
+            detail = cof.get("detail") if isinstance(cof, dict) else None
+            evidence = cof.get("evidence") if isinstance(cof, dict) else None
+            if isinstance(cof, dict) and isinstance(cof.get("vendors"), dict):
+                parts = []
+                for vendor, vinfo in sorted(cof["vendors"].items()):
+                    if not isinstance(vinfo, dict):
+                        continue
+                    ev = vinfo.get("evidence")
+                    ev_note = ""
+                    if isinstance(ev, dict) and ev:
+                        ev_note = "; evidence=%s" % ev
+                    parts.append(
+                        "vendor %s (%s%s)" % (
+                            vendor, vinfo.get("detail") or "outcome failure", ev_note))
+                detail_str = "; ".join(parts) if parts else (detail or "outcome failure")
+            else:
+                detail_str = detail or "outcome failure"
+                if evidence and isinstance(evidence, dict):
+                    detail_str = "%s; evidence=%s" % (detail_str, evidence)
+            degraded.append(
+                "canary-outcome-failed (round %s): the control probe was engaged but "
+                "reported outcome failure (%s) — cross-vendor seat(s) %s remain run; panel "
+                "certification withheld" % (
+                    rkey, detail_str, ", ".join(seats_outcome_failed or [])))
         cpu = declared.get("canaryPlantUndetected")
         if cpu:
             seats_undetected = cpu.get("seats") if isinstance(cpu, dict) else []

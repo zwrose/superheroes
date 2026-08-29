@@ -568,9 +568,9 @@ sequencing an independent batch is the defect this section exists to remove.
 **Every reported round count carries its lens coverage** — confirmation rounds at minimum, and any
 round whose counts anyone reads or acts on. A round is **complete** when every configured dimension
 folded `seatStatus: "run"` and the round records no `vacuousSeats`, no `canaryUnverified`, no
-`canaryFailed`, and no `canaryPlantUndetected`. A round is **partial** when any configured dimension
+`canaryFailed`, no `canaryOutcomeFailed`, and no `canaryPlantUndetected`. A round is **partial** when any configured dimension
 folded `missing`, or the round records any `vacuousSeats`, or `canaryUnverified`, or `canaryFailed`,
-or `canaryPlantUndetected`. Completeness is defined by
+or `canaryOutcomeFailed`, or `canaryPlantUndetected`. Completeness is defined by
 the **configured** dimensions, never by the seats that happened to return. Report it as
 `<complete>/<configured> dimensions` beside the count, naming the dimensions that did not land.
 
@@ -713,7 +713,7 @@ is the home for the driver-or-park valve.
   build recognizes (degrading — not `absent`), `shapeDrivers` — sorted
   channel names that fired for the certification shape (`independence`, `base`, `same-family`,
   `plugin-version-skew`, `seat-map-violation`, `unproven-liveness`, `seat-pin`, `seat-map-unavailable`))
-- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapUnjudgeable`, `seatMapViolations`, `pluginVersionSkew`, `vacuousSeats`, `engagedArtifactSeats`, `canaryUnverified`, `canaryFailed`, `canaryPlantUndetected`, `canaryVerified`, `adapterProvenance`, `recordOrphansIgnored`, `orderVendorProvenanceGaps`, `priorCommentsUnavailable`, `verifyPasses`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice` (the disclosure-channel names here are drift-pinned to `round_driver.RESUMABLE_DISCLOSURE_CHANNELS` by a test — a channel added to the registry must be added to this line)
+- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapUnjudgeable`, `seatMapViolations`, `pluginVersionSkew`, `vacuousSeats`, `engagedArtifactSeats`, `canaryUnverified`, `canaryFailed`, `canaryOutcomeFailed`, `canaryPlantUndetected`, `canaryVerified`, `adapterProvenance`, `recordOrphansIgnored`, `orderVendorProvenanceGaps`, `priorCommentsUnavailable`, `verifyPasses`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice` (the disclosure-channel names here are drift-pinned to `round_driver.RESUMABLE_DISCLOSURE_CHANNELS` by a test — a channel added to the registry must be added to this line)
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
 
 **Seat-map storage (#681).** The driver stores each round's submitted seat map as an append-only
@@ -737,8 +737,9 @@ receipt round `"0"`.
 | *(pin excusal)* | A standing excusable violation was excused because a collapsed seat was owner-pinned (`classify_violations` → `excusedByPin`). | `seat-map pin excusal: seat(s) …` (terminal `degraded`; `shapeDrivers` includes `seat-pin` and certification shape uses `-degraded`, not a third suffix) |
 | `vacuousSeats` | Seat dict has `vacuous: true` or `reason: "vacuous"` (empty findings with no verifiable investigation record). The seat folds as `missing` in `seatStatus` — it cannot anchor a `full-panel-confirmed` certification. | `vacuous-seat (round N): …` |
 | `canaryUnverified` | Every cross-vendor seat that ran returned zero findings and no `canaryResult` was submitted. | `canary-unverified (round N): …` |
-| `canaryFailed` | `canaryResult` was submitted but the probe outcome is a dispatch failure or `not-engaged` (`forfeited`, `vacuous`, `forfeit-with-engaged-artifact`, `unrunnable`, or `not-engaged`) — cross-vendor seats in that panel are downgraded to `missing`. | `canary-failed (round N): …` |
-| `canaryPlantUndetected` | `canaryResult` was submitted and engaged but the probe outcome is `plant-undetected` — the seat is live but missed the planted defect; panel certification is withheld. | `canary-plant-undetected (round N): …` |
+| `canaryFailed` | `canaryResult` was submitted but the probe showed no engagement (`not-engaged`, or a dispatch-failure outcome with `engaged` false) — cross-vendor seats in that panel are downgraded to `missing`. | `canary-failed (round N): …` |
+| `canaryOutcomeFailed` | `canaryResult` was submitted and engaged but the probe outcome is a dispatch failure (`forfeited`, `vacuous`, `forfeit-with-engaged-artifact`, or `unrunnable`) — the seat stays `run` but panel certification is withheld. | `canary-outcome-failed (round N): …` |
+| `canaryPlantUndetected` | `canaryResult` was submitted and engaged but the probe outcome is `plant-undetected` — the seat is live but missed the planted defect; panel certification is withheld. The plant gate is evaluated only for a vendor whose cross-vendor seats all returned zero usable findings — a vendor whose panel produced any finding is scoped out (`n/a`) and its control probe is not graded. | `canary-plant-undetected (round N): …` |
 | `canaryVerified` | `canaryResult.engaged` is true and the probe outcome is `ok` — records the probe's `evidence` dict on the round. | *(none)* |
 | `orderVendorProvenanceGaps` | An emitted order seat on a `dispatch-review` phase had no **resolved** vendor — absent from the seat map, or `vendorSource: "defaulted"` (a fallback the driver guessed, not evidence). Its order rendered the stdout contract. | `order-vendor-provenance-gap (round N): …` |
 

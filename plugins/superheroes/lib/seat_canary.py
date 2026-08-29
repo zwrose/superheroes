@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Planted-defect control probe (#668): dispatch a known-bad fixture through the real seat path
-and score ENGAGEMENT (not plant detection). stdlib only; does not raise from dispatch()."""
+and score two axes — engagement (requires investigation evidence in `investigated`) and plant
+detection (whether the planted defect was named in findings). stdlib only; does not raise from dispatch()."""
 import argparse
 import json
 import os
@@ -101,16 +102,17 @@ def _map_outcome(res):
 
 
 def _engaged_from_dispatch(res):
-    # axis: investigation evidence required for engagement
-    # Canary diverges from engagement_read: findings alone are not proof of investigation.
+    # axis: at least one non-empty investigated path required for engagement
+    # Canary diverges from engagement_read: findings and toolCalls alone are not investigation evidence.
     if engine_adapter.engagement_read(res) != "engaged":
         return False
-    investigated = res.get("investigated") or []
-    if investigated:
-        return True
-    eng = _safe_engagement(res.get("engagement"))
-    tool_calls = eng.get("toolCalls")
-    return tool_calls is not None and tool_calls >= 1
+    investigated = res.get("investigated")
+    if not isinstance(investigated, (list, tuple)):
+        return False
+    for entry in investigated:
+        if isinstance(entry, str) and entry.strip():
+            return True
+    return False
 
 
 def _evidence_from_dispatch(res):
