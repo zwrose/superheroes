@@ -4,6 +4,8 @@ Pure + deterministic. Stdlib-only; never touches disk. Every model role/vendor m
 elsewhere re-derives from THIS module — no parallel literals survive.
 
 Fail-OPEN for selection resolvers (wrong/absent config is a cost concern, never safety).
+Per-model family resolution is fail-CLOSED — it is an independence-accounting key, not a selection
+resolver — and ``dispatch_token`` and the other selection resolvers keep their fail-open ``None``.
 `validate_config` is the explicit fail-loud surface — it returns (False, reason), never raises.
 """
 from __future__ import annotations
@@ -279,9 +281,32 @@ def is_registered(vendor: str, model_id: str) -> bool:
     return vendor in _MODELS and model_id in _MODELS[vendor]
 
 
-def model_family(vendor: str, model_id: str) -> str | None:
-    rec = _MODELS.get(vendor, {}).get(model_id)
-    return rec["family"] if rec else None
+class UnknownModel(ValueError):
+    """Refusal: no family can be resolved for this (vendor, model_id) pair.
+
+    Family resolution is an independence-accounting key, so it fails CLOSED: an
+    unknown vendor or an unregistered model raises rather than returning a value
+    a caller could read as "no exclusion applies".
+    """
+
+    def __init__(self, vendor, model_id, known: tuple[str, ...]):
+        self.vendor = vendor
+        self.model_id = model_id
+        self.known = known
+        super().__init__(
+            f"no family for vendor {vendor!r} model {model_id!r}; "
+            f"known: {known!r}"
+        )
+
+
+def model_family(vendor: str, model_id: str) -> str:
+    vendor_models = _MODELS.get(vendor)
+    if vendor_models is None:
+        raise UnknownModel(vendor, model_id, VENDORS)
+    rec = vendor_models.get(model_id)
+    if rec is None:
+        raise UnknownModel(vendor, model_id, tuple(vendor_models))
+    return rec["family"]
 
 
 def matrix_config(role: str, vendor: str) -> tuple[str, str | None] | None:
@@ -519,6 +544,12 @@ def _is_str(value: object) -> bool:
 
 
 def family_for(role: str, vendor: str) -> str | None:
+    """Return the maker family for a role/vendor matrix cell, or ``None`` when absent.
+
+  ``None`` means *no matrix cell* — a non-``str`` argument or an unconfigured
+  role/vendor pair — never *no family*. When a cell is present, resolution is
+  delegated to ``model_family``, which resolves or raises ``UnknownModel``.
+    """
     if not _is_str(role) or not _is_str(vendor):
         return None
     cell = matrix_config(role, vendor)

@@ -114,7 +114,79 @@ def test_model_family():
     assert MR.model_family("codex", "gpt-5.6-sol") == "openai"
     assert MR.model_family("cursor", "composer-2.5") == "xai"
     assert MR.model_family("cursor", "cursor-grok-4.6") == "xai"
-    assert MR.model_family("cursor", "nope") is None
+    with pytest.raises(MR.UnknownModel) as exc:
+        MR.model_family("cursor", "nope")
+    assert exc.value.vendor == "cursor"
+    assert exc.value.model_id == "nope"
+    assert exc.value.known == tuple(MR._MODELS["cursor"])
+    assert "cursor" in str(exc.value)
+    assert "nope" in str(exc.value)
+    assert str(exc.value.known) in str(exc.value)
+
+
+def test_model_family_every_registered_pair_resolves():
+    # axis: every registered model across every vendor resolves to a non-empty str family
+    for vendor in MR.vendors():
+        for model_id in MR._MODELS[vendor]:
+            family = MR.model_family(vendor, model_id)
+            assert isinstance(family, str) and family
+
+
+def test_model_family_unknown_vendor_raises_unknown_model():
+    # axis: E1 — unknown vendor refuses with known == VENDORS
+    with pytest.raises(MR.UnknownModel) as exc:
+        MR.model_family("implementer", "composer-2.5")
+    assert exc.value.vendor == "implementer"
+    assert exc.value.model_id == "composer-2.5"
+    assert exc.value.known == MR.VENDORS
+    assert "implementer" in str(exc.value)
+    assert "composer-2.5" in str(exc.value)
+    assert str(MR.VENDORS) in str(exc.value)
+
+    for vendor in ("", "CURSOR"):
+        with pytest.raises(MR.UnknownModel) as exc:
+            MR.model_family(vendor, "composer-2.5")
+        assert exc.value.vendor == vendor
+        assert exc.value.known == MR.VENDORS
+
+
+def test_model_family_unregistered_model_raises_unknown_model():
+    # axis: E2 — registered vendor, unregistered model
+    with pytest.raises(MR.UnknownModel) as exc:
+        MR.model_family("cursor", "nope")
+    assert exc.value.vendor == "cursor"
+    assert exc.value.model_id == "nope"
+    assert exc.value.known == tuple(MR._MODELS["cursor"])
+
+
+def test_model_family_non_str_arguments_raise_unknown_model():
+    # axis: E3 — non-str argument never becomes TypeError or AttributeError
+    for vendor, model_id in ((None, "composer-2.5"), (0, "nope"), ("cursor", 0), ((1, 2), "x")):
+        with pytest.raises(MR.UnknownModel) as exc:
+            MR.model_family(vendor, model_id)
+        assert exc.value.vendor is vendor
+        assert exc.value.model_id is model_id
+        assert isinstance(exc.value.known, tuple)
+
+
+def test_family_for_absent_cell_returns_none():
+    # axis: E4 — absent matrix cell or non-str argument returns None, never raises
+    assert MR.family_for("synthesis", "codex") is None
+    assert MR.family_for(None, "cursor") is None
+    assert MR.family_for("reviewer", 0) is None
+    assert MR.family_for("bogus-role", "cursor") is None
+
+
+def test_family_for_present_cell_resolves_or_raises(monkeypatch):
+    # axis: E5 — present cell resolves; UnknownModel propagates uncaught
+    assert MR.family_for("reviewer", "cursor") == "xai"
+
+    def _boom(vendor, model_id):
+        raise MR.UnknownModel(vendor, model_id, ())
+
+    monkeypatch.setattr(MR, "model_family", _boom)
+    with pytest.raises(MR.UnknownModel):
+        MR.family_for("reviewer", "cursor")
 
 
 def test_derivation_helpers():
