@@ -86,6 +86,25 @@ def _write_review_session(repo, **over):
     obj.update(over)
     with open(os.path.join(d, hg.REVIEW_SESSION_FILE), "w", encoding="utf-8") as fh:
         json.dump(obj, fh)
+    return obj
+
+
+def _write_loop_state(session_dir, **over):
+    os.makedirs(session_dir, exist_ok=True)
+    obj = {"terminal": "converged"}
+    obj.update(over)
+    with open(os.path.join(session_dir, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+        json.dump(obj, fh)
+    return obj
+
+
+def _write_driver_journal(session_dir, rows):
+    os.makedirs(session_dir, exist_ok=True)
+    path = os.path.join(session_dir, RD.JOURNAL_FILE)
+    with open(path, "w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row) + "\n")
+    return path
 
 
 def _diff_sha256(repo, base_sha):
@@ -254,7 +273,7 @@ def test_command_subject_pr_url():
 def test_marker_state_neither_present(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     state = hg.marker_state(_gitdir(repo), repo)
-    assert state == {"inScope": False, "markers": [], "stale": []}
+    assert state == {"inScope": False, "markers": [], "stale": [], "reviewSession": None}
 
 
 def test_marker_state_valid_build_lane(tmp_path):
@@ -489,6 +508,7 @@ def test_review_session_marker_alone_in_scope(tmp_path):
     _commit_file(repo, "g.txt", "y\n")
     session = str(tmp_path / "session")
     _write_review_session(repo, sessionDir=session)
+    _write_loop_state(session, terminal="converged")
     _write_sidecar(repo, session, _certified_receipt(), base_ref="main", base_sha=base_sha)
     result = hg.validate_handback("gh pr ready", repo)
     assert result["decision"] == "allow"
@@ -785,6 +805,129 @@ def test_pr_inherited_repo_between_pr_and_ready(tmp_path):
     repo, _, _ = _scoped_repo(tmp_path)
     result = hg.validate_handback("gh pr -R other/repo ready", repo)
     assert result["reason"] == "handback-repo-mismatch"
+
+
+# --- WO-A (#1248 leg a): driver-state gate ----------------------------------------------------
+
+def _forensic_specimen(tmp_path, *, loop_state=None, sidecar=True):
+    """Build-lane + review-session with driver journal; optional sidecar."""
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    base_sha = sc.run_git(repo, "rev-parse", "HEAD")
+    _commit_file(repo, "g.txt", "y\n")
+    session = str(tmp_path / "session")
+    _write_build_lane(repo)
+    _write_review_session(repo, sessionDir=session)
+    _write_driver_journal(session, [
+        {"cmd": "next", "phase": "compile", "round": "1", "attempt": "1",
+         "outcome": "ok", "ts": "2026-08-09T00:00:01Z"},
+        {"cmd": "submit", "phase": "compile", "round": "1", "attempt": "1",
+         "outcome": "ok", "ts": "2026-08-09T00:00:02Z"},
+    ])
+    if loop_state is not False:
+        _write_loop_state(session, **(loop_state or {"terminal": None}))
+    if sidecar:
+        _write_sidecar(repo, session, _certified_receipt(), base_ref="main", base_sha=base_sha)
+    return repo, session, base_sha
+
+
+def test_specimen_shape_refuses(tmp_path):
+    repo, _, _ = _forensic_specimen(tmp_path)
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["decision"] == "refuse"
+    assert result["reason"] == "handback-driver-abandoned"
+
+
+def test_driver_abandoned_unreadable_review_session_marker(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    session = str(tmp_path / "session")
+    _write_build_lane(repo)
+    path = os.path.join(_superheroes_dir(repo), hg.REVIEW_SESSION_FILE)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["reason"] == "handback-driver-abandoned"
+    assert path in result["detail"]
+
+
+def test_driver_abandoned_invalid_review_session_marker(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    session = str(tmp_path / "session")
+    _write_build_lane(repo)
+    _write_review_session(repo, sessionDir="/nonexistent/session")
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["reason"] == "handback-driver-abandoned"
+
+
+def test_driver_abandoned_loop_state_missing(tmp_path):
+    repo, _, _ = _forensic_specimen(tmp_path, loop_state=False, sidecar=False)
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["reason"] == "handback-driver-abandoned"
+    assert "loop-state.json is missing" in result["detail"]
+
+
+def test_driver_abandoned_loop_state_unparseable(tmp_path):
+    repo, session, _ = _forensic_specimen(tmp_path, loop_state=False, sidecar=False)
+    with open(os.path.join(session, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+        fh.write("not-json")
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["reason"] == "handback-driver-abandoned"
+    assert "loop-state.json unreadable" in result["detail"]
+
+
+def test_driver_abandoned_null_terminal(tmp_path):
+    repo, _, _ = _forensic_specimen(tmp_path, loop_state={"terminal": None}, sidecar=False)
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["reason"] == "handback-driver-abandoned"
+    assert "terminal is null" in result["detail"]
+
+
+@pytest.mark.parametrize("terminal", [None, "", "missing-key"])
+def test_driver_abandoned_empty_terminal_variants(tmp_path, terminal):
+    repo, session, _ = _forensic_specimen(tmp_path, loop_state=False, sidecar=False)
+    if terminal == "missing-key":
+        _write_loop_state(session)
+        with open(os.path.join(session, RD.STATE_FILE), encoding="utf-8") as fh:
+            state = json.load(fh)
+        del state["terminal"]
+        with open(os.path.join(session, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+    else:
+        _write_loop_state(session, terminal=terminal)
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["reason"] == "handback-driver-abandoned"
+
+
+def test_session_mismatch_refuses(tmp_path):
+    repo, session, base_sha = _forensic_specimen(
+        tmp_path, loop_state={"terminal": "converged"})
+    other = str(tmp_path / "other-session")
+    _write_loop_state(other, terminal="converged")
+    sidecar_path = os.path.join(_superheroes_dir(repo), hg._SIDECAR_FILE)
+    with open(sidecar_path, encoding="utf-8") as fh:
+        sidecar = json.load(fh)
+    sidecar["sessionDir"] = other
+    with open(sidecar_path, "w", encoding="utf-8") as fh:
+        json.dump(sidecar, fh)
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["reason"] == "handback-session-mismatch"
+
+
+def test_no_review_session_marker_unchanged_no_receipt(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    _write_build_lane(repo)
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["reason"] == "handback-no-receipt"
+
+
+def test_non_null_terminal_passes_driver_check_to_receipt_path(tmp_path):
+    repo, session, base_sha = _forensic_specimen(
+        tmp_path, loop_state={"terminal": "converged"})
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["decision"] == "allow"
 
 
 # --- bite-proof -------------------------------------------------------------------------------

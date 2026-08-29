@@ -1728,6 +1728,43 @@ def _park_cannot_certify(state, detail):
     state["step"] = P_TERMINAL
 
 
+def _hand_graded_seat_landing(state, session_dir):
+    """(withhold, reason) — has any `dispatch-*` phase been folded by hand `submit`?"""
+    phases = state.get("_handGradedSeatPhases")
+    if isinstance(phases, list) and phases:
+        return True, ("hand-graded seat phase(s) folded by submit: %s — certification withheld"
+                      % ", ".join(phases))
+    if state.get("_advanceUsed"):
+        return False, None
+    if not state.get("_submitUsed") and _state_version(state) == STATE_SCHEMA_VERSION:
+        return False, None
+    if session_dir is None:
+        return True, ("hand-grading history unestablishable: no session directory — "
+                      "certification withheld")
+    path = os.path.join(session_dir, JOURNAL_FILE)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except ValueError as exc:
+                    return True, "hand-grading history unestablishable: %s" % exc
+                if not isinstance(entry, dict):
+                    return True, "hand-grading history unestablishable: journal entry not a dict"
+                if entry.get("cmd") == "submit" and entry.get("outcome") == "accepted":
+                    ph = entry.get("phase")
+                    if isinstance(ph, str) and ph.startswith("dispatch-"):
+                        rnd = entry.get("round")
+                        return True, ("hand-graded seat phase %s in round %s folded by submit — "
+                                      "certification withheld") % (ph, rnd)
+    except (OSError, UnicodeDecodeError) as exc:
+        return True, "hand-grading history unestablishable: %s" % exc
+    return False, None
+
+
 def _shard_payload(diff_text, dimensions):
     """The panel dispatch payload: dims + tiers, and — when shard_plan says big — per-lens shards.
     The cross-cutting lenses always carry the whole diff."""
@@ -3726,7 +3763,7 @@ def _fold_stall(state, config, artifact):
 
 # ---- terminal certification -----------------------------------------------------------------
 
-def _terminal_converged(state, config, full_panel, note=None):
+def _terminal_converged(state, config, full_panel, note=None, session_dir=None):
     """Certify: last round's fixes all discharged + verify pass. Shape is full-panel-confirmed (a
     qualifying full confirmation panel ran) or audited-chain (scoped certifying finish, no final
     full panel — say so). Degraded independence appends -degraded.
@@ -3742,6 +3779,10 @@ def _terminal_converged(state, config, full_panel, note=None):
         _park_cannot_certify(
             state, "panel incomplete — a configured lens never ran and no complete panel has since "
             "recovered the coverage; certification withheld")
+        return
+    withhold, why = _hand_graded_seat_landing(state, session_dir)
+    if withhold:
+        _park_cannot_certify(state, why)
         return
     base = "full-panel-confirmed" if full_panel else "audited-chain"
     shape = _cert_shape(state, base)
@@ -4805,6 +4846,8 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 round_records_sidecar = (rr_path, rr_bytes)
             journal_entry = _journal_entry_for_commit(session_dir, "submit", "accepted",
                                                       phase=phase, round=round_no, attempt=attempt)
+            if prep.get("certification_ineligible"):
+                journal_entry["certificationEligible"] = False
             orphan_journal = None
             orphan_seats = prep.get("orphan_seats_found")
             if isinstance(orphan_seats, list) and orphan_seats:
@@ -4866,8 +4909,11 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             # foldLanded marks a landed fold. It is authoritative on `ok: true` answers; its absence
             # there is the fail-closed default covering every future early return above the commit.
             # On an `ok: false` answer absence proves nothing — see the docstring's foldLanded note.
-            return {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step"),
+            body = {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step"),
                     "foldLanded": True}
+            if prep.get("certification_ineligible"):
+                body["certificationEligible"] = False
+            return body
     except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "submit", held)
 
@@ -5092,12 +5138,21 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
     # accept: clear the pending, then fold through cmd_submit (the fold chokepoint).
     round_no = pending.get("round")
     state["pending"] = None
+    certification_ineligible = False
     if not _via_advance and _state_version(state) == STATE_SCHEMA_VERSION:
         # The other half of the interleave fence: a v3 session that has taken a HAND submit refuses
         # `advance` from here on. Only stamped on v3 state — a v2 state's dict is never touched.
         state["_submitUsed"] = True
+        if isinstance(phase, str) and phase.startswith("dispatch-"):
+            label = "%s:%s" % (round_no, phase)
+            existing = state.get("_handGradedSeatPhases")
+            if not isinstance(existing, list):
+                existing = []
+            state["_handGradedSeatPhases"] = sorted(set(existing + [label]))
+            certification_ineligible = True
     return {"_fold_ready": True, "state": state, "round_no": round_no, "art_hash": art_hash,
-            "orphan_seats_found": orphan_seats_found}
+            "orphan_seats_found": orphan_seats_found,
+            "certification_ineligible": certification_ineligible}
 
 
 def _write_receipt(session_dir, state):
