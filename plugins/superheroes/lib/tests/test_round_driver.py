@@ -2888,6 +2888,7 @@ _ALL_CHANNELS = {
     "judgmentDispositions": [{"id": "f.py::tradeoff@L1", "title": "tradeoff",
                               "disposition": "fix-with-guidance",
                               "userGuidance": "keep narrow"}],
+    "gateGuidanceRowCarried": [{"index": 0, "title": "orphan row"}],
 }
 
 
@@ -4559,8 +4560,9 @@ def test_fix_with_guidance_attaches_guidance():
     assert state["step"] == RD.P_FIXER
     b = state["_fixBatch"][0]
     assert b["judgmentDisposition"] == "fix-with-guidance"
-    assert b[RD.FIX_BATCH_GUIDANCE_KEY] == "keep it backward compatible"
-    assert "guidance" not in b
+    logged = state["rounds"]["1"]["judgmentDispositions"][0]
+    assert logged[RD.GATE_GUIDANCE_RECORD_KEY] == "keep it backward compatible"
+    assert RD.GATE_GUIDANCE_RECORD_KEY not in b
 
 
 def test_skip_with_reason_records_ledger_and_rides_disclosure():
@@ -4768,7 +4770,9 @@ def test_judgment_identical_guidance_same_id_collapses():
     ]})
     assert state["step"] == RD.P_FIXER
     assert len(state["_fixBatch"]) == 1
-    assert state["_fixBatch"][0][RD.FIX_BATCH_GUIDANCE_KEY] == "same text"
+    logged = state["rounds"]["1"]["judgmentDispositions"][0]
+    assert logged[RD.GATE_GUIDANCE_RECORD_KEY] == "same text"
+    assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][0]
 
 
 def test_fix_with_guidance_blank_records_disposition_without_guidance_value():
@@ -4778,10 +4782,10 @@ def test_fix_with_guidance_blank_records_disposition_without_guidance_value():
     RD._fold_judgment(state, state["config"], {"dispositions": [
         {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "   "}]})
     assert state["step"] == RD.P_FIXER
-    assert RD.FIX_BATCH_GUIDANCE_KEY not in state["_fixBatch"][0]
+    assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][0]
     logged = state["rounds"]["1"]["judgmentDispositions"][0]
     assert logged["disposition"] == "fix-with-guidance"
-    assert RD.FIX_BATCH_GUIDANCE_KEY not in logged
+    assert RD.GATE_GUIDANCE_RECORD_KEY not in logged
 
 
 def test_judgment_dispositions_record_carries_guidance_text():
@@ -4792,7 +4796,7 @@ def test_judgment_dispositions_record_carries_guidance_text():
         {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
          "guidance": "keep it backward compatible"}]})
     logged = state["rounds"]["1"]["judgmentDispositions"][0]
-    assert logged[RD.FIX_BATCH_GUIDANCE_KEY] == "keep it backward compatible"
+    assert logged[RD.GATE_GUIDANCE_RECORD_KEY] == "keep it backward compatible"
 
 
 def test_receipt_projects_judgment_dispositions_when_recorded():
@@ -4805,11 +4809,11 @@ def test_receipt_projects_judgment_dispositions_when_recorded():
     state["terminal"] = "converged"
     receipt = RD.build_receipt(state)
     rd = receipt["rounds"][0]
-    assert rd["judgmentDispositions"][0][RD.FIX_BATCH_GUIDANCE_KEY] == "narrow only"
+    assert rd["judgmentDispositions"][0][RD.GATE_GUIDANCE_RECORD_KEY] == "narrow only"
 
 
 def test_judgment_dispositions_guidance_survives_records_path_resume(tmp_path):
-    """E6: fold guidance persists through recordsPath resume to terminal receipt."""
+    """E6: fold guidance persists through recordsPath resume to the rendered fixer order."""
     records = tmp_path / "round-records.json"
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
     RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
@@ -4820,12 +4824,31 @@ def test_judgment_dispositions_guidance_survives_records_path_resume(tmp_path):
     RD._persist_round_records(state, state["config"])
     on_disk = json.loads(records.read_text())
     rec = next(r for r in on_disk if r.get("round") == 1)
-    assert rec["disclosures"]["judgmentDispositions"][0][RD.FIX_BATCH_GUIDANCE_KEY] == "narrow only"
+    assert rec["disclosures"]["judgmentDispositions"][0][RD.GATE_GUIDANCE_RECORD_KEY] == "narrow only"
     resumed = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert resumed["rounds"]["1"]["judgmentDispositions"][0][RD.FIX_BATCH_GUIDANCE_KEY] == "narrow only"
+    assert resumed["rounds"]["1"]["judgmentDispositions"][0][RD.GATE_GUIDANCE_RECORD_KEY] == "narrow only"
     resumed["terminal"] = "converged"
     receipt = RD.build_receipt(resumed)
-    assert receipt["rounds"][0]["judgmentDispositions"][0][RD.FIX_BATCH_GUIDANCE_KEY] == "narrow only"
+    assert receipt["rounds"][0]["judgmentDispositions"][0][RD.GATE_GUIDANCE_RECORD_KEY] == "narrow only"
+    resumed["reviewedDiff"] = "diff --git a/f b/f\n"
+    resumed["_fixBatch"] = [{"title": "widen the API", "file": "f.py", "line": 1,
+                             "judgmentDisposition": "fix-with-guidance"}]
+    session_dir = str(tmp_path / "resume-render")
+    os.makedirs(session_dir)
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RD.P_FIXER, "fixer", 0, resumed, resumed["config"], {},
+        session_dir, 1, paths, RD.CHANNEL_FILE,
+    )
+    assert "narrow only" in ph["GATE_GUIDANCE"]
+    assert ph["GATE_GUIDANCE"] != RD._GATE_GUIDANCE_NO_GUIDANCE
 
 
 def _gate_guidance_header_id(block):
@@ -4835,7 +4858,7 @@ def _gate_guidance_header_id(block):
 
 
 def test_guided_order_block_id_matches_judgment_dispositions_record(tmp_path):
-    """E3: mechanical row sharing location with guided row — order id equals record id."""
+    """E3: order header id equals the fold-owned record id — minted once at the fold."""
     mech = {"title": "widen the API", "severity": "Critical", "file": "f.py", "line": 1}
     state = RD.new_state(_cfg())
     RD._route_judgment_blockers(state, [mech, dict(_TRADEOFF)])
@@ -4844,7 +4867,7 @@ def test_guided_order_block_id_matches_judgment_dispositions_record(tmp_path):
          "guidance": "keep it backward compatible"}]})
     record = state["rounds"]["1"]["judgmentDispositions"][0]
     record_id = record["id"]
-    assert state["_fixBatch"][1][RD.FIX_BATCH_GUIDANCE_ID_KEY] == record_id
+    assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][1]
     session_dir = str(tmp_path / "e3-id-match")
     os.makedirs(session_dir)
     state["reviewedDiff"] = "diff --git a/f b/f\n"
@@ -4880,7 +4903,7 @@ def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
         {"id": ids[1], "disposition": "fix-with-guidance", "guidance": "guidance B"},
     ]})
     records = state["rounds"]["1"]["judgmentDispositions"]
-    record_by_guidance = {r[RD.FIX_BATCH_GUIDANCE_KEY]: r["id"] for r in records}
+    record_by_guidance = {r[RD.GATE_GUIDANCE_RECORD_KEY]: r["id"] for r in records}
     session_dir = str(tmp_path / "e4-same-loc")
     os.makedirs(session_dir)
     state["reviewedDiff"] = "diff --git a/f b/f\n"
@@ -4900,10 +4923,7 @@ def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
     for guidance, record_id in record_by_guidance.items():
         assert record_id in block
         assert "> %s" % guidance in block
-    guided_batch = [r for r in state["_fixBatch"] if RD.FIX_BATCH_GUIDANCE_KEY in r]
-    assert len(guided_batch) == 2
-    stamped = {r[RD.FIX_BATCH_GUIDANCE_ID_KEY] for r in guided_batch}
-    assert stamped == set(record_by_guidance.values())
+    assert block.count("### ") == 2
 
 
 def test_two_guided_findings_same_title_distinguished_by_id(tmp_path):
