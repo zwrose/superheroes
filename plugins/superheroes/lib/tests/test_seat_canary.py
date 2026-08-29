@@ -30,9 +30,18 @@ def _load_canary_outcome():
     return mod
 
 
+def _load_dispatch_outcome():
+    spec = importlib.util.spec_from_file_location(
+        "dispatch_outcome", os.path.join(_HERE, "..", "dispatch_outcome.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 SC = _load()
 EA = _load_engine_adapter()
 CO = _load_canary_outcome()
+DO = _load_dispatch_outcome()
 
 _PLUGIN_ROOT = os.path.join(_HERE, "..", "..")
 
@@ -137,7 +146,7 @@ def test_findings_with_plant_engaged_and_detected():
                 "id": "p1",
                 "severity": "Critical",
                 "file": "lib/gate.py",
-                "title": SC.PLANT_MARKER,
+                "title": "verify_submission fails open on exception",
                 "body": "fails open",
             }],
             investigated=["lib/gate.py"],
@@ -374,7 +383,9 @@ def test_dispatch_receives_fixture_prompt_and_repo_root(tmp_path):
         "codex", engine_model="m", effort="high", repo_root=repo, dispatch=dispatch,
     )
     assert seen["repo_root"] == repo
-    assert SC.PLANT_MARKER in seen["contents"]
+    assert "verify_submission" in seen["contents"]
+    assert SC.PLANT_MARKER not in seen["contents"].split("```diff")[0]
+    assert "check_receipt" not in seen["contents"]
     assert "investigated" in seen["contents"]
 
 
@@ -615,10 +626,10 @@ def test_dod_row2_engaged_dispatch_plant_undetected_when_marker_missing():
 
 def test_classify_totality_cross_product():
     dispatch_members = [
-        CO.REASON_FORFEITED,
-        CO.REASON_VACUOUS,
-        CO.REASON_FORFEIT_ENGAGED_ARTIFACT,
-        CO.REASON_UNRUNNABLE,
+        DO.REASON_FORFEITED,
+        DO.REASON_VACUOUS,
+        DO.REASON_FORFEIT_ENGAGED_ARTIFACT,
+        DO.REASON_UNRUNNABLE,
         None,
     ]
     boolish = (True, False, None, "yes")
@@ -652,8 +663,77 @@ def test_normalize_outcome_unknown():
         "engaged": True,
         "detectedPlant": True,
     })
-    assert outcome == CO.OUTCOME_OK
+    assert outcome == CO.OUTCOME_PLANT_UNDETECTED
     assert fault == "canary-outcome-unknown:'bogus'"
+    assert CO.is_pass(outcome) is False
+
+
+def test_normalize_unhashable_outcome_list():
+    outcome, fault = CO.normalize({
+        "outcome": [],
+        "engaged": True,
+        "detectedPlant": True,
+    })
+    assert outcome == CO.OUTCOME_PLANT_UNDETECTED
+    assert fault == "canary-outcome-unknown:[]"
+    assert CO.is_pass(outcome) is False
+
+
+def test_normalize_unhashable_outcome_dict():
+    outcome, fault = CO.normalize({
+        "outcome": {"bad": True},
+        "engaged": True,
+        "detectedPlant": True,
+    })
+    assert outcome == CO.OUTCOME_PLANT_UNDETECTED
+    assert "canary-outcome-unknown:" in fault
+    assert CO.is_pass(outcome) is False
+
+
+def test_plant_marker_literal_pinned():
+    assert SC.PLANT_MARKER == "verify_submission"
+
+
+def test_detected_plant_names_verify_submission_naturally():
+    def dispatch(engine, **kwargs):
+        return _base_dispatch_result(
+            findings=[{
+                "id": "p1",
+                "severity": "Critical",
+                "file": "lib/gate.py",
+                "title": "verify_submission fails open on exception",
+                "body": "the except path returns True",
+            }],
+            investigated=["lib/gate.py"],
+            engagement={"tokens": 10, "toolCalls": 1, "stdoutBytes": 1, "wallSeconds": 1.0},
+        )
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["detectedPlant"] is True
+    assert out["outcome"] == CO.OUTCOME_OK
+
+
+def test_check_receipt_echo_no_longer_scores_detection():
+    def dispatch(engine, **kwargs):
+        return _base_dispatch_result(
+            findings=[{
+                "id": "p1",
+                "severity": "Critical",
+                "file": "lib/gate.py",
+                "title": "check_receipt",
+                "body": "echoed prompt marker",
+            }],
+            investigated=["lib/gate.py"],
+            engagement={"tokens": 10, "toolCalls": 1, "stdoutBytes": 1, "wallSeconds": 1.0},
+        )
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["detectedPlant"] is False
+    assert out["outcome"] == CO.OUTCOME_PLANT_UNDETECTED
 
 
 def test_normalize_outcome_ok_contradicts_fields():

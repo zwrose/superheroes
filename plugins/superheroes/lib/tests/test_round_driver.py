@@ -6343,6 +6343,50 @@ def test_canary_codex_configured_cursor_ran_needs_cursor_probe():
     assert state["rounds"]["1"]["canaryUnverified"] == ["code-reviewer"]
 
 
+def test_canary_engaged_dispatch_failure_outcome_failed_not_never_ran():
+    """Engaged probe with dispatch-failure outcome withholds certification without no-engagement prose."""
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    canary = {
+        "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": True,
+        "evidence": {"tokens": 50000, "toolCalls": 30}, "detectedPlant": False,
+        "detail": "vacuous seat",
+    }
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": seat_map, "canaryResult": canary,
+    })
+    r1 = state["rounds"]["1"]
+    assert r1["seatStatus"]["code-reviewer"] == "run"
+    assert "canaryVerified" not in r1
+    assert r1["canaryFailed"]["engagedFailure"] is True
+    assert state["fullPanelRan"] is False
+    assert "canary-outcome-failed" in _decision_kinds(state)
+    assert "canary-failed" not in _decision_kinds(state)
+    receipt = RD.build_receipt(state)
+    cof_lines = [d for d in receipt["degraded"] if d.startswith("canary-outcome-failed (round 1):")]
+    assert len(cof_lines) == 1
+    assert "no engagement" not in cof_lines[0]
+    assert "outcome failure" in cof_lines[0]
+
+
+def test_canary_liveness_engaged_dispatch_failure_status_outcome_failed():
+    dims = list(RD.DIMENSIONS)
+    seat_map = _seat_map_vendors({d: "claude" for d in dims})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    seats = {d: {"findings": []} for d in dims}
+    status = {d: "run" for d in dims}
+    engaged_failure = {
+        "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": True,
+        "evidence": {"tokens": 50000, "toolCalls": 30}, "detectedPlant": False,
+        "detail": "vacuous seat",
+    }
+    out = RD.canary_liveness(dims, status, seats, seat_map, {}, engaged_failure)
+    assert out["byVendor"]["codex"]["status"] == "outcome-failed"
+    assert out["byDim"]["code-reviewer"] == "outcome-failed"
+
+
 def test_canary_failed_record_includes_evidence():
     state = RD.new_state(_cfg(leg="panel"))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}

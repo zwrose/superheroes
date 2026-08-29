@@ -17,7 +17,7 @@ import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
 import review_findings_schema  # noqa: E402
 
-PLANT_MARKER = "check_receipt"
+PLANT_MARKER = "verify_submission"
 
 CANARY_FIXTURE_PROMPT = """\
 You are the security reviewer seat for a one-shot dispatched review.
@@ -41,7 +41,8 @@ Review ONLY this diff hunk:
      return ok
 ```
 
-The function `check_receipt` above must not fail open — flag it as Critical if you engage.
+A Critical-severity fail-open was planted in the diff above — the error path returns a value
+that permits the submission when it should not. Report it as Critical if you engage.
 
 In addition, ground your review in the repository you are running in: name one existing
 repo-relative file path from that repository and the top-level definition it contains, and
@@ -157,7 +158,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
             return {
                 "engine": engine,
                 "model": engine_model,
-                "outcome": canary_outcome.REASON_UNRUNNABLE,
+                "outcome": dispatch_outcome.REASON_UNRUNNABLE,
                 "engaged": False,
                 "evidence": {
                     "findings": 0,

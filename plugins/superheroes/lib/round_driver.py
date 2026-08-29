@@ -1988,8 +1988,8 @@ def _canary_probe_sort_key(probe):
     return (eng_s, engaged_s, stable)
 
 
-_CANARY_DEAD_OUTCOMES = (
-    canary_outcome.NON_PASS_OUTCOMES - {canary_outcome.OUTCOME_PLANT_UNDETECTED})
+_CANARY_DEAD_OUTCOMES = frozenset({canary_outcome.OUTCOME_NOT_ENGAGED})
+_CANARY_DISPATCH_FAILURE_OUTCOMES = frozenset(dispatch_outcome.NOT_RUN_REASONS)
 
 
 def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, canary_result):
@@ -2040,14 +2040,30 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
             outcome, fault = canary_outcome.normalize(probe)
             normalized.append((probe, outcome, fault))
 
-        dead = [t for t in normalized if t[1] in _CANARY_DEAD_OUTCOMES]
-        plant_undetected = [
-            t for t in normalized if t[1] == canary_outcome.OUTCOME_PLANT_UNDETECTED]
-        passing = [t for t in normalized if canary_outcome.is_pass(t[1])]
+        dead = []
+        outcome_failed = []
+        plant_undetected = []
+        passing = []
+        for probe, outcome, fault in normalized:
+            if canary_outcome.is_pass(outcome):
+                passing.append((probe, outcome, fault))
+            elif outcome == canary_outcome.OUTCOME_PLANT_UNDETECTED:
+                plant_undetected.append((probe, outcome, fault))
+            elif outcome in _CANARY_DISPATCH_FAILURE_OUTCOMES:
+                if probe.get("engaged") is True:
+                    outcome_failed.append((probe, outcome, fault))
+                else:
+                    dead.append((probe, outcome, fault))
+            elif outcome in _CANARY_DEAD_OUTCOMES:
+                dead.append((probe, outcome, fault))
 
         if dead:
             deciding, _, fault = sorted(dead, key=lambda t: _canary_probe_sort_key(t[0]))[0]
             st = "dead"
+        elif outcome_failed:
+            deciding, _, fault = sorted(
+                outcome_failed, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+            st = "outcome-failed"
         elif plant_undetected:
             deciding, _, fault = sorted(
                 plant_undetected, key=lambda t: _canary_probe_sort_key(t[0]))[0]
@@ -2229,6 +2245,7 @@ def _fold_panel(state, config, artifact):
         ran_manifest_canary, artifact.get("canaryResult"))
     unverified_dims = []
     failed_vendors = {}
+    outcome_failed_vendors = {}
     plant_undetected_vendors = {}
     verified_by_vendor = {}
     for vendor, info in (live.get("byVendor") or {}).items():
@@ -2244,6 +2261,9 @@ def _fold_panel(state, config, artifact):
                     missing_dims.append(dim)
                 seat_status[dim] = "missing"
             failed_vendors[vendor] = info
+        elif st == "outcome-failed":
+            outcome_failed_vendors[vendor] = info
+            canary_panel_gap = True
         elif st == canary_outcome.OUTCOME_PLANT_UNDETECTED:
             plant_undetected_vendors[vendor] = info
         elif st == "proven":
@@ -2281,6 +2301,34 @@ def _fold_panel(state, config, artifact):
             _decision(state, "canary-failed",
                       "control probe for vendor %s showed no engagement (%s) — cross-vendor "
                       "seat(s) %s downgraded to never-ran"
+                      % (vendor, detail, ", ".join(vdims)))
+    if outcome_failed_vendors:
+        failed_dims = sorted({d for info in outcome_failed_vendors.values()
+                              for d in (info.get("seats") or [])})
+        if len(outcome_failed_vendors) == 1:
+            only = next(iter(outcome_failed_vendors.values()))
+            cof_rec = {
+                "seats": failed_dims,
+                "detail": only.get("detail"),
+                "evidence": only.get("evidence"),
+                "engagedFailure": True,
+            }
+        else:
+            cof_rec = {
+                "seats": failed_dims,
+                "engagedFailure": True,
+                "vendors": {
+                    v: {"detail": info.get("detail"), "evidence": info.get("evidence")}
+                    for v, info in sorted(outcome_failed_vendors.items())
+                },
+            }
+        _record_round(state, "canaryFailed", cof_rec)
+        for vendor, info in sorted(outcome_failed_vendors.items()):
+            vdims = sorted(info.get("seats") or [])
+            detail = info.get("detail") or "outcome failure"
+            _decision(state, "canary-outcome-failed",
+                      "control probe for vendor %s was engaged but reported outcome failure "
+                      "(%s) — cross-vendor seat(s) %s remain run; panel certification withheld"
                       % (vendor, detail, ", ".join(vdims)))
     if plant_undetected_vendors:
         # axis: a non-pass canary withholds panel certification
@@ -4024,6 +4072,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
             seats_down = cf.get("seats") if isinstance(cf, dict) else []
             detail = cf.get("detail") if isinstance(cf, dict) else None
             evidence = cf.get("evidence") if isinstance(cf, dict) else None
+            engaged_failure = isinstance(cf, dict) and cf.get("engagedFailure") is True
             if isinstance(cf, dict) and isinstance(cf.get("vendors"), dict):
                 parts = []
                 for vendor, vinfo in sorted(cf["vendors"].items()):
@@ -4033,18 +4082,28 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                     ev_note = ""
                     if isinstance(ev, dict) and ev:
                         ev_note = "; evidence=%s" % ev
+                    default_detail = "outcome failure" if engaged_failure else "engaged not true"
                     parts.append(
                         "vendor %s (%s%s)" % (
-                            vendor, vinfo.get("detail") or "engaged not true", ev_note))
-                detail_str = "; ".join(parts) if parts else (detail or "engaged not true")
+                            vendor, vinfo.get("detail") or default_detail, ev_note))
+                default_detail = "outcome failure" if engaged_failure else "engaged not true"
+                detail_str = "; ".join(parts) if parts else (detail or default_detail)
             else:
-                detail_str = detail or "engaged not true"
+                default_detail = "outcome failure" if engaged_failure else "engaged not true"
+                detail_str = detail or default_detail
                 if evidence and isinstance(evidence, dict):
                     detail_str = "%s; evidence=%s" % (detail_str, evidence)
-            degraded.append(
-                "canary-failed (round %s): the control probe showed no engagement (%s) — "
-                "cross-vendor seat(s) %s downgraded to never-ran" % (
-                    rkey, detail_str, ", ".join(seats_down or [])))
+            if engaged_failure:
+                degraded.append(
+                    "canary-outcome-failed (round %s): the control probe was engaged but "
+                    "reported outcome failure (%s) — cross-vendor seat(s) %s remain run; panel "
+                    "certification withheld" % (
+                        rkey, detail_str, ", ".join(seats_down or [])))
+            else:
+                degraded.append(
+                    "canary-failed (round %s): the control probe showed no engagement (%s) — "
+                    "cross-vendor seat(s) %s downgraded to never-ran" % (
+                        rkey, detail_str, ", ".join(seats_down or [])))
         cpu = declared.get("canaryPlantUndetected")
         if cpu:
             seats_undetected = cpu.get("seats") if isinstance(cpu, dict) else []

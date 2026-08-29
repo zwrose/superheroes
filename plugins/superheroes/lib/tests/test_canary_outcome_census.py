@@ -186,12 +186,7 @@ def _outcome_members_from_ast():
                 continue
             if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
                 members.add(node.value.value)
-    dispatch_members = {
-        dispatch_outcome.REASON_FORFEITED,
-        dispatch_outcome.REASON_VACUOUS,
-        dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT,
-        dispatch_outcome.REASON_UNRUNNABLE,
-    }
+    dispatch_members = set(dispatch_outcome.NOT_RUN_REASONS)
     return members | dispatch_members
 
 

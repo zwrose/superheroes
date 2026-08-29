@@ -31,34 +31,20 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-from dispatch_outcome import (
-    REASON_FORFEIT_ENGAGED_ARTIFACT,
-    REASON_FORFEITED,
-    REASON_UNRUNNABLE,
-    REASON_VACUOUS,
-)
+from dispatch_outcome import NOT_RUN_REASONS
 
 OUTCOME_OK = "ok"  # the ONLY pass member
 OUTCOME_NOT_ENGAGED = "not-engaged"  # dispatch succeeded; investigation not proven
 OUTCOME_PLANT_UNDETECTED = "plant-undetected"  # dispatch succeeded; engaged; plant not named
 
-_DISPATCH_FAILURE_OUTCOMES = frozenset({
-    REASON_FORFEITED,
-    REASON_VACUOUS,
-    REASON_FORFEIT_ENGAGED_ARTIFACT,
-    REASON_UNRUNNABLE,
-})
+_DISPATCH_FAILURE_OUTCOMES = frozenset(NOT_RUN_REASONS)
 
 PASS_OUTCOMES = frozenset({OUTCOME_OK})
 ALL_OUTCOMES = frozenset({
     OUTCOME_OK,
     OUTCOME_NOT_ENGAGED,
     OUTCOME_PLANT_UNDETECTED,
-    REASON_FORFEITED,
-    REASON_VACUOUS,
-    REASON_FORFEIT_ENGAGED_ARTIFACT,
-    REASON_UNRUNNABLE,
-})
+}) | NOT_RUN_REASONS
 NON_PASS_OUTCOMES = ALL_OUTCOMES - PASS_OUTCOMES
 
 # Repo-relative paths of every module that imports this vocabulary. A module that imports
@@ -93,6 +79,13 @@ def _probe_fields(probe):
     return engaged, detected_plant
 
 
+def _clamp_unknown_derived(derived):
+    """Unknown or absent outcome must never normalize to a pass member."""
+    if is_pass(derived):
+        return OUTCOME_PLANT_UNDETECTED
+    return derived
+
+
 def normalize(probe):
     """Fail-closed ingestion guard; never raises."""
     if not isinstance(probe, dict):
@@ -102,13 +95,13 @@ def normalize(probe):
     engaged, detected_plant = _probe_fields(probe)
 
     if outcome is None:
-        derived = classify(
-            dispatch_reason_outcome=None, engaged=engaged, detected_plant=detected_plant)
+        derived = _clamp_unknown_derived(classify(
+            dispatch_reason_outcome=None, engaged=engaged, detected_plant=detected_plant))
         return derived, "canary-outcome-absent"
 
-    if outcome not in ALL_OUTCOMES:
-        derived = classify(
-            dispatch_reason_outcome=None, engaged=engaged, detected_plant=detected_plant)
+    if not isinstance(outcome, str) or outcome not in ALL_OUTCOMES:
+        derived = _clamp_unknown_derived(classify(
+            dispatch_reason_outcome=None, engaged=engaged, detected_plant=detected_plant))
         return derived, "canary-outcome-unknown:%r" % (outcome,)
 
     if outcome == OUTCOME_OK and (engaged is not True or detected_plant is not True):
