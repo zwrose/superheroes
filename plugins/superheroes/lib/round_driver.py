@@ -4140,6 +4140,14 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                 "prior-comments.json in PR mode — panel ran without prior PR comments; any claim "
                 "that prior comments were considered is not supported for this round"
                 % rkey)
+        jd = declared.get("judgmentDispositions")
+        if isinstance(jd, list) and jd:
+            fail_closed = [e for e in jd if isinstance(e, dict) and e.get("failClosed")]
+            if fail_closed:
+                degraded.append(
+                    "judgment-fail-closed (round %s): %d judgment blocker(s) had no valid owner "
+                    "disposition — owner ruling not recorded; loop defaulted to fix-as-suggested"
+                    % (rkey, len(fail_closed)))
         ggc = declared.get("gateGuidanceRowCarried")
         if ggc:
             degraded.append(

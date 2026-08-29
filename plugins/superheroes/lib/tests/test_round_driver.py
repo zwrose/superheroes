@@ -3405,6 +3405,69 @@ def test_prior_comments_unavailable_degraded_prose_on_receipt():
     )
 
 
+def test_judgment_fail_closed_dispositions_degraded_on_receipt():
+    """Fail-closed judgment folds disclose round and count on the receipt degraded list."""
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {"1": {"judgmentDispositions": [
+        {"id": "f.py::widen the api@L1", "title": "widen the API",
+         "disposition": "fix-as-suggested", "failClosed": True},
+        {"id": "f.py::other@L2", "title": "other tradeoff",
+         "disposition": "fix-as-suggested", "failClosed": True},
+    ]}}
+    receipt = RD.build_receipt(state)
+    lines = [d for d in receipt["degraded"] if "judgment-fail-closed" in d]
+    assert len(lines) == 1
+    assert "round 1" in lines[0]
+    assert "2 judgment blocker(s)" in lines[0]
+
+
+def test_judgment_valid_dispositions_not_degraded_on_receipt():
+    """All-valid judgment dispositions must not add a fail-closed degradation line."""
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {"1": {"judgmentDispositions": [
+        {"id": "f.py::widen the api@L1", "title": "widen the API",
+         "disposition": "fix-as-suggested"},
+        {"id": "f.py::narrow@L2", "title": "narrow the API",
+         "disposition": "fix-with-guidance", RD.GATE_GUIDANCE_RECORD_KEY: "keep compatible"},
+    ]}}
+    receipt = RD.build_receipt(state)
+    assert not any("judgment-fail-closed" in d for d in receipt["degraded"])
+
+
+def test_judgment_fail_closed_degraded_omits_guidance_and_title():
+    """Fail-closed degradation names only round and count — never guidance text or finding titles."""
+    distinctive_guidance = "ZQ_DISCLOSURE_MUST_NOT_LEAK_THIS_GUIDANCE"
+    distinctive_title = "ZQ_DISCLOSURE_MUST_NOT_LEAK_THIS_TITLE"
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {"1": {"judgmentDispositions": [
+        {"id": "f.py::widen the api@L1", "title": distinctive_title,
+         "disposition": "fix-as-suggested", "failClosed": True,
+         RD.GATE_GUIDANCE_RECORD_KEY: distinctive_guidance},
+    ]}}
+    receipt = RD.build_receipt(state)
+    lines = [d for d in receipt["degraded"] if "judgment-fail-closed" in d]
+    assert len(lines) == 1
+    assert distinctive_guidance not in lines[0]
+    assert distinctive_title not in lines[0]
+
+
+def test_judgment_fail_closed_degraded_per_round():
+    """Fail-closed entries across multiple rounds each get their own degradation line."""
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {
+        "1": {"judgmentDispositions": [
+            {"id": "a", "disposition": "fix-as-suggested", "failClosed": True}]},
+        "2": {"judgmentDispositions": [
+            {"id": "b", "disposition": "fix-as-suggested", "failClosed": True},
+            {"id": "c", "disposition": "fix-as-suggested", "failClosed": True}]},
+    }
+    receipt = RD.build_receipt(state)
+    lines = [d for d in receipt["degraded"] if "judgment-fail-closed" in d]
+    assert len(lines) == 2
+    assert any("round 1" in line and "1 judgment blocker(s)" in line for line in lines)
+    assert any("round 2" in line and "2 judgment blocker(s)" in line for line in lines)
+
+
 def test_malformed_order_vendor_gap_in_session_does_not_crash_receipt():
     """Malformed gap row recorded in-session is skipped at render; receipt still produced."""
     state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
