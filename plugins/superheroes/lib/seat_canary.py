@@ -193,7 +193,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
 
         detail = ""
         if outcome == canary_outcome.OUTCOME_PLANT_UNDETECTED:
-            detail = "plant-undetected"
+            detail = canary_outcome.OUTCOME_PLANT_UNDETECTED
         elif outcome == canary_outcome.OUTCOME_NOT_ENGAGED:
             detail = "no-investigation-evidence"
         elif not engaged:

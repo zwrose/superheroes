@@ -6275,7 +6275,9 @@ def test_canary_ok_contradicts_fields_not_proven():
     r1 = state["rounds"]["1"]
     assert "canaryVerified" not in r1
     assert "canaryPlantUndetected" in r1
-    assert r1["canaryPlantUndetected"]["detail"] == "canary-outcome-contradicts-fields"
+    assert r1["canaryPlantUndetected"]["detail"] == (
+        "canary-outcome-contradicts-fields; claimed ok"
+    )
     assert state["fullPanelRan"] is False
 
 

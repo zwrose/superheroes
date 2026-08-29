@@ -156,8 +156,7 @@ def _derived_consumers():
 
 
 def _literal_census_modules():
-    """Modules that must not spell canary outcome literals — non-consumers only."""
-    consumers = _derived_consumers()
+    """Modules that must not spell canary outcome literals outside canary_outcome.py."""
     modules = []
     for pattern in (
         os.path.join(_LIB, "*.py"),
@@ -167,8 +166,6 @@ def _literal_census_modules():
             if os.path.basename(path) == _EXEMPT_MODULE:
                 continue
             if os.path.basename(path) in _LITERAL_EXEMPT_BASENAMES:
-                continue
-            if _repo_rel(path) in consumers:
                 continue
             modules.append(path)
     modules.sort()
