@@ -1,10 +1,8 @@
 """AST census: no None-tolerant guard on shipped model_family calls; family_for consumers enumerated.
 
-Scanned file set (shipped, non-test Python under the repository root):
-  - plugins/superheroes/lib/*.py excluding the tests/ subtree
-  - plugins/superheroes/eval/**/*.py excluding tests/ subtrees and fixtures/
-  - eval/lib/*.py excluding its tests/ subtree
-  - .github/scripts/*.py excluding its tests/ subtree
+Scanned file set: every tracked non-test ``.py`` file under the repository root — the same
+enumeration as ``source_guard.watched_paths`` (includes ``plugins/superheroes/hooks/``,
+repo-root ``source_guard.py``, and all other shipped Python surfaces).
 
 Paths are resolved from this file's directory, never an ambient cwd.
 
@@ -13,10 +11,11 @@ call sites are dead fall-opens; family_for legitimately returns None for an abse
 and its None-tolerant guards are allowlisted by enclosing function.
 """
 import ast
-import glob
 import os
 
 import pytest
+
+import source_guard as sg
 
 _TESTS = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.realpath(os.path.join(_TESTS, "..", "..", "..", ".."))
@@ -86,26 +85,17 @@ def _is_under_tests_or_fixtures(path):
 
 
 def _scanned_py_files():
-    """Every shipped Python module in the declared scan set."""
+    """Every shipped Python module (tracked non-test .py, same set as source_guard)."""
     files = []
-    lib_dir = os.path.join(_REPO_ROOT, "plugins", "superheroes", "lib")
-    for path in sorted(glob.glob(os.path.join(lib_dir, "*.py"))):
-        files.append(path)
-
-    eval_root = os.path.join(_REPO_ROOT, "plugins", "superheroes", "eval")
-    for path in sorted(glob.glob(os.path.join(eval_root, "**", "*.py"), recursive=True)):
-        if _is_under_tests_or_fixtures(path):
+    seen = set()
+    for path in sorted(sg.watched_paths(_REPO_ROOT)):
+        real = os.path.realpath(path)
+        if real in seen or not os.path.isfile(real):
             continue
-        files.append(path)
-
-    eval_lib = os.path.join(_REPO_ROOT, "eval", "lib")
-    for path in sorted(glob.glob(os.path.join(eval_lib, "*.py"))):
-        files.append(path)
-
-    scripts = os.path.join(_REPO_ROOT, ".github", "scripts")
-    for path in sorted(glob.glob(os.path.join(scripts, "*.py"))):
-        files.append(path)
-
+        if _is_under_tests_or_fixtures(real):
+            continue
+        seen.add(real)
+        files.append(real)
     return files
 
 
@@ -316,6 +306,15 @@ def _analyze_scope(body, basename, func_name, target_func, enclosing_aliases=Non
                     bound[target.id] = stmt.lineno
                 else:
                     bound.pop(target.id, None)
+        elif (
+            isinstance(stmt, ast.AnnAssign)
+            and isinstance(stmt.target, ast.Name)
+            and stmt.value is not None
+        ):
+            if _is_target_call(stmt.value, target_func, aliases):
+                bound[stmt.target.id] = stmt.lineno
+            else:
+                bound.pop(stmt.target.id, None)
 
     for stmt in _linear_stmts(body):
         aliases |= _aliases_from_import(stmt, target_func)
@@ -513,6 +512,50 @@ def test_pattern_matcher_arms(src, expected):
 def test_pattern_matcher_ignores_clean_call():
     tree = ast.parse("def f():\n    return model_family(v, m)\n")
     assert _analyze_scope(tree.body[0].body, "synthetic.py", "f", "model_family") == []
+
+
+def test_pattern_matcher_annassign_then_guard():
+    src = (
+        "def f():\n"
+        "    fam: str = model_family(v, m)\n"
+        "    if not fam:\n"
+        "        return None\n"
+    )
+    tree = ast.parse(src)
+    vios = _analyze_scope(tree.body[0].body, "synthetic.py", "f", "model_family")
+    assert vios, vios
+    assert "P5" in {v["pattern"] for v in vios}, vios
+
+
+def test_model_family_census_scans_hooks_tree():
+    scanned = {os.path.realpath(p) for p in _scanned_py_files()}
+    hooks_dir = os.path.join(_REPO_ROOT, "plugins", "superheroes", "hooks")
+    missing = sorted(
+        os.path.join(hooks_dir, name)
+        for name in os.listdir(hooks_dir)
+        if name.endswith(".py")
+        and os.path.join(hooks_dir, name) not in scanned
+        and os.path.realpath(os.path.join(hooks_dir, name)) not in scanned
+    )
+    assert not missing, "hooks modules absent from census scan set: %s" % missing
+
+
+def test_hooks_consumer_assign_then_guard_detected():
+    """Red-axis: assign-then-guard under a hooks module basename is a violation when scanned."""
+    src = (
+        "def _strike(v, m):\n"
+        "    fam = model_family(v, m)\n"
+        "    if not fam:\n"
+        "        return None\n"
+    )
+    tree = ast.parse(src)
+    visitor = _ModuleCensusVisitor("session_start.py", "model_family", tree)
+    visitor.visit(tree)
+    assert visitor.call_sites, "model_family call in hooks-shaped consumer must be enumerated"
+    assert visitor.violations, (
+        "truthiness guard on model_family binding in hooks-shaped consumer must be a violation"
+    )
+    assert "P5" in {v["pattern"] for v in visitor.violations}, visitor.violations
 
 
 def test_model_family_aliased_import_detected():
