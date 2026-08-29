@@ -61,6 +61,11 @@ _CONSUMER_ROSTER = [
     ("skills/workhorse/SKILL.md", "## 6. Decompose into work orders", 1),
     ("skills/workhorse/SKILL.md", "## 8. Verify — re-run every receipt yourself", 1),
     ("skills/workhorse/SKILL.md", "## When you're tempted", 1),
+    (
+        "skills/workhorse/reference/dispatch-mechanics.md",
+        "## Engine forfeits and order shape",
+        1,
+    ),
     ("agents/implementer.md", "## The rules", 1),
     ("agents/implementer.md", "## Validating your work order", 1),
     ("agents/test-reviewer.md", "## Named test-smell taxonomy", 1),
