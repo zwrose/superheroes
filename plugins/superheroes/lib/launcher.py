@@ -221,20 +221,36 @@ def _expand_home(path, env):
 def spawn_config_dir(env=None, cwd=None):
     """The absolute config root the spawned child will write its session transcript under.
 
-    ``_scrub_env`` does not strip ``CLAUDE_CONFIG_DIR``, so the child inherits exactly what
-    is read here — that inheritance is what makes this value a true record of where the
-    lane's transcript lands rather than a second, independently-derived guess. Recording it
-    on the lane's ``reserved`` record is what lets a watcher running under a DIFFERENT
-    Claude instance still resolve this lane's transcript (#1036).
+    ``_spawn_attempt`` INJECTS this value into the child's environment under
+    ``CLAUDE_CONFIG_DIR`` (#1246), and the ``reserved`` record carries the same call's
+    answer — so the record is not a second, independently-derived guess at where the
+    transcript lands, it is the root the child was actually spawned with. Recording it on
+    the lane's ``reserved`` record is what lets a watcher running under a DIFFERENT Claude
+    instance still resolve this lane's transcript (#1036). Injection rather than plain
+    inheritance is what closes the auth-death class: a spawned ``claude -p`` child whose
+    ``CLAUDE_CONFIG_DIR`` is unset dies "OAuth session expired", so a caller that forgot the
+    export used to kill an unattended lane with a misleading auth error.
+
+    An explicit caller-provided ``CLAUDE_CONFIG_DIR`` wins: the override branch below is
+    read first, so the injection can never silently overwrite a deliberate export — it only
+    supplies the default the caller did not set. The one normalization it does apply to an
+    override is the ``.strip()`` below, which the ``reserved`` record has carried since
+    #1036. Handing the child the RAW padded value instead would recreate exactly the
+    record/child divergence #1036 exists to prevent — the watcher would search the stripped
+    root while the child wrote to the padded one — and a padded export is in practice a
+    quoting slip, where stripping is also what the caller meant.
 
     Every branch resolves through the SUPPLIED env and the child's own ``cwd`` — never the
     launcher's ambient environment or working directory — because a root derived from the
     launcher's context is a root the child does not write to. That includes a RELATIVE
-    override, which the child resolves against its cwd (the build worktree).
+    override, which resolves against the child's cwd (the build worktree); the child is
+    handed that resolved ABSOLUTE form, which is the same directory it would have reached
+    on its own and is byte-identical to the recorded value.
 
-    Returns None when no absolute root can be derived; the caller then omits the field, and
-    a consumer reading a record without it falls back to its own env root (pre-#1036
-    behaviour). Recording a non-absolute value instead would refuse the whole record.
+    Returns None when no absolute root can be derived; the caller then omits the field and
+    injects nothing (the child keeps whatever it inherited), and a consumer reading a record
+    without it falls back to its own env root (pre-#1036 behaviour). Recording a
+    non-absolute value instead would refuse the whole record.
     """
     base = dict(env if env is not None else os.environ)
     configured = base.get(CONFIG_DIR_ENV)
@@ -1075,6 +1091,21 @@ def _spawn_attempt(
     resolved = ll.resolve_root(repo_root, env=env)
     if resolved["ok"]:
         child_env[hb.HEARTBEAT_ROOT_ENV] = resolved["root"]
+    # The config root is PINNED here rather than left to inheritance (#1246). A spawned
+    # `claude -p` child with no CLAUDE_CONFIG_DIR dies "OAuth session expired" — an error
+    # that reads as an auth failure and is really an unset variable — so a caller who forgot
+    # the export killed an unattended lane. Pinning it at the one place a child is born is
+    # what makes the export impossible to forget, exactly as the effort pin below does.
+    # This is NOT an override: `spawn_config_dir` reads a caller-provided value first, so a
+    # deliberate export wins and only the default is supplied. It is also the SAME call the
+    # `reserved` record makes, on the same `env` and the same `cwd` (the record passes the
+    # worktree path this spawn runs in) — so the recorded configDir and the injected value
+    # agree by construction, not by two sites happening to derive the same answer. None means
+    # no absolute root could be derived: inject nothing and leave the inherited value alone,
+    # matching the record, which omits the field on exactly that branch.
+    config_dir = spawn_config_dir(env=env, cwd=cwd)
+    if config_dir is not None:
+        child_env[CONFIG_DIR_ENV] = config_dir
     child_env["BASH_MAX_TIMEOUT_MS"] = str(bash_max_timeout_ms)
     # Assignment, not defaulting: the launching session's ambient effort variables are already
     # in `child_env` via `_scrub_env`, so a pinned effort must overwrite the documented input or
