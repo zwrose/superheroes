@@ -1547,6 +1547,155 @@ def test_relative_config_dir_override_records_the_childs_effective_root(
         pass
 
 
+def _config_dir_reporting_spawn(report_path):
+    """A real spawn that makes the CHILD report the CLAUDE_CONFIG_DIR it actually sees.
+
+    The receipt is the child's own ``os.environ`` read, written from inside the spawned
+    process. Asserting against the env dict the launcher assembled proves only what we
+    handed ``Popen``; it cannot prove the pin survived the spawn into a child. `#1246`'s
+    DoD asks for the real spawn path, so these tests read the value back out of a process
+    that genuinely started.
+    """
+    script = (
+        "import os, time\n"
+        "open(%r, 'w').write(os.environ.get('CLAUDE_CONFIG_DIR', '<unset>'))\n"
+        "time.sleep(60)\n" % report_path
+    )
+
+    def spawn(argv, cwd, out_fh, err_fh, child_env):
+        return subprocess.Popen(
+            [sys.executable, "-c", script],
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=out_fh,
+            stderr=err_fh,
+            start_new_session=True,
+            close_fds=True,
+            env=child_env,
+        )
+
+    return spawn
+
+
+def _await_child_report(report_path, timeout=10.0):
+    """Read the child's report, waiting for the process it came from to write it."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if os.path.exists(report_path):
+            reported = open(report_path).read()
+            if reported:
+                return reported
+        time.sleep(0.05)
+    raise AssertionError("child never reported CLAUDE_CONFIG_DIR at %s" % report_path)
+
+
+def test_spawned_child_receives_the_config_dir_default_in_its_environment(
+    tmp_path, monkeypatch,
+):
+  # axis: #1246 — with no CLAUDE_CONFIG_DIR to inherit, the child STILL gets one. This is
+  # the auth-death class: an unpinned child dies "OAuth session expired", an error that
+  # reads as broken auth and is really an unset variable. Read back from the child's own
+  # environment through the real spawn path, and checked against the recorded configDir.
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    report = str(tmp_path / "child-config-dir.txt")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_config_dir_reporting_spawn(report),
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True, result
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    reported = _await_child_report(report)
+    assert reported == os.path.join(str(home), ".claude")
+    # The record is not a second guess at the child's root — it is that root.
+    assert reported == reserved["configDir"]
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_spawned_child_config_dir_pin_never_overrides_a_deliberate_export(
+    tmp_path, monkeypatch,
+):
+  # axis: #1246 — a caller who DID export CLAUDE_CONFIG_DIR chose that instance on purpose
+  # (a second Claude install, a sandboxed profile). The pin supplies a default; silently
+  # overriding a deliberate export would send the lane's transcript somewhere the caller
+  # is not watching.
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    other_instance = str(tmp_path / "claude-two")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", other_instance)
+    report = str(tmp_path / "child-config-dir.txt")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_config_dir_reporting_spawn(report),
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True, result
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    reported = _await_child_report(report)
+    assert reported == other_instance
+    assert reported != os.path.join(str(tmp_path / "home"), ".claude")
+    assert reported == reserved["configDir"]
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_spawned_child_config_dir_pin_resolves_a_relative_export(tmp_path, monkeypatch):
+  # axis: #1246 x #1036 — a relative export is handed to the child already resolved against
+  # the build worktree it runs in. Same directory the child would have reached on its own,
+  # and byte-identical to the recorded value, so the watcher and the child agree.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relative/config")
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    report = str(tmp_path / "child-config-dir.txt")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_config_dir_reporting_spawn(report),
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True, result
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    reported = _await_child_report(report)
+    assert reported == os.path.join(reserved["worktree"], "relative", "config")
+    assert os.path.isabs(reported)
+    assert reported == reserved["configDir"]
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
 def test_spawn_config_dir_expands_home_in_the_override(monkeypatch, tmp_path):
   # axis: `~/.claude-two` is a real-world override shape and must record absolute
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
