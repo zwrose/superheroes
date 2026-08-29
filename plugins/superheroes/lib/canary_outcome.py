@@ -104,10 +104,14 @@ def normalize(probe):
             dispatch_reason_outcome=None, engaged=engaged, detected_plant=detected_plant))
         return derived, "canary-outcome-unknown:%r" % (outcome,)
 
-    if outcome == OUTCOME_OK and (engaged is not True or detected_plant is not True):
-        # axis: a caller cannot assert a pass its fields refuse
-        derived = classify(
-            dispatch_reason_outcome=None, engaged=engaged, detected_plant=detected_plant)
+    dispatch_reason = outcome if outcome in _DISPATCH_FAILURE_OUTCOMES else None
+    derived = classify(
+        dispatch_reason_outcome=dispatch_reason,
+        engaged=engaged,
+        detected_plant=detected_plant,
+    )
+    if outcome != derived:
+        # axis: a caller cannot assert an outcome its fields refuse
         return derived, "canary-outcome-contradicts-fields"
 
     return outcome, None

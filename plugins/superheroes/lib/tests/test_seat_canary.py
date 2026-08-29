@@ -805,6 +805,16 @@ def test_normalize_outcome_ok_contradicts_fields():
     assert CO.is_pass(outcome) is False
 
 
+def test_normalize_plant_undetected_contradicts_engaged():
+    outcome, fault = CO.normalize({
+        "outcome": CO.OUTCOME_PLANT_UNDETECTED,
+        "engaged": False,
+        "detectedPlant": False,
+    })
+    assert outcome == CO.OUTCOME_NOT_ENGAGED
+    assert fault == "canary-outcome-contradicts-fields"
+
+
 def test_normalize_valid_probe_passes_through():
     outcome, fault = CO.normalize({
         "outcome": CO.OUTCOME_NOT_ENGAGED,

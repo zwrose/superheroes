@@ -1,7 +1,12 @@
-"""Static AST census: canary outcome tokens live only in canary_outcome.py (#1247).
+"""Static AST census: canary-native non-pass outcome literals stay in canary_outcome.py (#1247).
 
-A banned member literal is a violation in any syntactic position — dict keys and
-``.get()`` arguments are not exempt.
+The live sweep bans only the canary-native non-pass members (`not-engaged`,
+`plant-undetected`). The pass token `ok` is excluded from the live sweep because it is
+ubiquitous elsewhere (e.g. dispatch results `{"ok": true}`); it is proven instead by
+``test_matcher_catches_ok_literal_on_synthetic_source``, which runs the matcher with
+``member_set=ALL_OUTCOMES``. Re-exported dispatch-failure members are homed in
+``dispatch_outcome.py``. A banned member literal is a violation in any syntactic position
+— dict keys and ``.get()`` arguments are not exempt.
 """
 import ast
 import glob
@@ -67,8 +72,9 @@ def census_violations_from_source(source, source_path, *, member_set=None):
         if node.value not in member_set:
             continue
         violations.append(
-            "%s: literal '%s' (clause: canary outcome tokens live only in "
-            "canary_outcome.py regardless of syntactic position)"
+            "%s: literal '%s' (clause: canary-native non-pass outcome literals live only "
+            "in canary_outcome.py regardless of syntactic position; the pass token is "
+            "excluded from the live sweep — see module docstring)"
             % (_lineno(source_path, node), node.value)
         )
     return violations
@@ -138,20 +144,32 @@ def _literal_census_modules():
     return modules
 
 
-def _outcome_members_from_ast():
-    with open(_CANARY_OUTCOME_PATH, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read(), filename=_CANARY_OUTCOME_PATH)
+def _outcome_member_from_assign(node, members):
+    if isinstance(node, ast.Assign):
+        targets = node.targets
+        value = node.value
+    elif isinstance(node, ast.AnnAssign):
+        if not isinstance(node.target, ast.Name):
+            return
+        targets = [node.target]
+        value = node.value
+    else:
+        return
+    for target in targets:
+        if not isinstance(target, ast.Name):
+            continue
+        if not target.id.startswith("OUTCOME_"):
+            continue
+        if value is not None and isinstance(value, ast.Constant) and isinstance(value.value, str):
+            members.add(value.value)
+
+
+def _outcome_members_from_ast(source_path=_CANARY_OUTCOME_PATH):
+    with open(source_path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=source_path)
     members = set()
     for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        for target in node.targets:
-            if not isinstance(target, ast.Name):
-                continue
-            if not target.id.startswith("OUTCOME_"):
-                continue
-            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                members.add(node.value.value)
+        _outcome_member_from_assign(node, members)
     dispatch_members = set(dispatch_outcome.NOT_RUN_REASONS)
     return members | dispatch_members
 
@@ -201,6 +219,28 @@ def _canary_liveness_for_probe(probe):
         dims, status, seats, seat_map, {}, probe)
 
 
+def test_outcome_members_from_ast_includes_annotated_constant(tmp_path):
+    """axis: annotated OUTCOME_* declarations are included in the derived member set."""
+    path = tmp_path / "fake_canary_outcome_typed.py"
+    path.write_text('OUTCOME_TYPED: str = "typed"\n', encoding="utf-8")
+    derived = _outcome_members_from_ast(source_path=str(path))
+    assert "typed" in derived
+
+
+def test_contradictory_plant_undetected_probe_folds_dead():
+    """axis: plant-undetected with engaged not true normalizes to not-engaged and folds dead."""
+    probe = {
+        "engine": "codex",
+        "outcome": canary_outcome.OUTCOME_PLANT_UNDETECTED,
+        "engaged": False,
+        "detectedPlant": False,
+        "evidence": {},
+        "detail": "contradictory probe",
+    }
+    live = _canary_liveness_for_probe(probe)
+    assert live["byVendor"]["codex"]["status"] == "dead"
+
+
 def test_leg1_member_set_derived():
     """axis: a member absent from ALL_OUTCOMES is caught."""
     derived = _outcome_members_from_ast()
@@ -230,7 +270,8 @@ def test_leg3_literal_ban_clean():
     for path in _literal_census_modules():
         violations.extend(census_violations(path))
     assert violations == [], (
-        "INVARIANT: canary outcome tokens live only in canary_outcome.py; violations:\n  "
+        "INVARIANT: canary-native non-pass outcome literals live only in canary_outcome.py; "
+        "violations:\n  "
         + "\n  ".join(violations)
     )
 
