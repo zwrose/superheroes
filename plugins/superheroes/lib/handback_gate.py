@@ -63,6 +63,7 @@ HANDBACK_VERDICT_ALLOWLIST = ("converged", RD.ATTESTED_VERDICT)
 
 BUILD_LANE_SCHEMA = "build-lane/1"
 REVIEW_SESSION_SCHEMA = "review-session/1"
+_BRANCH_MISMATCH_REASON = "branch-mismatch"
 
 _SIDECAR_DIR = RD.SIDECAR_DIRNAME
 _SIDECAR_FILE = RD.SIDECAR_FILE
@@ -674,12 +675,16 @@ def _marker_repo_matches(marker_root, repo_root):
     return True, None
 
 
+def _marker_branch_mismatch_detail(marker_branch, current):
+    return "branch %r differs from worktree branch %r" % (marker_branch, current)
+
+
 def _marker_branch_matches(marker_branch, repo_root):
     if not isinstance(marker_branch, str) or not marker_branch.strip():
         return False, "branch is missing or empty"
     current = store_core.run_git(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
     if current and current != marker_branch:
-        return False, "branch %r differs from worktree branch %r" % (marker_branch, current)
+        return False, _BRANCH_MISMATCH_REASON
     return True, None
 
 
@@ -711,17 +716,6 @@ def _validate_build_lane(obj, repo_root):
     return True, None
 
 
-def _review_session_is_branch_stale(obj, repo_root):
-    """True when the marker's branch disagrees with the worktree (staleness, not invalidity)."""
-    if not isinstance(obj, dict):
-        return False
-    branch = obj.get("branch")
-    if not isinstance(branch, str) or not branch.strip():
-        return False
-    ok, _ = _marker_branch_matches(branch, repo_root)
-    return ok is False
-
-
 def _validate_review_session(obj, repo_root):
     if obj.get("schema") != REVIEW_SESSION_SCHEMA:
         return False, "schema must be review-session/1"
@@ -731,11 +725,11 @@ def _validate_review_session(obj, repo_root):
     ok, why = _marker_repo_matches(obj["repoRoot"], repo_root)
     if not ok:
         return False, why
+    if not os.path.isdir(obj["sessionDir"]):
+        return False, "sessionDir no longer exists"
     ok, why = _marker_branch_matches(obj["branch"], repo_root)
     if not ok:
         return False, why
-    if not os.path.isdir(obj["sessionDir"]):
-        return False, "sessionDir no longer exists"
     return True, None
 
 
@@ -778,12 +772,16 @@ def marker_state(gitdir, repo_root):
         if ok is True:
             markers.append(path)
         elif ok is False:
-            if name == REVIEW_SESSION_FILE and _review_session_is_branch_stale(obj, repo_root):
+            if name == REVIEW_SESSION_FILE and reason == _BRANCH_MISMATCH_REASON:
                 stale.append((path, reason))
             elif name == REVIEW_SESSION_FILE:
                 review_session_invalid_in_scope = True
             else:
-                stale.append((path, reason))
+                stale_reason = reason
+                if reason == _BRANCH_MISMATCH_REASON:
+                    current = store_core.run_git(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
+                    stale_reason = _marker_branch_mismatch_detail(obj["branch"], current)
+                stale.append((path, stale_reason))
         # ok is None → non-full build lane or other out-of-scope marker; ignore silently
     return {
         "inScope": bool(markers) or review_session_invalid_in_scope,

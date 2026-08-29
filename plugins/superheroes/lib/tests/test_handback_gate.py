@@ -796,6 +796,7 @@ def test_review_session_gone_stale(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     _commit_file(repo, "f.txt", "x\n")
     session = str(tmp_path / "session")
+    os.makedirs(session)
     _write_review_session(repo, sessionDir=session, branch="other-branch")
     state = hg.marker_state(_gitdir(repo), repo)
     assert state["inScope"] is False
@@ -810,6 +811,74 @@ def test_review_session_only_invalid_marker_in_scope(tmp_path):
     assert state["inScope"] is True
     assert state["markers"] == []
     assert len(state["stale"]) == 0
+
+
+def test_review_session_only_invalid_schema_wrong_branch_in_scope(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    session = str(tmp_path / "session")
+    os.makedirs(session)
+    _write_review_session(
+        repo, schema="wrong-schema", sessionDir=session, branch="other-branch",
+    )
+    state = hg.marker_state(_gitdir(repo), repo)
+    assert state["inScope"] is True
+    assert state["markers"] == []
+    assert len(state["stale"]) == 0
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["decision"] == "refuse"
+    assert result["reason"] == "handback-driver-abandoned"
+
+
+def test_review_session_only_missing_field_wrong_branch_in_scope(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    session = str(tmp_path / "session")
+    os.makedirs(session)
+    d = _superheroes_dir(repo)
+    obj = {
+        "schema": hg.REVIEW_SESSION_SCHEMA,
+        "sessionDir": session,
+        "repoRoot": os.path.realpath(repo),
+        "branch": "other-branch",
+    }
+    with open(os.path.join(d, hg.REVIEW_SESSION_FILE), "w", encoding="utf-8") as fh:
+        json.dump(obj, fh)
+    state = hg.marker_state(_gitdir(repo), repo)
+    assert state["inScope"] is True
+    assert state["markers"] == []
+    assert len(state["stale"]) == 0
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["decision"] == "refuse"
+    assert result["reason"] == "handback-driver-abandoned"
+
+
+def test_review_session_only_missing_session_dir_wrong_branch_in_scope(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    _write_review_session(repo, sessionDir="/nonexistent/session", branch="other-branch")
+    state = hg.marker_state(_gitdir(repo), repo)
+    assert state["inScope"] is True
+    assert state["markers"] == []
+    assert len(state["stale"]) == 0
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["decision"] == "refuse"
+    assert result["reason"] == "handback-driver-abandoned"
+
+
+def test_review_session_only_branch_mismatch_stale_silent_allow(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    session = str(tmp_path / "session")
+    os.makedirs(session)
+    _write_review_session(repo, sessionDir=session, branch="other-branch")
+    state = hg.marker_state(_gitdir(repo), repo)
+    assert state["inScope"] is False
+    assert state["markers"] == []
+    assert len(state["stale"]) == 1
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["decision"] == "allow"
+    assert result["reason"] is None
 
 
 def test_driver_abandoned_review_session_only_malformed_json(tmp_path):
