@@ -20,6 +20,16 @@ import re
 
 import pytest
 
+from clause_guard import (
+    add_one_occurrence_in_section,
+    census_excluded,
+    check_clause,
+    drop_one_occurrence_in_section,
+    plant_clause_elsewhere,
+    section_span,
+    without_clause_in_section,
+)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.abspath(os.path.join(HERE, "..", ".."))
 REPO_ROOT = os.path.abspath(os.path.join(PLUGIN, "..", ".."))
@@ -39,12 +49,7 @@ _CENSUS_EXCLUDED_FILES = ("CHANGELOG.md",)
 
 def _census_excluded(rel):
     """The walk's one chokepoint: plugin-relative paths the pointer census must not read."""
-    norm = os.path.normpath(rel)
-    if norm in {os.path.normpath(name) for name in _CENSUS_EXCLUDED_FILES}:
-        return True
-    return any(
-        norm.startswith(os.path.normpath(d) + os.sep) for d in _CENSUS_EXCLUDED_DIRS
-    )
+    return census_excluded(rel, _CENSUS_EXCLUDED_DIRS, _CENSUS_EXCLUDED_FILES)
 
 
 # Copy-holder disposition (§11.2 — extend roster when adding a pointer; bump expected_count when
@@ -83,81 +88,153 @@ _HEADINGS = [
 
 _CLAUSE_ROWS = [
     {
-        "clause": (
+        "home_clause": (
             "the guarded element, the neutralization to apply, and the detector expected to go red"
         ),
         "home_section": "## Who owes what",
+        "home_count": 1,
         "copy_holder": "agents/implementer.md",
         "copy_holder_section": "## Validating your work order",
+        "holder_count": 1,
     },
     {
-        "clause": "Unprovable as placed",
+        "home_clause": "Unprovable as placed",
         "home_section": "## When the proof cannot be produced",
+        "home_count": 1,
         "copy_holder": "agents/implementer.md",
         "copy_holder_section": "## The rules",
+        "holder_count": 1,
     },
     {
-        "clause": "Unreachable through this entry point",
+        "home_clause": "Unreachable through this entry point",
         "home_section": "## When the proof cannot be produced",
+        "home_count": 1,
         "copy_holder": "agents/implementer.md",
         "copy_holder_section": "## The rules",
+        "holder_count": 1,
     },
     {
-        "clause": "Unrunnable here",
+        "home_clause": "Unrunnable here",
         "home_section": "## When the proof cannot be produced",
+        "home_count": 1,
         "copy_holder": "agents/implementer.md",
         "copy_holder_section": "## The rules",
+        "holder_count": 1,
     },
     {
-        "clause": "32 KiB",
+        "home_clause": "32 KiB",
         "home_section": "## The record",
+        "home_count": 1,
         "copy_holder": "agents/implementer.md",
         "copy_holder_section": "## The rules",
+        "holder_count": 1,
     },
     {
-        "clause": "128 KiB",
+        "home_clause": "128 KiB",
         "home_section": "## The record",
+        "home_count": 1,
         "copy_holder": "agents/implementer.md",
         "copy_holder_section": "## The rules",
+        "holder_count": 1,
     },
     {
-        "clause": "names the bite-proof it expects",
+        "home_clause": "names the bite-proof it expects",
         "home_section": "## Who owes what",
+        "home_count": 1,
         "copy_holder": "skills/workhorse/SKILL.md",
         "copy_holder_section": "## 6. Decompose into work orders",
+        "holder_count": 1,
     },
     {
-        "clause": "per guarded element",
+        "home_clause": "per guarded element",
         "home_section": "## The record",
+        "home_count": 2,
         "copy_holder": "skills/workhorse/SKILL.md",
         "copy_holder_section": "## 8. Verify — re-run every receipt yourself",
+        "holder_count": 1,
     },
     {
-        "clause": "A green run is equally consistent with",
+        "home_clause": "A green run is equally consistent with",
         "home_section": "## The obligation",
+        "home_count": 1,
         "copy_holder": "skills/workhorse/SKILL.md",
         "copy_holder_section": "## When you're tempted",
+        "holder_count": 1,
     },
     {
-        "clause": "with the detector unedited",
+        "home_clause": "with the detector unedited",
         "home_section": "## The record",
+        "home_count": 1,
         "copy_holder": "skills/workhorse/SKILL.md",
         "copy_holder_section": "## When you're tempted",
+        "holder_count": 1,
     },
     {
-        "clause": "through the path the test uses",
+        "home_clause": "through the path the test uses",
         "home_section": "## When the proof cannot be produced",
+        "home_count": 1,
         "copy_holder": "agents/test-reviewer.md",
         "copy_holder_section": "## What to Flag",
+        "holder_count": 1,
     },
     {
-        "clause": "owed disclosure",
+        "home_clause": "owed disclosure",
         "home_section": "## Who owes what",
+        "home_count": 1,
         "copy_holder": "agents/test-reviewer.md",
         "copy_holder_section": "## Named test-smell taxonomy",
+        "holder_count": 1,
+    },
+    {
+        "id": "FA-1",
+        "home_clause": "**The guarded-element set is declared up front.**",
+        "home_section": "## The record",
+        "home_count": 1,
+        "copy_holder": "agents/implementer.md",
+        "copy_holder_section": "## Validating your work order",
+        "holder_clause": (
+            "**The guarded-element set is declared up front** — what an order must declare, "
+            "what to do when it declares nothing, and how the record's ceilings apply over that "
+            "enumeration are stated once in the bite-proof reference named above, § *The record*; "
+            "read it there rather than here."
+        ),
+        "holder_count": 1,
+    },
+    {
+        "id": "FA-2",
+        "home_clause": (
+            "A proof that reaches the constant through the symbol that defines it stays green under "
+            "*any* value, so it proves the plumbing and nothing about the contract (PR #1159, vet "
+            "181; same shape at PR #1156, vet 178)."
+        ),
+        "home_section": "## The obligation",
+        "home_count": 1,
+        "copy_holder": "agents/test-reviewer.md",
+        "copy_holder_section": "## What to Flag",
+        "holder_clause": (
+            "**literal-pin** — a diff-added test that reaches an external-contract constant "
+            "through the symbol that defines it rather than pinning the literal."
+        ),
+        "holder_count": 1,
+    },
+    {
+        "id": "FA-3",
+        "home_only": True,
+        "home_clause": (
+            "A neutralization that applies more than one replacement must assert that each "
+            "replacement landed, never that the aggregate diff is merely non-empty. When one "
+            "anchor drifts, a single replacement can silently no-op while the aggregate diff still "
+            "looks applied and the detector goes red for the other replacement's sake — the proof "
+            "is vacuous. An aggregate-only assertion is the rejected shape."
+        ),
+        "home_section": "## The record",
+        "home_count": 1,
     },
 ]
 
+_ROW_IDS = [row.get("id", row["home_clause"][:40]) for row in _CLAUSE_ROWS]
+_COPY_HOLDER_ROWS = [row for row in _CLAUSE_ROWS if not row.get("home_only")]
+_PARTIAL_DRIFT_ROWS = [row for row in _CLAUSE_ROWS if row["home_count"] > 1]
 
 
 def _read(rel):
@@ -165,49 +242,36 @@ def _read(rel):
         return fh.read()
 
 
-def _normalized(text):
-    return re.sub(r"\s+", " ", text.replace("*", "")).strip()
+def _holder_clause(row):
+    return row.get("holder_clause", row["home_clause"])
 
 
-def _heading_level(line):
-    stripped = line.strip()
-    if not stripped.startswith("#"):
-        return None
-    match = re.match(r"^(#+)\s", stripped)
-    return len(match.group(1)) if match else None
-
-
-def _section_span(lines, heading, label):
-    indices = [i for i, line in enumerate(lines) if line.strip() == heading]
-    if len(indices) != 1:
-        raise RuntimeError(f"{label}: expected exactly one {heading!r} line, found {len(indices)}")
-    start = indices[0]
-    start_level = _heading_level(lines[start])
-    end = len(lines)
-    for i in range(start + 1, len(lines)):
-        level = _heading_level(lines[i])
-        if level is not None and level <= start_level:
-            end = i
-            break
-    return start, end
-
-
-def _file_section(rel, heading, read_text=None):
-    if read_text is None:
-        read_text = _read
-    lines = read_text(rel).splitlines()
-    start, end = _section_span(lines, heading, rel)
-    return _normalized("\n".join(lines[start:end]))
+def _plant_target_section(rel, source_section):
+    """Pick a level-2 section in ``rel`` other than ``source_section`` for plant mutations."""
+    swaps = {
+        ("agents/implementer.md", "## Validating your work order"): "## The rules",
+        ("agents/implementer.md", "## The rules"): "## Validating your work order",
+        (
+            "skills/workhorse/SKILL.md",
+            "## 6. Decompose into work orders",
+        ): "## When you're tempted",
+        (
+            "skills/workhorse/SKILL.md",
+            "## 8. Verify — re-run every receipt yourself",
+        ): "## 6. Decompose into work orders",
+        ("skills/workhorse/SKILL.md", "## When you're tempted"): (
+            "## 8. Verify — re-run every receipt yourself"
+        ),
+        ("agents/test-reviewer.md", "## What to Flag"): "## Named test-smell taxonomy",
+        ("agents/test-reviewer.md", "## Named test-smell taxonomy"): "## What to Flag",
+    }
+    return swaps[(rel, source_section)]
 
 
 def _pointer_count_in_section(text, rel, section_heading):
     lines = text.splitlines()
-    start, end = _section_span(lines, section_heading, rel)
+    start, end = section_span(lines, section_heading, rel)
     return "\n".join(lines[start:end]).count(_POINTER)
-
-
-def _clause_regex(clause):
-    return re.compile(r"\s+".join(re.escape(part) for part in clause.split()))
 
 
 def _check_consumer_pointer_in_section(text, rel, section_heading, expected_count):
@@ -229,24 +293,26 @@ def _check_home_heading(text, heading):
 def _check_clause_sync(row, read_text=None):
     if read_text is None:
         read_text = _read
-    clause = row["clause"]
-    home_section = row["home_section"]
-    copy_holder = row["copy_holder"]
-    copy_holder_section = row["copy_holder_section"]
-    if clause not in _file_section(_HOME, home_section, read_text):
-        raise AssertionError(
-            f"{_HOME} (section {home_section}): clause missing — re-sync: {clause!r}"
-        )
-    if clause not in _file_section(copy_holder, copy_holder_section, read_text):
-        raise AssertionError(
-            f"{copy_holder} (section {copy_holder_section}): clause missing — "
-            f"re-sync from {_HOME}: {clause!r}"
+    check_clause(
+        read_text(_HOME),
+        _HOME,
+        row["home_section"],
+        row["home_clause"],
+        row["home_count"],
+    )
+    if not row.get("home_only"):
+        check_clause(
+            read_text(row["copy_holder"]),
+            row["copy_holder"],
+            row["copy_holder_section"],
+            _holder_clause(row),
+            row["holder_count"],
         )
 
 
 def _text_without_one_pointer_in_section(text, rel, section_heading):
     lines = text.splitlines()
-    start, end = _section_span(lines, section_heading, rel)
+    start, end = section_span(lines, section_heading, rel)
     section_text = "\n".join(lines[start:end])
     count = section_text.count(_POINTER)
     assert count >= 1, (
@@ -274,32 +340,12 @@ def _text_without_heading(text, heading):
     return mutated
 
 
-def _remove_clause(text, clause, label):
-    pattern = _clause_regex(clause)
-    matches = list(pattern.finditer(text))
-    assert matches, f"mutation setup: clause {clause!r} not found in {label}"
-    mutated = pattern.sub("", text, count=len(matches))
-    assert not pattern.search(mutated), f"mutation setup: clause still in mutated {label}"
-    assert mutated != text
-    return mutated
-
-
-def _text_without_clause_in_section(text, rel, section_heading, clause):
-    lines = text.splitlines()
-    start, end = _section_span(lines, section_heading, rel)
-    section_text = "\n".join(lines[start:end])
-    new_section = _remove_clause(section_text, clause, f"{rel} section {section_heading!r}")
-    new_lines = lines[:start] + new_section.splitlines() + lines[end:]
-    return "\n".join(new_lines) + ("\n" if text.endswith("\n") else "")
-
-
-def _plant_clause_elsewhere_in_home(text, home_section, clause, plant_section):
-    without = _text_without_clause_in_section(text, _HOME, home_section, clause)
-    lines = without.splitlines()
-    start, end = _section_span(lines, plant_section, _HOME)
-    planted_line = f"{clause} — planted outside {home_section}."
-    new_lines = lines[: start + 1] + [planted_line] + lines[start + 1 :]
-    return "\n".join(new_lines) + ("\n" if text.endswith("\n") else "")
+def _heading_level(line):
+    stripped = line.strip()
+    if not stripped.startswith("#"):
+        return None
+    match = re.match(r"^(#+)\s", stripped)
+    return len(match.group(1)) if match else None
 
 
 def _sections_with_pointer(rel, text):
@@ -311,7 +357,7 @@ def _sections_with_pointer(rel, text):
         heading = line.strip()
         if _heading_level(line) != 2:
             continue
-        start, end = _section_span(lines, heading, rel)
+        start, end = section_span(lines, heading, rel)
         if _POINTER in "\n".join(lines[start:end]):
             found.add((rel, heading))
     return found
@@ -331,7 +377,7 @@ def _walk_plugin_pointer_sections(plugin_root):
             rel = os.path.relpath(os.path.join(root, name), plugin_root)
             if _census_excluded(rel):
                 continue
-            with open(os.path.join(plugin_root, rel), encoding="utf-8") as fh:
+            with open(os.path.join(root, name), encoding="utf-8") as fh:
                 found |= _sections_with_pointer(rel, fh.read())
     return found
 
@@ -433,7 +479,7 @@ def test_census_does_not_exclude_consumer_surfaces(rel):
     assert not _census_excluded(rel)
 
 
-# --- _section_span direct tests (synthetic in-memory documents) ---
+# --- section_span direct tests (synthetic in-memory documents) ---
 
 
 def test_section_span_includes_deeper_subheading():
@@ -444,7 +490,7 @@ def test_section_span_includes_deeper_subheading():
         "child body",
         "## Sibling",
     ]).splitlines()
-    start, end = _section_span(lines, "## Parent", "synthetic")
+    start, end = section_span(lines, "## Parent", "synthetic")
     assert lines[start] == "## Parent"
     body = "\n".join(lines[start:end])
     assert "### Child" in body
@@ -459,7 +505,7 @@ def test_section_span_ends_at_same_or_higher_level():
         "## Second",
         "second body",
     ]).splitlines()
-    start, end = _section_span(lines, "## First", "synthetic")
+    start, end = section_span(lines, "## First", "synthetic")
     assert lines[end] == "## Second"
     assert "first body" in "\n".join(lines[start:end])
     assert "second body" not in "\n".join(lines[start:end])
@@ -468,13 +514,13 @@ def test_section_span_ends_at_same_or_higher_level():
 def test_section_span_zero_headings_raises():
     lines = ["## Other", "text"]
     with pytest.raises(RuntimeError, match="expected exactly one '## Missing'"):
-        _section_span(lines, "## Missing", "synthetic")
+        section_span(lines, "## Missing", "synthetic")
 
 
 def test_section_span_duplicate_headings_raises():
     lines = "\n".join(["## Dup", "a", "## Dup", "b"]).splitlines()
     with pytest.raises(RuntimeError, match="expected exactly one '## Dup'"):
-        _section_span(lines, "## Dup", "synthetic")
+        section_span(lines, "## Dup", "synthetic")
 
 
 @pytest.mark.parametrize("rel,section,expected_count", _CONSUMER_ROSTER, ids=[f"{r}::{s}" for r, s, _ in _CONSUMER_ROSTER])
@@ -487,7 +533,7 @@ def test_home_has_heading(heading):
     _check_home_heading(_read(_HOME), heading)
 
 
-@pytest.mark.parametrize("row", _CLAUSE_ROWS, ids=[r["clause"] for r in _CLAUSE_ROWS])
+@pytest.mark.parametrize("row", _CLAUSE_ROWS, ids=_ROW_IDS)
 def test_clause_present_in_home_and_copy_holder(row):
     _check_clause_sync(row)
 
@@ -525,31 +571,35 @@ def test_negative_home_heading_missing(heading):
         _check_home_heading(mutated, heading)
 
 
-@pytest.mark.parametrize("row", _CLAUSE_ROWS, ids=[r["clause"] for r in _CLAUSE_ROWS])
+@pytest.mark.parametrize("row", _COPY_HOLDER_ROWS, ids=[row.get("id", row["home_clause"][:40]) for row in _COPY_HOLDER_ROWS])
 def test_negative_clause_missing_from_copy_holder(row):
-    lines = _read(row["copy_holder"]).splitlines()
-    start, end = _section_span(lines, row["copy_holder_section"], row["copy_holder"])
-    section_text = "\n".join(lines[start:end])
-    mutated_section = _remove_clause(section_text, row["clause"], row["copy_holder_section"])
-    new_lines = lines[:start] + mutated_section.splitlines() + lines[end:]
-    mutated = "\n".join(new_lines) + ("\n" if _read(row["copy_holder"]).endswith("\n") else "")
+    mutated = without_clause_in_section(
+        _read(row["copy_holder"]),
+        row["copy_holder"],
+        row["copy_holder_section"],
+        _holder_clause(row),
+    )
     with pytest.raises(AssertionError, match=re.escape(row["copy_holder_section"])):
         _check_clause_sync(row, lambda rel: mutated if rel == row["copy_holder"] else _read(rel))
 
 
-@pytest.mark.parametrize("row", _CLAUSE_ROWS, ids=[r["clause"] for r in _CLAUSE_ROWS])
+@pytest.mark.parametrize("row", _CLAUSE_ROWS, ids=_ROW_IDS)
 def test_negative_clause_missing_from_home_section(row):
-    mutated = _text_without_clause_in_section(
-        _read(_HOME), _HOME, row["home_section"], row["clause"],
+    mutated = without_clause_in_section(
+        _read(_HOME), _HOME, row["home_section"], row["home_clause"],
     )
     with pytest.raises(AssertionError, match=re.escape(row["home_section"])):
         _check_clause_sync(row, lambda rel: mutated if rel == _HOME else _read(rel))
 
 
-@pytest.mark.parametrize("row", _CLAUSE_ROWS, ids=[r["clause"] for r in _CLAUSE_ROWS])
+@pytest.mark.parametrize("row", _CLAUSE_ROWS, ids=_ROW_IDS)
 def test_negative_clause_planted_elsewhere_in_home(row):
-    mutated = _plant_clause_elsewhere_in_home(
-        _read(_HOME), row["home_section"], row["clause"], "## When the proof runs under a normalization",
+    mutated = plant_clause_elsewhere(
+        _read(_HOME),
+        _HOME,
+        row["home_section"],
+        "## When the proof runs under a normalization",
+        row["home_clause"],
     )
     with pytest.raises(AssertionError, match=re.escape(row["home_section"])):
         _check_clause_sync(row, lambda rel: mutated if rel == _HOME else _read(rel))
@@ -579,17 +629,33 @@ def test_negative_consumer_pointer_over_count_in_section():
         _check_consumer_pointer_in_section(synthetic, "synthetic.md", "## Section A", 1)
 
 
-@pytest.mark.parametrize("row", _CLAUSE_ROWS, ids=[r["clause"] for r in _CLAUSE_ROWS])
+@pytest.mark.parametrize("row", _COPY_HOLDER_ROWS, ids=[row.get("id", row["home_clause"][:40]) for row in _COPY_HOLDER_ROWS])
 def test_negative_clause_planted_elsewhere_in_copy_holder(row):
-    plant_section = (
-        "## The rules" if row["copy_holder_section"] != "## The rules" else "## Validating your work order"
-    )
-    synthetic_text = "\n".join([
+    target = _plant_target_section(row["copy_holder"], row["copy_holder_section"])
+    mutated = plant_clause_elsewhere(
+        _read(row["copy_holder"]),
+        row["copy_holder"],
         row["copy_holder_section"],
-        "Section body without the clause.",
-        plant_section,
-        f"{row['clause']} — planted outside {row['copy_holder_section']}.",
-    ])
-    read_text = lambda rel: synthetic_text if rel == row["copy_holder"] else _read(rel)
+        target,
+        _holder_clause(row),
+    )
     with pytest.raises(AssertionError, match=re.escape(row["copy_holder_section"])):
-        _check_clause_sync(row, read_text)
+        _check_clause_sync(row, lambda rel: mutated if rel == row["copy_holder"] else _read(rel))
+
+
+@pytest.mark.parametrize("row", _CLAUSE_ROWS, ids=_ROW_IDS)
+def test_negative_clause_over_count_in_home(row):
+    mutated = add_one_occurrence_in_section(
+        _read(_HOME), _HOME, row["home_section"], row["home_clause"],
+    )
+    with pytest.raises(AssertionError, match=re.escape(row["home_section"])):
+        _check_clause_sync(row, lambda rel: mutated if rel == _HOME else _read(rel))
+
+
+@pytest.mark.parametrize("row", _PARTIAL_DRIFT_ROWS, ids=[row["home_clause"] for row in _PARTIAL_DRIFT_ROWS])
+def test_negative_clause_partial_drift_in_home(row):
+    mutated = drop_one_occurrence_in_section(
+        _read(_HOME), _HOME, row["home_section"], row["home_clause"],
+    )
+    with pytest.raises(AssertionError, match="expected count 2"):
+        _check_clause_sync(row, lambda rel: mutated if rel == _HOME else _read(rel))
