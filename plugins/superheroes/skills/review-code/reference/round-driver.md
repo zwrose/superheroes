@@ -180,9 +180,12 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" record-result \
   --session-dir "$SESSION_DIR" --seat "<seat>" \
   --round <round from next> --phase "<phase from next>"  # or: record-result --sweep with same
 # … record-missing for any slot that forfeit/timeout — echo the same --round and --phase …
+# … write $SESSION_DIR/round-<N>/landing/<phase>/_dispatch.a<K>.json (seat phases only — run-verify emits none); shape: Dispatch manifest row
 python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
   --session-dir "$SESSION_DIR"
 ```
+
+**Dispatch manifest before `advance`.** On **seat** phases, write the per-roster dispatch manifest after dispatching and before `advance` — omitting it discloses `dispatchManifestUnavailable` and a clearing audit ruling fails closed to `not-discharged` + `unauthenticated` (see the **Dispatch manifest** row in the artifact table below). **Orchestrator-fulfilled phases** (`run-verify`) emit no manifest.
 
 No `submit` on this path — `advance` echoes `expectedStateHash` itself; do not pass
 `--state-hash`. **Orchestrator-fulfilled phases** (`run-verify` — see
@@ -741,6 +744,12 @@ receipt round `"0"`.
 
 `validate_receipt(receipt)` returns `(ok, reason)` — a missing `scriptRan.byPhase` or non-list
 `rounds`/`findings`/`skippedBlockers` rejects the receipt.
+
+**This summary is deliberately non-exhaustive, and it is not pinned.** The authoritative field set
+and the complete refusal enumeration live in `lib/round_driver.py` — the `validate_receipt`
+implementation and the round-entry constants it reads (`ROUND_ENTRY_KEY_FORMS`,
+`RESUMABLE_DISCLOSURE_CHANNELS`). Read the code for the full list; do not treat the prose above as
+complete, and do not extend it into a second enumeration that would drift.
 
 ### Handback receipt gate (Claude host, Bash tool)
 

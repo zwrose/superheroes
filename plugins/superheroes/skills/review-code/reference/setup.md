@@ -112,9 +112,12 @@ does not hold the others** — every unpinned seat stays in the normal seeded as
 vendors are eligible for it, so an operator excluding a second maker family must pin **every** seat
 they need held; there is no hold-the-rest knob.
 
+An empty `$AUTHOR_FAMILY` composes an unjudgeable seat map — the constraint surfaces only later at the backstop — so composition refuses here (guard covers unresolved/empty only, not whether a non-empty family is correct):
+
 ```bash
 CONFIGURED=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.configured_cross_vendor_engines(p)))" "$ROOT_DIR")
 AUTHOR_FAMILY=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import model_registry as m;print(m.family_for('code-fixer',sys.argv[2]) or '')" "$ROOT_DIR" "$IMPL_ENGINE")
+[ -n "$AUTHOR_FAMILY" ] || { echo "author-family-unresolved: no maker family for implementation engine '$IMPL_ENGINE'" >&2; exit 1; }
 SEAT_PINS=$(echo "$EP" | jq -c 'if (.seatPins // {}) == {} then empty else .seatPins end')  # owner per-seat pins (#607); empty/absent → omit --pins
 PINS_ARGS=()
 [ -n "$SEAT_PINS" ] && PINS_ARGS=(--pins "$SEAT_PINS")
@@ -180,6 +183,6 @@ REFUSAL=$(printf '%s' "$VERIFY_JSON" | jq -r '.calibrationRefusal.remedy // empt
 [ "$VERIFY_CMD" = "none" ] && VERIFY_CMD=""
 ```
 
-When `REFUSAL` is non-empty, `core.md` calibration was not read and the legacy profile is unsupported — state that, quote the remedy, and note the legacy profile may still have supplied `VERIFY_CMD` and per-role tier overrides; say which values differ from band defaults rather than asserting they all came from the legacy file. When `VERIFY_MODE` is `unverified`, skip the verify gate. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation.
+When `REFUSAL` is non-empty, `core.md` calibration was not read and the legacy profile is unsupported — state that, quote the remedy, and note the legacy profile may still have supplied `VERIFY_CMD` and per-role tier overrides; say which values differ from band defaults rather than asserting they all came from the legacy file. When `VERIFY_MODE` is `unverified`, skip the verify gate — there is no verify command and no implied test receipt. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation. For what grounds a test-pass claim versus a verify receipt, read `rubric/test-receipt-evidence.md`.
 
 **Refresh dispatch paths before specialists.** Re-run the `calibration_resolve.py` jq block above once after bootstrap.

@@ -70,6 +70,11 @@ guarded element" can be re-read finer every round and the bar does not terminate
 three engaged rounds each read it one level finer on #1162, and the same seat passed a two-entry
 record clean on #1164.
 
+**The bite-proof record for every detector your order adds or changes** carries one entry per
+element of **the guarded-element set the order declared** — when the order declared no set (or an
+empty set or aggregate label), enumerate every independently neutralizable element the detector
+guards, flag the order gap, and apply the ceilings over that enumeration.
+
 **One bite-proof entry, per guarded element, must contain:**
 
 - **guarded element** — a `file:line` or a name — and **the axis** it claims;

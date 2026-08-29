@@ -29,7 +29,7 @@ vet-from-artifacts does not exist for that PR.** The entire independent check co
 standing grants; every micro change is authorized on its own, and the authorizing owner is
 independent of the maker **but is not comparing the change against a build record they have read**:
 no build brief, no advisor vet — the reviewer receipt and the explicit authorization are what stand
-in.
+in; post both where `review-discipline.md` names their durable home (`### Micro — owner authorization`).
 
 The change must **pass the quiet-failure question** unless the owner **explicitly waives it** —
 **owner-only, per change, never a standing grant; the risk must be stated explicitly** (the single

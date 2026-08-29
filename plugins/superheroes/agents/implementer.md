@@ -217,6 +217,9 @@ order is the likeliest defect source, so catching one early is high-value.
    must be mutated sits outside it, that is **stop and report** under the existing scope rule —
    flag it as the order defect it is, so the orchestrator can re-order, and do not wander. An order
    that names an existing test as "the proof" without a neutralization has not named a bite-proof.
+   **The guarded-element set is declared up front** — what an order must declare, what to do when it
+   declares nothing, and how the record's ceilings apply over that enumeration are stated once in the
+   bite-proof reference named above, § *The record*; read it there rather than here.
    (Field case: three non-discriminating assertions shipped in one file across three review rounds
    of one change, each passing against the very defect it was named for.)
 
