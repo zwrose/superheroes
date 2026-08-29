@@ -109,11 +109,33 @@ def _scanned_py_files():
     return files
 
 
-def _is_target_call(node, func_name):
+def _aliases_from_import(stmt, target_func):
+    """Local names that refer to target_func via ImportFrom."""
+    if not isinstance(stmt, ast.ImportFrom):
+        return set()
+    aliases = set()
+    for alias in stmt.names:
+        if alias.name == target_func:
+            aliases.add(alias.asname or alias.name)
+    return aliases
+
+
+def _collect_import_aliases(stmts, target_func):
+    """ImportFrom aliases for target_func declared directly in stmts."""
+    aliases = set()
+    for stmt in stmts:
+        aliases |= _aliases_from_import(stmt, target_func)
+    return aliases
+
+
+def _is_target_call(node, func_name, aliases=None):
     if not isinstance(node, ast.Call):
         return False
     func = node.func
-    if isinstance(func, ast.Name) and func.id == func_name:
+    local_names = {func_name}
+    if aliases:
+        local_names |= aliases
+    if isinstance(func, ast.Name) and func.id in local_names:
         return True
     if isinstance(func, ast.Attribute) and func.attr == func_name:
         return True
@@ -259,9 +281,10 @@ def _scope_expr_nodes(stmt):
             yield node
 
 
-def _analyze_scope(body, basename, func_name, target_func):
+def _analyze_scope(body, basename, func_name, target_func, enclosing_aliases=None):
     violations = []
     bound = {}
+    aliases = set(enclosing_aliases or ())
 
     def check_subject(subject, stmt, lineno, bound_name=None, bind_line=None):
         patterns = _patterns_for_subject(subject, stmt)
@@ -280,7 +303,7 @@ def _analyze_scope(body, basename, func_name, target_func):
 
     def walk_stmt(stmt):
         for node in _scope_expr_nodes(stmt):
-            if _is_target_call(node, target_func):
+            if _is_target_call(node, target_func, aliases):
                 check_subject(node, stmt, node.lineno)
             elif isinstance(node, ast.Name) and node.id in bound:
                 check_subject(node, stmt, node.lineno, node.id, bound[node.id])
@@ -289,12 +312,13 @@ def _analyze_scope(body, basename, func_name, target_func):
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
             target = stmt.targets[0]
             if isinstance(target, ast.Name):
-                if _is_target_call(stmt.value, target_func):
+                if _is_target_call(stmt.value, target_func, aliases):
                     bound[target.id] = stmt.lineno
                 else:
                     bound.pop(target.id, None)
 
     for stmt in _linear_stmts(body):
+        aliases |= _aliases_from_import(stmt, target_func)
         walk_stmt(stmt)
         update_bindings(stmt)
 
@@ -302,24 +326,36 @@ def _analyze_scope(body, basename, func_name, target_func):
 
 
 class _ModuleCensusVisitor(ast.NodeVisitor):
-    def __init__(self, basename, target_func):
+    def __init__(self, basename, target_func, tree):
         self.basename = basename
         self.target_func = target_func
         self.violations = []
         self.call_sites = []
         self.family_for_modules = set()
         self._scope_stack = ["<module>"]
+        self._alias_stack = [_collect_import_aliases(tree.body, target_func)]
 
     def _current_func(self):
         return self._scope_stack[-1]
 
+    def _current_aliases(self):
+        return self._alias_stack[-1]
+
     def _analyze_function(self, node):
         self._scope_stack.append(node.name)
+        self._alias_stack.append(set(self._current_aliases()))
         self.violations.extend(
-            _analyze_scope(node.body, self.basename, node.name, self.target_func)
+            _analyze_scope(
+                node.body,
+                self.basename,
+                node.name,
+                self.target_func,
+                self._current_aliases(),
+            )
         )
         self.generic_visit(node)
         self._scope_stack.pop()
+        self._alias_stack.pop()
 
     def visit_FunctionDef(self, node):
         self._analyze_function(node)
@@ -329,12 +365,24 @@ class _ModuleCensusVisitor(ast.NodeVisitor):
 
     def visit_Module(self, node):
         self.violations.extend(
-            _analyze_scope(node.body, self.basename, "<module>", self.target_func)
+            _analyze_scope(
+                node.body,
+                self.basename,
+                "<module>",
+                self.target_func,
+                self._current_aliases(),
+            )
         )
         self.generic_visit(node)
 
+    def visit_ImportFrom(self, node):
+        for alias in node.names:
+            if alias.name == self.target_func:
+                self._current_aliases().add(alias.asname or alias.name)
+        self.generic_visit(node)
+
     def visit_Call(self, node):
-        if _is_target_call(node, self.target_func):
+        if _is_target_call(node, self.target_func, self._current_aliases()):
             self.call_sites.append((self.basename, self._current_func(), node.lineno))
             if self.target_func == "family_for":
                 self.family_for_modules.add(self.basename)
@@ -356,7 +404,7 @@ def _parse_file(path):
 def _census_file(path, target_func):
     basename = os.path.basename(path)
     tree = _parse_file(path)
-    visitor = _ModuleCensusVisitor(basename, target_func)
+    visitor = _ModuleCensusVisitor(basename, target_func, tree)
     visitor.visit(tree)
     return visitor
 
@@ -431,6 +479,60 @@ def test_family_for_consumer_modules_enumerated():
         "expected %s got %s"
         % (sorted(FAMILY_FOR_MODULES), sorted(actual))
     )
+
+
+@pytest.mark.parametrize("src,expected", [
+    ("def f():\n    return model_family(v, m) or 'x'\n", "P1"),
+    (
+        "def f():\n    fam = model_family(v, m)\n    if fam and fam in EX:\n        return None\n",
+        "P2",
+    ),
+    (
+        "def f():\n    fam = model_family(v, m)\n    if fam is None:\n        return None\n",
+        "P3",
+    ),
+    (
+        "def f():\n    fam = model_family(v, m)\n    if fam == None:\n        return None\n",
+        "P4",
+    ),
+    (
+        "def f():\n    fam = model_family(v, m)\n    if not fam:\n        return None\n",
+        "P5",
+    ),
+    (
+        "def f():\n    fam = model_family(v, m)\n    if fam:\n        return fam\n",
+        "P6",
+    ),
+])
+def test_pattern_matcher_arms(src, expected):
+    tree = ast.parse(src)
+    vios = _analyze_scope(tree.body[0].body, "synthetic.py", "f", "model_family")
+    assert expected in {v["pattern"] for v in vios}, vios
+
+
+def test_pattern_matcher_ignores_clean_call():
+    tree = ast.parse("def f():\n    return model_family(v, m)\n")
+    assert _analyze_scope(tree.body[0].body, "synthetic.py", "f", "model_family") == []
+
+
+def test_model_family_aliased_import_detected():
+    src = (
+        "from model_registry import model_family as mf\n"
+        "\n"
+        "def consumer(v, m):\n"
+        "    fam = mf(v, m)\n"
+        "    if not fam:\n"
+        "        return None\n"
+    )
+    tree = ast.parse(src)
+    visitor = _ModuleCensusVisitor("synthetic.py", "model_family", tree)
+    visitor.visit(tree)
+    assert visitor.call_sites, "aliased model_family call must appear in call_sites"
+    assert visitor.violations, (
+        "truthiness guard on aliased model_family binding must be a violation"
+    )
+    patterns = {v["pattern"] for v in visitor.violations}
+    assert "P5" in patterns, patterns
 
 
 def test_family_for_none_tolerance_allowlist_matches_live_sites():
