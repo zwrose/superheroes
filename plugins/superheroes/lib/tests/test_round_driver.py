@@ -4577,6 +4577,9 @@ _TRADEOFF = {"title": "widen the API", "severity": "Important",
 # The judgment disposition key is the per-LOCATION id (line-less finding_identity + line) so two
 # same-title tradeoff blockers at different lines never collide (#507 R2 v5).
 _TRADEOFF_ID = "f.py::widen the api@L1"
+_RESUME_IDENTITY_TRADEOFF = {"title": "resume identity fields", "severity": "Important",
+                             "file": "pkg/resume_identity.py", "line": 42, "tradeoff": True}
+_RESUME_IDENTITY_TRADEOFF_ID = "pkg/resume_identity.py::resume identity fields@L42"
 
 
 def test_judgment_payload_rows_carry_single_classification_literal():
@@ -4916,6 +4919,59 @@ def test_judgment_dispositions_guidance_survives_records_path_resume(tmp_path):
     )
     assert "narrow only" in ph["GATE_GUIDANCE"]
     assert ph["GATE_GUIDANCE"] != RD._GATE_GUIDANCE_NO_GUIDANCE
+
+
+def test_judgment_dispositions_identity_fields_survive_records_path_resume(tmp_path):
+    """E6b: fold identity fields (id, file, line) persist through recordsPath resume."""
+    records = tmp_path / "round-records.json"
+    tradeoff = dict(_RESUME_IDENTITY_TRADEOFF)
+    guidance_text = "keep the resume identity intact"
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    RD._route_judgment_blockers(state, [tradeoff])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _RESUME_IDENTITY_TRADEOFF_ID, "disposition": "fix-with-guidance",
+         "guidance": guidance_text}]})
+    state["_records"] = [_seed_record(1)]
+    RD._persist_round_records(state, state["config"])
+    resumed = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    on_disk = json.loads(records.read_text())
+    rec = next(r for r in on_disk if r.get("round") == 1)
+    disk_entry = rec["disclosures"]["judgmentDispositions"][0]
+    assert disk_entry["file"] == tradeoff["file"]
+    assert disk_entry["line"] == tradeoff["line"]
+    assert disk_entry["id"] == _RESUME_IDENTITY_TRADEOFF_ID
+    resumed_entry = resumed["rounds"]["1"]["judgmentDispositions"][0]
+    assert resumed_entry["file"] == tradeoff["file"]
+    assert resumed_entry["line"] == tradeoff["line"]
+    assert resumed_entry["id"] == _RESUME_IDENTITY_TRADEOFF_ID
+    resumed["terminal"] = "converged"
+    receipt = RD.build_receipt(resumed)
+    receipt_entry = receipt["rounds"][0]["judgmentDispositions"][0]
+    assert receipt_entry["file"] == tradeoff["file"]
+    assert receipt_entry["line"] == tradeoff["line"]
+    assert receipt_entry["id"] == _RESUME_IDENTITY_TRADEOFF_ID
+    resumed["reviewedDiff"] = (
+        "diff --git a/pkg/resume_identity.py b/pkg/resume_identity.py\n")
+    resumed["_fixBatch"] = [{"title": tradeoff["title"], "file": tradeoff["file"],
+                             "line": tradeoff["line"],
+                             "judgmentDisposition": "fix-with-guidance"}]
+    session_dir = str(tmp_path / "resume-identity-render")
+    os.makedirs(session_dir)
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RD.P_FIXER, "fixer", 0, resumed, resumed["config"], {},
+        session_dir, 1, paths, RD.CHANNEL_FILE,
+    )
+    block = ph["GATE_GUIDANCE"]
+    assert "### %s:%s — %s" % (tradeoff["file"], tradeoff["line"], tradeoff["title"]) in block
+    assert _gate_guidance_record_id_line(block) == _RESUME_IDENTITY_TRADEOFF_ID
 
 
 def _gate_guidance_record_id_line(block):
