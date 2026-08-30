@@ -575,7 +575,6 @@ def test_truncate_utf8_bytes_mid_codepoint_backoff():
     prefix, withheld = RD._truncate_utf8_bytes(raw, cap)
     assert prefix == "é中"
     assert withheld == len(raw.encode("utf-8")) - len(prefix.encode("utf-8"))
-    prefix.encode("utf-8").decode("utf-8")  # valid UTF-8
 
 
 def test_truncate_utf8_bytes_cap_smaller_than_first_character():
@@ -851,9 +850,14 @@ def test_gate_guidance_header_field_one_byte_over_truncates_and_keeps_guidance(t
 
 
 def test_gate_guidance_header_multibyte_straddle_cap_is_valid_utf8(tmp_path):
-    """Edge 7: multi-byte character straddling the cap still yields valid UTF-8."""
-    # 3-byte 中 plus ASCII padding to land the cap mid-next 中
-    title = "中" + ("z" * (RD.GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP - 4)) + "中"
+    """Edge 7: multi-byte character straddling the cap backs off to a codepoint boundary."""
+    cap = RD.GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP
+    # 3-byte 中 plus ASCII padding lands the byte cap inside the trailing 中.
+    padding = "z" * (cap - 4)
+    title = "中" + padding + "中"
+    expected_prefix = "中" + padding
+    expected_withheld = len(title.encode("utf-8")) - len(expected_prefix.encode("utf-8"))
+    marker = " (%d bytes withheld)" % expected_withheld
     state = _fixer_guidance_state(
         tmp_path,
         [_guidance_disposition("f.py::mb@L1", title, "mb-guidance", file="f.py", line=1)],
@@ -861,9 +865,11 @@ def test_gate_guidance_header_multibyte_straddle_cap_is_valid_utf8(tmp_path):
     ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="mb-cap")
     identity = [ln for ln in ph["GATE_GUIDANCE"].splitlines() if ln.startswith("### ")][0]
     title_part = identity.split(" — ", 1)[1]
-    if "bytes withheld" in title_part:
-        title_part = title_part.rsplit(" (", 1)[0]
-    title_part.encode("utf-8").decode("utf-8")
+    assert title_part == expected_prefix + marker
+    bare_title = expected_prefix
+    assert bare_title
+    assert len(bare_title.encode("utf-8")) <= cap
+    assert expected_withheld == 3
 
 
 # --- head diff materialization (bite axis: head.diff exists when cited) ---------------------
