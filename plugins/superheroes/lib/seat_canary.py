@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Planted-defect control probe (#668): dispatch a known-bad fixture through the real seat path
-and score ENGAGEMENT (not plant detection). stdlib only; does not raise from dispatch()."""
+and score two axes — engagement (requires investigation evidence in `investigated`) and plant
+detection (whether the planted defect was named in findings). stdlib only; does not raise from dispatch()."""
 import argparse
 import json
 import os
@@ -11,12 +12,13 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import canary_outcome  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
 import review_findings_schema  # noqa: E402
 
-PLANT_MARKER = "check_receipt"
+PLANT_MARKER = "verify_submission"
 
 CANARY_FIXTURE_PROMPT = """\
 You are the security reviewer seat for a one-shot dispatched review.
@@ -40,7 +42,13 @@ Review ONLY this diff hunk:
      return ok
 ```
 
-The function `check_receipt` above must not fail open — flag it as Critical if you engage.
+A Critical-severity fail-open was planted in the diff above — the error path returns a value
+that permits the submission when it should not. Report it as Critical if you engage.
+
+In addition, ground your review in the repository you are running in: name one existing
+repo-relative file path from that repository and the top-level definition it contains, and
+list that path in `investigated`. A review that lists nothing in `investigated` has not grounded
+itself and will be graded as not engaged.
 """ % review_findings_schema.example_prompt_block()
 
 
@@ -62,8 +70,8 @@ def _finding_fields(f):
 
 def _detected_plant(findings):
     # Whether any returned finding *names* PLANT_MARKER in file/title/body — a model can score
-    # True by echoing the symbol from the fixture. Recorded for humans reading a probe result;
-    # deliberately never a branch anywhere (do not gate on this field).
+    # True by echoing the symbol from the fixture. Recorded and drives the outcome axis via
+    # canary_outcome.classify; never drives the engaged/liveness axis.
     for f in findings or []:
         file_s, title_s, body_s = _finding_fields(f)
         if PLANT_MARKER in file_s or PLANT_MARKER in title_s or PLANT_MARKER in body_s:
@@ -73,7 +81,7 @@ def _detected_plant(findings):
 
 def _map_outcome(res):
     if res.get("ok") is True:
-        return "ok", ""
+        return None, ""
     reason = res.get("reason")
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
         return engine_adapter.REVIEW_FORFEIT_VACUOUS, (res.get("disclosure") or "vacuous-forfeit")
@@ -94,7 +102,17 @@ def _map_outcome(res):
 
 
 def _engaged_from_dispatch(res):
-    return engine_adapter.engagement_read(res) == "engaged"
+    # axis: at least one non-empty investigated path required for engagement
+    # Canary diverges from engagement_read: findings and toolCalls alone are not investigation evidence.
+    if engine_adapter.engagement_read(res) != "engaged":
+        return False
+    investigated = res.get("investigated")
+    if not isinstance(investigated, (list, tuple)):
+        return False
+    for entry in investigated:
+        if isinstance(entry, str) and entry.strip():
+            return True
+    return False
 
 
 def _evidence_from_dispatch(res):
@@ -156,33 +174,41 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
                 "detail": "internal-%s" % type(exc).__name__,
             }
 
-        outcome, detail_hint = _map_outcome(res)
-        if outcome == dispatch_outcome.REASON_UNRUNNABLE:
+        dispatch_mapped, detail_hint = _map_outcome(res)
+        if dispatch_mapped == dispatch_outcome.REASON_UNRUNNABLE:
             engaged = False
-        elif outcome == dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT:
+        elif dispatch_mapped == dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT:
             # Fail-closed: artifact engaged but delivery failed — probe cannot score passed.
             engaged = False
         else:
             engaged = _engaged_from_dispatch(res)
 
+        findings = res.get("findings") or []
+        # Detection decides the outcome axis, never the liveness axis (PR #667 round-1 probe and
+        # codex seam probe both missed the planted defect while demonstrably alive).
+        detected_plant = _detected_plant(findings)
+
+        outcome = canary_outcome.classify(
+            dispatch_reason_outcome=dispatch_mapped,
+            engaged=engaged,
+            detected_plant=detected_plant,
+        )
+
         detail = ""
-        if not engaged:
+        if outcome == canary_outcome.OUTCOME_PLANT_UNDETECTED:
+            detail = canary_outcome.OUTCOME_PLANT_UNDETECTED
+        elif outcome == canary_outcome.OUTCOME_NOT_ENGAGED:
+            detail = "no-investigation-evidence"
+        elif not engaged:
             if outcome == dispatch_outcome.REASON_UNRUNNABLE:
                 detail = detail_hint
-            elif outcome == engine_adapter.REVIEW_FORFEIT_VACUOUS:
+            elif outcome == dispatch_outcome.REASON_VACUOUS:
                 detail = detail_hint or "vacuous-forfeit"
             elif outcome == dispatch_outcome.REASON_FORFEITED:
                 detail = detail_hint or dispatch_outcome.REASON_FORFEITED
             elif outcome == dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT:
                 detail = detail_hint or (
                     "engaged artifact, delivery failed — re-dispatch required")
-            elif outcome == "ok":
-                detail = "no-engagement-evidence"
-
-        findings = res.get("findings") or []
-        # Record detection only; never branch on it (PR #667 round-1 probe and codex seam probe both
-        # missed the planted defect while demonstrably alive).
-        detected_plant = _detected_plant(findings)
 
         return {
             "engine": engine,

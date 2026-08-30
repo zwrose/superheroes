@@ -488,16 +488,26 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > Submit the probe JSON objects as a **list** on the panel artifact as `canaryResult` (a single
 > dict is still accepted when only one cross-vendor vendor needs a probe). Each result must carry
-> its `engine` field matching the vendor you probed. The probe is scored on **engagement
-> evidence** — findings produced, a verifiable investigation record, or tool calls actually invoked
-> — and **never** on magnitudes: token spend and wall time are recorded but are deliberately not a
-> pass branch, because they classify backwards (a genuinely engaged clean review here spent 2,460
-> tokens while the field's vacuous seat spent about ten times that, and an 8-second dispatch returned
-> a Critical). It is also **never** scored on whether it detected the planted defect; a demonstrably
-> live seat can miss the plant (measured twice: PR #667's round-1 control, and this build's own live
-> probe, which spent 14,980 tokens and ran three repo commands while missing it). Without a probe,
-> the round records `canaryUnverified` and the receipt carries a degraded disclosure; a probe that
-> shows no engagement downgrades those seats to never-ran.
+> its `engine` field matching the vendor you probed. The probe is scored on **two axes**:
+>
+> - **Liveness / engagement** — the seat must show a verifiable investigation record: at least one
+>   accepted, non-empty `investigated` path. Findings alone are not enough, and tool calls alone
+>   are not enough (this is where the canary deliberately diverges from `engagement_read`). Token
+>   spend and wall time are recorded but are deliberately not a pass branch, because they classify
+>   backwards (a genuinely engaged clean review here spent 2,460 tokens while the field's vacuous
+>   seat spent about ten times that, and an 8-second dispatch returned a Critical). This axis
+>   **never** scores plant detection: a demonstrably live seat that misses the plant is **not**
+>   called inert and its seats are **not** downgraded to never-ran (measured twice: PR #667's
+>   round-1 control, and this build's own live probe, which spent 14,980 tokens and ran three repo
+>   commands while missing it).
+> - **Outcome** — an engaged probe that misses the plant is `plant-undetected`, which is **not a
+>   pass**, withholds panel certification, and is disclosed as `canaryPlantUndetected`. An engaged
+>   probe whose dispatch failed (`forfeited`, `vacuous`, `forfeit-with-engaged-artifact`, or
+>   `unrunnable`) is disclosed as `canaryOutcomeFailed` (also not a pass). A probe with no
+>   engagement evidence is `not-engaged` (also not a pass).
+>
+> Without a probe, the round records `canaryUnverified` and the receipt carries a degraded
+> disclosure; a probe that shows no engagement downgrades those seats to never-ran.
 
 > **External-engine dispatches — timeout is structural, an expired slot is `unreadable` (#202, #204).**
 > Every engine dispatch — the reviewer (read-only, above) AND the **fixer** (cursor, workspace-write) —

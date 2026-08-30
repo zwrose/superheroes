@@ -27,6 +27,7 @@ LIB = EVAL_DIR.parent / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+import canary_outcome  # noqa: E402
 import circuit_breaker as CB  # noqa: E402
 import coverage_decisions as cov  # noqa: E402
 import model_registry  # noqa: E402
@@ -53,7 +54,14 @@ def fabricate_canary_probes_for(seat_map):
         vendor = cell.get("vendor")
         if isinstance(vendor, str) and vendor and vendor != "claude":
             vendors.add(vendor)
-    return [{"engine": v, "engaged": True} for v in sorted(vendors)]
+    return [{
+        "engine": v,
+        "outcome": canary_outcome.OUTCOME_OK,
+        "engaged": True,
+        "detectedPlant": True,
+        "evidence": {},
+        "detail": "",
+    } for v in sorted(vendors)]
 
 
 # Synthetic citation surface so fixture findings (often file/line-less, written for the JS
