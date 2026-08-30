@@ -123,6 +123,11 @@ def test_gate_guidance_heading_present_on_copy_surface(rel):
 def test_auto_fix_loop_reference_points_at_canonical_fixer_template():
     # axis: guidance-matching contract has one home; auto-fix-loop carries pointer not copy
     text = _read(_AUTO_FIX_LOOP_REFERENCE)
+    canonical = _read(_CANONICAL_FIXER_TEMPLATE)
+    assert _GUIDANCE_MATCHING_CONTRACT in canonical, (
+        "guidance-matching contract drifted from its canonical home %s; update"
+        " _GUIDANCE_MATCHING_CONTRACT" % _CANONICAL_FIXER_TEMPLATE
+    )
     assert _CANONICAL_FIXER_TEMPLATE in text, (
         "expected canonical template path %r on %s"
         % (_CANONICAL_FIXER_TEMPLATE, _AUTO_FIX_LOOP_REFERENCE)
@@ -132,6 +137,10 @@ def test_auto_fix_loop_reference_points_at_canonical_fixer_template():
     )
     assert _GUIDANCE_MATCHING_CONTRACT not in text, (
         "duplicated guidance-matching contract on %s" % _AUTO_FIX_LOOP_REFERENCE
+    )
+    assert " ".join(_GUIDANCE_MATCHING_CONTRACT.split()) not in " ".join(text.split()), (
+        "duplicated guidance-matching contract (whitespace-normalized) on %s"
+        % _AUTO_FIX_LOOP_REFERENCE
     )
 
 
