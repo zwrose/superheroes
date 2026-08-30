@@ -110,7 +110,10 @@ _SELF_RECOVERY_FIXER_EFFORT = "high"
 GATE_GUIDANCE_RECORD_KEY = "userGuidance"
 GATE_GUIDANCE_ROW_BYTE_CAP = 2000
 GATE_GUIDANCE_AGGREGATE_BYTE_CAP = 8000
-GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP = 120
+# Bounds each header field so one oversized value cannot cost its entry a place under the
+# 8000-byte aggregate cap. Kept loose (not tight to title length): a truncated title still
+# matches by prefix, while a truncated shared title prefix would not match at all.
+GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP = 200
 _GATE_GUIDANCE_NO_GUIDANCE = "No owner-gate guidance is attached to this batch."
 _GATE_GUIDANCE_ROW_CARRIED_CHANNEL = "gateGuidanceRowCarried"
 GATE_GUIDANCE_UNUSABLE_REFUSAL = "gate-guidance-unusable"
@@ -2638,8 +2641,6 @@ def _gate_guidance_header_file_part(entry):
 
 def _gate_guidance_header_line_part(entry):
     raw = entry.get("line")
-    if isinstance(raw, int):
-        return _normalize_gate_guidance_header_field(raw)
     if raw is not None:
         return _normalize_gate_guidance_header_field(raw)
     return "(line not recorded)"

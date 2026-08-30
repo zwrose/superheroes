@@ -487,8 +487,28 @@ def test_row_carried_guidance_does_not_join_a_real_fold_entry(tmp_path):
      {"id": "dup", "title": "b", "disposition": "fix-with-guidance",
       RD.GATE_GUIDANCE_RECORD_KEY: "g2"}],
 ], ids=["none-id", "missing-id", "non-string-id", "blank-id", "duplicate-id"])
+def test_gate_guidance_refuses_unusable_records_at_render_entry_point(tmp_path, dispositions):
+    """Untrustworthy fold-owned guidance records refuse order render at P_FIXER entry."""
+    state = _fixer_guidance_state(tmp_path, dispositions)
+    with pytest.raises(ValueError, match="order-render-refused:gate-guidance-unusable"):
+        _fixer_order_ph(tmp_path, state, session_name="refuse-entry")
+
+
+@pytest.mark.parametrize("dispositions", [
+    [{"id": None, "title": "t", "disposition": "fix-with-guidance",
+      RD.GATE_GUIDANCE_RECORD_KEY: "g"}],
+    [{"title": "t", "disposition": "fix-with-guidance", RD.GATE_GUIDANCE_RECORD_KEY: "g"}],
+    [{"id": 1, "title": "t", "disposition": "fix-with-guidance",
+      RD.GATE_GUIDANCE_RECORD_KEY: "g"}],
+    [{"id": "   ", "title": "t", "disposition": "fix-with-guidance",
+      RD.GATE_GUIDANCE_RECORD_KEY: "g"}],
+    [{"id": "dup", "title": "a", "disposition": "fix-with-guidance",
+      RD.GATE_GUIDANCE_RECORD_KEY: "g1"},
+     {"id": "dup", "title": "b", "disposition": "fix-with-guidance",
+      RD.GATE_GUIDANCE_RECORD_KEY: "g2"}],
+], ids=["none-id", "missing-id", "non-string-id", "blank-id", "duplicate-id"])
 def test_gate_guidance_entries_refuses_unusable_records(tmp_path, dispositions):
-    """Untrustworthy fold-owned guidance records refuse order render."""
+    """Untrustworthy fold-owned guidance records refuse at the validation helper."""
     state = {
         "rounds": {"2": {"judgmentDispositions": dispositions}},
     }
@@ -542,6 +562,308 @@ def test_gate_guidance_row_carried_render_only_state_records_nothing(tmp_path):
     assert "rounds" not in state
     assert ph["GATE_GUIDANCE"] == RD._GATE_GUIDANCE_NO_GUIDANCE
     assert row_text not in ph["GATE_GUIDANCE"]
+
+
+# --- UTF-8 byte truncation (WO #1221 B3) -----------------------------------------------
+
+
+def test_truncate_utf8_bytes_mid_codepoint_backoff():
+    """Axis: cutting mid-codepoint backs off to a valid UTF-8 boundary."""
+    # é=2 bytes, 中=3 bytes, 🎉=4 bytes — cap lands inside the 4-byte emoji
+    raw = "é中🎉"
+    cap = len("é中".encode("utf-8")) + 2  # 2 bytes into the 4-byte emoji
+    prefix, withheld = RD._truncate_utf8_bytes(raw, cap)
+    assert prefix == "é中"
+    assert withheld == len(raw.encode("utf-8")) - len(prefix.encode("utf-8"))
+    prefix.encode("utf-8").decode("utf-8")  # valid UTF-8
+
+
+def test_truncate_utf8_bytes_cap_smaller_than_first_character():
+    """Axis: cap below the first codepoint width returns empty with full withheld count."""
+    raw = "🎉"
+    prefix, withheld = RD._truncate_utf8_bytes(raw, 1)
+    assert prefix == ""
+    assert withheld == len(raw.encode("utf-8"))
+
+
+def test_truncate_utf8_bytes_exact_codepoint_boundary():
+    """Axis: cap on a codepoint boundary needs no back-off."""
+    raw = "é中"
+    cap = len(raw.encode("utf-8"))
+    prefix, withheld = RD._truncate_utf8_bytes(raw, cap)
+    assert prefix == "é中"
+    assert withheld == 0
+
+
+# --- gate guidance header guarantees (WO #1221 B4) -------------------------------------
+
+
+def _gate_guidance_entry_blocks(block):
+    """Split a GATE_GUIDANCE block into per-entry chunks (header + body)."""
+    chunks = []
+    current = []
+    for line in block.splitlines():
+        if line.startswith("### ") and current:
+            chunks.append("\n".join(current))
+            current = [line]
+        elif line.startswith("### "):
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+def _header_region_lines(entry_block):
+    """Lines from identity through record-id, before the guidance body."""
+    lines = []
+    for line in entry_block.splitlines():
+        if line == "BEGIN owner-gate guidance":
+            break
+        lines.append(line)
+    return lines
+
+
+_HEADER_FIELD_INJECTION_SEPARATORS = [
+    ("\n", "lf"),
+    ("\r", "cr"),
+    ("\r\n", "crlf"),
+    ("\x0b", "vt"),
+    ("\u2028", "line-sep"),
+    ("\u2029", "para-sep"),
+]
+
+
+@pytest.mark.parametrize("field", ["file", "line", "title", "id"])
+@pytest.mark.parametrize("inject,sep_id", _HEADER_FIELD_INJECTION_SEPARATORS,
+                         ids=[s[1] for s in _HEADER_FIELD_INJECTION_SEPARATORS])
+def test_gate_guidance_header_field_cannot_emit_second_line(tmp_path, field, inject, sep_id):
+    """Axis: each header field neutralizes line breaks and C0/Unicode separators."""
+    evil = "INJECTED%sSECOND-LINE" % inject
+    base = {
+        "id": "f.py::safe@L1",
+        "title": "safe title",
+        "disposition": "fix-with-guidance",
+        RD.GATE_GUIDANCE_RECORD_KEY: "guidance body",
+        "file": "f.py",
+        "line": 1,
+    }
+    if field == "id":
+        base["id"] = evil
+    else:
+        base[field] = evil
+    state = _fixer_guidance_state(tmp_path, [base])
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="inj-%s-%s" % (field, sep_id))
+    block = ph["GATE_GUIDANCE"]
+    chunks = _gate_guidance_entry_blocks(block)
+    assert len(chunks) == 1
+    header_lines = _header_region_lines(chunks[0])
+    assert len(header_lines) == 2  # identity + record-id; no injected line
+    for line in header_lines:
+        assert not line.startswith("INJECTED")
+        assert not line.startswith("SECOND-LINE")
+
+
+def test_gate_guidance_oversized_title_truncated_and_guidance_still_renders(tmp_path):
+    """Axis: header cap keeps oversized identity from dropping the whole entry."""
+    guidance_text = "KEEP-THIS-GUIDANCE-VISIBLE"
+    huge_title = "T" * 9000
+    state = _fixer_guidance_state(
+        tmp_path,
+        [_guidance_disposition("f.py::big@L1", huge_title, guidance_text, file="f.py", line=1)],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="oversized-title")
+    block = ph["GATE_GUIDANCE"]
+    assert guidance_text in block
+    assert "not rendered in full" not in block
+    identity = [ln for ln in block.splitlines() if ln.startswith("### ")][0]
+    assert len(identity.encode("utf-8")) < 500
+    assert "bytes withheld" in identity
+
+
+def test_gate_guidance_legacy_record_without_file_line_renders_guidance(tmp_path):
+    """Axis: pre-WO-A judgmentDispositions without file/line still carry guidance."""
+    guidance_text = "LEGACY-RESUME-GUIDANCE"
+    state = _fixer_guidance_state(
+        tmp_path,
+        [_guidance_disposition("legacy::no-loc@L0", "legacy title", guidance_text)],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="legacy-no-loc")
+    block = ph["GATE_GUIDANCE"]
+    assert guidance_text in block
+    assert "### (file not recorded):(line not recorded) — legacy title" in block
+
+
+def test_gate_guidance_identical_identities_carry_ambiguity_note_and_keep_guidance(tmp_path):
+    """Axis: two entries sharing a rendered identity both get the note; neither body is lost."""
+    state = _fixer_guidance_state(
+        tmp_path,
+        [
+            _guidance_disposition("a.py::one@L1", "same", "GUIDANCE-ONE", file="a.py", line=1),
+            _guidance_disposition("a.py::two@L2", "same", "GUIDANCE-TWO", file="a.py", line=1),
+        ],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="ambig-two")
+    block = ph["GATE_GUIDANCE"]
+    assert block.count("Note: 2 guided findings share this identity") == 2
+    assert "GUIDANCE-ONE" in block
+    assert "GUIDANCE-TWO" in block
+
+
+def test_gate_guidance_truncation_collision_triggers_ambiguity_note(tmp_path):
+    """Axis: titles equal after header cap still collide on the final identity line."""
+    shared = "C" * RD.GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP
+    suffix_a = "DIFF-A"
+    suffix_b = "DIFF-B"
+    assert len(suffix_a) == len(suffix_b)
+    title_a = shared + suffix_a
+    title_b = shared + suffix_b
+    state = _fixer_guidance_state(
+        tmp_path,
+        [
+            _guidance_disposition("a.py::one@L1", title_a, "COLLIDE-A", file="a.py", line=1),
+            _guidance_disposition("a.py::two@L2", title_b, "COLLIDE-B", file="a.py", line=1),
+        ],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="trunc-collide")
+    block = ph["GATE_GUIDANCE"]
+    assert block.count("Note: 2 guided findings share this identity") == 2
+    assert "COLLIDE-A" in block
+    assert "COLLIDE-B" in block
+
+
+def test_gate_guidance_three_identical_identities_note_names_three(tmp_path):
+    """Axis: ambiguity note names the true count when three entries share an identity."""
+    state = _fixer_guidance_state(
+        tmp_path,
+        [
+            _guidance_disposition("a.py::one@L1", "triple", "G-A", file="a.py", line=1),
+            _guidance_disposition("a.py::two@L2", "triple", "G-B", file="a.py", line=1),
+            _guidance_disposition("a.py::three@L3", "triple", "G-C", file="a.py", line=1),
+        ],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="ambig-three")
+    block = ph["GATE_GUIDANCE"]
+    assert block.count("Note: 3 guided findings share this identity") == 3
+    assert "G-A" in block and "G-B" in block and "G-C" in block
+
+
+def test_gate_guidance_distinct_identities_carry_no_ambiguity_note(tmp_path):
+    """Axis: distinct rendered identities must not carry an unconditional ambiguity note."""
+    state = _fixer_guidance_state(
+        tmp_path,
+        [
+            _guidance_disposition("a.py::one@L1", "first", "G-ONE", file="a.py", line=1),
+            _guidance_disposition("b.py::two@L2", "second", "G-TWO", file="b.py", line=2),
+        ],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="distinct-id")
+    block = ph["GATE_GUIDANCE"]
+    assert "Note:" not in block
+    assert "G-ONE" in block and "G-TWO" in block
+
+
+def test_gate_guidance_record_id_line_is_audit_only_and_carries_fold_id(tmp_path):
+    """Axis: record-id row is present, labelled audit-only, and carries the fold-minted id."""
+    record_id = "f.py::occurrence@L1#2"
+    state = _fixer_guidance_state(
+        tmp_path,
+        [_guidance_disposition(record_id, "occurrence", "TRACE-ME", file="f.py", line=1)],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="record-id-line")
+    block = ph["GATE_GUIDANCE"]
+    assert "Record id (auditing only, not for matching): %s" % record_id in block
+    assert block.count("Record id (auditing only, not for matching):") == 1
+
+
+def test_gate_guidance_header_line_none_renders_not_recorded(tmp_path):
+    """Edge 1: missing line → (line not recorded), no exception."""
+    state = _fixer_guidance_state(
+        tmp_path,
+        [_guidance_disposition("f.py::no-line@L0", "t", "g", file="f.py")],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="line-none")
+    assert "### f.py:(line not recorded) — t" in ph["GATE_GUIDANCE"]
+
+
+def test_gate_guidance_header_line_zero_renders_zero(tmp_path):
+    """Edge 2: line 0 is a real value, not treated as missing."""
+    state = _fixer_guidance_state(
+        tmp_path,
+        [_guidance_disposition("f.py::zero@L0", "t", "g", file="f.py", line=0)],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="line-zero")
+    assert "### f.py:0 — t" in ph["GATE_GUIDANCE"]
+
+
+def test_gate_guidance_header_whitespace_file_renders_not_recorded(tmp_path):
+    """Edge 3: whitespace-only file → (file not recorded)."""
+    state = _fixer_guidance_state(
+        tmp_path,
+        [_guidance_disposition("f.py::ws@L1", "t", "g", file="   ", line=1)],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="file-ws")
+    assert "### (file not recorded):1 — t" in ph["GATE_GUIDANCE"]
+
+
+def test_gate_guidance_header_empty_title_renders_no_title(tmp_path):
+    """Edge 4: missing/empty title → (no title) through the normalizer."""
+    entry = {
+        "id": "f.py::blank-title@L1",
+        "title": "",
+        "disposition": "fix-with-guidance",
+        RD.GATE_GUIDANCE_RECORD_KEY: "g",
+        "file": "f.py",
+        "line": 1,
+    }
+    state = _fixer_guidance_state(tmp_path, [entry])
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="title-empty")
+    assert "### f.py:1 — (no title)" in ph["GATE_GUIDANCE"]
+
+
+def test_gate_guidance_header_field_at_cap_has_no_truncation_marker(tmp_path):
+    """Edge 5: field exactly at the byte cap is not truncated."""
+    exact = "x" * RD.GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP
+    state = _fixer_guidance_state(
+        tmp_path,
+        [_guidance_disposition("f.py::at-cap@L1", exact, "g", file="f.py", line=1)],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="at-cap")
+    identity = [ln for ln in ph["GATE_GUIDANCE"].splitlines() if ln.startswith("### ")][0]
+    assert "bytes withheld" not in identity
+    assert exact in identity
+
+
+def test_gate_guidance_header_field_one_byte_over_truncates_and_keeps_guidance(tmp_path):
+    """Edge 6: one byte over the cap truncates with marker; guidance body still renders."""
+    over = "y" * (RD.GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP + 1)
+    guidance_text = "STILL-HERE-AFTER-TRUNCATION"
+    state = _fixer_guidance_state(
+        tmp_path,
+        [_guidance_disposition("f.py::over@L1", over, guidance_text, file="f.py", line=1)],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="one-over")
+    block = ph["GATE_GUIDANCE"]
+    identity = [ln for ln in block.splitlines() if ln.startswith("### ")][0]
+    assert "bytes withheld" in identity
+    assert guidance_text in block
+
+
+def test_gate_guidance_header_multibyte_straddle_cap_is_valid_utf8(tmp_path):
+    """Edge 7: multi-byte character straddling the cap still yields valid UTF-8."""
+    # 3-byte 中 plus ASCII padding to land the cap mid-next 中
+    title = "中" + ("z" * (RD.GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP - 4)) + "中"
+    state = _fixer_guidance_state(
+        tmp_path,
+        [_guidance_disposition("f.py::mb@L1", title, "mb-guidance", file="f.py", line=1)],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="mb-cap")
+    identity = [ln for ln in ph["GATE_GUIDANCE"].splitlines() if ln.startswith("### ")][0]
+    title_part = identity.split(" — ", 1)[1]
+    if "bytes withheld" in title_part:
+        title_part = title_part.rsplit(" (", 1)[0]
+    title_part.encode("utf-8").decode("utf-8")
 
 
 # --- head diff materialization (bite axis: head.diff exists when cited) ---------------------
