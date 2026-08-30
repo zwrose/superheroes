@@ -143,6 +143,43 @@ def test_gate_guidance_block_skips_non_guided_rows():
     assert RD._gate_guidance_block(entries) == RD._GATE_GUIDANCE_NO_GUIDANCE
 
 
+_EMPTY_TITLE_SENTINEL_CASES = [
+    ("spaces", "  "),
+    ("mixed-ws", "\t\n "),
+    ("nul", "\x00"),
+    ("line-sep", "\u2028"),
+    ("empty", ""),
+    ("none", None),
+]
+
+
+@pytest.mark.parametrize("case_id,title", _EMPTY_TITLE_SENTINEL_CASES,
+                         ids=[c[0] for c in _EMPTY_TITLE_SENTINEL_CASES])
+def test_gate_guidance_identity_line_empty_title_renders_no_title_sentinel(
+        tmp_path, case_id, title):
+    """Axis: identity header title segment is never empty after normalization."""
+    state = _fixer_guidance_state(
+        tmp_path,
+        [_guidance_disposition("f.py::empty-title@L1", title, "guidance body",
+                              file="f.py", line=1)],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(
+        tmp_path, state, session_name="no-title-%s" % case_id)
+    identity = [ln for ln in ph["GATE_GUIDANCE"].splitlines() if ln.startswith("### ")][0]
+    assert identity == "### f.py:1 — (no title)"
+
+
+def test_gate_guidance_identity_line_ordinary_title_renders_title(tmp_path):
+    state = _fixer_guidance_state(
+        tmp_path,
+        [_guidance_disposition("f.py::widen the api@L1", "widen the API", "guidance body",
+                              file="f.py", line=1)],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="ordinary-title")
+    identity = [ln for ln in ph["GATE_GUIDANCE"].splitlines() if ln.startswith("### ")][0]
+    assert identity == "### f.py:1 — widen the API"
+
+
 def _minimal_render_ctx(session_dir, repo_root, ph, paths):
     return {
         "session_dir": session_dir,

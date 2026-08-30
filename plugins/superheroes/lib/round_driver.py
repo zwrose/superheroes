@@ -2649,7 +2649,10 @@ def _gate_guidance_header_line_part(entry):
 def _gate_guidance_identity_line(entry):
     file_part = _gate_guidance_header_file_part(entry)
     line_part = _gate_guidance_header_line_part(entry)
-    title = _normalize_gate_guidance_header_field(entry.get("title") or "(no title)")
+    raw = entry.get("title")
+    title = _normalize_gate_guidance_header_field(raw if raw is not None else "")
+    if not title:
+        title = "(no title)"
     return "### %s:%s — %s" % (file_part, line_part, title)
 
 
