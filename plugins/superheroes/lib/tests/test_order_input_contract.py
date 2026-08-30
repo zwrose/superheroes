@@ -164,13 +164,18 @@ def _minimal_render_ctx(session_dir, repo_root, ph, paths):
     }
 
 
-def _guidance_disposition(entry_id, title, guidance):
-    return {
+def _guidance_disposition(entry_id, title, guidance, file=None, line=None):
+    entry = {
         "id": entry_id,
         "title": title,
         "disposition": "fix-with-guidance",
         RD.GATE_GUIDANCE_RECORD_KEY: guidance,
     }
+    if file is not None:
+        entry["file"] = file
+    if line is not None:
+        entry["line"] = line
+    return entry
 
 
 def _fixer_guidance_state(tmp_path, dispositions, fix_batch=None, rnd=2):
@@ -196,29 +201,31 @@ def _fixer_order_ph(tmp_path, state, rnd=2, session_name="gate-session"):
 
 
 def test_gate_guidance_block_renders_guided_row_verbatim():
-    entries = [{"id": "f.py::widen the api@L1", "title": "widen the API",
-                "guidance": "keep backward compatible"}]
+    entries = [{"id": "f.py::widen the api@L1", "title": "widen the API", "file": "f.py",
+                "line": 1, "guidance": "keep backward compatible"}]
     block = RD._gate_guidance_block(entries)
-    assert "f.py::widen the api@L1" in block
-    assert "widen the API" in block
+    assert "### f.py:1 — widen the API" in block
+    assert "Record id (auditing only, not for matching): f.py::widen the api@L1" in block
     assert "> keep backward compatible" in block
     assert "BEGIN owner-gate guidance" in block
     assert "END owner-gate guidance" in block
 
 
 def test_gate_guidance_block_missing_stamped_id_uses_no_finding_id_label():
-    # E1: guided entry with no id → "(no finding id)" label; entry still appears
+    # E1: guided entry with no id → record-id line uses "(no finding id)"; entry still appears
     entries = [{"title": "widen the API", "guidance": "keep backward compatible"}]
     block = RD._gate_guidance_block(entries)
-    assert "### (no finding id) — widen the API" in block
+    assert "### (file not recorded):(line not recorded) — widen the API" in block
+    assert "Record id (auditing only, not for matching): (no finding id)" in block
     assert "> keep backward compatible" in block
 
 
 def test_gate_guidance_block_non_string_stamped_id_uses_no_finding_id_label():
-    # E2: non-string entry id → same as E1
+    # E2: non-string entry id → same as E1 on the record-id line
     entries = [{"id": 1, "title": "widen the API", "guidance": "keep backward compatible"}]
     block = RD._gate_guidance_block(entries)
-    assert "### (no finding id) — widen the API" in block
+    assert "### (file not recorded):(line not recorded) — widen the API" in block
+    assert "Record id (auditing only, not for matching): (no finding id)" in block
     assert "> keep backward compatible" in block
 
 
@@ -227,7 +234,8 @@ def test_gate_guidance_round_placeholder_neutralized_in_rendered_order(tmp_path)
     import round_orders as RO
     state = _fixer_guidance_state(
         tmp_path,
-        [_guidance_disposition("a.py::leak@L3", "leak", "use round {{ROUND}} here")],
+        [_guidance_disposition("a.py::leak@L3", "leak", "use round {{ROUND}} here",
+                              file="a.py", line=3)],
         fix_batch=[{"title": "leak", "file": "a.py", "line": 3}],
     )
     ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-round")
@@ -245,7 +253,7 @@ def test_gate_guidance_unknown_placeholder_does_not_wedge_render(tmp_path):
     import round_orders as RO
     state = _fixer_guidance_state(
         tmp_path,
-        [_guidance_disposition("b.py::x@L1", "x", "see {{UNKNOWN_THING}}")],
+        [_guidance_disposition("b.py::x@L1", "x", "see {{UNKNOWN_THING}}", file="b.py", line=1)],
         fix_batch=[{"title": "x", "file": "b.py", "line": 1}],
     )
     ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-unknown")
@@ -260,7 +268,8 @@ def test_gate_guidance_triple_brace_round_placeholder_neutralized_in_rendered_or
     import round_orders as RO
     state = _fixer_guidance_state(
         tmp_path,
-        [_guidance_disposition("a.py::leak@L3", "leak", "use {{{ROUND}} exactly")],
+        [_guidance_disposition("a.py::leak@L3", "leak", "use {{{ROUND}}} exactly",
+                              file="a.py", line=3)],
         fix_batch=[{"title": "leak", "file": "a.py", "line": 3}],
     )
     ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-triple")
@@ -277,7 +286,7 @@ def test_gate_guidance_long_odd_brace_run_neutralized_in_rendered_order(tmp_path
     import round_orders as RO
     state = _fixer_guidance_state(
         tmp_path,
-        [_guidance_disposition("b.py::x@L1", "x", "{{{{{FOO}}")],
+        [_guidance_disposition("b.py::x@L1", "x", "{{{{{FOO}}", file="b.py", line=1)],
         fix_batch=[{"title": "x", "file": "b.py", "line": 1}],
     )
     ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-odd")
@@ -293,7 +302,8 @@ def test_gate_guidance_title_placeholder_neutralized_in_rendered_order(tmp_path)
     import round_orders as RO
     state = _fixer_guidance_state(
         tmp_path,
-        [_guidance_disposition("b.py::review@L1", "review {{UNKNOWN_THING}} handling", "ship narrow")],
+        [_guidance_disposition("b.py::review@L1", "review {{UNKNOWN_THING}} handling", "ship narrow",
+                              file="b.py", line=1)],
         fix_batch=[{"title": "review {{UNKNOWN_THING}} handling", "file": "b.py", "line": 1}],
     )
     ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-title")
@@ -310,12 +320,13 @@ def test_gate_guidance_stamped_id_placeholder_neutralized_in_rendered_order(tmp_
     import round_orders as RO
     state = _fixer_guidance_state(
         tmp_path,
-        [_guidance_disposition("a.py::{{ROUND}}@L3", "leak", "keep narrow")],
+        [_guidance_disposition("a.py::{{ROUND}}@L3", "leak", "keep narrow",
+                              file="a.py", line=3)],
         fix_batch=[{"title": "leak", "file": "a.py", "line": 3}],
     )
     ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-id")
     assert "a.py::{{ROUND}}@L3" not in ph["GATE_GUIDANCE"]
-    assert "a.py::{ {ROUND}}@L3" in ph["GATE_GUIDANCE"]
+    assert "Record id (auditing only, not for matching): a.py::{ {ROUND}}@L3" in ph["GATE_GUIDANCE"]
     ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
     text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
     assert reason is None, reason
@@ -327,7 +338,8 @@ def test_gate_guidance_all_fields_placeholder_neutralized_in_rendered_order(tmp_
     import round_orders as RO
     state = _fixer_guidance_state(
         tmp_path,
-        [_guidance_disposition("a.py::{{BAR}}@L1", "review {{FOO}}", "use {{{ROUND}}}")],
+        [_guidance_disposition("a.py::{{BAR}}@L1", "review {{FOO}}", "use {{{ROUND}}}",
+                              file="a.py", line=1)],
         fix_batch=[{"title": "review {{FOO}}", "file": "a.py", "line": 1}],
     )
     ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-all")
@@ -344,7 +356,7 @@ def test_gate_guidance_markdown_in_guidance_stays_inside_delimiters(tmp_path):
     guidance = "# heading\n```py\nx = 1\n```\nuse `foo`"
     state = _fixer_guidance_state(
         tmp_path,
-        [_guidance_disposition("c.py::fmt@L2", "fmt", guidance)],
+        [_guidance_disposition("c.py::fmt@L2", "fmt", guidance, file="c.py", line=2)],
         fix_batch=[{"title": "fmt", "file": "c.py", "line": 2}],
     )
     ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-md")
@@ -361,7 +373,7 @@ def test_gate_guidance_markdown_in_guidance_stays_inside_delimiters(tmp_path):
 
 def test_gate_guidance_per_row_cap_renders_full_at_boundary():
     """E7: guidance at the 2000-byte row cap renders in full; one byte over withholds exactly one."""
-    entry = {"id": "d.py::big@L1", "title": "big", "guidance": "x"}
+    entry = {"id": "d.py::big@L1", "title": "big", "file": "d.py", "line": 1, "guidance": "x"}
     at_cap = dict(entry, guidance="x" * 2000)
     block_full = RD._gate_guidance_block([at_cap])
     assert "bytes withheld" not in block_full
@@ -375,10 +387,11 @@ def test_gate_guidance_aggregate_cap_admits_and_omits_at_boundary():
     """E8: the 8000-byte aggregate cap renders fitting rows in full and names the rest."""
     guidance = "y" * 500
     entries = [{"id": "e%d.py::row-%02d@L%d" % (i, i, i + 1), "title": "row-%02d" % i,
-                  "guidance": guidance} for i in range(20)]
+                  "file": "e%d.py" % i, "line": i + 1, "guidance": guidance} for i in range(20)]
     block = RD._gate_guidance_block(entries)
     assert "not rendered in full; the remainder is not carried in this order." in block
-    rendered = [e for e in entries if "### %s — %s" % (e["id"], e["title"]) in block]
+    rendered = [e for e in entries
+                if "### %s:%d — %s" % (e["file"], e["line"], e["title"]) in block]
     omitted = [e for e in entries if e not in rendered]
     assert rendered, "expected at least one row under the 8000-byte aggregate cap"
     assert omitted, "expected at least one row omitted by the 8000-byte aggregate cap"
@@ -395,7 +408,8 @@ def test_fixer_order_placeholders_include_guided_gate_block(tmp_path):
     # G1 axis: P_FIXER wiring emits guided guidance from fold-owned records
     state = _fixer_guidance_state(
         tmp_path,
-        [_guidance_disposition("f.py::widen the api@L1", "widen the API", "ship narrow API")],
+        [_guidance_disposition("f.py::widen the api@L1", "widen the API", "ship narrow API",
+                              file="f.py", line=1)],
         fix_batch=[{"title": "widen the API", "file": "f.py", "line": 1}],
     )
     ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="guided-batch")

@@ -110,6 +110,7 @@ _SELF_RECOVERY_FIXER_EFFORT = "high"
 GATE_GUIDANCE_RECORD_KEY = "userGuidance"
 GATE_GUIDANCE_ROW_BYTE_CAP = 2000
 GATE_GUIDANCE_AGGREGATE_BYTE_CAP = 8000
+GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP = 120
 _GATE_GUIDANCE_NO_GUIDANCE = "No owner-gate guidance is attached to this batch."
 _GATE_GUIDANCE_ROW_CARRIED_CHANNEL = "gateGuidanceRowCarried"
 GATE_GUIDANCE_UNUSABLE_REFUSAL = "gate-guidance-unusable"
@@ -2617,6 +2618,46 @@ def _truncate_utf8_bytes(text, max_bytes):
     return "", len(raw)
 
 
+def _normalize_gate_guidance_header_field(value):
+    """Prepare one owner-gate guidance header field for safe single-line interpolation."""
+    text = str(value)
+    text = re.sub(r"[\x00-\x1f\x7f\u2028\u2029]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text, withheld = _truncate_utf8_bytes(text, GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP)
+    if withheld:
+        text = "%s (%d bytes withheld)" % (text, withheld)
+    return _escape_guidance_placeholder_syntax(text)
+
+
+def _gate_guidance_header_file_part(entry):
+    raw = entry.get("file")
+    if isinstance(raw, str) and raw.strip():
+        return _normalize_gate_guidance_header_field(raw.strip())
+    return "(file not recorded)"
+
+
+def _gate_guidance_header_line_part(entry):
+    raw = entry.get("line")
+    if isinstance(raw, int):
+        return _normalize_gate_guidance_header_field(raw)
+    if raw is not None:
+        return _normalize_gate_guidance_header_field(raw)
+    return "(line not recorded)"
+
+
+def _gate_guidance_identity_line(entry):
+    file_part = _gate_guidance_header_file_part(entry)
+    line_part = _gate_guidance_header_line_part(entry)
+    title = _normalize_gate_guidance_header_field(entry.get("title") or "(no title)")
+    return "### %s:%s — %s" % (file_part, line_part, title)
+
+
+def _gate_guidance_record_id_line(fid):
+    label = fid.strip() if isinstance(fid, str) and fid.strip() else "(no finding id)"
+    return "Record id (auditing only, not for matching): %s" % (
+        _normalize_gate_guidance_header_field(label))
+
+
 def _gate_guidance_entries(state, rnd):
     """Return validated fold-owned guidance records for order rendering."""
     rounds = state.get("rounds") if isinstance(state, dict) else None
@@ -2645,7 +2686,8 @@ def _gate_guidance_entries(state, rnd):
         if fid in seen_ids:
             raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
         seen_ids.add(fid)
-        out.append({"id": fid, "title": item.get("title"), "guidance": guidance.strip()})
+        out.append({"id": fid, "title": item.get("title"), "file": item.get("file"),
+                    "line": item.get("line"), "guidance": guidance.strip()})
     return out
 
 
@@ -2668,17 +2710,26 @@ def _gate_guidance_block(entries):
         guided.append((entry, guidance.strip(), fid_stripped))
     if not guided:
         return _GATE_GUIDANCE_NO_GUIDANCE
+    identity_counts = {}
+    identity_lines = []
+    for entry, _guidance, _fid in guided:
+        identity_line = _gate_guidance_identity_line(entry)
+        identity_lines.append(identity_line)
+        identity_counts[identity_line] = identity_counts.get(identity_line, 0) + 1
     parts = []
     aggregate_bytes = 0
     omitted = 0
-    for idx, (entry, guidance, fid) in enumerate(guided):
+    for idx, ((entry, guidance, fid), identity_line) in enumerate(zip(guided, identity_lines)):
         if aggregate_bytes >= GATE_GUIDANCE_AGGREGATE_BYTE_CAP:
             omitted = len(guided) - idx
             break
-        title = _escape_guidance_placeholder_syntax(entry.get("title") or "(no title)")
-        id_label = _escape_guidance_placeholder_syntax(
-            fid if fid is not None else "(no finding id)")
-        header = "### %s — %s" % (id_label, title)
+        header_lines = [identity_line]
+        if identity_counts[identity_line] >= 2:
+            header_lines.append(
+                "Note: %d guided findings share this identity (file, line, title) — "
+                "read all guidance blocks before applying any fix."
+                % identity_counts[identity_line])
+        header_lines.append(_gate_guidance_record_id_line(fid))
         text, withheld = _truncate_utf8_bytes(guidance, GATE_GUIDANCE_ROW_BYTE_CAP)
         escaped = _escape_guidance_placeholder_syntax(text)
         body_lines = ["BEGIN owner-gate guidance"]
@@ -2688,7 +2739,7 @@ def _gate_guidance_block(entries):
             body_lines.append(
                 "> (%d bytes withheld; the remainder is not carried in this order)" % withheld)
         body_lines.append("END owner-gate guidance")
-        entry_text = "\n".join([header] + body_lines)
+        entry_text = "\n".join(header_lines + body_lines)
         entry_bytes = len(entry_text.encode("utf-8"))
         remaining = GATE_GUIDANCE_AGGREGATE_BYTE_CAP - aggregate_bytes
         if entry_bytes > remaining:
@@ -2754,7 +2805,8 @@ def _fold_judgment(state, config, artifact):
     disposed:
 
       - `fix-as-suggested`  → folds into the round's fix batch;
-      - `fix-with-guidance` → folds into the fix batch with the owner's free-text `guidance` attached;
+      - `fix-with-guidance` → folds into the fix batch; the owner's free-text `guidance` is recorded
+        only in the fold-owned ``judgmentDispositions`` log and rendered order, never on the row;
       - `skip`              → requires a citable `reason` (recorded in the decision ledger); the
                               skipped blocker rides the exit disclosure (the skipped-blocking channel).
 
@@ -2813,7 +2865,8 @@ def _fold_judgment(state, config, artifact):
         if disposition == "fix-with-guidance":
             g["judgmentDisposition"] = "fix-with-guidance"
             guidance = d.get("guidance")
-            entry = {"id": fid, "title": f.get("title"), "disposition": "fix-with-guidance"}
+            entry = {"id": fid, "title": f.get("title"), "file": f.get("file"),
+                     "line": f.get("line"), "disposition": "fix-with-guidance"}
             if isinstance(guidance, str) and guidance.strip():
                 entry[GATE_GUIDANCE_RECORD_KEY] = guidance.strip()
             disposition_log.append(entry)

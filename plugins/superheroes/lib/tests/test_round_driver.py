@@ -4918,14 +4918,15 @@ def test_judgment_dispositions_guidance_survives_records_path_resume(tmp_path):
     assert ph["GATE_GUIDANCE"] != RD._GATE_GUIDANCE_NO_GUIDANCE
 
 
-def _gate_guidance_header_id(block):
+def _gate_guidance_record_id_line(block):
     import re
-    m = re.search(r"^### (.+?) — ", block, re.MULTILINE)
+    m = re.search(
+        r"^Record id \(auditing only, not for matching\): (.+)$", block, re.MULTILINE)
     return m.group(1) if m else None
 
 
 def test_guided_order_block_id_matches_judgment_dispositions_record(tmp_path):
-    """E3: order header id equals the fold-owned record id — minted once at the fold."""
+    """E3: durable record id is minted once at the fold and appears on the record-id line."""
     mech = {"title": "widen the API", "severity": "Critical", "file": "f.py", "line": 1}
     state = RD.new_state(_cfg())
     RD._route_judgment_blockers(state, [mech, dict(_TRADEOFF)])
@@ -4934,6 +4935,8 @@ def test_guided_order_block_id_matches_judgment_dispositions_record(tmp_path):
          "guidance": "keep it backward compatible"}]})
     record = state["rounds"]["1"]["judgmentDispositions"][0]
     record_id = record["id"]
+    assert record["file"] == _TRADEOFF.get("file")
+    assert record["line"] == _TRADEOFF.get("line")
     assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][1]
     session_dir = str(tmp_path / "e3-id-match")
     os.makedirs(session_dir)
@@ -4950,12 +4953,13 @@ def test_guided_order_block_id_matches_judgment_dispositions_record(tmp_path):
         RD.P_FIXER, "fixer", 0, state, state["config"], {},
         session_dir, 1, paths, RD.CHANNEL_FILE,
     )
-    order_id = _gate_guidance_header_id(ph["GATE_GUIDANCE"])
-    assert order_id == record_id
+    block = ph["GATE_GUIDANCE"]
+    assert _gate_guidance_record_id_line(block) == record_id
+    assert "### %s:%s — %s" % (_TRADEOFF["file"], _TRADEOFF["line"], _TRADEOFF["title"]) in block
 
 
 def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
-    """E4: two guided tradeoffs at the same location — distinct ids each match its record entry."""
+    """E4: two guided tradeoffs at the same location — ambiguity note, both guidance texts kept."""
     a = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
          "tradeoff": True}
     b = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
@@ -4990,11 +4994,13 @@ def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
     for guidance, record_id in record_by_guidance.items():
         assert record_id in block
         assert "> %s" % guidance in block
-    assert block.count("### ") == 2
+    assert block.count("### f.py:10 — same choice") == 2
+    assert block.count("Note: 2 guided findings share this identity") == 2
+    assert block.count("BEGIN owner-gate guidance") == 2
 
 
 def test_two_guided_findings_same_title_distinguished_by_id(tmp_path):
-    """Edge 10: same title at different lines → both guided entries, distinct finding ids."""
+    """Edge 10: same title at different lines → distinct identity lines, no ambiguity note."""
     a = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
          "tradeoff": True}
     b = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 20,
@@ -5023,6 +5029,9 @@ def test_two_guided_findings_same_title_distinguished_by_id(tmp_path):
         session_dir, 1, paths, RD.CHANNEL_FILE,
     )
     block = ph["GATE_GUIDANCE"]
+    assert "### f.py:10 — same choice" in block
+    assert "### f.py:20 — same choice" in block
+    assert "Note:" not in block
     assert ids[0] in block and ids[1] in block
     assert "guidance A" in block and "guidance B" in block
     assert ids[0] != ids[1]
