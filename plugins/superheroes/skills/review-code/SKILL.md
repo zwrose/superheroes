@@ -385,4 +385,4 @@ Test-receipt evidence policy: `rubric/test-receipt-evidence.md`.
 
 ## Learning Loop & Staleness Nudge
 
-For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules. The subagent prompt templates, verification rules, and common mistakes for this skill are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md`.
+For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules. The triage subagent prompt template, verification rules, and common mistakes for this skill are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md`; other subagent prompt bodies live in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/orders/<phase>.md` and are rendered by the driver.
