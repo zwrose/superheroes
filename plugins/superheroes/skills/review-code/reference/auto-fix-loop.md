@@ -662,9 +662,12 @@ park branch scoped to that family — is
 `rubric/review-discipline.md` § *The safety-machinery route — the guard refuses the fixer*. Follow it
 rather than re-deriving it; do not retry the fixer, and never narrow the guard to converge a round.
 
-Rendered fixer orders use `rubric/orders/dispatch-fixer.md` as the authoritative template.
-The fenced block below is illustrative only — its owner-gate guidance section and
-guidance-matching contract live in that template, not here.
+**Moved.** The fixer subagent prompt template now ships as data and is rendered per round by
+`round_orders.render_order` on each `next` for `dispatch-fixer`. The orchestrator **dispatches the
+emitted order file** — do not hand-compose from a fenced template.
+
+The authoritative template body lives at `rubric/orders/dispatch-fixer.md` under the plugin
+root. The fenced block below is illustrative only.
 
 ```
 You are the fixer for one round of an auto-fix code-review loop.

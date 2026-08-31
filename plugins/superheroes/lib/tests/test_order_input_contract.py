@@ -247,6 +247,41 @@ def test_gate_guidance_identity_line_empty_title_renders_no_title_sentinel(
     assert identity == "### f.py:1 — (no title)"
 
 
+# Sentinel is reserved for a title that normalizes to empty; a falsy-but-renderable title
+# keeps its rendered form (e.g. str(0) → "0").
+_NON_STRING_FALSY_TITLE_CASES = [
+    ("zero", 0, "### f.py:1 — 0"),
+    ("false", False, "### f.py:1 — False"),
+]
+
+
+@pytest.mark.parametrize("case_id,title,expected_identity", _NON_STRING_FALSY_TITLE_CASES,
+                         ids=[c[0] for c in _NON_STRING_FALSY_TITLE_CASES])
+def test_gate_guidance_identity_line_falsy_non_string_title_renders_string_form(
+        tmp_path, case_id, title, expected_identity):
+    state = _fixer_guidance_state(
+        tmp_path,
+        [_guidance_disposition("f.py::falsy-title@L1", title, "guidance body",
+                              file="f.py", line=1)],
+    )
+    ph, _session_dir, _paths = _fixer_order_ph(
+        tmp_path, state, session_name="falsy-title-%s" % case_id)
+    identity = [ln for ln in ph["GATE_GUIDANCE"].splitlines() if ln.startswith("### ")][0]
+    assert identity == expected_identity
+
+
+def test_gate_guidance_identity_line_list_title_refuses_unhashable_fold_set(tmp_path):
+    # [] is falsy but unhashable — fold_titles set construction raises before identity render.
+    state = _fixer_guidance_state(
+        tmp_path,
+        [_guidance_disposition("f.py::falsy-title@L1", [], "guidance body",
+                              file="f.py", line=1)],
+    )
+    with pytest.raises(TypeError, match="unhashable type"):
+        _fixer_order_ph(tmp_path, state, session_name="falsy-title-empty-list")
+
+
+# axis: ordinary title survives normalization unchanged into the identity line
 def test_gate_guidance_identity_line_ordinary_title_renders_title(tmp_path):
     state = _fixer_guidance_state(
         tmp_path,
