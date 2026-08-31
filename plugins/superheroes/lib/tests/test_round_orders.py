@@ -101,6 +101,7 @@ def _fixer_placeholders():
         "ESCALATION_WRAPPER_PATH": shlex.quote(_ESCALATION),
         "VERIFY_COMMAND": "npm test",
         "ROUND": "2",
+        "GATE_GUIDANCE": "No owner-gate guidance is attached to this batch.",
     }
 
 

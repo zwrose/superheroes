@@ -321,7 +321,7 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" submit \
 
 ### Fixer subagent prompt
 
-The fixer subagent prompt template (including the escalation-guard context) is in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md`. Embed `ESC_WRAPPER` and `REPO_ROOT` (absolute) into the fixer prompt's `## Input` block. On `dispatch-fixer`, submit `headDiff` and `changedSubjects` derived from git via the **guarded** per-round command in Setup (`git diff "$BASE_REF"...HEAD` against the pinned base commit, with its failed-diff and empty-diff halts), never the fixer's self-report.
+The fixer subagent prompt template (including the escalation-guard context) is in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/orders/dispatch-fixer.md` — the driver renders it per `dispatch-fixer`; the fenced block in `skills/review-code/reference/auto-fix-loop.md` is illustrative only. Embed `ESC_WRAPPER` and `REPO_ROOT` (absolute) into the fixer prompt's `## Input` block. On `dispatch-fixer`, submit `headDiff` and `changedSubjects` derived from git via the **guarded** per-round command in Setup (`git diff "$BASE_REF"...HEAD` against the pinned base commit, with its failed-diff and empty-diff halts), never the fixer's self-report.
 
 ### End-of-Loop Summary
 
@@ -385,4 +385,4 @@ Test-receipt evidence policy: `rubric/test-receipt-evidence.md`.
 
 ## Learning Loop & Staleness Nudge
 
-For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules. The subagent prompt templates, verification rules, and common mistakes for this skill are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md`.
+For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules. The triage subagent prompt template, verification rules, and common mistakes for this skill are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md`; other subagent prompt bodies live in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/orders/<phase>.md` and are rendered by the driver.

@@ -662,13 +662,19 @@ park branch scoped to that family — is
 `rubric/review-discipline.md` § *The safety-machinery route — the guard refuses the fixer*. Follow it
 rather than re-deriving it; do not retry the fixer, and never narrow the guard to converge a round.
 
+**Moved.** The fixer subagent prompt template now ships as data and is rendered per round by
+`round_orders.render_order` on each `next` for `dispatch-fixer`. The orchestrator **dispatches the
+emitted order file** — do not hand-compose from a fenced template.
+
+The authoritative template body lives at `rubric/orders/dispatch-fixer.md` under the plugin
+root. The fenced block below is illustrative only.
+
 ```
 You are the fixer for one round of an auto-fix code-review loop.
 
 ## Input
 - Findings to fix: $SESSION_DIR/round-<N>/fix-batch.json (array; each has
-  id, severity, dimension, file, line, body, suggestion, and optional
-  userGuidance)
+  id, severity, dimension, file, line, body, and suggestion)
 - Conventions: CLAUDE.md and the project profile (<PROFILE_PATH>);
   severity/format from the base rubric (<absolute RUBRIC path>)
 - Work in the current branch's working tree at <cwd>
@@ -678,8 +684,8 @@ You are the fixer for one round of an auto-fix code-review loop.
 
 ## Your job
 1. Apply a fix for EACH finding. Follow CLAUDE.md conventions and the profile's
-   canonical patterns. When a finding has userGuidance, follow it over the
-   original suggestion. BEFORE editing any file, gate it with the fixer
+   canonical patterns.
+   BEFORE editing any file, gate it with the fixer
    file-scope guard, using the absolute "Escalation guard" and "Repo root"
    values from ## Input:
    `python3 -B "<absolute ESC_WRAPPER path>" guard --root "<absolute REPO_ROOT>" --path "<file>"`

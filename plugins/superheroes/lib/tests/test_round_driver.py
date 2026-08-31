@@ -2889,6 +2889,10 @@ _ALL_CHANNELS = {
     "verifyPasses": [{"CONFIRMED": 1, "PLAUSIBLE": 0, "REFUTED": 0, "drops": 0,
                       "downgrades": 0, "unverified": 0, "ambiguous": 0}],
     "seatMapUnjudgeable": [_load("seat_map").VIOLATION_BASIS_NO_AUTHOR_FAMILY],
+    "judgmentDispositions": [{"id": "f.py::tradeoff@L1", "title": "tradeoff",
+                              "disposition": "fix-with-guidance",
+                              "userGuidance": "keep narrow"}],
+    "gateGuidanceRowCarried": [{"index": 0, "title": "orphan row"}],
 }
 
 
@@ -3405,6 +3409,69 @@ def test_prior_comments_unavailable_degraded_prose_on_receipt():
     )
 
 
+def test_judgment_fail_closed_dispositions_degraded_on_receipt():
+    """Fail-closed judgment folds disclose round and count on the receipt degraded list."""
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {"1": {"judgmentDispositions": [
+        {"id": "f.py::widen the api@L1", "title": "widen the API",
+         "disposition": "fix-as-suggested", "failClosed": True},
+        {"id": "f.py::other@L2", "title": "other tradeoff",
+         "disposition": "fix-as-suggested", "failClosed": True},
+    ]}}
+    receipt = RD.build_receipt(state)
+    lines = [d for d in receipt["degraded"] if "judgment-fail-closed" in d]
+    assert len(lines) == 1
+    assert "round 1" in lines[0]
+    assert "2 judgment blocker(s)" in lines[0]
+
+
+def test_judgment_valid_dispositions_not_degraded_on_receipt():
+    """All-valid judgment dispositions must not add a fail-closed degradation line."""
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {"1": {"judgmentDispositions": [
+        {"id": "f.py::widen the api@L1", "title": "widen the API",
+         "disposition": "fix-as-suggested"},
+        {"id": "f.py::narrow@L2", "title": "narrow the API",
+         "disposition": "fix-with-guidance", RD.GATE_GUIDANCE_RECORD_KEY: "keep compatible"},
+    ]}}
+    receipt = RD.build_receipt(state)
+    assert not any("judgment-fail-closed" in d for d in receipt["degraded"])
+
+
+def test_judgment_fail_closed_degraded_omits_guidance_and_title():
+    """Fail-closed degradation names only round and count — never guidance text or finding titles."""
+    distinctive_guidance = "ZQ_DISCLOSURE_MUST_NOT_LEAK_THIS_GUIDANCE"
+    distinctive_title = "ZQ_DISCLOSURE_MUST_NOT_LEAK_THIS_TITLE"
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {"1": {"judgmentDispositions": [
+        {"id": "f.py::widen the api@L1", "title": distinctive_title,
+         "disposition": "fix-as-suggested", "failClosed": True,
+         RD.GATE_GUIDANCE_RECORD_KEY: distinctive_guidance},
+    ]}}
+    receipt = RD.build_receipt(state)
+    lines = [d for d in receipt["degraded"] if "judgment-fail-closed" in d]
+    assert len(lines) == 1
+    assert distinctive_guidance not in lines[0]
+    assert distinctive_title not in lines[0]
+
+
+def test_judgment_fail_closed_degraded_per_round():
+    """Fail-closed entries across multiple rounds each get their own degradation line."""
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {
+        "1": {"judgmentDispositions": [
+            {"id": "a", "disposition": "fix-as-suggested", "failClosed": True}]},
+        "2": {"judgmentDispositions": [
+            {"id": "b", "disposition": "fix-as-suggested", "failClosed": True},
+            {"id": "c", "disposition": "fix-as-suggested", "failClosed": True}]},
+    }
+    receipt = RD.build_receipt(state)
+    lines = [d for d in receipt["degraded"] if "judgment-fail-closed" in d]
+    assert len(lines) == 2
+    assert any("round 1" in line and "1 judgment blocker(s)" in line for line in lines)
+    assert any("round 2" in line and "2 judgment blocker(s)" in line for line in lines)
+
+
 def test_malformed_order_vendor_gap_in_session_does_not_crash_receipt():
     """Malformed gap row recorded in-session is skipped at render; receipt still produced."""
     state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
@@ -3560,6 +3627,7 @@ def test_panel_round_channels_are_all_accounted_for():
             verifier_appended.add(key.value)
 
     fold_provenance = set(RD.FOLD_PROVENANCE_DISCLOSURE_CHANNELS)
+    judgment_fold = set(RD.JUDGMENT_FOLD_DISCLOSURE_CHANNELS)
     submit_disclosure = set(RD.SUBMIT_DISCLOSURE_CHANNELS)
     order_emission = set(RD.ORDER_EMISSION_DISCLOSURE_CHANNELS)
     verifier_fold = set(RD.VERIFIER_FOLD_DISCLOSURE_CHANNELS)
@@ -3577,10 +3645,13 @@ def test_panel_round_channels_are_all_accounted_for():
     assert verifier_fold <= restorable, (
         "verifier-fold disclosure channels must be restorable: %s"
         % sorted(verifier_fold - restorable))
+    assert judgment_fold <= restorable, (
+        "judgment-fold disclosure channels must be restorable: %s"
+        % sorted(judgment_fold - restorable))
     assert not (restorable & unrestored), \
         "a channel cannot be both restorable and not-restored: %s" % sorted(restorable & unrestored)
     accounted = restorable | unrestored
-    all_recorded = (recorded | fold_provenance | submit_disclosure | order_emission
+    all_recorded = (recorded | fold_provenance | judgment_fold | submit_disclosure | order_emission
                     | verifier_recorded | verifier_appended | verifier_fold)
     assert all_recorded == accounted, (
         "every per-round disclosure channel needs exactly one home — unaccounted (no resume path): %s; "
@@ -4506,6 +4577,9 @@ _TRADEOFF = {"title": "widen the API", "severity": "Important",
 # The judgment disposition key is the per-LOCATION id (line-less finding_identity + line) so two
 # same-title tradeoff blockers at different lines never collide (#507 R2 v5).
 _TRADEOFF_ID = "f.py::widen the api@L1"
+_RESUME_IDENTITY_TRADEOFF = {"title": "resume identity fields", "severity": "Important",
+                             "file": "pkg/resume_identity.py", "line": 42, "tradeoff": True}
+_RESUME_IDENTITY_TRADEOFF_ID = "pkg/resume_identity.py::resume identity fields@L42"
 
 
 def test_judgment_payload_rows_carry_single_classification_literal():
@@ -4556,8 +4630,9 @@ def test_fix_with_guidance_attaches_guidance():
     assert state["step"] == RD.P_FIXER
     b = state["_fixBatch"][0]
     assert b["judgmentDisposition"] == "fix-with-guidance"
-    assert b[RD.FIX_BATCH_GUIDANCE_KEY] == "keep it backward compatible"
-    assert "guidance" not in b
+    logged = state["rounds"]["1"]["judgmentDispositions"][0]
+    assert logged[RD.GATE_GUIDANCE_RECORD_KEY] == "keep it backward compatible"
+    assert RD.GATE_GUIDANCE_RECORD_KEY not in b
 
 
 def test_skip_with_reason_records_ledger_and_rides_disclosure():
@@ -4741,6 +4816,281 @@ def test_judgment_conflicting_dispositions_same_id_parks():
     ]})
     assert state["terminal"] == "cannot-certify"
     assert RD.JUDGMENT_DISPOSITION_COLLISION_CAUSE in (state["certification"]["reason"] or "")
+
+
+def test_judgment_conflicting_guidance_same_id_parks():
+    """Two fix-with-guidance rows for one id with different guidance park via collision cause."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "approach A"},
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "approach B"},
+    ]})
+    assert state["terminal"] == "cannot-certify"
+    assert RD.JUDGMENT_DISPOSITION_COLLISION_CAUSE in (state["certification"]["reason"] or "")
+
+
+def test_judgment_identical_guidance_same_id_collapses():
+    """Identical guidance for the same id folds normally — not a conflict."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "same text"},
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "same text"},
+    ]})
+    assert state["step"] == RD.P_FIXER
+    assert len(state["_fixBatch"]) == 1
+    logged = state["rounds"]["1"]["judgmentDispositions"][0]
+    assert logged[RD.GATE_GUIDANCE_RECORD_KEY] == "same text"
+    assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][0]
+
+
+def test_fix_with_guidance_blank_records_disposition_without_guidance_value():
+    """fix-with-guidance with blank guidance records disposition only — no fabricated guidance."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "   "}]})
+    assert state["step"] == RD.P_FIXER
+    assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][0]
+    logged = state["rounds"]["1"]["judgmentDispositions"][0]
+    assert logged["disposition"] == "fix-with-guidance"
+    assert RD.GATE_GUIDANCE_RECORD_KEY not in logged
+
+
+def test_judgment_dispositions_record_carries_guidance_text():
+    """G3 axis: disposition_log carries userGuidance for fix-with-guidance folds."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
+         "guidance": "keep it backward compatible"}]})
+    logged = state["rounds"]["1"]["judgmentDispositions"][0]
+    assert logged[RD.GATE_GUIDANCE_RECORD_KEY] == "keep it backward compatible"
+
+
+def test_receipt_projects_judgment_dispositions_when_recorded():
+    """G4 axis: build_receipt carries judgmentDispositions when the round recorded one."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
+         "guidance": "narrow only"}]})
+    state["terminal"] = "converged"
+    receipt = RD.build_receipt(state)
+    rd = receipt["rounds"][0]
+    assert rd["judgmentDispositions"][0][RD.GATE_GUIDANCE_RECORD_KEY] == "narrow only"
+
+
+def test_judgment_dispositions_guidance_survives_records_path_resume(tmp_path):
+    """E6: fold guidance persists through recordsPath resume to the rendered fixer order."""
+    records = tmp_path / "round-records.json"
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
+         "guidance": "narrow only"}]})
+    state["_records"] = [_seed_record(1)]
+    RD._persist_round_records(state, state["config"])
+    on_disk = json.loads(records.read_text())
+    rec = next(r for r in on_disk if r.get("round") == 1)
+    assert rec["disclosures"]["judgmentDispositions"][0][RD.GATE_GUIDANCE_RECORD_KEY] == "narrow only"
+    resumed = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert resumed["rounds"]["1"]["judgmentDispositions"][0][RD.GATE_GUIDANCE_RECORD_KEY] == "narrow only"
+    resumed["terminal"] = "converged"
+    receipt = RD.build_receipt(resumed)
+    assert receipt["rounds"][0]["judgmentDispositions"][0][RD.GATE_GUIDANCE_RECORD_KEY] == "narrow only"
+    resumed["reviewedDiff"] = "diff --git a/f b/f\n"
+    resumed["_fixBatch"] = [{"title": "widen the API", "file": "f.py", "line": 1,
+                             "judgmentDisposition": "fix-with-guidance"}]
+    session_dir = str(tmp_path / "resume-render")
+    os.makedirs(session_dir)
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RD.P_FIXER, "fixer", 0, resumed, resumed["config"], {},
+        session_dir, 1, paths, RD.CHANNEL_FILE,
+    )
+    assert "narrow only" in ph["GATE_GUIDANCE"]
+    assert ph["GATE_GUIDANCE"] != RD._GATE_GUIDANCE_NO_GUIDANCE
+
+
+def test_judgment_dispositions_identity_fields_survive_records_path_resume(tmp_path):
+    """E6b: fold identity fields (id, file, line) persist through recordsPath resume."""
+    records = tmp_path / "round-records.json"
+    tradeoff = dict(_RESUME_IDENTITY_TRADEOFF)
+    guidance_text = "keep the resume identity intact"
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    RD._route_judgment_blockers(state, [tradeoff])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _RESUME_IDENTITY_TRADEOFF_ID, "disposition": "fix-with-guidance",
+         "guidance": guidance_text}]})
+    state["_records"] = [_seed_record(1)]
+    RD._persist_round_records(state, state["config"])
+    resumed = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    on_disk = json.loads(records.read_text())
+    rec = next(r for r in on_disk if r.get("round") == 1)
+    disk_entry = rec["disclosures"]["judgmentDispositions"][0]
+    assert disk_entry["file"] == tradeoff["file"]
+    assert disk_entry["line"] == tradeoff["line"]
+    assert disk_entry["id"] == _RESUME_IDENTITY_TRADEOFF_ID
+    resumed_entry = resumed["rounds"]["1"]["judgmentDispositions"][0]
+    assert resumed_entry["file"] == tradeoff["file"]
+    assert resumed_entry["line"] == tradeoff["line"]
+    assert resumed_entry["id"] == _RESUME_IDENTITY_TRADEOFF_ID
+    resumed["terminal"] = "converged"
+    receipt = RD.build_receipt(resumed)
+    receipt_entry = receipt["rounds"][0]["judgmentDispositions"][0]
+    assert receipt_entry["file"] == tradeoff["file"]
+    assert receipt_entry["line"] == tradeoff["line"]
+    assert receipt_entry["id"] == _RESUME_IDENTITY_TRADEOFF_ID
+    resumed["reviewedDiff"] = (
+        "diff --git a/pkg/resume_identity.py b/pkg/resume_identity.py\n")
+    resumed["_fixBatch"] = [{"title": tradeoff["title"], "file": tradeoff["file"],
+                             "line": tradeoff["line"],
+                             "judgmentDisposition": "fix-with-guidance"}]
+    session_dir = str(tmp_path / "resume-identity-render")
+    os.makedirs(session_dir)
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RD.P_FIXER, "fixer", 0, resumed, resumed["config"], {},
+        session_dir, 1, paths, RD.CHANNEL_FILE,
+    )
+    block = ph["GATE_GUIDANCE"]
+    assert "### %s:%s — %s" % (tradeoff["file"], tradeoff["line"], tradeoff["title"]) in block
+    assert _gate_guidance_record_id_line(block) == _RESUME_IDENTITY_TRADEOFF_ID
+
+
+def _gate_guidance_record_id_line(block):
+    import re
+    m = re.search(
+        r"^Record id \(auditing only, not for matching\): (.+)$", block, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def test_guided_order_block_id_matches_judgment_dispositions_record(tmp_path):
+    """E3: durable record id is minted once at the fold and appears on the record-id line."""
+    mech = {"title": "widen the API", "severity": "Critical", "file": "f.py", "line": 1}
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [mech, dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
+         "guidance": "keep it backward compatible"}]})
+    record = state["rounds"]["1"]["judgmentDispositions"][0]
+    record_id = record["id"]
+    assert record["file"] == _TRADEOFF.get("file")
+    assert record["line"] == _TRADEOFF.get("line")
+    assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][1]
+    session_dir = str(tmp_path / "e3-id-match")
+    os.makedirs(session_dir)
+    state["reviewedDiff"] = "diff --git a/f b/f\n"
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RD.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 1, paths, RD.CHANNEL_FILE,
+    )
+    block = ph["GATE_GUIDANCE"]
+    assert _gate_guidance_record_id_line(block) == record_id
+    assert "### %s:%s — %s" % (_TRADEOFF["file"], _TRADEOFF["line"], _TRADEOFF["title"]) in block
+
+
+def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
+    """E4: two guided tradeoffs at the same location — ambiguity note, both guidance texts kept."""
+    a = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
+         "tradeoff": True}
+    b = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
+         "tradeoff": True}
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(a), dict(b)])
+    step = RD._advance(state, state["config"])
+    ids = [f["id"] for f in step["payload"]["findings"]]
+    assert ids[0] != ids[1]
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": ids[0], "disposition": "fix-with-guidance", "guidance": "guidance A"},
+        {"id": ids[1], "disposition": "fix-with-guidance", "guidance": "guidance B"},
+    ]})
+    records = state["rounds"]["1"]["judgmentDispositions"]
+    record_by_guidance = {r[RD.GATE_GUIDANCE_RECORD_KEY]: r["id"] for r in records}
+    session_dir = str(tmp_path / "e4-same-loc")
+    os.makedirs(session_dir)
+    state["reviewedDiff"] = "diff --git a/f b/f\n"
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RD.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 1, paths, RD.CHANNEL_FILE,
+    )
+    block = ph["GATE_GUIDANCE"]
+    for guidance, record_id in record_by_guidance.items():
+        assert record_id in block
+        assert "> %s" % guidance in block
+    assert block.count("### f.py:10 — same choice") == 2
+    assert block.count("Note: 2 guided findings share this identity") == 2
+    assert block.count("BEGIN owner-gate guidance") == 2
+
+
+def test_two_guided_findings_same_title_distinguished_by_id(tmp_path):
+    """Edge 10: same title at different lines → distinct identity lines, no ambiguity note."""
+    a = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
+         "tradeoff": True}
+    b = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 20,
+         "tradeoff": True}
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(a), dict(b)])
+    step = RD._advance(state, state["config"])
+    ids = [f["id"] for f in step["payload"]["findings"]]
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": ids[0], "disposition": "fix-with-guidance", "guidance": "guidance A"},
+        {"id": ids[1], "disposition": "fix-with-guidance", "guidance": "guidance B"},
+    ]})
+    session_dir = str(tmp_path / "two-guided")
+    os.makedirs(session_dir)
+    state["reviewedDiff"] = "diff --git a/f b/f\n"
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RD.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 1, paths, RD.CHANNEL_FILE,
+    )
+    block = ph["GATE_GUIDANCE"]
+    assert "### f.py:10 — same choice" in block
+    assert "### f.py:20 — same choice" in block
+    assert "Note:" not in block
+    assert ids[0] in block and ids[1] in block
+    assert "guidance A" in block and "guidance B" in block
+    assert ids[0] != ids[1]
 
 
 def test_stall_menu_payload_carries_no_judgment_findings():
