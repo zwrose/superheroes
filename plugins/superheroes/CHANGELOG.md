@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.33.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.32.0...superheroes-v0.33.0) (2026-08-31)
+
+
+### Features
+
+* **superheroes:** fold-time owner-gate guidance reaches the emitted fixer order ([#1255](https://github.com/zwrose/superheroes/issues/1255)) ([c6391e0](https://github.com/zwrose/superheroes/commit/c6391e0caa0f8c63ec11c53fd4c508c43be2d295))
+* **superheroes:** seat_canary engagement needs investigation evidence; undetected plant is never a pass ([#1253](https://github.com/zwrose/superheroes/issues/1253)) ([59c8dee](https://github.com/zwrose/superheroes/commit/59c8deefbe2826ba7833e4d99de74ce57d59ced8))
+
+
+### Bug Fixes
+
+* **superheroes:** deflake the pilot process-group teardown family under -n auto ([#1216](https://github.com/zwrose/superheroes/issues/1216)) ([c3b45e6](https://github.com/zwrose/superheroes/commit/c3b45e6aa18801621e8b9ae1534ccb0b3aad9ff6))
+* **superheroes:** launcher injects CLAUDE_CONFIG_DIR into spawned children ([#1249](https://github.com/zwrose/superheroes/issues/1249)) ([909ece2](https://github.com/zwrose/superheroes/commit/909ece2c5b9df473377f07109cc0f245bd5339e3))
+* **superheroes:** prove the tripwire-residual guards on test_round_driver.py and scope per-round seatMapUnjudgeable to its own round ([#1218](https://github.com/zwrose/superheroes/issues/1218)) ([8156fb0](https://github.com/zwrose/superheroes/commit/8156fb0ada872c9fff75bed289d9620d44f8ca28))
+
 ## [0.32.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.31.0...superheroes-v0.32.0) (2026-08-28)
 
 
