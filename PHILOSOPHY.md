@@ -28,6 +28,11 @@ where superheroes lives), and delegates **judgment**, not just labor: when they 
 off a build, they are trusting the session to find the gotchas they don't know exist;
 when a readout says "reviewed and passing," they will ship on that sentence.
 
+Superheroes reviews repositories its owner trusts. Code whose provenance is unknown —
+code that could steer its own reviewer — is outside what the product reviews, and it
+does not defend review against that threat. A project that reviews outside contributions
+is outside that statement; saying so plainly is all the product owes it.
+
 We build superheroes with superheroes. Every promise and guardrail below is one its own
 developers run behind daily — the bar is that they hold even for experts, because
 guardrails that only protect careful owners are not guardrails.
@@ -37,11 +42,13 @@ guardrails that only protect careful owners are not guardrails.
 What the owner may trust, in order of what they'd feel most betrayed by if broken:
 
 1. **Work is delegated; commitment is not.** The product codes, designs, and decides
-   freely inside its workspace. The decisions that bind the owner — approving a merge,
-   a release, a publication — are never made on their behalf; executing an approved
-   merge may be delegated only where a mechanical checkpoint guarantees the owner's
-   approval every time. Releases, publications, and rewritten history stay in the
-   owner's hands. It parks rather than presume.
+   freely inside its workspace. Approval is the owner's word, given in conversation
+   over the PRs in front of them; it covers what it named until those PRs merge, and
+   anything opened later or materially changed asks again. Inside that word the
+   advisor executes merges and reports each one back at once in the thread that
+   gave it. A force-push needs its own word after the reason is stated in chat.
+   Releases and publications stay the owner's click by default. It parks rather
+   than presume.
 2. **It applies the judgment the owner isn't expected to have.** The third-party
    contract that needs a round-trip test before it's trusted, the unhappy path nobody
    specified, the race that only shows up under load, the test suite that mocks the very
@@ -139,6 +146,28 @@ without the milestone that unlocks it. The anti-opportunities ledger — the lis
 things we deliberately do not build — is a first-class artifact, cited instead of
 re-litigated.
 *Re-check:* the unlock conditions written on the ledger itself.
+
+**B8 — Forward share.** The fraction of capacity going to new goals versus maintaining
+the machine is the harm metric the product steers by. Control is a dial: a ceiling on
+the machinery share of each window's capacity, a per-project number configured per
+project; the plugin default is 20–30%. Test-pilot work classifies as product — it
+exercises the product, not the machine. Work folded into an epic from the backlog
+counts product-forward. Measured 2026-08-30 and corrected at CP3, outward-facing work
+was about 14% of open board stock and about 17% of wave slots under the
+test-pilot-as-product convention — equivalently, machinery held about 83–86% of
+capacity against the dial's 20–30% ceiling. That distance is the gap the trend closes.
+*Re-check:* steering by this one ratio should move the product outward; we change our
+mind if the trend fails to close that gap over recorded windows, or closes it by
+shipping junk.
+
+**B9 — Shrink or tolerate before you refuse.** When a model-driven caller misses an
+exact token, the first question is whether the interface can shrink or the reader can
+tolerate the miss — not whether to document the trap and add a refusal token.
+Fail-closed rigor stays only where it is load-bearing; the standing bias is against new
+refusal tokens as the fix for caller confusion. *The hard shell must stay tight. An
+unwieldy shell recreates the problem inside the treatment for it.*
+*Re-check:* caller-confusion incidents that tolerance let through and a refusal token
+would have caught — if those accumulate, the bias loses.
 
 ## 4. When values collide
 
