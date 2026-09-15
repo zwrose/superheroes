@@ -32,12 +32,10 @@ and never checks it by tool.
 
 ### Priority tiers
 
-The four tiers an item can hold at the front door: P0, P1, P2, and declined. P0 is the next wave,
-rare by construction, and every P0 names what it displaces. P1 enters the standing budget on the
-owner's batched word at a walk, and ages: at each [gardening pass](#gardening-pass) an old P1 is
-proposed for promotion, demotion, or decline. P2 should eventually happen, files without an owner
-word, and drains mostly by being folded in. Declined is below the bar: a [declined
-registry](#declined-registry) line with a [trigger](#trigger), and nothing on the board.
+The four tiers an item can hold at the front door: P0, the next wave; P1, the standing budget,
+entered on the owner's batched word; P2, should eventually happen, filed without an owner word;
+and declined, a [declined registry](#declined-registry) line with a [trigger](#trigger). The
+front door's rules for each tier live in the issue contract.
 
 ## Gardening and condition windows
 
@@ -185,7 +183,8 @@ own mechanisms.
 ### Product-forward lane
 
 A launched lane whose issue carries the product [kind label](#kind-label): work that moves the
-product toward its users. Test-pilot work is product.
+product toward its users, under the classification convention PHILOSOPHY's forward-share bet
+states.
 
 ### N
 
@@ -295,5 +294,5 @@ condition](#delete-when-condition) wearing a tag.
 
 Part structural, part capability-gap. The entry names which part is which so a
 [proposal](#proposal) can split it. Example: the seat canary, whose engagement axis is structural
-(a silent transport, read from telemetry) and whose plant-detection axis is a competence test,
-now a sampled probe.
+(a silent transport, read from telemetry) and whose plant-detection axis is a competence test
+sampled by a probe.

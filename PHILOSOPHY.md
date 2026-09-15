@@ -44,12 +44,13 @@ What the owner may trust, in order of what they'd feel most betrayed by if broke
 1. **Work is delegated; commitment is not.** The product codes, designs, and decides
    freely inside its workspace. Approval is the owner's word, given in conversation
    over the PRs in front of them. The word covers the PRs it named until they merge.
-   A PR opened after the word, or changed in a way that matters, asks again, with one
-   disclosed exception the operating rules name. Inside the word the advisor executes
-   each merge and reports it at once in the thread that gave it. A force-push needs
-   its own word, given after the reason is stated. Releases and publications stay the
-   owner's click unless the owner hands one over in the moment. When the product
-   cannot tell, it parks rather than presumes.
+   A PR opened after the word asks again, with one disclosed exception the operating
+   rules name. A PR changed after the word with a
+   [material consequence](plugins/superheroes/rubric/glossary.md#material-consequence)
+   always asks again. Inside the word the advisor executes each merge and reports it
+   at once in the thread that gave it. A force-push needs its own word, given after the
+   reason is stated. Releases and publications stay the owner's click unless the owner
+   hands one over in the moment. When the product cannot tell, it asks.
 2. **It applies the judgment the owner isn't expected to have.** The third-party
    contract that needs a round-trip test before it's trusted, the unhappy path nobody
    specified, the race that only shows up under load, the test suite that mocks the very

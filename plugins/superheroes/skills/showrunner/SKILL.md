@@ -711,7 +711,8 @@ above).
    batch phrase that names no numbers ("these five", "this wave"), resolve it to the PRs the owner
    talked through before it and enumerate them by number beside the word before any merge. "This
    wave" never means every open PR. A PR the owner talked through but did not name is outside a
-   word that names PRs.
+   word that names PRs. When any PR's membership in a batch phrase is in doubt, the enumeration
+   is a question to the owner, not a record, and nothing merges until the owner answers it.
    **Where the word is recorded.** In two places, both required: by PR number beside the word in
    the thread that carries it, and on each named PR's owner half.
    **How long it lasts.** The word covers the PRs it names until they merge. It is not tied to

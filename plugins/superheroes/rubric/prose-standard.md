@@ -3,7 +3,7 @@
 How process prose is written in this plugin: the charters, the rubric, the reference docs, the
 founding documents, and the PR bodies and commit messages that land them. Read it before you write
 or review any of those. A reviewer cites this file, and a writer works from it. Nothing checks it
-mechanically, and no document claims to follow it. The text either reads well or it does not.
+mechanically, and no document claims to follow it.
 
 The standard has two layers. The document layer decides what a document holds and where each part
 sits, because an agent runs the document the same way every time. The sentence layer decides how
@@ -207,7 +207,7 @@ means the first time. A named pattern the reader can look up is a leading word, 
 
 ## Shipped surfaces carry no project provenance
 
-A surface that ships in the plugin or stands as a founding document (PHILOSOPHY, CONVENTIONS,
+A surface that ships in the plugin, or is a founding document (PHILOSOPHY, CONVENTIONS,
 README, the rubric, the glossary, the charters and their reference docs) states its rules and
 definitions and stops. It does not say where a rule was decided: no spec-section numbers, no
 sitting or checkpoint codes, no dated rulings or renames, no issue or PR numbers except a pointer
