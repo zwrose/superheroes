@@ -704,52 +704,50 @@ above).
    Apply this duty's two tests per item as the filter's *why it is yours* ground, **written down**,
    not re-derived silently. `/superheroes:discuss-open-decisions` is the owner's keystroke for the
    same contract on demand; it does not replace this standing duty.
-6. **Coordinate releases and drive the merge train.** The covenant's promise 1 governs — approval
-   never delegates — and this duty carries its operational half.
-   **The word.** The owner gives a **scoped word in chat** after the PRs have been talked through —
-   "these five", "this wave". When the owner **names** PRs in the word, the scope is **exactly those
-   PRs** — PRs talked through before the word but not named in it are **not** in scope. The
-   talked-through set applies **only** to resolve a batch phrase that names no numbers ("these five",
-   "this wave"); the resolved set is **enumerated by PR number beside the word** before any merge
-   is executed. "This wave" resolves to the PRs of that wave the owner talked through, **never to every
-   PR open**.
-   **Where it is recorded — two places, both required.** By **PR number beside the word in the thread
-   that carries it**, and **on each named PR's owner half**.
-   **How long it lasts.** It applies to the PRs named in it **until they merge**. It is **not tied to
-   walks and does not lapse at one**. **No head is recorded at the word.**
-   **What puts a PR back outside it.** A PR **opened after the word** (a fix PR,
-   a later stack layer, a fold) is outside it and asks — **except** the disclosed follow-up PR on a
-   red train once the last lane has merged: that PR is the **single exception**, and it rides the
-   scope **only** while the fix is craft with no material consequence (see **The red train** below).
-   A PR whose **behavior, scope, or disclosed tradeoffs changed materially** after the word is outside
-   it and asks again — judged against the project's **material-consequence line**. The owner may
-   **withdraw or supersede the word at any time**, and a withdrawn or superseded word **covers nothing**
-   from that moment — it is the owner's approval and **theirs to take back**. A routine base
-   update or a craft fix with no material consequence **keeps** the word; that is the advisor's
-   judgment and it is **said on the owner half**. Where the advisor cannot confidently place a
-   post-word change on the material-consequence line, the doubt resolves to an owner call and the
-   PR asks again.
-   **Preconditions for executing inside the scope.** The **review and verification evidence the PR's
-   lane requires** (a READY vet for a full or light lane; the independent reviewer's **final-head
-   receipt** for a micro lane, which has no advisor vet by design); **CI green on the recorded head**;
-   and a **branch current with its base**.
-   **Reporting.** Each merge the advisor executes is **reported at once**, in the conversation that
-   gave the word, as **one line — the PR, the head merged, the scope it rode** — so a wrong merge is
-   visible within minutes and the word and the act sit in one thread. There is **no separate list of
-   executed merges** anywhere; the chat reports and the owner halves are the record.
-   **The red train.** A red on the train is fixed **under the word already given** when the fix is
-   craft with no material consequence; a fix with a material consequence asks. Recipe and field cases:
+6. **Coordinate releases and drive the merge train.** The covenant's promise 1 governs: approval
+   never delegates. This duty carries its operational half.
+   **The word.** The owner approves merges with a scoped word in chat, given after the PRs have
+   been talked through. When the word names PRs, the scope is exactly those PRs. When the word is a
+   batch phrase that names no numbers ("these five", "this wave"), resolve it to the PRs the owner
+   talked through before it and enumerate them by number beside the word before any merge. "This
+   wave" never means every open PR. A PR the owner talked through but did not name is outside a
+   word that names PRs.
+   **Where the word is recorded.** In two places, both required: by PR number beside the word in
+   the thread that carries it, and on each named PR's owner half.
+   **How long it lasts.** The word covers the PRs it names until they merge. It is not tied to
+   walks and does not lapse at one. No head is recorded at the word. The owner may withdraw or
+   supersede the word at any time, in the same thread, and a withdrawn word covers nothing from
+   that moment.
+   **What puts a PR back outside the word.** A PR opened after the word (a fix PR, a later stack
+   layer, a fold) asks again. The one exception is the disclosed follow-up PR on a red train once
+   the last lane has merged, which rides the scope only while the fix is craft with no material
+   consequence. A PR whose behavior, scope, or disclosed tradeoffs changed materially after the
+   word asks again, judged against the project's material-consequence line. A routine base update
+   or a craft fix with no material consequence keeps the word; that is your judgment, and you say
+   it on the owner half. When you cannot place a post-word change on that line with confidence,
+   treat it as an owner call and ask.
+   **Preconditions for executing inside the word.** Three, and none waives: the review and
+   verification evidence the PR's lane requires (a READY vet for a full or light lane; the
+   independent reviewer's final-head receipt for a micro lane, which has no advisor vet by
+   design), CI green on the recorded head, and a branch current with its base.
+   **Reporting.** Report each merge you execute at once, in the conversation that gave the word,
+   as one line: the PR, the head merged, and the scope it rode. A wrong merge is then visible
+   within minutes, and the word and the act sit in one thread. There is no separate list of
+   executed merges. The chat reports and the owner halves are the record.
+   **The red train.** When a lane goes red on the union or on `main`'s post-merge run, fix it
+   under the word already given if the fix is craft with no material consequence. A fix with a
+   material consequence asks. Recipe and field cases:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/merge-train.md`.
-   **Force-push.** The advisor **states the reason in chat first and proceeds on a word**; the word
-   and the reason are recorded on the PR's owner half.
-   **Releases and publishing.** By default the advisor does **not** execute a release merge or a
-   publish: it **asks in chat and the owner clicks**, and a release is **never inside a PR scope**.
-   The owner may override **in the moment** with a word for that release.
-   **The floor.** There is **no mechanical merge floor.**
-   **Mechanical duties you may execute inside the scope:** issuing the merge command, sequencing,
+   **Force-push.** State the reason in chat first, then proceed on a word. Record the word and the
+   reason on the PR's owner half.
+   **Releases and publishing.** By default you do not execute a release merge or a publish: ask in
+   chat and the owner clicks. A release is never inside a PR scope. The owner may hand one over in
+   the moment with a word for that release.
+   **The floor.** There is no mechanical merge floor.
+   **Mechanical duties you may execute inside the word:** issuing the merge command, sequencing,
    branch-update, waiting for CI green, conflict resolution under an advisor-authored recipe, and
-   post-merge hygiene. **A merge train's "green" includes post-merge `main` CI**; **union fixes ride
-   the last *open* PR, disclosed**.
+   post-merge hygiene. A merge train's "green" includes post-merge `main` CI, and union fixes ride
+   the last open PR, disclosed.
    When you hand mechanical duties to a cheap in-session subagent, three conditions make that safe:
    (1) **Recipes are durable versioned artifacts, not session context** — a fresh subagent has none of
    your context; what it executes must be self-contained and written down. (2) **The delegated seat
@@ -999,7 +997,7 @@ above).
 
 | Excuse | Reality |
 |---|---|
-| "The PR is small, I'll just merge it" | **Approval** is never yours; there is no merge without the owner's **scoped word** — a PR opened after the word may ride it only for a disclosed red-train follow-up while the fix is craft with no material consequence; a PR that materially changed since the word always asks again — vet it, then execute inside the word and report the merge at once. |
+| "The PR is small, I'll just merge it" | Approval is never yours, and there is no merge without the owner's scoped word. A PR opened after the word rides it only as the disclosed red-train follow-up while the fix is craft with no material consequence, and a PR that materially changed since the word always asks again. Vet it, then execute inside the word and report the merge at once. |
 | "I just ran a batch an hour ago — skip the preflight" | Preflight scales with the batch; N/A is explicit, never silent skip. Stale quota, base, or grant state kills the next launch. |
 | "Zero parks — clean batch" | Zero park/refusal rate is a signal to inspect, not a clean sheet. |
 | "CI is green, ship it" | Green means the suite passed, not that the owner got what they asked. Probe what the suite cannot test. |

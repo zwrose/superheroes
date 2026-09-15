@@ -20,3 +20,5 @@ every spec sentence a builder needs):
 The epic is the strategic reset (Spec A FR-A6): outside the dial and the trend, graded once on
 the per-role startup context before and after (C7's landing note). It ends when its last child
 lands or the owner closes it at a walk.
+
+**Package fixes after the stamp (2026-09-15):** register R29 added; FR-B6's sentence-layer row moved from C3 to C1; C1 and C3 bodies amended to match (here and on the live issues); Spec A amendments #1 to #4 recorded in the spec's own log. Owner-ruled at the review of PR #1277.
