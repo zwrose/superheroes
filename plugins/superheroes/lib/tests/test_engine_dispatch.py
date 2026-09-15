@@ -1332,11 +1332,11 @@ def test_view_destroyed_after_dispatch(tmp_path):
         (
             "engine_config_refusal",
             _never_call,
-            {"engine": "cursor", "model": "fable", "effort": "composer"},
+            {},
         ),
     ],
 )
-def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwargs):
+def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwargs, monkeypatch):
     repo_root = _repo(tmp_path)
     captured_path = []
     build_view_fn = _fake_build_view(tmp_path)
@@ -1353,7 +1353,16 @@ def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwa
             effort=kwargs.get("effort"),
         )
     else:
-        seat = _codex_seat(effort=kwargs.get("effort", "high"))
+        seat = _codex_seat(
+            model=kwargs.get("model", "gpt-5.6-sol"),
+            effort=kwargs.get("effort", "high"),
+        )
+    if case == "engine_config_refusal":
+        monkeypatch.setattr(
+            ED.engine_adapter,
+            "build_argv_result",
+            lambda *a, **k: {"argv": [], "reason": "unregistered-engine-model"},
+        )
     dispatch_kwargs = {
         "seat": seat,
         "role": _REVIEW_ROLE,
@@ -2675,6 +2684,17 @@ def test_run_engine_files_spawn_failure_omits_timing_keys(tmp_path):
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+        "roleKind": "build", "orderId": "x", "argv": ["/no/such/engine-binary-687"],
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
     ED._run_engine_files(
         run_dir, 1, ["/no/such/engine-binary-687"], run_dir,
         prompt_path, stdout_path, stderr_path, 30,
@@ -2695,6 +2715,17 @@ def test_run_engine_files_journal_append_failed_omits_timing_keys(tmp_path, monk
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+        "roleKind": "build", "orderId": "x", "argv": [sys.executable, "-c", "print('ok')"],
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
     real_append = ED._journal_append
     calls = {"n": 0}
 

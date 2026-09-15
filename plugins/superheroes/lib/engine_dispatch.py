@@ -223,12 +223,29 @@ def _seat_dispatch_refusal(seat_result, *, mode=None):
     return base
 
 
-def _normalize_allowlist_verdict(verdict):
+def _malformed_allowlist_verdict_reason(role, vendor):
+    if role is not None and vendor is not None:
+        return (
+            "allowlist guard returned malformed verdict — expected dispatch_guard.validate("
+            "%r, %r, model, effort) to return ok, reason, allowlist, and allowlist_pairs "
+            "naming the sanctioned model allowlist for this role and vendor; "
+            "fix the seat or re-run dispatch_guard check"
+            % (role, vendor)
+        )
+    return (
+        "allowlist guard returned malformed verdict — expected a well-formed "
+        "dispatch_guard.validate verdict with ok, reason, allowlist, and allowlist_pairs "
+        "naming the sanctioned model allowlist; fix the guard call or seat"
+    )
+
+
+def _normalize_allowlist_verdict(verdict, *, role=None, vendor=None):
     """Refuse on malformed dispatch_guard verdict — never proceed."""
+    malformed = _malformed_allowlist_verdict_reason(role, vendor)
     if not isinstance(verdict, dict):
         return {
             "ok": False,
-            "reason": "allowlist guard returned malformed verdict",
+            "reason": malformed,
             "allowlist": [],
             "allowlist_pairs": [],
         }
@@ -238,7 +255,7 @@ def _normalize_allowlist_verdict(verdict):
     if not isinstance(reason, str) or not reason.strip():
         return {
             "ok": False,
-            "reason": "allowlist guard returned malformed verdict",
+            "reason": malformed,
             "allowlist": list(verdict.get("allowlist") or []),
             "allowlist_pairs": list(verdict.get("allowlist_pairs") or []),
         }
@@ -250,7 +267,7 @@ def _dispatch_allowlist_validate(role, vendor, model, effort):
         verdict = dispatch_guard.validate(role, vendor, model, effort)
     except Exception:
         verdict = {"ok": False, "reason": "allowlist guard raised unexpectedly"}
-    return _normalize_allowlist_verdict(verdict)
+    return _normalize_allowlist_verdict(verdict, role=role, vendor=vendor)
 
 
 def _allowlist_guard_payload(verdict):
@@ -262,11 +279,11 @@ def _allowlist_guard_payload(verdict):
 
 
 def _entry_allowlist_refusal(
-    verdict, *, repo_root=None, engine=None, run_dir="", argv=None,
+    verdict, *, repo_root=None, engine=None, role=None, run_dir="", argv=None,
     mode=None, run_kind=RUN_KIND_REVIEW,
 ):
     """G1 terminal refusal — no lease, no opened run, no child."""
-    verdict = _normalize_allowlist_verdict(verdict)
+    verdict = _normalize_allowlist_verdict(verdict, role=role, vendor=engine)
     if verdict.get("ok"):
         return None
     result = {
@@ -4044,7 +4061,7 @@ def _dispatch_review_impl(seat, *, role, prompt_path,
                 role, engine, seat.get("model"), seat.get("effort"),
             )
             entry_refusal = _entry_allowlist_refusal(
-                guard_verdict, repo_root=repo_detail, engine=engine,
+                guard_verdict, repo_root=repo_detail, engine=engine, role=role,
                 run_dir=run_dir_real or "", mode=resolved_mode.get("mode"),
             )
             if entry_refusal is not None:
@@ -4392,21 +4409,10 @@ def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
              "attempts": 0, "forfeited": False, "terminal": True},
         )
 
-    opts = {"cwd": cwd_real}
-    built = engine_adapter.build_argv_result(seat, role_kind, opts)
-    if built["reason"] is not None:
-        return _write_preflight_terminal(
-            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-             "detail": "engine-config:%s" % built["reason"],
-             "attempts": 0, "forfeited": False, "terminal": True},
-        )
-    argv = built["argv"]
-
     if run_dir is None:
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-absent",
              "attempts": 0, "forfeited": False, "terminal": True},
-            argv=argv,
         )
 
     ok_rd, rd_detail = _validate_run_dir(run_dir, create=True)
@@ -4414,7 +4420,7 @@ def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": rd_detail,
              "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir=run_dir or "", argv=argv,
+            run_dir=run_dir or "", argv=[],
         )
     run_dir_real = rd_detail
 
@@ -4424,6 +4430,29 @@ def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
         records, _corrupt = _journal_read(run_dir_real)
         state = _journal_state(records)
         opened = state.get("opened")
+
+        if opened is None:
+            # axis: G1 — entry gate on fresh open only; no lease, opened run, or child without allowlist pass.
+            guard_verdict = _dispatch_allowlist_validate(
+                role, engine, seat.get("model"), seat.get("effort"),
+            )
+            entry_refusal = _entry_allowlist_refusal(
+                guard_verdict, repo_root=repo_root, engine=engine, role=role,
+                run_dir=run_dir_real, argv=[], run_kind=RUN_KIND_WRITE,
+            )
+            if entry_refusal is not None:
+                return entry_refusal
+
+        opts = {"cwd": cwd_real}
+        built = engine_adapter.build_argv_result(seat, role_kind, opts)
+        if built["reason"] is not None:
+            return _write_preflight_terminal(
+                {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                 "detail": "engine-config:%s" % built["reason"],
+                 "attempts": 0, "forfeited": False, "terminal": True},
+                run_dir=run_dir_real, argv=[],
+            )
+        argv = built["argv"]
 
         if opened is not None:
             if os.path.realpath(opened.get("cwd", "")) != cwd_real:
@@ -4483,17 +4512,6 @@ def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
                         run_dir=run_dir_real, argv=argv,
                     )
         else:
-            # axis: G1 — entry gate on fresh open only; no lease, opened run, or child without allowlist pass.
-            guard_verdict = _dispatch_allowlist_validate(
-                role, engine, seat.get("model"), seat.get("effort"),
-            )
-            entry_refusal = _entry_allowlist_refusal(
-                guard_verdict, repo_root=repo_root, engine=engine, run_dir=run_dir_real,
-                argv=argv, run_kind=RUN_KIND_WRITE,
-            )
-            if entry_refusal is not None:
-                return entry_refusal
-
             if base_sha is None:
                 try:
                     head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=preflight_timeout)

@@ -135,6 +135,19 @@ def _codex_seat(model="gpt-5.6-sol", effort="high"):
     return _seat("codex", model, effort)
 
 
+def _spawn_gate_resolved_inputs(seat, role):
+    return {
+        "engine": seat["vendor"],
+        "engineSource": "caller",
+        "model": seat["model"],
+        "modelSource": "caller",
+        "effort": seat.get("effort"),
+        "effortSource": "declared-none" if seat.get("effort") is None else "caller",
+        "role": role,
+        "roleSource": "caller",
+    }
+
+
 def _cursor_seat(model="composer-2.5", effort=None):
     return _seat("cursor", model, effort)
 
@@ -1163,6 +1176,7 @@ def test_engine_started_append_failure_terminates_engine(tmp_path, monkeypatch):
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
     })
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
