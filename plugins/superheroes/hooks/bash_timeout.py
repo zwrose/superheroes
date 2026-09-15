@@ -31,6 +31,8 @@ _DEFAULT_CONFIG_DIR = "~/.claude"
 _RECORD_REL_PATH = os.path.join("superheroes", "state", "bash-timeout-firings.jsonl")
 _RECORD_ROTATE_BYTES = 2 * 1024 * 1024
 
+# WORKAROUND: PreToolUse Bash timeout floor when the model omits an explicit timeout.
+# delete-when: the host Bash tool defaults to at least 600 s without a PreToolUse rewrite hook.
 DEFAULT_TIMEOUT_MS = 600000  # mirrors verify_gate.DEFAULT_TIMEOUT (600s); a project that lowers
 # BASH_MAX_TIMEOUT_MS below this gets the harness's clamp, not an error — still fail-open.
 
