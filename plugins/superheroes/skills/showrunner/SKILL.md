@@ -704,24 +704,42 @@ above).
    Apply this duty's two tests per item as the filter's *why it is yours* ground, **written down**,
    not re-derived silently. `/superheroes:discuss-open-decisions` is the owner's keystroke for the
    same contract on demand; it does not replace this standing duty.
-6. **Coordinate releases and drive the merge train.** The covenant's
-   promise 1 governs — approval never delegates; merge-command **execution** is delegable only where
-   a mechanical per-merge approval checkpoint exists on that host or path; release PRs and
-   force-pushes never delegate — and this duty carries its operational half: **the plugin ships its
-   own owner-authority gate as that checkpoint, and it is not wired on every host.** Where it does
-   not fire there is no per-merge ping, delegation is not available on that path, and merge
-   execution stays with the owner; **if you cannot establish that the checkpoint fires on your host
-   and path, the owner executes** (covenant fail-closed). When the project being advised is the
-   superheroes source repository itself, which host the gate is wired for is recorded in
-   `LEDGERS.md` §3.
-   **Delegated (when the checkpoint exists):** issuing the merge command, sequencing, branch-update,
-   waiting for CI green, conflict resolution under an advisor-authored recipe, and post-merge hygiene.
-   **Never delegated:** the approval; release PRs; anything needing a force-push. **Preconditions that
-   never waive:** an advisor vet with biting probes **when that vet exists** (not for **micro** PRs —
-   the one reviewer and per-change owner authorization stand in its place), CI green, branch current.
-   **The gate is a backstop, not an authorization boundary** — delegation stands on advisor
-   discipline with the gate behind it, never the reverse; **approval stays per-PR** ("approve once,
-   execute five" was considered and **not adopted**). **A merge train's "green" includes post-merge `main` CI**; **union fixes ride the last *open* PR, disclosed** — the recipe and its field cases: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/merge-train.md`.
+6. **Coordinate releases and drive the merge train.** The covenant's promise 1 governs — approval
+   never delegates — and this duty carries its operational half.
+   **The word.** The owner gives a **scoped word in chat** after the PRs have been talked through —
+   "these five", "this wave". The scope is the set of PRs the owner **named or talked through** when
+   giving it; "this wave" resolves to the PRs of that wave the owner talked through, **never to every
+   PR open**.
+   **Where it is recorded — two places, both required.** By **PR number beside the word in the thread
+   that carries it**, and **on each named PR's owner half**.
+   **How long it lasts.** It applies to the PRs named in it **until they merge**. It is **not tied to
+   walks and does not lapse at one**. **No head is recorded at the word.**
+   **What puts a PR back outside it — exactly two things.** A PR **opened after the word** (a fix PR,
+   a later stack layer, a fold) is outside it and asks. A PR whose **behavior, scope, or disclosed
+   tradeoffs changed materially** after the word is outside it and asks again — judged against the
+   project's **material-consequence line**. A routine base update or a craft fix with no material
+   consequence **keeps** the word; that is the advisor's judgment and it is **said on the owner half**.
+   **Preconditions for executing inside the scope.** The **review and verification evidence the PR's
+   lane requires** (a READY vet for a full or light lane; the independent reviewer's **final-head
+   receipt** for a micro lane, which has no advisor vet by design); **CI green on the recorded head**;
+   and a **branch current with its base**.
+   **Reporting.** Each merge the advisor executes is **reported at once**, in the conversation that
+   gave the word, as **one line — the PR, the head merged, the scope it rode** — so a wrong merge is
+   visible within minutes and the word and the act sit in one thread. There is **no separate list of
+   executed merges** anywhere; the chat reports and the owner halves are the record.
+   **The red train.** A red on the train is fixed **under the word already given** when the fix is
+   craft with no material consequence; a fix with a material consequence asks. Recipe and field cases:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/merge-train.md`.
+   **Force-push.** The advisor **states the reason in chat first and proceeds on a word**; the word
+   and the reason are recorded on the PR's owner half.
+   **Releases and publishing.** By default the advisor does **not** execute a release merge or a
+   publish: it **asks in chat and the owner clicks**, and a release is **never inside a PR scope**.
+   The owner may override **in the moment** with a word for that release.
+   **The floor.** There is **no mechanical merge floor.**
+   **Mechanical duties you may execute inside the scope:** issuing the merge command, sequencing,
+   branch-update, waiting for CI green, conflict resolution under an advisor-authored recipe, and
+   post-merge hygiene. **A merge train's "green" includes post-merge `main` CI**; **union fixes ride
+   the last *open* PR, disclosed**.
    When you hand mechanical duties to a cheap in-session subagent, three conditions make that safe:
    (1) **Recipes are durable versioned artifacts, not session context** — a fresh subagent has none of
    your context; what it executes must be self-contained and written down. (2) **The delegated seat
@@ -971,7 +989,7 @@ above).
 
 | Excuse | Reality |
 |---|---|
-| "The PR is small, I'll just merge it" | **Approval** is never yours; **merge execution** is delegable only where a per-merge checkpoint exists — vet, get the owner's click, then execute if delegated. |
+| "The PR is small, I'll just merge it" | **Approval** is never yours; there is no merge without the owner's **scoped word**, and a PR opened after the word or materially changed since asks again — vet it, then execute inside the word and report the merge at once. |
 | "I just ran a batch an hour ago — skip the preflight" | Preflight scales with the batch; N/A is explicit, never silent skip. Stale quota, base, or grant state kills the next launch. |
 | "Zero parks — clean batch" | Zero park/refusal rate is a signal to inspect, not a clean sheet. |
 | "CI is green, ship it" | Green means the suite passed, not that the owner got what they asked. Probe what the suite cannot test. |
