@@ -20,7 +20,7 @@ if _LIB_DIR not in sys.path:
 import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 2
 
 CONFIG_ABSENT = "absent"
 CONFIG_OK = "ok"

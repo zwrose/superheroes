@@ -51,7 +51,7 @@ _SPELLING_ALLOWLIST = {
     ("control_plane.py", "SCHEMA_VERSION = 1"): {
         "reason": "control-plane meta schema, not the driver state/receipt version",
     },
-    ("core_md.py", "SCHEMA_VERSION = 3"): {
+    ("core_md.py", "SCHEMA_VERSION = 2"): {
         "reason": "core-md sidecar schema, not the driver state/receipt version",
     },
     ("definition_doc.py", "SCHEMA_VERSION = 1"): {
