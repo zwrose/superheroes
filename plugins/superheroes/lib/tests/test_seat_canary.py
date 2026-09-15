@@ -43,6 +43,11 @@ EA = _load_engine_adapter()
 CO = _load_canary_outcome()
 DO = _load_dispatch_outcome()
 
+
+def _seat(vendor, model, effort):
+    return {"vendor": vendor, "model": model, "effort": effort}
+
+
 _PLUGIN_ROOT = os.path.join(_HERE, "..", "..")
 
 
@@ -873,20 +878,20 @@ def test_effort_none_builds_cursor_argv_and_still_refuses_where_effort_required(
     Grounds the #963 DoD — the probe reaches the engine — without dispatching one, and pins that
     the relaxation is CLI-side only: a model that requires an effort still refuses without one.
     """
-    runnable = EA.build_argv_result("cursor", "review", None, {"engine_model": "composer-2.5"})
+    runnable = EA.build_argv_result(_seat("cursor", "composer-2.5", None), "review", {})
     assert runnable["reason"] is None
     assert runnable["argv"]
 
     # Unchanged fail-closed edges: an effort string on the effort-less model, and a missing effort
     # on models that require one.
     assert EA.build_argv_result(
-        "cursor", "review", "high", {"engine_model": "composer-2.5"},
+        _seat("cursor", "composer-2.5", "high"), "review", {},
     )["reason"] == "invalid-model-effort"
     assert EA.build_argv_result(
-        "cursor", "review", None, {"engine_model": "cursor-grok-4.6"},
+        _seat("cursor", "cursor-grok-4.6", None), "review", {},
     )["reason"] == "invalid-model-effort"
     assert EA.build_argv_result(
-        "codex", "review", None, {"engine_model": "gpt-5.6-terra"},
+        _seat("codex", "gpt-5.6-terra", None), "review", {},
     )["reason"] == "invalid-model-effort"
 
 

@@ -32,6 +32,14 @@ SM = _load("seat_map", "seat_map.py")
 RD = _load("round_driver", "round_driver.py")
 MR = _load("model_registry", "model_registry.py")
 
+_REVIEW_ROLE = "reviewer"
+_WRITE_ROLE = "implementer"
+
+
+def _seat_json(vendor, model, effort):
+    return json.dumps({"vendor": vendor, "model": model, "effort": effort})
+
+
 _CENSUS_MODULES = (
     ("engine_dispatch", ED.build_parser()),
     ("dispatch_guard", DG.build_parser()),
@@ -105,8 +113,8 @@ def test_dispatch_review_run_dir_symlink_refused_through_cli(tmp_path, capsys):
     prompt.write_text("review this", encoding="utf-8")
     rc = ED.main([
         "dispatch-review",
-        "--engine", "cursor",
-        "--effort", "high",
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--role", _REVIEW_ROLE,
         "--prompt-path", str(prompt),
         "--repo-root", str(repo),
         "--run-dir", str(symlink),
@@ -120,7 +128,7 @@ def test_dispatch_review_run_dir_symlink_refused_through_cli(tmp_path, capsys):
 def test_dispatch_review_main_forwards_mode_kwarg(tmp_path, monkeypatch, capsys):
     captured = {}
 
-    def fake_dispatch_review(engine, **kwargs):
+    def fake_dispatch_review(seat=None, role=None, **kwargs):
         captured.update(kwargs)
         return {
             "ok": False, "terminal": True, "reason": "unrunnable", "detail": "test",
@@ -134,8 +142,8 @@ def test_dispatch_review_main_forwards_mode_kwarg(tmp_path, monkeypatch, capsys)
     prompt.write_text("review this", encoding="utf-8")
     rc = ED.main([
         "dispatch-review",
-        "--engine", "codex",
-        "--effort", "high",
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--role", _REVIEW_ROLE,
         "--prompt-path", str(prompt),
         "--repo-root", str(repo),
         "--mode", "brief-check",
@@ -148,38 +156,29 @@ def test_dispatch_review_main_forwards_mode_kwarg(tmp_path, monkeypatch, capsys)
 def test_role_rejects_valid_vendor_name():
     with pytest.raises(SystemExit):
         DG.build_parser().parse_args(
-            ["check", "--role", "claude", "--vendor", "cursor"]
-        )
-
-
-def test_model_slot_rejects_valid_role_name():
-    with pytest.raises(SystemExit):
-        DG.build_parser().parse_args(
             [
                 "check",
-                "--role",
-                "implementer",
-                "--vendor",
-                "cursor",
-                "--model",
-                "reviewer",
+                "--seat", _seat_json("cursor", "composer-2.5", None),
+                "--role", "claude",
             ]
         )
 
 
+def test_model_slot_rejects_valid_role_name():
+    with pytest.raises(argparse.ArgumentTypeError, match="dispatch role name"):
+        cc.model_not_a_role("reviewer")
+
+
 def test_model_slot_accepts_unknown_registry_model():
+    unknown = "__totally-unknown-model-token__"
     args = DG.build_parser().parse_args(
         [
             "check",
-            "--role",
-            "implementer",
-            "--vendor",
-            "cursor",
-            "--model",
-            "__totally-unknown-model-token__",
+            "--seat", _seat_json("cursor", unknown, None),
+            "--role", _WRITE_ROLE,
         ]
     )
-    assert args.model == "__totally-unknown-model-token__"
+    assert json.loads(args.seat)["model"] == unknown
 
 
 def test_dispatch_review_repo_root_omitted_refused_at_argparse(tmp_path):
@@ -189,10 +188,10 @@ def test_dispatch_review_repo_root_omitted_refused_at_argparse(tmp_path):
         ED.build_parser().parse_args(
             [
                 "dispatch-review",
-                "--engine",
-                "codex",
-                "--effort",
-                "high",
+                "--seat",
+                _seat_json("codex", "gpt-5.6-sol", "high"),
+                "--role",
+                _REVIEW_ROLE,
                 "--prompt-path",
                 str(prompt),
             ]
@@ -209,10 +208,10 @@ def test_dispatch_review_repo_root_not_a_git_repo_refused_at_argparse(tmp_path):
         ED.build_parser().parse_args(
             [
                 "dispatch-review",
-                "--engine",
-                "codex",
-                "--effort",
-                "high",
+                "--seat",
+                _seat_json("codex", "gpt-5.6-sol", "high"),
+                "--role",
+                _REVIEW_ROLE,
                 "--prompt-path",
                 str(prompt),
                 "--repo-root",
@@ -232,8 +231,10 @@ def test_dispatch_write_run_dir_creatable_when_parent_exists(tmp_path):
     args = ED.build_parser().parse_args(
         [
             "dispatch-write",
-            "--engine",
-            "cursor",
+            "--seat",
+            _seat_json("cursor", "composer-2.5", None),
+            "--role",
+            _WRITE_ROLE,
             "--prompt-path",
             str(prompt),
             "--cwd",
@@ -255,8 +256,10 @@ def test_dispatch_write_run_dir_creatable_when_parent_missing(tmp_path):
     args = ED.build_parser().parse_args(
         [
             "dispatch-write",
-            "--engine",
-            "cursor",
+            "--seat",
+            _seat_json("cursor", "composer-2.5", None),
+            "--role",
+            _WRITE_ROLE,
             "--prompt-path",
             str(prompt),
             "--cwd",
@@ -277,10 +280,10 @@ def test_dispatch_review_run_dir_creatable_when_parent_missing(tmp_path):
     args = ED.build_parser().parse_args(
         [
             "dispatch-review",
-            "--engine",
-            "codex",
-            "--effort",
-            "high",
+            "--seat",
+            _seat_json("codex", "gpt-5.6-sol", "high"),
+            "--role",
+            _REVIEW_ROLE,
             "--prompt-path",
             str(prompt),
             "--repo-root",
@@ -305,8 +308,10 @@ def test_dispatch_write_run_dir_refused_when_nearest_ancestor_is_file(tmp_path):
         ED.build_parser().parse_args(
             [
                 "dispatch-write",
-                "--engine",
-                "cursor",
+                "--seat",
+                _seat_json("cursor", "composer-2.5", None),
+                "--role",
+                _WRITE_ROLE,
                 "--prompt-path",
                 str(prompt),
                 "--cwd",
@@ -328,8 +333,10 @@ def test_run_dir_existing_file_refused(tmp_path):
         ED.build_parser().parse_args(
             [
                 "dispatch-write",
-                "--engine",
-                "cursor",
+                "--seat",
+                _seat_json("cursor", "composer-2.5", None),
+                "--role",
+                _WRITE_ROLE,
                 "--prompt-path",
                 str(prompt),
                 "--cwd",
@@ -374,17 +381,24 @@ def test_effort_rejects_unknown_value():
         cc.effort("__not-a-registered-effort__")
 
 
+def _subcmd_contracts(parser, subcmd):
+    return {
+        action.dest: cc.contract_for_action(action)
+        for path, action in cc.iter_caller_supplied_actions(parser)
+        if path == (subcmd,)
+    }
+
+
 def test_census_reads_contract_from_parser_not_hand_list():
   # axis: a parser built through build_parser() carries declarations on its actions.
     parser = ED.build_parser()
-    contracts = {
-        (path, action.dest): cc.contract_for_action(action)
-        for path, action in cc.iter_caller_supplied_actions(parser)
-    }
-    assert contracts[("dispatch-write",), "run_dir"] == "creatable-path"
-    assert contracts[("dispatch-review",), "repo_root"] == "repo-root"
-    assert contracts[("dispatch-review",), "model"] == "model-not-a-role"
-    assert contracts[("dispatch-review",), "mode"] == "choices:review,brief-check"
+    write = _subcmd_contracts(parser, "dispatch-write")
+    review = _subcmd_contracts(parser, "dispatch-review")
+    assert write["run_dir"] == "creatable-path"
+    assert review["repo_root"] == "repo-root"
+    assert review["seat"] == write["seat"] == "free-text"
+    assert review["role"] == write["role"] == "role"
+    assert review["mode"] == "choices:review,brief-check"
 
 
 def test_census_red_when_argument_lacks_contract():

@@ -29,6 +29,7 @@ _ENGINE_ADAPTER_LIB_CLOSURE = frozenset({
     "review_findings_schema",
     "review_memory",
     "round_phases",
+    "seat_bundle",
 })
 
 _REEXPORT_NAMES = (
