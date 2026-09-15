@@ -3108,7 +3108,10 @@ def test_patch_filter_duplicate_minus_header_stripped_path_withheld():
         b" x\n"
     )
     assert sv._paths_from_diff_section(sec) is None
-    assert _filter_patch(sec) == b""
+    # Stripped-path content still never reaches the written patch; the module now refuses rather than omitting.
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _filter_patch(sec)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
 
 
 def test_patch_filter_duplicate_plus_header_stripped_path_withheld():
@@ -3122,7 +3125,10 @@ def test_patch_filter_duplicate_plus_header_stripped_path_withheld():
         b" x\n"
     )
     assert sv._paths_from_diff_section(sec) is None
-    assert _filter_patch(sec) == b""
+    # Stripped-path content still never reaches the written patch; the module now refuses rather than omitting.
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _filter_patch(sec)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
 
 
 def test_patch_filter_tab_terminator_stripped_path_withheld():
@@ -3149,9 +3155,9 @@ def test_patch_filter_only_diff_cc_unrecognized():
         b"@@@ -1,1 -1,1 -1,1 @@@\n"
         b"+" + _PATCH_SPOOF_SENTINEL + b"\n"
     )
-    kept = _filter_patch(sec)
-    assert kept == b""
-    assert _PATCH_SPOOF_SENTINEL not in kept
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _filter_patch(sec)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
 
 
 def test_patch_filter_two_sections_nothing_withheld_round_trip():
@@ -3190,12 +3196,12 @@ def test_patch_filter_git_section_followed_by_diff_cc():
         b"@@@ -1,1 -1,1 -1,1 @@@\n"
         b"+" + sentinel + b"\n"
     )
-    kept = _filter_patch(sec)
-    assert b"safe.md" in kept
-    assert sentinel not in kept
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _filter_patch(sec)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
 
 
-def test_patch_filter_unresolvable_path_section_is_dropped():
+def test_patch_filter_undecodable_path_section_refuses():
     sec = (
         b"diff --git a/x b/x\n"
         b"index 111..222 100644\n"
@@ -3203,7 +3209,23 @@ def test_patch_filter_unresolvable_path_section_is_dropped():
         b" x\n"
     )
     assert sv._paths_from_diff_section(sec) is None
-    assert sv._filter_patch_sections(sec) == b""
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._filter_patch_sections(sec)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
+
+
+def test_patch_filter_unrecognized_span_refuses():
+    patch = b"preamble noise\n" + (
+        b"diff --git a/safe.md b/safe.md\n"
+        b"index 111..222 100644\n"
+        b"--- a/safe.md\n"
+        b"+++ b/safe.md\n"
+        b"@@ -1 +1 @@\n"
+        b" ok\n"
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._filter_patch_sections(patch)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
 
 
 def _patch_filter_pkg_transition(
@@ -3766,6 +3788,24 @@ def test_review_diff_ancestry_merge_base_argv_pins_config(monkeypatch, tmp_path)
     assert "core.useReplaceRefs=false" in merge_argv
 
 
+def test_merge_base_argv_pins_safe_directory(monkeypatch, tmp_path):
+    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "safe-directory-pin")
+    repo_real = os.path.realpath(repo)
+    recorded = []
+    real_run = subprocess.run
+
+    def recorder(argv, **kwargs):
+        recorded.append(list(argv))
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(sv.subprocess, "run", recorder)
+    sv._authoritative_merge_base(repo, B, H, time.monotonic())
+    shallow_argv = next(a for a in recorded if "--is-shallow-repository" in a)
+    merge_argv = next(a for a in recorded if "merge-base" in a)
+    assert "safe.directory=%s" % repo_real in shallow_argv
+    assert "safe.directory=%s" % repo_real in merge_argv
+
+
 @pytest.mark.parametrize(
     "returncode,stdout,expected",
     [
@@ -4243,6 +4283,100 @@ def test_config_changes_path_collision_refuses(tmp_path):
             time.monotonic(),
         )
     assert exc.value.detail == "sanitized-view-diff-config-path-collision"
+
+
+def test_review_diff_quoted_path_is_decoded_and_kept(tmp_path):
+    quoted_name = 'we"ird.txt'
+    repo = _init_repo(
+        tmp_path / "quoted-ordinary",
+        files={quoted_name: "baseline\n", "keep.txt": "k\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, quoted_name), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "modify quoted filename")
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b'we\\"ird.txt' in patch
+        assert b"+changed\n" in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_diff_quoted_stripped_path_is_withheld(tmp_path):
+    quoted_rel = '.claude/we"ird.json'
+    repo = _init_repo(
+        tmp_path / "quoted-stripped",
+        files={quoted_rel: "{}\n", "keep.txt": "k\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, quoted_rel), "w", encoding="utf-8") as fh:
+        fh.write('{"changed": true}\n')
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "modify quoted stripped path")
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert _diff_git_section_count(patch, quoted_rel) == 0
+        assert view["diffWithheldCount"] >= 1
+        assert view["configDiffPath"] == sv.CONFIG_CHANGES_FILE_NAME
+        with open(_config_changes_abs(view), "rb") as fh:
+            config_bytes = fh.read()
+        assert b'.claude/we\\"ird.json' in config_bytes
+        assert b'+{"changed": true}' in config_bytes
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_config_changes_opaque_binary_refuses(tmp_path):
+    repo = _init_repo(
+        tmp_path / "config-opaque",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "wb") as fh:
+        fh.write(b"\x00binary\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "binary claude change")
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def test_config_changes_batch_overflow_refuses_with_the_config_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(sv, "REVIEW_DIFF_MAX_BYTES", 10)
+    repo = _init_repo(
+        tmp_path / "config-batch-overflow",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("x" * 200 + "\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "large claude change")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    view_root = str(tmp_path / "view-batch-overflow")
+    os.makedirs(view_root)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._stage_config_changes(
+            repo,
+            base_sha,
+            head_sha,
+            view_root,
+            ["CLAUDE.md"],
+            time.monotonic(),
+        )
+    assert exc.value.detail == "sanitized-view-diff-config-too-large"
 
 
 def test_config_changes_too_large_refuses(tmp_path, monkeypatch):

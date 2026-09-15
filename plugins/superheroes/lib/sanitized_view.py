@@ -587,17 +587,26 @@ def _neutral_git_env():
 def _authoritative_merge_base(repo_real, base_sha, head_sha, started):
     """Merge-base resolved directly in the reviewed repository.
 
-    Scratch isolation is gone: repository-local ancestry overlays — ``.git/info/grafts``
-    in particular — are honoured, as they are for every other git command run against
-    that repository. Inherited ``GIT_*`` environment variables are still stripped via
-    ``_neutral_git_env`` so a hostile ``GIT_GRAFT_FILE`` cannot steer the merge base.
+    Repository-local ancestry overlays — ``.git/info/grafts`` in particular — are
+    honoured, as they are for every other git command run against that repository.
+    Inherited ``GIT_*`` environment variables are still stripped via
+    ``_neutral_git_env`` so an inherited ``GIT_GRAFT_FILE`` would otherwise move the
+    merge base without anyone noticing.
 
     ``base_sha`` is a pinned commit object id, enforced before any repo-local git.
     """
     _check_export_deadline(started)
     try:
         proc = subprocess.run(
-            ["git", "-C", repo_real, "rev-parse", "--is-shallow-repository"],
+            [
+                "git",
+                "-C",
+                repo_real,
+                "-c",
+                "safe.directory=%s" % repo_real,
+                "rev-parse",
+                "--is-shallow-repository",
+            ],
             capture_output=True,
             text=True,
             timeout=_remaining_export_timeout(started),
@@ -620,6 +629,8 @@ def _authoritative_merge_base(repo_real, base_sha, head_sha, started):
                 "git",
                 "-C",
                 repo_real,
+                "-c",
+                "safe.directory=%s" % repo_real,
                 "-c",
                 "core.commitGraph=false",
                 "-c",
@@ -971,6 +982,99 @@ def _assert_no_stripped_paths_in_view(view_root):
             raise SanitizedViewError("sanitized-view-diff-path-collision")
 
 
+def _scan_c_quoted_end(token):
+    """Index of closing quote in a C-quoted token starting with ``b'"'``, or None."""
+    if not token.startswith(b'"'):
+        return None
+    i = 1
+    while i < len(token):
+        ch = token[i]
+        if ch == ord('"'):
+            return i
+        if ch == ord("\\"):
+            if i + 1 >= len(token):
+                return None
+            esc = token[i + 1]
+            if esc in (
+                ord("\\"),
+                ord('"'),
+                ord("a"),
+                ord("b"),
+                ord("f"),
+                ord("n"),
+                ord("r"),
+                ord("t"),
+                ord("v"),
+            ):
+                i += 2
+                continue
+            if ord("0") <= esc <= ord("7"):
+                j = i + 1
+                while j < len(token) and j < i + 4 and ord("0") <= token[j] <= ord("7"):
+                    j += 1
+                if j == i + 1:
+                    return None
+                if int(token[i + 1 : j], 8) > 0o377:
+                    return None
+                i = j
+                continue
+            return None
+        i += 1
+    return None
+
+
+def _unquote_c_style(token):
+    """Decode a complete C-quoted git path token; None when malformed."""
+    end = _scan_c_quoted_end(token)
+    if end is None or end != len(token) - 1:
+        return None
+    out = bytearray()
+    i = 1
+    while i < end:
+        ch = token[i]
+        if ch == ord("\\"):
+            esc = token[i + 1]
+            if esc == ord("\\"):
+                out.append(ord("\\"))
+                i += 2
+            elif esc == ord('"'):
+                out.append(ord('"'))
+                i += 2
+            elif esc == ord("a"):
+                out.append(ord("\a"))
+                i += 2
+            elif esc == ord("b"):
+                out.append(ord("\b"))
+                i += 2
+            elif esc == ord("f"):
+                out.append(ord("\f"))
+                i += 2
+            elif esc == ord("n"):
+                out.append(ord("\n"))
+                i += 2
+            elif esc == ord("r"):
+                out.append(ord("\r"))
+                i += 2
+            elif esc == ord("t"):
+                out.append(ord("\t"))
+                i += 2
+            elif esc == ord("v"):
+                out.append(ord("\v"))
+                i += 2
+            elif ord("0") <= esc <= ord("7"):
+                j = i + 1
+                while j < len(token) and j < i + 4 and ord("0") <= token[j] <= ord("7"):
+                    j += 1
+                out.append(int(token[i + 1 : j], 8))
+                i = j
+            else:
+                return None
+        else:
+            out.append(ch)
+            i += 1
+    return bytes(out)
+
+
 def _path_from_minus_plus_rest(rest):
     """Decode one ``---``/``+++`` path token (``core.quotePath=false`` output)."""
     tab = rest.find(b"\t")
@@ -978,6 +1082,11 @@ def _path_from_minus_plus_rest(rest):
         rest = rest[:tab]
     if rest == b"/dev/null":
         return None
+    if rest.startswith(b'"'):
+        decoded = _unquote_c_style(rest)
+        if decoded is None:
+            return None
+        rest = decoded
     if rest.startswith(b"a/"):
         rest = rest[2:]
     elif rest.startswith(b"b/"):
@@ -996,6 +1105,20 @@ def _path_from_diff_git_line(line):
     if not line.startswith(prefix):
         return None
     rest = line[len(prefix) :]
+    if rest.startswith(b'"'):
+        end = _scan_c_quoted_end(rest)
+        if end is None:
+            return None
+        side_one = rest[: end + 1]
+        remainder = rest[end + 1 :]
+        if not remainder.startswith(b" "):
+            return None
+        side_two = remainder[1:]
+        old_path = _path_from_minus_plus_rest(side_one)
+        new_path = _path_from_minus_plus_rest(side_two)
+        if old_path is not None and new_path is not None and old_path == new_path:
+            return old_path
+        return None
     candidates = []
     for i in range(len(rest) - 2):
         if rest[i : i + 3] == b" b/":
@@ -1100,12 +1223,14 @@ def _filter_patch_sections(patch_bytes):
     """
     if not patch_bytes:
         return b""
-    sections, _unrecognized_spans = _split_patch_sections(patch_bytes)
+    sections, unrecognized_spans = _split_patch_sections(patch_bytes)
+    if unrecognized_spans:
+        raise SanitizedViewError("sanitized-view-diff-unaccounted")
     kept = []
     for section in sections:
         path = _paths_from_diff_section(section)
         if path is None:
-            continue
+            raise SanitizedViewError("sanitized-view-diff-unaccounted")
         if _rel_path_would_be_stripped(path):
             continue
         kept.append(section)
@@ -1216,12 +1341,21 @@ def _stage_config_changes(repo_real, merge_base, head_sha, view_root, withheld, 
             *_review_diff_argv_prefix(repo_real, merge_base, head_sha),
             *batch,
         ]
-        chunk, total_bytes = _git_diff_batch_output(argv, started, total_bytes)
+        try:
+            chunk, total_bytes = _git_diff_batch_output(argv, started, total_bytes)
+        except SanitizedViewError as exc:
+            if exc.detail == "sanitized-view-diff-too-large":
+                raise SanitizedViewError("sanitized-view-diff-config-too-large") from exc
+            raise
         patch_parts.append(chunk)
 
     patch_bytes = b"".join(patch_parts)
     # Deliberate asymmetry: _filter_patch_sections keeps stripped paths *out* of the
-    # review patch; here they are the entire point — do not filter.
+    # review patch; here they are the entire point — do not filter. The opaque check
+    # is shared; the stripped-path filter is not.
+    sections, _unrecognized_spans = _split_patch_sections(patch_bytes)
+    if any(_section_is_opaque(section) for section in sections):
+        raise SanitizedViewError("sanitized-view-diff-opaque")
 
     if not patch_bytes:
         return {"configDiffPath": None, "configDiffBytes": None}

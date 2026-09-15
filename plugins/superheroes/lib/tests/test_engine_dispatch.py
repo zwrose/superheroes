@@ -4241,6 +4241,49 @@ def test_grade_review_view_meta_diff_path_rejects_patch_only_investigation(tmp_p
     assert "generated-artifact" in grade.get("investigatedRejected", [])
 
 
+def test_grade_review_view_meta_config_path_rejects_config_only_investigation(tmp_path):
+    config_name = "SUPERHEROES_CONFIG_CHANGES_UNDER_REVIEW.txt"
+    run_dir = str(tmp_path / "config-only-investigated")
+    repo_root, view = _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["viewMeta"] = {
+                "diffPath": "SUPERHEROES_REVIEW_DIFF.patch",
+                "configDiffPath": config_name,
+                "headSha": "abc",
+            }
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    stdout = json.dumps({"findings": [], "investigated": [config_name]})
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "signal": None,
+        "refusal": None, "at": time.time(), "wallSeconds": 1.0, "stdoutBytes": len(stdout),
+    })
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    patch_path = os.path.join(view["path"], "SUPERHEROES_REVIEW_DIFF.patch")
+    with open(patch_path, "w", encoding="utf-8") as fh:
+        fh.write("diff\n")
+    config_path = os.path.join(view["path"], config_name)
+    with open(config_path, "w", encoding="utf-8") as fh:
+        fh.write("config\n")
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
+    assert "generated-artifact" in grade.get("investigatedRejected", [])
+
+
 def test_main_dispatch_review_diff_base_cli_wiring(tmp_path, monkeypatch, capsys):
     captured = {}
 

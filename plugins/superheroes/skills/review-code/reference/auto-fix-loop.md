@@ -141,29 +141,28 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > Rejection is by resolved file identity, so `./NAME`, `a/../NAME` and a symlink to it are all
 > rejected. The rejection reason string is `generated-artifact`.
 >
-> **Four `sanitizedView` receipt keys** (always present, `null` when `--diff-base` was not used):
+> **Six `sanitizedView` receipt keys** (always present, `null` when `--diff-base` was not used):
 >
 > | key | meaning |
 > |---|---|
 > | `diffBase` | the resolved **merge-base** sha the patch is against (40 hex chars, or 64 in a SHA-256 repository) |
 > | `diffPath` | `SUPERHEROES_REVIEW_DIFF.patch`, relative to the view root |
 > | `diffBytes` | patch size in bytes |
-> | `diffWithheldCount` | **only** the changed non-tree entries the stripped-config policy withheld; underivable, unrecognized, unaccounted, and opaque content **refuse the dispatch** rather than being counted here — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
+> | `diffWithheldCount` | **only** the changed non-tree entries the stripped-config policy withheld; undecodable paths, unrecognized spans, unaccounted census entries, and opaque content **refuse the dispatch** rather than being counted here — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
+> | `configDiffPath` | `SUPERHEROES_CONFIG_CHANGES_UNDER_REVIEW.txt`, relative to the view root, when withheld configuration hunks were staged; `null` when nothing was withheld |
+> | `configDiffBytes` | size in bytes of that configuration-changes file; `null` when `configDiffPath` is `null` |
 >
 > The census of changed paths comes from direct two-tree enumeration (`git ls-tree` on the
 > merge-base and head), not from patch presentation — `git diff`, rendered patch text, or a list of
-> presently-known dangerous configuration keys. Every changed recursively enumerated **non-tree**
-> entry — blob/file, symlink or gitlink — must be **rendered**, **policy-withheld**, or **refused**
-> before any external engine spawns. The merge-base the census is taken against is resolved outside
-> the reviewed repository's git directory — in a scratch repository linked only by its object store,
-> under an environment with every inherited `GIT_*` variable dropped — so repository-controlled
-> ancestry overlays cannot select a base that omits a genuine change, and dispatch **refuses** when
-> authoritative ancestry cannot be established. An empty directory added or removed in a commit is a
-> tree-only change carrying no file, symlink or gitlink content, `git diff` renders nothing for it
-> either, and it is therefore outside this contract. Until a follow-up issue
-> lands, opaque or unaccounted content returns a named terminal refusal (`attempts: 0`) that is
-> never interpreted as zero findings or a clean review; there is no automatic fallback, and that
-> absence is an explicitly accepted availability limitation.
+> presently-known dangerous configuration keys. Sections on stripped paths are filtered out of the
+> review patch; a section whose path cannot be decoded refuses; an unrecognized span refuses. The
+> merge-base is resolved directly in the reviewed repository under an environment built by dropping
+> every inherited `GIT_*` variable, with replace-refs and the commit-graph pinned off — and
+> repository-local ancestry overlays such as `.git/info/grafts` are honoured. An empty directory
+> added or removed in a commit is a tree-only change carrying no file, symlink or gitlink content,
+> `git diff` renders nothing for it either, and it is therefore outside this contract. Opaque or
+> unaccounted content returns a named terminal refusal (`attempts: 0`) that is never interpreted as
+> zero findings or a clean review; there is no automatic fallback.
 >
 > **Diff refusals** (all `attempts: 0`, no token spend), joining the existing `sanitized-view-*`
 > family:
@@ -180,7 +179,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `sanitized-view-diff-config-too-large` | the withheld configuration hunks exceed the review-only file's size cap |
 > | `sanitized-view-diff-failed` | a git subprocess failed while resolving ancestry or generating the patch (spawn error, non-zero exit, timeout) — command failure only |
 > | `sanitized-view-diff-opaque` | a rendered section whose content is opaque — `Binary files … differ` (or `GIT binary patch`) instead of hunks |
-> | `sanitized-view-diff-unaccounted` | a census tree containing the same path more than once |
+> | `sanitized-view-diff-unaccounted` | a census tree containing the same path more than once, a patch section whose path cannot be decoded, or an unrecognized span in the patch text |
 >
 > **Mode refusals** (all `attempts: 0`, no spawn — not members of the `sanitized-view-*`
 > diff-refusal family above):
@@ -223,8 +222,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > **Receipt.** Every dispatch result carries a `sanitizedView` block (`strategy`, `stripped`,
 > `strippedCount`, `headSha`, `sourceDirty`, `buildSeconds`, `bytes`, `fileCount`, plus `diffBase`,
-> `diffPath`, `diffBytes`, `diffWithheldCount` — the last four always present, `null` when
-> `--diff-base` was not used). The `bytes` and `fileCount` figures **include** the staged patch when
+> `diffPath`, `diffBytes`, `diffWithheldCount`, `configDiffPath`, and `configDiffBytes` — the last
+> six always present, `null` when `--diff-base` was not used). The `bytes` and `fileCount` figures
+> **include** the staged patch when
 > one was written. The view is the **committed** tree at `headSha`; `sourceDirty: true` flags modified
 > tracked files in the source repo
 > so a caller reviewing uncommitted work is disclosed rather than silently given the pre-change tree.
