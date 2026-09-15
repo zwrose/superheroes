@@ -139,7 +139,7 @@ is structural; most structural components are not foundational.
 ### Authority surface
 
 A component implementing an owner hard line: the worktree guard, the circuit breaker and
-escalation, model governance, the verify gate.
+escalation, model governance, the verify gate, the vet-receipt spine with its owner half.
 
 ## Priority-tier instruments
 
