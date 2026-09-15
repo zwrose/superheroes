@@ -618,7 +618,7 @@ this trial.
   holding the lane in a per-account service whose own death was not exercised. *Delete when:* a
   re-run of this trial observes the launcher's own lanes surviving their spawner's turn end on the
   path the launcher actually spawns, and the service that holds them has been exercised or its
-  failure accepted in writing.
+  failure is accepted by the owner, on the record and cited by id, as a known unexercised class.
 
 - **Wave-watch arming and the re-arm ritual.** **Needed.** *Evidence:* five idle subscriptions
   across all three accounts, five qualifying transitions including one exit, zero notices
@@ -644,7 +644,8 @@ this trial.
   what did not change is that the supervisor dies and is told nothing, since none of the five
   subscriptions produced a notice. A supervisor that ends its turn still loses the result.
   *Delete when:* a re-run observes that a headless supervising session either no longer dies at
-  turn end, or is notified after it does, so that ending a turn stops costing the result.
+  turn end, or is notified after it does for every lane of a wave, not merely for most lanes, so
+  that ending a turn stops costing the result.
 
 - **Multi-account provisioning transport.** **Needed.** *Evidence:* the negative case was run.
   With `CLAUDE_CONFIG_DIR` unset, a lane launched from a session running under `~/.claude-three`
