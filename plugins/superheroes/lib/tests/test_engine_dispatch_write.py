@@ -135,6 +135,19 @@ def _codex_seat(model="gpt-5.6-sol", effort="high"):
     return _seat("codex", model, effort)
 
 
+def _spawn_gate_resolved_inputs(seat, role):
+    return {
+        "engine": seat["vendor"],
+        "engineSource": "caller",
+        "model": seat["model"],
+        "modelSource": "caller",
+        "effort": seat.get("effort"),
+        "effortSource": "declared-none" if seat.get("effort") is None else "caller",
+        "role": role,
+        "roleSource": "caller",
+    }
+
+
 def _cursor_seat(model="composer-2.5", effort=None):
     return _seat("cursor", model, effort)
 
@@ -1163,6 +1176,7 @@ def test_engine_started_append_failure_terminates_engine(tmp_path, monkeypatch):
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
     })
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
@@ -2499,3 +2513,81 @@ def test_write_continuation_different_seat_refuses(tmp_path):
     )
     assert res["detail"] == ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
     assert res["attempts"] == 0
+
+
+# --- #1269 WO-B: allowlist hard shell on write path --------------------------------
+
+_OFF_ALLOWLIST_CODEX = "gpt-5.3-codex-high"
+
+
+def _assert_allowlist_refusal(res, *, run_opened=False):
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res.get("runOpened") is run_opened
+    guard = res.get("allowlistGuard") or {}
+    reason = guard.get("reason") or res.get("detail") or ""
+    assert reason
+    assert guard.get("allowlist") or "allowlist" in reason
+
+
+def test_entry_allowlist_refuses_off_allowlist_write_library(tmp_path):
+    # axis: G1 path 4 write — library dispatch_write refuses before run-open
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-g1")
+    res = ED.dispatch_write(
+        seat=_seat("codex", _OFF_ALLOWLIST_CODEX, "high"),
+        role=_WRITE_ROLE,
+        cwd=wt,
+        run_dir=run_dir,
+        prompt_path=_prompt(tmp_path),
+        run_engine=FakeRunner([]),
+        max_wait=0,
+    )
+    _assert_allowlist_refusal(res)
+    assert res["attempts"] == 0
+    assert res["runOpened"] is False
+    assert _OFF_ALLOWLIST_CODEX in res["detail"]
+
+
+def test_entry_allowlist_refuses_off_allowlist_write_cli(tmp_path):
+    # axis: G1 path 2 — dispatch-write CLI refuses with allowlist named
+    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-cli")
+    proc = subprocess.run(
+        [
+            sys.executable, "-B", mod_path,
+            "dispatch-write",
+            "--seat", _seat_json("codex", _OFF_ALLOWLIST_CODEX, "high"),
+            "--role", _WRITE_ROLE,
+            "--prompt-path", _prompt(tmp_path),
+            "--cwd", wt,
+            "--run-dir", run_dir,
+            "--max-wait", "0",
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    _assert_allowlist_refusal(payload)
+    assert _OFF_ALLOWLIST_CODEX in payload["detail"]
+
+
+def test_write_g1_refusal_leaves_no_lease_or_opened_run(tmp_path):
+    # axis: G1 refusal leaves no lease and no opened run on write path
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-no-open")
+    res = ED.dispatch_write(
+        seat=_seat("codex", _OFF_ALLOWLIST_CODEX, "high"),
+        role=_WRITE_ROLE,
+        cwd=wt,
+        run_dir=run_dir,
+        prompt_path=_prompt(tmp_path),
+        run_engine=FakeRunner([]),
+        max_wait=0,
+    )
+    _assert_allowlist_refusal(res)
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") == "run-opened" for r in records)
+    lease_path = ED._worktree_lease_path(os.path.realpath(wt))
+    assert not os.path.exists(lease_path)

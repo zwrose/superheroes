@@ -48,6 +48,23 @@ def _cursor_seat(model="composer-2.5", effort=None):
     return _seat("cursor", model, effort)
 
 
+def _reviewer_cursor_seat():
+    return _seat("cursor", "cursor-grok-4.6", "xhigh")
+
+
+def _spawn_gate_resolved_inputs(seat, role):
+    return {
+        "engine": seat["vendor"],
+        "engineSource": "caller",
+        "model": seat["model"],
+        "modelSource": "caller",
+        "effort": seat.get("effort"),
+        "effortSource": "declared-none" if seat.get("effort") is None else "caller",
+        "role": role,
+        "roleSource": "caller",
+    }
+
+
 _EA = importlib.util.spec_from_file_location(
     "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
 EA = importlib.util.module_from_spec(_EA)
@@ -314,7 +331,7 @@ def test_dispatch_review_valid_repo_root_pins_cwd_cursor(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        seat=_cursor_seat(), role=_REVIEW_ROLE,
+        seat=_reviewer_cursor_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -470,7 +487,7 @@ def test_dispatch_review_does_not_inherit_orchestrator_cwd_cursor(tmp_path, monk
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        seat=_cursor_seat(), role=_REVIEW_ROLE,
+        seat=_reviewer_cursor_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -875,7 +892,7 @@ def test_dispatch_cursor_engagement_tool_calls(tmp_path):
     ])
     fake = FakeRunner([(stream, False, 0, "")])
     res = ED.dispatch_review(
-        seat=_cursor_seat(), role=_REVIEW_ROLE,
+        seat=_reviewer_cursor_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1315,11 +1332,11 @@ def test_view_destroyed_after_dispatch(tmp_path):
         (
             "engine_config_refusal",
             _never_call,
-            {"engine": "cursor", "model": "fable", "effort": "composer"},
+            {},
         ),
     ],
 )
-def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwargs):
+def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwargs, monkeypatch):
     repo_root = _repo(tmp_path)
     captured_path = []
     build_view_fn = _fake_build_view(tmp_path)
@@ -1336,7 +1353,16 @@ def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwa
             effort=kwargs.get("effort"),
         )
     else:
-        seat = _codex_seat(effort=kwargs.get("effort", "high"))
+        seat = _codex_seat(
+            model=kwargs.get("model", "gpt-5.6-sol"),
+            effort=kwargs.get("effort", "high"),
+        )
+    if case == "engine_config_refusal":
+        monkeypatch.setattr(
+            ED.engine_adapter,
+            "build_argv_result",
+            lambda *a, **k: {"argv": [], "reason": "unregistered-engine-model"},
+        )
     dispatch_kwargs = {
         "seat": seat,
         "role": _REVIEW_ROLE,
@@ -2106,6 +2132,7 @@ def test_run_child_waits_for_late_attempt_started(tmp_path, monkeypatch):
         prompt_path=_valid_prompt(tmp_path), order_id="race-1", base_sha="abc",
         worktree_baseline=baseline,
         progress_path=os.path.join(run_dir, "progress.jsonl"),
+        resolved_inputs=_spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
     )
 
     mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
@@ -2190,6 +2217,7 @@ def test_fold_append_failure_leaves_lease(tmp_path, monkeypatch):
         prompt_path=_valid_prompt(tmp_path), order_id="order-1", base_sha="abc",
         worktree_baseline=baseline,
         progress_path=os.path.join(run_dir, "progress.jsonl"),
+        resolved_inputs=_spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
     )
     lease_path = ED._worktree_lease_path(os.path.realpath(wt))
     assert os.path.exists(lease_path)
@@ -2228,6 +2256,7 @@ def test_abandon_append_failure_leaves_lease(tmp_path, monkeypatch):
         prompt_path=_valid_prompt(tmp_path), order_id="order-1", base_sha="abc",
         worktree_baseline=baseline,
         progress_path=os.path.join(run_dir, "progress.jsonl"),
+        resolved_inputs=_spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
     )
     lease_path = ED._worktree_lease_path(os.path.realpath(wt))
     assert os.path.exists(lease_path)
@@ -2294,6 +2323,7 @@ def test_run_engine_files_caps_stdout(tmp_path, monkeypatch):
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
     })
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
@@ -2519,6 +2549,7 @@ def test_run_engine_files_caps_under_live_writer_stdout_and_stderr(tmp_path, mon
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
     })
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
@@ -2563,6 +2594,7 @@ def test_run_engine_files_caps_only_after_terminate_on_timeout(tmp_path, monkeyp
         "cwd": run_dir, "timeout": 1, "retryTimeout": 1,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
     })
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
@@ -2627,6 +2659,7 @@ def test_run_engine_files_journals_wall_seconds_and_stdout_bytes(tmp_path, monke
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _REVIEW_ROLE),
     })
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
@@ -2651,6 +2684,17 @@ def test_run_engine_files_spawn_failure_omits_timing_keys(tmp_path):
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+        "roleKind": "build", "orderId": "x", "argv": ["/no/such/engine-binary-687"],
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
     ED._run_engine_files(
         run_dir, 1, ["/no/such/engine-binary-687"], run_dir,
         prompt_path, stdout_path, stderr_path, 30,
@@ -2671,6 +2715,17 @@ def test_run_engine_files_journal_append_failed_omits_timing_keys(tmp_path, monk
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+        "roleKind": "build", "orderId": "x", "argv": [sys.executable, "-c", "print('ok')"],
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
     real_append = ED._journal_append
     calls = {"n": 0}
 
@@ -2715,6 +2770,7 @@ def test_run_engine_files_stdout_bytes_is_pre_cap_size(tmp_path, monkeypatch):
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _REVIEW_ROLE),
     })
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
@@ -3462,6 +3518,7 @@ def _wo2_open_run(run_dir, prompt_path, **opened_overrides):
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _REVIEW_ROLE),
     }
     opened.update(opened_overrides)
     ED._journal_append(run_dir, opened)
@@ -4716,6 +4773,7 @@ def _open_write_run_manual(tmp_path, wt, *, run_dir=None, sibling_baseline=None)
         progress_path=os.path.join(run_dir, "progress.jsonl"),
         repo_root=repo_root,
         sibling_baseline=sibling_baseline,
+        resolved_inputs=_spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
     )
     return run_dir, repo_root
 
@@ -4972,6 +5030,7 @@ def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_
         "repoRoot": os.path.realpath(repo_root),
         "supervisorPid": os.getpid(),
         "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _REVIEW_ROLE),
     }
     if not omit_mode:
         record["mode"] = mode
@@ -8444,7 +8503,7 @@ def test_review_continuation_different_seat_refuses(tmp_path):
         order_id="order-seat",
     )
     res = ED.dispatch_review(
-        seat=_cursor_seat(), role=_REVIEW_ROLE,
+        seat=_reviewer_cursor_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
         build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
         order_id="order-seat",
@@ -8516,7 +8575,7 @@ def test_caller_timeout_effort_and_declared_none_sources(tmp_path):
     run_dir = str(tmp_path / "sources")
     fake = FakeRunner([])
     ED.dispatch_review(
-        seat=_cursor_seat(), role=_REVIEW_ROLE,
+        seat=_reviewer_cursor_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
         order_id="order-sources", timeout=120,
@@ -8524,6 +8583,277 @@ def test_caller_timeout_effort_and_declared_none_sources(tmp_path):
     snapshot = _opened_resolved_inputs(run_dir)
     assert snapshot["timeout"] == 120
     assert snapshot["timeoutSource"] == "caller"
-    assert snapshot["effortSource"] == "declared-none"
-    assert snapshot["model"] == "composer-2.5"
+    assert snapshot["effortSource"] == "caller"
+    assert snapshot["model"] == "cursor-grok-4.6"
+
+
+# --- #1269 WO-B: allowlist hard shell (G1 entry gate + G2 spawn gate + R1) ----
+
+_DG = importlib.util.spec_from_file_location(
+    "dispatch_guard", os.path.join(_HERE, "..", "dispatch_guard.py"))
+dispatch_guard_mod = importlib.util.module_from_spec(_DG)
+_DG.loader.exec_module(dispatch_guard_mod)
+
+_OFF_ALLOWLIST_CODEX = "gpt-5.3-codex-high"
+_PARK_TAIL = (
+    "an unlisted model is a park, not a pick (#600). "
+    "Pick a listed model or amend lib/model_registry.py."
+)
+
+
+def _assert_allowlist_refusal(res, *, run_opened=False):
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res.get("runOpened") is run_opened
+    guard = res.get("allowlistGuard") or {}
+    reason = guard.get("reason") or res.get("detail") or ""
+    assert reason
+    assert guard.get("allowlist") or "allowlist" in reason
+    assert _PARK_TAIL in reason or "sanctioned model" in reason or "cannot be established" in reason
+
+
+def test_entry_allowlist_refuses_off_allowlist_review_library(tmp_path):
+    # axis: G1 — library dispatch_review refuses before run-open with allowlist named
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        seat=_codex_seat(model=_OFF_ALLOWLIST_CODEX), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view,
+    )
+    _assert_allowlist_refusal(res)
+    assert res["attempts"] == 0
+    assert res["runOpened"] is False
+    assert _OFF_ALLOWLIST_CODEX in res["detail"]
+
+
+def test_entry_allowlist_refuses_off_allowlist_review_cli(tmp_path):
+    # axis: G1 path 1 — dispatch-review CLI refuses with allowlist named
+    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    repo_root = _repo(tmp_path)
+    prompt_path = _valid_prompt(tmp_path)
+    proc = subprocess.run(
+        [
+            sys.executable, "-B", mod_path,
+            "dispatch-review",
+            "--seat", _seat_json("codex", _OFF_ALLOWLIST_CODEX, "high"),
+            "--role", _REVIEW_ROLE,
+            "--prompt-path", prompt_path,
+            "--repo-root", repo_root,
+            "--max-wait", "0",
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    _assert_allowlist_refusal(payload)
+    assert _OFF_ALLOWLIST_CODEX in payload["detail"]
+
+
+def test_entry_allowlist_refuses_brief_check_cli(tmp_path):
+    # axis: G1 path 3 — dispatch-review --mode brief-check refuses off-allowlist
+    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    repo_root = _repo(tmp_path)
+    prompt_path = _valid_prompt(tmp_path)
+    proc = subprocess.run(
+        [
+            sys.executable, "-B", mod_path,
+            "dispatch-review",
+            "--seat", _seat_json("codex", _OFF_ALLOWLIST_CODEX, "high"),
+            "--role", "brief-check",
+            "--prompt-path", prompt_path,
+            "--repo-root", repo_root,
+            "--mode", "brief-check",
+            "--max-wait", "0",
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    _assert_allowlist_refusal(payload)
+
+
+def test_spawn_gate_refuses_pre_upgrade_journal_without_resolved_inputs(tmp_path):
+    # axis: R1 path 9 — pre-upgrade run-opened without resolvedInputs refuses at G2
+    run_dir = str(tmp_path / "legacy-spawn")
+    os.makedirs(run_dir, exist_ok=True)
+    legacy_opened = {
+        "kind": "run-opened",
+        "runKind": ED.RUN_KIND_REVIEW,
+        "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW,
+        "orderId": "legacy-spawn",
+        "mode": "review",
+        "argv": ["codex", "exec"],
+        "cwd": str(tmp_path),
+        "timeout": ED.RETRY_MIN_TIMEOUT,
+        "retryTimeout": ED.RETRY_MIN_TIMEOUT,
+        "promptPath": os.path.join(run_dir, "prompt.txt"),
+        "progressPath": os.path.join(run_dir, "progress.jsonl"),
+        "repoRoot": str(tmp_path),
+        "at": 1.0,
+    }
+    ED._journal_append(run_dir, legacy_opened)
+    with open(os.path.join(run_dir, "prompt.txt"), "w", encoding="utf-8") as fh:
+        fh.write("prompt\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=FakeRunner([]))
+    assert ok is False
+    assert "resolvedInputs" in detail
+    assert "cannot be established" in detail
+
+
+def test_spawn_gate_refuses_continuation_with_off_allowlist_snapshot(tmp_path):
+    # axis: G2 path 6 — continuation spawn reads journal seat, not caller argv
+    run_dir = str(tmp_path / "cont-g2")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["resolvedInputs"]["model"] = _OFF_ALLOWLIST_CODEX
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=FakeRunner([]))
+    assert ok is False
+    assert _OFF_ALLOWLIST_CODEX in detail
+
+
+def test_spawn_gate_refuses_retry_with_off_allowlist_snapshot(tmp_path):
+    # axis: G2 path 7 — retry attempt re-validates journal seat before spawn
+    run_dir = str(tmp_path / "retry-g2")
+    _manual_open_review_run(tmp_path, run_dir)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1, "exit": 1, "timedOut": False,
+        "signal": None, "refusal": None, "at": time.time(),
+    })
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["resolvedInputs"]["model"] = _OFF_ALLOWLIST_CODEX
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ok, detail = ED._spawn_attempt(run_dir, state, 2, run_engine=FakeRunner([]))
+    assert ok is False
+    assert _OFF_ALLOWLIST_CODEX in detail
+
+
+def test_run_child_spawn_gate_refuses_off_allowlist_snapshot(tmp_path):
+    # axis: G2 path 8 — run-child re-entry validates journal seat before engine Popen
+    run_dir = str(tmp_path / "run-child-g2")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["resolvedInputs"]["model"] = _OFF_ALLOWLIST_CODEX
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1,
+        "childPid": os.getpid(), "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1,
+        "childPid": os.getpid(), "argv": ["codex"], "at": time.time(),
+    })
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended.get("exit") == 127
+    assert _OFF_ALLOWLIST_CODEX in (ended.get("refusal") or "")
+
+
+def test_cached_liveness_does_not_bypass_entry_allowlist(tmp_path, monkeypatch):
+    # axis: cached live verdict never satisfies allowlist — G1 still refuses off-allowlist
+    import liveness_cache as lc
+    cache_path = str(tmp_path / "liveness.json")
+    monkeypatch.setattr(lc, "receipt_path", lambda cwd=None, root=None: cache_path)
+    liveness = {
+        "claude": {"live": True, "cells": [], "models": {}},
+        "codex": {"live": True, "cells": [], "models": {}},
+        "cursor": {"live": True, "cells": [], "models": {}},
+    }
+    needed = {"claude": [], "codex": [[_OFF_ALLOWLIST_CODEX, "high"]], "cursor": []}
+    lc.write(liveness, needed, path=cache_path, now=1000.0)
+    assert lc.read(cache_path, now=1000.0) is not None
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        seat=_codex_seat(model=_OFF_ALLOWLIST_CODEX), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view,
+    )
+    _assert_allowlist_refusal(res)
+
+
+@pytest.mark.parametrize(
+    "ok_role, ok_vendor, ok_model, ok_effort, bad_role",
+    [
+        ("implementer", "cursor", "composer-2.5", None, "reviewer"),
+        ("reviewer", "codex", "gpt-5.6-terra", "high", "reviewer-deep"),
+        ("reviewer", "codex", "gpt-5.6-terra", "high", "brief-check"),
+        ("reviewer", "codex", "gpt-5.6-terra", "high", "brief-check"),
+    ],
+)
+def test_distinct_role_allowlists_refuse_cross_role_model(
+    tmp_path, ok_role, ok_vendor, ok_model, ok_effort, bad_role,
+):
+    # axis: role allowlists differ — on one role, off another; never a union or hard-coded role
+    ok_verdict = dispatch_guard_mod.validate(ok_role, ok_vendor, ok_model, ok_effort)
+    assert ok_verdict["ok"] is True
+    bad_verdict = dispatch_guard_mod.validate(bad_role, ok_vendor, ok_model, ok_effort)
+    assert bad_verdict["ok"] is False
+    repo_root = _repo(tmp_path)
+    seat = _seat(ok_vendor, ok_model, ok_effort)
+    res = ED.dispatch_review(
+        seat=seat, role=bad_role,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view,
+    )
+    _assert_allowlist_refusal(res)
+
+
+def test_entry_allowlist_malformed_guard_verdict_refuses(tmp_path, monkeypatch):
+    # axis: malformed guard verdict is a refusal, never proceed
+    monkeypatch.setattr(ED, "_dispatch_allowlist_validate", lambda *a, **k: {"ok": False})
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        seat=_codex_seat(), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view,
+    )
+    _assert_allowlist_refusal(res)
+    assert "malformed verdict" in res["detail"]
+
+
+def test_g1_refusal_leaves_no_opened_run(tmp_path):
+    # axis: G1 refusal leaves no lease and no opened run
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "no-open")
+    res = ED.dispatch_review(
+        seat=_codex_seat(model=_OFF_ALLOWLIST_CODEX), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir,
+    )
+    _assert_allowlist_refusal(res)
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") == "run-opened" for r in records)
 

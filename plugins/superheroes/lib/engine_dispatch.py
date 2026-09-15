@@ -38,6 +38,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cli_contract as cc  # noqa: E402  argparse caller-contract builders
+import dispatch_guard  # noqa: E402  model allowlist gate (#600, #1269 WO-B)
 import dispatch_outcome  # noqa: E402  outcome vocabulary chokepoint (#747)
 import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
 import seat_bundle  # noqa: E402  single dispatch seat entry (#1269 WO-A1)
@@ -129,6 +130,8 @@ PR_BODY_REFUSAL_RUN_DIR_MISMATCH = "run-dir-pr-body-mismatch"
 RESULT_KIND_REFUSAL_INVALID = "expected-result-kind-invalid"
 RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH = "run-dir-result-kind-mismatch"
 SEAT_REFUSAL_RUN_DIR_MISMATCH = "run-dir-seat-mismatch"
+ALLOWLIST_GUARD_DETAIL = "allowlist-guard"
+SEAT_UNVERIFIABLE_DETAIL = "run-seat-unverifiable"
 
 _PARAM_UNSET = object()
 
@@ -218,6 +221,165 @@ def _seat_dispatch_refusal(seat_result, *, mode=None):
     if mode is not None:
         base["mode"] = mode
     return base
+
+
+def _malformed_allowlist_verdict_reason(role, vendor):
+    if role is not None and vendor is not None:
+        return (
+            "allowlist guard returned malformed verdict — expected dispatch_guard.validate("
+            "%r, %r, model, effort) to return ok, reason, allowlist, and allowlist_pairs "
+            "naming the sanctioned model allowlist for this role and vendor; "
+            "fix the seat or re-run dispatch_guard check"
+            % (role, vendor)
+        )
+    return (
+        "allowlist guard returned malformed verdict — expected a well-formed "
+        "dispatch_guard.validate verdict with ok, reason, allowlist, and allowlist_pairs "
+        "naming the sanctioned model allowlist; fix the guard call or seat"
+    )
+
+
+def _normalize_allowlist_verdict(verdict, *, role=None, vendor=None):
+    """Refuse on malformed dispatch_guard verdict — never proceed."""
+    malformed = _malformed_allowlist_verdict_reason(role, vendor)
+    if not isinstance(verdict, dict):
+        return {
+            "ok": False,
+            "reason": malformed,
+            "allowlist": [],
+            "allowlist_pairs": [],
+        }
+    if verdict.get("ok") is True:
+        return verdict
+    reason = verdict.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        return {
+            "ok": False,
+            "reason": malformed,
+            "allowlist": list(verdict.get("allowlist") or []),
+            "allowlist_pairs": list(verdict.get("allowlist_pairs") or []),
+        }
+    return verdict
+
+
+def _dispatch_allowlist_validate(role, vendor, model, effort):
+    try:
+        verdict = dispatch_guard.validate(role, vendor, model, effort)
+    except Exception:
+        verdict = {"ok": False, "reason": "allowlist guard raised unexpectedly"}
+    return _normalize_allowlist_verdict(verdict, role=role, vendor=vendor)
+
+
+def _allowlist_guard_payload(verdict):
+    return {
+        "reason": verdict["reason"],
+        "allowlist": list(verdict.get("allowlist") or []),
+        "allowlist_pairs": list(verdict.get("allowlist_pairs") or []),
+    }
+
+
+def _entry_allowlist_refusal(
+    verdict, *, repo_root=None, engine=None, role=None, run_dir="", argv=None,
+    mode=None, run_kind=RUN_KIND_REVIEW,
+):
+    """G1 terminal refusal — no lease, no opened run, no child."""
+    verdict = _normalize_allowlist_verdict(verdict, role=role, vendor=engine)
+    if verdict.get("ok"):
+        return None
+    result = {
+        "ok": False,
+        "reason": dispatch_outcome.REASON_UNRUNNABLE,
+        "detail": verdict["reason"],
+        "allowlistGuard": _allowlist_guard_payload(verdict),
+        "attempts": 0,
+        "forfeited": False,
+        "terminal": True,
+        "runOpened": False,
+    }
+    if mode is not None:
+        result["mode"] = mode
+    return _finish_preflight_terminal(
+        repo_root, result, run_dir=run_dir, argv=argv or [], engine=engine,
+        run_kind=run_kind,
+    )
+
+
+def _seat_tuple_from_resolved_snapshot(snapshot):
+    if not isinstance(snapshot, dict):
+        return None
+    vendor = snapshot.get("engine")
+    model = snapshot.get("model")
+    effort = snapshot.get("effort")
+    role = snapshot.get("role")
+    if not isinstance(vendor, str) or not isinstance(role, str):
+        return None
+    if not isinstance(model, str):
+        return None
+    if effort is not None and not isinstance(effort, str):
+        return None
+    return role, vendor, model, effort
+
+
+def _spawn_allowlist_verdict(opened, *, journal_corrupt=False):
+    """G2/R1 spawn gate — validate seat from journal resolvedInputs snapshot."""
+    if journal_corrupt:
+        return {
+            "ok": False,
+            "reason": (
+                "run seat cannot be established — journal is corrupt; "
+                "re-open the run with a fresh dispatch that persists resolvedInputs"
+            ),
+            "allowlist": [],
+            "allowlist_pairs": [],
+        }
+    if not isinstance(opened, dict):
+        return {
+            "ok": False,
+            "reason": (
+                "run seat cannot be established — run is not opened; "
+                "re-open the run with a fresh dispatch that persists resolvedInputs "
+                "(engine/model/effort/role snapshot at open)"
+            ),
+            "allowlist": [],
+            "allowlist_pairs": [],
+        }
+    snapshot = opened.get("resolvedInputs")
+    if not isinstance(snapshot, dict):
+        return {
+            "ok": False,
+            "reason": (
+                "run seat cannot be established — run-opened record lacks resolvedInputs; "
+                "re-open the run with a fresh dispatch that persists resolvedInputs "
+                "(engine/model/effort/role snapshot at open)"
+            ),
+            "allowlist": [],
+            "allowlist_pairs": [],
+        }
+    seat_tuple = _seat_tuple_from_resolved_snapshot(snapshot)
+    if seat_tuple is None:
+        missing = []
+        if not isinstance(snapshot.get("engine"), str):
+            missing.append("engine")
+        if not isinstance(snapshot.get("model"), str):
+            missing.append("model")
+        if not isinstance(snapshot.get("role"), str):
+            missing.append("role")
+        effort = snapshot.get("effort")
+        if effort is not None and not isinstance(effort, str):
+            missing.append("effort")
+        fields = ", ".join(missing) if missing else "seat fields"
+        return {
+            "ok": False,
+            "reason": (
+                "run seat cannot be established — resolvedInputs snapshot lacks valid %s; "
+                "re-open the run with a fresh dispatch that persists resolvedInputs"
+                % fields
+            ),
+            "allowlist": [],
+            "allowlist_pairs": [],
+        }
+    role, vendor, model, effort = seat_tuple
+    return _dispatch_allowlist_validate(role, vendor, model, effort)
 
 
 def _scrub_env(env=None):
@@ -2420,8 +2582,17 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
 
     Caller must journal engine-launching before invoking. Journals engine-started
     immediately after Popen returns, then attempt-ended on completion or spawn failure."""
-    records, _corrupt = _journal_read(run_dir_real)
+    records, corrupt = _journal_read(run_dir_real)
     opened = _journal_state(records).get("opened")
+    # axis: G2 — no external engine Popen without dispatch_guard.validate on the journal seat.
+    guard_verdict = _spawn_allowlist_verdict(opened, journal_corrupt=corrupt)
+    if not guard_verdict.get("ok"):
+        _journal_append(run_dir_real, {
+            "kind": "attempt-ended", "attempt": attempt,
+            "exit": 127, "timedOut": False, "signal": None,
+            "refusal": guard_verdict["reason"][:_STDERR_TAIL], "at": time.time(),
+        })
+        return
     dispatch_path = _dispatch_path_from_opened(opened)
     try:
         prompt_bytes = os.path.getsize(prompt_path)
@@ -2560,6 +2731,10 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     This path does NOT exercise the real run-child spawn — production uses subprocess.Popen in
     _spawn_attempt and _run_engine_files instead."""
     opened = state["opened"]
+    # axis: G2 — injected run_engine seam still refuses before any engine invocation.
+    guard_verdict = _spawn_allowlist_verdict(opened)
+    if not guard_verdict.get("ok"):
+        return False, guard_verdict["reason"]
     argv = opened["argv"]
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, attempt)
@@ -3881,6 +4056,17 @@ def _dispatch_review_impl(seat, *, role, prompt_path,
                 )
 
         if not continuation:
+            # axis: G1 — entry gate on fresh open only; no lease, opened run, or child without allowlist pass.
+            guard_verdict = _dispatch_allowlist_validate(
+                role, engine, seat.get("model"), seat.get("effort"),
+            )
+            entry_refusal = _entry_allowlist_refusal(
+                guard_verdict, repo_root=repo_detail, engine=engine, role=role,
+                run_dir=run_dir_real or "", mode=resolved_mode.get("mode"),
+            )
+            if entry_refusal is not None:
+                return entry_refusal
+
             resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
             try:
                 view = build_view(
@@ -4223,21 +4409,10 @@ def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
              "attempts": 0, "forfeited": False, "terminal": True},
         )
 
-    opts = {"cwd": cwd_real}
-    built = engine_adapter.build_argv_result(seat, role_kind, opts)
-    if built["reason"] is not None:
-        return _write_preflight_terminal(
-            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-             "detail": "engine-config:%s" % built["reason"],
-             "attempts": 0, "forfeited": False, "terminal": True},
-        )
-    argv = built["argv"]
-
     if run_dir is None:
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-absent",
              "attempts": 0, "forfeited": False, "terminal": True},
-            argv=argv,
         )
 
     ok_rd, rd_detail = _validate_run_dir(run_dir, create=True)
@@ -4245,7 +4420,7 @@ def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": rd_detail,
              "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir=run_dir or "", argv=argv,
+            run_dir=run_dir or "", argv=[],
         )
     run_dir_real = rd_detail
 
@@ -4255,6 +4430,29 @@ def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
         records, _corrupt = _journal_read(run_dir_real)
         state = _journal_state(records)
         opened = state.get("opened")
+
+        if opened is None:
+            # axis: G1 — entry gate on fresh open only; no lease, opened run, or child without allowlist pass.
+            guard_verdict = _dispatch_allowlist_validate(
+                role, engine, seat.get("model"), seat.get("effort"),
+            )
+            entry_refusal = _entry_allowlist_refusal(
+                guard_verdict, repo_root=repo_root, engine=engine, role=role,
+                run_dir=run_dir_real, argv=[], run_kind=RUN_KIND_WRITE,
+            )
+            if entry_refusal is not None:
+                return entry_refusal
+
+        opts = {"cwd": cwd_real}
+        built = engine_adapter.build_argv_result(seat, role_kind, opts)
+        if built["reason"] is not None:
+            return _write_preflight_terminal(
+                {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                 "detail": "engine-config:%s" % built["reason"],
+                 "attempts": 0, "forfeited": False, "terminal": True},
+                run_dir=run_dir_real, argv=[],
+            )
+        argv = built["argv"]
 
         if opened is not None:
             if os.path.realpath(opened.get("cwd", "")) != cwd_real:
