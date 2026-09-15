@@ -3332,6 +3332,8 @@ def _sanitized_view_receipt(view):
         "diffPath": view.get("diffPath"),
         "diffBytes": view.get("diffBytes"),
         "diffWithheldCount": view.get("diffWithheldCount"),
+        "configDiffPath": view.get("configDiffPath"),
+        "configDiffBytes": view.get("configDiffBytes"),
         "prBodyPath": view.get("prBodyPath"),
         "prBodyBytes": view.get("prBodyBytes"),
     }

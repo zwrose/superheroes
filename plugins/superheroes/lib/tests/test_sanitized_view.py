@@ -2774,33 +2774,17 @@ def test_notice_with_diff_artifact_sentences(tmp_path):
         sv.destroy_sanitized_view(view["path"])
 
 
-def test_notice_withheld_count_sentence(tmp_path):
-    repo = _init_repo(tmp_path / "notice-withheld", files={"keep.txt": "k\n"})
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
-        fh.write("secret\n")
-    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
-        fh.write("changed\n")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "change",
-    )
-    view = sv.build_sanitized_view(repo, diff_base=base_sha)
-    try:
-        notice = sv.sanitized_view_notice(view)
-        assert "1 changed path(s) were withheld" in notice
-        assert "stripped agent/IDE config" in notice
-        assert "not a finding" in notice
-    finally:
-        sv.destroy_sanitized_view(view["path"])
+def test_notice_withheld_count_sentence():
+    view = {
+        "headSha": "abc",
+        "diffWithheldCount": 1,
+        "configDiffPath": None,
+        "stripped": ["CLAUDE.md"],
+    }
+    notice = sv.sanitized_view_notice(view)
+    assert "1 changed path(s) were withheld" in notice
+    assert "stripped agent/IDE config" in notice
+    assert "not a finding" in notice
 
 
 # --- WO-F3 additions ----------------------------------------------------------
@@ -4070,6 +4054,300 @@ def test_build_sanitized_view_refuses_unpinned_base_before_head_resolution(
         sv.build_sanitized_view(repo, diff_base=bad_base)
     assert exc.value.detail == "sanitized-view-diff-base-unresolved"
     assert spawned == []
+
+
+# --- WO-4: config changes under review file ---------------------------------
+
+
+def _config_changes_abs(view):
+    return os.path.join(view["path"], sv.CONFIG_CHANGES_FILE_NAME)
+
+
+def test_config_changes_file_carries_the_withheld_hunks(tmp_path):
+    repo = _init_repo(
+        tmp_path / "config-hunks",
+        files={"README.md": "hello\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "README.md"), "w", encoding="utf-8") as fh:
+        fh.write("changed readme\n")
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("secret config\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert view["diffPath"] is not None
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"changed readme" in patch
+        assert b"secret config" not in patch
+        assert b"diff --git a/CLAUDE.md" not in patch
+        assert os.path.isfile(_config_changes_abs(view))
+        with open(_config_changes_abs(view), "rb") as fh:
+            config_bytes = fh.read()
+        assert b"diff --git a/CLAUDE.md" in config_bytes
+        assert b"secret config" in config_bytes
+        assert view["configDiffPath"] == sv.CONFIG_CHANGES_FILE_NAME
+        assert view["configDiffBytes"] == len(config_bytes)
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_config_changes_file_starts_with_the_data_not_instructions_header(tmp_path):
+    repo = _init_repo(
+        tmp_path / "config-header",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_config_changes_abs(view), "rb") as fh:
+            config_bytes = fh.read()
+        header_bytes = sv.CONFIG_CHANGES_HEADER.encode("utf-8")
+        assert config_bytes.startswith(header_bytes)
+        diff_idx = config_bytes.find(b"diff --git")
+        assert diff_idx >= len(header_bytes)
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_config_changes_file_is_not_discoverable_as_configuration(tmp_path):
+    assert sv.CONFIG_CHANGES_FILE_NAME not in sv.SANITIZED_CONFIG_FILES
+    assert sv.CONFIG_CHANGES_FILE_NAME not in sv.SANITIZED_CONFIG_DIRS
+    assert not sv._rel_path_would_be_stripped(sv.CONFIG_CHANGES_FILE_NAME)
+
+    repo = _init_repo(
+        tmp_path / "config-not-config",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        sv._assert_no_stripped_paths_in_view(view["path"])
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_config_changes_absent_when_nothing_withheld(tmp_path):
+    repo = _init_repo(tmp_path / "config-none", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "keep.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert view["configDiffPath"] is None
+        assert not os.path.exists(_config_changes_abs(view))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_config_changes_absent_without_a_diff_base(tmp_path):
+    repo = _init_repo(tmp_path / "config-no-base", files={"keep.txt": "k\n"})
+    view = sv.build_sanitized_view(repo)
+    try:
+        assert view["configDiffPath"] is None
+        assert not os.path.exists(_config_changes_abs(view))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_config_changes_path_collision_refuses(tmp_path):
+    repo = _init_repo(
+        tmp_path / "config-collision",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    view_root = str(tmp_path / "view-collision")
+    os.makedirs(view_root)
+    with open(os.path.join(view_root, sv.CONFIG_CHANGES_FILE_NAME), "w", encoding="utf-8") as fh:
+        fh.write("pre-existing\n")
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._stage_config_changes(
+            repo,
+            base_sha,
+            head_sha,
+            view_root,
+            ["CLAUDE.md"],
+            time.monotonic(),
+        )
+    assert exc.value.detail == "sanitized-view-config-diff-path-collision"
+
+
+def test_config_changes_too_large_refuses(tmp_path, monkeypatch):
+    monkeypatch.setattr(sv, "CONFIG_CHANGES_MAX_BYTES", 50)
+    repo = _init_repo(
+        tmp_path / "config-too-large",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("x" * 200 + "\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    view_root = str(tmp_path / "view-too-large")
+    os.makedirs(view_root)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._stage_config_changes(
+            repo,
+            base_sha,
+            head_sha,
+            view_root,
+            ["CLAUDE.md"],
+            time.monotonic(),
+        )
+    assert exc.value.detail == "sanitized-view-config-diff-too-large"
+
+
+def test_notice_names_the_config_file_as_a_context_file(tmp_path):
+    repo = _init_repo(
+        tmp_path / "notice-config-file",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        notice = sv.sanitized_view_notice(view)
+        assert sv.CONFIG_CHANGES_FILE_NAME in notice
+        assert "context file" in notice
+        assert "their absence is not a finding" not in notice
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_patch_still_excludes_stripped_paths_with_config_file_present(tmp_path):
+    repo = _init_repo(
+        tmp_path / "config-patch-invariant",
+        files={"CLAUDE.md": "baseline\n", "keep.txt": "k\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("secret\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert os.path.isfile(_config_changes_abs(view))
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"diff --git a/CLAUDE.md" not in patch
+        for name in sv.SANITIZED_CONFIG_FILES:
+            marker = ("diff --git a/%s b/%s" % (name, name)).encode("utf-8")
+            assert marker not in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
 
 
 # --- GIT_NO_LAZY_FETCH bite receipt -----------------------------------------

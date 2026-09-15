@@ -121,6 +121,8 @@ def _fake_view_receipt(**overrides):
         "diffPath": None,
         "diffBytes": None,
         "diffWithheldCount": None,
+        "configDiffPath": None,
+        "configDiffBytes": None,
         "prBodyPath": None,
         "prBodyBytes": None,
     }
@@ -4134,14 +4136,20 @@ def test_sanitized_view_receipt_forwards_diff_keys_with_get():
     assert receipt["diffPath"] is None
     assert receipt["diffBytes"] is None
     assert receipt["diffWithheldCount"] is None
+    assert receipt["configDiffPath"] is None
+    assert receipt["configDiffBytes"] is None
 
     full = dict(old_shape, diffBase="b" * 40, diffPath="SUPERHEROES_REVIEW_DIFF.patch",
-                diffBytes=99, diffWithheldCount=1)
+                diffBytes=99, diffWithheldCount=1,
+                configDiffPath="SUPERHEROES_CONFIG_CHANGES_UNDER_REVIEW.txt",
+                configDiffBytes=55)
     receipt = ED._sanitized_view_receipt(full)
     assert receipt["diffBase"] == "b" * 40
     assert receipt["diffPath"] == "SUPERHEROES_REVIEW_DIFF.patch"
     assert receipt["diffBytes"] == 99
     assert receipt["diffWithheldCount"] == 1
+    assert receipt["configDiffPath"] == "SUPERHEROES_CONFIG_CHANGES_UNDER_REVIEW.txt"
+    assert receipt["configDiffBytes"] == 55
 
 
 def test_review_continuation_ignores_diff_base(tmp_path):
