@@ -307,6 +307,40 @@ def _untokenizable_detail(vendor, model_id, effort):
     )
 
 
+def resolve_engine_model(seat, role_kind, opts):
+    """Return (engine_model, source) for the resolved engine-model pin (#1269 WO-A2).
+
+    Mirrors build_argv_result's model resolution without constructing argv."""
+    opts = opts or {}
+    vendor = seat.get("vendor")
+    model_id = seat.get("model")
+    claude_tier = opts.get("model")
+    if vendor == "codex":
+        engine_model = model_id
+        if isinstance(engine_model, str) and engine_model:
+            if model_registry.is_registered("codex", engine_model):
+                return engine_model, "caller"
+            parsed = model_registry.parse_dispatch_token("codex", engine_model)
+            if parsed is None:
+                return None, "declared-none"
+            return parsed[0], "resolved"
+        try:
+            return model_registry.codex_peer_for_claude_tier(claude_tier), "resolved"
+        except Exception:
+            return None, "declared-none"
+    if vendor == "cursor":
+        engine_model = model_id
+        if isinstance(engine_model, str) and engine_model:
+            if model_registry.is_registered("cursor", engine_model):
+                return engine_model, "caller"
+            parsed = model_registry.parse_dispatch_token("cursor", engine_model)
+            if parsed is None:
+                return None, "declared-none"
+            return parsed[0], "resolved"
+        return "composer-2.5", "default"
+    return None, "declared-none"
+
+
 def build_argv_result(seat, role_kind, opts):
     """Like build_argv but returns {argv, reason} with a named refusal token when unrunnable.
 

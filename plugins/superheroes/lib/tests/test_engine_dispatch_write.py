@@ -120,14 +120,22 @@ class FakeRunner:
 _NO_CWD = object()
 
 
-def _dispatch_write(tmp_path, fake, *, cwd=_NO_CWD, run_dir=None, engine="codex", **kwargs):
+def _seat(vendor, model, effort):
+    return json.dumps({"vendor": vendor, "model": model, "effort": effort})
+
+
+def _codex_seat(model="gpt-5.6-sol", effort="high"):
+    return _seat("codex", model, effort)
+
+
+def _dispatch_write(tmp_path, fake, *, cwd=_NO_CWD, run_dir=None, seat=None, **kwargs):
     if cwd is _NO_CWD:
         cwd, _main = _linked_worktree(tmp_path)
     if run_dir is None:
         run_dir = str(tmp_path / "run")
     defaults = {
-        "model": "sonnet",
-        "effort": "high",
+        "seat": seat or _codex_seat(),
+        "role": "implementer",
         "cwd": cwd,
         "run_dir": run_dir,
         "order_id": "order-1",
@@ -136,7 +144,7 @@ def _dispatch_write(tmp_path, fake, *, cwd=_NO_CWD, run_dir=None, engine="codex"
     if "prompt_path" not in kwargs:
         defaults["prompt_path"] = _prompt(tmp_path)
     defaults.update(kwargs)
-    return ED.dispatch_write(engine, **defaults)
+    return ED.dispatch_write(**defaults)
 
 
 # --- cwd validation refusals ---------------------------------------------------
@@ -2397,3 +2405,58 @@ def test_write_legacy_uncontracted_resume_grades_like_parse_result(tmp_path):
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade["ok"] is True
     assert grade["signal"] == "ok"
+
+
+# --- #1269 WO-A2: resolved-input snapshot on write path -----------------------
+
+_WRITE_RESOLVED_INPUT_KEYS = frozenset({
+    "engine", "engineSource", "model", "modelSource", "effort", "effortSource",
+    "engineModel", "engineModelSource", "role", "roleSource", "repoRoot", "repoRootSource",
+    "runDir", "runDirSource", "promptPath", "promptPathSource", "timeout", "timeoutSource",
+    "retryTimeout", "retryTimeoutSource", "maxWait", "maxWaitSource", "preflightTimeout",
+    "preflightTimeoutSource", "mode", "modeSource", "expectedResultKind",
+    "expectedResultKindSource", "baseSha", "baseShaSource", "diffBase", "diffBaseSource",
+    "progressPath", "progressPathSource", "journalRoot", "journalRootSource",
+})
+
+
+def _write_opened_resolved_inputs(run_dir):
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    snapshot = opened.get("resolvedInputs")
+    assert isinstance(snapshot, dict)
+    assert frozenset(snapshot.keys()) == _WRITE_RESOLVED_INPUT_KEYS
+    return snapshot
+
+
+def test_write_run_opened_carries_resolved_inputs_snapshot(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([])
+    run_dir = str(tmp_path / "write-run")
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=0)
+    snapshot = _write_opened_resolved_inputs(run_dir)
+    assert snapshot["engine"] == "codex"
+    assert snapshot["role"] == "implementer"
+    assert snapshot["preflightTimeout"] == 1
+    assert snapshot["preflightTimeoutSource"] == "clamped"
+    assert snapshot["maxWait"] == 0
+    assert snapshot["maxWaitSource"] == "caller"
+    assert snapshot["timeoutSource"] == "default"
+
+
+def test_write_continuation_different_seat_refuses(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "seat-mismatch")
+    fake = FakeRunner([])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=0)
+    res = ED.dispatch_write(
+        seat=_seat("cursor", "composer-2.5", None),
+        role="implementer",
+        cwd=wt,
+        run_dir=run_dir,
+        order_id="order-1",
+        prompt_path=_prompt(tmp_path),
+        run_engine=FakeRunner([]),
+        max_wait=0,
+    )
+    assert res["detail"] == ED.SEAT_REFUSAL_RUN_DIR_MISMATCH

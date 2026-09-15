@@ -225,7 +225,7 @@ def test_dispatch_review_repo_root_absent_no_spawn(tmp_path):
     assert res == {
         "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
         "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
-        "mode": "review",
+        "mode": "review", "runOpened": False,
     }
     assert "sanitizedView" not in res
     assert len(fake.calls) == 0
@@ -1437,12 +1437,45 @@ def _manual_open_review_run(tmp_path, run_dir):
         base = fh.read()
     fed = _fed_prompt(base, view_meta=view)
     os.makedirs(run_dir, exist_ok=True)
+    staged_prompt = os.path.join(run_dir, ED.PROMPT_NAME)
+    progress_path = os.path.join(run_dir, "progress.jsonl")
+    resolved_inputs = ED._build_resolved_inputs(
+        seat=_codex_seat(),
+        role=_REVIEW_ROLE,
+        role_kind="review",
+        repo_root=os.path.realpath(repo_root),
+        run_dir_real=run_dir,
+        run_dir_source="caller",
+        staged_prompt_path=staged_prompt,
+        timeout=ED.RETRY_MIN_TIMEOUT,
+        timeout_source="default",
+        retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        retry_timeout_source="default",
+        max_wait=None,
+        max_wait_source="default",
+        preflight_timeout=None,
+        preflight_timeout_source="declared-none",
+        mode="review",
+        mode_source="default",
+        expected_result_kind=None,
+        expected_result_kind_source="declared-none",
+        base_sha=None,
+        base_sha_source="declared-none",
+        diff_base=view.get("diffBase"),
+        diff_base_source=(
+            "resolved" if view.get("diffBase") is not None else "declared-none"
+        ),
+        progress_path=progress_path,
+        progress_path_source="resolved",
+        engine_model_opts={"cwd": cwd},
+    )
     ok, detail = ED._open_review_run(
         run_dir, engine="codex", argv=argv, cwd=cwd,
         timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
         prompt_path=prompt_path, view_path=view["path"], view_meta=view,
-        fed_prompt=fed, order_id="test-order", progress_path=os.path.join(run_dir, "progress.jsonl"),
+        fed_prompt=fed, order_id="test-order", progress_path=progress_path,
         repo_root=os.path.realpath(repo_root),
+        resolved_inputs=resolved_inputs,
     )
     assert ok, detail
     return repo_root, view
@@ -8301,4 +8334,196 @@ def test_grade_review_pr_body_payload_without_investigation_forfeit(tmp_path):
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
     assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
+
+
+# --- #1269 WO-A2: resolved-input snapshot echoed on every exit -----------------
+
+_RESOLVED_INPUT_KEYS = frozenset({
+    "engine", "engineSource", "model", "modelSource", "effort", "effortSource",
+    "engineModel", "engineModelSource", "role", "roleSource", "repoRoot", "repoRootSource",
+    "runDir", "runDirSource", "promptPath", "promptPathSource", "timeout", "timeoutSource",
+    "retryTimeout", "retryTimeoutSource", "maxWait", "maxWaitSource", "preflightTimeout",
+    "preflightTimeoutSource", "mode", "modeSource", "expectedResultKind",
+    "expectedResultKindSource", "baseSha", "baseShaSource", "diffBase", "diffBaseSource",
+    "progressPath", "progressPathSource", "journalRoot", "journalRootSource",
+})
+
+
+def _opened_resolved_inputs(run_dir):
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    snapshot = opened.get("resolvedInputs")
+    assert isinstance(snapshot, dict)
+    assert frozenset(snapshot.keys()) == _RESOLVED_INPUT_KEYS
+    return snapshot
+
+
+def test_review_run_opened_carries_resolved_inputs_snapshot(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_codex_seat(), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
+        order_id="order-1",
+    )
+    snapshot = _opened_resolved_inputs(run_dir)
+    assert snapshot["engine"] == "codex"
+    assert snapshot["engineSource"] == "caller"
+    assert snapshot["role"] == _REVIEW_ROLE
+    assert snapshot["timeoutSource"] == "default"
+    assert snapshot["maxWaitSource"] == "caller"
+    assert snapshot["maxWait"] == 0
+    assert snapshot["preflightTimeout"] is None
+    assert snapshot["preflightTimeoutSource"] == "declared-none"
+
+
+def test_resolved_inputs_echo_identical_across_five_exits(tmp_path):
+    # axis: I2 — snapshot-sourced echo is byte-identical on dispatch, continuation, poll, abandon, fold
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "echo-run")
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    fresh = ED.dispatch_review(
+        seat=_codex_seat(), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
+        order_id="order-echo",
+    )
+    echo = fresh["resolvedInputs"]
+    assert fresh["runOpened"] is True
+    continuation = ED.dispatch_review(
+        seat=_codex_seat(), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
+        order_id="order-echo",
+    )
+    polled = ED.dispatch_poll(str(run_dir))
+    abandon_dir = str(tmp_path / "abandon-run")
+    _manual_open_review_run(tmp_path, abandon_dir)
+    abandoned = ED.dispatch_abandon(abandon_dir)
+    folded_run = str(tmp_path / "fold-run")
+    folded_first = ED.dispatch_review(
+        seat=_codex_seat(), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=folded_run, max_wait=0,
+        order_id="order-fold",
+    )
+    folded_replay = ED.dispatch_review(
+        seat=_codex_seat(), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path), run_dir=folded_run, max_wait=0,
+        order_id="order-fold",
+    )
+    assert continuation["resolvedInputs"] == echo
+    assert polled["resolvedInputs"] == echo
+    assert abandoned["resolvedInputs"] == _opened_resolved_inputs(abandon_dir)
+    if folded_first.get("terminal"):
+        assert folded_replay["resolvedInputs"] == folded_first["resolvedInputs"]
+
+
+def test_resolved_inputs_poll_echo_matches_opened_snapshot_without_seat(tmp_path):
+    # axis: I2 — poll has no seat; echo still comes from the journal snapshot
+    run_dir = str(tmp_path / "poll-echo")
+    _manual_open_review_run(tmp_path, run_dir)
+    snapshot = _opened_resolved_inputs(run_dir)
+    polled = ED.dispatch_poll(run_dir)
+    assert polled["runOpened"] is True
+    assert polled["resolvedInputs"] == snapshot
+
+
+def test_review_continuation_different_seat_refuses(tmp_path):
+    # axis: I3 — immutable seat at open; disagreeing continuation refuses by name
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "seat-mismatch")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_codex_seat(), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
+        order_id="order-seat",
+    )
+    res = ED.dispatch_review(
+        seat=_cursor_seat(), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
+        order_id="order-seat",
+    )
+    assert res["detail"] == ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
+    assert res["attempts"] == 0
+
+
+def test_review_continuation_same_seat_proceeds(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "seat-match")
+    fake = FakeRunner([])
+    first = ED.dispatch_review(
+        seat=_codex_seat(), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
+        order_id="order-seat-ok",
+    )
+    second = ED.dispatch_review(
+        seat=_codex_seat(), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
+        order_id="order-seat-ok",
+    )
+    assert second.get("detail") != ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
+    assert second["resolvedInputs"] == first["resolvedInputs"]
+
+
+def test_pre_upgrade_run_opened_continuation_echoes_legacy_snapshot(tmp_path):
+    run_dir = str(tmp_path / "legacy")
+    os.makedirs(run_dir, exist_ok=True)
+    legacy_opened = {
+        "kind": "run-opened",
+        "runKind": ED.RUN_KIND_REVIEW,
+        "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW,
+        "orderId": "legacy-order",
+        "mode": "review",
+        "argv": ["codex", "exec"],
+        "cwd": str(tmp_path),
+        "timeout": ED.RETRY_MIN_TIMEOUT,
+        "retryTimeout": ED.RETRY_MIN_TIMEOUT,
+        "promptPath": os.path.join(run_dir, "prompt.txt"),
+        "progressPath": os.path.join(run_dir, "progress.jsonl"),
+        "repoRoot": str(tmp_path),
+        "at": 1.0,
+    }
+    ED._journal_append(run_dir, legacy_opened)
+    polled = ED.dispatch_poll(run_dir)
+    assert polled["runOpened"] is True
+    assert polled["resolvedInputsStatus"] == "pre-upgrade"
+    assert polled["resolvedInputs"]["engine"] == "codex"
+    assert polled["resolvedInputs"]["engineSource"] == "legacy-journal"
+
+
+def test_preflight_refusal_echoes_run_never_opened(tmp_path):
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        seat=_codex_seat(), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
+        build_view=_never_build_view,
+    )
+    assert res["runOpened"] is False
+    assert "resolvedInputs" not in res
+
+
+def test_caller_timeout_effort_and_declared_none_sources(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "sources")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_cursor_seat(), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
+        order_id="order-sources", timeout=120,
+    )
+    snapshot = _opened_resolved_inputs(run_dir)
+    assert snapshot["timeout"] == 120
+    assert snapshot["timeoutSource"] == "caller"
+    assert snapshot["effortSource"] == "declared-none"
+    assert snapshot["model"] == "composer-2.5"
 
