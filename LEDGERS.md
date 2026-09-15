@@ -561,10 +561,10 @@ So the notice is not lost. It was **delivered only at the subscribing session's 
 never inside the turn. A supervisor that polls inside its turn, which is what a supervisor must do
 while it still has work in flight, cannot see a notice no matter how long it waits. What was
 observed is exactly that and no more: no notice arrived within any tool round of a working turn.
-This supervising session is headless, received the five at a turn boundary, and went on working
-afterwards, so a turn boundary is not the same event as the session's exit. What the boundary
-delivery costs is narrower and still decisive for a wave: a turn that ends with lanes in flight and
-results owed learns of a finish only after it can no longer act on it inside that turn. The
+This supervising session is headless. It received the five at a turn boundary and went on working
+afterwards, so a turn boundary is not the same event as the session's exit. The cost of boundary
+delivery is narrower than exit, and still decisive for a wave. A turn that ends with lanes in flight
+learns of each finish only after that turn is over, when nothing in it can act on the finish. The
 acknowledgement text's "you will get one notice here" is true; what it does not say is when.
 
 This correction was made after the section was first committed, when the notices arrived. The
@@ -645,8 +645,8 @@ this trial.
   across all three accounts (`323cc06c`, `f36e02f3`, `0e6d2ec1`, `5258a26b`, `6ab29229`), five
   qualifying transitions, and five notices delivered — every one of them at the supervising
   session's turn boundary, none during the turn. The signal the watcher stands in for exists and
-  arrives too late to stand in for: a wave supervisor learns a lane finished only once it can no
-  longer act within that turn, and a headless one only as it exits.
+  arrives too late to stand in for: a wave supervisor learns a lane finished only once the turn that
+  was waiting on it has ended.
   *Delete when:* a re-run of this trial observes completion and wake signals reaching the
   **headless spawning** session **while that session is still working** — inside the turn, not at
   its boundary — for every lane of a wave, not merely for most lanes, and not at an interactive or
@@ -669,10 +669,11 @@ this trial.
   arrive, at a turn boundary, and none inside the turn that was waiting on them, so a turn that ends
   with results owed is not rescued by a notice that comes only after it ends. A supervisor that ends
   its turn still loses the result.
-  *Delete when:* a re-run observes that a headless supervising session either survives its turn
-  end on the path the launcher spawns with its in-flight work and pending results intact, or is
-  notified in time to act on it, inside the turn and not at its boundary, for every lane of a wave
-  and not merely for most lanes, so that ending a turn stops costing the result.
+  *Delete when:* a re-run observes that a headless supervising session is notified of each
+  lane's finish in time to act on it, inside the turn and not at its boundary, for every lane of a
+  wave and not merely for most lanes, so that ending a turn stops costing the result. Survival of
+  the supervising process past a turn end does not satisfy this line on its own. This receipt
+  already records that shape of survival, and the result was still lost.
 
 - **Multi-account provisioning transport.** **Needed.** *Evidence:* the negative case was run.
   With `CLAUDE_CONFIG_DIR` unset, a lane launched from a session running under `~/.claude-three`
