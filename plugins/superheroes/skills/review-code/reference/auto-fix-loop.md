@@ -106,7 +106,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **`--mode {review,brief-check}` (optional, default `review`).** `--mode review` or omitted →
 > behaviour identical to today, including `--diff-base` resolving to an empty patch →
 > `sanitized-view-diff-empty`, `attempts: 0`. `--mode brief-check` → the sanitized view is built
-> **diff-less**; all four `sanitizedView` diff keys below are `null`. Supplying **both**
+> **diff-less**; all six `sanitizedView` diff keys below are `null`. Supplying **both**
 > `--mode brief-check` and `--diff-base` is a terminal refusal `mode-brief-check-with-diff-base`,
 > `attempts: 0`, no spawn — **including on continuation**, because the check runs before the journal
 > read. On continuation, an explicitly disagreeing `--mode` is
@@ -117,7 +117,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > pre-spawn refusal alike. Registry/model gate, sanitized-view export and config strip, the #666
 > investigation floor, engagement read, and vacuous-forfeit accounting are unchanged in both modes.
 >
-> **`--diff-base <commit-oid>` (optional).** Omitted → nothing is staged and the four receipt keys
+> **`--diff-base <commit-oid>` (optional).** Omitted → nothing is staged and the six receipt keys
 > below are `null` (this has always been true — `--diff-base` was never required). Supplied → the value must be a **pinned commit object id**
 > (40 hex characters, or 64 in a SHA-256 repository); a revision expression, branch name or tag is
 > refused as `sanitized-view-diff-base-unresolved` **before any repository-local git command runs**.
@@ -136,8 +136,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `--mode brief-check` explicitly, which refuses `mode-brief-check-with-diff-base` before the
 > journal is read.
 >
-> The staged patch is **rejected from the #666 investigation floor**: a seat whose `investigated` array
-> cites only the patch fails the floor and forfeits vacuously, exactly as if it had cited nothing.
+> The staged review patch, the review-only configuration-changes file, and the staged PR body are
+> **rejected from the #666 investigation floor**: a seat whose `investigated` array cites only these
+> artifacts fails the floor and forfeits vacuously, exactly as if it had cited nothing.
 > Rejection is by resolved file identity, so `./NAME`, `a/../NAME` and a symlink to it are all
 > rejected. The rejection reason string is `generated-artifact`.
 >
@@ -176,7 +177,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `sanitized-view-diff-too-large` | the patch exceeds the 8 MiB ceiling, or census `ls-tree` stdout exceeds the export byte ceiling |
 > | `sanitized-view-diff-path-collision` | the repository already tracks a file named `SUPERHEROES_REVIEW_DIFF.patch` |
 > | `sanitized-view-diff-config-path-collision` | the review-only configuration-changes file could not be created at its name in the view, or did not read back as written |
-> | `sanitized-view-diff-config-too-large` | the withheld configuration hunks exceed the review-only file's size cap |
+> | `sanitized-view-diff-config-too-large` | the assembled review-only configuration-changes file exceeds its size cap, or patch streaming hits its byte ceiling while those hunks are being generated |
 > | `sanitized-view-diff-failed` | a git subprocess failed while resolving ancestry or generating the patch (spawn error, non-zero exit, timeout) — command failure only |
 > | `sanitized-view-diff-opaque` | a rendered section whose content is opaque — `Binary files … differ` (or `GIT binary patch`) instead of hunks |
 > | `sanitized-view-diff-unaccounted` | a census tree containing the same path more than once, a patch section whose path cannot be decoded, or an unrecognized span in the patch text |

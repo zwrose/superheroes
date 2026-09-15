@@ -590,7 +590,7 @@ def _authoritative_merge_base(repo_real, base_sha, head_sha, started):
     Repository-local ancestry overlays — ``.git/info/grafts`` in particular — are
     honoured, as they are for every other git command run against that repository.
     Inherited ``GIT_*`` environment variables are still stripped via
-    ``_neutral_git_env`` so an inherited ``GIT_GRAFT_FILE`` would otherwise move the
+    ``_neutral_git_env``; otherwise an inherited ``GIT_GRAFT_FILE`` would move the
     merge base without anyone noticing.
 
     ``base_sha`` is a pinned commit object id, enforced before any repo-local git.
