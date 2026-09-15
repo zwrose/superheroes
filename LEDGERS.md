@@ -560,11 +560,12 @@ boundary**, at 13:26Z, each naming its lane and the time its last turn had finis
 So the notice is not lost. It was **delivered at the subscribing session's turn boundary**, and
 at no point inside the turn that was waiting on it. A supervisor that polls inside its turn, which is what a supervisor must do
 while it still has work in flight, cannot see a notice no matter how long it waits. What was
-observed is exactly that and no more: no notice arrived within any tool round of a working turn.
+observed is exactly that and no more. No notice arrived within any tool round of a working turn.
 This supervising session is headless. It received the five at a turn boundary and went on working
 afterwards, so a turn boundary is not the same event as the session's exit. The cost of boundary
-delivery is narrower than exit, and still decisive for a wave. A turn that ends with lanes in flight
-learns of each finish only after that turn is over, when nothing in it can act on the finish. The
+delivery is narrower than exit, and still decisive for a wave. In this run, a turn that ended with lanes in
+flight learned of each finish only after that turn was over, when nothing in it could act on the
+finish. The
 acknowledgement text's "you will get one notice here" is true; what it does not say is when.
 
 This correction was made after the section was first committed, when the notices arrived. The
@@ -644,9 +645,9 @@ this trial.
 - **Wave-watch arming and the re-arm ritual.** **Needed.** *Evidence:* five idle subscriptions
   across all three accounts (`323cc06c`, `f36e02f3`, `0e6d2ec1`, `5258a26b`, `6ab29229`), five
   qualifying transitions, and five notices delivered — every one of them at the supervising
-  session's turn boundary, none during the turn. The signal the watcher stands in for exists and
-  arrives too late to stand in for it. A wave supervisor learns a lane finished only once the turn
-  that was waiting on it has ended.
+  session's turn boundary, none during the turn. The signal the watcher stands in for exists, and in
+  this run it arrived too late to replace the watcher. The wave supervisor learned that a lane had
+  finished only once the turn that was waiting on it had ended.
   *Delete when:* a re-run of this trial observes completion and wake signals reaching the
   **headless spawning** session **while that session is still working** — inside the turn, not at
   its boundary — for every lane of a wave, not merely for most lanes, and not at an interactive or
@@ -666,13 +667,13 @@ this trial.
   the doctrine's premise was re-demonstrated live in this trial — the disposable `claude -p`
   controller exited the moment its turn ended. What changed is that the work it launched survived;
   what did not change is that the supervisor dies with the result still owed. The five notices did
-  arrive, at a turn boundary, and none inside the turn that was waiting on them, so a turn that ends
-  with results owed is not rescued by a notice that comes only after it ends. A supervisor that ends
-  its turn still loses the result.
+  arrive, at a turn boundary, and none inside the turn that was waiting on them, so in this run a
+  turn that ended with finishes owed was not rescued by its notices. A supervisor that ends its turn
+  still ends it without the finish.
   *Delete when:* a re-run observes that a headless supervising session is notified of each
   lane's finish in time to act on it, inside the turn and not at its boundary, for every lane of a
   wave and not merely for most lanes, so that ending a turn stops costing the result. Survival of
-  the supervising process past a turn end does not satisfy this line on its own. This receipt
+  the supervising process past a turn boundary does not satisfy this line on its own. This receipt
   already records that shape of survival, and the waiting turn still ended without learning of
   the finish.
 
@@ -714,9 +715,9 @@ supply, and grown them on the background path, while the lanes run on the print 
 seven conditions — detached spawn, transcript-mtime liveness, and the launcher-enforced
 own-worktree half — turn on the spawn path changing and then being observed again. Three more —
 wave-watch, the turn-end doctrine, and the heartbeat — each turn on a notice reaching the headless
-session that is waiting on it while that session can still act, which this trial observed only at a
-turn boundary. Each of those three lines states its own further demand, and this summary restates
-none of it; the line is the condition. The seventh, multi-account transport, turns on neither: it turns
+session that is waiting on it while that session can still act. This trial observed such notices
+only at a turn boundary. Each of those three lines states its own further demand, and this summary
+restates none of it. The line is the condition. The seventh, multi-account transport, turns on neither: it turns
 on the config-dir pin becoming unnecessary and on one supervision view carrying lane work state
 across every account, and this run saw neither.
 
