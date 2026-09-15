@@ -740,8 +740,9 @@ above).
    under the word already given if the fix is craft with no material consequence. A fix with a
    material consequence asks. Recipe and field cases:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/merge-train.md`.
-   **Force-push.** State the reason in chat first, then proceed on a word. Record the word and the
-   reason on the PR's owner half.
+   **Force-push.** State the reason in chat first, then proceed only on a word the owner gives for
+   that force-push after hearing the reason. The merge word does not cover it. Record the word and
+   the reason on the PR's owner half, or in the thread that gave the word when there is no PR.
    **Releases and publishing.** By default you do not execute a release merge or a publish: ask in
    chat and the owner clicks. A release is never inside a PR scope. The owner may hand one over in
    the moment with a word for that release.
@@ -999,7 +1000,7 @@ above).
 
 | Excuse | Reality |
 |---|---|
-| "The PR is small, I'll just merge it" | Approval is never yours, and there is no merge without the owner's scoped word. A PR opened after the word rides it only as the disclosed red-train follow-up while the fix is craft with no material consequence, and a PR that materially changed since the word always asks again. Vet it, then execute inside the word and report the merge at once. |
+| "The PR is small, I'll just merge it" | Approval is never yours, and there is no merge without the owner's scoped word. A PR opened after the word rides it only as the disclosed red-train follow-up, once the last lane has merged and while the fix is craft with no material consequence, and a PR that materially changed since the word always asks again. Vet it, then execute inside the word and report the merge at once. |
 | "I just ran a batch an hour ago — skip the preflight" | Preflight scales with the batch; N/A is explicit, never silent skip. Stale quota, base, or grant state kills the next launch. |
 | "Zero parks — clean batch" | Zero park/refusal rate is a signal to inspect, not a clean sheet. |
 | "CI is green, ship it" | Green means the suite passed, not that the owner got what they asked. Probe what the suite cannot test. |

@@ -50,7 +50,8 @@ What the owner may trust, in order of what they'd feel most betrayed by if broke
    always asks again. Inside the word the advisor executes each merge and reports it
    at once in the thread that gave it. A force-push needs its own word, given after the
    reason is stated. Releases and publications stay the owner's click unless the owner
-   hands one over in the moment. When the product cannot tell, it asks.
+   hands one over in the moment with a word for that release. When the product cannot
+   tell, it asks.
 2. **It applies the judgment the owner isn't expected to have.** The third-party
    contract that needs a round-trip test before it's trusted, the unhappy path nobody
    specified, the race that only shows up under load, the test suite that mocks the very
@@ -151,8 +152,8 @@ re-litigated.
 
 **B8 — Forward share.** The share of capacity that goes to new goals, rather than to
 maintaining the machine, is the harm the product steers by. The control is the
-[dial](plugins/superheroes/rubric/glossary.md#dial): each project sets its own ceiling on
-the machinery share of the lanes it launches. Test-pilot work counts as product, because
+[dial](plugins/superheroes/rubric/glossary.md#dial), and each project sets its own.
+Test-pilot work counts as product, because
 it exercises the product rather than the machine. Work folded into an epic from the
 backlog counts as product too. A project records its own starting point and reads the
 trend against it at each gardening pass.
@@ -164,8 +165,8 @@ junk.
 exact token, ask first whether the interface can shrink or the reader can tolerate the
 miss. Documenting the trap and adding a refusal token is the last resort, not the first.
 Fail-closed rigor stays where it is load-bearing, and the standing bias is against new
-refusal tokens as the fix for caller confusion. The hard shell stays tight: an unwieldy
-shell recreates the problem inside the treatment for it.
+refusal tokens as the fix for caller confusion. The hard shell stays tight, because an
+unwieldy shell recreates the problem inside the treatment for it.
 *Re-check:* caller-confusion incidents that tolerance let through and a refusal token
 would have caught. If those accumulate, the bias loses.
 

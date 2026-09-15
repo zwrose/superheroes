@@ -2,7 +2,8 @@
 
 How process prose is written in this plugin: the charters, the rubric, the reference docs, the
 founding documents, and the PR bodies and commit messages that land them. Read it before you write
-or review any of those. A reviewer cites this file, and a writer works from it. Nothing checks it
+or review any of those. This file is reference: rules for lookup, each with its reason where the
+rule is one a careful writer would not guess. A reviewer cites this file, and a writer works from it. Nothing checks it
 mechanically, and no document claims to follow it.
 
 The standard has two layers. The document layer decides what a document holds and where each part
@@ -172,7 +173,7 @@ reference, is a document that has not decided what it is.
 A document can obey every rule above and still read machine-written. Mix sentence lengths on
 purpose: short sentences land a point, and a longer one carries a fact with its condition. Split the
 sentence that carries two thoughts, and keep the long one that carries one. Have a view where the mode
-allows it: explanation weighs a trade-off and says what you make of it. Be specific over sterile:
+allows it, which is explanation, where you weigh a trade-off and say what you make of it. Be specific over sterile:
 not "schema changes can cause issues" but "a column rename fails the build". Ask of every sentence
 what it tells the reader to do or know, and write that. A sentence that could sit unchanged in
 another project's docs says nothing about this one.

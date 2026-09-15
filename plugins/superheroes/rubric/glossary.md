@@ -172,8 +172,7 @@ owner's word.
 ### Dial
 
 A project's ceiling on the share of launched lanes that carry machinery work over a [gardening
-window](#gardening-window). The plugin default is 20 to 30 percent, and each project configures
-its own number.
+window](#gardening-window). Each project configures its number, and the plugin ships a default.
 
 ### Machinery lane
 
