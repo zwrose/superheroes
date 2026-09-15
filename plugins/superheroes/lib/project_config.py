@@ -634,6 +634,78 @@ def _detect_detector_test_boundary():
     return None
 
 
+def _declared_dependencies_mapping(facts):
+    if not isinstance(facts, dict):
+        return {}
+    declared = facts.get("declaredDependencies")
+    if declared is None:
+        return {}
+    if not isinstance(declared, dict):
+        return {}
+    return dict(declared)
+
+
+def _validate_dependency_value(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if not value.strip():
+            return REASON_MALFORMED_VALUE
+        return None
+    if isinstance(value, dict):
+        return None
+    return REASON_MALFORMED_VALUE
+
+
+def declare_dependency(cwd, slug, value, root=None):
+    """Declare or withdraw one dependency in ``declaredDependencies`` only."""
+    if slug not in _DEPENDENCY_FALLBACKS:
+        return {"action": "refused", "reason": REASON_UNKNOWN_SLUG}
+
+    reason = _validate_dependency_value(value)
+    if reason is not None:
+        return {"action": "refused", "reason": reason}
+
+    facts = core_md.read(cwd, root)
+    if facts is None:
+        if core_md.gate_config_profile_is_absent(cwd, root):
+            return {"action": "refused", "reason": REASON_PROFILE_ABSENT}
+        return {"action": "refused", "reason": REASON_PROFILE_UNPARSEABLE}
+    if facts.get("behind"):
+        return {"action": "behind", "record": facts}
+
+    mapping = _declared_dependencies_mapping(facts)
+    if value is None:
+        if slug not in mapping:
+            return {"action": "noop"}
+        del mapping[slug]
+    else:
+        mapping[slug] = value
+
+    # axis: sibling declarations survive a single dependency declare — wo_h_1276_sibling-declarations
+    write_result = core_md.write_declared_dependencies(cwd, mapping, root=root)
+    if write_result.get("action") not in ("written", "noop"):
+        return write_result
+
+    reread = _declared_dependencies_mapping(core_md.read(cwd, root))
+    if value is None:
+        if slug in reread:
+            return {
+                "action": "refused",
+                "reason": REASON_SET_MISMATCH,
+                "expected": None,
+                "observed": reread.get(slug),
+            }
+    elif not _values_equal(reread.get(slug), value):
+        return {
+            "action": "refused",
+            "reason": REASON_SET_MISMATCH,
+            "expected": value,
+            "observed": reread.get(slug),
+        }
+    return write_result
+
+
 def dependencies(cwd, root=None):
     """Report the four declared dependencies and their status. Never blocks."""
     facts = core_md.read(cwd, root) or {}
@@ -703,6 +775,11 @@ def main(argv):
     dp.add_argument("--cwd", default=".")
     dp.add_argument("--root", default=None)
 
+    decl = sub.add_parser("declare")
+    decl.add_argument("--dependency", required=True)
+    decl.add_argument("--cwd", default=".")
+    decl.add_argument("--root", default=None)
+
     args = ap.parse_args(argv)
 
     if args.cmd == "view":
@@ -717,6 +794,15 @@ def main(argv):
             out = {"action": "refused", "reason": "input-unparseable"}
         else:
             out = set_item(args.cwd, args.item, value, root=args.root)
+    elif args.cmd == "declare":
+        raw = sys.stdin.read()
+        try:
+            value = json.loads(raw) if raw.strip() else None
+        except ValueError:
+            out = {"action": "refused", "reason": "input-unparseable"}
+        else:
+            out = declare_dependency(
+                args.cwd, args.dependency, value, root=args.root)
     else:
         out = dependencies(args.cwd, root=args.root)
 

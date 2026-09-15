@@ -293,6 +293,16 @@ step blocks set-up.
    python3 -B "$ROOT_DIR/lib/project_config.py" dependencies --cwd .
    ```
 
+   When the project has a dependency to declare, persist it with JSON on stdin:
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   printf '%s' '"standing-proposals"' | \
+     python3 -B "$ROOT_DIR/lib/project_config.py" declare --dependency collector --cwd .
+   ```
+
+   An undeclared dependency is not a failure — its fallback applies.
+
 2. **Kind labels.** When `kind:machinery` or `kind:product` is missing on the repository, create
    only the missing labels through `kind_labels`. Report what was created. A label failure
    degrades calibration with a disclosure and never refuses it.
