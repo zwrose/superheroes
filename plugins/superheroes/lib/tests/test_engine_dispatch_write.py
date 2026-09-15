@@ -23,6 +23,9 @@ def _load():
 
 ED = _load()
 
+_REVIEW_ROLE = "reviewer"
+_WRITE_ROLE = "implementer"
+
 import file_lock as _file_lock
 
 _EA = importlib.util.spec_from_file_location(
@@ -120,14 +123,30 @@ class FakeRunner:
 _NO_CWD = object()
 
 
-def _dispatch_write(tmp_path, fake, *, cwd=_NO_CWD, run_dir=None, engine="codex", **kwargs):
+def _seat(vendor, model, effort):
+    return {"vendor": vendor, "model": model, "effort": effort}
+
+
+def _seat_json(vendor, model, effort):
+    return json.dumps({"vendor": vendor, "model": model, "effort": effort})
+
+
+def _codex_seat(model="gpt-5.6-sol", effort="high"):
+    return _seat("codex", model, effort)
+
+
+def _cursor_seat(model="composer-2.5", effort=None):
+    return _seat("cursor", model, effort)
+
+
+def _dispatch_write(tmp_path, fake, *, cwd=_NO_CWD, run_dir=None, seat=None, **kwargs):
     if cwd is _NO_CWD:
         cwd, _main = _linked_worktree(tmp_path)
     if run_dir is None:
         run_dir = str(tmp_path / "run")
     defaults = {
-        "model": "sonnet",
-        "effort": "high",
+        "seat": seat or _codex_seat(),
+        "role": _WRITE_ROLE,
         "cwd": cwd,
         "run_dir": run_dir,
         "order_id": "order-1",
@@ -136,7 +155,7 @@ def _dispatch_write(tmp_path, fake, *, cwd=_NO_CWD, run_dir=None, engine="codex"
     if "prompt_path" not in kwargs:
         defaults["prompt_path"] = _prompt(tmp_path)
     defaults.update(kwargs)
-    return ED.dispatch_write(engine, **defaults)
+    return ED.dispatch_write(**defaults)
 
 
 # --- cwd validation refusals ---------------------------------------------------
@@ -362,7 +381,9 @@ def test_run_kind_mismatch_both_directions(tmp_path):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
     baseline = ED._worktree_baseline(os.path.realpath(wt))
-    built = EA.build_argv_result("codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)})
+    built = EA.build_argv_result(
+        _codex_seat(), "build", {"cwd": os.path.realpath(wt)},
+    )
     ED._acquire_worktree_lease(os.path.realpath(wt), run_dir)
     ED._open_write_run(
         run_dir, engine="codex", argv=built["argv"], cwd=os.path.realpath(wt),
@@ -435,8 +456,13 @@ def test_dispatch_write_never_raises(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ED, "_validate_linked_build_cwd", boom)
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high", prompt_path=_prompt(tmp_path),
-        cwd=wt, run_dir=str(tmp_path / "run"),
+        seat=_codex_seat(),
+        role=_WRITE_ROLE,
+        prompt_path=_prompt(tmp_path),
+        cwd=wt,
+        run_dir=str(tmp_path / "run"),
+        order_id="order-1",
+        run_engine=FakeRunner([]),
     )
     assert res["detail"] == "internal-ValueError"
     assert res["attempts"] == 0
@@ -830,26 +856,27 @@ def test_write_argv_shape_codex(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
     cwd_real = os.path.realpath(wt)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, engine="codex", effort="high", model="sonnet")
+    seat = _codex_seat()
+    res = _dispatch_write(tmp_path, fake, cwd=wt, seat=seat)
     assert res["ok"] is True
     argv = fake.calls[0]["argv"]
-    built = EA.build_argv_result("codex", "build", "high", {"model": "sonnet", "cwd": cwd_real})
+    built = EA.build_argv_result(seat, "build", {"cwd": cwd_real})
     assert argv == built["argv"]
     assert argv == [
         "codex", "exec", "--sandbox", "workspace-write", "-m", argv[5],
         "-c", "model_reasoning_effort=high", "-C", cwd_real, "-",
     ]
     assert "read-only" not in argv
-    review_built = EA.build_argv_result("codex", "review", "high", {"model": "sonnet", "cwd": cwd_real})
+    review_built = EA.build_argv_result(seat, "review", {"cwd": cwd_real})
     assert review_built["argv"] != argv
     assert "read-only" in review_built["argv"]
 
     real_build = ED.engine_adapter.build_argv_result
 
-    def neutralized(engine, role_kind, effort, opts):
+    def neutralized(seat, role_kind, opts):
         if role_kind == "build":
             role_kind = "review"
-        return real_build(engine, role_kind, effort, opts)
+        return real_build(seat, role_kind, opts)
 
     monkeypatch.setattr(ED.engine_adapter, "build_argv_result", neutralized)
     fake2 = FakeRunner([(_build_ok_stdout(), False, 0, "")])
@@ -865,10 +892,7 @@ def test_write_argv_shape_codex(tmp_path, monkeypatch):
 def test_write_argv_shape_cursor(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
-    res = _dispatch_write(
-        tmp_path, fake, cwd=wt, engine="cursor",
-        engine_model="composer-2.5", effort=None, model=None,
-    )
+    res = _dispatch_write(tmp_path, fake, cwd=wt, seat=_cursor_seat())
     assert res["ok"] is True
     argv = fake.calls[0]["argv"]
     assert argv == [
@@ -876,13 +900,16 @@ def test_write_argv_shape_cursor(tmp_path):
         "--output-format", "stream-json",
     ]
     built = EA.build_argv_result(
-        "cursor", "build", None, {"engine_model": "composer-2.5", "cwd": os.path.realpath(wt)},
+        _cursor_seat(), "build",
+        {"engine_model": "composer-2.5", "cwd": os.path.realpath(wt)},
     )
     assert argv == built["argv"]
     assert argv[0] == "cursor-agent"
     assert "-f" in argv
     assert "--mode" not in argv
-    review_built = EA.build_argv_result("cursor", "review", None, {"engine_model": "composer-2.5"})
+    review_built = EA.build_argv_result(
+        _cursor_seat(), "review", {"engine_model": "composer-2.5"},
+    )
     assert "-f" not in review_built["argv"]
     assert "--mode" in review_built["argv"]
 
@@ -891,11 +918,11 @@ def test_dispatch_write_codex_effort_none_refuses_no_lease(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     lease_path = ED._worktree_lease_path(os.path.realpath(wt))
     fake = FakeRunner([])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, engine="codex", effort=None)
+    res = _dispatch_write(tmp_path, fake, cwd=wt, seat=_seat("codex", "gpt-5.6-sol", None))
     assert res["ok"] is False
     assert res["terminal"] is True
     assert res["reason"] == "unrunnable"
-    assert res["detail"] == "engine-config:invalid-model-effort"
+    assert res["detail"] == "invalid-model-effort"
     assert res["attempts"] == 0
     assert len(fake.calls) == 0
     assert not os.path.exists(lease_path)
@@ -905,29 +932,30 @@ def test_dispatch_write_cursor_grok_effort_none_refuses(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     fake = FakeRunner([])
     res = _dispatch_write(
-        tmp_path, fake, cwd=wt, engine="cursor",
-        engine_model="cursor-grok-4.6", effort=None, model=None,
+        tmp_path, fake, cwd=wt, seat=_seat("cursor", "cursor-grok-4.6", None),
     )
     assert res["ok"] is False
     assert res["terminal"] is True
     assert res["reason"] == "unrunnable"
-    assert res["detail"] == "engine-config:invalid-model-effort"
+    assert res["detail"] == "invalid-model-effort"
     assert res["attempts"] == 0
     assert len(fake.calls) == 0
     built = EA.build_argv_result(
-        "cursor", "build", None, {"engine_model": "cursor-grok-4.6", "cwd": os.path.realpath(wt)},
+        _seat("cursor", "cursor-grok-4.6", None), "build",
+        {"engine_model": "cursor-grok-4.6", "cwd": os.path.realpath(wt)},
     )
     assert built["reason"] == "invalid-model-effort"
 
 
-def test_dispatch_write_cli_effort_optional(tmp_path):
+def test_dispatch_write_cli_effort_key_absent_refuses(tmp_path, capsys):
+    # axis: seat bundle makes absent effort unrepresentable — CLI must refuse by name
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")
     prompt = _prompt(tmp_path)
     argv = [
         "dispatch-write",
-        "--engine", "cursor",
-        "--engine-model", "composer-2.5",
+        "--seat", json.dumps({"vendor": "cursor", "model": "composer-2.5"}),
+        "--role", _WRITE_ROLE,
         "--prompt-path", prompt,
         "--cwd", wt,
         "--run-dir", run_dir,
@@ -935,6 +963,11 @@ def test_dispatch_write_cli_effort_optional(tmp_path):
     ]
     code = ED.main(argv)
     assert code == 0
+    res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res["detail"] == "effort-key-absent"
+    assert "effort key is required" in res["seatDetail"]
 
 
 # --- process-group liveness + abandon confirmation -----------------------------
@@ -1209,8 +1242,8 @@ def test_write_cli_out_of_range_max_wait_prints_named_refusal(tmp_path, capsys):
     run_dir = str(tmp_path / "run")
     argv = [
         "dispatch-write",
-        "--engine", "cursor",
-        "--engine-model", "composer-2.5",
+        "--seat", _seat_json("cursor", "composer-2.5", None),
+        "--role", _WRITE_ROLE,
         "--prompt-path", _prompt(tmp_path),
         "--cwd", wt,
         "--run-dir", run_dir,
@@ -1479,8 +1512,8 @@ def test_write_cli_expect_item_and_file(tmp_path, capsys):
     items_file.write_text("from-file.txt\n", encoding="utf-8")
     argv = [
         "dispatch-write",
-        "--engine", "cursor",
-        "--engine-model", "composer-2.5",
+        "--seat", _seat_json("cursor", "composer-2.5", None),
+        "--role", _WRITE_ROLE,
         "--prompt-path", _prompt(tmp_path),
         "--cwd", wt,
         "--run-dir", run_dir,
@@ -2397,3 +2430,72 @@ def test_write_legacy_uncontracted_resume_grades_like_parse_result(tmp_path):
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade["ok"] is True
     assert grade["signal"] == "ok"
+
+
+# --- #1269 WO-A2: resolved-input snapshot on write path -----------------------
+
+_WRITE_RESOLVED_INPUT_KEYS = frozenset({
+    "engine", "engineSource", "model", "modelSource", "effort", "effortSource",
+    "engineModel", "engineModelSource", "role", "roleSource", "repoRoot", "repoRootSource",
+    "runDir", "runDirSource", "promptPath", "promptPathSource", "timeout", "timeoutSource",
+    "retryTimeout", "retryTimeoutSource", "maxWait", "maxWaitSource", "preflightTimeout",
+    "preflightTimeoutSource", "mode", "modeSource", "expectedResultKind",
+    "expectedResultKindSource", "baseSha", "baseShaSource", "diffBase", "diffBaseSource",
+    "progressPath", "progressPathSource", "journalRoot", "journalRootSource",
+})
+
+
+def _write_opened_resolved_inputs(run_dir):
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    snapshot = opened.get("resolvedInputs")
+    assert isinstance(snapshot, dict)
+    assert frozenset(snapshot.keys()) == _WRITE_RESOLVED_INPUT_KEYS
+    return snapshot
+
+
+def test_write_run_opened_carries_resolved_inputs_snapshot(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([])
+    run_dir = str(tmp_path / "write-run")
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=0)
+    snapshot = _write_opened_resolved_inputs(run_dir)
+    assert snapshot["engine"] == "codex"
+    assert snapshot["role"] == "implementer"
+    assert snapshot["preflightTimeout"] == 1
+    assert snapshot["preflightTimeoutSource"] == "clamped"
+    assert snapshot["maxWait"] == 0
+    assert snapshot["maxWaitSource"] == "caller"
+    assert snapshot["timeoutSource"] == "default"
+
+
+def test_write_resolved_inputs_poll_echo_matches_opened_snapshot_without_seat(tmp_path):
+    # axis: I2 — poll has no seat; echo still comes from the journal snapshot
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "poll-echo")
+    fake = FakeRunner([])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=0)
+    snapshot = _write_opened_resolved_inputs(run_dir)
+    polled = ED.dispatch_poll(run_dir)
+    assert polled["runOpened"] is True
+    assert polled["resolvedInputs"] == snapshot
+
+
+def test_write_continuation_different_seat_refuses(tmp_path):
+    # axis: I3 — immutable seat at open; disagreeing continuation refuses by name
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "seat-mismatch")
+    fake = FakeRunner([])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=0)
+    res = ED.dispatch_write(
+        seat=_cursor_seat(),
+        role=_WRITE_ROLE,
+        cwd=wt,
+        run_dir=run_dir,
+        order_id="order-1",
+        prompt_path=_prompt(tmp_path),
+        run_engine=FakeRunner([]),
+        max_wait=0,
+    )
+    assert res["detail"] == ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
+    assert res["attempts"] == 0
