@@ -36,8 +36,9 @@ control probe. It does not reclassify the PR. The containing lane keeps its own 
 its advisor vet.
 
 A red on the train is a per-lane green that goes red on the union or on `main`'s post-merge run.
-When the fix is craft with no material consequence (the glossary's term, which duty 6 links),
-fix it under the word already given: the
+When the fix is craft with no
+[material consequence](../../../rubric/glossary.md#material-consequence), fix it under the word
+already given: the
 disclosed integration commit on the last open PR, or the disclosed follow-up PR once the last lane
 has merged, rides the scope and is reported in the thread like any merge. That follow-up PR is the
 one exception to the rule that a PR opened after the word asks again, and it holds only while the

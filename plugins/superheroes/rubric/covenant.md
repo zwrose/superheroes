@@ -13,9 +13,9 @@ governs.
    chat, given after the PRs are talked through. Inside that word the advisor, and only the
    advisor, executes each merge and reports it at once in the thread that gave it. A PR opened after the word asks again,
    except the disclosed red-train follow-up the merge rule names while the fix is craft
-   with no [material consequence](rubric/glossary.md#material-consequence). A PR
+   with no [material consequence](glossary.md#material-consequence). A PR
    materially changed after the word always asks again. When the word's scope or a
-   change is in doubt, it is an [owner call](rubric/glossary.md#owner-call): ask. A force-push proceeds on a
+   change is in doubt, it is an [owner call](glossary.md#owner-call): ask. A force-push proceeds on a
    word the owner gives for that force-push after hearing the reason. Releases and
    publishing are the owner's click unless the owner hands one over in the moment with a
    word for that release. Park rather than presume.
@@ -47,10 +47,10 @@ governs.
   advisor's act, and it needs three things: the review and verification evidence the lane requires, CI green on the
   recorded head, and a branch current with its base. A PR opened after the word asks
   again, except the disclosed red-train follow-up the merge rule names while the fix is
-  craft with no [material consequence](rubric/glossary.md#material-consequence). A PR
+  craft with no [material consequence](glossary.md#material-consequence). A PR
   materially changed after the word always asks again. When you cannot place the word's
   scope, or a post-word change on the material-consequence line, with confidence, treat
-  it as an [owner call](rubric/glossary.md#owner-call) and ask. A
+  it as an [owner call](glossary.md#owner-call) and ask. A
   force-push proceeds only on a word the owner gives for that force-push after hearing the
   reason. Releases and publishing are the owner's click unless the owner hands one over in
   the moment with a word for that release.

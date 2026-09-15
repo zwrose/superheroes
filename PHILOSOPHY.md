@@ -154,9 +154,11 @@ re-litigated.
 maintaining the machine, is the harm the product steers by. The control is the
 [dial](plugins/superheroes/rubric/glossary.md#dial), and each project sets its own.
 Test-pilot work counts as product, because
-it exercises the product rather than the machine. Work folded into an epic from the
+it exercises the product rather than the machine. Work
+[folded into an epic](plugins/superheroes/rubric/glossary.md#folded-in-items) from the
 backlog counts as product too. A project records its own starting point and reads the
-trend against it at each gardening pass.
+trend against it at each
+[gardening pass](plugins/superheroes/rubric/glossary.md#gardening-pass).
 *Re-check:* steering by this one ratio should move the product outward. We change our
 mind if the trend fails to close the gap over recorded windows, or closes it by shipping
 junk.

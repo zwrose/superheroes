@@ -747,10 +747,10 @@ above).
    chat and the owner clicks. A release is never inside a PR scope. The owner may hand one over in
    the moment with a word for that release.
    **The floor.** There is no mechanical merge floor.
-   **Mechanical duties you may execute inside the word:** issuing the merge command, sequencing,
-   branch-update, waiting for CI green, conflict resolution under an advisor-authored recipe, and
-   post-merge hygiene. A merge train's "green" includes post-merge `main` CI, and union fixes ride
-   the last open PR, disclosed.
+   **Mechanical duties inside the word:** issuing the merge command, sequencing, branch-update,
+   waiting for CI green, conflict resolution under an advisor-authored recipe, and post-merge
+   hygiene. The merge command itself is yours to issue, never a subagent's. A merge train's "green"
+   includes post-merge `main` CI, and union fixes ride the last open PR, disclosed.
    When you hand mechanical duties to a cheap in-session subagent, three conditions make that safe:
    (1) **Recipes are durable versioned artifacts, not session context** — a fresh subagent has none of
    your context; what it executes must be self-contained and written down. (2) **The delegated seat
@@ -1000,7 +1000,7 @@ above).
 
 | Excuse | Reality |
 |---|---|
-| "The PR is small, I'll just merge it" | Approval is never yours, and there is no merge without the owner's scoped word. A PR opened after the word rides it only as the disclosed red-train follow-up, once the last lane has merged and while the fix is craft with no material consequence, and a PR that materially changed since the word always asks again. Vet it, then execute inside the word and report the merge at once. |
+| "The PR is small, I'll just merge it" | Approval is never yours, and there is no merge without the owner's scoped word. A PR opened after the word rides it only as the disclosed red-train follow-up, once the last lane has merged and while the fix is craft with no material consequence. A PR that materially changed since the word always asks again. Vet it, then execute inside the word and report the merge at once. |
 | "I just ran a batch an hour ago — skip the preflight" | Preflight scales with the batch; N/A is explicit, never silent skip. Stale quota, base, or grant state kills the next launch. |
 | "Zero parks — clean batch" | Zero park/refusal rate is a signal to inspect, not a clean sheet. |
 | "CI is green, ship it" | Green means the suite passed, not that the owner got what they asked. Probe what the suite cannot test. |
