@@ -3,8 +3,7 @@
 How process prose is written in this plugin: the charters, the rubric, the reference docs, the
 founding documents, and the PR bodies and commit messages that land them. Read it before you write
 or review any of those. This file is reference. Its rules are for lookup, each with its reason
-where the rule is one a careful writer would not guess, and the reviewer's questions at the end
-are the same rules asked the other way round. A reviewer cites this file, and a writer works from it. Nothing checks it
+where the rule is one a careful writer would not guess. A reviewer cites a rule by its heading. A reviewer cites this file, and a writer works from it. Nothing checks it
 mechanically, and no document claims to follow it.
 
 The standard has two layers. The document layer decides what a document holds and where each part
@@ -226,23 +225,6 @@ beside the rule, because the reason helps every reader. Where the rule was decid
 - Trim for context cost only. Shortening a document that is already read once is churn, and
   rewording an unchanged sentence between edits costs the same way.
 - No document claims adherence to a style as a property of itself. The text is the evidence.
-
-## What a reviewer asks of a shipped surface
-
-A reviewer cites this file and asks:
-
-1. Is the document one mode, with links where modes meet?
-2. Does every step end on a criterion the agent can tell done from not done by?
-3. Is every instruction a command with its condition in front?
-4. Does any sentence carry two thoughts? Split it. Can any word be cut? Cut it.
-5. Is "only" next to the word it changes, does every "it" point at one thing, does every clause
-   keep its verb?
-6. Does each thing have one name across the docs, and is that name the real symbol or the glossary
-   slug?
-7. Is every prohibition paired with the positive instruction, and does every sentence pass the
-   no-op test?
-8. Does the text carry any project provenance, and is every count, path, and symbol true at the
-   commit that lands it?
 
 ## Sources
 

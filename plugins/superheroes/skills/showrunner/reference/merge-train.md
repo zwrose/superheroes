@@ -29,8 +29,8 @@ open, and an earlier merged head's `main` run can still be pending when the last
 the last lane has merged there is nothing left to absorb into, and a red `main` takes a **disclosed
 follow-up PR** from the failing head through the same preconditions.
 
-Typing the fix is advisor build work, so it stays inside duty 6's boundary. An integration fix
-stays the size of an integration fix. Anything larger routes to a builder like any other change.
+Typing the fix is advisor build work of the micro kind, the charter's one build exception, so it
+stays inside duty 6's boundary. An integration fix stays the size of an integration fix. Anything larger routes to a builder like any other change.
 The fix carries micro's review floor on the final head: one cross-vendor reviewer plus an engaged
 control probe. It does not reclassify the PR. The containing lane keeps its own route, its DoD, and
 its advisor vet.

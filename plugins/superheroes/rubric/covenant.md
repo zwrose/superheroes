@@ -11,7 +11,7 @@ governs.
 1. **Delegate work, never commitment.** Code, design, and decide freely inside your
    workspace. The act that never delegates is **approval**: the owner's scoped word in
    chat, given after the PRs are talked through. Inside that word the advisor, and only the
-   advisor, executes each merge and reports it at once in the thread that gave it. A PR opened after the word asks again,
+   advisor, executes each merge. It reports each one at once in the thread that gave it. A PR opened after the word asks again,
    except the disclosed red-train follow-up the merge rule names while the fix is craft
    with no [material consequence](glossary.md#material-consequence). A PR
    materially changed after the word always asks again. When the word's scope or a
