@@ -10,6 +10,8 @@ import json
 import os
 import subprocess
 
+import pytest
+
 _PLUGIN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _HOOK = os.path.join(_PLUGIN, "hooks", "bash_timeout.py")
 _HOOKS_JSON = os.path.join(_PLUGIN, "hooks", "hooks.json")
@@ -25,6 +27,12 @@ def _mod():
 def _run_hook(stdin_text):
     return subprocess.run(["python3", _HOOK], input=stdin_text,
                           capture_output=True, text=True, timeout=10)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_claude_config_dir(tmp_path, monkeypatch):
+    """The hook writes a durable firing record; a test run must never land in a real one."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
 
 
 # --- decide(): pure ---------------------------------------------------------
@@ -99,6 +107,18 @@ def test_hooks_json_wires_timeout_floor_fail_open():
 
 def _record_path(config_root):
     return os.path.join(config_root, "superheroes", "state", "bash-timeout-firings.jsonl")
+
+
+def test_firing_record_isolated_without_explicit_config_dir(tmp_path):
+    home = os.path.realpath(os.path.expanduser("~"))
+    r = _run_hook(json.dumps({"tool_input": {"command": "echo ok"}}))
+    assert r.returncode == 0
+    config_dir = os.environ["CLAUDE_CONFIG_DIR"]
+    record = _record_path(config_dir)
+    assert os.path.isfile(record)
+    record_real = os.path.realpath(record)
+    assert not record_real.startswith(home + os.sep) and record_real != home
+    assert record_real.startswith(os.path.realpath(str(tmp_path)) + os.sep)
 
 
 def test_firing_record_writes_one_json_line(tmp_path, monkeypatch):
