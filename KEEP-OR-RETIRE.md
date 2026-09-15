@@ -78,7 +78,79 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 ### A. Session gates & hooks
 
-### A6 — source_guard
+#### A1 — Owner-authority gate
+
+- **Component.** PreToolUse(Bash) gate and classifier that ask before enumerated owner-authority
+  actions on calibrated projects; it costs a stdin parse and command inspection on every Bash call.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing an
+  owner-authority gate `ask` that blocked an unauthorized merge, release, force-push, default-branch
+  push, or workflow dispatch. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Re-derived tool-to-subcommand matching to close a silent
+  classification bypass in workflow dispatch (#989).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — implements the never-merge-on-agent-authority hard line; a zero citation
+  count means the floor is holding, not that the bypass class is gone.
+
+#### A2 — Worktree guard
+
+- **Component.** PreToolUse(Bash) gate and classifier that deny destructive git discard on dirty
+  calibrated worktrees; it costs a git status probe on matching commands.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  worktree-guard `deny` that prevented the checkout-revert wipe class. On firing, a proposal to the
+  owner at a gardening pass.
+- **Last demonstrated benefit.** Refuses destructive `git` discard when uncommitted work would be
+  lost, guarding the checkout-revert wipe class (#682).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — guards unrecoverable worktree loss; a zero citation count means agents are
+  not attempting the wipe, not that the defect class vanished.
+
+#### A3 — Handback receipt gate (hook)
+
+- **Component.** PreToolUse(Bash) handback-receipt hook shipped dark and unwired from the live hook
+  chain, with zero shipped consumers ever; K1 retires it with `handback_gate.py` (#954).
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a live
+  handback-receipt refusal (none possible while dark and unwired). On firing, a retirement proposal
+  to the owner at a gardening pass. An absent, unreadable, or short-of-window record reads
+  unmeasured, never zero.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — the host PreToolUse chain does not arm this hook; review-before-handback
+  is held in charter prose until K1 lands.
+
+#### A4 — Bash timeout hook
+
+- **Component.** PreToolUse(Bash) input rewrite that floors omitted Bash tool timeouts to 600s; it
+  costs a stdin parse on every Bash call and works around the host's 120s default.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts in which the
+  injected timeout floor is what let a command finish. On firing, a proposal to the owner at a
+  gardening pass. A citation reads this hook's own record; an absent, unreadable, or short-of-window
+  record reads unmeasured, never zero.
+- **Last demonstrated benefit.** Probe-verified that injected timeout takes effect and that plugin
+  PreToolUse hooks fire inside subagent leaves (hooks/bash_timeout.py docstring, 2026-07-04).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — leaf models omit `timeout` stochastically and the host default kills long
+  spine commands; explicit model-passed timeouts are never touched.
+
+#### A5 — Session bootstrap (covenant inject, compaction recovery, skew notice)
+
+- **Component.** SessionStart bootstrap and PreCompact charter-aware compaction skeleton; the row is
+  process prose machinery loaded on every spawn and compact, and it costs context tokens per
+  session.
+- **Condition.** Usage-based, 60 days: calibrated sessions where bootstrap or compaction context
+  fired (startup, resume, clear, or compact sources). On firing, a proposal to the owner at a
+  gardening pass.
+- **Last demonstrated benefit.** Probe-verified that native harness context loads on all spawn paths
+  while bootstrap still supplies plugin roots and the distilled covenant (#627).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — covenant and plugin-root inject are structural; charter-aware compaction preserve
+  directives are capability-gap until the host offers native charter steering.
+
+#### A6 — source_guard
 
 - **Component.** A pytest guard that blocks writes to shipped Python source during test runs; it costs session setup and parallel-run overhead on every suite invocation.
 - **Condition.** Catch-based, 45 days: real catches of shipped-source mutation under parallel test execution. On firing, a proposal to the owner at a gardening pass.
@@ -87,9 +159,71 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — a zero catch count means the guard is doing its job, not that the race is gone.
 
+#### A7 — Version-skew guard
+
+- **Component.** Plugin-version skew detector appended to seat-map degradations; K2 retires it with
+  trigger to rebuild at the front door when a real skew incident recurs.
+- **Condition.** Citation-based, 45 days: real skew-incident receipts (the K2 rebuild trigger). On
+  firing, a rebuild proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — detection-only record with zero recorded firings; the motivating
+  incident (#675) predates the module and was fixed by other means.
+
 ### B. Launch & wave machinery
 
-### B5 — Environment probes
+#### B1 — Launcher + launch ledger (declare-batch/launch/record-outcome/amend)
+
+- **Component.** Headless launcher, launch ledger, doctrine, and build-lane stamp that walk preflight,
+  reserve, spawn, and outcome recording for unattended waves; it costs ledger I/O and detached-spawn
+  plumbing on every batch.
+- **Condition.** Usage-based, 60 days: unattended launch batches that reach a stamped ledger outcome
+  via launcher verbs. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — load-bearing spine for declare-batch, launch, record-outcome, and amend;
+  wave_watch and heartbeat read the ledger it writes.
+
+#### B2 — wave_watch (loop watcher + re-arm doctrine)
+
+- **Component.** Ledger-driven batch watcher and loop re-arm doctrine with its reference doc; it
+  costs polling, gh child spawns, and advisor attention per armed batch.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  wave_watch qualifying event that drove advisor action. On firing, a proposal to the owner at a
+  gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — the host offers no native batch watcher; auto-re-arm redesign is queued
+  at the front door while the silent-death class it targets still recurs in field evidence.
+
+#### B3 — Heartbeat
+
+- **Component.** Semantic builder heartbeat stamp and advisor sweep classifier; a false `fresh` answer
+  is the dangerous failure mode, and every lane carries periodic stamp overhead.
+- **Condition.** Catch-based, 45 days: heartbeat sweep classifications of `stale` or `terminal` that
+  drove advisor or wave_watch action. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Classified six stalled lanes in one advisor sweep (cp2-scoreboards).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — fail-closed liveness signal for unattended builders; a low catch count means
+  builders are finishing, not that wedged lanes stopped happening.
+
+#### B4 — Seat canary (planted-defect control probe)
+
+- **Component.** Planted-defect control probe that dispatches a known-bad fixture through the real
+  seat path and scores engagement and plant detection; each run costs a full seat dispatch.
+- **Condition.** Catch-based, 45 days: canary runs where engagement or plant-detection axes scored a
+  miss. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Tripwire scored seven correct fires in one wave (cp2-scoreboards).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — measures whether review seats investigate and name planted defects;
+  evidence observed on the real dispatch path (#668).
+
+#### B5 — Environment probes
 
 - **Component.** Scaffold probes that detect harness and worktree environment faults before dispatch; the row covers `harness_probe`, `sibling_worktree_probe`, and `hostinfo`, which differ in wiring and retirement posture.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite the probe rule's substance for `sibling_worktree_probe`. On firing, a proposal to the owner at a gardening pass. `hostinfo` has no separate condition; `harness_probe` is retired and is not counted.
@@ -98,9 +232,112 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit for `sibling_worktree_probe` — the host offers no native worktree-liveness signal; structural for `hostinfo` — load-bearing file-lock consumer with a real defect class behind it.
 
+#### B6 — File lock + store family
+
+- **Component.** Substrate row: `file_lock`, `store_core`, `store_sweep`, and test-pilot-only
+  `store.py` guard concurrent engine applies and project-store writes; proposals on this row are
+  shrink or split, not row deletion.
+- **Condition.** Usage-based, 60 days: consuming acts that acquire `file_lock` or write through the
+  store family (engine dispatch, calibration, test-pilot). On firing, a shrink proposal to the owner
+  at a gardening pass.
+- **Last demonstrated benefit.** Foreign-host reclaim and tri-state `same_boot` doctrine settled a
+  permanent-wedge defect class (#953).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — load-bearing substrate for parallel worktree agents and store I/O; shrink
+  targets members, not the row's existence.
+
+### C. Engine dispatch stack
+
+#### C1 — Dispatch core
+
+- **Component.** This row is substrate — a proposal on it is a shrink proposal, not a deletion.
+  The cross-vendor dispatch stack (`engine_dispatch.py`, adapters, authz, prefs) costs ongoing
+  contract maintenance and measured caller-facing refusal churn; CP2 directs a shrink of the
+  entry/argument shell while the parse/scrub/forfeit-grading boundary stays tight.
+- **Condition.** Usage-based, 60 days: the signal is terminal `dispatch-write` and
+  `dispatch-review` runs graded through the core. On firing, a shrink proposal to the owner at a
+  gardening pass.
+- **Last demonstrated benefit.** Blocked silent inference of load-bearing dispatch params — the
+  #839 specimen — and closed fail-open grading on malformed engine output at the parse boundary
+  (#1010 empty-object class) (cp2-scoreboards.md).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — the parse/scrub/forfeit shell is structural; the caller-facing refusal
+  surface is capability-gap until tolerant reading pairs with deterministic echo.
+
+#### C2 — Dispatch grading & self-test
+
+- **Component.** Pre-dispatch model allowlist grading and dispatch self-test guards
+  (`dispatch_guard.py`, `dispatch_outcome.py`, `dispatch_selftest.py`); they cost a CLI round-trip
+  on every external dispatch and block unlisted models before spawn.
+- **Condition.** Catch-based, 45 days: refusals where `dispatch_guard.py check` blocks an
+  unlisted or misconfigured engine/model before spawn. On firing, a proposal to the owner at a
+  gardening pass.
+- **Last demonstrated benefit.** Refused an unlisted model pick with a park-not-pick outcome (#600
+  class, wired in `dispatch_guard.py` refusal tail).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — registry allowlisting guards how dispatch is authorized, not a model
+  quirk.
+
+#### C3 — Preflight probe
+
+- **Component.** The v2 run preflight aggregator and dispatch-calibration readout
+  (`preflight_probe.py`); it costs probe subprocesses and orchestrator browser exercise before a
+  wave opens, and fails loud when auth, CLI, or calibration prerequisites are missing.
+- **Condition.** Catch-based, 45 days: preflight `aggregate` outcomes that block a go/no-go with
+  `ok: false` on a probe the build would otherwise have launched against. On firing, a proposal to
+  the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — fail-loud go/no-go before dispatch is load-bearing wave hygiene.
+
+#### C4 — Forfeit ledger
+
+- **Component.** The durable forfeit ledger and attribution decider (`forfeit_ledger.py`); it costs
+  disk rows and gardening-pass read time, and records every terminal dispatch with telemetry and
+  attribution outside the session that produced it.
+- **Condition.** Usage-based, 60 days: the signal is `forfeit_ledger.py report` reads or gardening
+  pass rows that cite a ledger path when attributing a dispatch forfeit. On firing, a proposal to
+  the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the ledger is a record, never a control input; absence of reads is not
+  proof it is unused.
+
+#### C5 — Payload/findings contracts
+
+- **Component.** Declared per-seat payload contracts and the review-findings schema guards
+  (`payload_contracts.py`, `review_findings_schema.py`); they cost layering maintenance at the seam
+  between round phases and engine transport, and refuse unreadable or schema-drifting seat output.
+- **Condition.** Catch-based, 45 days: terminal dispatch refusals graded `unreadable` or
+  schema-blocked on review payload shape. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Closed the #949 outer-envelope fail-open class where empty or
+  control-wrapped findings could certify clean (`engine_adapter.py` gate, #1145 hardening).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the contract guards transport gradeability independent of seat honesty.
+
+#### C6 — Sanitized view
+
+- **Component.** The disposable git export that strips agent/IDE config before external review reads
+  (`sanitized_view.py`); it costs export time and temp disk on every sanitized review dispatch, and
+  blocks config-path exfiltration from untrusted repos.
+- **Condition.** Catch-based, 45 days: refusals or withheld-path receipts where sanitized export
+  blocked a config leak or export failure. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Reproduced and blocked a config-path exfiltration attempt during
+  sanitized review export (cp2-scoreboards.md keeps receipts).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — stripping untrusted-repo config is a host-trust boundary, not a model
+  behaviour.
+
 ### D. Certified review loop
 
-### D1 — Round driver core
+#### D1 — Round driver core
 
 - **Component.** The certified review loop's round driver substrate and gate; it costs ongoing contract maintenance and is the hub where certification drop-off is measured.
 - **Condition.** Usage-based, first 10 post-shrink full lanes: the signal is full lanes reaching certified completion against full lanes run; on firing, a retirement-or-indictment proposal to the owner. Abandonment fires the same condition: fewer than 10 full lanes within 60 calendar days.
@@ -109,10 +346,538 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — the parse and refusal shell is structural; the exact-token certification contract is capability-gap until the re-spec lands.
 
-<!-- remaining entries land here -->
+#### D2 — Seat map + liveness + tally
+
+- **Component.** Deterministic panel seat-map composition, liveness cache, and tally plumbing
+  (`seat_map.py`, `seat_map_receipts.py`, `liveness_cache.py`, `panel_tally.py`); it costs registry
+  coupling and panel-composition CPU, and refuses same-family or unreachable seat mixes.
+- **Condition.** Catch-based, 45 days: seat-map or liveness refusals for same-family conformance or
+  unreachable panel cells. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Measured ~1% same-family conformance violations from the review
+  corpus; fix-#787-inside-the-guard is the one queued item (cp2-scoreboards.md).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — deterministic composition from `model_registry` guards a build property,
+  not a single vendor.
+
+#### D3 — Loop plan/state/memory
+
+- **Component.** This row is substrate — a proposal on it is a shrink proposal, not a deletion.
+  The certified-loop plan, state, memory, and policy store (`review_loop_plan.py`, `loop_state.py`,
+  `review_memory.py`, and siblings) costs contract surface and over-records relative to what the
+  driver shell demands.
+- **Condition.** Usage-based, 60 days: the signal is full review lanes that reach certified
+  completion against full lanes run. On firing, a shrink proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — halt-integrity storage is structural; the 52% fix-share over-storage
+  signature is capability-gap until D1's contract shrink lands.
+
+#### D4 — Grounding seat/stage
+
+- **Component.** The grounding-stage PR-body stager and grounding-seat charter
+  (`grounding_stage.py`, `agents/grounding-seat.md`); it costs staging machinery and a seat slot,
+  and is meant to grade implementer self-claims against the repo before panel review trusts them.
+- **Condition.** Catch-based, 45 days: grounding-stage or grounding-seat findings that block or
+  park on unsupported self-claims in a PR body or dispatch receipt. On firing, a proposal to the
+  owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — the stage ships without a wired caller yet; evidence is on the held
+  verification set (Cursor-family orchestrators observed on weekly-eats lanes).
+
+#### D5 — Circuit breaker + escalation
+
+- **Component.** The review auto-fix loop circuit breaker and its escalation resolver
+  (`circuit_breaker.py`, `escalation.py`, `escalation_resolve.py`); it costs recurrence tracking
+  on every round and halts stuck loops that stop making progress.
+- **Condition.** Catch-based, 45 days: circuit-breaker trips or escalation halts on a review loop
+  that would otherwise continue without progress. On firing, a proposal to the owner at a gardening
+  pass.
+- **Last demonstrated benefit.** Seven correct stuck-loop fires in one wave without blocking normal
+  two-to-three-round convergence (cp2-scoreboards.md keeps receipts).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — stuck-loop detection guards loop integrity independent of vendor.
+
+#### D6 — Handback gate
+
+- **Component.** `handback_gate.py` is on the CP2 kill list (K1) with zero shipped consumers ever;
+  the row is shipped dark and collides with held PR #1254. The gate and its tests cost ~2,771 lines
+  of maintenance on machinery nothing invokes.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite
+  `handback_gate.py` or the handback refusal class after K1 retires. On firing, a proposal to the
+  owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — a Claude-host Bash tripwire with no wired reader; #954 audit
+  recommends retire and the driver mandate (#1095) already holds the same line.
+
+#### D7 — Verify gate
+
+- **Component.** The code-leg verify gate that runs the project's configured verify command before a
+  loop may declare clean terminal (`verify_gate.py`, `verification.py`); it costs bounded subprocess
+  time on every code leg and fail-closes on fail, timeout, or execution error.
+- **Condition.** Catch-based, 45 days: verify-gate outcomes classified `fail` or `timeout` that
+  block a clean terminal the loop would otherwise have declared. On firing, a proposal to the owner
+  at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — receipts-before-claims on the verify command is load-bearing regardless
+  of host.
+
+#### D8 — Gate-write + decisions plumbing
+
+- **Component.** This row is substrate — a proposal on it is a shrink proposal, not a deletion.
+  The gate-write handshake and decisions plumbing (`gate_write.py`, `decisions.py`,
+  `coverage_decisions.py`) costs duplicated-skill maintenance; CP2 retires `gate_write.py`
+  `certify` mode while `reset` and the decisions helpers keep.
+- **Condition.** Usage-based, 60 days: the signal is `gate_write.py` invocations in live review-crew
+  flows (`reset` mode and decisions readers). On firing, a shrink proposal to the owner at a
+  gardening pass scoped to surviving members.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — `reset` and decisions plumbing are structural; legacy `certify` is
+  capability-gap baggage from plan/tasks legs retired in #469.
+
+#### D9 — Review support
+
+- **Component.** This row is substrate — a proposal on it is a shrink proposal, not a deletion.
+  Review-support helpers (`finding_identity.py`, `delta_surface.py`, `diff_scope.py`, `md_fence.py`,
+  `review_code_config.py`) cost import-closure maintenance and underpin finding identity, diff
+  scope, and review-code configuration across the loop.
+- **Condition.** Usage-based, 60 days: the signal is review-loop modules importing or calling D9
+  helpers on live lanes. On firing, a shrink proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — finding identity and diff scope are load-bearing substrate, not optional
+  polish.
+
+#### D10 — Review lens agents
+
+- **Component.** The machinery embedded in the review-lens product row: five lens agents plus spine
+  docs (`agents/*-reviewer.md`, `review-base.md`, review-code reference tree). The row costs charter
+  mass and panel dispatch time; CP2 keeps the lenses untouched and indicts routing and triage around
+  them.
+- **Condition.** Catch-based, 45 days: CONFIRMED review findings from a lens seat that fixed a
+  defect or blocked a park. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Six CONFIRMED findings fixed in the 0.18.0 wave (#1247); each #1099
+  lens carries a regression check against its origin escape (cp2-scoreboards.md).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — lens detection is structural; deferral-heavy routing around the lenses is
+  capability-gap (Cursor-family false forfeits observed on weekly-eats lanes).
+
+### E. Board & process machinery
+
+#### E1 — Issue contract checker (three-slot skeleton, anchor, DoD bar)
+
+- **Component.** The advisory build-ready anchor-shape checker (`lib/issue_contract.py`) and
+  its reference spine (`issue-contract.md`); it costs charter maintenance and an extra read at
+  filing and vet time.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite
+  the issue-contract anchor-shape rule — advisory, always exit 0, so zero catches are not evidence
+  the shape class is gone. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Shipped deterministic anchor-kind checking for build-ready
+  marking (#932).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — guards routed-issue body shape; no host offers build-ready marking-time
+  validation.
+
+#### E2 — register_check (epic contract quotes)
+
+- **Component.** The register-to-child byte-exact quote guard (`lib/register_check.py`); it costs
+  maintenance on the closed register grammar and runs at every child filing and package-read
+  verification.
+- **Condition.** Catch-based, 45 days: real catches of register-quote text drift, missing quotes,
+  or unknown-entry at charter filing or package-read verification. On firing, a proposal to the
+  owner at a gardening pass.
+- **Last demonstrated benefit.** Caught register parsing that would have blocked every child
+  filing in the verification-strategy package read (#1227).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — guards byte-exact register agreement; no platform primitive compares
+  quoted issue blocks to repo files.
+
+#### E3 — package_read_audit
+
+- **Component.** The FR-32 machine-record trail convention and the completeness-and-shape checker
+  (`lib/package_read_audit.py`); CP2 splits the row — the trail convention keeps, the checker
+  retires on a real trail-integrity incident — and the checker costs ~2,815 LOC against a
+  circular trust chain.
+- **Condition.** Usage-based, 60 days: spec-package reads that write machine-record blocks per
+  the trail convention — scoped to the keeping member. On firing, a shrink proposal to the owner
+  at a gardening pass (not a row deletion).
+- **Last demonstrated benefit.** Verification-strategy package read produced conforming machine
+  records and a checked trail (#1227/ca515aa6).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — trail convention is structural; checker is harness-limit (advisor writes,
+  advisor runs check, owner reads conforming in a title per CP2 sitting).
+
+#### E4 — Citation/exact-text validators
+
+- **Component.** The dangling-citation detector (`lib/citation_validator.py` and its exact-text
+  checker script); it is cheap, wired in review-spec compile, and guards the #205
+  fabricated-fact class with zero live catches recorded.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite
+  the citation-validator rule's substance — zero catches mean the class may still be live, not
+  that the detector is idle. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Made dangling spec citations mechanically catchable in
+  review-spec compile (#517).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — guards spec provenance existence; no platform doc-citation validator
+  exists.
+
+#### E5 — Collector + revisit-trigger registry
+
+- **Component.** The Tier-2 collector on issue #695 and the revisit-trigger registry pinned
+  there, plus the append-always and registry rules in `owner-decisions.md`; it costs pinned-comment
+  hygiene and unconditional vet-time appends.
+- **Condition.** Usage-based, 60 days: Tier-2 residuals appended to the collector and
+  revisit-registry rows written at vet time per the owner-decisions delivery contract. On firing,
+  a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Append-always closed the empty-collector over-filtering failure
+  (owner-decisions.md, issue #695).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — complete register by construction; no mechanical gate on chat delivery.
+
+#### E6 — Vet spine + vet-receipt contract
+
+- **Component.** The vet-receipt shape and showrunner vet duty (`vet-receipt.md`, showrunner duty
+  4); CP2 queued a simplify to trim confirmatory probe mass that drifts from the contract.
+- **Condition.** Usage-based, 60 days: child PR vets that post a spine-complete vet receipt per
+  `vet-receipt.md` — distinct probes, not re-run green suites. On firing, a proposal to the owner
+  at a gardening pass.
+- **Last demonstrated benefit.** Explicit `None` made vet absences readable instead of
+  presence-by-grep (`vet-receipt.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — spine shape is structural; confirmatory probe drift is capability-gap (71%
+  confirmatory mass per CP2, contract already forbids it at line 42).
+
+#### E7 — Owner-decisions walk contract
+
+- **Component.** The open-decisions delivery contract (`owner-decisions.md`) and the
+  `/superheroes:discuss-open-decisions` skill; it costs loaded prose on every owner walk and
+  enforces the per-item spine the owner corrected into existence.
+- **Condition.** Usage-based, 60 days: open-decision deliveries that follow the per-item spine,
+  worth-it gate, and venue ladder in `owner-decisions.md`. On firing, a proposal to the owner at
+  a gardening pass.
+- **Last demonstrated benefit.** Unified residual-triage vocabulary ended inconsistent
+  disposition across advisor sessions (#1118).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — owner-present delivery shape; nothing mechanical gates a chat message.
+
+#### E8 — Worth-it gate + venue ladder
+
+- **Component.** The residual-triage prose in `owner-decisions.md` §worth-it gate and venue
+  ladder; CP2 kill K6 records it superseded by the package-landing front door — real catches,
+  zero LOC, registry rows inherit at ratification rather than retiring on absence evidence.
+- **Condition.** Usage-based, 60 days: residual dispositions that cite the worth-it gate and venue
+  ladder vocabulary until the front door ratifies and inherits the registry rows. On firing, a
+  proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Unified residual triage across review, vet, and owner-decision
+  surfaces (#1118).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — triage vocabulary promoted to the front door at Part B landing, not
+  retired on zero catches.
+
+#### E9 — Bite-proof doctrine + probe discipline
+
+- **Component.** The bite-proof rule (`rubric/bite-proof.md`) and its probe-discipline records;
+  it costs neutralize-red-restore-green work on every new or changed detector.
+- **Condition.** Usage-based, 60 days: new or changed detectors shipped with a recorded
+  bite-proof per `rubric/bite-proof.md`. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Red-run requirement distinguished verified detectors from
+  green-only claims (bite-proof.md, PR #1159 vet 181).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — covenant fourth promise (receipts before claims) applied to detectors.
+
+#### E10 — Charters + covenant + launch/dispatch doctrine (loaded prose mass)
+
+- **Component.** The loaded charter and doctrine prose mass (showrunner, workhorse, detective
+  SKILL.md files, covenant, launch-doctrine, dispatch-mechanics, review-discipline); CP2 queued a
+  third diet pass against a 3,826-line baseline — context load on every dispatched session.
+- **Condition.** Usage-based, 60 days: build, review, and advisor sessions that load the charter
+  and doctrine prose. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — covenant hard lines are structural; charter mass size is capability-gap
+  (Change 6 meter baseline, 3,826 loaded lines per CP2).
+
+#### E11 — Orders templates (shipped data)
+
+- **Component.** The orders substrate row — `rubric/orders/` templates and `round_orders`
+  renderers; this row is substrate, so a proposal is a shrink or split, not a deletion; it costs
+  template and placeholder-contract maintenance on every certified round.
+- **Condition.** Usage-based, 60 days: certified review rounds that render seat orders through
+  `round_orders` from `rubric/orders/` templates. On firing, a shrink proposal to the owner at a
+  gardening pass.
+- **Last demonstrated benefit.** Shipped per-seat order rendering from templates with
+  refuse-on-unfilled-placeholder (#723).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — load-bearing dispatch text substrate wired through `round_driver`.
+
+### F. Config & calibration
+
+#### F1 — Configure + calibration + modes
+
+- **Component.** The configure-hero embedded machinery (not the skill front door): the configure
+  skill, calibration routing, mode registry, and session-mode resolution across a dozen lib
+  modules. It costs vocabulary maintenance every time mode semantics shift.
+- **Condition.** Usage-based, 60 days: owner-invoked configure or calibration-fix runs whose
+  reconcile signals still reference pre-#1151 mode vocabulary outside the single-owner pattern. On
+  firing, a shrink proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Routed incomplete calibrations to fix and healthy-but-drifted
+  projects to view via configure_route state sense (#1151).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — session-mode SSOT (#1151) is structural; duplicated vocabulary across modules
+  is capability-gap until consolidation lands.
+
+#### F2 — Model governance (tiers, registry, overrides)
+
+- **Component.** Model governance: the tier registry, override resolution, and skill-facing
+  resolver. It costs table maintenance whenever a dispatch role or host model set changes.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  model-tier misresolution (wrong band, stale override, fail-open masking a safety tier). On
+  firing, a proposal to the owner at a gardening pass; zero citations means the guard is working,
+  not that tiers are unnecessary.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — owner authority over which model runs which role; the fail-open degrade
+  path is deliberate cost control.
+
+#### F3 — Doctor/readout/CLI support
+
+- **Component.** F3 is substrate: doctor, readout, CLI contract, identifiers, catalog, core_md,
+  and hostinfo helpers, so a proposal on it is a shrink or split, not row deletion. The
+  identifiers.py content_hash half and the cli_contract census pair are already slated to retire
+  (K4, sitting ruling).
+- **Condition.** Usage-based, 60 days: live imports of the retiring members (identifiers
+  content_hash, cli_contract census helpers) after their retirement lands. On firing, a shrink
+  proposal to chase stragglers at a gardening pass.
+- **Last demonstrated benefit.** core_md carried five real calibration hardenings with eighteen
+  live consumers (cp2-scoreboards.md F3 split verdict).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — core_md is structural substrate; the census-pair and content_hash vestige are
+  capability-gap machinery scheduled for deletion.
+
+### G. CI validators & the test estate
+
+#### G1 — CI validators (7 scripts)
+
+- **Component.** The seven CI validator scripts under `.github/scripts/` (validate_* and check_*).
+  They cost a few CI seconds each run. check_release_bump is best-evidenced; validate_marketplace
+  and the other never-fired members are keep-cheap with attached conditions.
+- **Condition.** Catch-based, 45 days: zero real catches from the never-fired members
+  (validate_marketplace, validate_hosts, validate_skills, check_conventional_commit,
+  check_catalog_membership; check_release_bump excluded because it has a 100% incident record). On
+  zero catches for the full window across all never-fired members, a retirement proposal for those
+  members at a gardening pass.
+- **Last demonstrated benefit.** check_release_bump caught release-please silent version drops
+  across three incidents (investigation-record.md / cp2-scoreboards.md).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — check_release_bump is structural (release-blocking-quiet class); never-fired
+  validators are harness-limit guards on cheap static checks.
+
+#### G2 — Rail lane (doc↔code drift tests, censuses, drift pins)
+
+- **Component.** The rail-lane detector: test_ssot_drift.py and the rail-census-v3 pinned set (53
+  files). It costs suite mass and drift-pin maintenance whenever a doc↔code mirror moves.
+- **Condition.** Citation-based, 45 days: a named-edit record removing a rail inventory entry
+  without cannot-bite evidence and owner approval (the retention-doctrine bar for rails). On
+  firing, a proposal to enforce the bar at a gardening pass; zero violations means the rails are
+  holding.
+- **Last demonstrated benefit.** The four rails are the suite's recorded foreign-regression provers
+  (cp2-scoreboards.md G2 ruling (a)).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — rails prove doc↔code SSOT; natural shrink expected as Change 7 deletes
+  mirrors.
+
+#### G3 — Behavior-lane test suite (~14k cases)
+
+- **Component.** The behavior-lane test mass: everything under `*/tests/` outside the rail lane
+  (~14k cases, ~230k LOC). It costs 18.6× CI wall-time growth and ongoing pin maintenance;
+  scored by retention-doctrine class, not by individual case.
+- **Condition.** Catch-based, 45 days: per retention-doctrine class (cannot-bite, birth-red,
+  regression-catch, count-pin, byte-pin, and the remainder), count CI regression-catches
+  attributable to that class. On a class accumulating zero regression-catches for the full window,
+  a trim proposal for that class at a gardening pass.
+- **Last demonstrated benefit.** Birth-red catches on every PR that ships broken tests;
+  bulk-removal classes start with 33 named cannot-bite tests (cp2-scoreboards.md G3 simplify /
+  #1105).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — birth-red and cannot-bite trimming are structural suite hygiene; count-pin and
+  byte-pin conversion is capability-gap debt from over-pinning.
+
+#### G4 — Stub-marker validation
+
+- **Component.** Stub-marker validation: stub_markers.py and validate_stubs.py. It costs a
+  full-tree scan on every CI run to keep deliberately unwired seams tracked to issues.
+- **Condition.** Usage-based, 60 days: count of live `STUB(#NNN)` markers in the tree
+  (validate_stubs.py find_violations surface). On zero live markers for the full window, a
+  retirement proposal at a gardening pass.
+- **Last demonstrated benefit.** Enforces the no-silent-stubs convention so every placeholder names
+  a tracked issue (#228 / stub_markers.py module docstring).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — tracked stubs are the contract for deliberate unwiring; the validator
+  retires when nothing remains to validate.
+
+### H. Product heroes
+
+#### H1 — Guardian (audit hero; has real catch receipts)
+
+- **Component.** The Guardian hero's embedded machinery (not the skill front door): seventeen
+  guardian_*.py modules, lenses, sweep pipeline, store, and report. It costs collector
+  maintenance and lens registration sync; the hero milestone is held until one sweep produces a
+  consumed output.
+- **Condition.** Usage-based, 60 days: a completed sweep→validate→file cycle whose report card or
+  filed issue is recorded as consumed (not merely generated). On zero consumed outputs for the full
+  window, a proposal to shrink hardening scope at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — readers exist by design but recorded consumption is zero
+  (cp2-scoreboards.md H1 posture, one sweep with zero validated findings).
+
+#### H2 — Test-pilot (framework A1–D11)
+
+- **Component.** The test-pilot hero's embedded machinery (not the skill front door): ~30 pilot_*.py
+  modules, the seeding engine, and pilot-contract guards. It costs the highest August fix share
+  among dispatch surfaces.
+- **Condition.** Catch-based, 45 days: real pilot-framework catches in CI or dispatch receipts
+  (contract refusal, block-execution failure, plan or schema mismatch). On firing, a proposal to
+  the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the A1–D11 contract is load-bearing orchestration machinery; churn
+  evidence observed on engine-7-class dispatches at weekly-eats (cp2-scoreboards.md C1/H2).
+
+#### H3 — Other heroes (architect, discovery, detective, review-spec, audit-debt, checkpoint…)
+
+- **Component.** The other-heroes embedded machinery (not their skill front doors): architect,
+  discovery, detective, review-spec, audit-debt, and checkpoint skills plus supporting lib hooks.
+  It costs loaded prose mass across the skill tree.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  specific other-hero skill dispatch failure (routing, charter drift, missing reference). On
+  firing, a proposal to the owner at a gardening pass; zero citations means the heroes are
+  holding.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — review-spec and architect discovery are structural product surfaces;
+  thin-evidence members (#541 landed) wait on Change-3 conditions per member.
+
+#### H4 — Eval harness
+
+- **Component.** The eval-harness embedded machinery (not a scored product): eval/,
+  plugins/superheroes/eval/, and band-level activation gates. It costs fixture and golden
+  maintenance; the defect is missing operating structure, not unwanted evals.
+- **Condition.** Usage-based, 60 days: recorded benchmark or activation-gate runs whose results
+  attach as release evidence (reader = owner at release click). On zero recorded runs for the full
+  window, an operating-structure proposal at a gardening pass.
+- **Last demonstrated benefit.** v1 A/B harness produced a green improved≥baseline gate at the
+  0.14.0-era baseline (plugins/superheroes/eval/RESULTS.md).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — release evidence wants benchmarks but no cadence has run since 0.14.0
+  against 0.32.0 current (cp2-scoreboards.md H4 reframing).
+
+### Supplemental entries
+
+#### S1 — Dispatch stdout cap
+
+- **Component.** Not a census row. The engine write dispatch stdout capture cap in
+  `engine_dispatch.py` (`MAX_STDOUT_CAPTURE`, 8 MiB): when engine stdout exceeds the budget, the
+  terminal forfeit carries `stdout-capped-by-attempt` and declared-item grading never runs on work
+  that already landed.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite the
+  stdout capture cap or `stdout-capped-by-attempt` as the loss mechanism — a zero count means long
+  dispatches are staying inside the budget, not that the cap is gone. On firing, a proposal to the
+  owner at a gardening pass.
+- **Last demonstrated benefit.** Separated stdout-cap truncation from `worktree-dirtied-by-attempt`
+  so a long implementer report forfeits with an explicit cap reason instead of a dirtied-worktree
+  misread (#1109 hardening class, `dispatch-mechanics.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — external engines paste long receipts; the cap bounds what the runner
+  can grade (Cursor-family implementers observed on weekly-eats dispatches).
+
+#### S2 — Dispatch salvage paths
+
+- **Component.** Not a census row. The salvage recoveries when a dispatch ends in a forfeit but left
+  a readable artifact: review `forfeit-with-engaged-artifact` salvage, write-report salvage
+  (structured tail and prose tier), and `report-missing-items-delivered` work-on-disk doctrine
+  (`engine_dispatch.py`, `engine_adapter.py`, `dispatch-mechanics.md`).
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite a
+  salvage block or manual artifact read recovering work from a terminal forfeit. On firing, a
+  proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Recovered engaged review stdout and on-disk implementer work when
+  transport grading forfeited after files landed (field record in `dispatch-mechanics.md`: three
+  builds in one wave, four of six dispatches with correct files on disk).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — salvage exists because engine stdout and host turn limits destroy
+  gradeable reports while work survives on disk (Cursor `NonRetriableError` class).
+
+#### S3 — Dirty-tree probe
+
+- **Component.** Not a census row. The sibling-worktree baseline snapshot at `dispatch-write` open
+  and the terminal `siblingWorktrees` fold (`sibling_worktree_probe.py`, `engine_dispatch.py`): an
+  unattributed observed delta on other registered worktrees while a write run is open, not an escape
+  claim.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite the
+  sibling-worktree observation or its baseline when disambiguating a worktree-dirtied forfeit — a
+  zero count means no dispute needed the observation, not that concurrent worktrees stopped
+  existing. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Guards false worktree-dirtied forfeits with a wired reader on every
+  terminal dispatch fold (cp2-scoreboards.md B5 qualified-keep record; zero recorded catches).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — the host offers no native worktree-liveness signal; the observation
+  is advisory only and never changes `ok`.
+
 
 ## The workaround-marker inventory
 
 A platform workaround in this tree carries the marker `WORKAROUND:` in a comment, immediately followed by a `delete-when:` line naming the [delete-when condition](plugins/superheroes/rubric/glossary.md#delete-when-condition) that makes it removable. When the condition comes true, the workaround is promoted into a real fix or removed, never left as unmarked ritual. A gardening pass reports the markers whose condition has come true. The inventory below lists every marked site in the tree, and a grep for the tag over the tree, excluding this file, returns exactly that set.
 
-<!-- inventory lands here -->
+- `.github/scripts/validate_hosts.py` — portable plugin-root seam and host-map lint for dual-host skill prose. **delete-when:** every host resolves plugin root through one variable without this fallback seam.
+- `.github/scripts/validate_skills.py` — CI lint enforces the portable plugin-root seam on skill reference paths. **delete-when:** every host resolves plugin root through one variable without this fallback seam.
+- `plugins/superheroes/hooks/bash_timeout.py` — PreToolUse Bash timeout floor when the model omits an explicit timeout. **delete-when:** the host Bash tool defaults to at least 600 s without a PreToolUse rewrite hook.
+- `plugins/superheroes/lib/build_lane.py` — build-lane sidecar marker so the receipt gate can arm before review starts. **delete-when:** the host session carries build scope without a build-lane.json sidecar file.
+- `plugins/superheroes/lib/harness_probe.py` — tripwire that native project-context injection still holds on every spawn path. **delete-when:** every spawn path is confirmed and recorded without this probe, or the probe retires.
+- `plugins/superheroes/lib/hostinfo.py` — OS-specific boot-id reads to corroborate a recorded pid belongs to this boot. **delete-when:** the host exposes a stable per-boot identity without OS-specific parsing.
+- `plugins/superheroes/lib/launch_doctrine.py` — machine parser for launch doctrine prose the host does not supply natively. **delete-when:** the host injects launch rulings and preflight checks without a parsed artifact.
+- `plugins/superheroes/lib/launch_ledger.py` — file-backed launch batch ledger when the host has no durable batch accounting. **delete-when:** the host records launch batches durably without this ledger module.
+- `plugins/superheroes/lib/launcher.py` — headless builders must survive parent session exit via detached spawn. **delete-when:** the background-session trial receipt marks detached spawn not needed.
+- `plugins/superheroes/lib/launcher.py` — launcher refuses spawn when cwd is the primary checkout (own-worktree). **delete-when:** the background-session trial receipt marks launcher worktree enforcement not needed.
+- `plugins/superheroes/lib/pilot_conformance_runtime.py` — env-var transport of connection detail across multi-account ownership probes. **delete-when:** the background-session trial receipt marks multi-account provisioning transport not needed.
+- `plugins/superheroes/lib/sibling_worktree_probe.py` — sibling worktree snapshot probe when dispatch fold cannot attribute dirt. **delete-when:** dispatch fold attributes sibling worktree changes without a snapshot probe.
+- `plugins/superheroes/lib/wave_watch.py` — loop re-arms wave_watch run because there is no durable batch watcher daemon. **delete-when:** the background-session trial receipt marks wave-watch arming not needed.
+- `plugins/superheroes/lib/wave_watch.py` — transcript file mtime as lane liveness when idle signals are unreliable. **delete-when:** the background-session trial receipt marks transcript-mtime liveness not needed.
+- `plugins/superheroes/skills/showrunner/reference/wave-watch.md` — harness background-task arming pattern with manual re-arm after each event. **delete-when:** the background-session trial receipt marks wave-watch arming not needed.
+- `plugins/superheroes/skills/workhorse/reference/dispatch-mechanics.md` — 540 s continuation and short launch slice recipes for turn-end survival. **delete-when:** the background-session trial receipt marks turn-end slice recipes not needed.
