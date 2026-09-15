@@ -163,14 +163,16 @@ trend against it at each
 mind if the trend fails to close the gap over recorded windows, or closes it by shipping
 junk.
 
-**B9 — Shrink or tolerate before you refuse.** When a model-driven caller misses an
-exact token, ask first whether the interface can shrink or the reader can tolerate the
-miss. Documenting the trap and adding a refusal token is the last resort, not the first.
-Fail-closed rigor stays where it is load-bearing, and the standing bias is against new
-refusal tokens as the fix for caller confusion. The hard shell stays tight, because an
-unwieldy shell recreates the problem inside the treatment for it.
-*Re-check:* caller-confusion incidents that tolerance let through and a refusal token
-would have caught. If those accumulate, the bias loses.
+**B9 — Tolerate a miss before you refuse it.** Agents drive the plugin's commands, and
+they sometimes get a flag or a word slightly wrong. When that happens, the first fix is
+to make the command accept the reasonable variant, or to shrink the command so there is
+less to get wrong. Writing the mistake up as a trap and adding one more refusal is the
+last resort. Strict, fail-closed checks stay only where a wrong input would do real
+damage: the record formats, the terminal states, the safety refusals, and the receipts.
+Everything else bends. A wall of refusals around a simple tool recreates the confusion
+it was built to prevent.
+*Re-check:* mistakes that tolerance let through and a refusal would have caught. If
+those pile up, the bet loses.
 
 ## 4. When values collide
 
