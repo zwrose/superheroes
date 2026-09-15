@@ -44,8 +44,8 @@ What the owner may trust, in order of what they'd feel most betrayed by if broke
 1. **Work is delegated; commitment is not.** The product codes, designs, and decides
    freely inside its workspace. Approval is the owner's word, given in conversation
    over the PRs in front of them. The word covers the PRs it named until they merge.
-   A PR opened after the word asks again, with one disclosed exception the operating
-   rules name. A PR changed after the word with a
+   A PR opened after the word asks again, with one disclosed exception: a craft fix on a
+   red merge train, as the operating rules bound it. A PR changed after the word with a
    [material consequence](plugins/superheroes/rubric/glossary.md#material-consequence)
    always asks again. Inside the word the advisor executes each merge and reports it
    at once in the thread that gave it. A force-push needs its own word, given after the

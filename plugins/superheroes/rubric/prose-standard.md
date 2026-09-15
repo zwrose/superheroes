@@ -2,8 +2,9 @@
 
 How process prose is written in this plugin: the charters, the rubric, the reference docs, the
 founding documents, and the PR bodies and commit messages that land them. Read it before you write
-or review any of those. This file is reference: rules for lookup, each with its reason where the
-rule is one a careful writer would not guess. A reviewer cites this file, and a writer works from it. Nothing checks it
+or review any of those. This file is reference. Its rules are for lookup, each with its reason
+where the rule is one a careful writer would not guess, and the reviewer's questions at the end
+are the same rules asked the other way round. A reviewer cites this file, and a writer works from it. Nothing checks it
 mechanically, and no document claims to follow it.
 
 The standard has two layers. The document layer decides what a document holds and where each part
@@ -222,14 +223,13 @@ beside the rule, because the reason helps every reader. Where the rule was decid
 
 - Rationale stays on counter-default rules: the rule a reader would not guess gets its reason in
   one sentence, and the rule every careful engineer already follows gets none.
-- Every prohibition is paired with the positive instruction, so the reader has something to do.
 - Trim for context cost only. Shortening a document that is already read once is churn, and
   rewording an unchanged sentence between edits costs the same way.
 - No document claims adherence to a style as a property of itself. The text is the evidence.
 
-## Reviewing prose against this standard
+## What a reviewer asks of a shipped surface
 
-A reviewer of a shipped surface cites this file and checks:
+A reviewer cites this file and asks:
 
 1. Is the document one mode, with links where modes meet?
 2. Does every step end on a criterion the agent can tell done from not done by?
