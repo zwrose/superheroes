@@ -333,11 +333,11 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 # Keep $BRIEF_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
 # Gate first — thread model_id / effort from the JSON
 python3 -B "$ROOT_DIR/lib/dispatch_guard.py" check \
-  --role brief-check --vendor "$BRIEF_ENGINE" --model "$BRIEF_MODEL"
+  --role brief-check --seat '{"vendor":"'"$BRIEF_ENGINE"'","model":"'"$BRIEF_MODEL"'","effort":null}'
 # LAUNCH — fresh --run-dir outside the repo; no --diff-base
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
   --mode brief-check \
-  --engine "$BRIEF_ENGINE" --engine-model "$BRIEF_ENGINE_MODEL" --effort "$BRIEF_EFFORT" \
+  --seat '{"vendor":"'"$BRIEF_ENGINE"'","model":"'"$BRIEF_ENGINE_MODEL"'","effort":"'"$BRIEF_EFFORT"'"}' --role brief-check \
   --prompt-path "$BRIEF_PATH" --repo-root "$REPO_ROOT" \
   --order-id "$ORDER_ID" \
   --run-dir "$RUN_DIR" --max-wait 12 \
@@ -345,7 +345,7 @@ python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 # CONTINUATION — re-invoke while .terminal is false
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
   --mode brief-check \
-  --engine "$BRIEF_ENGINE" --engine-model "$BRIEF_ENGINE_MODEL" --effort "$BRIEF_EFFORT" \
+  --seat '{"vendor":"'"$BRIEF_ENGINE"'","model":"'"$BRIEF_ENGINE_MODEL"'","effort":"'"$BRIEF_EFFORT"'"}' --role brief-check \
   --prompt-path "$BRIEF_PATH" --repo-root "$REPO_ROOT" \
   --order-id "$ORDER_ID" \
   --run-dir "$RUN_DIR" --max-wait 540 \
@@ -407,13 +407,13 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 # LAUNCH — first call on a fresh --run-dir; on dispatch-write --max-wait is also the git-preflight
 # timeout, so size this slice to the repository's preflight cost, not just rotation headroom
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
-  --engine "$IMPL_ENGINE" --engine-model "$IMPL_ENGINE_MODEL" \
+  --seat '{"vendor":"'"$IMPL_ENGINE"'","model":"'"$IMPL_ENGINE_MODEL"'","effort":null}' --role implementer \
   --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
   --expect-item "<path-from-order>" \
   --run-dir "$RUN_DIR" --max-wait 45
 # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
-  --engine "$IMPL_ENGINE" --engine-model "$IMPL_ENGINE_MODEL" \
+  --seat '{"vendor":"'"$IMPL_ENGINE"'","model":"'"$IMPL_ENGINE_MODEL"'","effort":null}' --role implementer \
   --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
   --expect-item "<path-from-order>" \
   --run-dir "$RUN_DIR" --max-wait 540

@@ -19,6 +19,7 @@ import dispatch_guard  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_pref  # noqa: E402
 import model_registry  # noqa: E402
+import seat_bundle  # noqa: E402
 import seat_map  # noqa: E402
 
 _EXTERNAL_ENGINES = ("codex", "cursor")
@@ -47,10 +48,14 @@ def _model_flag_index(engine):
     return "-m" if engine == "codex" else "--model"
 
 
-def _assert_build_argv_invariant(engine, role_kind, effort, opts, failures, checked, where_base):
+def _seat(vendor, model_id, effort):
+    return {"vendor": vendor, "model": model_id, "effort": effort, "ok": True, "source": "json"}
+
+
+def _assert_build_argv_invariant(vendor, role_kind, model_id, effort, failures, checked, where_base):
     checked[0] += 1
     try:
-        res = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
+        res = engine_adapter.build_argv_result(_seat(vendor, model_id, effort), role_kind, {})
     except Exception as exc:
         _fail(failures, where_base, "build_argv_result raised: %s" % exc)
         return
@@ -72,7 +77,7 @@ def _assert_build_argv_invariant(engine, role_kind, effort, opts, failures, chec
             _fail(failures, where_base, "unknown refusal token %r" % reason)
         return
     checked[0] += 1
-    flag = _model_flag_index(engine)
+    flag = _model_flag_index(vendor)
     if flag not in argv:
         _fail(failures, where_base, "argv missing model flag %r: %r" % (flag, argv))
         return
@@ -81,13 +86,11 @@ def _assert_build_argv_invariant(engine, role_kind, effort, opts, failures, chec
         _fail(failures, where_base, "no value after %r in argv" % flag)
         return
     model_val = argv[idx + 1]
-    em = opts.get("engine_model")
-    if isinstance(em, str) and em:
-        vendor = engine
-        if model_registry.is_registered(vendor, em):
-            expected_tok = model_registry.dispatch_token(vendor, em, effort)
+    if isinstance(model_id, str) and model_id:
+        if model_registry.is_registered(vendor, model_id):
+            expected_tok = model_registry.dispatch_token(vendor, model_id, effort)
         else:
-            parsed = model_registry.parse_dispatch_token(vendor, em)
+            parsed = model_registry.parse_dispatch_token(vendor, model_id)
             if parsed is not None:
                 m_id, tok_eff = parsed
                 eff = effort if tok_eff is None else tok_eff
@@ -270,14 +273,13 @@ def _leg_engine_adapter(failures, checked):
         pairs = _vendor_allowlist_union(vendor)
         for role_kind in _ROLE_KINDS:
             for m, e in pairs:
-                opts_id = {"engine_model": m}
-                opts_tok = {
-                    "engine_model": model_registry.dispatch_token(vendor, m, e),
-                }
+                seat_id = _seat(vendor, m, e)
+                tok = model_registry.dispatch_token(vendor, m, e)
+                seat_tok = _seat(vendor, tok, e)
                 where = "build-argv %s/%s (%s, %s)" % (engine, role_kind, m, e)
                 try:
-                    r_id = engine_adapter.build_argv_result(engine, role_kind, e, opts_id)
-                    r_tok = engine_adapter.build_argv_result(engine, role_kind, e, opts_tok)
+                    r_id = engine_adapter.build_argv_result(seat_id, role_kind, {})
+                    r_tok = engine_adapter.build_argv_result(seat_tok, role_kind, {})
                 except Exception as exc:
                     _fail(failures, where, "build_argv_result raised: %s" % exc)
                     continue
@@ -297,54 +299,62 @@ def _leg_engine_adapter(failures, checked):
                         "argv mismatch id=%r tok=%r" % (r_id.get("argv"), r_tok.get("argv")),
                     )
                 _assert_build_argv_invariant(
-                    engine, role_kind, e, opts_id, failures, checked, where
+                    engine, role_kind, m, e, failures, checked, where
                 )
 
     named_cases = [
         (
             "unknown-claude-tier",
+            "cursor",
+            None,
             {"model": "cursor-grok-4.6-xhigh"},
             "high",
         ),
-        ("fable-unrunnable", {"model": "fable"}, "high"),
+        ("fable-unrunnable", "codex", None, {"model": "fable"}, "high"),
         (
             "engine-model-effort-conflict",
-            {"engine_model": "cursor-grok-4.6-xhigh"},
+            "cursor",
+            "cursor-grok-4.6-xhigh",
+            {},
             "low",
         ),
-        ("unregistered-engine-model", {"engine_model": "not-a-real-model-id"}, "high"),
+        (
+            "unregistered-engine-model",
+            "cursor",
+            "not-a-real-model-id",
+            {},
+            "high",
+        ),
     ]
-    for engine in _EXTERNAL_ENGINES:
-        for token, opts, effort in named_cases:
-            if token == "engine-model-effort-conflict" and engine == "codex":
-                continue
-            where = "named-refusal %s %s" % (engine, token)
-            checked[0] += 1
-            try:
-                res = engine_adapter.build_argv_result(engine, "build", effort, opts)
-            except Exception as exc:
-                _fail(failures, where, "raised: %s" % exc)
-                continue
-            if res.get("reason") != token:
-                _fail(
-                    failures,
-                    where,
-                    "expected reason %r got %r argv=%r"
-                    % (token, res.get("reason"), res.get("argv")),
-                )
-            if res.get("argv") != []:
-                _fail(failures, where, "expected empty argv on refusal")
-
-    for engine in _EXTERNAL_ENGINES:
-        where = "cursor-composer-default %s" % engine
-        if engine != "cursor":
+    for token, vendor, model_id, opts, effort in named_cases:
+        if token == "engine-model-effort-conflict" and vendor == "codex":
             continue
+        where = "named-refusal %s %s" % (vendor, token)
         checked[0] += 1
         try:
-            res = engine_adapter.build_argv_result("cursor", "build", None, {})
+            seat = _seat(vendor, model_id, effort)
+            res = engine_adapter.build_argv_result(seat, "build", opts)
         except Exception as exc:
             _fail(failures, where, "raised: %s" % exc)
             continue
+        if res.get("reason") != token:
+            _fail(
+                failures,
+                where,
+                "expected reason %r got %r argv=%r"
+                % (token, res.get("reason"), res.get("argv")),
+            )
+        if res.get("argv") != []:
+            _fail(failures, where, "expected empty argv on refusal")
+
+    where = "cursor-composer-default cursor"
+    checked[0] += 1
+    try:
+        res = engine_adapter.build_argv_result(
+            _seat("cursor", None, None), "build", {})
+    except Exception as exc:
+        _fail(failures, where, "raised: %s" % exc)
+    else:
         if res.get("reason") is not None:
             _fail(failures, where, "expected runnable default, reason=%r" % res.get("reason"))
         elif not res.get("argv"):
@@ -371,55 +381,38 @@ def _leg_cli(failures, checked):
         (
             "cli composer no effort",
             [
-                "--engine",
-                "cursor",
+                "--seat",
+                json.dumps({"vendor": "cursor", "model": "composer-2.5", "effort": None}),
                 "--role",
                 "build",
-                "--engine-model",
-                "composer-2.5",
             ],
             True,
         ),
         (
             "cli grok by registry id",
             [
-                "--engine",
-                "cursor",
+                "--seat",
+                json.dumps(
+                    {"vendor": "cursor", "model": "cursor-grok-4.6", "effort": "xhigh"}
+                ),
                 "--role",
                 "review",
-                "--engine-model",
-                "cursor-grok-4.6",
-                "--effort",
-                "xhigh",
             ],
             True,
         ),
         (
             "cli grok by composed token",
             [
-                "--engine",
-                "cursor",
+                "--seat",
+                "cursor:cursor-grok-4.6-xhigh",
                 "--role",
                 "review",
-                "--engine-model",
-                "cursor-grok-4.6-xhigh",
-                "--effort",
-                "xhigh",
             ],
             True,
         ),
         (
-            "cli fable refusal",
-            [
-                "--engine",
-                "codex",
-                "--role",
-                "build",
-                "--model",
-                "fable",
-                "--effort",
-                "high",
-            ],
+            "cli dropped engine flag",
+            ["--engine", "codex", "--role", "build"],
             False,
         ),
     ]
@@ -445,11 +438,11 @@ def _leg_cli(failures, checked):
         else:
             if not isinstance(payload, dict) or payload.get("ok") is not False:
                 _fail(failures, where, "expected refusal envelope, got %r" % payload)
-            elif payload.get("detail") != "fable-unrunnable":
+            elif payload.get("reason") != "legacy-seat-args":
                 _fail(
                     failures,
                     where,
-                    "expected fable-unrunnable detail, got %r" % payload.get("detail"),
+                    "expected legacy-seat-args reason, got %r" % payload.get("reason"),
                 )
 
 

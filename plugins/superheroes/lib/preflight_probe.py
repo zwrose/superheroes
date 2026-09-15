@@ -33,6 +33,7 @@ import engine_pref            # noqa: E402
 import liveness_cache          # noqa: E402
 import model_registry          # noqa: E402
 import model_tier_overrides    # noqa: E402
+import seat_bundle             # noqa: E402
 
 DEFAULT_GH_ARGV = ("gh", "auth", "status")
 
@@ -415,8 +416,12 @@ def model_no_op_argv(engine, model, effort=None):
     unknown/unroutable (caller marks unavailable — never calls run)."""
     if engine in ("codex", "cursor"):
         effort = _probe_effort(engine, model, effort)
-        result = engine_adapter.build_argv_result(
-            engine, "review", effort, {"engine_model": model})
+        seat = {"vendor": engine, "model": model, "effort": effort}
+        parsed = seat_bundle.parse(json.dumps(seat))
+        validated = seat_bundle.validate_effort_only(parsed)
+        if not validated.get("ok"):
+            return None
+        result = engine_adapter.build_argv_result(validated, "review", {})
         if result.get("reason") or not result.get("argv"):
             return None
         return tuple(result["argv"])

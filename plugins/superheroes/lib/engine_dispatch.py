@@ -40,6 +40,7 @@ if _LIB_DIR not in sys.path:
 import cli_contract as cc  # noqa: E402  argparse caller-contract builders
 import dispatch_outcome  # noqa: E402  outcome vocabulary chokepoint (#747)
 import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
+import seat_bundle  # noqa: E402  single dispatch seat entry (#1269 WO-A1)
 import file_lock  # noqa: E402
 import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
@@ -156,6 +157,58 @@ def _expected_result_kind_invalid_refusal(rejected_kind, effective_mode):
             "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
             "mode": effective_mode,
             "rejectedResultKind": _coerce_rejected_mode(rejected_kind)}
+
+
+def _coerce_seat_input(seat):
+    if isinstance(seat, str):
+        return seat_bundle.parse(seat)
+    if isinstance(seat, dict):
+        if seat.get("ok") is True:
+            return seat
+        if isinstance(seat.get("vendor"), str):
+            out = dict(seat)
+            out.setdefault("ok", True)
+            out.setdefault("source", "json")
+            return out
+    return {
+        "ok": False,
+        "reason": "seat-invalid",
+        "detail": seat_bundle.accepted_seat_detail(),
+    }
+
+
+def _legacy_dispatch_refusal(*, mode=None):
+    refusal = seat_bundle.legacy_refusal()
+    base = {
+        "ok": False,
+        "reason": refusal["reason"],
+        "detail": refusal["detail"],
+        "attempts": 0,
+        "forfeited": False,
+        "terminal": True,
+        "runDir": "",
+        "argv": [],
+    }
+    if mode is not None:
+        base["mode"] = mode
+    return base
+
+
+def _seat_dispatch_refusal(seat_result, *, mode=None):
+    base = {
+        "ok": False,
+        "reason": dispatch_outcome.REASON_UNRUNNABLE,
+        "detail": seat_result.get("reason", "seat-invalid"),
+        "seatDetail": seat_result.get("detail"),
+        "attempts": 0,
+        "forfeited": False,
+        "terminal": True,
+        "runDir": "",
+        "argv": [],
+    }
+    if mode is not None:
+        base["mode"] = mode
+    return base
 
 
 def _scrub_env(env=None):
@@ -3408,18 +3461,22 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     return True, ""
 
 
-def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
+def dispatch_review(*args, seat=None, role=None, prompt_path=None,
                     repo_root=None, timeout=RETRY_MIN_TIMEOUT,
                     retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                     build_view=sanitized_view.build_sanitized_view,
                     run_dir=None, max_wait=None, order_id=None, diff_base=None, mode=None,
-                    expected_result_kind=None, pr_body_path=None, session_dir=None):
+                    expected_result_kind=None, pr_body_path=None, session_dir=None, **kwargs):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
     caller always sees JSON and can fall open to Claude."""
     resolved = {"mode": None}
     try:
+        if seat_bundle.legacy_call_detected(args, kwargs):
+            stamped = _legacy_dispatch_refusal(mode=mode or sanitized_view.MODE_REVIEW)
+            stamped["mode"] = mode or sanitized_view.MODE_REVIEW
+            return stamped
         if mode is not None:
             if not isinstance(mode, str) or mode not in sanitized_view.REVIEW_MODES:
                 return _mode_invalid_refusal(mode)
@@ -3427,8 +3484,16 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
             if not isinstance(expected_result_kind, str) or expected_result_kind not in REVIEW_RESULT_KINDS:
                 return _expected_result_kind_invalid_refusal(
                     expected_result_kind, mode or sanitized_view.MODE_REVIEW)
+        parsed = _coerce_seat_input(seat)
+        if not parsed.get("ok"):
+            stamped = _seat_dispatch_refusal(parsed, mode=mode or sanitized_view.MODE_REVIEW)
+            return stamped
+        validated = seat_bundle.validate(parsed, role)
+        if not validated.get("ok"):
+            stamped = _seat_dispatch_refusal(validated, mode=mode or sanitized_view.MODE_REVIEW)
+            return stamped
         result = _dispatch_review_impl(
-            engine, model=model, effort=effort, engine_model=engine_model, prompt_path=prompt_path,
+            validated, role=role, prompt_path=prompt_path,
             repo_root=repo_root, timeout=timeout,
             retry_timeout=retry_timeout, progress_path=progress_path, run_engine=run_engine,
             build_view=build_view, run_dir=run_dir, max_wait=max_wait, order_id=order_id,
@@ -3445,7 +3510,7 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
                 "mode": resolved["mode"] or (mode or sanitized_view.MODE_REVIEW)}
 
 
-def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_path,
+def _dispatch_review_impl(seat, *, role, prompt_path,
                           repo_root=None, timeout=RETRY_MIN_TIMEOUT,
                           retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                           build_view=sanitized_view.build_sanitized_view,
@@ -3454,6 +3519,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                           pr_body_path=None, session_dir=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
+    engine = seat["vendor"]
     role_kind = RUN_KIND_REVIEW
     if resolved_mode is None:
         resolved_mode = {"mode": None}
@@ -3629,8 +3695,8 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
             view_path = view["path"]
             cwd = os.path.realpath(view_path)
-            opts = {"model": model, "engine_model": engine_model, "cwd": cwd}
-            built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
+            opts = {"cwd": cwd}
+            built = engine_adapter.build_argv_result(seat, role_kind, opts)
             if built["reason"] is not None:
                 err = _attach_sanitized_view(_with_run_fields(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
@@ -3798,33 +3864,43 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     return True, ""
 
 
-def dispatch_write(engine, *, model, effort=None, engine_model=None, prompt_path, cwd,
+def dispatch_write(*args, seat=None, role=None, prompt_path=None, cwd,
                    order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
                    retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
-                   run_dir=None, max_wait=None, expected_items=None, expected_items_file=None):
+                   run_dir=None, max_wait=None, expected_items=None, expected_items_file=None,
+                   **kwargs):
     """Build-scoped dispatch into a linked worktree (#702). Role is HARD-CODED 'build'
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
     Never raises: any unexpected internal failure is converted to a structured result."""
     try:
+        if seat_bundle.legacy_call_detected(args, kwargs):
+            return seat_bundle.legacy_refusal()
+        parsed = _coerce_seat_input(seat)
+        if not parsed.get("ok"):
+            return _seat_dispatch_refusal(parsed)
+        validated = seat_bundle.validate(parsed, role)
+        if not validated.get("ok"):
+            return _seat_dispatch_refusal(validated)
         return _dispatch_write_impl(
-            engine, model=model, effort=effort, engine_model=engine_model,
-            prompt_path=prompt_path, cwd=cwd, order_id=order_id, base_sha=base_sha,
-            timeout=timeout, retry_timeout=retry_timeout, progress_path=progress_path,
-            run_engine=run_engine, run_dir=run_dir, max_wait=max_wait,
-            expected_items=expected_items, expected_items_file=expected_items_file,
+            validated, role=role, prompt_path=prompt_path, cwd=cwd, order_id=order_id,
+            base_sha=base_sha, timeout=timeout, retry_timeout=retry_timeout,
+            progress_path=progress_path, run_engine=run_engine, run_dir=run_dir,
+            max_wait=max_wait, expected_items=expected_items,
+            expected_items_file=expected_items_file,
         )
     except Exception as exc:
         return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "internal-%s" % type(exc).__name__,
                 "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": []}
 
 
-def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, prompt_path, cwd,
+def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
                          order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
                          retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                          run_dir=None, max_wait=None, expected_items=None,
                          expected_items_file=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
+    engine = seat["vendor"]
     role_kind = "build"
     argv = []
     ok, wait_detail = _validate_max_wait(max_wait)
@@ -3872,8 +3948,8 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
              "attempts": 0, "forfeited": False, "terminal": True},
         )
 
-    opts = {"model": model, "engine_model": engine_model, "cwd": cwd_real}
-    built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
+    opts = {"cwd": cwd_real}
+    built = engine_adapter.build_argv_result(seat, role_kind, opts)
     if built["reason"] is not None:
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
@@ -4303,12 +4379,9 @@ def build_parser():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     d = sub.add_parser("dispatch-review")
-    cc.add_argument(d, "--engine", contract="choices:codex,cursor",
-                    required=True, choices=("codex", "cursor"))
-    cc.add_argument(d, "--model", contract="model-not-a-role", default=None,
-                    type=cc.optional_model_not_a_role)
-    cc.add_argument(d, "--effort", contract="effort", required=True)
-    cc.add_argument(d, "--engine-model", contract="free-text", default=None)
+    cc.add_argument(d, "--seat", contract="free-text", required=True,
+                    help="JSON seat bundle or vendor:token composed dispatch token")
+    cc.add_argument(d, "--role", contract="role", required=True, type=cc.role)
     cc.add_argument(d, "--prompt-path", contract="free-text", required=True)
     cc.add_argument(d, "--timeout", contract="integer", default=RETRY_MIN_TIMEOUT, type=int)
     cc.add_argument(d, "--retry-timeout", contract="integer",
@@ -4331,12 +4404,9 @@ def build_parser():
     cc.add_argument(d, "--session-dir", contract="existing-directory", default=None)
 
     w = sub.add_parser("dispatch-write")
-    cc.add_argument(w, "--engine", contract="choices:codex,cursor",
-                    required=True, choices=("codex", "cursor"))
-    cc.add_argument(w, "--model", contract="model-not-a-role", default=None,
-                    type=cc.optional_model_not_a_role)
-    cc.add_argument(w, "--effort", contract="effort", default=None)
-    cc.add_argument(w, "--engine-model", contract="free-text", default=None)
+    cc.add_argument(w, "--seat", contract="free-text", required=True,
+                    help="JSON seat bundle or vendor:token composed dispatch token")
+    cc.add_argument(w, "--role", contract="role", required=True, type=cc.role)
     cc.add_argument(w, "--prompt-path", contract="free-text", required=True)
     cc.add_argument(w, "--cwd", contract="existing-directory", required=True)
     cc.add_argument(w, "--order-id", contract="free-text", default=None)
@@ -4363,10 +4433,15 @@ def build_parser():
 
 
 def main(argv):
+    dropped = seat_bundle.scan_dropped_flags(argv)
+    if dropped:
+        refusal = seat_bundle.legacy_refusal(dropped_flags=tuple(dropped))
+        sys.stdout.write(json.dumps(refusal) + "\n")
+        return 1
     args = build_parser().parse_args(argv)
     if args.cmd == "dispatch-review":
-        res = dispatch_review(args.engine, model=args.model, effort=args.effort,
-                              engine_model=args.engine_model, prompt_path=args.prompt_path,
+        res = dispatch_review(seat=args.seat, role=args.role,
+                              prompt_path=args.prompt_path,
                               repo_root=args.repo_root,
                               timeout=args.timeout, retry_timeout=args.retry_timeout,
                               progress_path=args.progress_file, run_dir=args.run_dir,
@@ -4375,8 +4450,8 @@ def main(argv):
                               expected_result_kind=args.expected_result_kind,
                               pr_body_path=args.pr_body_path, session_dir=args.session_dir)
     elif args.cmd == "dispatch-write":
-        res = dispatch_write(args.engine, model=args.model, effort=args.effort,
-                             engine_model=args.engine_model, prompt_path=args.prompt_path,
+        res = dispatch_write(seat=args.seat, role=args.role,
+                             prompt_path=args.prompt_path,
                              cwd=args.cwd, order_id=args.order_id, base_sha=args.base_sha,
                              run_dir=args.run_dir, timeout=args.timeout,
                              retry_timeout=args.retry_timeout, max_wait=args.max_wait,
