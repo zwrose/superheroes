@@ -469,10 +469,12 @@ def test_bite_write_project_config_round_trip_axis(tmp_path, monkeypatch):
     path = CM.core_path(repo, store)
     original_text = open(path).read()
 
+    _original_splice = CM._splice_single_json_block
+
     def corrupting_splice(text, new_body):
         bad_body = json.loads(new_body)
         bad_body["verifyCommand"] = "CORRUPTED"
-        return CM._splice_single_json_block(text, json.dumps(bad_body, indent=2))
+        return _original_splice(text, json.dumps(bad_body, indent=2))
 
     monkeypatch.setattr(CM, "_splice_single_json_block", corrupting_splice)
     res = CM.write_project_config(repo, _PROJECT_CFG, root=store)
