@@ -85,10 +85,10 @@ pretrained word to a coined one: a coined word recruits no prior and costs its d
 for the passage that spells out a triad three times, or spends a sentence gesturing at one idea,
 and collapse it.
 
-State the target behavior, never the banned one. A prohibition drags the forbidden behavior into
-context and makes it more available. Write "one-line comments", and the ban is never spoken. A
-prohibition earns its place only as a hard guardrail you cannot phrase positively, and even then it
-sits beside the positive instruction so attention lands on what to do.
+State the target behavior. A prohibition drags the forbidden behavior into context and makes it
+more available, so write "one-line comments" and the ban goes unspoken. A prohibition earns its
+place only as a hard guardrail you cannot phrase positively, and even then it sits beside the
+positive instruction so attention lands on what to do.
 
 ### Pruning
 

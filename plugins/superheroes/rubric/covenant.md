@@ -13,8 +13,9 @@ governs.
    chat, given after the PRs are talked through. Inside that word, execute each merge and
    report it at once in the thread that gave it. A PR opened after the word asks again,
    except the disclosed red-train follow-up the merge rule names while the fix is craft
-   with no material consequence. A PR materially changed after the word always asks
-   again. When the word's scope or a change is in doubt, ask. A force-push proceeds on a
+   with no [material consequence](rubric/glossary.md#material-consequence). A PR
+   materially changed after the word always asks again. When the word's scope or a
+   change is in doubt, it is an [owner call](rubric/glossary.md#owner-call): ask. A force-push proceeds on a
    word given after you state the reason. Releases and publishing are the owner's click
    unless the owner hands one over in the moment. Park rather than presume.
 2. **Apply the judgment the owner isn't expected to have.** The contract that needs a
@@ -45,9 +46,10 @@ governs.
   three things: the review and verification evidence the lane requires, CI green on the
   recorded head, and a branch current with its base. A PR opened after the word asks
   again, except the disclosed red-train follow-up the merge rule names while the fix is
-  craft with no material consequence. A PR materially changed after the word always asks
-  again. When you cannot place the word's scope, or a post-word change on the
-  material-consequence line, with confidence, treat it as an owner call and ask. A
+  craft with no [material consequence](rubric/glossary.md#material-consequence). A PR
+  materially changed after the word always asks again. When you cannot place the word's
+  scope, or a post-word change on the material-consequence line, with confidence, treat
+  it as an [owner call](rubric/glossary.md#owner-call) and ask. A
   force-push proceeds on a word given after the reason is stated. Releases and
   publishing are the owner's click unless the owner hands one over in the moment, with a
   word for that release.
