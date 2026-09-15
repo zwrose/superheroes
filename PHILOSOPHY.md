@@ -28,6 +28,11 @@ where superheroes lives), and delegates **judgment**, not just labor: when they 
 off a build, they are trusting the session to find the gotchas they don't know exist;
 when a readout says "reviewed and passing," they will ship on that sentence.
 
+Superheroes reviews repositories its owner trusts. Code of unknown provenance, which
+could steer its own reviewer, is outside what the product reviews, and the product does
+not defend its reviews against that threat. A project that reviews outside contributions
+works outside that statement, and saying so plainly is all the product owes it.
+
 We build superheroes with superheroes. Every promise and guardrail below is one its own
 developers run behind daily — the bar is that they hold even for experts, because
 guardrails that only protect careful owners are not guardrails.
@@ -37,11 +42,16 @@ guardrails that only protect careful owners are not guardrails.
 What the owner may trust, in order of what they'd feel most betrayed by if broken:
 
 1. **Work is delegated; commitment is not.** The product codes, designs, and decides
-   freely inside its workspace. The decisions that bind the owner — approving a merge,
-   a release, a publication — are never made on their behalf; executing an approved
-   merge may be delegated only where a mechanical checkpoint guarantees the owner's
-   approval every time. Releases, publications, and rewritten history stay in the
-   owner's hands. It parks rather than presume.
+   freely inside its workspace. Approval is the owner's word, given in conversation
+   over the PRs in front of them. The word covers the PRs it named until they merge.
+   A PR opened after the word asks again, with one disclosed exception: a craft fix on a
+   red merge train, as the operating rules bound it. A PR changed after the word with a
+   [material consequence](plugins/superheroes/rubric/glossary.md#material-consequence)
+   always asks again. Inside the word the advisor executes each merge and reports it
+   at once in the thread that gave it. A force-push needs its own word, given after the
+   reason is stated. A release or a publication is never inside a word. It stays the
+   owner's click unless the owner hands one over in the moment with a word for that
+   release. When the product cannot tell, it asks.
 2. **It applies the judgment the owner isn't expected to have.** The third-party
    contract that needs a round-trip test before it's trusted, the unhappy path nobody
    specified, the race that only shows up under load, the test suite that mocks the very
@@ -139,6 +149,30 @@ without the milestone that unlocks it. The anti-opportunities ledger — the lis
 things we deliberately do not build — is a first-class artifact, cited instead of
 re-litigated.
 *Re-check:* the unlock conditions written on the ledger itself.
+
+**B8 — Forward share.** The share of capacity that goes to new goals, rather than to
+maintaining the machine, is the harm the product steers by. The control is the
+[dial](plugins/superheroes/rubric/glossary.md#dial), and each project sets its own.
+Test-pilot work counts as product, because
+it exercises the product rather than the machine. Work
+[folded into an epic](plugins/superheroes/rubric/glossary.md#folded-in-items) from the
+backlog counts as product too. A project records its own starting point and reads the
+trend against it at each
+[gardening pass](plugins/superheroes/rubric/glossary.md#gardening-pass).
+*Re-check:* steering by this one ratio should move the product outward. We change our
+mind if the trend fails to close the gap over recorded windows, or closes it by shipping
+junk.
+
+**B9 — Tolerate a miss before you refuse it.** Agents drive the plugin's commands, and
+they sometimes get a flag or a word slightly wrong. When that happens, the first fix is
+to make the command accept the reasonable variant, or to shrink the command so there is
+less to get wrong. Writing the mistake up as a trap and adding one more refusal is the
+last resort. Strict, fail-closed checks stay only where a wrong input would do real
+damage: the record formats, the terminal states, the safety refusals, and the receipts.
+Everything else bends. A wall of refusals around a simple tool recreates the confusion
+it was built to prevent.
+*Re-check:* mistakes that tolerance let through and a refusal would have caught. If
+those pile up, the bet loses.
 
 ## 4. When values collide
 
