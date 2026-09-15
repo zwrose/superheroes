@@ -20,7 +20,7 @@ if _LIB_DIR not in sys.path:
 import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 CONFIG_ABSENT = "absent"
 CONFIG_OK = "ok"
@@ -74,6 +74,18 @@ ENGINE_PINS_REASON_NOT_A_MAPPING = "engine-pins-not-a-mapping"
 ENGINE_PINS_REASON_INVALID = "engine-pins-invalid"
 ENGINE_PINS_REASON_ROUND_TRIP = "engine-pins-round-trip-refused"
 REVIEW_GATE_POLICY_KEY = "reviewGatePolicy"
+PROJECT_CONFIGURATION_KEY = "projectConfiguration"
+DECLARED_DEPENDENCIES_KEY = "declaredDependencies"
+PROJECT_CONFIG_REASON_NOT_A_MAPPING = "project-config-not-a-mapping"
+PROJECT_CONFIG_REASON_ROUND_TRIP = "project-config-round-trip-refused"
+DECLARED_DEPS_REASON_NOT_A_MAPPING = "declared-deps-not-a-mapping"
+DECLARED_DEPS_REASON_ROUND_TRIP = "declared-deps-round-trip-refused"
+THREAT_MODEL_REASON_ROUND_TRIP = "threat-model-round-trip-refused"
+GUARDIAN_CADENCE_REASON_LAYER_ABSENT = "guardian-layer-absent"
+GUARDIAN_CADENCE_REASON_NO_FENCE = "guardian-config-fence-absent"
+GUARDIAN_CADENCE_REASON_UNPARSEABLE = "guardian-config-unparseable"
+GUARDIAN_CADENCE_REASON_INVALID_CADENCE = "guardian-cadence-invalid"
+GUARDIAN_CADENCE_REASON_ROUND_TRIP = "guardian-cadence-round-trip-refused"
 GATE_POLICY_REASON_INPUT_UNPARSEABLE = "gate-policy-input-unparseable"
 GATE_POLICY_REASON_NOT_A_MAPPING = "gate-policy-not-a-mapping"
 GATE_POLICY_REASON_INVALID = "gate-policy-invalid"
@@ -100,6 +112,12 @@ def render_core(facts, status, created, updated):
     overlay = facts.get(REVIEW_GATE_POLICY_KEY)
     if isinstance(overlay, dict):
         block[REVIEW_GATE_POLICY_KEY] = dict(overlay)
+    project_cfg = facts.get(PROJECT_CONFIGURATION_KEY)
+    if isinstance(project_cfg, dict) and project_cfg:
+        block[PROJECT_CONFIGURATION_KEY] = dict(project_cfg)
+    declared_deps = facts.get(DECLARED_DEPENDENCIES_KEY)
+    if isinstance(declared_deps, dict) and declared_deps:
+        block[DECLARED_DEPENDENCIES_KEY] = dict(declared_deps)
     show_it = (facts.get("showItSurface") or "").strip()
     show_it_block = ""
     if show_it:
@@ -170,6 +188,12 @@ def parse_core(text):
     overlay = block.get(REVIEW_GATE_POLICY_KEY)
     if overlay is not None and not isinstance(overlay, dict):
         overlay = None
+    project_cfg = block.get(PROJECT_CONFIGURATION_KEY)
+    if project_cfg is not None and not isinstance(project_cfg, dict):
+        project_cfg = {}
+    declared_deps = block.get(DECLARED_DEPENDENCIES_KEY)
+    if declared_deps is not None and not isinstance(declared_deps, dict):
+        declared_deps = {}
     return {
         "schemaVersion": int(block["schemaVersion"]),
         "status": status,
@@ -177,6 +201,8 @@ def parse_core(text):
         "stackTags": list(tags) if isinstance(tags, list) else [],
         "enginePreferences": dict(prefs) if isinstance(prefs, dict) else {},
         "reviewGatePolicy": dict(overlay) if isinstance(overlay, dict) else None,
+        "projectConfiguration": dict(project_cfg) if isinstance(project_cfg, dict) else {},
+        "declaredDependencies": dict(declared_deps) if isinstance(declared_deps, dict) else {},
         "threatModel": _section(text, "Threat model"),
         "patterns": _section(text, "Canonical patterns"),
         "showItSurface": _section(text, "Show-it surface"),
@@ -414,6 +440,8 @@ def read(cwd, root=None):
         "stackTags": facts["stackTags"],
         "enginePreferences": facts["enginePreferences"],
         "reviewGatePolicy": facts.get("reviewGatePolicy"),
+        "projectConfiguration": facts.get("projectConfiguration") or {},
+        "declaredDependencies": facts.get("declaredDependencies") or {},
         "threatModel": facts["threatModel"],
         "patterns": facts["patterns"],
         "showItSurface": facts["showItSurface"],
@@ -1359,6 +1387,370 @@ def write_review_gate_policy(cwd, policy, *, root=None):
         return {"action": "written"}
 
 
+def _json_block_key_round_trip_ok(orig, new_parsed, owned_key):
+    """True when the candidate changes only ``owned_key`` in the superheroes-core json block."""
+    if new_parsed is None:
+        return False
+    orig_facts = {k: v for k, v in orig.items() if k != owned_key}
+    new_facts = {k: v for k, v in new_parsed.items() if k != owned_key}
+    if set(orig_facts) != set(new_facts):
+        return False
+    for key in orig_facts:
+        if orig_facts[key] != new_facts[key]:
+            return False
+    return True
+
+
+def _prose_field_round_trip_ok(orig, new_parsed, owned_field):
+    """True when the candidate changes only one prose field in parse_core output."""
+    if new_parsed is None:
+        return False
+    orig_facts = {k: v for k, v in orig.items() if k != owned_field}
+    new_facts = {k: v for k, v in new_parsed.items() if k != owned_field}
+    if set(orig_facts) != set(new_facts):
+        return False
+    for key in orig_facts:
+        if orig_facts[key] != new_facts[key]:
+            return False
+    return True
+
+
+def _write_json_block_key(cwd, block_key, mapping, *, root=None, not_a_mapping_reason,
+                          round_trip_reason):
+    """Shared lock-guarded writer for a single superheroes-core json object key."""
+    if not isinstance(mapping, dict):
+        return {"action": "refused", "reason": not_a_mapping_reason}
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+        return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE}
+    gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+    if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+        return {"action": "deferred",
+                "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
+    structural = profile_structural_refusal(cwd, root=root)
+    if structural is not None:
+        return {"action": "refused", "reason": structural}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED})
+            return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED}
+        record = read(cwd, root)
+        if record is None:
+            cls = _classify_core_md_at_path(core_path(cwd, root))
+            if cls.status == CONFIG_ABSENT:
+                return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_ABSENT}
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        if record.get("behind"):
+            return {
+                "action": "behind",
+                "reason": BUILDER_DISPATCH_DEFER_SCHEMA_BEHIND,
+                "record": record,
+            }
+        try:
+            path = core_path(cwd, root)
+        except RepoRootUnavailable as exc:
+            return {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE,
+            }
+        orig = parse_core(text)
+        if orig is None:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        blocks = list(_JSON_BLOCK.finditer(text))
+        if len(blocks) != 1:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        block, duplicate_key = _loads_rejecting_duplicate_keys(blocks[0].group(1))
+        if duplicate_key is not None:
+            return {"action": "refused",
+                    "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key)}
+        if block is None or not isinstance(block, dict):
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        current = block.get(block_key)
+        if mapping:
+            if isinstance(current, dict) and current == mapping:
+                return {"action": "noop"}
+            block[block_key] = dict(mapping)
+        else:
+            if block_key not in block:
+                return {"action": "noop"}
+            block.pop(block_key, None)
+        new_body = json.dumps(block, indent=2)
+        new_text = _splice_single_json_block(text, new_body)
+        if new_text is None:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        if new_text == text:
+            return {"action": "noop"}
+        new_parsed = parse_core(new_text)
+        if not _json_block_key_round_trip_ok(orig, new_parsed, block_key):
+            return {"action": "refused", "reason": round_trip_reason}
+        try:
+            store_core.atomic_write(path, new_text)
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_WRITE_FAILED,
+            }
+        clear_pending(cwd, root)
+        return {"action": "written"}
+
+
+def write_project_config(cwd, mapping, *, root=None):
+    """Lock-guarded surgical write of ``projectConfiguration`` only. Never raises."""
+    return _write_json_block_key(
+        cwd, PROJECT_CONFIGURATION_KEY, mapping, root=root,
+        not_a_mapping_reason=PROJECT_CONFIG_REASON_NOT_A_MAPPING,
+        round_trip_reason=PROJECT_CONFIG_REASON_ROUND_TRIP)
+
+
+def write_declared_dependencies(cwd, mapping, *, root=None):
+    """Lock-guarded surgical write of ``declaredDependencies`` only. Never raises."""
+    return _write_json_block_key(
+        cwd, DECLARED_DEPENDENCIES_KEY, mapping, root=root,
+        not_a_mapping_reason=DECLARED_DEPS_REASON_NOT_A_MAPPING,
+        round_trip_reason=DECLARED_DEPS_REASON_ROUND_TRIP)
+
+
+_THREAT_MODEL_HEADING = re.compile(r"^\s*##\s+Threat model\s*$", re.IGNORECASE)
+
+
+def _render_threat_model_block(prose):
+    body = (prose or "").strip()
+    if not body:
+        return "## Threat model\n\n\n"
+    return "## Threat model\n\n" + body + "\n\n"
+
+
+def replace_threat_model_section(text, prose):
+    """Create or replace only the ``## Threat model`` section; preserve all else."""
+    new_block = _render_threat_model_block(prose)
+    lines = (text or "").splitlines(keepends=True)
+    start = None
+    for i, line in enumerate(lines):
+        if _THREAT_MODEL_HEADING.match(line):
+            start = i
+            break
+    if start is None:
+        insert_at = 0
+        for i, line in enumerate(lines):
+            if line.lstrip().startswith("<!--"):
+                insert_at = i + 1
+                if insert_at < len(lines) and lines[insert_at].strip() == "":
+                    insert_at += 1
+                break
+        return "".join(lines[:insert_at]) + new_block + "".join(lines[insert_at:])
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if _TOP_LEVEL_SECTION.match(lines[j]) or _JSON_FENCE_LINE.match(lines[j]):
+            end = j
+            break
+    return "".join(lines[:start]) + new_block + "".join(lines[end:])
+
+
+def write_threat_model(cwd, prose, *, root=None):
+    """Lock-guarded surgical write of the Threat model prose section only. Never raises."""
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+        return {"action": "deferred"}
+    gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+    if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+        return {"action": "deferred",
+                "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"reason": "lock-contended"})
+            return {"action": "deferred"}
+        record = read(cwd, root)
+        if record is None:
+            cls = _classify_core_md_at_path(core_path(cwd, root))
+            if cls.status == CONFIG_ABSENT:
+                return {"action": "refused", "reason": SHOW_IT_REASON_ABSENT}
+            return {"action": "refused", "reason": SHOW_IT_REASON_UNPARSEABLE}
+        if record.get("behind"):
+            return {"action": "behind", "record": record}
+        try:
+            path = core_path(cwd, root)
+        except RepoRootUnavailable as exc:
+            return {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+            return {"action": "deferred"}
+        orig = parse_core(text)
+        if orig is None:
+            return {"action": "refused", "reason": SHOW_IT_REASON_UNPARSEABLE}
+        body = prose if prose is not None else ""
+        new_text = replace_threat_model_section(text, body)
+        if new_text == text:
+            return {"action": "noop"}
+        new_parsed = parse_core(new_text)
+        if (new_parsed is None or not _prose_field_round_trip_ok(orig, new_parsed, "threatModel")
+                or not _show_it_json_blocks_unchanged(text, new_text)):
+            return {"action": "refused", "reason": THREAT_MODEL_REASON_ROUND_TRIP}
+        try:
+            store_core.atomic_write(path, new_text)
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+            return {"action": "deferred"}
+        clear_pending(cwd, root)
+        return {"action": "written"}
+
+
+def _guardian_layer_outside_config_unchanged(orig_text, new_text):
+    """True when prose outside the sole guardian-config fence is byte-identical."""
+    import guardian_sweep as gs
+    orig_matches = list(gs._CONFIG_BLOCK.finditer(orig_text or ""))
+    new_matches = list(gs._CONFIG_BLOCK.finditer(new_text or ""))
+    if len(orig_matches) != 1 or len(new_matches) != 1:
+        return False
+    om, nm = orig_matches[0], new_matches[0]
+    return (orig_text[:om.start()] == new_text[:nm.start()]
+            and orig_text[om.end():] == new_text[nm.end():])
+
+
+def _guardian_config_inner_text(text):
+    """Inner text of the sole guardian-config fence, or None."""
+    import guardian_sweep as gs
+    matches = list(gs._CONFIG_BLOCK.finditer(text or ""))
+    if len(matches) != 1:
+        return None
+    return matches[0].group(1)
+
+
+def _splice_guardian_config_block(text, new_body):
+    """Replace the body of the sole guardian-config fence, or None if not exactly one."""
+    import guardian_sweep as gs
+    matches = list(gs._CONFIG_BLOCK.finditer(text or ""))
+    if len(matches) != 1:
+        return None
+    m = matches[0]
+    return text[:m.start(1)] + new_body + text[m.end(1):]
+
+
+def _guardian_config_round_trip_ok(orig_block, new_block):
+    """True when only ``cadence`` changed in a guardian-config object."""
+    if not isinstance(new_block, dict):
+        return False
+    orig_copy = dict(orig_block)
+    new_copy = dict(new_block)
+    orig_copy.pop("cadence", None)
+    new_copy.pop("cadence", None)
+    return orig_copy == new_copy
+
+
+def _validate_guardian_cadence(cadence):
+    """Return a refusal reason when cadence is not a positive-integer minMerges/minDays object."""
+    import guardian_sweep as gs
+    if not isinstance(cadence, dict):
+        return GUARDIAN_CADENCE_REASON_INVALID_CADENCE
+    for key in ("minMerges", "minDays"):
+        if not gs._positive_cadence_int(cadence.get(key)):
+            return GUARDIAN_CADENCE_REASON_INVALID_CADENCE
+    return None
+
+
+def write_guardian_cadence(cwd, cadence, *, root=None):
+    """Lock-guarded surgical write of guardian-config ``cadence`` only. Never raises."""
+    import guardian_store as gs_store
+    refusal = _validate_guardian_cadence(cadence)
+    if refusal is not None:
+        return {"action": "refused", "reason": refusal}
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+        return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE}
+    gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+    if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+        return {"action": "deferred",
+                "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED})
+            return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED}
+        record = read(cwd, root)
+        if record is None:
+            cls = _classify_core_md_at_path(core_path(cwd, root))
+            if cls.status == CONFIG_ABSENT:
+                return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_ABSENT}
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        if record.get("behind"):
+            return {
+                "action": "behind",
+                "reason": BUILDER_DISPATCH_DEFER_SCHEMA_BEHIND,
+                "record": record,
+            }
+        try:
+            layer_p = gs_store.guardian_layer_path(cwd, root)
+        except RepoRootUnavailable as exc:
+            return {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        if not os.path.isfile(layer_p) or _layer_is_empty(layer_p):
+            return {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_LAYER_ABSENT}
+        try:
+            with open(layer_p, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE,
+            }
+        inner = _guardian_config_inner_text(text)
+        if inner is None:
+            return {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_NO_FENCE}
+        block, duplicate_key = _loads_rejecting_duplicate_keys(inner)
+        if duplicate_key is not None:
+            return {"action": "refused",
+                    "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key)}
+        if block is None:
+            return {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_UNPARSEABLE}
+        if not isinstance(block, dict):
+            return {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_UNPARSEABLE}
+        orig_block = dict(block)
+        if orig_block.get("cadence") == dict(cadence):
+            return {"action": "noop"}
+        block["cadence"] = dict(cadence)
+        new_body = json.dumps(block, indent=2)
+        new_text = _splice_guardian_config_block(text, new_body)
+        if new_text is None:
+            return {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_UNPARSEABLE}
+        if new_text == text:
+            return {"action": "noop"}
+        new_inner = _guardian_config_inner_text(new_text)
+        if new_inner is None:
+            return {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_ROUND_TRIP}
+        try:
+            new_block = json.loads(new_inner)
+        except ValueError:
+            return {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_ROUND_TRIP}
+        if not _guardian_config_round_trip_ok(orig_block, new_block):
+            return {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_ROUND_TRIP}
+        if not _guardian_layer_outside_config_unchanged(text, new_text):
+            return {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_ROUND_TRIP}
+        try:
+            store_core.atomic_write(layer_p, new_text)
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_WRITE_FAILED,
+            }
+        clear_pending(cwd, root)
+        return {"action": "written"}
+
+
 def layer_path(cwd, hero, root=None):
     """Mode-aware path to a hero layer file, co-located with core.md."""
     return os.path.join(os.path.dirname(core_path(cwd, root)), hero + ".md")
@@ -1615,7 +2007,8 @@ def confirm(cwd, *, root=None, now=None):
                 return {"action": "noop", "record": existing}
             facts = {k: existing[k] for k in (
                 "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface",
-                "ratifiedResiduals", REVIEW_GATE_POLICY_KEY)}
+                "ratifiedResiduals", REVIEW_GATE_POLICY_KEY, PROJECT_CONFIGURATION_KEY,
+                DECLARED_DEPENDENCIES_KEY)}
             created = existing.get("created") or stamp
             try:
                 store_core.atomic_write(core_path(cwd, root),
@@ -1728,6 +2121,18 @@ def main(argv):
     rgp = sub.add_parser("write-review-gate-policy")  # reviewGatePolicy overlay
     rgp.add_argument("--cwd", default=".")
     rgp.add_argument("--root", default=None)
+    wpc = sub.add_parser("write-project-config")
+    wpc.add_argument("--cwd", default=".")
+    wpc.add_argument("--root", default=None)
+    wdd = sub.add_parser("write-declared-dependencies")
+    wdd.add_argument("--cwd", default=".")
+    wdd.add_argument("--root", default=None)
+    wtm = sub.add_parser("write-threat-model")
+    wtm.add_argument("--cwd", default=".")
+    wtm.add_argument("--root", default=None)
+    wgc = sub.add_parser("write-guardian-cadence")
+    wgc.add_argument("--cwd", default=".")
+    wgc.add_argument("--root", default=None)
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
         try:
@@ -1830,6 +2235,85 @@ def main(argv):
                     sys.stdout.write(json.dumps(out, indent=2) + "\n")
                     return 0
             out = write_review_gate_policy(args.cwd, policy, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED}
+    elif args.cmd == "write-project-config":
+        try:
+            raw = sys.stdin.read()
+            if raw.strip() == "":
+                mapping = {}
+            else:
+                try:
+                    mapping = json.loads(raw)
+                except ValueError:
+                    out = {"action": "refused", "reason": GATE_POLICY_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                if not isinstance(mapping, dict):
+                    out = {"action": "refused", "reason": PROJECT_CONFIG_REASON_NOT_A_MAPPING}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+            out = write_project_config(args.cwd, mapping, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED}
+    elif args.cmd == "write-declared-dependencies":
+        try:
+            raw = sys.stdin.read()
+            if raw.strip() == "":
+                mapping = {}
+            else:
+                try:
+                    mapping = json.loads(raw)
+                except ValueError:
+                    out = {"action": "refused", "reason": GATE_POLICY_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                if not isinstance(mapping, dict):
+                    out = {"action": "refused", "reason": DECLARED_DEPS_REASON_NOT_A_MAPPING}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+            out = write_declared_dependencies(args.cwd, mapping, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED}
+    elif args.cmd == "write-threat-model":
+        try:
+            out = write_threat_model(args.cwd, sys.stdin.read(), root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred"}
+    elif args.cmd == "write-guardian-cadence":
+        try:
+            raw = sys.stdin.read()
+            if raw.strip() == "":
+                out = {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_INVALID_CADENCE}
+                sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                return 0
+            try:
+                cadence = json.loads(raw)
+            except ValueError:
+                out = {"action": "refused", "reason": GATE_POLICY_REASON_INPUT_UNPARSEABLE}
+                sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                return 0
+            if not isinstance(cadence, dict):
+                out = {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_INVALID_CADENCE}
+                sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                return 0
+            out = write_guardian_cadence(args.cwd, cadence, root=args.root)
         except RepoRootUnavailable as exc:
             out = {"action": "deferred",
                     "reason": GATE_REASON_ROOT_UNAVAILABLE,
