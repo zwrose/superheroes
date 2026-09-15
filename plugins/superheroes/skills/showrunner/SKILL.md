@@ -723,11 +723,11 @@ above).
    the last lane has merged, which rides the scope only while the fix is craft with no material
    consequence. A PR whose behavior, scope, or disclosed tradeoffs changed materially after the
    word asks again, judged against the project's material-consequence line. A routine base update
-   or a craft fix with no material consequence keeps the word; that is your judgment, and you say
+   or a craft fix with no material consequence keeps the word. That is your judgment, and you say
    it on the owner half. When you cannot place a post-word change on that line with confidence,
    treat it as an owner call and ask.
    **Preconditions for executing inside the word.** Three, and none waives: the review and
-   verification evidence the PR's lane requires (a READY vet for a full or light lane; the
+   verification evidence the PR's lane requires (a READY vet for a full or light lane, or the
    independent reviewer's final-head receipt for a micro lane, which has no advisor vet by
    design), CI green on the recorded head, and a branch current with its base.
    **Reporting.** Report each merge you execute at once, in the conversation that gave the word,

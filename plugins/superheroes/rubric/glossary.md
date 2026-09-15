@@ -68,9 +68,9 @@ retirement the default.
 ### Keep-or-retire entry
 
 One component's entry on the [keep-or-retire list](#keep-or-retire-list): the component and the
-cost or annoyance that makes reconsidering it worthwhile; its condition and window; its last
-demonstrated benefit with its receipt; its [consumer evidence](#consumer-evidence); the owner's
-last decision; and notes.
+cost or annoyance that makes reconsidering it worthwhile, its condition and window, its last
+demonstrated benefit with its receipt, its [consumer evidence](#consumer-evidence), the owner's
+last decision, and notes.
 
 ### Plugin component
 
@@ -106,7 +106,7 @@ A firing that led to no accepted finding.
 
 ### Citation
 
-A receipt relying on a rule's substance, whether or not it names the rule; the signal a
+A receipt relying on a rule's substance, whether or not it names the rule. It is the signal a
 [citation-based](#citation-based) condition counts, for mechanisms only.
 
 ### Consumer evidence
@@ -134,8 +134,8 @@ The owner's word on a [proposal](#proposal): retire, keep, or recalibrate.
 
 ### Foundational component
 
-A component with no condition, never queued; changing it is a spec amendment. Every foundational
-component is structural; most structural components are not foundational.
+A component with no condition and never queued. Changing it is a spec amendment. Every
+foundational component is structural, and most structural components are not foundational.
 
 ### Authority surface
 
@@ -174,8 +174,8 @@ owner's word.
 ### Dial
 
 A project's ceiling on the share of launched lanes that carry machinery work over a [gardening
-window](#gardening-window). The plugin default is 20 to 30 percent; each project configures its own
-number.
+window](#gardening-window). The plugin default is 20 to 30 percent, and each project configures
+its own number.
 
 ### Machinery lane
 
@@ -266,8 +266,8 @@ test's own module counts. Its one consequence is a line on the [keep list](#keep
 
 ### Threat tags
 
-What a component on the machinery map assumes: A, an untrusted repository; B, agent mistakes; C,
-a sincere but wrong self-report; or none.
+What a component on the machinery map assumes. A means an untrusted repository, B means agent
+mistakes, C means a sincere but wrong self-report, and none means no assumption.
 
 ### Tag: structural
 
