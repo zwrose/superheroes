@@ -67,10 +67,11 @@ two. Both cost.
 
 ### Completion criteria
 
-End every step on a completion criterion: the condition that tells the agent the step is done. Two
-properties make it work. Clarity: the agent can tell done from not done, so "understanding
-reached" fails and "every modified model accounted for" passes. Demand: how much the criterion
-requires, which drives the digging the agent does without a separate step for it. Flat reference
+End every step on a completion criterion, the condition that tells the agent the step is done.
+Two properties make it work. Clarity means the agent can tell done from not done, so
+"understanding reached" fails and "every modified model accounted for" passes. Demand means how
+much the criterion requires, which drives the digging the agent does without a separate step for
+it. Flat reference
 carries the same bar: "every rule applied" binds a rule set the way "every step done" binds a
 sequence. When a vague criterion invites the agent to rush toward the visible next steps, sharpen
 the criterion first. Split the sequence across a real context boundary only when sharpening fails

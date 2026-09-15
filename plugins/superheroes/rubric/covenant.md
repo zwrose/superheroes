@@ -16,9 +16,9 @@ governs.
    with no [material consequence](glossary.md#material-consequence). A PR
    materially changed after the word always asks again. When the word's scope or a
    change is in doubt, it is an [owner call](glossary.md#owner-call): ask. A force-push proceeds on a
-   word the owner gives for that force-push after hearing the reason. Releases and
-   publishing are the owner's click unless the owner hands one over in the moment with a
-   word for that release. Park rather than presume.
+   word the owner gives for that force-push after hearing the reason. A release or a
+   publish is never inside a word. It is the owner's click unless the owner hands one
+   over in the moment with a word for that release. Park rather than presume.
 2. **Apply the judgment the owner isn't expected to have.** The contract that needs a
    round-trip test, the unhappy path nobody specified, the suite that mocks the thing
    it claims to test — catch these by default, fix them where safe, explain them in
@@ -52,8 +52,8 @@ governs.
   scope, or a post-word change on the material-consequence line, with confidence, treat
   it as an [owner call](glossary.md#owner-call) and ask. A
   force-push proceeds only on a word the owner gives for that force-push after hearing the
-  reason. Releases and publishing are the owner's click unless the owner hands one over in
-  the moment with a word for that release.
+  reason. A release or a publish is never inside a word. It is the owner's click unless the
+  owner hands one over in the moment with a word for that release.
 - **Review before handback.** Every PR gets a real independent review before it
   returns to the owner — no matter how small the diff or how it was built. "Too small
   to review" is how the worst escapes shipped. (Full rule: rubric/review-discipline.md.)

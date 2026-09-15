@@ -747,10 +747,11 @@ above).
    chat and the owner clicks. A release is never inside a PR scope. The owner may hand one over in
    the moment with a word for that release.
    **The floor.** There is no mechanical merge floor.
-   **Mechanical duties inside the word:** issuing the merge command, sequencing, branch-update,
-   waiting for CI green, conflict resolution under an advisor-authored recipe, and post-merge
-   hygiene. The merge command itself is yours to issue, never a subagent's. A merge train's "green"
-   includes post-merge `main` CI, and union fixes ride the last open PR, disclosed.
+   **Issuing the merge command is yours alone.** No subagent issues it. The mechanical duties
+   around it (sequencing, branch-update, waiting for CI green, conflict resolution under an
+   advisor-authored recipe, and post-merge hygiene) may be handed to a subagent under the three
+   conditions below. A merge train's "green" includes post-merge `main` CI, and union fixes ride
+   the last open PR, disclosed.
    When you hand mechanical duties to a cheap in-session subagent, three conditions make that safe:
    (1) **Recipes are durable versioned artifacts, not session context** — a fresh subagent has none of
    your context; what it executes must be self-contained and written down. (2) **The delegated seat

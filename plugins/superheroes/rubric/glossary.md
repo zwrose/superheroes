@@ -32,10 +32,10 @@ and never checks it by tool.
 
 ### Priority tiers
 
-The four tiers an item can hold at the front door: P0, the next wave; P1, the standing budget,
-entered on the owner's batched word; P2, should eventually happen, filed without an owner word;
-and declined, a [declined registry](#declined-registry) line with a [trigger](#trigger). The
-front door's rules for each tier live in the issue contract.
+The four tiers an item can hold at the front door. P0 is the next wave. P1 is the standing
+budget, entered on the owner's batched word. P2 should eventually happen and is filed without an
+owner word. Declined is a [declined registry](#declined-registry) line with a
+[trigger](#trigger). The front door's rules for each tier live in the issue contract.
 
 ## Gardening and condition windows
 
