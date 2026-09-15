@@ -11,6 +11,7 @@ import pytest
 
 import core_md
 import mode_registry as mr
+import seat_bundle
 import store_core as sc
 
 import preflight_probe as pp
@@ -190,7 +191,12 @@ def test_cross_vendor_no_op_argv_cursor():
     assert probe == (
         "cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust",
         "--mode", "plan")
-    builder = engine_adapter.build_argv("cursor", "review", None, {})
+    seat = seat_bundle.validate_effort_only(
+        seat_bundle.parse(json.dumps(
+            {"vendor": "cursor", "model": "composer-2.5", "effort": None})),
+    )
+    assert seat.get("ok"), seat.get("detail", seat.get("reason"))
+    builder = engine_adapter.build_argv(seat, "review", {})
     assert builder[builder.index("--mode") + 1] == "plan"
     # Every read-role token the builder emits is carried by the probe, except the
     # stream-json output format the probe deliberately omits (it parses no stdout).
@@ -438,7 +444,12 @@ def test_probe_argv_drift_guard_real_values_pass():
     import engine_adapter
 
     probe = pp.cross_vendor_no_op_argv("cursor")
-    builder = engine_adapter.build_argv("cursor", "review", None, {})
+    seat = seat_bundle.validate_effort_only(
+        seat_bundle.parse(json.dumps(
+            {"vendor": "cursor", "model": "composer-2.5", "effort": None})),
+    )
+    assert seat.get("ok"), seat.get("detail", seat.get("reason"))
+    builder = engine_adapter.build_argv(seat, "review", {})
     _assert_probe_argv_matches_builder_minus_stream_json(builder, probe)
 
 
@@ -1025,8 +1036,12 @@ def test_preflight_run_includes_dispatch_vocab_probe(monkeypatch, capsys):
 def test_model_no_op_argv_cursor_grok_dispatch_token():
     import engine_adapter
     argv = pp.model_no_op_argv("cursor", "cursor-grok-4.6", "xhigh")
-    expected = tuple(engine_adapter.build_argv(
-        "cursor", "review", "xhigh", {"engine_model": "cursor-grok-4.6"}))
+    seat = seat_bundle.validate_effort_only(
+        seat_bundle.parse(json.dumps(
+            {"vendor": "cursor", "model": "cursor-grok-4.6", "effort": "xhigh"})),
+    )
+    assert seat.get("ok"), seat.get("detail", seat.get("reason"))
+    expected = tuple(engine_adapter.build_argv(seat, "review", {}))
     assert argv == expected
     assert argv == (
         "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust",
@@ -1052,8 +1067,12 @@ def test_model_no_op_argv_codex_terra_effort_none_resolves_second_tier():
 def test_model_no_op_argv_codex_matches_builder():
     import engine_adapter
     argv = pp.model_no_op_argv("codex", "gpt-5.6-sol", "xhigh")
-    expected = tuple(engine_adapter.build_argv(
-        "codex", "review", "xhigh", {"engine_model": "gpt-5.6-sol"}))
+    seat = seat_bundle.validate_effort_only(
+        seat_bundle.parse(json.dumps(
+            {"vendor": "codex", "model": "gpt-5.6-sol", "effort": "xhigh"})),
+    )
+    assert seat.get("ok"), seat.get("detail", seat.get("reason"))
+    expected = tuple(engine_adapter.build_argv(seat, "review", {}))
     assert argv == expected
     assert argv[-1] == "-"
 
