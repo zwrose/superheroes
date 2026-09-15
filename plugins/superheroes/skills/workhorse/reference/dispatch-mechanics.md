@@ -303,21 +303,9 @@ interval (10 s), not to the byte. **`signalSource`** — the runner terminates t
 every path, so without this field a runner-inflicted `SIGTERM` (`runner-timeout`) is indistinguishable
 from an engine crash (`engine`).
 
-**Ledger receipt** — every terminal fold appends `result["ledger"]`: `written`, `path`, `why`. The row
-records `reason`, per-attempt telemetry, `stages`, `engagement`, `evidence` (stdout/stderr/journal
-paths, plus stand-down records — `stoodDownCount`, `stoodDown`, `stoodDownTruncated` — the
-orphan-child events a supervisor death between spawn and journal append produces, capped at 20
-entries with the cap stated on the row), `attribution` (caller-error, our-transport-contract,
-our-environment, engine-side, unknown —
-a forfeit is presumed self-inflicted until attributed; **unknown is a queue, not a bucket**), and
-`salvage` when detected. The ledger is a **record, never a control input** — nothing reads it to
-decide what a dispatch does. Read standing accounting via
-`python3 -B "$ROOT_DIR/lib/forfeit_ledger.py" report --repo-root <repo-root>`.
-
-**Engaged vs delivered are two variables** — `stages.engaged` and `stages.delivered` are recorded
-separately on every row. A seat can burn hundreds of thousands of tokens, reach real findings in its
-stdout, and deliver nothing gradeable through our transport (`stages.engaged: true`,
-`stages.delivered: false`). Other terminal reasons: `forfeited`, `vacuous`, `unrunnable`.
+**Engaged vs delivered are two variables** — a seat can burn hundreds of thousands of tokens, reach
+real findings in its stdout, and deliver nothing gradeable through our transport (engaged but not
+delivered). Other terminal reasons: `forfeited`, `vacuous`, `unrunnable`.
 
 ### Brief-check dispatch (`--mode brief-check`)
 

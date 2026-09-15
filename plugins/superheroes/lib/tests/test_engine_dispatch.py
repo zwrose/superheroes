@@ -1244,7 +1244,7 @@ def test_sanitized_view_build_error_refusal_no_spawn(tmp_path):
     assert res["terminal"] is True
     assert res["runDir"] == ""
     assert res["argv"] == []
-    assert "ledger" in res
+    assert "ledger" not in res
     assert len(fake.calls) == 0
     assert "sanitizedView" not in res
 
@@ -3350,10 +3350,6 @@ def test_review_result_kind_census_survives_consumers(tmp_path, kind):
     other_kinds = tuple(k for k in ED.REVIEW_RESULT_KINDS if k != kind)
     for other_kind in other_kinds:
         assert other_kind not in res
-    opened = {"runKind": ED.RUN_KIND_REVIEW}
-    stages = ED._ledger_stages(res, {}, str(tmp_path / "run"), opened)
-    assert stages["delivered"] is True
-
     run_dir = str(tmp_path / ("run-graded-%s" % kind))
     os.makedirs(run_dir, exist_ok=True)
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
@@ -3805,11 +3801,6 @@ _DO = importlib.util.spec_from_file_location(
 _DO_MOD = importlib.util.module_from_spec(_DO)
 _DO.loader.exec_module(_DO_MOD)
 
-_FL = importlib.util.spec_from_file_location(
-    "forfeit_ledger", os.path.join(_HERE, "..", "forfeit_ledger.py"))
-_FL_MOD = importlib.util.module_from_spec(_FL)
-_FL.loader.exec_module(_FL_MOD)
-
 _LL = importlib.util.spec_from_file_location(
     "launch_ledger", os.path.join(_HERE, "..", "launch_ledger.py"))
 _LL_MOD = importlib.util.module_from_spec(_LL)
@@ -3819,13 +3810,6 @@ _EA_WO4B = importlib.util.spec_from_file_location(
     "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
 _EA_WO4B_MOD = importlib.util.module_from_spec(_EA_WO4B)
 _EA_WO4B.loader.exec_module(_EA_WO4B_MOD)
-
-
-def _ledger_env(tmp_path, monkeypatch):
-    root = str(tmp_path / "forfeit-ledger-root")
-    os.makedirs(root, mode=0o700, exist_ok=True)
-    monkeypatch.setenv(_FL_MOD.LEDGER_ROOT_ENV, root)
-    return root
 
 
 def _manual_open_review_run_git(tmp_path, run_dir, repo_root):
@@ -3922,110 +3906,8 @@ def test_forfeit_without_engaged_artifact_unchanged(tmp_path):
     assert "salvage" not in res
 
 
-def test_fold_ledger_forfeited_transport_class(tmp_path, monkeypatch):
-    repo_root = _git_init(str(tmp_path / "repo-ledger"))
-    _ledger_env(tmp_path, monkeypatch)
-    prose = _poster_child_attempt1_stdout()
-    fake = FakeRunner([
-        (prose, False, 0, ""),
-        ('{"verdicts":[]}', False, 0, ""),
-    ])
-    res = ED.dispatch_review(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["ledger"]["written"] is True
-    rows, _ = _FL_MOD.read(repo_root)
-    assert len(rows) == 1
-    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_TRANSPORT
-
-
-def test_fold_ledger_success_thin_row(tmp_path, monkeypatch):
-    repo_root = _git_init(str(tmp_path / "repo-success"))
-    _ledger_env(tmp_path, monkeypatch)
-    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
-    res = ED.dispatch_review(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["ok"] is True
-    assert res["ledger"]["written"] is True
-    rows, _ = _FL_MOD.read(repo_root)
-    assert len(rows) == 1
-    assert rows[0]["ok"] is True
-    thin = rows[0]["attempts"][0]
-    assert thin["attempt"] == 1
-    assert thin["exit"] == 0
-    assert thin["timedOut"] is False
-    assert "wallSeconds" not in thin
-
-
-def test_fold_ledger_idempotent_per_run_id(tmp_path, monkeypatch):
-    run_dir = str(tmp_path / "run-idem")
-    repo_root = _git_init(str(tmp_path / "repo-idem"))
-    _ledger_env(tmp_path, monkeypatch)
-    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
-    result = {
-        "ok": True, "terminal": True, "attempts": 1,
-        "findings": [{"id": "f1", "message": "x"}],
-        "engagement": {"read": "engaged"},
-    }
-    ED._append_fold_ledger(run_dir, state, result)
-    ED._append_fold_ledger(run_dir, state, result)
-    rows, _ = _FL_MOD.read(repo_root)
-    assert len(rows) == 1
-
-
-def test_fold_ledger_no_repo_root_written_false(tmp_path, monkeypatch):
-    run_dir = str(tmp_path / "run-noroot")
-    _ledger_env(tmp_path, monkeypatch)
-    os.makedirs(run_dir, exist_ok=True)
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
-        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "x",
-        "argv": [], "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": os.path.join(run_dir, "prompt.txt"),
-        "supervisorPid": 1, "at": time.time(),
-    })
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
-    result = {"ok": False, "terminal": True, "reason": "forfeited", "forfeited": True, "attempts": 0}
-    receipt = ED._append_fold_ledger(run_dir, state, result)
-    assert receipt["written"] is False
-    assert receipt["why"] == "repo-root-absent-from-run-opened"
-
-
-def test_fold_ledger_append_failure_fail_soft(tmp_path, monkeypatch):
-    repo_root = _git_init(str(tmp_path / "repo-failsoft"))
-    _ledger_env(tmp_path, monkeypatch)
-    prose = _poster_child_attempt1_stdout()
-    fake = FakeRunner([
-        (prose, True, 0, ""),
-        ("short", False, 0, ""),
-    ])
-
-    def boom(*_a, **_k):
-        raise RuntimeError("ledger-boom")
-
-    monkeypatch.setattr(ED.forfeit_ledger, "append", boom)
-    res = ED.dispatch_review(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
-    assert res["ledger"]["written"] is False
-    assert res["ledger"]["why"] == "ledger-internal-error"
-
-
-def test_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkeypatch):
-    """axis: which entry points append — review pre-spawn refusals with repo identity."""
+def test_preflight_prompt_missing_returns_refusal_without_ledger(tmp_path):
     repo_root = _git_init(str(tmp_path / "repo-preflight"))
-    _ledger_env(tmp_path, monkeypatch)
     missing_prompt = str(tmp_path / "missing-prompt.txt")
     res = ED.dispatch_review(
         seat=_codex_seat(), role=_REVIEW_ROLE,
@@ -4035,86 +3917,37 @@ def test_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkeypatch)
     assert res["reason"] == "unrunnable"
     assert res["detail"] == "prompt-missing"
     assert res["attempts"] == 0
-    assert res["ledger"]["written"] is True
-    rows, _ = _FL_MOD.read(repo_root)
-    assert len(rows) == 1
-    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_CALLER_ERROR
+    assert "ledger" not in res
 
 
-def test_abandon_appends_ledger_row(tmp_path, monkeypatch):
-    """axis: which terminal paths append — run-abandoned with repo identity."""
-    repo_root = _git_init(str(tmp_path / "repo-abandon"))
-    _ledger_env(tmp_path, monkeypatch)
-    run_dir = str(tmp_path / "run-abandon")
+def test_preflight_run_dir_reused_returns_refusal_without_ledger(tmp_path):
+    repo_root = _git_init(str(tmp_path / "repo-preflight-id"))
+    run_dir = str(tmp_path / "run-preflight-id")
+    os.makedirs(run_dir, exist_ok=True)
     _manual_open_review_run_git(tmp_path, run_dir, repo_root)
-    res = ED.dispatch_abandon(run_dir)
-    assert res["detail"] == "run-abandoned"
-    assert res["ledger"]["written"] is True
-    rows, _ = _FL_MOD.read(repo_root)
-    assert len(rows) == 1
-    assert rows[0]["reason"] == "unrunnable"
-    assert rows[0]["detail"] == "run-abandoned"
+    res = ED.dispatch_review(
+        seat=_codex_seat(), role=_REVIEW_ROLE,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, order_id="wrong-order",
+    )
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "run-dir-reused"
+    assert "ledger" not in res
 
 
-def test_dispatch_abandon_idempotent_equal_results(tmp_path, monkeypatch):
-    """axis: that repeat reads return the stored result — not a fresh ledger append."""
+def test_dispatch_abandon_idempotent_equal_results(tmp_path):
+    """axis: that repeat reads return the stored result."""
     repo_root = _git_init(str(tmp_path / "repo-abandon-idem"))
-    _ledger_env(tmp_path, monkeypatch)
     run_dir = str(tmp_path / "run-abandon-idem")
     _manual_open_review_run_git(tmp_path, run_dir, repo_root)
     first = ED.dispatch_abandon(run_dir)
     second = ED.dispatch_abandon(run_dir)
     assert second == first
+    assert "ledger" not in first
 
 
-def test_preflight_run_id_namespaced_from_run_dir_dedupe_key(tmp_path, monkeypatch):
-    """axis: that a preflight row cannot take a real run's dedupe key — collision, not presence."""
-    repo_root = _git_init(str(tmp_path / "repo-preflight-id"))
-    _ledger_env(tmp_path, monkeypatch)
-    run_dir = str(tmp_path / "run-preflight-id")
-    os.makedirs(run_dir, exist_ok=True)
-    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
-    wrong_order = ED.dispatch_review(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
-        build_view=_fake_build_view(tmp_path), run_dir=run_dir, order_id="wrong-order",
-    )
-    assert wrong_order["detail"] == "run-dir-reused"
-    assert wrong_order["ledger"]["written"] is True
-    rows, _ = _FL_MOD.read(repo_root)
-    preflight_row = rows[-1]
-    real_run_id = _FL_MOD.run_id_from_run_dir(run_dir)
-    assert preflight_row["runId"] != real_run_id
-    assert preflight_row["runId"].startswith("preflight-")
-
-
-def test_dispatch_abandon_idempotent_after_failed_ledger_append(tmp_path, monkeypatch):
-    """axis: that repeat reads return the stored result even when ledger state changed."""
-    repo_root = _git_init(str(tmp_path / "repo-abandon-fail"))
-    _ledger_env(tmp_path, monkeypatch)
-    run_dir = str(tmp_path / "run-abandon-fail")
-    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
-    calls = {"n": 0}
-    real_append = _FL_MOD.append
-
-    def flaky_append(repo_root_arg, row):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"written": False, "path": None, "why": "ledger-lock-busy"}
-        return real_append(repo_root_arg, row)
-
-    monkeypatch.setattr(ED.forfeit_ledger, "append", flaky_append)
-    first = ED.dispatch_abandon(run_dir)
-    assert first["ledger"]["written"] is False
-    second = ED.dispatch_abandon(run_dir)
-    assert second == first
-    assert calls["n"] == 1
-
-
-def test_write_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkeypatch):
-    """axis: which entry points append — write pre-spawn refusals with repo identity."""
+def test_write_preflight_prompt_missing_returns_refusal_without_ledger(tmp_path):
     wt = _linked_worktree(tmp_path)
-    _ledger_env(tmp_path, monkeypatch)
     missing_prompt = str(tmp_path / "missing-write-prompt.txt")
     res = ED.dispatch_write(
         seat=_codex_seat(), role=_REVIEW_ROLE,
@@ -4124,35 +3957,23 @@ def test_write_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkey
     )
     assert res["reason"] == "unrunnable"
     assert res["detail"] == "prompt-missing"
-    assert res["ledger"]["written"] is True
-    repo_root = ED._repository_root_from_git_cwd(wt)
-    rows, _ = _FL_MOD.read(repo_root)
-    assert len(rows) == 1
-    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_CALLER_ERROR
-    assert rows[0]["runKind"] == ED.RUN_KIND_WRITE
+    assert "ledger" not in res
 
 
-def test_write_preflight_primary_checkout_ledgers_refusal(tmp_path, monkeypatch):
-    """axis: which entry points append — cwd-validation refusals with repo identity."""
+def test_write_preflight_primary_checkout_returns_refusal_without_ledger(tmp_path):
     main = _git_init(str(tmp_path / "main-primary"))
-    _ledger_env(tmp_path, monkeypatch)
     res = ED.dispatch_write(
         seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=main,
         run_dir=str(tmp_path / "run-write-primary"), order_id="inv-primary",
         run_engine=_never_call,
     )
+    assert res["reason"] == "unrunnable"
     assert res["detail"] == "cwd-primary-checkout"
-    assert res["ledger"]["written"] is True
-    rows, _ = _FL_MOD.read(os.path.realpath(main))
-    assert len(rows) == 1
-    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_CALLER_ERROR
-    assert rows[0]["runKind"] == ED.RUN_KIND_WRITE
+    assert "ledger" not in res
 
 
-def test_write_preflight_non_repo_stays_unledgered(tmp_path, monkeypatch):
-    """axis: which entry points append — no repo identity means no ledger row."""
-    _ledger_env(tmp_path, monkeypatch)
+def test_write_preflight_non_repo_returns_refusal_without_ledger(tmp_path):
     non_repo = str(tmp_path / "not-a-repo")
     os.makedirs(non_repo)
     res = ED.dispatch_write(
@@ -4161,8 +3982,65 @@ def test_write_preflight_non_repo_stays_unledgered(tmp_path, monkeypatch):
         run_dir=str(tmp_path / "run-write-nonrepo"), order_id="inv-nonrepo",
         run_engine=_never_call,
     )
+    assert res["reason"] == "unrunnable"
     assert res["detail"] == "cwd-not-a-repo"
     assert "ledger" not in res
+
+
+def test_stored_terminal_replay_strips_legacy_ledger_key(tmp_path):
+    """axis: legacy journal rows may still carry ledger; callers never see it."""
+    repo_root = _git_init(str(tmp_path / "repo-legacy-ledger"))
+    run_dir = str(tmp_path / "run-legacy-ledger")
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    legacy = {
+        "ok": False,
+        "terminal": True,
+        "reason": "unrunnable",
+        "detail": "run-abandoned",
+        "attempts": 0,
+        "forfeited": False,
+        "ledger": {"written": True, "path": "/tmp/forfeit-ledger.jsonl", "why": None},
+    }
+    ED._journal_append(run_dir, {
+        "kind": "run-abandoned",
+        "detail": "abandoned",
+        "result": legacy,
+        "at": time.time(),
+    })
+    res = ED.dispatch_abandon(run_dir)
+    assert res["detail"] == "run-abandoned"
+    assert "ledger" not in res
+
+    folded = {
+        "ok": True,
+        "terminal": True,
+        "attempts": 1,
+        "ledger": {"written": True, "path": "/tmp/forfeit-ledger.jsonl", "why": None},
+    }
+    run_dir_fold = str(tmp_path / "run-legacy-fold")
+    os.makedirs(run_dir_fold, exist_ok=True)
+    ED._journal_append(run_dir_fold, {
+        "kind": "run-opened",
+        "runKind": ED.RUN_KIND_REVIEW,
+        "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW,
+        "orderId": "legacy-fold",
+        "argv": ["codex", "exec"],
+        "cwd": run_dir_fold,
+        "timeout": 30,
+        "retryTimeout": 30,
+        "promptPath": os.path.join(run_dir_fold, "prompt.txt"),
+        "supervisorPid": 1,
+        "at": time.time(),
+    })
+    ED._journal_append(run_dir_fold, {
+        "kind": "run-folded",
+        "result": folded,
+        "at": time.time(),
+    })
+    folded_res = ED.dispatch_poll(run_dir_fold)
+    assert folded_res["ok"] is True
+    assert "ledger" not in folded_res
 
 
 def test_run_opened_records_repo_root_and_id(tmp_path):
@@ -4628,79 +4506,6 @@ def test_journal_state_other_keys_unchanged_when_stand_down_present():
     assert full_state["stoodDown"] == [
         {"attempt": 1, "childPid": 100, "recordedPid": 200, "at": 6.0},
     ]
-
-
-def test_ledger_evidence_carries_stood_down_and_preserves_existing_keys(tmp_path):
-    """axis: ledger evidence includes stand-downs without altering path keys."""
-    run_dir = str(tmp_path / "run")
-    os.makedirs(run_dir)
-    opened = {"promptPath": os.path.join(run_dir, "prompt.txt")}
-    state = {
-        "attempts": {1: {"childPid": 200, "enginePgid": None, "ended": None}},
-        "stoodDown": [
-            {"attempt": 1, "childPid": 100, "recordedPid": 200, "at": 1.0},
-        ],
-    }
-    evidence = ED._ledger_evidence(run_dir, state, opened)
-    assert evidence["stoodDownCount"] == 1
-    assert evidence["stoodDown"] == [
-        {"attempt": 1, "childPid": 100, "recordedPid": 200, "at": 1.0},
-    ]
-    assert evidence["stoodDownTruncated"] is False
-    assert evidence["stdoutPaths"] == [os.path.join(run_dir, "attempt-1.stdout")]
-    assert evidence["stderrPaths"] == [os.path.join(run_dir, "attempt-1.stderr")]
-    assert evidence["journalPath"] == ED._journal_path(run_dir)
-    assert evidence["promptPath"] == opened["promptPath"]
-
-
-def _stood_down_records(n):
-    return [
-        {
-            "kind": "child-stood-down", "attempt": 1,
-            "childPid": 100 + i, "recordedPid": 200, "at": float(i),
-        }
-        for i in range(n)
-    ]
-
-
-def test_ledger_evidence_stood_down_truncated_at_twenty(tmp_path):
-    """axis: ledger evidence caps stand-down list at 20 with truncation flag."""
-    run_dir = str(tmp_path / "run")
-    os.makedirs(run_dir)
-    opened = {"promptPath": None}
-    state = {"attempts": {}, "stoodDown": []}
-    for rec in _stood_down_records(25):
-        state["stoodDown"].append({
-            "attempt": rec["attempt"],
-            "childPid": rec["childPid"],
-            "recordedPid": rec["recordedPid"],
-            "at": rec["at"],
-        })
-    evidence = ED._ledger_evidence(run_dir, state, opened)
-    assert evidence["stoodDownCount"] == 25
-    assert len(evidence["stoodDown"]) == 20
-    assert evidence["stoodDownTruncated"] is True
-    assert evidence["stoodDown"][0]["childPid"] == 100
-    assert evidence["stoodDown"][-1]["childPid"] == 119
-
-
-def test_ledger_evidence_stood_down_at_boundary_not_truncated(tmp_path):
-    """axis: exactly 20 stand-downs fit without truncation."""
-    run_dir = str(tmp_path / "run")
-    os.makedirs(run_dir)
-    opened = {"promptPath": None}
-    state = {"attempts": {}, "stoodDown": []}
-    for rec in _stood_down_records(20):
-        state["stoodDown"].append({
-            "attempt": rec["attempt"],
-            "childPid": rec["childPid"],
-            "recordedPid": rec["recordedPid"],
-            "at": rec["at"],
-        })
-    evidence = ED._ledger_evidence(run_dir, state, opened)
-    assert evidence["stoodDownCount"] == 20
-    assert len(evidence["stoodDown"]) == 20
-    assert evidence["stoodDownTruncated"] is False
 
 
 # --- #862 review finding: only the recorded child runs the attempt --------------
@@ -5418,6 +5223,9 @@ def test_dispatch_review_every_outcome_carries_mode(
     assert res["terminal"] is expected_terminal, label
     if expected_detail is not None:
         assert res.get("detail") == expected_detail, label
+        assert res.get("reason") == "unrunnable", label
+    if expected_terminal:
+        assert "ledger" not in res, label
 
 
 # --- #763-F: dispatch_review result key-presence matrix (F-I1–F-I4) ---
@@ -6256,25 +6064,6 @@ def test_cap_file_tail_rewrite_failure_signal_distinct_from_clean_cap(tmp_path, 
     assert observed == over
     assert rewrite_failed is True
     assert write_attempted is True
-
-
-def test_ledger_attempt_records_carries_stdout_cap_rewrite_failed(tmp_path):
-    """axis: durable ledger row carries stdoutCapRewriteFailed from attempt-ended."""
-    run_dir = str(tmp_path / "run")
-    state = {
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0,
-                    "stdoutBytes": 9001,
-                    "stdoutBytesPreCap": True,
-                    "stdoutCapRewriteFailed": True,
-                }
-            }
-        }
-    }
-    records = ED._ledger_attempt_records(state, run_dir)
-    assert records[0]["stdoutCapRewriteFailed"] is True
 
 
 def test_stdout_capped_forfeit_disclosure_rewrite_failure_names_rewrite_problem(tmp_path):
