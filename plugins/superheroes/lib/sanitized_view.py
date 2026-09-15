@@ -1228,18 +1228,18 @@ def _stage_config_changes(repo_real, merge_base, head_sha, view_root, withheld, 
 
     body_bytes = CONFIG_CHANGES_HEADER.encode("utf-8") + patch_bytes
     if len(body_bytes) > CONFIG_CHANGES_MAX_BYTES:
-        raise SanitizedViewError("sanitized-view-config-diff-too-large")
+        raise SanitizedViewError("sanitized-view-diff-config-too-large")
 
     dest_path = os.path.join(view_root, CONFIG_CHANGES_FILE_NAME)
     if os.path.lexists(dest_path):
-        raise SanitizedViewError("sanitized-view-config-diff-path-collision")
+        raise SanitizedViewError("sanitized-view-diff-config-path-collision")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(dest_path, flags, 0o600)
     except FileExistsError:
-        raise SanitizedViewError("sanitized-view-config-diff-path-collision")
+        raise SanitizedViewError("sanitized-view-diff-config-path-collision")
     except OSError:
-        raise SanitizedViewError("sanitized-view-config-diff-path-collision")
+        raise SanitizedViewError("sanitized-view-diff-config-path-collision")
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(body_bytes)
@@ -1248,15 +1248,15 @@ def _stage_config_changes(repo_real, merge_base, head_sha, view_root, withheld, 
             os.unlink(dest_path)
         except OSError:
             pass
-        raise SanitizedViewError("sanitized-view-config-diff-path-collision")
+        raise SanitizedViewError("sanitized-view-diff-config-path-collision")
 
     try:
         with open(dest_path, "rb") as fh:
             read_back = fh.read()
     except OSError:
-        raise SanitizedViewError("sanitized-view-config-diff-path-collision")
+        raise SanitizedViewError("sanitized-view-diff-config-path-collision")
     if read_back != body_bytes:
-        raise SanitizedViewError("sanitized-view-config-diff-path-collision")
+        raise SanitizedViewError("sanitized-view-diff-config-path-collision")
 
     _assert_no_stripped_paths_in_view(view_root)
 

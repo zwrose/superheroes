@@ -176,8 +176,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `sanitized-view-diff-fully-withheld` | every changed path was withheld as stripped config — an external seat could not review this change at all |
 > | `sanitized-view-diff-too-large` | the patch exceeds the 8 MiB ceiling, or census `ls-tree` stdout exceeds the export byte ceiling |
 > | `sanitized-view-diff-path-collision` | the repository already tracks a file named `SUPERHEROES_REVIEW_DIFF.patch` |
-> | `sanitized-view-config-diff-path-collision` | the review-only configuration-changes file could not be created at its name in the view, or did not read back as written |
-> | `sanitized-view-config-diff-too-large` | the withheld configuration hunks exceed the review-only file's size cap |
+> | `sanitized-view-diff-config-path-collision` | the review-only configuration-changes file could not be created at its name in the view, or did not read back as written |
+> | `sanitized-view-diff-config-too-large` | the withheld configuration hunks exceed the review-only file's size cap |
 > | `sanitized-view-diff-failed` | a git subprocess failed while resolving ancestry or generating the patch (spawn error, non-zero exit, timeout) — command failure only |
 > | `sanitized-view-diff-opaque` | a rendered section whose content is opaque — `Binary files … differ` (or `GIT binary patch`) instead of hunks |
 > | `sanitized-view-diff-unaccounted` | a census tree containing the same path more than once |

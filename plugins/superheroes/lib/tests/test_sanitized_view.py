@@ -4242,7 +4242,7 @@ def test_config_changes_path_collision_refuses(tmp_path):
             ["CLAUDE.md"],
             time.monotonic(),
         )
-    assert exc.value.detail == "sanitized-view-config-diff-path-collision"
+    assert exc.value.detail == "sanitized-view-diff-config-path-collision"
 
 
 def test_config_changes_too_large_refuses(tmp_path, monkeypatch):
@@ -4280,7 +4280,7 @@ def test_config_changes_too_large_refuses(tmp_path, monkeypatch):
             ["CLAUDE.md"],
             time.monotonic(),
         )
-    assert exc.value.detail == "sanitized-view-config-diff-too-large"
+    assert exc.value.detail == "sanitized-view-diff-config-too-large"
 
 
 def test_notice_names_the_config_file_as_a_context_file(tmp_path):
