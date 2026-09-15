@@ -584,7 +584,7 @@ def test_unrunnable_engine_config_unknown_claude_tier_no_spawn(tmp_path):
     )
     assert res["ok"] is False
     assert res["reason"] == "unrunnable"
-    assert res["detail"] == "engine-config:unknown-claude-tier"
+    assert res["detail"] == "effort-token-conflict"
     assert res["attempts"] == 0
     assert res["forfeited"] is False
 
@@ -598,7 +598,7 @@ def test_unrunnable_engine_config_effort_conflict_no_spawn(tmp_path):
     )
     assert res["ok"] is False
     assert res["reason"] == "unrunnable"
-    assert res["detail"] == "engine-config:engine-model-effort-conflict"
+    assert res["detail"] == "effort-token-conflict"
     assert res["attempts"] == 0
     assert res["forfeited"] is False
 
@@ -1329,14 +1329,21 @@ def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwa
         captured_path.append(view["path"])
         return view
 
+    engine = kwargs.get("engine", "codex")
+    if engine == "cursor":
+        seat = _cursor_seat(
+            model=kwargs.get("model", "composer-2.5"),
+            effort=kwargs.get("effort"),
+        )
+    else:
+        seat = _codex_seat(effort=kwargs.get("effort", "high"))
     dispatch_kwargs = {
-        "model": kwargs.get("model", "sonnet"),
-        "effort": kwargs.get("effort", "high"),
+        "seat": seat,
+        "role": _REVIEW_ROLE,
         "prompt_path": _valid_prompt(tmp_path),
         "repo_root": repo_root,
         "build_view": capture_build,
     }
-    engine = kwargs.get("engine", "codex")
     if kwargs.get("run_engine_factory") == "boom":
         def boom(*_a, **_k):
             raise RuntimeError("injected failure")
@@ -1344,7 +1351,7 @@ def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwa
     else:
         dispatch_kwargs["run_engine"] = run_engine
 
-    ED.dispatch_review(engine, **dispatch_kwargs)
+    ED.dispatch_review(**dispatch_kwargs)
     assert captured_path
     assert not os.path.exists(captured_path[0])
 
@@ -1422,7 +1429,7 @@ def _manual_open_review_run(tmp_path, run_dir):
     view = build_view(os.path.realpath(repo_root))
     cwd = os.path.realpath(view["path"])
     built = __import__("engine_adapter").build_argv_result(
-        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+        _codex_seat(), "review", {"model": "sonnet", "cwd": cwd},
     )
     argv = built["argv"]
     prompt_path = _valid_prompt(tmp_path)
@@ -2058,7 +2065,7 @@ def test_run_child_waits_for_late_attempt_started(tmp_path, monkeypatch):
     EA = importlib.util.module_from_spec(_EA)
     _EA.loader.exec_module(EA)
     built = EA.build_argv_result(
-        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
+        _codex_seat(), "build", {"model": "sonnet", "cwd": os.path.realpath(wt)},
     )
     ED._open_write_run(
         run_dir, engine="codex", argv=built["argv"], cwd=os.path.realpath(wt),
@@ -2141,7 +2148,7 @@ def test_fold_append_failure_leaves_lease(tmp_path, monkeypatch):
     EA = importlib.util.module_from_spec(_EA)
     _EA.loader.exec_module(EA)
     built = EA.build_argv_result(
-        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
+        _codex_seat(), "build", {"model": "sonnet", "cwd": os.path.realpath(wt)},
     )
     ED._acquire_worktree_lease(os.path.realpath(wt), run_dir)
     ED._open_write_run(
@@ -2179,7 +2186,7 @@ def test_abandon_append_failure_leaves_lease(tmp_path, monkeypatch):
     EA = importlib.util.module_from_spec(_EA)
     _EA.loader.exec_module(EA)
     built = EA.build_argv_result(
-        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
+        _codex_seat(), "build", {"model": "sonnet", "cwd": os.path.realpath(wt)},
     )
     ED._acquire_worktree_lease(os.path.realpath(wt), run_dir)
     ED._open_write_run(
@@ -3736,7 +3743,7 @@ def _manual_open_review_run_git(tmp_path, run_dir, repo_root):
     view = build_view(os.path.realpath(repo_root))
     cwd = os.path.realpath(view["path"])
     built = __import__("engine_adapter").build_argv_result(
-        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+        _codex_seat(), "review", {"model": "sonnet", "cwd": cwd},
     )
     argv = built["argv"]
     prompt_path = _valid_prompt(tmp_path)
@@ -4661,7 +4668,7 @@ def _open_write_run_manual(tmp_path, wt, *, run_dir=None, sibling_baseline=None)
     EA_mod = importlib.util.module_from_spec(_EA)
     _EA.loader.exec_module(EA_mod)
     built = EA_mod.build_argv_result(
-        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
+        _codex_seat(), "build", {"model": "sonnet", "cwd": os.path.realpath(wt)},
     )
     ED._acquire_worktree_lease(os.path.realpath(wt), run_dir)
     if sibling_baseline is None:
@@ -4902,7 +4909,7 @@ def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_
     view = build_view(os.path.realpath(repo_root))
     cwd = os.path.realpath(view["path"])
     built = EA.build_argv_result(
-        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+        _codex_seat(), "review", {"model": "sonnet", "cwd": cwd},
     )
     argv = built["argv"]
     prompt_path = _valid_prompt(tmp_path)
@@ -5311,8 +5318,7 @@ def test_dispatch_review_every_outcome_carries_mode(
         assert res["terminal"] is expected_terminal
         return
 
-    engine = kwargs.get("engine", "codex")
-    res = ED.dispatch_review(engine, **base_kwargs)
+    res = ED.dispatch_review(**base_kwargs)
     assert "mode" in res, label
     assert isinstance(res["mode"], str), label
     assert res["mode"] == expected_mode, label
@@ -8226,7 +8232,7 @@ def _manual_open_review_run_with_pr_body(tmp_path, run_dir, *, pr_body_source):
     view["prBodyBytes"] = 12
     cwd = os.path.realpath(view["path"])
     built = EA.build_argv_result(
-        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+        _codex_seat(), "review", {"model": "sonnet", "cwd": cwd},
     )
     argv = built["argv"]
     prompt_path = _valid_prompt(tmp_path)
