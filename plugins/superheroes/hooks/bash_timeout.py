@@ -26,9 +26,12 @@ import json
 import os
 import sys
 
+_STORE_ROOT_ENV_NEW = "SUPERHEROES_STORE_ROOT"
+_STORE_ROOT_ENV_LEGACY = "WORKHORSE_STORE_ROOT"
 _CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
 _DEFAULT_CONFIG_DIR = "~/.claude"
-_RECORD_REL_PATH = os.path.join("superheroes", "state", "bash-timeout-firings.jsonl")
+_RECORD_UNDER_STORE = os.path.join("state", "bash-timeout-firings.jsonl")
+_RECORD_UNDER_CONFIG = os.path.join("superheroes", "state", "bash-timeout-firings.jsonl")
 _RECORD_ROTATE_BYTES = 2 * 1024 * 1024
 
 # WORKAROUND: PreToolUse Bash timeout floor when the model omits an explicit timeout.
@@ -52,17 +55,21 @@ def decide(payload):
 
 
 def _record_file_path():
+    # Precedence matches control_plane.store_root() env override order
+    # (plugins/superheroes/lib/control_plane.py); hook stays import-free.
+    store_env = os.environ.get(_STORE_ROOT_ENV_NEW) or os.environ.get(_STORE_ROOT_ENV_LEGACY)
+    if store_env:
+        base = os.path.expanduser(store_env)
+        return os.path.join(base, _RECORD_UNDER_STORE)
     config_dir = os.environ.get(_CONFIG_DIR_ENV)
     base = os.path.expanduser(config_dir if config_dir else _DEFAULT_CONFIG_DIR)
-    return os.path.join(base, _RECORD_REL_PATH)
+    return os.path.join(base, _RECORD_UNDER_CONFIG)
 
 
 def _rotate_record_if_needed(path):
     if os.path.isfile(path) and os.path.getsize(path) > _RECORD_ROTATE_BYTES:
         rotated = path + ".1"
-        if os.path.exists(rotated):
-            os.remove(rotated)
-        os.rename(path, rotated)
+        os.replace(path, rotated)
 
 
 def record_firing(payload, timeout_ms):

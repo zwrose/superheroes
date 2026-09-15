@@ -32,6 +32,8 @@ def _run_hook(stdin_text):
 @pytest.fixture(autouse=True)
 def _isolate_claude_config_dir(tmp_path, monkeypatch):
     """The hook writes a durable firing record; a test run must never land in a real one."""
+    monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
+    monkeypatch.delenv("WORKHORSE_STORE_ROOT", raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
 
 
@@ -109,7 +111,11 @@ def _record_path(config_root):
     return os.path.join(config_root, "superheroes", "state", "bash-timeout-firings.jsonl")
 
 
-def test_firing_record_isolated_without_explicit_config_dir(tmp_path):
+def _store_record_path(store_root):
+    return os.path.join(store_root, "state", "bash-timeout-firings.jsonl")
+
+
+def test_firing_record_isolated_when_test_sets_nothing(tmp_path):
     home = os.path.realpath(os.path.expanduser("~"))
     r = _run_hook(json.dumps({"tool_input": {"command": "echo ok"}}))
     assert r.returncode == 0
@@ -119,6 +125,27 @@ def test_firing_record_isolated_without_explicit_config_dir(tmp_path):
     record_real = os.path.realpath(record)
     assert not record_real.startswith(home + os.sep) and record_real != home
     assert record_real.startswith(os.path.realpath(str(tmp_path)) + os.sep)
+
+
+def test_firing_record_uses_default_root_when_env_unset(tmp_path, monkeypatch):
+    for var in ("SUPERHEROES_STORE_ROOT", "WORKHORSE_STORE_ROOT", "CLAUDE_CONFIG_DIR"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    r = _run_hook(json.dumps({"tool_input": {"command": "echo ok"}}))
+    assert r.returncode == 0
+    record = _record_path(os.path.expanduser("~/.claude"))
+    assert os.path.isfile(record)
+
+
+def test_superheroes_store_root_wins_over_claude_config_dir(tmp_path, monkeypatch):
+    store_root = tmp_path / "store"
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(store_root))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    r = _run_hook(json.dumps({"tool_input": {"command": "echo ok"}}))
+    assert r.returncode == 0
+    assert os.path.isfile(_store_record_path(store_root))
+    assert not os.path.exists(_record_path(config_dir))
 
 
 def test_firing_record_writes_one_json_line(tmp_path, monkeypatch):
@@ -136,6 +163,21 @@ def test_firing_record_writes_one_json_line(tmp_path, monkeypatch):
     assert entry["ts"].endswith("Z")
     assert entry["session"] == "sess-1"
     assert entry["cwd"] == "/work"
+
+
+def test_firing_record_appends_second_line_with_distinct_sessions(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    for session_id in ("sess-first", "sess-second"):
+        r = _run_hook(json.dumps({"tool_input": {"command": "echo ok"},
+                                  "session_id": session_id}))
+        assert r.returncode == 0
+    record = _record_path(tmp_path)
+    lines = open(record, encoding="utf-8").read().splitlines()
+    assert len(lines) == 2
+    first = json.loads(lines[0])
+    second = json.loads(lines[1])
+    assert first["session"] == "sess-first"
+    assert second["session"] == "sess-second"
 
 
 def test_explicit_timeout_writes_no_firing_record(tmp_path, monkeypatch):
@@ -184,8 +226,10 @@ def test_firing_record_rotation_replaces_prior_generation(tmp_path, monkeypatch)
     record = _record_path(tmp_path)
     os.makedirs(os.path.dirname(record), exist_ok=True)
     threshold = _mod()._RECORD_ROTATE_BYTES
-    for _ in range(2):
-        open(record, "wb").write(b"x" * (threshold + 1))
+    fillers = (b"generation-alpha-", b"generation-beta-")
+    for filler in fillers:
+        padding = threshold + 1 - len(filler)
+        open(record, "wb").write(filler + b"x" * padding)
         r = _run_hook(json.dumps({"tool_input": {"command": "echo ok"}}))
         assert r.returncode == 0
     state_dir = os.path.dirname(record)
@@ -193,3 +237,5 @@ def test_firing_record_rotation_replaces_prior_generation(tmp_path, monkeypatch)
         "bash-timeout-firings.jsonl",
         "bash-timeout-firings.jsonl.1",
     ]
+    rotated_text = open(record + ".1", encoding="utf-8").read()
+    assert rotated_text.startswith("generation-beta-")

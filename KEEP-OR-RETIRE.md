@@ -8,6 +8,9 @@ Nothing checks it mechanically and it gets no guard. Its vocabulary is the shipp
 no term of its own and points there once. This file is this repository's own record, the same class
 of document as `LEDGERS.md`, and the rules it applies ship in the glossary and the rubric.
 
+Strategic-assessment evidence cited as `the assessment record` lives in a record kept beside this
+repository, outside the repository; entries cite it by name rather than by path.
+
 ## How an entry is built
 
 A [keep-or-retire entry](plugins/superheroes/rubric/glossary.md#keep-or-retire-entry) has six
@@ -191,8 +194,10 @@ The list's units are the census rows, and each entry is keyed to its census id.
   costs a stdin parse on every Bash call and works around the host's 120s default.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts in which the
   injected timeout floor is what let a command finish. On firing, a proposal to the owner at a
-  gardening pass. A citation reads this hook's own record; an absent, unreadable, or short-of-window
-  record reads unmeasured, never zero.
+  gardening pass. The hook's firing record is a corroborating join source, not the citation itself;
+  the citation is the vet, forfeit-dispute, or incident receipt, and the record's session and
+  timestamp tie that receipt to a firing. An absent, unreadable, or short-of-window record reads
+  unmeasured, never zero.
 - **Last demonstrated benefit.** Probe-verified that injected timeout takes effect and that plugin
   PreToolUse hooks fire inside subagent leaves (hooks/bash_timeout.py docstring, 2026-07-04).
 - **Consumer evidence.** unmeasured.
@@ -219,8 +224,9 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 - **Component.** A pytest guard that blocks writes to shipped Python source during test runs; it
   costs session setup and parallel-run overhead on every suite invocation.
-- **Condition.** Catch-based, 45 days: real catches of shipped-source mutation under parallel test
-  execution. On firing, a proposal to the owner at a gardening pass.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
+  `source_guard` catching a shipped-source mutation under parallel test execution. On firing, a
+  proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Caught a shipped-source mutation race under pytest-xdist parallel
   execution (#1153).
 - **Consumer evidence.** unmeasured.
@@ -272,10 +278,11 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 - **Component.** Semantic builder heartbeat stamp and advisor sweep classifier; a false `fresh`
   answer is the dangerous failure mode, and every lane carries periodic stamp overhead.
-- **Condition.** Catch-based, 45 days: heartbeat sweep classifications of `stale` or `terminal` that
-  drove advisor or wave_watch action. On firing, a proposal to the owner at a gardening pass.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
+  heartbeat sweep classifications of `stale` or `terminal` that drove advisor or wave_watch action.
+  On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Classified six stalled lanes in one advisor sweep
-  (cp2-scoreboards).
+  (the assessment record).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — fail-closed liveness signal for unattended builders; a low catch count
@@ -287,7 +294,8 @@ The list's units are the census rows, and each entry is keyed to its census id.
   seat path and scores engagement and plant detection; each run costs a full seat dispatch.
 - **Condition.** Catch-based, 45 days: canary runs where engagement or plant-detection axes scored a
   miss. On firing, a proposal to the owner at a gardening pass.
-- **Last demonstrated benefit.** Tripwire scored seven correct fires in one wave (cp2-scoreboards).
+- **Last demonstrated benefit.** Tripwire scored seven correct fires in one wave (the assessment
+  record).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** capability-gap — measures whether review seats investigate and name planted defects;
@@ -337,7 +345,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
   runs graded through the core. On firing, a shrink proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Blocked silent inference of load-bearing dispatch params — the #839
   specimen — and closed fail-open grading on malformed engine output at the parse boundary (#1010
-  empty-object class) (cp2-scoreboards.md).
+  empty-object class) (the assessment record).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — the parse/scrub/forfeit shell is structural; the caller-facing refusal surface
@@ -348,9 +356,9 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** Pre-dispatch model allowlist grading and dispatch self-test guards
   (`dispatch_guard.py`, `dispatch_outcome.py`, `dispatch_selftest.py`); they cost a CLI round-trip
   on every external dispatch and block unlisted models before spawn.
-- **Condition.** Catch-based, 45 days: refusals where `dispatch_guard.py check` blocks an unlisted
-  or misconfigured engine/model before spawn. On firing, a proposal to the owner at a gardening
-  pass.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
+  `dispatch_guard.py check` blocking an unlisted or misconfigured engine/model before spawn. On
+  firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Refused an unlisted model pick with a park-not-pick outcome (#600
   class, wired in `dispatch_guard.py` refusal tail).
 - **Consumer evidence.** unmeasured.
@@ -363,9 +371,9 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** The v2 run preflight aggregator and dispatch-calibration readout
   (`preflight_probe.py`); it costs probe subprocesses and orchestrator browser exercise before a
   wave opens, and fails loud when auth, CLI, or calibration prerequisites are missing.
-- **Condition.** Catch-based, 45 days: preflight `aggregate` outcomes that block a go/no-go with
-  `ok: false` on a probe the build would otherwise have launched against. On firing, a proposal to
-  the owner at a gardening pass.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
+  preflight `aggregate` outcomes that blocked a go/no-go with `ok: false` on a probe the build
+  would otherwise have launched against. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
@@ -390,8 +398,9 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** Declared per-seat payload contracts and the review-findings schema guards
   (`payload_contracts.py`, `review_findings_schema.py`); they cost layering maintenance at the seam
   between round phases and engine transport, and refuse unreadable or schema-drifting seat output.
-- **Condition.** Catch-based, 45 days: terminal dispatch refusals graded `unreadable` or
-  schema-blocked on review payload shape. On firing, a proposal to the owner at a gardening pass.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
+  terminal dispatch refusals graded `unreadable` or schema-blocked on review payload shape. On
+  firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Closed the #949 outer-envelope fail-open class where empty or
   control-wrapped findings could certify clean (`engine_adapter.py` gate, #1145 hardening).
 - **Consumer evidence.** unmeasured.
@@ -403,10 +412,11 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** The disposable git export that strips agent/IDE config before external review reads
   (`sanitized_view.py`); it costs export time and temp disk on every sanitized review dispatch, and
   blocks config-path exfiltration from untrusted repos.
-- **Condition.** Catch-based, 45 days: refusals or withheld-path receipts where sanitized export
-  blocked a config leak or export failure. On firing, a proposal to the owner at a gardening pass.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
+  sanitized-export refusals or withheld-path receipts that blocked a config leak or export
+  failure. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Reproduced and blocked a config-path exfiltration attempt during
-  sanitized review export (cp2-scoreboards.md keeps receipts).
+  sanitized review export (the assessment record, keeps receipts).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — stripping untrusted-repo config is a host-trust boundary, not a model
@@ -449,10 +459,11 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** Deterministic panel seat-map composition, liveness cache, and tally plumbing
   (`seat_map.py`, `seat_map_receipts.py`, `liveness_cache.py`, `panel_tally.py`); it costs registry
   coupling and panel-composition CPU, and refuses same-family or unreachable seat mixes.
-- **Condition.** Catch-based, 45 days: seat-map or liveness refusals for same-family conformance or
-  unreachable panel cells. On firing, a proposal to the owner at a gardening pass.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
+  seat-map or liveness refusals for same-family conformance or unreachable panel cells. On firing,
+  a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Measured ~1% same-family conformance violations from the review
-  corpus; fix-#787-inside-the-guard is the one queued item (cp2-scoreboards.md).
+  corpus; fix-#787-inside-the-guard is the one queued item (the assessment record).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — deterministic composition from `model_registry` guards a build property,
@@ -491,11 +502,11 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** The review auto-fix loop circuit breaker and its escalation resolver
   (`circuit_breaker.py`, `escalation.py`, `escalation_resolve.py`); it costs recurrence tracking on
   every round and halts stuck loops that stop making progress.
-- **Condition.** Catch-based, 45 days: circuit-breaker trips or escalation halts on a review loop
-  that would otherwise continue without progress. On firing, a proposal to the owner at a gardening
-  pass.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
+  circuit-breaker trips or escalation halts on a review loop that would otherwise have continued
+  without progress. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Seven correct stuck-loop fires in one wave without blocking normal
-  two-to-three-round convergence (cp2-scoreboards.md keeps receipts).
+  two-to-three-round convergence (the assessment record, keeps receipts).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — stuck-loop detection guards loop integrity independent of vendor.
@@ -519,9 +530,9 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** The code-leg verify gate that runs the project's configured verify command before a
   loop may declare clean terminal (`verify_gate.py`, `verification.py`); it costs bounded subprocess
   time on every code leg and fail-closes on fail, timeout, or execution error.
-- **Condition.** Catch-based, 45 days: verify-gate outcomes classified `fail` or `timeout` that
-  block a clean terminal the loop would otherwise have declared. On firing, a proposal to the owner
-  at a gardening pass.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
+  verify-gate outcomes classified `fail` or `timeout` that blocked a clean terminal the loop would
+  otherwise have declared. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
@@ -566,7 +577,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Condition.** Catch-based, 45 days: CONFIRMED review findings from a lens seat that fixed a
   defect or blocked a park. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Six CONFIRMED findings fixed in the 0.18.0 wave (#1247); each #1099
-  lens carries a regression check against its origin escape (cp2-scoreboards.md).
+  lens carries a regression check against its origin escape (the assessment record).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — lens detection is structural; deferral-heavy routing around the lenses is
@@ -594,9 +605,9 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** The register-to-child byte-exact quote guard (`lib/register_check.py`); it costs
   maintenance on the closed register grammar and runs at every child filing and package-read
   verification.
-- **Condition.** Catch-based, 45 days: real catches of register-quote text drift, missing quotes, or
-  unknown-entry at charter filing or package-read verification. On firing, a proposal to the owner
-  at a gardening pass.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
+  `register_check` catching register-quote text drift, missing quotes, or unknown-entry at charter
+  filing or package-read verification. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Caught register parsing that would have blocked every child filing
   in the verification-strategy package read (#1227).
 - **Consumer evidence.** unmeasured.
@@ -606,7 +617,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 #### E3 — package_read_audit
 
-- **Component.** The FR-32 machine-record trail convention and the completeness-and-shape checker
+- **Component.** The machine-record trail convention and its completeness-and-shape checker
   (`lib/package_read_audit.py`); CP2 splits the row — the trail convention keeps, the checker
   retires on a real trail-integrity incident — and the checker costs ~2,815 LOC against a circular
   trust chain.
@@ -772,7 +783,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
   content_hash, cli_contract census helpers) after their retirement lands. On firing, a shrink
   proposal to chase stragglers at a gardening pass.
 - **Last demonstrated benefit.** core_md carried five real calibration hardenings with eighteen live
-  consumers (cp2-scoreboards.md F3 split verdict).
+  consumers (the assessment record, F3 split verdict).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — core_md is structural substrate; the census-pair and content_hash vestige are
@@ -785,13 +796,13 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** The seven CI validator scripts under `.github/scripts/` (validate_* and check_*).
   They cost a few CI seconds each run. check_release_bump is best-evidenced; validate_marketplace
   and the other never-fired members are keep-cheap with attached conditions.
-- **Condition.** Catch-based, 45 days: zero real catches from the never-fired members
-  (validate_marketplace, validate_hosts, validate_skills, check_conventional_commit,
-  check_catalog_membership; check_release_bump excluded because it has a 100% incident record). On
-  zero catches for the full window across all never-fired members, a retirement proposal for those
-  members at a gardening pass.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing real
+  catches from the never-fired members (validate_marketplace, validate_hosts, validate_skills,
+  check_conventional_commit, check_catalog_membership; check_release_bump excluded because it has a
+  100% incident record). On zero citations for the full window across all never-fired members, a
+  retirement proposal for those members at a gardening pass.
 - **Last demonstrated benefit.** check_release_bump caught release-please silent version drops
-  across three incidents (investigation-record.md / cp2-scoreboards.md).
+  across three incidents (investigation-record.md / the assessment record).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — check_release_bump is structural (release-blocking-quiet class); never-fired
@@ -805,7 +816,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
   without cannot-bite evidence and owner approval (the retention-doctrine bar for rails). On firing,
   a proposal to enforce the bar at a gardening pass; zero violations means the rails are holding.
 - **Last demonstrated benefit.** The four rails are the suite's recorded foreign-regression provers
-  (cp2-scoreboards.md G2 ruling (a)).
+  (the assessment record, G2 ruling (a)).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — rails prove doc↔code SSOT; natural shrink expected as Change 7 deletes
@@ -821,7 +832,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
   attributable to that class. On a class accumulating zero regression-catches for the full window, a
   trim proposal for that class at a gardening pass.
 - **Last demonstrated benefit.** Birth-red catches on every PR that ships broken tests; bulk-removal
-  classes start with 33 named cannot-bite tests (cp2-scoreboards.md G3 simplify / #1105).
+  classes start with 33 named cannot-bite tests (the assessment record, G3 simplify / #1105).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — birth-red and cannot-bite trimming are structural suite hygiene; count-pin and
@@ -855,21 +866,21 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** capability-gap — readers exist by design but recorded consumption is zero
-  (cp2-scoreboards.md H1 posture, one sweep with zero validated findings).
+  (the assessment record, H1 posture, one sweep with zero validated findings).
 
 #### H2 — Test-pilot (framework A1–D11)
 
 - **Component.** The test-pilot hero's embedded machinery (not the skill front door): ~30 pilot_*.py
   modules, the seeding engine, and pilot-contract guards. It costs the highest August fix share
   among dispatch surfaces.
-- **Condition.** Catch-based, 45 days: real pilot-framework catches in CI or dispatch receipts
-  (contract refusal, block-execution failure, plan or schema mismatch). On firing, a proposal to the
-  owner at a gardening pass.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing real
+  pilot-framework catches in CI or dispatch receipts (contract refusal, block-execution failure,
+  plan or schema mismatch). On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — the A1–D11 contract is load-bearing orchestration machinery; churn
-  evidence observed on engine-7-class dispatches at weekly-eats (cp2-scoreboards.md C1/H2).
+  evidence observed on engine-7-class dispatches at weekly-eats (the assessment record, C1/H2).
 
 #### H3 — Other heroes (architect, discovery, detective, review-spec, audit-debt, checkpoint…)
 
@@ -898,7 +909,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — release evidence wants benchmarks but no cadence has run since 0.14.0
-  against 0.32.0 current (cp2-scoreboards.md H4 reframing).
+  against 0.32.0 current (the assessment record, H4 reframing).
 
 ### Supplemental entries
 
@@ -948,7 +959,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
   zero count means no dispute needed the observation, not that concurrent worktrees stopped
   existing. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Guards false worktree-dirtied forfeits with a wired reader on every
-  terminal dispatch fold (cp2-scoreboards.md B5 qualified-keep record; zero recorded catches).
+  terminal dispatch fold (the assessment record, B5 qualified-keep record; zero recorded catches).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — the host offers no native worktree-liveness signal; the observation is
