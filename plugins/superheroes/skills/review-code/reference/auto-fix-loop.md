@@ -416,25 +416,13 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > ```
 >
-> `$SEAT_ENGINE_MODEL` is the seat's **registry id** and `$SEAT_EFFORT` its effort — **both are
-> required by this runner**; `engine_dispatch` takes `--effort` as a required flag on
-> `dispatch-review`. Every review seat the seat map assigns on cursor carries a real effort, so this
-> is not a limitation in practice.
+> For the full `dispatch-review` argument surface, read
+> `skills/workhorse/reference/dispatch-entry.md`.
 >
 > Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. The
 > seat **may and should** read files and run read-only commands inside the sanitized view to ground
-> its findings (`--repo-root` on the CLI still names the **source** repository; the runner builds the
-> view itself). An unresolvable `--repo-root` is refused by **argparse before any JSON is emitted**
-> (exit 2) — missing, empty, not a directory, or not a git repository. `--diff-base` makes staging the diff **machinery** — the runner stages the change as
-> `SUPERHEROES_REVIEW_DIFF.patch` inside the view so the seat can read it without git history.
-> The value must be the **pinned base commit object id** the round diff was computed against — not a
-> symbolic ref like `origin/main`, which can drift mid-loop and stage a patch that disagrees with the
-> round diff. This is now **mechanized**: anything that is not a 40-/64-hex commit object id is refused
-> before any repository-local git command runs. An unset shell variable expands to `--diff-base ""`,
-> which the runner refuses as
-> `sanitized-view-diff-base-unresolved` with `attempts: 0` — empty is not the same as omitted.
-> Inlining the diff in the seat prompt remains available and is still reasonable for a small diff,
-> but it is no longer the only way a seat gets the change. Repo access is no longer forbidden.
+> its findings. Inlining the diff in the seat prompt remains available and is still reasonable for a
+> small diff, but it is no longer the only way a seat gets the change.
 >
 > **Host grants (subcommand granularity).** The owner may adopt these grant strings at subcommand
 > granularity (the band states them; it never writes the owner's settings):

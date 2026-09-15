@@ -9,7 +9,8 @@
 7. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
 8. [Supervised write dispatch](#supervised-write-dispatch)
 9. [Declared items](#declared-items)
-10. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
+10. [Refusal streak — shell health](#refusal-streak--shell-health)
+11. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
 
 ---
 
@@ -187,7 +188,8 @@ slice (12–45 s is the measured range above).
 The sanctioned way to dispatch a long-running **external reviewer** seat is `dispatch-review`. The
 seat's delivery contract is in `rubric/review-base.md` ("Findings output format"); `auto-fix-loop.md`
 documents the runner's result mechanics — read both before authoring seat prompts; this subsection is
-the at-dispatch-time summary only.
+the at-dispatch-time summary only. For the full CLI argument surface, read
+`skills/workhorse/reference/dispatch-entry.md`.
 
 ### Findings-only review prompts
 
@@ -340,6 +342,8 @@ python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
   --progress-file "$BRIEF_PROGRESS"
 ```
 
+For the full `dispatch-review` argument surface, read `skills/workhorse/reference/dispatch-entry.md`.
+
 Continuation rules — full contract in `auto-fix-loop.md`: omitting `--mode` inherits the opened mode;
 supplying a disagreeing `--mode` is `run-dir-mode-mismatch`, `attempts: 0`. Explicit
 `--mode brief-check` together with `--diff-base` always refuses `mode-brief-check-with-diff-base`
@@ -388,7 +392,8 @@ time would have cost minutes.
 
 ## Supervised write dispatch
 
-The sanctioned way to dispatch a long-running **external implementer** is the supervised runner:
+The sanctioned way to dispatch a long-running **external implementer** is the supervised runner. For
+the full CLI argument surface, read `skills/workhorse/reference/dispatch-entry.md`.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -416,23 +421,18 @@ may be another session's settings.
 ### Declared items
 
 Repeat `--expect-item` for every file the order must deliver (or use `--expect-items-file` instead).
+See `skills/workhorse/reference/dispatch-entry.md` for every flag on `dispatch-write`.
 
 `$IMPL_ENGINE` and `$IMPL_ENGINE_MODEL` come from the project's dispatch calibration for the
-**implementer** role. `--effort` is **optional** on `dispatch-write` because a registry model may
-legitimately carry no effort, while it stays **required** on `dispatch-review`; an engine/model that
-*does* need an effort still fails closed without one (`engine-config:invalid-model-effort`,
-`attempts: 0`, no spawn, no lease). Re-invoke the **originating verb**
-(`dispatch-write`, never `dispatch-poll`) with the same `--run-dir` and `--max-wait 540` while
-`.terminal` is false. A non-terminal `{"reason": "running", "terminal": false}` is **not** a forfeit.
-`dispatch-poll` is observational and never spawns; `dispatch-abandon` abandons a run directory. Every
-result carries `terminal`, `argv` (the exact spawned command), and `runDir`. Omitting `--max-wait`
-loops until terminal in 540 s slices (below the 600 s foreground-conversion boundary on harness
-2.1.219). The runner owns the bound — its per-attempt timeout, journal, and bounded slice — so **do
-not compose a separate per-dispatch watchdog** on top of it. **`cwd` must be a linked build worktree**
-— a primary checkout is refused (`cwd-primary-checkout`) — which is exactly why this is the workhorse's
-implementer path and not review-code's in-place fixer path. `BASH_MAX_TIMEOUT_MS` is a **headless-launch
-premise field owned by [#656](https://github.com/zwrose/superheroes/issues/656)**; this change sets it
-nowhere.
+**implementer** role. Re-invoke the **originating verb** (`dispatch-write`, never `dispatch-poll`)
+with the same `--run-dir` and `--max-wait 540` while `.terminal` is false. A non-terminal
+`{"reason": "running", "terminal": false}` is **not** a forfeit. `dispatch-poll` is observational
+and never spawns; `dispatch-abandon` abandons a run directory. Omitting `--max-wait` loops until
+terminal in 540 s slices (below the 600 s foreground-conversion boundary on harness 2.1.219). The
+runner owns the bound — its per-attempt timeout, journal, and bounded slice — so **do not compose a
+separate per-dispatch watchdog** on top of it. **`cwd` must be a linked build worktree** — a primary
+checkout is refused (`cwd-primary-checkout`) — which is exactly why this is the workhorse's
+implementer path and not review-code's in-place fixer path.
 
 ### Write-report contract
 
@@ -523,6 +523,17 @@ something went wrong. The block never affects `ok`, `terminal`, or `reason`.
 | write run, either snapshot indeterminate | `{"status": "indeterminate", "reason": "<why>"}` |
 | **preflight-terminal** result (refused before the run opened, never reaches fold) | **key absent** — there was no run to observe |
 | review run | **key absent** |
+
+## Refusal streak — shell health
+
+Three refusal round-trips in a row on one caller's dispatch invocations is the shell's health
+condition. A refusal that cost the caller a round counts, and a refusing continuation call counts too.
+You observe the streak at a vet or a consuming project reports it. The streak **proposes** at the
+next gardening pass and never executes anything. There is no counter, no instrument, and no journal
+field — this is a sentence people read, not machinery.
+
+Read the streak honestly. The streak is the observation. "The shell is bouncing callers" is the
+inferred cause. "One caller's bad script" is the alternative reading that sits beside it.
 
 ## Engine forfeits and order shape
 

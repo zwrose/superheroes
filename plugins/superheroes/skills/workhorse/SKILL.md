@@ -565,7 +565,9 @@ four dispatch kinds this charter sanctions — an **implementer order**, a **fix
 **`check-runner` dispatch**, and a **hand-rolled fallback dispatch** — you **run the model gate** on
 the effective `--model` you will pass (explicit or defaulted) *before dispatching*:
 `python3 -B ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/dispatch_guard.py check --role <role> --seat '<json-or-vendor:token>'`.
-It validates that model against the seat's **registry allowlist** (`lib/model_registry.py`, the single
+For the full dispatch CLI argument surface, read `skills/workhorse/reference/dispatch-entry.md`.
+It validates that
+model against the seat's **registry allowlist** (`lib/model_registry.py`, the single
 model/vendor taxonomy; #510). **Exit 1 = an unlisted model = a park, not a pick:** the gate prints the
 allowlist, and you **park before any work runs** — never treat a model-within-engine choice as "just a
 preference," and this governs **a dispatch you are going to make**: declining to dispatch and doing the
