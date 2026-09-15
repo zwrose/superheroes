@@ -6,6 +6,8 @@ then compares head sha, porcelain sha256, and HEAD reflog entry count. Emits an
 unattributed observed delta only — it cannot say who changed a sibling worktree.
 
 stdlib only. Injectable command runner for unit tests. Public functions never raise."""
+# WORKAROUND: sibling worktree snapshot probe when dispatch fold cannot attribute dirt
+# delete-when: dispatch fold attributes sibling worktree changes without a snapshot probe
 import argparse
 import hashlib
 import json

@@ -30,6 +30,8 @@ def check_line_count(skill_key, total_lines, ceilings):
 
 import re
 
+# WORKAROUND: CI lint enforces the portable plugin-root seam on skill reference paths
+# delete-when: every host resolves plugin root through one variable without this fallback seam
 _REF = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT:-\$\{PLUGIN_ROOT\}\}/([A-Za-z0-9._/\-]+)")
 _HEADING = re.compile(r"^#+\s+(\d+(?:\.\d+)*)\b", re.MULTILINE)
 # Only CONVENTIONS-qualified citations are validated. A bare "§N" is ambiguous — skills

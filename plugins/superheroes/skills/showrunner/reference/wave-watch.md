@@ -31,6 +31,9 @@ ten-hour dead-watcher hole — and each failure looked like a calm wave.
 
 ## The arming pattern
 
+<!-- WORKAROUND: harness background-task arming pattern with manual re-arm after each event
+     delete-when: the background-session trial receipt marks wave-watch arming not needed -->
+
 Assign the portable root seam once, then arm one harness **background task per batch**:
 
 ```bash
