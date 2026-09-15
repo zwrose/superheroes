@@ -189,6 +189,30 @@ def test_cli_pass_exits_0():
     assert payload["resolved_model"]
 
 
+def test_dispatch_guard_check_refuses_off_allowlist_for_implementer():
+    # axis: G1 path 5 — dispatch_guard check refuses off-allowlist and names allowlist
+    proc = subprocess.run(
+        [
+            sys.executable,
+            _MOD,
+            "check",
+            "--role",
+            "implementer",
+            "--seat",
+            json.dumps({"vendor": "cursor", "model": "gpt-5.3-codex-high", "effort": None}),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert "composer-2.5" in payload["allowlist"]
+    assert _PARK_TAIL in payload["reason"]
+    assert proc.stderr.strip()
+
+
 def _assert_success_triple(payload):
     assert payload["ok"] is True
     assert payload["resolved_model"] == payload["dispatch_token"]

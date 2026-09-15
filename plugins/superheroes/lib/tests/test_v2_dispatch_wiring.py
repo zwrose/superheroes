@@ -294,3 +294,24 @@ def test_workhorse_requires_dispatch_provenance():
     assert not missing, (
         f"{WORKHORSE} is missing required observability wiring phrase(s): {missing}"
     )
+
+
+# --- #1269 WO-B: allowlist guard wired into engine_dispatch ---------------------
+
+def test_engine_dispatch_calls_dispatch_guard_validate():
+    # axis: G1/G2 hard shell — engine_dispatch imports and invokes dispatch_guard.validate
+    path = os.path.join(LIB, "engine_dispatch.py")
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    assert "import dispatch_guard" in source
+    assert "dispatch_guard.validate" in source
+    assert "_dispatch_allowlist_validate" in source
+    assert "_spawn_allowlist_verdict" in source
+    assert "_run_engine_files" in source
+    g2_idx = source.index("def _run_engine_files")
+    g2_block = source[g2_idx:g2_idx + 2500]
+    assert "_spawn_allowlist_verdict" in g2_block
+    assert "subprocess.Popen" in g2_block
+    popen_idx = g2_block.index("subprocess.Popen")
+    guard_idx = g2_block.index("_spawn_allowlist_verdict")
+    assert guard_idx < popen_idx
