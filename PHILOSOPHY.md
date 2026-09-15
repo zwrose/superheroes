@@ -149,12 +149,12 @@ re-litigated.
 *Re-check:* the unlock conditions written on the ledger itself.
 
 **B8 — Forward share.** The share of capacity that goes to new goals, rather than to
-maintaining the machine, is the harm the product steers by. The control is a dial: a
-ceiling on the machinery share of each window's launched lanes, one number per project,
-with a plugin default of 20 to 30 percent. Test-pilot work counts as product, because it
-exercises the product rather than the machine. Work folded into an epic from the backlog
-counts as product too. A project records its own starting point and reads the trend
-against it at each gardening pass.
+maintaining the machine, is the harm the product steers by. The control is the
+[dial](plugins/superheroes/rubric/glossary.md#dial): each project sets its own ceiling on
+the machinery share of the lanes it launches. Test-pilot work counts as product, because
+it exercises the product rather than the machine. Work folded into an epic from the
+backlog counts as product too. A project records its own starting point and reads the
+trend against it at each gardening pass.
 *Re-check:* steering by this one ratio should move the product outward. We change our
 mind if the trend fails to close the gap over recorded windows, or closes it by shipping
 junk.
