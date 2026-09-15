@@ -45,6 +45,7 @@ _DEPENDENCY_FALLBACKS = {
         "calibration defect to fix"
     ),
 }
+DEPENDENCY_ORDER = tuple(_DEPENDENCY_FALLBACKS)
 
 ITEMS = (
     {
@@ -170,6 +171,17 @@ def _validate_prose(value):
     return None
 
 
+def _validate_threat_model(value):
+    if not isinstance(value, str):
+        return REASON_MALFORMED_VALUE
+    if not value.strip():
+        return REASON_MALFORMED_VALUE
+    for line in value.splitlines():
+        if line.lstrip().startswith("## "):
+            return REASON_MALFORMED_VALUE
+    return None
+
+
 def _validate_prose_list(value):
     if not isinstance(value, list):
         return REASON_MALFORMED_VALUE
@@ -236,7 +248,7 @@ def _validate_guardian_cadence(value):
 
 def _validate_severity_ladder(value):
     # axis: every band example carries a citation — see bite-proof record wo_b_1276_citation-required
-    if not isinstance(value, list):
+    if not isinstance(value, list) or not value:
         return REASON_MALFORMED_VALUE
     for band in value:
         if not isinstance(band, dict):
@@ -244,12 +256,13 @@ def _validate_severity_ladder(value):
         if not isinstance(band.get("name"), str) or not band.get("name").strip():
             return REASON_MALFORMED_VALUE
         examples = band.get("examples")
-        if not isinstance(examples, list):
+        if not isinstance(examples, list) or not examples:
             return REASON_MALFORMED_VALUE
         for example in examples:
             if not isinstance(example, dict):
                 return REASON_MALFORMED_VALUE
-            if not isinstance(example.get("text"), str):
+            text = example.get("text")
+            if not isinstance(text, str) or not text.strip():
                 return REASON_MALFORMED_VALUE
             citation = example.get("citation")
             if not isinstance(citation, str) or not citation.strip():
@@ -272,6 +285,8 @@ _VALIDATORS = {
 
 def validate_item_value(item, value):
     """Return a refusal reason when ``value`` does not match ``item``'s shape."""
+    if item["slug"] == "threatModel":
+        return _validate_threat_model(value)
     validator = _VALIDATORS.get(item["shape"])
     if validator is None:
         return REASON_MALFORMED_VALUE
@@ -586,9 +601,7 @@ def set_item(cwd, slug, value, root=None):
         write_result = core_md.write_guardian_cadence(cwd, value, root=root)
     else:
         # axis: sibling keys in projectConfiguration survive a single-item set — wo_b_1276_one-home
-        mapping = dict(_project_config_mapping(facts))
-        mapping[slug] = value
-        write_result = core_md.write_project_config(cwd, mapping, root=root)
+        write_result = core_md.write_project_config_item(cwd, slug, value, root=root)
 
     if write_result.get("action") not in ("written", "noop"):
         return write_result
@@ -619,18 +632,6 @@ def _detect_launch_ledger(cwd, root):
             return "detected"
     except Exception:
         pass
-    return None
-
-
-def _detect_detector_test_boundary():
-    path = os.path.normpath(os.path.join(_LIB_DIR, "..", "rubric", "bite-proof.md"))
-    if os.path.isfile(path):
-        try:
-            with open(path, encoding="utf-8") as fh:
-                fh.read(1)
-            return "detected"
-        except OSError:
-            pass
     return None
 
 
@@ -674,16 +675,10 @@ def declare_dependency(cwd, slug, value, root=None):
     if facts.get("behind"):
         return {"action": "behind", "record": facts}
 
-    mapping = _declared_dependencies_mapping(facts)
-    if value is None:
-        if slug not in mapping:
-            return {"action": "noop"}
-        del mapping[slug]
-    else:
-        mapping[slug] = value
-
     # axis: sibling declarations survive a single dependency declare — wo_h_1276_sibling-declarations
-    write_result = core_md.write_declared_dependencies(cwd, mapping, root=root)
+    if value is None and slug not in _declared_dependencies_mapping(facts):
+        return {"action": "noop"}
+    write_result = core_md.write_declared_dependency_item(cwd, slug, value, root=root)
     if write_result.get("action") not in ("written", "noop"):
         return write_result
 
@@ -741,9 +736,8 @@ def dependencies(cwd, root=None):
             "fallback": _DEPENDENCY_FALLBACKS["keepOrRetireBackfill"],
         }
 
-    detector = _detect_detector_test_boundary()
-    if detector:
-        out["detectorTestBoundary"] = {"status": "detected"}
+    if "detectorTestBoundary" in declared:
+        out["detectorTestBoundary"] = {"status": "declared"}
     else:
         out["detectorTestBoundary"] = {
             "status": "absent",

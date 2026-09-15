@@ -188,6 +188,48 @@ def test_p0_stamped_definition_excludes_band(tmp_path):
     assert got["reason"] == FD.REASON_P0_BAND_EXCLUDED
 
 
+def test_p0_stamped_definition_requires_matching_evidence(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    _stamp_ladder(repo, store)
+    PC.set_item(
+        repo,
+        "p0Definition",
+        "Band 1 by citation plus field evidence",
+        root=store,
+    )
+    got = FD.grade(
+        repo,
+        _claim(tier="P0", band="Band 1", evidence="lab"),
+        root=store,
+    )
+    assert got["outcome"] == "refused"
+    assert got["reason"] == FD.REASON_P0_EVIDENCE_EXCLUDED
+
+
+def test_p0_stamped_definition_long_band_name_prefix_match(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    ladder = [
+        {
+            "name": "Band 1, users harmed or misled",
+            "examples": [{"text": "data loss", "citation": "runbook §2"}],
+        },
+    ]
+    _stamp_ladder(repo, store, ladder=ladder)
+    PC.set_item(
+        repo,
+        "p0Definition",
+        "Band 1 by citation plus field evidence",
+        root=store,
+    )
+    got = FD.grade(
+        repo,
+        _claim(tier="P0", band="Band 1, users harmed or misled", evidence="field"),
+        root=store,
+    )
+    assert got["outcome"] == "graded"
+    assert got["tier"] == "P0"
+
+
 def test_p1_and_p2_grade_with_stamped_ladder(tmp_path):
     repo, store = _setup_repo(tmp_path)
     _stamp_ladder(repo, store)
@@ -232,6 +274,45 @@ def test_edge_corrupt_profile_json(tmp_path):
     )
     assert got["outcome"] == "refused"
     assert got["reason"] == PC.REASON_PROFILE_UNPARSEABLE
+
+
+def test_edge_structural_refusal_duplicate_core_blocks(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    path = CM.core_path(repo, store)
+    text = open(path, encoding="utf-8").read()
+    open(path, "w", encoding="utf-8").write(text + "\n" + text)
+    got = FD.grade(
+        repo,
+        _claim(tier="P1", band="Band 1", evidence="field"),
+        root=store,
+    )
+    assert got["outcome"] == "refused"
+    assert got["reason"] is not None
+    assert got["reason"].startswith("multiple-core-blocks:")
+
+
+def test_edge_structural_refusal_duplicate_top_level_key(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    path = CM.core_path(repo, store)
+    text = open(path, encoding="utf-8").read()
+    block = (
+        '{\n  "schemaVersion": %d,\n  "verifyCommand": "npm test",\n'
+        '  "stackTags": [],\n  "verifyCommand": "dup"\n}'
+        % CM.SCHEMA_VERSION
+    )
+    open(path, "w", encoding="utf-8").write(
+        text.split("```json superheroes-core")[0]
+        + "```json superheroes-core\n"
+        + block
+        + "\n```\n"
+    )
+    got = FD.grade(
+        repo,
+        _claim(tier="P0", band="Band 1", evidence="field"),
+        root=store,
+    )
+    assert got["outcome"] == "refused"
+    assert got["reason"] == "duplicate-core-key:verifyCommand"
 
 
 def test_edge_newer_schema_behind(tmp_path):

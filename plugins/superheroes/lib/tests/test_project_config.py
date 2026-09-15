@@ -376,15 +376,18 @@ def test_set_read_mismatch_reported(tmp_path, monkeypatch):
 def test_dependencies_fallback_when_absent(tmp_path, monkeypatch, slug):
     repo, store = _setup_repo(tmp_path)
     monkeypatch.setattr(PC, "_detect_launch_ledger", lambda *a, **k: None)
-    monkeypatch.setattr(PC, "_detect_detector_test_boundary", lambda: None)
     got = PC.dependencies(repo, root=store)
     assert got[slug]["status"] == "absent"
     assert "fallback" in got[slug]
 
 
-def test_dependency_detector_boundary_detected():
-    got = PC.dependencies(_REPO_ROOT, root=None)
-    assert got["detectorTestBoundary"]["status"] == "detected"
+def test_dependency_detector_boundary_declared(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    CM.write_declared_dependencies(
+        repo, {"detectorTestBoundary": "bite-proof.md"}, root=store,
+    )
+    got = PC.dependencies(repo, root=store)
+    assert got["detectorTestBoundary"]["status"] == "declared"
 
 
 def test_dependency_collector_declared(tmp_path):

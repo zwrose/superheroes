@@ -201,10 +201,10 @@ def test_dependencies_raises_shows_not_available(tmp_path, monkeypatch):
 
 def test_dependencies_absent_show_fallback(tmp_path, monkeypatch):
     repo, store = _setup_repo(tmp_path)
-    monkeypatch.setattr(PC, "_detect_launch_ledger", lambda *a, **k: None)
-    monkeypatch.setattr(PC, "_detect_detector_test_boundary", lambda: None)
+    monkeypatch.setattr(CV.project_config, "_detect_launch_ledger", lambda *a, **k: None)
     screen = CV.render(repo, root=store)
     block = _project_config_section(screen)
     joined = "\n".join(block)
     assert "launchLedger: absent — fallback:" in joined
     assert "collector: absent — fallback:" in joined
+    assert "detectorTestBoundary: absent — fallback:" in joined

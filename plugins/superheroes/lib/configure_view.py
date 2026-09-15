@@ -35,14 +35,6 @@ import store_sweep     # noqa: E402
 _NON_LAYER = ("core.md", "patterns.md")
 _PROSE_CONFIG_SHAPES = frozenset({"prose"})
 _PROSE_DISPLAY_MAX = 120
-_DEPENDENCY_ORDER = (
-    "launchLedger",
-    "collector",
-    "keepOrRetireBackfill",
-    "detectorTestBoundary",
-)
-
-
 def _read(path):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -295,7 +287,7 @@ def _project_config_lines(cwd, root):
     except Exception:
         lines.append("dependencies: (not available)")
         return lines
-    for key in _DEPENDENCY_ORDER:
+    for key in project_config.DEPENDENCY_ORDER:
         info = deps.get(key) or {}
         status = info.get("status") or "unknown"
         if status == "absent":

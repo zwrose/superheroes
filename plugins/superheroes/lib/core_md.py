@@ -20,7 +20,7 @@ if _LIB_DIR not in sys.path:
 import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 CONFIG_ABSENT = "absent"
 CONFIG_OK = "ok"
@@ -1399,6 +1399,100 @@ def write_review_gate_policy(cwd, policy, *, root=None):
         return {"action": "written"}
 
 
+def _write_json_block_key_item(cwd, block_key, slug, value, *, root=None,
+                               not_a_mapping_reason, round_trip_reason):
+    """Shared lock-guarded writer that merges one key into a superheroes-core json object."""
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+        return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE}
+    gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+    if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+        return {"action": "deferred",
+                "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
+    structural = profile_structural_refusal(cwd, root=root)
+    if structural is not None:
+        return {"action": "refused", "reason": structural}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED})
+            return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED}
+        record = read(cwd, root)
+        if record is None:
+            cls = _classify_core_md_at_path(core_path(cwd, root))
+            if cls.status == CONFIG_ABSENT:
+                return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_ABSENT}
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        if record.get("behind"):
+            return {
+                "action": "behind",
+                "reason": BUILDER_DISPATCH_DEFER_SCHEMA_BEHIND,
+                "record": record,
+            }
+        try:
+            path = core_path(cwd, root)
+        except RepoRootUnavailable as exc:
+            return {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE,
+            }
+        orig = parse_core(text)
+        if orig is None:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        blocks = list(_JSON_BLOCK.finditer(text))
+        if len(blocks) != 1:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        block, duplicate_key = _loads_rejecting_duplicate_keys(blocks[0].group(1))
+        if duplicate_key is not None:
+            return {"action": "refused",
+                    "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key)}
+        if block is None or not isinstance(block, dict):
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        current = block.get(block_key)
+        if not isinstance(current, dict):
+            current = {}
+        else:
+            current = dict(current)
+        if value is None:
+            if slug not in current:
+                return {"action": "noop"}
+            del current[slug]
+        else:
+            if current.get(slug) == value:
+                return {"action": "noop"}
+            current[slug] = value
+        if current:
+            block[block_key] = current
+        else:
+            block.pop(block_key, None)
+        new_body = json.dumps(block, indent=2)
+        new_text = _splice_single_json_block(text, new_body)
+        if new_text is None:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        if new_text == text:
+            return {"action": "noop"}
+        new_parsed = parse_core(new_text)
+        if not _json_block_key_round_trip_ok(orig, new_parsed, block_key):
+            return {"action": "refused", "reason": round_trip_reason}
+        try:
+            store_core.atomic_write(path, new_text)
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_WRITE_FAILED,
+            }
+        clear_pending(cwd, root)
+        return {"action": "written"}
+
+
 def _json_block_key_round_trip_ok(orig, new_parsed, owned_key):
     """True when the candidate changes only ``owned_key`` in the superheroes-core json block."""
     if new_parsed is None:
@@ -1523,10 +1617,26 @@ def write_project_config(cwd, mapping, *, root=None):
         round_trip_reason=PROJECT_CONFIG_REASON_ROUND_TRIP)
 
 
+def write_project_config_item(cwd, slug, value, *, root=None):
+    """Lock-guarded merge of one ``projectConfiguration`` slug. Never raises."""
+    return _write_json_block_key_item(
+        cwd, PROJECT_CONFIGURATION_KEY, slug, value, root=root,
+        not_a_mapping_reason=PROJECT_CONFIG_REASON_NOT_A_MAPPING,
+        round_trip_reason=PROJECT_CONFIG_REASON_ROUND_TRIP)
+
+
 def write_declared_dependencies(cwd, mapping, *, root=None):
     """Lock-guarded surgical write of ``declaredDependencies`` only. Never raises."""
     return _write_json_block_key(
         cwd, DECLARED_DEPENDENCIES_KEY, mapping, root=root,
+        not_a_mapping_reason=DECLARED_DEPS_REASON_NOT_A_MAPPING,
+        round_trip_reason=DECLARED_DEPS_REASON_ROUND_TRIP)
+
+
+def write_declared_dependency_item(cwd, slug, value, *, root=None):
+    """Lock-guarded merge of one ``declaredDependencies`` slug. Never raises."""
+    return _write_json_block_key_item(
+        cwd, DECLARED_DEPENDENCIES_KEY, slug, value, root=root,
         not_a_mapping_reason=DECLARED_DEPS_REASON_NOT_A_MAPPING,
         round_trip_reason=DECLARED_DEPS_REASON_ROUND_TRIP)
 
@@ -1604,10 +1714,17 @@ def write_threat_model(cwd, prose, *, root=None):
         if orig is None:
             return {"action": "refused", "reason": SHOW_IT_REASON_UNPARSEABLE}
         body = prose if prose is not None else ""
+        if body.strip():
+            for line in body.splitlines():
+                if _TOP_LEVEL_SECTION.match(line):
+                    return {"action": "refused", "reason": THREAT_MODEL_REASON_ROUND_TRIP}
         new_text = replace_threat_model_section(text, body)
         if new_text == text:
             return {"action": "noop"}
         new_parsed = parse_core(new_text)
+        parsed_threat = new_parsed.get("threatModel") if new_parsed else None
+        if body.strip() and parsed_threat != body.strip():
+            return {"action": "refused", "reason": THREAT_MODEL_REASON_ROUND_TRIP}
         if (new_parsed is None or not _prose_field_round_trip_ok(orig, new_parsed, "threatModel")
                 or not _show_it_json_blocks_unchanged(text, new_text)):
             return {"action": "refused", "reason": THREAT_MODEL_REASON_ROUND_TRIP}

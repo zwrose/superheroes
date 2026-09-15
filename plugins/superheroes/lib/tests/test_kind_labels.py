@@ -11,6 +11,11 @@ import kind_labels as kl
 REPO = "owner/example"
 
 
+@pytest.fixture(autouse=True)
+def _gh_on_path(monkeypatch):
+    monkeypatch.setattr(kl.shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None)
+
+
 def _labels_json(names):
     return json.dumps(
         [{"name": n, "color": "000000", "description": "x"} for n in names]
@@ -104,6 +109,7 @@ def test_report_never_calls_create():
         }
     )
     kl.ensure_kind_labels(REPO, run=run)
+    assert any("list" in argv for argv in calls)
     assert all("create" not in argv for argv in calls)
 
 
@@ -328,6 +334,7 @@ def test_edge_report_cannot_write():
         }
     )
     kl.ensure_kind_labels(REPO, apply=False, run=run)
+    assert any("list" in argv for argv in calls)
     assert all("create" not in argv for argv in calls)
 
 

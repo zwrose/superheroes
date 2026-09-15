@@ -16,6 +16,8 @@ REASON_LADDER_UNSTAMPED = "ladder-unstamped"
 REASON_BAND_UNKNOWN = "band-unknown"
 REASON_EVIDENCE_ARGUED = "evidence-argued"
 REASON_P0_BAND_EXCLUDED = "p0-band-excluded"
+REASON_P0_DEFINITION_NAMES_NO_BAND = "p0-definition-names-no-band"
+REASON_P0_EVIDENCE_EXCLUDED = "p0-evidence-excluded"
 REASON_BAND_WITHOUT_LADDER = "band-without-ladder"
 REASON_BAND_REQUIRED = "band-required"
 REASON_CLAIM_NOT_OBJECT = "claim-not-object"
@@ -69,6 +71,9 @@ def _profile_refusal(cwd, root, payload):
         if core_md.gate_config_profile_is_absent(cwd, root):
             return project_config.REASON_PROFILE_ABSENT
         return project_config.REASON_PROFILE_UNPARSEABLE
+    structural = core_md.profile_structural_refusal(cwd, root)
+    if structural is not None:
+        return structural
     return None
 
 
@@ -91,22 +96,52 @@ def _ladder_is_stamped(ladder_entry):
     return ladder_entry.get("source") == "stamped" and ladder_entry.get("effective") is not None
 
 
-def _p0_allowed_bands(ladder_entry, p0_entry):
+def _band_reference_tokens(name):
+    tokens = [name]
+    if "," in name:
+        prefix = name.split(",", 1)[0].strip()
+        if prefix and prefix != name:
+            tokens.append(prefix)
+    return tokens
+
+
+def _p0_bands_named_in_prose(prose, names):
+    matched = set()
+    for name in names:
+        for token in _band_reference_tokens(name):
+            if prose.startswith(token):
+                matched.add(name)
+                break
+    return matched
+
+
+def _p0_required_evidence(prose):
+    lower = prose.lower()
+    required = set()
+    if "field evidence" in lower:
+        required.add("field")
+    if "lab evidence" in lower:
+        required.add("lab")
+    return required or None
+
+
+def _p0_policy(ladder_entry, p0_entry):
+    """Return (allowed_bands, required_evidence, refuse_reason)."""
     names = _ladder_band_names(ladder_entry.get("effective"))
     if not names:
-        return None
+        return None, None, project_config.REASON_MALFORMED_VALUE
     top = names[0]
     if p0_entry.get("malformed"):
-        return None
+        return None, None, project_config.REASON_MALFORMED_VALUE
     if p0_entry.get("source") != "stamped":
-        return {top}
+        return {top}, None, None
     prose = p0_entry.get("effective")
     if not isinstance(prose, str) or not prose.strip():
-        return None
-    allowed = {name for name in names if name in prose}
+        return None, None, project_config.REASON_MALFORMED_VALUE
+    allowed = _p0_bands_named_in_prose(prose, names)
     if not allowed:
-        return None
-    return allowed
+        return None, None, REASON_P0_DEFINITION_NAMES_NO_BAND
+    return allowed, _p0_required_evidence(prose), None
 
 
 def _unstamped_ladder_outcome(tier, band, evidence):
@@ -174,11 +209,13 @@ def grade(cwd, claim, root=None):
         return _refused(REASON_BAND_UNKNOWN, band, tier, evidence)
 
     if tier == "P0":
-        allowed = _p0_allowed_bands(ladder_entry, p0_entry)
-        if allowed is None:
-            return _refused(project_config.REASON_MALFORMED_VALUE, band, tier, evidence)
+        allowed, required_evidence, refuse_reason = _p0_policy(ladder_entry, p0_entry)
+        if refuse_reason is not None:
+            return _refused(refuse_reason, band, tier, evidence)
         if band not in allowed:
             return _refused(REASON_P0_BAND_EXCLUDED, band, tier, evidence)
+        if required_evidence is not None and evidence not in required_evidence:
+            return _refused(REASON_P0_EVIDENCE_EXCLUDED, band, tier, evidence)
         return _graded("P0", band, evidence)
 
     if tier == "P1":
