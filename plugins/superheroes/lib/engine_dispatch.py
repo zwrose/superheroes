@@ -43,7 +43,6 @@ import dispatch_outcome  # noqa: E402  outcome vocabulary chokepoint (#747)
 import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
 import seat_bundle  # noqa: E402  single dispatch seat entry (#1269 WO-A1)
 import file_lock  # noqa: E402
-import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
 import review_findings_schema  # noqa: E402  findings example renderer (#1145 WO-C)
 import sanitized_view  # noqa: E402
@@ -2009,191 +2008,16 @@ def _maybe_upgrade_review_terminal_forfeit(run_dir_real, state, terminal, engine
     return out
 
 
-def _ledger_attempt_records(state, run_dir_real, *, thin=False):
-    """Per-attempt telemetry from journal slots for the forfeit ledger."""
-    records = []
-    for att in sorted(state.get("attempts") or {}):
-        slot = state["attempts"][att]
-        ended = slot.get("ended") or {}
-        if thin:
-            records.append({
-                "attempt": att,
-                "exit": ended.get("exit"),
-                "timedOut": ended.get("timedOut"),
-            })
-            continue
-        rec = {"attempt": att}
-        for key in (
-            "exit", "timedOut", "signal", "signalSource", "refusal", "at",
-            "wallSeconds", "capSeconds", "stdoutBytes", "stderrBytes",
-            "silenceSeconds", "lastActivityAt", "activityStream",
-            "dispatchPath", "promptBytes", "stdoutCapRewriteFailed",
-        ):
-            if key in ended:
-                rec[key] = ended[key]
-        superseded = slot.get("endedSuperseded")
-        if isinstance(superseded, dict):
-            rec["endedSuperseded"] = True
-        records.append(rec)
-    return records
-
-
-def _ledger_evidence(run_dir_real, state, opened):
-    stdout_paths = []
-    stderr_paths = []
-    for att in sorted(state.get("attempts") or {}):
-        stdout_paths.append(os.path.join(run_dir_real, "attempt-%d.stdout" % att))
-        stderr_paths.append(os.path.join(run_dir_real, "attempt-%d.stderr" % att))
-    stood_down = list(state.get("stoodDown") or [])
-    stood_down_count = len(stood_down)
-    stood_down_truncated = stood_down_count > 20
-    if stood_down_truncated:
-        stood_down = stood_down[:20]
-    evidence = {
-        "stdoutPaths": stdout_paths,
-        "stderrPaths": stderr_paths,
-        "journalPath": _journal_path(run_dir_real),
-        "promptPath": opened.get("promptPath"),
-        "stoodDownCount": stood_down_count,
-        "stoodDown": stood_down,
-        "stoodDownTruncated": stood_down_truncated,
-    }
-    return evidence
-
-
-def _ledger_stages(result, state, run_dir_real, opened):
-    """engaged vs delivered — never collapsed (#747 WO-4b)."""
-    stages = {"engaged": None, "delivered": None}
-    run_kind = opened.get("runKind")
-    if run_kind == RUN_KIND_REVIEW:
-        candidates = _scan_review_engaged_candidates(run_dir_real, state)
-        if candidates:
-            stages["engaged"] = True
-        elif result.get("engagement"):
-            stages["engaged"] = engine_adapter.engagement_read(result) == "engaged"
-        delivered = False
-        if result.get("ok"):
-            kind = result.get("resultKind")
-            if kind in REVIEW_RESULT_KINDS:
-                if _parse_review_has_payload(result):
-                    delivered = True
-            if not delivered and result.get("investigated"):
-                delivered = True
-        stages["delivered"] = delivered
-    else:
-        if result.get("ok"):
-            stages["delivered"] = True
-            stages["engaged"] = True
-        else:
-            stages["delivered"] = False
-            stages["engaged"] = True if result.get("salvage") else None
-    return stages
-
-
-def _build_ledger_row(run_dir_real, state, result):
-    opened = state.get("opened") or {}
-    reason = result.get("reason")
-    ok = result.get("ok")
-    is_success = ok is True and reason is None
-    attempts = result.get("attempts")
-    if attempts is None:
-        attempts = _highest_attempt(state)
-    attempt_records = _ledger_attempt_records(
-        state, run_dir_real, thin=is_success,
-    )
-    stages = _ledger_stages(result, state, run_dir_real, opened)
-    evidence = _ledger_evidence(run_dir_real, state, opened)
-    detail = result.get("detail") or result.get("disclosure")
-    ledger_kwargs = dict(
-        run_dir=run_dir_real,
-        order_id=opened.get("orderId"),
-        engine=opened.get("engine"),
-        engine_model=opened.get("engineModel"),
-        run_kind=opened.get("runKind"),
-        reason=reason,
-        detail=detail,
-        attempt_count=attempts,
-        attempts=attempt_records,
-        stages=stages,
-        engagement=result.get("engagement"),
-        evidence=evidence,
-        ok=ok,
-    )
-    if opened.get("runKind") == RUN_KIND_REVIEW:
-        ledger_kwargs["mode"] = opened.get("mode") or result.get("mode")
-    row = forfeit_ledger.build_row(**ledger_kwargs)
-    salvage = result.get("salvage")
-    if isinstance(salvage, dict):
-        ledger_salvage = engine_adapter.scrub_salvage_block(dict(salvage))
-        ledger_salvage["detected"] = True
-        row["salvage"] = ledger_salvage
-    return row
-
-
-def _preflight_run_id(repo_root_resolved, row, run_dir_real=None):
-    """Namespace-separated preflight id — never reuses a real run's dedupe key."""
-    # axis: that a preflight row cannot take a real run's dedupe key — collision, not presence.
-    material = json.dumps({
-        "namespace": "preflight",
-        "repo": repo_root_resolved,
-        "runDir": run_dir_real or row.get("runDir"),
-        "reason": row.get("reason"),
-        "detail": row.get("detail"),
-        "at": row.get("at"),
-        "attemptCount": row.get("attemptCount"),
-    }, sort_keys=True, separators=(",", ":"))
-    return "preflight-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
-
-
-def _append_fold_ledger(run_dir_real, state, result, *, repo_root=None, preflight=False):
-    """Append one ledger row at terminal fold or preflight refusal; fail-soft — never changes dispatch outcome."""
-    try:
-        opened = state.get("opened") or {}
-        repo_root_resolved = repo_root or opened.get("repoRoot")
-        if not repo_root_resolved:
-            return {"written": False, "path": None, "why": "repo-root-absent-from-run-opened"}
-        row = _build_ledger_row(run_dir_real, state, result)
-        if preflight:
-            row["runId"] = _preflight_run_id(repo_root_resolved, row, run_dir_real)
-        elif not row.get("runId"):
-            row["runId"] = _preflight_run_id(repo_root_resolved, row, run_dir_real)
-        append_result = forfeit_ledger.append(repo_root_resolved, row)
-        return {
-            "written": append_result.get("written", False),
-            "path": append_result.get("path"),
-            "why": append_result.get("why"),
-        }
-    except Exception:
-        return {"written": False, "path": None, "why": "ledger-internal-error"}
-
-
 def _finish_preflight_terminal(
     repo_root, result, *, run_dir="", argv=None, engine=None, run_kind=RUN_KIND_REVIEW,
 ):
-    """Return a terminal pre-spawn refusal; append a ledger row when repo identity is known."""
-    # axis: which entry points append — review and write pre-spawn refusals with repo identity.
-    out = _with_run_fields(result, run_dir=run_dir, argv=argv or [])
-    if (
-        repo_root
-        and out.get("terminal")
-        and not (out.get("ok") is True and out.get("reason") is None)
-    ):
-        state = {
-            "opened": {
-                "repoRoot": repo_root,
-                "engine": engine,
-                "runKind": run_kind,
-            },
-        }
-        out["ledger"] = _append_fold_ledger(
-            run_dir, state, out, repo_root=repo_root, preflight=True,
-        )
-    return out
+    """Return a terminal pre-spawn refusal."""
+    return _with_run_fields(result, run_dir=run_dir, argv=argv or [])
 
 
 def _abandon_terminal_result(run_dir_real, state):
-    """Terminal run-abandoned payload with fail-soft ledger receipt for idempotent re-reads."""
-    abandon_result = {
+    """Terminal run-abandoned payload for idempotent re-reads."""
+    return {
         "ok": False,
         "terminal": True,
         "reason": dispatch_outcome.REASON_UNRUNNABLE,
@@ -2201,8 +2025,6 @@ def _abandon_terminal_result(run_dir_real, state):
         "attempts": len(state.get("attempts") or {}),
         "forfeited": False,
     }
-    abandon_result["ledger"] = _append_fold_ledger(run_dir_real, state, abandon_result)
-    return abandon_result
 
 
 def _stored_abandon_result(run_dir_real, state):
@@ -2222,13 +2044,9 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
     argv = list(opened.get("argv") or result.get("argv") or [])
 
     if record_kind == "run-folded":
-        # axis: one ledger append per terminal fold — before view teardown captures evidence paths.
-        ledger_receipt = _append_fold_ledger(run_dir_real, state, result)
-        result = dict(result)
-        result["ledger"] = ledger_receipt
-        record = {"kind": "run-folded", "result": result, "at": time.time()}
+        record = {"kind": "run-folded", "result": dict(result), "at": time.time()}
     elif record_kind == "run-abandoned":
-        # axis: that repeat reads return the stored result — not a fresh ledger append.
+        # axis: that repeat reads return the stored result — not a fresh abandon mint.
         abandon_result = _abandon_terminal_result(run_dir_real, state)
         record = {
             "kind": "run-abandoned",
@@ -2323,6 +2141,7 @@ def _fold_run(run_dir_real, state, result):
 def _with_run_fields(result, *, run_dir, argv, snapshot=None):
     # axis: every exit echoes resolvedInputs from the run-opened snapshot, never the invocation.
     out = dict(result)
+    out.pop("ledger", None)
     out["runDir"] = run_dir
     out["argv"] = list(argv or [])
     if "terminal" not in out:
