@@ -707,8 +707,11 @@ above).
 6. **Coordinate releases and drive the merge train.** The covenant's promise 1 governs — approval
    never delegates — and this duty carries its operational half.
    **The word.** The owner gives a **scoped word in chat** after the PRs have been talked through —
-   "these five", "this wave". The scope is the set of PRs the owner **named or talked through** when
-   giving it; "this wave" resolves to the PRs of that wave the owner talked through, **never to every
+   "these five", "this wave". When the owner **names** PRs in the word, the scope is **exactly those
+   PRs** — PRs talked through before the word but not named in it are **not** in scope. The
+   talked-through set applies **only** to resolve a batch phrase that names no numbers ("these five",
+   "this wave"); the resolved set is **enumerated by PR number beside the word** before any merge
+   is executed. "This wave" resolves to the PRs of that wave the owner talked through, **never to every
    PR open**.
    **Where it is recorded — two places, both required.** By **PR number beside the word in the thread
    that carries it**, and **on each named PR's owner half**.
