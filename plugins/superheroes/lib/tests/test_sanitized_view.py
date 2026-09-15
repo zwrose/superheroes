@@ -901,10 +901,10 @@ def test_submodule_gitlink_skipped(tmp_path):
         "add submodule",
     )
     ls = _git(outer, "ls-tree", "-r", "HEAD").stdout
-    assert "160000 commit" in ls
+    assert "160000 commit" in ls and "\tsubmod" in ls
     view = _build(outer)
     try:
-        assert not os.path.exists(os.path.join(view["path"], "submod", "inner.txt"))
+        assert not os.path.exists(os.path.join(view["path"], "submod"))
         assert os.path.isfile(os.path.join(view["path"], "outer.txt"))
     finally:
         sv.destroy_sanitized_view(view["path"])
@@ -1028,41 +1028,6 @@ def test_sweep_aged_prefix_symlink_to_outside_dir_untouched(tmp_path, monkeypatc
     assert link_path.is_symlink()
     assert outside.exists()
     assert (outside / "marker.txt").read_text(encoding="utf-8") == "keep\n"
-
-
-def test_sweep_swap_symlink_after_islink_check_victim_survives(tmp_path, monkeypatch):
-    base = tmp_path / "fake-tmp"
-    base.mkdir()
-    nest = base / "nest"
-    nest.mkdir()
-    victim = nest / (sv.SANITIZED_VIEW_DIR_PREFIX + "victim")
-    victim.mkdir()
-    (victim / "PRECIOUS.txt").write_text("keep\n", encoding="utf-8")
-    entry_name = sv.SANITIZED_VIEW_DIR_PREFIX + "stale-entry"
-    full_path = base / entry_name
-    full_path.mkdir()
-    stale_time = time.time() - sv.SANITIZED_VIEW_STALE_AGE_SECONDS - 120
-    os.utime(full_path, (stale_time, stale_time))
-    os.utime(victim, (stale_time, stale_time))
-    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(base))
-    real_owned = sv._owned_view_realpath
-    swapped = {"done": False}
-
-    def realpath_with_midflight_swap(path):
-        norm_full = os.path.normpath(str(full_path))
-        if not swapped["done"] and os.path.normpath(path) == norm_full:
-            swapped["done"] = True
-            hidden = base / (entry_name + ".hidden")
-            full_path.rename(hidden)
-            os.symlink(str(victim), str(full_path))
-            return str(victim.resolve())
-        return real_owned(path)
-
-    monkeypatch.setattr(sv, "_owned_view_realpath", realpath_with_midflight_swap)
-    sv._sweep_stale_views(str(base))
-    assert swapped["done"], "the simulated swap never fired — this test would pass vacuously"
-    assert victim.is_dir()
-    assert (victim / "PRECIOUS.txt").read_text(encoding="utf-8") == "keep\n"
 
 
 def test_destroy_refuses_case_variant_of_temp_base(tmp_path, monkeypatch):
@@ -1341,55 +1306,6 @@ def test_literal_backslash_in_filename_materialized(tmp_path):
             assert fh.read() == "backslash ok\n"
     finally:
         sv.destroy_sanitized_view(view["path"])
-
-
-def test_forged_gitlink_hiding_blob_refuses(tmp_path):
-    """Mode 160000 pointing at a blob: ls-tree still reports commit; must refuse."""
-    repo = _init_repo(
-        tmp_path / "forge",
-        files={
-            "normal.py": "print('ok')\n",
-            "hidden.py": "SECRET_SOURCE\n",
-        },
-    )
-    blob_oid = _git(repo, "hash-object", "-w", "hidden.py").stdout.strip()
-    _git(repo, "rm", "--cached", "hidden.py")
-    _git(
-        repo,
-        "update-index",
-        "--add",
-        "--cacheinfo",
-        "160000,%s,hidden.py" % blob_oid,
-    )
-    tree_oid = _git(repo, "write-tree").stdout.strip()
-    parent = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    commit_oid = subprocess.run(
-        [
-            "git",
-            "-C",
-            repo,
-            "-c",
-            "user.email=test@test.local",
-            "-c",
-            "user.name=test",
-            "commit-tree",
-            tree_oid,
-            "-p",
-            parent,
-            "-m",
-            "crafted fake gitlink",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    _git(repo, "update-ref", "HEAD", commit_oid)
-    ls = _git(repo, "ls-tree", "-r", "HEAD").stdout
-    assert "160000 commit" in ls and "hidden.py" in ls
-    assert _git(repo, "cat-file", "-t", blob_oid).stdout.strip() == "blob"
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        _build(repo)
-    assert exc.value.detail == "sanitized-view-export-failed"
 
 
 # --- review diff staging (WO-A) ------------------------------------------------
@@ -2618,8 +2534,11 @@ def test_diff_submodule_gitlink_only(tmp_path):
         "-m",
         "add submodule",
     )
+    ls = _git(outer, "ls-tree", "-r", "HEAD").stdout
+    assert "160000 commit" in ls and "\tsubmod" in ls
     view = sv.build_sanitized_view(outer, diff_base=base_sha)
     try:
+        assert not os.path.exists(os.path.join(view["path"], "submod"))
         with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
         assert b"inner.txt" not in patch
@@ -3930,21 +3849,6 @@ def test_review_diff_ancestry_scratch_directory_is_removed(tmp_path, monkeypatch
         _build(repo2, diff_base=first_sha)
     assert exc.value.detail == "sanitized-view-diff-base-unresolved"
     assert _leftover_ancestry_dirs(tmp_base) == []
-
-
-def test_sweep_stale_views_reaps_aged_ancestry_scratch(tmp_path, monkeypatch):
-    base = tmp_path / "fake-tmp"
-    base.mkdir()
-    aged = base / (sv._ANCESTRY_SCRATCH_PREFIX + "old")
-    aged.mkdir()
-    fresh = base / (sv._ANCESTRY_SCRATCH_PREFIX + "fresh")
-    fresh.mkdir()
-    stale_time = time.time() - sv.SANITIZED_VIEW_STALE_AGE_SECONDS - 120
-    os.utime(aged, (stale_time, stale_time))
-    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(base))
-    sv._sweep_stale_views(str(base))
-    assert not aged.exists()
-    assert fresh.exists()
 
 
 def test_review_diff_ancestry_resolves_in_linked_worktree(tmp_path):

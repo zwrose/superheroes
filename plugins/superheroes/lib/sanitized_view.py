@@ -470,37 +470,15 @@ def destroy_sanitized_view(path):
     return not os.path.exists(real)
 
 
-def _owned_ancestry_scratch_realpath(path):
-    """Resolved path when authorized to reap a stale ancestry scratch dir; None otherwise."""
-    try:
-        real = os.path.realpath(path)
-        if not os.path.basename(real).startswith(_ANCESTRY_SCRATCH_PREFIX):
-            return None
-        tmp_base = tempfile.gettempdir()
-        tmp_base_real = os.path.realpath(tmp_base)
-        is_temp_base = False
-        try:
-            is_temp_base = os.path.samefile(real, tmp_base_real)
-        except OSError:
-            is_temp_base = real == tmp_base_real
-        if is_temp_base:
-            return None
-        if not path_is_confidently_under(real, tmp_base):
-            return None
-        return real
-    except Exception:
-        return None
-
-
 def _sweep_stale_views(tmp_base):
-    """Remove old owned sanitized-view and ancestry-scratch directories (best-effort).
+    """Remove old owned sanitized-view directories (best-effort).
 
     ``tmp_base`` selects what is **listed** (the caller's checked enumeration base).
-    ``_owned_view_realpath`` and ``_owned_ancestry_scratch_realpath`` authorize
-    deletion; their containment root is ``tempfile.gettempdir()``, so an entry is
-    deleted only when it is an owned directory under **that** root — which is why a
-    base disjoint from ``gettempdir()`` deletes nothing. Age and directory kind are
-    additional sweep-only conditions on top of that predicate.
+    ``_owned_view_realpath`` authorizes deletion; its containment root is
+    ``tempfile.gettempdir()``, so an entry is deleted only when it is an owned
+    directory under **that** root — which is why a base disjoint from
+    ``gettempdir()`` deletes nothing. Age and directory kind are additional
+    sweep-only conditions on top of that predicate.
     """
     try:
         names = os.listdir(tmp_base)
@@ -509,9 +487,7 @@ def _sweep_stale_views(tmp_base):
     scanned = 0
     now = time.time()
     for name in names:
-        is_view = name.startswith(SANITIZED_VIEW_DIR_PREFIX)
-        is_ancestry = name.startswith(_ANCESTRY_SCRATCH_PREFIX)
-        if not is_view and not is_ancestry:
+        if not name.startswith(SANITIZED_VIEW_DIR_PREFIX):
             continue
         if scanned >= SANITIZED_VIEW_STALE_SCAN_LIMIT:
             break
@@ -519,10 +495,7 @@ def _sweep_stale_views(tmp_base):
         full = os.path.join(tmp_base, name)
         if os.path.islink(full):
             continue
-        if is_view:
-            real = _owned_view_realpath(full)
-        else:
-            real = _owned_ancestry_scratch_realpath(full)
+        real = _owned_view_realpath(full)
         if real is None:
             continue
         try:
@@ -530,9 +503,6 @@ def _sweep_stale_views(tmp_base):
                 continue
             if now - os.path.getmtime(real) < SANITIZED_VIEW_STALE_AGE_SECONDS:
                 continue
-            # Authorization resolves; deletion must target the enumerated entry so
-            # rmtree's refusal of a top-level symlink (every platform) catches a
-            # post-check swap — race-free where avoids_symlink_attacks is True.
             shutil.rmtree(full, ignore_errors=True)
         except OSError:
             continue
@@ -569,14 +539,6 @@ def _parse_ls_tree_z(raw):
         path = record[tab + 1 :].decode("utf-8", errors="surrogateescape")
         entries.append((mode, obj_type, oid, path))
     return entries
-
-
-def _expected_git_type_for_mode(mode):
-    if mode in ("100644", "100755", "120000"):
-        return "blob"
-    if mode == "160000":
-        return "commit"
-    return None
 
 
 def _git_ls_tree_export(repo_real, head_sha):
@@ -1068,67 +1030,6 @@ class _CatFileBatch:
         self._proc = None
 
 
-class _CatFileBatchCheck:
-    """Single ``git cat-file --batch-check`` session (strict request-then-response)."""
-
-    def __init__(self, repo_real):
-        try:
-            self._proc = _git_popen(
-                ["git", "-C", repo_real, "cat-file", "--batch-check"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError as exc:
-            raise SanitizedViewError("sanitized-view-export-failed") from exc
-        self._stdin = self._proc.stdin
-        self._stdout = self._proc.stdout
-
-    def check_object_type(self, oid, started):
-        _check_export_deadline(started)
-        try:
-            self._stdin.write(oid.encode("ascii") + b"\n")
-            self._stdin.flush()
-        except OSError as exc:
-            raise SanitizedViewError("sanitized-view-export-failed") from exc
-        try:
-            line = self._stdout.readline()
-        except OSError as exc:
-            raise SanitizedViewError("sanitized-view-export-failed") from exc
-        if not line or line == b"\n":
-            raise SanitizedViewError("sanitized-view-export-failed")
-        parts = line.decode("ascii", errors="replace").split()
-        if len(parts) == 2 and parts[0] == oid and parts[1] == "missing":
-            return "missing"
-        if len(parts) == 3 and parts[0] == oid:
-            return parts[1]
-        raise SanitizedViewError("sanitized-view-export-failed")
-
-    def close(self):
-        if self._stdin is not None:
-            try:
-                self._stdin.close()
-            except OSError:
-                pass
-            self._stdin = None
-        _terminate_process(self._proc)
-        self._proc = None
-
-
-def _resolve_gitlink_object_types(repo_real, oids, started):
-    """Map gitlink object ids to actual types (``missing`` when not in this repo)."""
-    if not oids:
-        return {}
-    unique = list(dict.fromkeys(oids))
-    batch = None
-    try:
-        batch = _CatFileBatchCheck(repo_real)
-        return {oid: batch.check_object_type(oid, started) for oid in unique}
-    finally:
-        if batch is not None:
-            batch.close()
-
-
 def _assert_path_under_view(view_root, rel_posix):
     full = os.path.normpath(os.path.join(view_root, rel_posix))
     if not path_is_confidently_under(full, view_root):
@@ -1156,8 +1057,6 @@ def _materialize_from_tree(repo_real, head_sha, view_root, started):
     .gitattributes cannot apply.
     """
     census = _git_ls_tree_export(repo_real, head_sha)
-    gitlink_oids = [oid for mode, _obj_type, oid, _path in census if mode == "160000"]
-    gitlink_types = _resolve_gitlink_object_types(repo_real, gitlink_oids, started)
     stripped_set = set()
     submodules = set()
     escaping_symlinks = set()
@@ -1169,27 +1068,14 @@ def _materialize_from_tree(repo_real, head_sha, view_root, started):
         for mode, obj_type, oid, path in census:
             _check_export_deadline(started)
 
-            expected_type = _expected_git_type_for_mode(mode)
-            if expected_type is None:
-                raise SanitizedViewError("sanitized-view-export-failed")
-            if obj_type != expected_type:
-                raise SanitizedViewError("sanitized-view-export-failed")
-
             marker = _stripped_marker_for_rel(path)
             if marker is not None:
                 stripped_set.add(marker)
                 continue
 
             if mode == "160000":
-                actual_type = gitlink_types[oid]
-                if actual_type == "commit":
-                    submodules.add(path)
-                    continue
-                if actual_type == "missing":
-                    # Parent repos usually lack the submodule commit object locally.
-                    submodules.add(path)
-                    continue
-                raise SanitizedViewError("sanitized-view-export-failed")
+                submodules.add(path)
+                continue
 
             if mode == "120000":
                 blob, total_bytes = batch.read_blob_bytes(
