@@ -1304,24 +1304,25 @@ def test_probe_argv_builders_contain_no_positional_prompt():
 
 
 def test_live_vendors_for_composition_claude_always_in_live_list():
-    live, _live_cells, liveness, _notes, _prov = pp.live_vendors_for_composition(["codex", "cursor"], run=fake1)
+    live, _live_cells, liveness, _notes, _src, _prov = pp.live_vendors_for_composition(
+        ["codex", "cursor"], run=fake1)
     assert "claude" in live
     assert liveness["claude"]["live"] is True
 
 
 def test_live_vendors_for_composition_all_ok_includes_external():
-    live, _live_cells, _, _, _ = pp.live_vendors_for_composition(["codex", "cursor"], run=fake0)
+    live, _live_cells, _, _, _, _ = pp.live_vendors_for_composition(["codex", "cursor"], run=fake0)
     assert live == ["claude", "codex", "cursor"]
 
 
 def test_live_vendors_for_composition_external_failure_excludes_vendor():
-    live, _live_cells, _, _, _ = pp.live_vendors_for_composition(["codex", "cursor"], run=fake1)
+    live, _live_cells, _, _, _, _ = pp.live_vendors_for_composition(["codex", "cursor"], run=fake1)
     assert live == ["claude"]
 
 
-def test_live_vendors_for_composition_returns_five_tuple():
+def test_live_vendors_for_composition_returns_six_tuple():
     result = pp.live_vendors_for_composition(["codex"], run=fake0)
-    assert len(result) == 5
+    assert len(result) == 6
 
 
 def test_live_vendors_for_composition_cache_hit_skips_probe(tmp_path, monkeypatch):
@@ -1350,7 +1351,7 @@ def test_live_vendors_for_composition_cache_hit_skips_probe(tmp_path, monkeypatc
     def _boom(argv, **kwargs):
         raise AssertionError("run must not be called on cache hit")
 
-    live, _live_cells, _liv, notes, _prov = pp.live_vendors_for_composition(
+    live, _live_cells, _liv, notes, _src, cache_prov = pp.live_vendors_for_composition(
         ["codex"],
         run=_boom,
         cache_path=cache_path,
@@ -1358,6 +1359,10 @@ def test_live_vendors_for_composition_cache_hit_skips_probe(tmp_path, monkeypatc
     )
     assert "codex" in live
     assert any(n.get("constraint") == "preflight-cache" for n in notes)
+    assert cache_prov["servedFromCache"] is True
+    assert "served from cache" in next(
+        n["reason"] for n in notes if n.get("constraint") == "preflight-cache"
+    )
 
 
 def test_live_vendors_for_composition_cache_miss_stale_probes_and_writes(tmp_path, monkeypatch):
@@ -1386,7 +1391,7 @@ def test_live_vendors_for_composition_cache_miss_stale_probes_and_writes(tmp_pat
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     now = 1000.0
-    live, _live_cells, _liv, _notes, _prov = pp.live_vendors_for_composition(
+    live, _live_cells, _liv, _notes, _src, cache_prov = pp.live_vendors_for_composition(
         ["codex"],
         run=_run,
         cache_path=cache_path,
@@ -1396,6 +1401,7 @@ def test_live_vendors_for_composition_cache_miss_stale_probes_and_writes(tmp_pat
     assert "codex" in live
     rec = liveness_cache.read(cache_path, now=now)
     assert rec is not None
+    assert cache_prov["servedFromCache"] is False
 
 
 def test_live_vendors_for_composition_provenance_per_branch(tmp_path, monkeypatch):
@@ -1421,21 +1427,66 @@ def test_live_vendors_for_composition_provenance_per_branch(tmp_path, monkeypatc
     def _boom(argv, **kwargs):
         raise AssertionError("run must not be called")
 
-    _live, _cells, _liv, _notes, cache_hit_prov = pp.live_vendors_for_composition(
+    _live, _cells, _liv, _notes, cache_hit_src, cache_hit_prov = pp.live_vendors_for_composition(
         ["codex"],
         run=_boom,
         cache_path=cache_path,
         now=now + 1,
     )
-    assert cache_hit_prov == "probed"
+    assert cache_hit_src == liveness_cache.LIVE_CELLS_SOURCE_PROBED
+    assert cache_hit_prov["servedFromCache"] is True
+    assert cache_hit_prov["probedAt"] == now
+    assert cache_hit_prov["remainingTtl"] == 3599
 
-    _live, _cells, _liv, _notes, fresh_prov = pp.live_vendors_for_composition(
+    _live, _cells, _liv, _notes, fresh_src, fresh_prov = pp.live_vendors_for_composition(
         ["codex"],
         run=fake0,
         cache_path=str(tmp_path / "fresh-cache.json"),
         now=now,
     )
-    assert fresh_prov == "probed"
+    assert fresh_src == liveness_cache.LIVE_CELLS_SOURCE_PROBED
+    assert fresh_prov == {
+        "servedFromCache": False,
+        "probedAt": None,
+        "remainingTtl": None,
+    }
+
+
+def test_live_vendors_for_composition_probe_then_reprobe_uses_cache(tmp_path, monkeypatch):
+    import liveness_cache
+
+    monkeypatch.delenv(liveness_cache._ENV_TTL, raising=False)
+    needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
+    cache_path = str(tmp_path / "composition-liveness.json")
+    now = 1000.0
+
+    calls = []
+
+    def _run(argv, **kwargs):
+        calls.append(now)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    _live, _cells, _liv, _notes, _src, first_prov = pp.live_vendors_for_composition(
+        ["codex"],
+        run=_run,
+        cache_path=cache_path,
+        now=now,
+    )
+    assert first_prov["servedFromCache"] is False
+    assert calls
+
+    def _boom(argv, **kwargs):
+        raise AssertionError("run must not be called on cache hit")
+
+    _live, _cells, _liv, _notes, _src, second_prov = pp.live_vendors_for_composition(
+        ["codex"],
+        run=_boom,
+        cache_path=cache_path,
+        now=now + 700,
+    )
+    assert second_prov["servedFromCache"] is True
+    assert second_prov["probedAt"] == now
+    assert second_prov["remainingTtl"] == 2900
 
 
 def test_live_vendors_for_composition_provenance_values_in_vocabulary_home(tmp_path, monkeypatch):
@@ -1464,24 +1515,26 @@ def test_live_vendors_for_composition_provenance_values_in_vocabulary_home(tmp_p
         raise AssertionError("run must not be called")
 
     provenance_values = []
-    _live, _cells, _liv, _notes, cache_hit_prov = pp.live_vendors_for_composition(
+    _live, _cells, _liv, _notes, cache_hit_src, cache_hit_prov = pp.live_vendors_for_composition(
         ["codex"],
         run=_boom,
         cache_path=cache_path,
         now=now + 1,
     )
-    provenance_values.append(cache_hit_prov)
+    provenance_values.append(cache_hit_src)
 
-    _live, _cells, _liv, _notes, fresh_prov = pp.live_vendors_for_composition(
+    _live, _cells, _liv, _notes, fresh_src, fresh_prov = pp.live_vendors_for_composition(
         ["codex"],
         run=fake0,
         cache_path=str(tmp_path / "fresh-cache.json"),
         now=now,
     )
-    provenance_values.append(fresh_prov)
+    provenance_values.append(fresh_src)
 
     for prov in provenance_values:
         assert prov in vocab
+    assert cache_hit_prov["servedFromCache"] is True
+    assert fresh_prov["servedFromCache"] is False
 
 
 def test_live_vendors_for_composition_cache_write_failure_disclosed(tmp_path):
@@ -1490,7 +1543,7 @@ def test_live_vendors_for_composition_cache_write_failure_disclosed(tmp_path):
     blocker = tmp_path / "not-a-dir"
     blocker.write_text("blocks mkdir")
     cache_path = str(blocker / "composition-liveness.json")
-    live, _live_cells, _liv, notes, _prov = pp.live_vendors_for_composition(
+    live, _live_cells, _liv, notes, _src, _prov = pp.live_vendors_for_composition(
         ["codex"],
         run=fake0,
         cache_path=cache_path,
@@ -1508,7 +1561,7 @@ def test_live_vendors_for_composition_fresh_path_emits_cell_dead_notes():
                 returncode=1, stdout="", stderr="Command timed out after 120 seconds")
         return SimpleNamespace(returncode=0, stdout="READY", stderr="")
 
-    live, live_cells, _liv, notes, _prov = pp.live_vendors_for_composition(["codex"], run=_run)
+    live, live_cells, _liv, notes, _src, _prov = pp.live_vendors_for_composition(["codex"], run=_run)
     assert "codex" not in live
     assert any(c[1] == "gpt-5.6-sol" for c in live_cells)
     cell_notes = [n for n in notes if n.get("constraint") == "liveness-cell"]
@@ -1546,7 +1599,7 @@ def test_live_vendors_for_composition_cache_path_emits_cell_dead_notes(tmp_path,
     now = 1000.0
     liveness_cache.write(liveness, needed, path=cache_path, now=now)
 
-    live, live_cells, _liv, notes, _prov = pp.live_vendors_for_composition(
+    live, live_cells, _liv, notes, _src, cache_prov = pp.live_vendors_for_composition(
         ["codex"],
         run=fake0,
         cache_path=cache_path,
@@ -1557,6 +1610,69 @@ def test_live_vendors_for_composition_cache_path_emits_cell_dead_notes(tmp_path,
     cell_notes = [n for n in notes if n.get("constraint") == "liveness-cell"]
     assert any(n["model"] == "gpt-5.6-terra" for n in cell_notes)
     assert any("timed out" in n["reason"] for n in cell_notes)
+    assert any("served from cache" in n["reason"] for n in cell_notes)
+    assert any("seconds of effective TTL remaining" in n["reason"] for n in cell_notes)
+    assert cache_prov["servedFromCache"] is True
+    assert cache_prov["remainingTtl"] == 3599
+
+
+def test_live_vendors_for_composition_cache_served_note_constraint_matches_fresh_probe():
+    def _run(argv, **kwargs):
+        model = argv[argv.index("-m") + 1] if "-m" in argv else ""
+        if model == "gpt-5.6-terra":
+            return SimpleNamespace(
+                returncode=1, stdout="", stderr="Command timed out after 120 seconds")
+        return SimpleNamespace(returncode=0, stdout="READY", stderr="")
+
+    _live, _cells, _liv, fresh_notes, _src, _prov = pp.live_vendors_for_composition(
+        ["codex"], run=_run)
+    fresh_cell_notes = [n for n in fresh_notes if n.get("constraint") == "liveness-cell"]
+    assert fresh_cell_notes
+
+    import liveness_cache
+
+    needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
+    liveness = {
+        "codex": {
+            "live": False,
+            "models": {
+                m: {"ok": (m != "gpt-5.6-terra"), "detail": (
+                    "Command timed out after 120 seconds" if m == "gpt-5.6-terra" else "")}
+                for m, _ in needed["codex"]
+            },
+            "cells": [
+                {
+                    "model": m,
+                    "effort": e,
+                    "ok": (m != "gpt-5.6-terra"),
+                    "detail": (
+                        "Command timed out after 120 seconds" if m == "gpt-5.6-terra" else ""),
+                }
+                for m, e in needed["codex"]
+            ],
+        },
+        "claude": {"live": True, "models": {}, "cells": []},
+    }
+    cache_path = "/tmp/unused-for-this-test.json"
+    now = 1000.0
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        cache_path = td + "/receipt.json"
+        assert liveness_cache.write(liveness, needed, path=cache_path, now=now)
+        _live, _cells, _liv, cached_notes, _src, _prov = pp.live_vendors_for_composition(
+            ["codex"],
+            run=fake0,
+            cache_path=cache_path,
+            now=now + 1,
+        )
+    cached_cell_notes = [n for n in cached_notes if n.get("constraint") == "liveness-cell"]
+    assert len(cached_cell_notes) == len(fresh_cell_notes)
+    for cached, fresh in zip(cached_cell_notes, fresh_cell_notes):
+        assert cached["constraint"] == fresh["constraint"]
+        assert cached["constraint"] == "liveness-cell"
+        assert cached["reason"].startswith(fresh["reason"])
+        assert "served from cache" in cached["reason"]
+        assert "seconds of effective TTL remaining" in cached["reason"]
 
 
 def test_cli_compose_liveness_writes_receipt(tmp_path, monkeypatch, capsys):
@@ -1576,6 +1692,8 @@ def test_cli_compose_liveness_writes_receipt(tmp_path, monkeypatch, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert "live" in payload
     assert "cachePath" in payload
+    assert "cacheProvenance" in payload
+    assert payload["cacheProvenance"]["servedFromCache"] is False
     assert payload["cachePath"] == str(cache_file)
     assert cache_file.is_file()
 
@@ -1778,7 +1896,11 @@ def test_compose_liveness_configured_engines_come_from_the_snapshot(tmp_path, mo
 
     def capture_live_vendors(configured_vendors, *args, **kwargs):
         captured["configured_vendors"] = configured_vendors
-        return (["claude"], [], {}, [], "probed")
+        return (["claude"], [], {}, [], "probed", {
+            "servedFromCache": False,
+            "probedAt": None,
+            "remainingTtl": None,
+        })
 
     monkeypatch.setattr(pp, "live_vendors_for_composition", capture_live_vendors)
 

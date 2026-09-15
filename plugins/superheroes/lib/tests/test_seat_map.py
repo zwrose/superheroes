@@ -492,7 +492,11 @@ def test_cli_compose_probed_path_retains_codex_cell_through_receipt(monkeypatch,
     live_vendors = ["claude", "cursor"]
 
     def fake_live_vendors_for_composition(*_args, **_kwargs):
-        return (live_vendors, aug15_cells, {}, [], "probed")
+        return (live_vendors, aug15_cells, {}, [], "probed", {
+            "servedFromCache": False,
+            "probedAt": None,
+            "remainingTtl": None,
+        })
 
     monkeypatch.setattr(pp, "live_vendors_for_composition", fake_live_vendors_for_composition)
 
@@ -1067,6 +1071,7 @@ def test_compose_merges_probe_notes_before_deriving_the_receipt(monkeypatch, tmp
             {"claude": {"live": True, "models": {}, "cells": []}},
             [{"constraint": "compose-failed", "reason": "probe unavailable"}],
             liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED,
+            {"servedFromCache": False, "probedAt": None, "remainingTtl": None},
         )
 
     monkeypatch.setattr(preflight_probe, "live_vendors_for_composition", _fell_open)

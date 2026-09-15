@@ -17,7 +17,7 @@ import mode_registry
 # recorded effort the old probe never actually dispatched; #795: v2 receipts
 # carry no per-cell evidence and are refused rather than read as vendor-level truth).
 SCHEMA_VERSION = 3
-DEFAULT_TTL_SECONDS = 600
+DEFAULT_TTL_SECONDS = 3600
 _ENV_TTL = "SUPERHEROES_LIVENESS_TTL_SECONDS"
 
 # probed = per-cell probe evidence (fresh or TTL-cached); synthesized = derived from a
@@ -52,6 +52,57 @@ def ttl_seconds():
     except (TypeError, ValueError):
         pass
     return DEFAULT_TTL_SECONDS
+
+
+def effective_ttl(receipt):
+    """Effective TTL for expiry: min(stored, configured) when stored is a positive number."""
+    configured = ttl_seconds()
+    if not isinstance(receipt, dict):
+        return configured
+    stored = receipt.get("ttl")
+    if not isinstance(stored, (int, float)) or isinstance(stored, bool):
+        return configured
+    if not math.isfinite(stored) or stored <= 0:
+        return configured
+    return min(int(stored), configured)
+
+
+def remaining_ttl(receipt, now):
+    """Seconds of effective TTL left for a receipt at ``now``; floored at 0. Never raises."""
+    try:
+        probed_at = receipt.get("probedAt")
+        if not _is_timestamp(probed_at):
+            return 0
+        age = float(now) - float(probed_at)
+        return max(0, int(effective_ttl(receipt) - age))
+    except Exception:
+        return 0
+
+
+def _cache_provenance_reason_suffix(probed_at, remaining):
+    import datetime
+
+    dt = datetime.datetime.fromtimestamp(float(probed_at), tz=datetime.timezone.utc)
+    iso = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (
+        " [served from cache; probed at %s; %d seconds of effective TTL remaining]"
+        % (iso, remaining)
+    )
+
+
+def extend_notes_with_cache_provenance(notes, receipt, now):
+    """Append cache provenance to each note's reason. Mutates notes in place."""
+    try:
+        probed_at = receipt.get("probedAt")
+        if not _is_timestamp(probed_at):
+            return
+        remaining = remaining_ttl(receipt, now)
+        suffix = _cache_provenance_reason_suffix(probed_at, remaining)
+        for note in notes:
+            if isinstance(note, dict) and isinstance(note.get("reason"), str):
+                note["reason"] = note["reason"] + suffix
+    except Exception:
+        pass
 
 
 def receipt_path(cwd=None, root=None):
@@ -201,7 +252,7 @@ def read(path, *, now):
         return None
     if probed_at > now:
         return None
-    if (now - probed_at) >= ttl_seconds():
+    if (now - probed_at) >= effective_ttl(raw):
         return None
     if not isinstance(raw.get("liveness"), dict):
         return None

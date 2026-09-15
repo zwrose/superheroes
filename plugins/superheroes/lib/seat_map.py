@@ -1184,7 +1184,7 @@ def main(argv):
             configured = [e for e in args.configured_engines.split(",") if e]
             needed_override = reachable_configs(configured, pins) if pins else None
             liveness_pin_scoped = needed_override is not None
-            live, live_cells, _liveness, notes, live_cells_source = (
+            live, live_cells, _liveness, notes, live_cells_source, _cache_provenance = (
                 preflight_probe.live_vendors_for_composition(
                     configured,
                     needed_override=needed_override,

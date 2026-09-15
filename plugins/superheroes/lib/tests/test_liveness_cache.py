@@ -36,7 +36,7 @@ def _good_needed():
 
 def test_ttl_seconds_default(monkeypatch):
     monkeypatch.delenv(lc._ENV_TTL, raising=False)
-    assert lc.ttl_seconds() == 600
+    assert lc.ttl_seconds() == 3600
 
 
 def test_ttl_seconds_env_positive_override(monkeypatch):
@@ -50,7 +50,76 @@ def test_ttl_seconds_env_invalid_falls_back(monkeypatch, val):
         monkeypatch.delenv(lc._ENV_TTL, raising=False)
     else:
         monkeypatch.setenv(lc._ENV_TTL, val)
-    assert lc.ttl_seconds() == 600
+    assert lc.ttl_seconds() == 3600
+
+
+# --- effective_ttl ---
+
+
+@pytest.mark.parametrize("stored", [None, "600", -1, 0, float("nan"), float("inf")])
+def test_effective_ttl_invalid_stored_falls_back_to_configured(monkeypatch, stored):
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    receipt = {"ttl": stored} if stored is not None else {}
+    assert lc.effective_ttl(receipt) == 3600
+
+
+def test_effective_ttl_configured_wins_over_larger_stored(monkeypatch):
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    assert lc.effective_ttl({"ttl": 100_000}) == 3600
+
+
+def test_effective_ttl_stored_wins_when_shorter(monkeypatch):
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    assert lc.effective_ttl({"ttl": 600}) == 600
+
+
+def test_read_refuses_receipt_past_stored_shorter_ttl(tmp_path, monkeypatch):
+    # I1: a receipt written under 600s must not be served at age 900s when default is 3600.
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    path = str(tmp_path / "r.json")
+    now = 10_000.0
+    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 900, ttl=600)
+    assert lc.read(path, now=now) is None
+
+
+def test_read_serves_receipt_within_stored_ttl(tmp_path, monkeypatch):
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    path = str(tmp_path / "r.json")
+    now = 10_000.0
+    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 700, ttl=3600)
+    got = lc.read(path, now=now)
+    assert got is not None
+    assert lc.remaining_ttl(got, now) == 2900
+
+
+def test_read_refuses_cached_success_at_age_700_under_600_stored_ttl(tmp_path, monkeypatch):
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    path = str(tmp_path / "r.json")
+    now = 10_000.0
+    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 700, ttl=600)
+    assert lc.read(path, now=now) is None
+
+
+def test_read_refuses_cached_failure_at_age_700_under_600_stored_ttl(tmp_path, monkeypatch):
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    path = str(tmp_path / "r.json")
+    now = 10_000.0
+    liv = _good_liveness()
+    liv["codex"]["models"]["gpt-5.6-terra"]["ok"] = False
+    liv["codex"]["cells"][1]["ok"] = False
+    lc.write(liv, _good_needed(), path=path, now=now - 700, ttl=600)
+    assert lc.read(path, now=now) is None
+
+
+def test_remaining_ttl_never_negative(tmp_path, monkeypatch):
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    path = str(tmp_path / "r.json")
+    now = 10_000.0
+    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 3600, ttl=600)
+    assert lc.read(path, now=now) is None
+    with open(path, encoding="utf-8") as fh:
+        raw = json.load(fh)
+    assert lc.remaining_ttl(raw, now) == 0
 
 
 # --- receipt_path ---
@@ -194,7 +263,7 @@ def test_read_miss_cell_ok_string(tmp_path):
 def test_read_miss_probed_at_future(tmp_path):
     path = str(tmp_path / "r.json")
     now = 2000.0
-    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 1000)
+    lc.write(_good_liveness(), _good_needed(), path=path, now=now + 100)
     assert lc.read(path, now=now) is None
 
 
@@ -202,7 +271,7 @@ def test_read_miss_stale(tmp_path, monkeypatch):
     monkeypatch.delenv(lc._ENV_TTL, raising=False)
     path = str(tmp_path / "r.json")
     now = 10_000.0
-    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 601)
+    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 3601)
     assert lc.read(path, now=now) is None
 
 
@@ -210,16 +279,17 @@ def test_read_uses_reader_ttl_not_stored_ttl(tmp_path, monkeypatch):
     monkeypatch.delenv(lc._ENV_TTL, raising=False)
     path = str(tmp_path / "r.json")
     now = 20_000.0
-    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 601, ttl=100_000)
+    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 3601, ttl=100_000)
     assert lc.read(path, now=now) is None
 
 
-def test_read_env_ttl_extends_stale_receipt(tmp_path, monkeypatch):
+def test_read_env_ttl_does_not_revive_receipt_past_stored_default(tmp_path, monkeypatch):
+    # I1: raising configured TTL via env must not prolong a receipt written under the default.
     monkeypatch.setenv(lc._ENV_TTL, "100000")
     path = str(tmp_path / "r.json")
     now = 30_000.0
-    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 601)
-    assert lc.read(path, now=now) is not None
+    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 3601)
+    assert lc.read(path, now=now) is None
 
 
 def test_read_miss_json_nan_probed_at(tmp_path, monkeypatch):
@@ -302,7 +372,7 @@ def test_read_hit_within_ttl(tmp_path, monkeypatch):
     monkeypatch.delenv(lc._ENV_TTL, raising=False)
     path = str(tmp_path / "r.json")
     now = 50_000.0
-    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 599)
+    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 3599)
     got = lc.read(path, now=now)
     assert got is not None
     assert got["liveness"]["codex"]["models"]["gpt-5.6-sol"]["ok"] is True
