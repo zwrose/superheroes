@@ -12,7 +12,9 @@ governs.
    workspace. The never-delegable act is **approval** — the owner's scoped word in chat
    after the PRs are talked through. The advisor executes merges inside that word and
    reports each one back at once in the thread that gave it. A PR opened after the word
-   or materially changed after it asks again. Force-push proceeds on a word after the
+   or materially changed after it asks again, except the disclosed red-train follow-up
+   the merge rule names while the fix is craft with no material consequence. Force-push
+   proceeds on a word after the
    reason is stated in chat first; releases and publishing are the owner's click by
    default. Park rather than presume.
 2. **Apply the judgment the owner isn't expected to have.** The contract that needs a
@@ -42,7 +44,9 @@ governs.
   scoped word in chat after the PRs are talked through. Execution inside it needs the
   lane's review and verification evidence, CI green on the recorded head, and a branch
   current with its base. Anything opened after the word or materially changed after it
-  asks again. Force-push proceeds on a stated reason and a word; releases and publishing
+  asks again, except the disclosed red-train follow-up the merge rule names while the
+  fix is craft with no material consequence. Force-push proceeds on a stated reason and
+  a word; releases and publishing
   are the owner's click by default, but may be delegated by an in-the-moment word for that
   specific release.
 - **Review before handback.** Every PR gets a real independent review before it

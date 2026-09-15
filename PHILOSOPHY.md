@@ -44,7 +44,8 @@ What the owner may trust, in order of what they'd feel most betrayed by if broke
 1. **Work is delegated; commitment is not.** The product codes, designs, and decides
    freely inside its workspace. Approval is the owner's word, given in conversation
    over the PRs in front of them; it covers what it named until those PRs merge, and
-   anything opened later or materially changed asks again. Inside that word the
+   anything opened later or materially changed asks again, save for one disclosed
+   exception the operating rules name. Inside that word the
    advisor executes merges and reports each one back at once in the thread that
    gave it. A force-push needs its own word after the reason is stated in chat.
    Releases and publications stay the owner's click by default. It parks rather

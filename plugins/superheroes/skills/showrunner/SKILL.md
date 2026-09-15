@@ -992,7 +992,7 @@ above).
 
 | Excuse | Reality |
 |---|---|
-| "The PR is small, I'll just merge it" | **Approval** is never yours; there is no merge without the owner's **scoped word**, and a PR opened after the word or materially changed since asks again — vet it, then execute inside the word and report the merge at once. |
+| "The PR is small, I'll just merge it" | **Approval** is never yours; there is no merge without the owner's **scoped word**, and a PR opened after the word or materially changed since asks again — except the disclosed red-train follow-up — vet it, then execute inside the word and report the merge at once. |
 | "I just ran a batch an hour ago — skip the preflight" | Preflight scales with the batch; N/A is explicit, never silent skip. Stale quota, base, or grant state kills the next launch. |
 | "Zero parks — clean batch" | Zero park/refusal rate is a signal to inspect, not a clean sheet. |
 | "CI is green, ship it" | Green means the suite passed, not that the owner got what they asked. Probe what the suite cannot test. |
