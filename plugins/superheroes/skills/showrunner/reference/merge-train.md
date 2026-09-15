@@ -29,11 +29,18 @@ open, and an earlier merged head's `main` run can still be pending when the last
 the last lane has merged there is nothing left to absorb into, and a red `main` takes a **disclosed
 follow-up PR** from the failing head through the same preconditions.
 
-Typing it is advisor **build** work, so it stays inside duty 6's boundary: the owner authorizes **that
-edit**, it stays the size of an integration fix — anything larger routes to a builder like any other
-change — and it carries micro's review floor on the final head (one cross-vendor reviewer plus an
-**engaged** control probe). What it does **not** do is reclassify the PR: the containing lane keeps
-its own route, its DoD, and its advisor vet.
+Typing it is advisor **build** work, so it stays inside duty 6's boundary.
+
+Every integration fix stays the size of an integration fix; anything larger routes to a builder like
+any other change, and it carries micro's review floor on the final head (one cross-vendor reviewer
+plus an **engaged** control probe). It does not reclassify the PR: the containing lane keeps its own
+route, its DoD, and its advisor vet.
+
+A red on the train (a per-lane green that goes red on the union or on `main`'s post-merge run) is
+fixed **under the word already given** when the fix is **craft with no material consequence**; the
+disclosed integration commit on the last open PR, or the disclosed follow-up PR once the last lane
+has merged, **rides the scope and is reported in the thread like any merge**. A fix with a **material
+consequence asks**.
 
 **Field case:** a test green on the identical tree pre-merge went **deterministically** red post-merge
 in CI only (coverage-instrumented runners lose an assertion race); a disclosed integration commit on
