@@ -45,7 +45,8 @@ governs.
   lane's review and verification evidence, CI green on the recorded head, and a branch
   current with its base. Anything opened after the word or materially changed after it
   asks again, except the disclosed red-train follow-up the merge rule names while the
-  fix is craft with no material consequence. Force-push proceeds on a stated reason and
+  fix is craft with no material consequence; where you cannot establish that branch,
+  doubt resolves to an owner call. Force-push proceeds on a stated reason and
   a word; releases and publishing
   are the owner's click by default, but may be delegated by an in-the-moment word for that
   specific release.

@@ -726,7 +726,9 @@ above).
    **withdraw or supersede the word at any time**, and a withdrawn or superseded word **covers nothing**
    from that moment — it is the owner's approval and **theirs to take back**. A routine base
    update or a craft fix with no material consequence **keeps** the word; that is the advisor's
-   judgment and it is **said on the owner half**.
+   judgment and it is **said on the owner half**. Where the advisor cannot confidently place a
+   post-word change on the material-consequence line, the doubt resolves to an owner call and the
+   PR asks again.
    **Preconditions for executing inside the scope.** The **review and verification evidence the PR's
    lane requires** (a READY vet for a full or light lane; the independent reviewer's **final-head
    receipt** for a micro lane, which has no advisor vet by design); **CI green on the recorded head**;
