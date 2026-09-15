@@ -163,7 +163,9 @@ def test_build_argv_codex_invalid_engine_model_fails_capable():
 
 def test_build_argv_codex_invalid_engine_model_pin_refuses_unregistered():
     res = EA.build_argv_result(_seat("codex", "gpt-5.5", "high"), "review", {"model": "opus"})
-    assert res == {"argv": [], "reason": "unregistered-engine-model"}
+    assert res["argv"] == [] and res["reason"] == "unregistered-engine-model"
+    assert "registered engine-model pins" in res["detail"]
+    assert "gpt-5.6-sol" in res["detail"]
 
 
 def test_build_argv_cursor_review_plan_mode():
@@ -507,8 +509,11 @@ def test_build_argv_cursor_unregistered_engine_model_returns_empty_argv():
 
 
 def test_build_argv_cursor_registered_engine_model_invalid_effort_returns_empty_argv():
-    assert EA.build_argv("cursor", "review", "banana",
-                         {"engine_model": "cursor-grok-4.6"}) == []
+    res = EA.build_argv_result(_seat("cursor", "cursor-grok-4.6", "banana"), "review", {})
+    assert res["argv"] == []
+    assert res["reason"] == "invalid-model-effort"
+    assert "banana" in res["detail"]
+    assert "accepted efforts" in res["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -528,7 +533,8 @@ def test_build_argv_result_composed_grok_token_effort_adoption():
     r_conflict = EA.build_argv_result(_seat("cursor", "cursor-grok-4.6-xhigh", "low"), "review", {})
     assert r_conflict["reason"] == "engine-model-effort-conflict"
     r_bare = EA.build_argv_result(_seat("cursor", "cursor-grok-4.6", None), "review", {})
-    assert r_bare == {"argv": [], "reason": "invalid-model-effort"}
+    assert r_bare["argv"] == [] and r_bare["reason"] == "invalid-model-effort"
+    assert "accepted efforts" in r_bare["detail"]
 
 
 def test_build_argv_cli_composed_grok_token_without_effort_flag(capsys):

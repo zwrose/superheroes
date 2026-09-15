@@ -2843,7 +2843,7 @@ def test_review_dispatch_fed_prompt_includes_schema_example_block(
     stdout = _census_review_stdout(expected_result_kind or "findings")
     fake = FakeRunner([(stdout, False, 0, "")])
     dispatch_kwargs = dict(
-        engine=seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -2929,7 +2929,7 @@ def test_review_dispatch_fed_prompt_blocks_never_abut(tmp_path):
     for expected_result_kind, stdout in cases:
         fake = FakeRunner([(stdout, False, 0, "")])
         dispatch_kwargs = dict(
-            engine=seat=_codex_seat(), role=_REVIEW_ROLE,
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path, "Review this code.\n"),
             repo_root=repo_root, run_engine=fake,
             build_view=_fake_build_view(tmp_path),

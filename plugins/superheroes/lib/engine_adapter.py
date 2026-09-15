@@ -222,6 +222,91 @@ def _ok(argv):
     return {"argv": argv, "reason": None}
 
 
+def _format_valid(values):
+    return ", ".join(values)
+
+
+def _registered_engine_models_detail(vendor):
+    if vendor == "codex":
+        models = model_registry.codex_models()
+    elif vendor == "cursor":
+        models = model_registry.cursor_models()
+    else:
+        return None
+    return (
+        f"registered engine-model pins for vendor {vendor!r}: "
+        f"{_format_valid(models)}"
+    )
+
+
+def _unknown_engine_detail(vendor):
+    valid = _format_valid(model_registry.vendors())
+    if isinstance(vendor, str) and vendor.strip():
+        return f"unknown vendor {vendor!r}; valid vendors: {valid}"
+    return f"unknown engine vendor; valid vendors: {valid}"
+
+
+def _unknown_claude_tier_detail(claude_tier):
+    valid = _format_valid(model_registry.known_claude_models())
+    if isinstance(claude_tier, str):
+        return f"unknown claude tier {claude_tier!r}; accepted tiers: {valid}"
+    return f"unknown claude tier; accepted tiers: {valid}"
+
+
+def _fable_unrunnable_detail(claude_tier):
+    if claude_tier == "fable":
+        return (
+            "claude tier fable is anthropic-only and has no cross-family engine peer; "
+            "dispatch a codex or cursor seat instead"
+        )
+    peer = None
+    try:
+        if isinstance(claude_tier, str):
+            peer = model_registry.codex_peer_for_claude_tier(claude_tier)
+    except Exception:
+        peer = None
+    if peer:
+        return (
+            f"claude tier {claude_tier!r} cannot be substituted for fable; "
+            f"use codex peer {peer!r} instead"
+        )
+    return (
+        "claude tier fable is anthropic-only and has no cross-family engine peer; "
+        "dispatch a codex or cursor seat instead"
+    )
+
+
+def _invalid_model_effort_detail(vendor, model_id, effort):
+    allowed = model_registry._allowed_efforts(vendor, model_id)  # noqa: SLF001
+    if allowed is None:
+        return f"model {model_id!r} is not registered for vendor {vendor!r}"
+    if not allowed:
+        return (
+            f"model {model_id!r} declares an empty effort set — only null effort is accepted; "
+            f"got {effort!r}"
+        )
+    return (
+        f"effort {effort!r} is not valid for model {model_id!r}; "
+        f"accepted efforts for this model: {_format_valid(allowed)}"
+    )
+
+
+def _engine_model_effort_conflict_detail(tok_effort, effort, model_token):
+    return (
+        f"effort {effort!r} conflicts with effort {tok_effort!r} encoded in model token "
+        f"{model_token!r}; drop the seat-level effort and let the token supply it, or use a "
+        f"base model pin"
+    )
+
+
+def _untokenizable_detail(vendor, model_id, effort):
+    return (
+        f"no dispatch token for vendor {vendor!r} model {model_id!r} effort {effort!r}; "
+        f"accepted efforts for this model: "
+        f"{_format_valid(model_registry._allowed_efforts(vendor, model_id) or ())}"  # noqa: SLF001
+    )
+
+
 def build_argv_result(seat, role_kind, opts):
     """Like build_argv but returns {argv, reason} with a named refusal token when unrunnable.
 
@@ -239,9 +324,9 @@ def build_argv_result(seat, role_kind, opts):
     claude_tier = opts.get("model")
     if claude_tier is not None:
         if not isinstance(claude_tier, str) or claude_tier not in model_registry.known_claude_models():
-            return _refuse("unknown-claude-tier", detail=accepted)
+            return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(claude_tier))
         if claude_tier == "fable":
-            return _refuse("fable-unrunnable", detail=accepted)
+            return _refuse("fable-unrunnable", detail=_fable_unrunnable_detail(claude_tier))
     if vendor == "codex":
         engine_model = model_id
         if isinstance(engine_model, str) and engine_model:
@@ -250,19 +335,28 @@ def build_argv_result(seat, role_kind, opts):
             else:
                 parsed = model_registry.parse_dispatch_token("codex", engine_model)
                 if parsed is None:
-                    return _refuse("unregistered-engine-model", detail=accepted)
+                    return _refuse(
+                        "unregistered-engine-model",
+                        detail=_registered_engine_models_detail("codex"),
+                    )
                 engine_model, _tok_effort = parsed
         else:
             try:
                 engine_model = model_registry.codex_peer_for_claude_tier(claude_tier)
             except (ValueError, TypeError):
-                return _refuse("fable-unrunnable", detail=accepted)
+                return _refuse("fable-unrunnable", detail=_fable_unrunnable_detail(claude_tier))
             except Exception:
-                return _refuse("unregistered-engine-model", detail=accepted)
+                return _refuse(
+                    "unregistered-engine-model",
+                    detail=_registered_engine_models_detail("codex"),
+                )
         ok, _reason = model_registry.validate_config(
             "codex", engine_model, effort, allow_override_only=True)
         if not ok:
-            return _refuse("invalid-model-effort", detail=accepted)
+            return _refuse(
+                "invalid-model-effort",
+                detail=_invalid_model_effort_detail("codex", engine_model, effort),
+            )
         sandbox = "read-only" if is_read else "workspace-write"
         argv = ["codex", "exec", "--sandbox", sandbox,
                 "-m", engine_model,
@@ -279,18 +373,31 @@ def build_argv_result(seat, role_kind, opts):
             else:
                 parsed = model_registry.parse_dispatch_token("cursor", engine_model)
                 if parsed is None:
-                    return _refuse("unregistered-engine-model", detail=accepted)
+                    return _refuse(
+                        "unregistered-engine-model",
+                        detail=_registered_engine_models_detail("cursor"),
+                    )
                 cursor_model_id, tok_effort = parsed
                 if tok_effort is not None and effort is not None and tok_effort != effort:
-                    return _refuse("engine-model-effort-conflict", detail=accepted)
+                    return _refuse(
+                        "engine-model-effort-conflict",
+                        detail=_engine_model_effort_conflict_detail(
+                            tok_effort, effort, engine_model),
+                    )
                 if effort is None and tok_effort is not None:
                     effort = tok_effort
             ok, _reason = model_registry.validate_config("cursor", cursor_model_id, effort)
             if not ok:
-                return _refuse("invalid-model-effort", detail=accepted)
+                return _refuse(
+                    "invalid-model-effort",
+                    detail=_invalid_model_effort_detail("cursor", cursor_model_id, effort),
+                )
             tok = model_registry.dispatch_token("cursor", cursor_model_id, effort)
             if not tok:
-                return _refuse("untokenizable", detail=accepted)
+                return _refuse(
+                    "untokenizable",
+                    detail=_untokenizable_detail("cursor", cursor_model_id, effort),
+                )
             model = tok
         else:
             model = _CURSOR_MODEL
@@ -301,7 +408,7 @@ def build_argv_result(seat, role_kind, opts):
             argv += ["-f"]
         argv += ["--output-format", "stream-json"]
         return _ok(argv)
-    return _refuse("unknown-engine", detail=accepted)
+    return _refuse("unknown-engine", detail=_unknown_engine_detail(vendor))
 
 
 def build_argv(seat, role_kind, opts):
