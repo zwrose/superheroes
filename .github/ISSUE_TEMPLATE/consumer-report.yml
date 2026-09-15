@@ -1,0 +1,38 @@
+name: Consumer report
+description: Report unexpected plugin behavior from a consuming project
+title: "[consumer-report] "
+labels:
+  - consumer-report
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Anyone may file a consumer report. A consuming project's advisor files them as a matter of course. Each report is read at a gardening pass, linked from the component's entry as a receipt, and closed once a pass has read it or a proposal it fed has been ruled.
+  - type: input
+    id: project-and-version
+    attributes:
+      label: The project and the plugin version
+      description: The consuming project's name and the version of this plugin it is running.
+    validations:
+      required: true
+  - type: input
+    id: component
+    attributes:
+      label: The component or mechanism
+      description: Which plugin component or mechanism the report is about.
+    validations:
+      required: true
+  - type: textarea
+    id: expected-and-actual
+    attributes:
+      label: What was expected and what happened
+      description: Put the expected behavior and the actual behavior side by side.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence-pointer
+    attributes:
+      label: The evidence pointer
+      description: The lane, dispatch, journal, or receipt that evidences the report. A report with no record behind it is a conversation, not a firing.
+    validations:
+      required: true

@@ -93,3 +93,83 @@ def test_hooks_json_wires_timeout_floor_fail_open():
     idx = [i for i, c in enumerate(cmds) if "bash_timeout.py" in c]
     assert idx, "hooks.json must wire bash_timeout.py on the Bash matcher"
     assert "|| true" in cmds[idx[0]], "process-level fail-open: a hook crash never breaks Bash"
+
+
+# --- firing record -----------------------------------------------------------
+
+def _record_path(config_root):
+    return os.path.join(config_root, "superheroes", "state", "bash-timeout-firings.jsonl")
+
+
+def test_firing_record_writes_one_json_line(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    r = _run_hook(json.dumps({"tool_input": {"command": "echo ok"},
+                              "session_id": "sess-1", "cwd": "/work"}))
+    assert r.returncode == 0
+    record = _record_path(tmp_path)
+    assert os.path.isfile(record)
+    lines = open(record, encoding="utf-8").read().splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert set(entry) == {"ts", "timeout_ms", "session", "cwd"}
+    assert entry["timeout_ms"] == _mod().DEFAULT_TIMEOUT_MS
+    assert entry["ts"].endswith("Z")
+    assert entry["session"] == "sess-1"
+    assert entry["cwd"] == "/work"
+
+
+def test_explicit_timeout_writes_no_firing_record(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    r = _run_hook(json.dumps({"tool_input": {"command": "x", "timeout": 30000}}))
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+    assert not os.path.exists(_record_path(tmp_path))
+
+
+def test_firing_record_never_contains_command_text(tmp_path, monkeypatch):
+    secret_marker = "DISTINCTIVE_SECRET_COMMAND_MARKER_XYZ"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    r = _run_hook(json.dumps({"tool_input": {"command": secret_marker}}))
+    assert r.returncode == 0
+    record_text = open(_record_path(tmp_path), encoding="utf-8").read()
+    assert secret_marker not in record_text
+
+
+def test_unwritable_record_location_does_not_affect_hook(tmp_path, monkeypatch):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(blocker / "config"))
+    r = _run_hook(json.dumps({"tool_input": {"command": "x"}}))
+    assert r.returncode == 0
+    out = json.loads(r.stdout)
+    assert out["hookSpecificOutput"]["updatedInput"]["timeout"] == _mod().DEFAULT_TIMEOUT_MS
+
+
+def test_firing_record_rotates_when_past_size_threshold(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    record = _record_path(tmp_path)
+    os.makedirs(os.path.dirname(record), exist_ok=True)
+    threshold = _mod()._RECORD_ROTATE_BYTES
+    open(record, "wb").write(b"x" * (threshold + 1))
+    r = _run_hook(json.dumps({"tool_input": {"command": "echo ok"}}))
+    assert r.returncode == 0
+    assert os.path.isfile(record + ".1")
+    lines = open(record, encoding="utf-8").read().splitlines()
+    assert len(lines) == 1
+    json.loads(lines[0])
+
+
+def test_firing_record_rotation_replaces_prior_generation(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    record = _record_path(tmp_path)
+    os.makedirs(os.path.dirname(record), exist_ok=True)
+    threshold = _mod()._RECORD_ROTATE_BYTES
+    for _ in range(2):
+        open(record, "wb").write(b"x" * (threshold + 1))
+        r = _run_hook(json.dumps({"tool_input": {"command": "echo ok"}}))
+        assert r.returncode == 0
+    state_dir = os.path.dirname(record)
+    assert sorted(os.listdir(state_dir)) == [
+        "bash-timeout-firings.jsonl",
+        "bash-timeout-firings.jsonl.1",
+    ]

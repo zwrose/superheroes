@@ -1,0 +1,17 @@
+<!-- markers: 16 -->
+- `.github/scripts/validate_hosts.py` — portable plugin-root seam and host-map lint for dual-host skill prose. **delete-when:** every host resolves plugin root through one variable without this fallback seam.
+- `.github/scripts/validate_skills.py` — CI lint enforces the portable plugin-root seam on skill reference paths. **delete-when:** every host resolves plugin root through one variable without this fallback seam.
+- `plugins/superheroes/hooks/bash_timeout.py` — PreToolUse Bash timeout floor when the model omits an explicit timeout. **delete-when:** the host Bash tool defaults to at least 600 s without a PreToolUse rewrite hook.
+- `plugins/superheroes/lib/build_lane.py` — build-lane sidecar marker so the receipt gate can arm before review starts. **delete-when:** the host session carries build scope without a build-lane.json sidecar file.
+- `plugins/superheroes/lib/harness_probe.py` — tripwire that native project-context injection still holds on every spawn path. **delete-when:** every spawn path is confirmed and recorded without this probe, or the probe retires.
+- `plugins/superheroes/lib/hostinfo.py` — OS-specific boot-id reads to corroborate a recorded pid belongs to this boot. **delete-when:** the host exposes a stable per-boot identity without OS-specific parsing.
+- `plugins/superheroes/lib/launch_doctrine.py` — machine parser for launch doctrine prose the host does not supply natively. **delete-when:** the host injects launch rulings and preflight checks without a parsed artifact.
+- `plugins/superheroes/lib/launch_ledger.py` — file-backed launch batch ledger when the host has no durable batch accounting. **delete-when:** the host records launch batches durably without this ledger module.
+- `plugins/superheroes/lib/launcher.py` — headless builders must survive parent session exit via detached spawn. **delete-when:** the background-session trial receipt marks detached spawn not needed.
+- `plugins/superheroes/lib/launcher.py` — launcher refuses spawn when cwd is the primary checkout (own-worktree). **delete-when:** the background-session trial receipt marks launcher worktree enforcement not needed.
+- `plugins/superheroes/lib/pilot_conformance_runtime.py` — env-var transport of connection detail across multi-account ownership probes. **delete-when:** the background-session trial receipt marks multi-account provisioning transport not needed.
+- `plugins/superheroes/lib/sibling_worktree_probe.py` — sibling worktree snapshot probe when dispatch fold cannot attribute dirt. **delete-when:** dispatch fold attributes sibling worktree changes without a snapshot probe.
+- `plugins/superheroes/lib/wave_watch.py` — loop re-arms wave_watch run because there is no durable batch watcher daemon. **delete-when:** the background-session trial receipt marks wave-watch arming not needed.
+- `plugins/superheroes/lib/wave_watch.py` — transcript file mtime as lane liveness when idle signals are unreliable. **delete-when:** the background-session trial receipt marks transcript-mtime liveness not needed.
+- `plugins/superheroes/skills/showrunner/reference/wave-watch.md` — harness background-task arming pattern with manual re-arm after each event. **delete-when:** the background-session trial receipt marks wave-watch arming not needed.
+- `plugins/superheroes/skills/workhorse/reference/dispatch-mechanics.md` — 540 s continuation and short launch slice recipes for turn-end survival. **delete-when:** the background-session trial receipt marks turn-end slice recipes not needed.

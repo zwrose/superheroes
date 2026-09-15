@@ -9,6 +9,8 @@ Two reads of the SAME boot must compare equal, so boot ids are compared through
 `same_boot`, never with `==` (#953): darwin renders `kern.boottime` as
 `{ sec = S, usec = U } <date>` and the `usec` leg has been observed to shift between
 reads of one boot, which made a live holder look rebooted."""
+# WORKAROUND: OS-specific boot-id reads to corroborate a recorded pid belongs to this boot
+# delete-when: the host exposes a stable per-boot identity without OS-specific parsing
 import re
 import subprocess
 import time

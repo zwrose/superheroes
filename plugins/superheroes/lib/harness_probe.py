@@ -48,6 +48,8 @@ durable backstop and keeps working; only summary shaping is lost.
 Validated against Claude Code 2.1.219 (native layer) and 2.1.222 (PreCompact top-level key).
 Stdlib-only.
 """
+# WORKAROUND: tripwire that native project-context injection still holds on every spawn path
+# delete-when: every spawn path is confirmed and recorded without this probe, or the probe retires
 from __future__ import annotations
 
 import argparse

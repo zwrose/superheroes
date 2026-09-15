@@ -17,6 +17,8 @@ from validate_marketplace import SEMVER
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PLUGINS = os.path.join(REPO, "plugins")
+# WORKAROUND: portable plugin-root seam and host-map lint for dual-host skill prose
+# delete-when: every host resolves plugin root through one variable without this fallback seam
 SEAM = '${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}'
 # The pointer line must resolve via the portable seam (CONVENTIONS §7.1): a bare
 # `hosts/<your-host>-tools.md` anchors at the skill's own folder (which has no hosts/),
