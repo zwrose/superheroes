@@ -2187,13 +2187,7 @@ def _cmd_build_argv(args):
     return 0
 
 
-def main(argv):
-    if argv and argv[0] == "build-argv":
-        dropped = seat_bundle.scan_dropped_flags(argv[1:])
-        if dropped:
-            refusal = seat_bundle.legacy_refusal(dropped_flags=tuple(dropped))
-            sys.stdout.write(json.dumps(refusal) + "\n")
-            return 1
+def build_parser():
     ap = argparse.ArgumentParser(prog="engine_adapter")
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build-argv")
@@ -2230,6 +2224,17 @@ def main(argv):
     cm.add_argument("--worktree", required=True)
     cm.add_argument("--task-id", required=True)
     cm.add_argument("--pre-sha", required=True)
+    return ap
+
+
+def main(argv):
+    if argv and argv[0] == "build-argv":
+        dropped = seat_bundle.scan_dropped_flags(argv[1:])
+        if dropped:
+            refusal = seat_bundle.legacy_refusal(dropped_flags=tuple(dropped))
+            sys.stdout.write(json.dumps(refusal) + "\n")
+            return 1
+    ap = build_parser()
     args = ap.parse_args(argv)
     if args.cmd == "build-argv":
         return _cmd_build_argv(args)
