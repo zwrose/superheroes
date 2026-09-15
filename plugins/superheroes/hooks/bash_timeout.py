@@ -17,9 +17,19 @@ Two deliberate bounds:
 - FAIL-OPEN, unlike the enforcer: on any parse/shape error emit nothing and exit 0 —
   worst case is the pre-hook 120s default, never a broken Bash call. (The enforcer in
   the same matcher block stays fail-closed; a deny there wins over this rewrite.)
+
+The hook keeps a firing record so its usefulness can be read later. The record is written
+fail-open so it can never break a Bash call.
 """
+import datetime
 import json
+import os
 import sys
+
+_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
+_DEFAULT_CONFIG_DIR = "~/.claude"
+_RECORD_REL_PATH = os.path.join("superheroes", "state", "bash-timeout-firings.jsonl")
+_RECORD_ROTATE_BYTES = 2 * 1024 * 1024
 
 DEFAULT_TIMEOUT_MS = 600000  # mirrors verify_gate.DEFAULT_TIMEOUT (600s); a project that lowers
 # BASH_MAX_TIMEOUT_MS below this gets the harness's clamp, not an error — still fail-open.
@@ -39,10 +49,50 @@ def decide(payload):
     return updated
 
 
+def _record_file_path():
+    config_dir = os.environ.get(_CONFIG_DIR_ENV)
+    base = os.path.expanduser(config_dir if config_dir else _DEFAULT_CONFIG_DIR)
+    return os.path.join(base, _RECORD_REL_PATH)
+
+
+def _rotate_record_if_needed(path):
+    if os.path.isfile(path) and os.path.getsize(path) > _RECORD_ROTATE_BYTES:
+        rotated = path + ".1"
+        if os.path.exists(rotated):
+            os.remove(rotated)
+        os.rename(path, rotated)
+
+
+def record_firing(payload, timeout_ms):
+    """Append one firing line; fail-open on any error."""
+    try:
+        path = _record_file_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _rotate_record_if_needed(path)
+        if isinstance(payload, dict):
+            session = payload.get("session_id")
+            cwd = payload.get("cwd")
+        else:
+            session = None
+            cwd = None
+        entry = {
+            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timeout_ms": timeout_ms,
+            "session": session,
+            "cwd": cwd,
+        }
+        with open(path, "a", encoding="utf-8") as record:
+            record.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
+
+
 def main():
     try:
-        updated = decide(json.load(sys.stdin))
+        payload = json.load(sys.stdin)
+        updated = decide(payload)
         if updated is not None:
+            record_firing(payload, DEFAULT_TIMEOUT_MS)
             print(json.dumps({"hookSpecificOutput": {
                 "hookEventName": "PreToolUse", "updatedInput": updated}}))
     except Exception:
