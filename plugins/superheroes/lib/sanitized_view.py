@@ -1347,224 +1347,93 @@ def _assert_no_stripped_paths_in_view(view_root):
             raise SanitizedViewError("sanitized-view-diff-path-collision")
 
 
-_DIFF_PATH_UNDERIVABLE = object()
-
-
-def _scan_c_quoted_end(token):
-    """Index of closing quote in a C-quoted token starting with ``b'"'``, or None."""
-    if not token.startswith(b'"'):
-        return None
-    i = 1
-    while i < len(token):
-        ch = token[i]
-        if ch == ord('"'):
-            return i
-        if ch == ord("\\"):
-            if i + 1 >= len(token):
-                return None
-            esc = token[i + 1]
-            if esc in (
-                ord("\\"),
-                ord('"'),
-                ord("a"),
-                ord("b"),
-                ord("f"),
-                ord("n"),
-                ord("r"),
-                ord("t"),
-                ord("v"),
-            ):
-                i += 2
-                continue
-            if ord("0") <= esc <= ord("7"):
-                j = i + 1
-                while j < len(token) and j < i + 4 and ord("0") <= token[j] <= ord("7"):
-                    j += 1
-                if j == i + 1:
-                    return None
-                if int(token[i + 1 : j], 8) > 0o377:
-                    return None
-                i = j
-                continue
-            return None
-        i += 1
-    return None
-
-
-def _unquote_c_style(token):
-    """Decode a complete C-quoted git path token; None when malformed."""
-    end = _scan_c_quoted_end(token)
-    if end is None or end != len(token) - 1:
-        return None
-    out = bytearray()
-    i = 1
-    while i < end:
-        ch = token[i]
-        if ch == ord("\\"):
-            esc = token[i + 1]
-            if esc == ord("\\"):
-                out.append(ord("\\"))
-                i += 2
-            elif esc == ord('"'):
-                out.append(ord('"'))
-                i += 2
-            elif esc == ord("a"):
-                out.append(ord("\a"))
-                i += 2
-            elif esc == ord("b"):
-                out.append(ord("\b"))
-                i += 2
-            elif esc == ord("f"):
-                out.append(ord("\f"))
-                i += 2
-            elif esc == ord("n"):
-                out.append(ord("\n"))
-                i += 2
-            elif esc == ord("r"):
-                out.append(ord("\r"))
-                i += 2
-            elif esc == ord("t"):
-                out.append(ord("\t"))
-                i += 2
-            elif esc == ord("v"):
-                out.append(ord("\v"))
-                i += 2
-            elif ord("0") <= esc <= ord("7"):
-                j = i + 1
-                while j < len(token) and j < i + 4 and ord("0") <= token[j] <= ord("7"):
-                    j += 1
-                out.append(int(token[i + 1 : j], 8))
-                i = j
-            else:
-                return None
-        else:
-            out.append(ch)
-            i += 1
-    return bytes(out)
-
-
-def _path_token_from_minus_plus_rest(rest):
-    """Extract one path token from bytes after ``--- `` / ``+++ ``."""
-    if rest.startswith(b'"'):
-        end = _scan_c_quoted_end(rest)
-        if end is None:
-            return None
-        return rest[: end + 1]
+def _path_from_minus_plus_rest(rest):
+    """Decode one ``---``/``+++`` path token (``core.quotePath=false`` output)."""
     tab = rest.find(b"\t")
-    if tab == -1:
-        return rest
-    return rest[:tab]
-
-
-def _decode_diff_path_token(token):
-    """Decode one path token from a ``---``/``+++`` line or ``diff --git`` header."""
-    if token is None:
-        return _DIFF_PATH_UNDERIVABLE
-    if token == b"/dev/null":
+    if tab != -1:
+        rest = rest[:tab]
+    if rest == b"/dev/null":
         return None
-    if token.startswith(b'"'):
-        decoded = _unquote_c_style(token)
-        if decoded is None:
-            return _DIFF_PATH_UNDERIVABLE
-        token = decoded
-    if token.startswith(b"a/"):
-        token = token[2:]
-    elif token.startswith(b"b/"):
-        token = token[2:]
+    if rest.startswith(b"a/"):
+        rest = rest[2:]
+    elif rest.startswith(b"b/"):
+        rest = rest[2:]
     else:
-        return _DIFF_PATH_UNDERIVABLE
+        return None
     try:
-        return token.decode("utf-8", errors="surrogateescape")
+        return rest.decode("utf-8", errors="surrogateescape")
     except Exception:
-        return _DIFF_PATH_UNDERIVABLE
+        return None
 
 
-def _paths_from_diff_git_header(line):
-    """Return (old_path, new_path) from a ``diff --git`` line, or underivable sentinels."""
+def _path_from_diff_git_line(line):
+    """Decode the path from a ``diff --git a/… b/…`` line (``--no-renames`` output)."""
     prefix = b"diff --git "
     if not line.startswith(prefix):
-        return _DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE
+        return None
     rest = line[len(prefix) :]
-    if rest.startswith(b'"'):
-        end = _scan_c_quoted_end(rest)
-        if end is None:
-            return _DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE
-        side_one = rest[: end + 1]
-        remainder = rest[end + 1 :]
-        if not remainder.startswith(b" "):
-            return _DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE
-        side_two = remainder[1:]
-        return (
-            _decode_diff_path_token(side_one),
-            _decode_diff_path_token(side_two),
-        )
-    # ``--no-renames`` means git never emits differing sides; the `` b/`` split below
-    # depends on that invariant — keep them coupled if the flag changes.
     candidates = []
     for i in range(len(rest) - 2):
         if rest[i : i + 3] == b" b/":
             candidates.append((rest[:i], rest[i + 1 :]))
     if not candidates:
-        return _DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE
-    equal_pairs = []
+        return None
+    equal_paths = []
     for side_one, side_two in candidates:
-        old_path = _decode_diff_path_token(side_one)
-        new_path = _decode_diff_path_token(side_two)
-        if (
-            old_path is not _DIFF_PATH_UNDERIVABLE
-            and new_path is not _DIFF_PATH_UNDERIVABLE
-            and old_path == new_path
-        ):
-            equal_pairs.append((old_path, new_path))
-    if len(equal_pairs) == 1:
-        return equal_pairs[0]
-    if len(equal_pairs) > 1:
-        return _DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE
+        old_path = _path_from_minus_plus_rest(side_one)
+        new_path = _path_from_minus_plus_rest(side_two)
+        if old_path is not None and new_path is not None and old_path == new_path:
+            equal_paths.append(old_path)
+    if len(equal_paths) == 1:
+        return equal_paths[0]
+    if len(equal_paths) > 1:
+        return None
     if len(candidates) == 1:
         side_one, side_two = candidates[0]
-        return _decode_diff_path_token(side_one), _decode_diff_path_token(side_two)
-    return _DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE
+        old_path = _path_from_minus_plus_rest(side_one)
+        new_path = _path_from_minus_plus_rest(side_two)
+        if old_path is not None and new_path is not None:
+            return old_path if old_path == new_path else None
+    return None
 
 
 def _paths_from_diff_section(section):
-    """Derive both sides' paths from one patch section (fail-closed on ambiguity)."""
+    """Derive the path from one patch section's ``---``/``+++`` headers only."""
     lines = section.split(b"\n")
-    header_lines = []
-    for line in lines:
-        if line.startswith(b"@@"):
-            break
-        header_lines.append(line)
     minus_count = 0
     plus_count = 0
     minus_path = None
     plus_path = None
-    for line in header_lines:
+    for line in lines:
+        if line.startswith(b"@@"):
+            break
         if line.startswith(b"--- "):
             minus_count += 1
-            minus_path = _decode_diff_path_token(_path_token_from_minus_plus_rest(line[4:]))
+            minus_path = _path_from_minus_plus_rest(line[4:])
         elif line.startswith(b"+++ "):
             plus_count += 1
-            plus_path = _decode_diff_path_token(_path_token_from_minus_plus_rest(line[4:]))
+            plus_path = _path_from_minus_plus_rest(line[4:])
     if minus_count > 1 or plus_count > 1:
-        return _DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE
-    git_old, git_new = (
-        _paths_from_diff_git_header(lines[0])
-        if lines
-        else (_DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE)
-    )
-    if minus_count == 0:
-        old_path = git_old
-    elif minus_path is None:
-        old_path = git_old
-    else:
-        old_path = minus_path
-    if plus_count == 0:
-        new_path = git_new
-    elif plus_path is None:
-        new_path = git_new
-    else:
-        new_path = plus_path
-    return old_path, new_path
+        return None
+    paths = set()
+    if minus_path is not None:
+        paths.add(minus_path)
+    if plus_path is not None:
+        paths.add(plus_path)
+    if len(paths) == 1:
+        return paths.pop()
+    if len(paths) > 1:
+        return None
+    has_hunk = any(line.startswith(b"@@") for line in lines)
+    if (
+        minus_count == 0
+        and plus_count == 0
+        and not has_hunk
+        and lines
+        and lines[0].startswith(b"diff --git ")
+    ):
+        return _path_from_diff_git_line(lines[0])
+    return None
 
 
 def _split_patch_sections(patch_bytes):
@@ -1597,56 +1466,30 @@ def _split_patch_sections(patch_bytes):
     return sections, unrecognized_spans
 
 
-def _section_withhold_info(section):
-    """Return (withhold, stripped_paths, underivable) for one patch section."""
-    old_path, new_path = _paths_from_diff_section(section)
-    lines = section.split(b"\n")
-    git_old, git_new = (
-        _paths_from_diff_git_header(lines[0])
-        if lines
-        else (_DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE)
-    )
-    stripped_paths = set()
-    underivable = False
-    # Deliberately check all four path spellings: old_path/new_path from ---/+++
-    # headers and git_old/git_new from the diff --git line. _paths_from_diff_section
-    # resolves one winner per side, so on a header-spoofed section it can return the
-    # attacker's path; the diff --git pair is the independent second opinion. A None
-    # (/dev/null) side counts as underivable rather than skipped. Removing any of
-    # the four reopens the header-spoof defect (see
-    # test_patch_filter_modification_both_sides_spoofed_withheld).
-    for path in (old_path, new_path, git_old, git_new):
-        if path is _DIFF_PATH_UNDERIVABLE or path is None:
-            underivable = True
-        elif _rel_path_would_be_stripped(path):
-            stripped_paths.add(path)
-    withhold = underivable or bool(stripped_paths)
-    return withhold, stripped_paths, underivable
-
-
 def _filter_patch_sections(patch_bytes):
-    """Output-side guarantee: drop sections touching stripped or underivable paths.
+    """Output-side gate for ``SUPERHEROES_REVIEW_DIFF.patch``.
 
-    Returns ``(kept_bytes, stripped_paths, underivable_section_count,
-    unrecognized_spans)``.
+    Invariant: no patch section whose resolved path would be stripped by
+    ``_rel_path_would_be_stripped`` reaches the written patch, and a patch whose
+    surviving sections contain opaque (binary) content is refused with
+    ``sanitized-view-diff-opaque``.
     """
     if not patch_bytes:
-        return b"", set(), 0, 0
-    sections, unrecognized_spans = _split_patch_sections(patch_bytes)
+        return b""
+    sections, _unrecognized_spans = _split_patch_sections(patch_bytes)
     kept = []
-    stripped_paths = set()
-    underivable_sections = 0
     for section in sections:
-        withhold, section_stripped, section_underivable = _section_withhold_info(section)
-        if withhold:
-            stripped_paths.update(section_stripped)
-            if section_underivable and not section_stripped:
-                underivable_sections += 1
-        else:
-            kept.append(section)
+        path = _paths_from_diff_section(section)
+        if path is None:
+            continue
+        if _rel_path_would_be_stripped(path):
+            continue
+        kept.append(section)
+    if any(_section_is_opaque(section) for section in kept):
+        raise SanitizedViewError("sanitized-view-diff-opaque")
     if not kept:
-        return b"", stripped_paths, underivable_sections, unrecognized_spans
-    return b"".join(kept), stripped_paths, underivable_sections, unrecognized_spans
+        return b""
+    return b"".join(kept)
 
 
 def _argv_byte_size(argv):
@@ -1694,44 +1537,9 @@ def _review_diff_argv_prefix(repo_real, merge_base, head_sha):
     ]
 
 
-_COLLAPSE_DEADLINE_CHECK_INTERVAL = 4096
-
-
-def _collapse_descendant_pathspecs(pathspecs, started):
-    """Drop pathspecs that are descendants of another pathspec in the vector.
-
-    Sorted by path *segments* so that every descendant of a path follows it in one
-    contiguous run: raw string order interleaves siblings (``a`` < ``a-b`` < ``a/c``
-    by bytes, but ``a`` < ``a/c`` < ``a-b`` by segments), which would break a single
-    scan. One pass with an ancestor stack then replaces the previous all-pairs
-    comparison, taking the step from O(n^2) to a sort plus O(n). The ``ancestors``
-    list is bounded at one element because the ``continue`` skips the push whenever
-    an ancestor is already kept.
-
-    ``started`` is the export clock. The deadline is checked before the sort, after
-    the sort, and periodically through the scan, so this step cannot run past the
-    export budget and then spawn a git subprocess anyway.
-    """
-    _check_export_deadline(started)
-    ordered = sorted(set(pathspecs), key=lambda path: path.split("/"))
-    _check_export_deadline(started)
-    kept = []
-    ancestors = []
-    for index, path in enumerate(ordered):
-        if index % _COLLAPSE_DEADLINE_CHECK_INTERVAL == 0:
-            _check_export_deadline(started)
-        while ancestors and not path.startswith(ancestors[-1] + "/"):
-            ancestors.pop()
-        if ancestors:
-            continue
-        kept.append(path)
-        ancestors.append(path)
-    return kept
-
-
 def _batch_review_diff_pathspecs(repo_real, merge_base, head_sha, pathspecs, started):
     """Batch pathspecs so each emitted argv stays within the effective byte budget."""
-    pathspecs = _collapse_descendant_pathspecs(pathspecs, started)
+    pathspecs = sorted(set(pathspecs))
     prefix = _review_diff_argv_prefix(repo_real, merge_base, head_sha)
     prefix_bytes = _argv_byte_size(prefix)
     budget = _effective_review_diff_argv_budget()
@@ -1771,73 +1579,6 @@ def _section_is_opaque(section):
         if line.startswith(b"GIT binary patch"):
             return True
     return False
-
-
-def _section_resolved_path_raw(section):
-    """Resolve the single path for a section without applying withhold policy."""
-    old_path, new_path = _paths_from_diff_section(section)
-    lines = section.split(b"\n")
-    git_old, git_new = (
-        _paths_from_diff_git_header(lines[0])
-        if lines
-        else (_DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE)
-    )
-    paths = set()
-    for path in (old_path, new_path, git_old, git_new):
-        if path is not None and path is not _DIFF_PATH_UNDERIVABLE:
-            paths.add(path)
-    if len(paths) != 1:
-        return None
-    return paths.pop()
-
-
-def _reconcile_review_patch(patch_bytes, survivors, withheld):
-    """Reconcile patch sections against the census survivor set; return kept bytes."""
-    survivors_set = set(survivors)
-    withheld_set = set(withheld)
-    sections, unrecognized_spans = _split_patch_sections(patch_bytes)
-    if unrecognized_spans > 0:
-        raise SanitizedViewError("sanitized-view-diff-unaccounted")
-    kept_sections = []
-    rendered_paths = set()
-    for section in sections:
-        withhold, stripped_paths, underivable = _section_withhold_info(section)
-        if underivable:
-            raise SanitizedViewError("sanitized-view-diff-unaccounted")
-        if withhold:
-            # Pathspec prefix expansion on a directory→file transition can
-            # legitimately emit diff sections for census-withheld descendants of
-            # a survivor pathspec (e.g. pkg/CLAUDE.md when survivor is pkg); a
-            # withheld path outside every survivor prefix cannot come from our
-            # pathspec set. See test_review_diff_dir_to_file_transition_
-            # withheld_child_is_skipped and
-            # test_review_diff_withheld_section_outside_survivor_prefix_refuses.
-            if (
-                stripped_paths
-                and stripped_paths.issubset(withheld_set)
-                and all(
-                    any(p.startswith(s + "/") for s in survivors_set)
-                    for p in stripped_paths
-                )
-            ):
-                continue
-            raise SanitizedViewError("sanitized-view-diff-unaccounted")
-        path = _section_resolved_path_raw(section)
-        if path is None or path not in survivors_set:
-            raise SanitizedViewError("sanitized-view-diff-unaccounted")
-        if path in rendered_paths:
-            # Backstop for overlapping pathspec batches (see _collapse_descendant_pathspecs).
-            raise SanitizedViewError("sanitized-view-diff-unaccounted")
-        kept_sections.append(section)
-        rendered_paths.add(path)
-    missing = set(survivors) - rendered_paths
-    if missing:
-        raise SanitizedViewError("sanitized-view-diff-unaccounted")
-    if any(_section_is_opaque(section) for section in kept_sections):
-        raise SanitizedViewError("sanitized-view-diff-opaque")
-    if not kept_sections:
-        return b""
-    return b"".join(kept_sections)
 
 
 def _write_review_patch_file(view_root, patch_bytes):
@@ -2055,9 +1796,7 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
         patch_parts.append(chunk)
 
     patch_bytes = b"".join(patch_parts)
-    # _reconcile_review_patch applies _section_withhold_info per section — the
-    # output-side withhold check lives there, not in a separate filter pass.
-    patch_bytes = _reconcile_review_patch(patch_bytes, survivors, withheld)
+    patch_bytes = _filter_patch_sections(patch_bytes)
 
     if not patch_bytes:
         raise SanitizedViewError("sanitized-view-diff-empty")

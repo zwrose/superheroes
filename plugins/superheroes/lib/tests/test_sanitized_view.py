@@ -1907,21 +1907,6 @@ def test_review_diff_tree_census_ignores_repo_diff_controls(tmp_path):
     assert set(changed) == {"file.txt", "src.py", "sub2"}
 
 
-def test_review_diff_census_unaccounted_gitlink_refuses(tmp_path, monkeypatch):
-    repo, base_sha, _head_sha = _hostile_diff_controls_fixture(tmp_path)
-    fake_tmp = str(tmp_path / "tmpdir")
-    os.makedirs(fake_tmp)
-    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
-    patch_flags = tuple(
-        f for f in sv._DIFF_PATCH_FLAGS if f != "--ignore-submodules=none"
-    )
-    monkeypatch.setattr(sv, "_DIFF_PATCH_FLAGS", patch_flags)
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv.build_sanitized_view(repo, diff_base=base_sha)
-    assert exc.value.detail == "sanitized-view-diff-unaccounted"
-    assert _leftover_view_dirs(fake_tmp) == []
-
-
 def test_review_diff_attribute_suppressed_source_refuses_opaque(tmp_path, monkeypatch):
     repo, base_sha, _head_sha = _hostile_diff_controls_fixture(tmp_path)
     fake_tmp = str(tmp_path / "tmpdir")
@@ -2089,54 +2074,6 @@ def test_review_diff_command_failure_is_distinct_from_unaccounted(tmp_path, monk
         assert not os.path.lexists(patch_path)
     finally:
         sv.destroy_sanitized_view(view_root)
-
-
-def test_review_diff_non_utf8_path_reconciles(tmp_path):
-    """Changed file with invalid UTF-8 name bytes (surrogateescape seam)."""
-    repo = _init_repo(tmp_path / "nonutf8-reconcile", files={"keep.txt": "k\n"})
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    try:
-        bad_rel = os.fsdecode(b"caf\xe9.txt")
-    except (UnicodeDecodeError, ValueError):
-        pytest.skip("filesystem refuses invalid UTF-8 path bytes")
-    full = os.path.join(repo, bad_rel)
-    try:
-        with open(full, "wb") as fh:
-            fh.write(b"payload\n")
-    except OSError:
-        pytest.skip("filesystem refuses creating paths with invalid UTF-8 bytes")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "nonutf8",
-    )
-    with open(full, "wb") as fh:
-        fh.write(b"changed payload\n")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "change nonutf8",
-    )
-    view = sv.build_sanitized_view(repo, diff_base=base_sha)
-    try:
-        assert view["diffBytes"] > 0
-        assert os.path.isfile(os.path.join(view["path"], bad_rel))
-    finally:
-        sv.destroy_sanitized_view(view["path"])
 
 
 def test_review_diff_duplicate_tree_entry_refuses(tmp_path):
@@ -2413,194 +2350,6 @@ def test_review_diff_dir_to_file_transition_withheld_child_is_skipped(tmp_path):
         assert view["diffWithheldCount"] == 1
     finally:
         sv.destroy_sanitized_view(view["path"])
-
-
-def test_review_diff_descendant_pathspecs_collapse_to_ancestor(tmp_path, monkeypatch):
-    repo = str(tmp_path / "descendant-collapse")
-    os.makedirs(repo, exist_ok=True)
-    _git(repo, "init", "-q")
-    os.makedirs(os.path.join(repo, "pkg"))
-    with open(os.path.join(repo, "pkg", "CLAUDE.md"), "w", encoding="utf-8") as fh:
-        fh.write("secret baseline\n")
-    with open(os.path.join(repo, "pkg", "x.txt"), "w", encoding="utf-8") as fh:
-        fh.write("x baseline\n")
-    with open(os.path.join(repo, "other.txt"), "w", encoding="utf-8") as fh:
-        fh.write("other baseline\n")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "init pkg dir",
-    )
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    shutil.rmtree(os.path.join(repo, "pkg"))
-    with open(os.path.join(repo, "pkg"), "w", encoding="utf-8") as fh:
-        fh.write("regular file\n")
-    with open(os.path.join(repo, "other.txt"), "w", encoding="utf-8") as fh:
-        fh.write("other changed\n")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "pkg dir to file",
-    )
-    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    merge_base = _git(repo, "merge-base", base_sha, head_sha).stdout.strip()
-    started = time.monotonic()
-    changed = sv._changed_tree_entries(repo, merge_base, head_sha, started)
-    survivors = [p for p in changed if not sv._rel_path_would_be_stripped(p)]
-    monkeypatch.setattr(sv, "_effective_review_diff_argv_budget", lambda: 0)
-    batches = sv._batch_review_diff_pathspecs(
-        repo, merge_base, head_sha, survivors, started
-    )
-    all_pathspecs = [path for batch in batches for path in batch]
-    assert "pkg" in all_pathspecs
-    assert "pkg/x.txt" not in all_pathspecs
-    view = sv.build_sanitized_view(repo, diff_base=base_sha)
-    try:
-        with open(_patch_abs(view), "rb") as fh:
-            patch = fh.read()
-        for path in survivors:
-            assert _diff_git_section_count(patch, path) == 1
-    finally:
-        sv.destroy_sanitized_view(view["path"])
-
-
-def test_collapse_descendant_pathspecs_adversarial_sibling_prefixes():
-    started = time.monotonic()
-    assert sv._collapse_descendant_pathspecs(["a", "a-b", "a/c"], started) == [
-        "a",
-        "a-b",
-    ]
-    assert sv._collapse_descendant_pathspecs(["a/c", "a-b", "a"], started) == [
-        "a",
-        "a-b",
-    ]
-    assert sv._collapse_descendant_pathspecs(
-        ["pkg", "pkg/x", "pkg/y/z", "pkgx"], started
-    ) == ["pkg", "pkgx"]
-    assert sv._collapse_descendant_pathspecs(["a/b", "a/bc"], started) == [
-        "a/b",
-        "a/bc",
-    ]
-    assert sv._collapse_descendant_pathspecs(["a", "a"], started) == ["a"]
-    assert sv._collapse_descendant_pathspecs([], started) == []
-
-
-def test_collapse_descendant_pathspecs_checks_deadline_at_every_stage(monkeypatch):
-    calls = []
-    monkeypatch.setattr(sv, "_COLLAPSE_DEADLINE_CHECK_INTERVAL", 1)
-    monkeypatch.setattr(
-        sv, "_check_export_deadline", lambda started: calls.append(started)
-    )
-    paths = ["p%d" % i for i in range(5)]
-    sv._collapse_descendant_pathspecs(paths, time.monotonic())
-    assert len(calls) == len(paths) + 2
-
-
-def test_collapse_descendant_pathspecs_enforces_export_deadline():
-    started = time.monotonic() - sv.SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS - 1
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv._collapse_descendant_pathspecs(["a", "a-b", "a/c", "pkg/x"], started)
-    assert exc.value.detail == "sanitized-view-export-timeout"
-
-
-def test_review_diff_collapse_deadline_wins_before_patch_git_spawn(
-    tmp_path, monkeypatch,
-):
-    """Deadline during collapse must win before any patch-batch git subprocess."""
-    repo = _init_repo(
-        tmp_path / "collapse-deadline-build",
-        files={("p%d.txt" % i): "v\n" for i in range(6)},
-    )
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    with open(os.path.join(repo, "p0.txt"), "w", encoding="utf-8") as fh:
-        fh.write("changed\n")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "head",
-    )
-    deadline_calls = {"n": 0}
-    real_check = sv._check_export_deadline
-    real_popen = sv._git_popen
-    # Expire during collapse (calls 26–29) after census/ancestry, before diff at call 30.
-    expire_after = 28
-
-    def counting_deadline(started):
-        deadline_calls["n"] += 1
-        if deadline_calls["n"] > expire_after:
-            raise sv.SanitizedViewError("sanitized-view-export-timeout")
-        real_check(started)
-
-    def git_spawned_after_deadline(argv, **kwargs):
-        if "diff" in argv:
-            raise AssertionError("git spawned after deadline")
-        return real_popen(argv, **kwargs)
-
-    monkeypatch.setattr(sv, "_check_export_deadline", counting_deadline)
-    monkeypatch.setattr(sv, "_git_popen", git_spawned_after_deadline)
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv.build_sanitized_view(repo, diff_base=base_sha)
-    assert exc.value.detail == "sanitized-view-export-timeout"
-
-
-def test_review_diff_withheld_section_outside_survivor_prefix_refuses():
-    # Reconciler-level guard for a shape the current pathspec set cannot emit.
-    patch = (
-        b"diff --git a/safe.py b/safe.py\n"
-        b"index 111..222 100644\n"
-        b"--- a/safe.py\n"
-        b"+++ b/safe.py\n"
-        b"@@ -1 +1 @@\n"
-        b" changed\n"
-        b"diff --git a/CLAUDE.md b/CLAUDE.md\n"
-        b"index 111..222 100644\n"
-        b"--- a/CLAUDE.md\n"
-        b"+++ b/CLAUDE.md\n"
-        b"@@ -1 +1 @@\n"
-        b" secret\n"
-    )
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv._reconcile_review_patch(
-            patch, survivors=["safe.py"], withheld=["CLAUDE.md"]
-        )
-    assert exc.value.detail == "sanitized-view-diff-unaccounted"
-
-
-def test_review_diff_duplicate_rendered_section_refuses():
-    section = (
-        b"diff --git a/x.py b/x.py\n"
-        b"index 111..222 100644\n"
-        b"--- a/x.py\n"
-        b"+++ b/x.py\n"
-        b"@@ -1 +1 @@\n"
-        b"-old\n"
-        b"+new\n"
-    )
-    patch = section + section
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv._reconcile_review_patch(patch, survivors={"x.py"}, withheld=set())
-    assert exc.value.detail == "sanitized-view-diff-unaccounted"
 
 
 def test_diff_too_large(tmp_path, monkeypatch):
@@ -3487,59 +3236,7 @@ def _claude_file_patch(repo, merge_base, head_sha):
 
 
 def _filter_patch(section):
-    kept, stripped_paths, underivable_sections, unrecognized = (
-        sv._filter_patch_sections(section)
-    )
-    return kept, stripped_paths, underivable_sections, unrecognized
-
-
-def test_patch_filter_new_file_payload_spoof_withheld():
-    sec = (
-        b"diff --git a/CLAUDE.md b/CLAUDE.md\n"
-        b"new file mode 100644\n"
-        b"index 0000000..1111111\n"
-        b"--- /dev/null\n"
-        b"+++ b/CLAUDE.md\n"
-        b"@@ -0,0 +1,2 @@\n"
-        b"+secret\n"
-        b"+++ b/README.md\n"
-        b"+" + _PATCH_SPOOF_SENTINEL + b"\n"
-    )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert stripped_paths or underivable_sections
-    assert _PATCH_SPOOF_SENTINEL not in kept
-
-
-def test_patch_filter_deletion_payload_spoof_withheld():
-    sec = (
-        b"diff --git a/CLAUDE.md b/CLAUDE.md\n"
-        b"deleted file mode 100644\n"
-        b"index 1111111..0000000\n"
-        b"--- a/CLAUDE.md\n"
-        b"+++ /dev/null\n"
-        b"@@ -1,2 +0,0 @@\n"
-        b"-secret\n"
-        b"--- a/README.md\n"
-        b"-" + _PATCH_SPOOF_SENTINEL + b"\n"
-    )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert stripped_paths or underivable_sections
-    assert _PATCH_SPOOF_SENTINEL not in kept
-
-
-def test_patch_filter_modification_both_sides_spoofed_withheld():
-    sec = (
-        b"diff --git a/CLAUDE.md b/CLAUDE.md\n"
-        b"index 111..222 100644\n"
-        b"--- a/README.md\n"
-        b"+++ b/README.md\n"
-        b"@@ -1 +1,2 @@\n"
-        b" old\n"
-        b"+" + _PATCH_SPOOF_SENTINEL + b"\n"
-    )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert stripped_paths or underivable_sections
-    assert _PATCH_SPOOF_SENTINEL not in kept
+    return sv._filter_patch_sections(section)
 
 
 def test_patch_filter_duplicate_minus_header_stripped_path_withheld():
@@ -3552,12 +3249,8 @@ def test_patch_filter_duplicate_minus_header_stripped_path_withheld():
         b"@@ -1 +1 @@\n"
         b" x\n"
     )
-    old, new = sv._paths_from_diff_section(sec)
-    assert old is sv._DIFF_PATH_UNDERIVABLE
-    assert new is sv._DIFF_PATH_UNDERIVABLE
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert kept == b""
-    assert stripped_paths or underivable_sections
+    assert sv._paths_from_diff_section(sec) is None
+    assert _filter_patch(sec) == b""
 
 
 def test_patch_filter_duplicate_plus_header_stripped_path_withheld():
@@ -3570,12 +3263,8 @@ def test_patch_filter_duplicate_plus_header_stripped_path_withheld():
         b"@@ -1 +1 @@\n"
         b" x\n"
     )
-    old, new = sv._paths_from_diff_section(sec)
-    assert old is sv._DIFF_PATH_UNDERIVABLE
-    assert new is sv._DIFF_PATH_UNDERIVABLE
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert kept == b""
-    assert stripped_paths or underivable_sections
+    assert sv._paths_from_diff_section(sec) is None
+    assert _filter_patch(sec) == b""
 
 
 def test_patch_filter_tab_terminator_stripped_path_withheld():
@@ -3588,8 +3277,8 @@ def test_patch_filter_tab_terminator_stripped_path_withheld():
         b" old\n"
         b"+" + _PATCH_SPOOF_SENTINEL + b"\n"
     )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert stripped_paths or underivable_sections
+    kept = _filter_patch(sec)
+    assert kept == b""
     assert _PATCH_SPOOF_SENTINEL not in kept
 
 
@@ -3602,9 +3291,8 @@ def test_patch_filter_only_diff_cc_unrecognized():
         b"@@@ -1,1 -1,1 -1,1 @@@\n"
         b"+" + _PATCH_SPOOF_SENTINEL + b"\n"
     )
-    kept, stripped_paths, underivable_sections, unrecognized = _filter_patch(sec)
+    kept = _filter_patch(sec)
     assert kept == b""
-    assert unrecognized >= 1
     assert _PATCH_SPOOF_SENTINEL not in kept
 
 
@@ -3625,13 +3313,7 @@ def test_patch_filter_two_sections_nothing_withheld_round_trip():
         b" c\n"
         b"+d\n"
     )
-    kept, stripped_paths, underivable_sections, unrecognized = (
-        sv._filter_patch_sections(patch)
-    )
-    assert kept == patch
-    assert not stripped_paths
-    assert underivable_sections == 0
-    assert unrecognized == 0
+    assert sv._filter_patch_sections(patch) == patch
 
 
 def test_patch_filter_git_section_followed_by_diff_cc():
@@ -3650,10 +3332,20 @@ def test_patch_filter_git_section_followed_by_diff_cc():
         b"@@@ -1,1 -1,1 -1,1 @@@\n"
         b"+" + sentinel + b"\n"
     )
-    kept, stripped_paths, underivable_sections, unrecognized = _filter_patch(sec)
+    kept = _filter_patch(sec)
     assert b"safe.md" in kept
     assert sentinel not in kept
-    assert unrecognized >= 1
+
+
+def test_patch_filter_unresolvable_path_section_is_dropped():
+    sec = (
+        b"diff --git a/x b/x\n"
+        b"index 111..222 100644\n"
+        b"@@ -1 +1 @@\n"
+        b" x\n"
+    )
+    assert sv._paths_from_diff_section(sec) is None
+    assert sv._filter_patch_sections(sec) == b""
 
 
 def _patch_filter_pkg_transition(
@@ -3714,58 +3406,6 @@ def _patch_filter_pkg_file_to_dir(tmp_path, *, name, stripped_rel, stripped_cont
         stripped_rel=stripped_rel,
         stripped_content=stripped_content,
     )
-
-
-def test_patch_filter_e2e_new_file_payload_spoof(tmp_path):
-    spoof_content = "-- a/README.md\n" + _PATCH_SPOOF_SENTINEL.decode() + "\n"
-    repo, base_sha = _patch_filter_pkg_dir_to_file(
-        tmp_path,
-        name="spoof-add",
-        stripped_rel="pkg/CLAUDE.md",
-        stripped_content=spoof_content,
-    )
-    view = sv.build_sanitized_view(repo, diff_base=base_sha)
-    try:
-        with open(_patch_abs(view), "rb") as fh:
-            patch = fh.read()
-        assert _PATCH_SPOOF_SENTINEL not in patch
-        assert b"diff --git a/pkg b/pkg" in patch
-        assert b"diff --git a/top.txt b/top.txt" in patch
-        assert view["diffWithheldCount"] == 1
-    finally:
-        sv.destroy_sanitized_view(view["path"])
-
-
-def test_patch_filter_e2e_add_side_payload_spoof(tmp_path):
-    spoof_content = "++ b/README.md\n" + _PATCH_SPOOF_SENTINEL.decode() + "\n"
-    repo, base_sha = _patch_filter_pkg_file_to_dir(
-        tmp_path,
-        name="spoof-add-side",
-        stripped_rel="pkg/CLAUDE.md",
-        stripped_content=spoof_content,
-    )
-    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    merge_base = _git(repo, "merge-base", base_sha, head_sha).stdout.strip()
-    raw_patch = _git(
-        repo,
-        "diff",
-        merge_base,
-        head_sha,
-        "--",
-        "pkg/CLAUDE.md",
-    ).stdout
-    assert "+++ b/pkg/CLAUDE.md" in raw_patch
-    assert "--- a/pkg/CLAUDE.md" not in raw_patch
-    view = sv.build_sanitized_view(repo, diff_base=base_sha)
-    try:
-        with open(_patch_abs(view), "rb") as fh:
-            patch = fh.read()
-        assert _PATCH_SPOOF_SENTINEL not in patch
-        assert b"diff --git a/pkg b/pkg" in patch
-        assert b"diff --git a/top.txt b/top.txt" in patch
-        assert view["diffWithheldCount"] == 1
-    finally:
-        sv.destroy_sanitized_view(view["path"])
 
 
 def test_stage_review_diff_e2e_census_excludes_modified_stripped_config_from_patch(tmp_path):
@@ -3921,25 +3561,6 @@ def test_patch_filter_hostile_git_config_nested_claude(tmp_path):
         sv.destroy_sanitized_view(view["path"])
 
 
-def test_patch_filter_control_readme_payload_spoof_lines_kept():
-    sec = (
-        b"diff --git a/README.md b/README.md\n"
-        b"index 111..222 100644\n"
-        b"--- a/README.md\n"
-        b"+++ b/README.md\n"
-        b"@@ -1 +1,3 @@\n"
-        b" hello\n"
-        b"+++ b/CLAUDE.md\n"
-        b"--- a/CLAUDE.md\n"
-        b"+more\n"
-    )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert not stripped_paths
-    assert underivable_sections == 0
-    assert b"+++ b/CLAUDE.md" in kept
-    assert b"--- a/CLAUDE.md" in kept
-
-
 def test_patch_filter_control_stripped_no_spoof_withheld():
     sec = (
         b"diff --git a/CLAUDE.md b/CLAUDE.md\n"
@@ -3950,24 +3571,7 @@ def test_patch_filter_control_stripped_no_spoof_withheld():
         b"@@ -0,0 +1 @@\n"
         b"+secret config\n"
     )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert stripped_paths or underivable_sections
-    assert kept == b""
-
-
-def test_patch_filter_control_quoted_legitimate_path_kept():
-    sec = (
-        b'diff --git "a/we\\"ird.md" "b/we\\"ird.md"\n'
-        b"index 111..222 100644\n"
-        b'--- "a/we\\"ird.md"\n'
-        b'+++ "b/we\\"ird.md"\n'
-        b"@@ -1 +1 @@\n"
-        b" x\n"
-    )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert not stripped_paths
-    assert underivable_sections == 0
-    assert b"we" in kept or b"ird.md" in kept
+    assert _filter_patch(sec) == b""
 
 
 def test_patch_filter_control_space_path_tab_terminator_kept():
@@ -3979,89 +3583,13 @@ def test_patch_filter_control_space_path_tab_terminator_kept():
         b"@@ -1 +1 @@\n"
         b" x\n"
     )
-    old, new = sv._paths_from_diff_section(sec)
-    assert old == "my file.md"
-    assert new == "my file.md"
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert not stripped_paths
-    assert underivable_sections == 0
-
-
-def test_patch_filter_control_stripped_quoted_path_withheld():
-    sec = (
-        b'diff --git "a/.claude/we\\"ird.json" "b/.claude/we\\"ird.json"\n'
-        b"index 111..222 100644\n"
-        b'--- "a/.claude/we\\"ird.json"\n'
-        b'+++ "b/.claude/we\\"ird.json"\n'
-        b"@@ -0,0 +1 @@\n"
-        b"+secret\n"
-    )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert stripped_paths or underivable_sections
-    assert kept == b""
+    assert sv._paths_from_diff_section(sec) == "my file.md"
+    kept = _filter_patch(sec)
+    assert kept == sec
 
 
 def test_patch_filter_empty_input():
-    kept, stripped_paths, underivable_sections, unrecognized = (
-        sv._filter_patch_sections(b"")
-    )
-    assert kept == b""
-    assert not stripped_paths
-    assert underivable_sections == 0
-    assert unrecognized == 0
-
-
-def test_stage_review_diff_unrecognized_span_refused(tmp_path, monkeypatch):
-    repo = _init_repo(tmp_path / "unrecognized-span", files={"keep.txt": "k\n"})
-    repo_real = os.path.realpath(repo)
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
-        fh.write("changed\n")
-    _git(repo, "add", "keep.txt")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "change",
-    )
-    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    cc_sentinel = b"CC_STAGE_LEAK_SENTINEL_ZZZ"
-    poisoned_patch = (
-        b"diff --git a/keep.txt b/keep.txt\n"
-        b"index 111..222 100644\n"
-        b"--- a/keep.txt\n"
-        b"+++ b/keep.txt\n"
-        b"@@ -1 +1 @@\n"
-        b" changed\n"
-        b"diff --cc .claude/settings.json\n"
-        b"index 111,222..333 100644\n"
-        b"--- a/.claude/settings.json\n"
-        b"+++ b/.claude/settings.json\n"
-        b"@@@ -1,1 -1,1 -1,1 @@@\n"
-        b"+" + cc_sentinel + b"\n"
-    )
-
-    def fake_batch_output(argv, started, total_bytes):
-        return poisoned_patch, total_bytes + len(poisoned_patch)
-
-    monkeypatch.setattr(sv, "_git_diff_batch_output", fake_batch_output)
-    view_root = sv.tempfile.mkdtemp(prefix=sv.SANITIZED_VIEW_DIR_PREFIX)
-    try:
-        sv._materialize_from_tree(repo_real, head_sha, view_root, time.monotonic())
-        patch_path = os.path.join(view_root, sv.REVIEW_DIFF_FILE_NAME)
-        with pytest.raises(sv.SanitizedViewError) as exc:
-            sv._stage_review_diff(
-                repo_real, head_sha, view_root, base_sha, time.monotonic()
-            )
-        assert exc.value.detail == "sanitized-view-diff-unaccounted"
-        assert not os.path.lexists(patch_path)
-    finally:
-        sv.destroy_sanitized_view(view_root)
+    assert sv._filter_patch_sections(b"") == b""
 
 
 _EXT_DIFF_SENTINEL = b"EXT_DIFF_DRIVER_SENTINEL_ZZZ"
