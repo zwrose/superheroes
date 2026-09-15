@@ -105,11 +105,27 @@ def _band_reference_tokens(name):
     return tokens
 
 
+def _prose_references_token(prose, token):
+    """True when ``token`` appears at a band-reference boundary in ``prose``."""
+    start = 0
+    while start < len(prose):
+        pos = prose.find(token, start)
+        if pos < 0:
+            return False
+        before_ok = pos == 0 or prose[pos - 1] in " \t(,;"
+        end = pos + len(token)
+        after_ok = end == len(prose) or prose[end] in " \t),;:."
+        if before_ok and after_ok:
+            return True
+        start = pos + 1
+    return False
+
+
 def _p0_bands_named_in_prose(prose, names):
     matched = set()
     for name in names:
         for token in _band_reference_tokens(name):
-            if prose.startswith(token):
+            if _prose_references_token(prose, token):
                 matched.add(name)
                 break
     return matched

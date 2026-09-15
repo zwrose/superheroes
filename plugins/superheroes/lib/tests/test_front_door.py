@@ -206,6 +206,28 @@ def test_p0_stamped_definition_requires_matching_evidence(tmp_path):
     assert got["reason"] == FD.REASON_P0_EVIDENCE_EXCLUDED
 
 
+def test_p0_stamped_definition_does_not_match_band_prefix_of_another(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    ladder = [
+        {"name": "Band 1", "examples": [{"text": "minor", "citation": "runbook §1"}]},
+        {"name": "Band 10", "examples": [{"text": "major", "citation": "runbook §10"}]},
+    ]
+    _stamp_ladder(repo, store, ladder=ladder)
+    PC.set_item(
+        repo,
+        "p0Definition",
+        "Band 10 by citation plus field evidence",
+        root=store,
+    )
+    got = FD.grade(
+        repo,
+        _claim(tier="P0", band="Band 1", evidence="field"),
+        root=store,
+    )
+    assert got["outcome"] == "refused"
+    assert got["reason"] == FD.REASON_P0_BAND_EXCLUDED
+
+
 def test_p0_stamped_definition_long_band_name_prefix_match(tmp_path):
     repo, store = _setup_repo(tmp_path)
     ladder = [
