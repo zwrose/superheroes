@@ -25,6 +25,7 @@ if _LIB_DIR not in sys.path:
 
 import cli_contract as cc  # noqa: E402
 import model_registry  # noqa: E402
+import seat_bundle  # noqa: E402
 
 _PARK_TAIL = (
     "an unlisted model is a park, not a pick (#600). "
@@ -148,7 +149,50 @@ def validate(
 
 
 def _cli_check(args: argparse.Namespace) -> int:
-    result = validate(args.role, args.vendor, args.model, args.effort)
+    parsed = seat_bundle.parse(args.seat)
+    if not parsed.get("ok"):
+        payload = {
+            "ok": False,
+            "role": args.role,
+            "vendor": None,
+            "model_id": None,
+            "effort": None,
+            "dispatch_token": None,
+            "effort_source": None,
+            "resolved_model": None,
+            "allowlist": [],
+            "allowlist_pairs": [],
+            "reason": parsed.get("reason"),
+            "seat_detail": parsed.get("detail"),
+        }
+        print(json.dumps(payload))
+        print(parsed.get("detail") or parsed.get("reason"), file=sys.stderr)
+        return 1
+    validated = seat_bundle.validate(parsed, args.role)
+    if not validated.get("ok"):
+        payload = {
+            "ok": False,
+            "role": args.role,
+            "vendor": validated.get("vendor"),
+            "model_id": None,
+            "effort": None,
+            "dispatch_token": None,
+            "effort_source": None,
+            "resolved_model": None,
+            "allowlist": [],
+            "allowlist_pairs": [],
+            "reason": validated.get("reason"),
+            "seat_detail": validated.get("detail"),
+        }
+        print(json.dumps(payload))
+        print(validated.get("detail") or validated.get("reason"), file=sys.stderr)
+        return 1
+    result = validate(
+        args.role,
+        validated["vendor"],
+        validated["model"],
+        validated["effort"],
+    )
     print(json.dumps(result))
     if not result["ok"]:
         print(result["reason"], file=sys.stderr)
@@ -160,16 +204,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Dispatch model allowlist guard")
     sub = parser.add_subparsers(dest="command", required=True)
     check = sub.add_parser("check", help="Validate a dispatch against the allowlist")
-    cc.add_argument(check, "--role", contract="role", required=True)
-    cc.add_argument(check, "--vendor", contract="vendor", required=True)
-    cc.add_argument(check, "--model", contract="model-not-a-role", default=None,
-                    type=cc.optional_model_not_a_role)
-    cc.add_argument(check, "--effort", contract="effort", default=None)
+    cc.add_argument(check, "--seat", contract="free-text", required=True,
+                    help="JSON seat bundle or vendor:token composed dispatch token")
+    cc.add_argument(check, "--role", contract="role", required=True, type=cc.role)
     check.set_defaults(func=_cli_check)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = argv if argv is not None else sys.argv[1:]
+    dropped = seat_bundle.scan_dropped_flags(argv)
+    if dropped:
+        refusal = seat_bundle.legacy_refusal(dropped_flags=tuple(dropped))
+        print(json.dumps(refusal))
+        print(refusal["detail"], file=sys.stderr)
+        return 1
     args = build_parser().parse_args(argv)
     return args.func(args)
 

@@ -28,6 +28,26 @@ def _load():
 
 ED = _load()
 
+_REVIEW_ROLE = "reviewer"
+_WRITE_ROLE = "implementer"
+
+
+def _seat(vendor, model, effort):
+    return {"vendor": vendor, "model": model, "effort": effort}
+
+
+def _seat_json(vendor, model, effort):
+    return json.dumps({"vendor": vendor, "model": model, "effort": effort})
+
+
+def _codex_seat(model="gpt-5.6-sol", effort="high"):
+    return _seat("codex", model, effort)
+
+
+def _cursor_seat(model="composer-2.5", effort=None):
+    return _seat("cursor", model, effort)
+
+
 _EA = importlib.util.spec_from_file_location(
     "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
 EA = importlib.util.module_from_spec(_EA)
@@ -198,7 +218,7 @@ def _never_call(*_args, **_kwargs):
 def test_dispatch_review_repo_root_absent_no_spawn(tmp_path):
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
         build_view=_never_build_view,
     )
@@ -214,7 +234,7 @@ def test_dispatch_review_repo_root_absent_no_spawn(tmp_path):
 def test_dispatch_review_repo_root_empty_string_no_spawn(tmp_path):
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root="   ", run_engine=fake,
         build_view=_never_build_view,
     )
@@ -228,7 +248,7 @@ def test_dispatch_review_repo_root_missing_path_no_spawn(tmp_path):
     fake = FakeRunner([])
     missing = str(tmp_path / "no-such-repo")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=missing, run_engine=fake,
         build_view=_never_build_view,
     )
@@ -242,7 +262,7 @@ def test_dispatch_review_repo_root_not_a_directory_no_spawn(tmp_path):
     f = tmp_path / "file-not-dir"
     f.write_text("x", encoding="utf-8")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=str(f), run_engine=fake,
         build_view=_never_build_view,
     )
@@ -256,7 +276,7 @@ def test_dispatch_review_repo_root_not_a_repo_no_spawn(tmp_path):
     bare = tmp_path / "bare-dir"
     bare.mkdir()
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=str(bare), run_engine=fake,
         build_view=_never_build_view,
     )
@@ -270,7 +290,7 @@ def test_dispatch_review_valid_repo_root_git_file_pins_cwd_codex(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -282,7 +302,7 @@ def test_dispatch_review_valid_repo_root_git_dir_pins_cwd_codex(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -294,7 +314,7 @@ def test_dispatch_review_valid_repo_root_pins_cwd_cursor(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "cursor", model=None, effort="high",
+        seat=_cursor_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -306,7 +326,7 @@ def test_dispatch_review_codex_argv_has_c_repo_no_skip_git(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -324,7 +344,7 @@ def test_dispatch_review_prompt_has_new_preamble(tmp_path):
     base_body = "Review this code.\n"
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path, base_body), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -358,7 +378,7 @@ def test_dispatch_review_repo_survives_success(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -370,7 +390,7 @@ def test_dispatch_review_repo_survives_double_forfeit(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([("", True, 0, ""), ("", True, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -382,7 +402,7 @@ def test_dispatch_review_repo_survives_unreadable_both_attempts(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([("not json", False, 0, ""), ("not json", False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -397,7 +417,7 @@ def test_dispatch_review_repo_survives_run_engine_raises(tmp_path):
         raise RuntimeError("injected failure")
 
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=boom,
         build_view=_fake_build_view(tmp_path),
     )
@@ -417,7 +437,7 @@ def test_dispatch_review_retry_pins_same_cwd(tmp_path):
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
     ])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -434,7 +454,7 @@ def test_dispatch_review_does_not_inherit_orchestrator_cwd_codex(tmp_path, monke
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -450,7 +470,7 @@ def test_dispatch_review_does_not_inherit_orchestrator_cwd_cursor(tmp_path, monk
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "cursor", model=None, effort="high",
+        seat=_cursor_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -461,7 +481,7 @@ def test_first_attempt_success_no_retry(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -478,7 +498,7 @@ def test_second_attempt_success(tmp_path):
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -494,7 +514,7 @@ def test_double_forfeit_no_third_attempt(tmp_path):
         ("", True, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -513,7 +533,7 @@ def test_unreadable_both_attempts_forfeits(tmp_path):
         ("not json", False, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -528,7 +548,7 @@ def test_invalid_empty_prompt_zero_attempts_no_spawn(tmp_path):
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=str(prompt_path), repo_root=repo_root, run_engine=_never_call,
         build_view=build_view,
     )
@@ -540,26 +560,25 @@ def test_invalid_empty_prompt_zero_attempts_no_spawn(tmp_path):
     assert build_view.meta["build_count"] == 0
 
 
-def test_unrunnable_engine_config_zero_attempts(tmp_path):
+def test_legacy_model_keyword_refuses_before_spawn(tmp_path):
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
     res = ED.dispatch_review(
-        "cursor", model="fable", effort="composer",
+        "codex", model="fable", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=build_view,
     )
-    assert res["reason"] == "unrunnable"
-    assert res["detail"] == "engine-config:fable-unrunnable"
+    assert res["reason"] == "legacy-seat-args"
     assert res["attempts"] == 0
     assert res["forfeited"] is False
-    assert res["sanitizedView"] == _fake_view_receipt()
-    assert build_view.meta["build_count"] == 1
+    assert "sanitizedView" not in res
+    assert build_view.meta["build_count"] == 0
 
 
 def test_unrunnable_engine_config_unknown_claude_tier_no_spawn(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "cursor", model="cursor-grok-4.6-xhigh", effort="high",
+        seat=_seat("cursor", "cursor-grok-4.6-xhigh", "high"), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_fake_build_view(tmp_path),
     )
@@ -573,8 +592,7 @@ def test_unrunnable_engine_config_unknown_claude_tier_no_spawn(tmp_path):
 def test_unrunnable_engine_config_effort_conflict_no_spawn(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "cursor", model=None, effort="low",
-        engine_model="cursor-grok-4.6-xhigh",
+        seat=_seat("cursor", "cursor-grok-4.6-xhigh", "low"), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_fake_build_view(tmp_path),
     )
@@ -593,7 +611,7 @@ def test_timeout_mid_stream_partial_output_rejected(tmp_path):
         (partial, True, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -608,7 +626,7 @@ def test_nonzero_exit_with_parseable_stdout_rejected(tmp_path):
         (_VALID_FINDINGS_STDOUT, False, 1, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -620,7 +638,7 @@ def test_noisy_but_valid_output_accepted(tmp_path):
     noisy = "bootstrap noise\nsession start\n" + _VALID_FINDINGS_STDOUT
     fake = FakeRunner([(noisy, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -643,7 +661,7 @@ def test_liveness_heartbeats(tmp_path, monkeypatch):
         )
 
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path),
         repo_root=repo_root,
         progress_path=progress_path,
@@ -711,7 +729,7 @@ def test_reviewer_only_no_write_dispatch_reachable(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -728,7 +746,7 @@ def test_retry_uses_900s_floor(tmp_path):
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
     ])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
         retry_timeout=1, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
@@ -741,7 +759,7 @@ def test_antihijack_preamble_and_codex_c_flag(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -772,7 +790,7 @@ def test_dispatch_echo_only_stdout_forfeits_not_clean_review(tmp_path):
     fed = _fed_prompt(base)
     fake = FakeRunner([(fed, False, 0, ""), (fed, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=prompt_path, repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -808,7 +826,7 @@ def test_dispatch_genuine_finding_quoting_the_prompt_survives(tmp_path):
          "body": finding_body, "suggestion": "s"}]})
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=prompt_path, repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -824,7 +842,7 @@ def test_dispatch_success_includes_engagement_fields(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -838,7 +856,7 @@ def test_dispatch_codex_engagement_tokens_from_stderr(tmp_path):
     stderr_tail = "log line\ntokens used\n1,234\n"
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, stderr_tail)])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -857,7 +875,7 @@ def test_dispatch_cursor_engagement_tool_calls(tmp_path):
     ])
     fake = FakeRunner([(stream, False, 0, "")])
     res = ED.dispatch_review(
-        "cursor", model=None, effort="high",
+        seat=_cursor_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -872,7 +890,7 @@ def test_dispatch_empty_findings_no_investigated_is_vacuous_forfeit(tmp_path):
     empty = json.dumps({"findings": []})
     fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -895,7 +913,7 @@ def test_dispatch_empty_findings_with_valid_investigated_accepted(tmp_path):
     stdout = json.dumps({"findings": [], "investigated": [rel]})
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -911,7 +929,7 @@ def test_dispatch_empty_grouping_no_investigated_is_vacuous_forfeit(tmp_path, gr
     empty = json.dumps({"grouping": grouping})
     fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -932,7 +950,7 @@ def test_dispatch_empty_grouping_with_valid_investigated_accepted(tmp_path, grou
     stdout = json.dumps({"grouping": grouping, "investigated": [rel]})
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -948,7 +966,7 @@ def test_dispatch_empty_findings_all_investigated_rejected_is_vacuous(tmp_path):
     stdout = json.dumps({"findings": [], "investigated": ["/abs/path", "missing.py"]})
     fake = FakeRunner([(stdout, False, 0, ""), (stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -967,7 +985,7 @@ def test_dispatch_mixed_findings_propagates_rejected_records(tmp_path):
     stdout = json.dumps({"findings": [42, {"id": "f1", "message": "issue found"}]})
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -991,7 +1009,7 @@ def test_dispatch_whitespace_padded_repo_root_accepts_honest_investigated(tmp_pa
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=padded, run_engine=fake,
         build_view=build_view,
     )
@@ -1008,7 +1026,7 @@ def test_dispatch_relative_repo_root_absolutized_for_cwd_and_codex_c(tmp_path, m
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=rel_root, run_engine=fake,
         build_view=build_view,
     )
@@ -1023,8 +1041,8 @@ def test_main_dispatch_review_without_repo_root_argparse_refusal(tmp_path):
     with pytest.raises(SystemExit) as excinfo:
         ED.main([
             "dispatch-review",
-            "--engine", "codex",
-            "--effort", "high",
+            "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+            "--role", _REVIEW_ROLE,
             "--prompt-path", prompt,
         ])
     assert excinfo.value.code == 2
@@ -1039,7 +1057,7 @@ def test_dispatch_vacuous_then_valid_investigated_succeeds_on_retry(tmp_path):
     good = json.dumps({"findings": [], "investigated": ["a.py"]})
     fake = FakeRunner([(bad, False, 0, ""), (good, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1053,7 +1071,7 @@ def test_dispatch_nonempty_findings_without_investigated_bypasses_floor(tmp_path
     stdout = json.dumps({"findings": [{"id": "f1", "message": "issue"}]})
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1077,7 +1095,7 @@ def test_dispatch_findings_with_investigated_survives_transport(tmp_path):
     })
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1096,7 +1114,7 @@ def test_dispatch_findings_with_empty_investigated_still_succeeds(tmp_path):
     })
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1113,7 +1131,7 @@ def test_dispatch_findings_with_wholly_rejected_investigated_still_succeeds(tmp_
     })
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1135,7 +1153,7 @@ def test_dispatch_clean_success_surfaces_mixed_investigated_rejections(tmp_path)
     })
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1149,7 +1167,7 @@ def test_dispatch_double_timeout_stays_forfeited_not_vacuous(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([("", True, 0, ""), ("", True, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1162,7 +1180,7 @@ def test_dispatch_timeout_then_vacuous_reports_vacuous(tmp_path):
     empty = json.dumps({"findings": []})
     fake = FakeRunner([("", True, 0, ""), (empty, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1175,13 +1193,13 @@ def test_double_forfeit_has_engagement_unrunnable_does_not(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([("not json", False, 0, ""), ("not json", False, 0, "")])
     forfeited = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
     assert "engagement" in forfeited
     unrunnable = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
         build_view=_never_build_view,
     )
@@ -1197,7 +1215,7 @@ def test_sanitized_view_build_error_refusal_no_spawn(tmp_path):
         raise ED.sanitized_view.SanitizedViewError("sanitized-view-export-failed")
 
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=fail_build,
     )
@@ -1218,7 +1236,7 @@ def test_success_includes_sanitized_view_receipt(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1230,7 +1248,7 @@ def test_source_dirty_disclosure_when_view_flags_dirty(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path, source_dirty=True),
     )
@@ -1244,7 +1262,7 @@ def test_clean_source_has_no_dirty_disclosure(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path, source_dirty=False),
     )
@@ -1262,7 +1280,7 @@ def test_view_destroyed_after_dispatch(tmp_path):
 
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=capture_build,
     )
@@ -1338,7 +1356,7 @@ def test_dispatch_investigated_stripped_path_is_vacuous_forfeit(tmp_path):
     stdout = json.dumps({"findings": [], "investigated": ["CLAUDE.md"]})
     fake = FakeRunner([(stdout, False, 0, ""), (stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -1359,7 +1377,7 @@ def test_pre_view_repo_root_refusals_have_no_sanitized_view(tmp_path, repo_root,
         repo_root = str(tmp_path / "no-such-repo")
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_never_build_view,
     )
@@ -1374,7 +1392,7 @@ def test_pre_view_repo_root_not_a_directory_no_sanitized_view(tmp_path):
     f.write_text("x", encoding="utf-8")
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=str(f), run_engine=fake,
         build_view=_never_build_view,
     )
@@ -1388,7 +1406,7 @@ def test_pre_view_repo_root_not_a_repo_no_sanitized_view(tmp_path):
     bare.mkdir()
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=str(bare), run_engine=fake,
         build_view=_never_build_view,
     )
@@ -1511,7 +1529,7 @@ def test_run_dir_not_empty_unopened_refused(tmp_path):
     (run_dir / "stale.txt").write_text("leftover\n", encoding="utf-8")
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), run_dir=str(run_dir),
     )
@@ -1601,7 +1619,7 @@ def test_dispatch_review_creates_missing_run_dir(tmp_path):
     assert not run_dir.exists()
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
     )
@@ -1620,7 +1638,7 @@ def test_dispatch_review_ancestor_symlink_physicalizes_run_dir(tmp_path):
     run_dir = alias_parent / "review-run"
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
     )
@@ -1635,7 +1653,7 @@ def test_dispatch_review_symlink_leaf_refused(tmp_path):
     link.symlink_to(real_dir)
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), run_dir=str(link),
     )
@@ -1652,7 +1670,7 @@ def test_dispatch_review_trailing_separator_symlink_leaf_refused(tmp_path):
     link.symlink_to(real_dir)
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), run_dir=str(link) + os.sep,
     )
@@ -1665,7 +1683,7 @@ def test_dispatch_review_continuation_reuses_created_run_dir(tmp_path):
     run_dir = tmp_path / "continue-run"
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     first = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
         order_id="order-1",
@@ -1675,7 +1693,7 @@ def test_dispatch_review_continuation_reuses_created_run_dir(tmp_path):
     assert len(opened_first) == 1
     assert os.path.isdir(first["runDir"])
     second = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
         build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
         order_id="order-1",
@@ -1875,7 +1893,7 @@ def test_review_continuation_builds_no_second_view(tmp_path):
     build_view = _fake_build_view(tmp_path)
     try:
         first = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
             run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
             order_id="test-order", max_wait=1,
@@ -1884,7 +1902,7 @@ def test_review_continuation_builds_no_second_view(tmp_path):
         assert build_view.meta["build_count"] == 0
 
         second = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
             run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
             order_id="test-order", max_wait=1,
@@ -1915,7 +1933,7 @@ def test_review_continuation_argv_matches_journal(tmp_path):
     build_view = _fake_build_view(tmp_path)
     try:
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
             run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
             order_id="test-order", max_wait=1,
@@ -1943,14 +1961,14 @@ def test_review_continuation_non_terminal_leaves_no_extra_view(tmp_path):
     build_view = _fake_build_view(tmp_path)
     try:
         ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
             run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
             order_id="test-order", max_wait=1,
         )
         assert os.path.isdir(view_path)
         ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
             run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
             order_id="test-order", max_wait=1,
@@ -1968,7 +1986,7 @@ def test_review_resume_order_id_mismatch(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view, run_dir=run_dir, order_id="order-2", max_wait=0,
     )
@@ -2000,7 +2018,7 @@ def test_blocking_supervise_loop_bounded_under_held_lock(tmp_path, monkeypatch):
 
         def run_dispatch():
             ED.dispatch_review(
-                "codex", model="sonnet", effort="high",
+                seat=_codex_seat(), role=_REVIEW_ROLE,
                 prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
                 run_engine=FakeRunner([]),
                 build_view=_fake_build_view(tmp_path), run_dir=run_dir,
@@ -2328,7 +2346,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         repo_root = _repo(tmp_path)
         fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
             build_view=_fake_build_view(tmp_path),
         )
@@ -2337,7 +2355,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         repo_root = _repo(tmp_path)
         fake = FakeRunner([("", True, 0, ""), ("", True, 0, "")])
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
             build_view=_fake_build_view(tmp_path),
         )
@@ -2347,7 +2365,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         empty = json.dumps({"findings": []})
         fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
             build_view=_fake_build_view(tmp_path),
         )
@@ -2356,7 +2374,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         wt = _linked_worktree(tmp_path)
         fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
         res = ED.dispatch_write(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), cwd=wt,
             run_dir=str(tmp_path / "run-write"), order_id="inv-1", run_engine=fake,
         )
@@ -2365,7 +2383,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         wt = _linked_worktree(tmp_path)
         fake = FakeRunner([(_honest_refusal_stdout(), False, 0, "")])
         res = ED.dispatch_write(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), cwd=wt,
             run_dir=str(tmp_path / "run-refusal"), order_id="inv-2", run_engine=fake,
         )
@@ -2380,7 +2398,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
                 return "", True, 0, ""
 
         res = ED.dispatch_write(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), cwd=wt,
             run_dir=str(tmp_path / "run-dirty"), order_id="inv-3",
             run_engine=DirtyTimeoutRunner(), max_wait=120,
@@ -2426,7 +2444,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         monkeypatch.setattr(ED, "_supervise", boom)
         fake = FakeRunner([])
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
             build_view=_fake_build_view(tmp_path),
         )
@@ -2680,7 +2698,7 @@ def test_dispatch_review_payload_shape_on_unreadable_forfeit(tmp_path):
         (_UNREADABLE_REVIEW_STDOUT, False, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2696,7 +2714,7 @@ def test_dispatch_review_payload_shape_absent_on_vacuous_forfeit(tmp_path):
     empty = json.dumps({"findings": []})
     fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2709,7 +2727,7 @@ def test_dispatch_review_payload_shape_absent_on_success(tmp_path, monkeypatch):
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     monkeypatch.setattr(ED.engine_adapter, "review_payload_shape", lambda _stdout: {"parsed": "x"})
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2721,7 +2739,7 @@ def test_dispatch_review_engagement_read_on_success(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2732,7 +2750,7 @@ def test_dispatch_review_engagement_read_on_forfeit(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([("not json", False, 0, ""), ("not json", False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2744,7 +2762,7 @@ def test_dispatch_review_timeout_forfeit_has_no_engagement(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([("", True, 0, ""), ("", True, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2759,7 +2777,7 @@ def test_dispatch_review_nonzero_exit_forfeit_has_no_engagement(tmp_path):
         (_VALID_FINDINGS_STDOUT, False, 1, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2825,7 +2843,7 @@ def test_review_dispatch_fed_prompt_includes_schema_example_block(
     stdout = _census_review_stdout(expected_result_kind or "findings")
     fake = FakeRunner([(stdout, False, 0, "")])
     dispatch_kwargs = dict(
-        engine="codex", model="sonnet", effort="high",
+        engine=seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -2858,7 +2876,7 @@ def test_review_dispatch_fed_prompt_result_contract_unpinned_lists_all_kinds(tmp
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2884,7 +2902,7 @@ def test_review_dispatch_fed_prompt_result_contract_pinned_non_findings(
     stdout = _census_review_stdout(expected_result_kind)
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
         expected_result_kind=expected_result_kind,
@@ -2911,7 +2929,7 @@ def test_review_dispatch_fed_prompt_blocks_never_abut(tmp_path):
     for expected_result_kind, stdout in cases:
         fake = FakeRunner([(stdout, False, 0, "")])
         dispatch_kwargs = dict(
-            engine="codex", model="sonnet", effort="high",
+            engine=seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path, "Review this code.\n"),
             repo_root=repo_root, run_engine=fake,
             build_view=_fake_build_view(tmp_path),
@@ -2982,7 +3000,7 @@ def test_dispatch_review_open_stores_echo_nonce(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
         expected_result_kind="findings",
@@ -3000,7 +3018,7 @@ def test_dispatch_review_continuation_grades_with_stored_echo_nonce(tmp_path):
     repo_root = _repo(tmp_path)
     run_dir = tmp_path / "continue-echo-nonce"
     first = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
         build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
         order_id="order-echo-nonce", expected_result_kind="findings",
@@ -3014,7 +3032,7 @@ def test_dispatch_review_continuation_grades_with_stored_echo_nonce(tmp_path):
         (example_stdout, False, 0, ""),
     ])
     second = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_never_build_view, run_dir=str(run_dir), max_wait=60,
         order_id="order-echo-nonce", expected_result_kind="findings",
@@ -3152,7 +3170,7 @@ def test_dispatch_review_verdicts_terminal_carries_result_kind(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3224,7 +3242,7 @@ def test_review_result_kind_census_survives_consumers(tmp_path, kind):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3303,7 +3321,7 @@ def test_dispatch_review_ruling_terminal_carries_payload(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_RULING_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3764,7 +3782,7 @@ def test_poster_child_engaged_artifact_forfeit_plain_path(tmp_path):
         ("short echo only", False, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3787,7 +3805,7 @@ def test_engaged_artifact_forfeit_from_vacuous_path(tmp_path):
         (empty, False, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3799,7 +3817,7 @@ def test_forfeit_without_engaged_artifact_unchanged(tmp_path):
     repo_root = _git_init(str(tmp_path / "repo-plain"))
     fake = FakeRunner([("", True, 0, ""), ("echo", False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3816,7 +3834,7 @@ def test_fold_ledger_forfeited_transport_class(tmp_path, monkeypatch):
         ('{"verdicts":[]}', False, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3831,7 +3849,7 @@ def test_fold_ledger_success_thin_row(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3898,7 +3916,7 @@ def test_fold_ledger_append_failure_fail_soft(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ED.forfeit_ledger, "append", boom)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3913,7 +3931,7 @@ def test_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkeypatch)
     _ledger_env(tmp_path, monkeypatch)
     missing_prompt = str(tmp_path / "missing-prompt.txt")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=missing_prompt, repo_root=repo_root, run_engine=_never_call,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3960,7 +3978,7 @@ def test_preflight_run_id_namespaced_from_run_dir_dedupe_key(tmp_path, monkeypat
     os.makedirs(run_dir, exist_ok=True)
     _manual_open_review_run_git(tmp_path, run_dir, repo_root)
     wrong_order = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_fake_build_view(tmp_path), run_dir=run_dir, order_id="wrong-order",
     )
@@ -4002,7 +4020,7 @@ def test_write_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkey
     _ledger_env(tmp_path, monkeypatch)
     missing_prompt = str(tmp_path / "missing-write-prompt.txt")
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=missing_prompt, cwd=wt,
         run_dir=str(tmp_path / "run-write-preflight"), order_id="inv-write",
         run_engine=_never_call,
@@ -4022,7 +4040,7 @@ def test_write_preflight_primary_checkout_ledgers_refusal(tmp_path, monkeypatch)
     main = _git_init(str(tmp_path / "main-primary"))
     _ledger_env(tmp_path, monkeypatch)
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=main,
         run_dir=str(tmp_path / "run-write-primary"), order_id="inv-primary",
         run_engine=_never_call,
@@ -4041,7 +4059,7 @@ def test_write_preflight_non_repo_stays_unledgered(tmp_path, monkeypatch):
     non_repo = str(tmp_path / "not-a-repo")
     os.makedirs(non_repo)
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=non_repo,
         run_dir=str(tmp_path / "run-write-nonrepo"), order_id="inv-nonrepo",
         run_engine=_never_call,
@@ -4092,7 +4110,7 @@ def test_dispatch_review_diff_base_omitted_reaches_build_view(tmp_path):
     build_view = _capture_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -4108,7 +4126,7 @@ def test_dispatch_review_diff_base_forwarded_to_build_view(tmp_path):
     build_view = _capture_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view, diff_base="origin/main",
     )
@@ -4161,7 +4179,7 @@ def test_review_continuation_ignores_diff_base(tmp_path):
     build_view = _capture_build_view(tmp_path)
     try:
         ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
             run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
             order_id="test-order", max_wait=1, diff_base="other-ref",
@@ -4248,8 +4266,8 @@ def test_main_dispatch_review_diff_base_cli_wiring(tmp_path, monkeypatch, capsys
     repo_root = _repo(tmp_path)
     rc = ED.main([
         "dispatch-review",
-        "--engine", "codex",
-        "--effort", "high",
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--role", _REVIEW_ROLE,
         "--prompt-path", prompt,
         "--repo-root", repo_root,
         "--diff-base", "REF",
@@ -4286,7 +4304,7 @@ def _running_slice_capture(monkeypatch):
 def _review_with_max_wait(tmp_path, repo_root, run_dir, max_wait, *, runner=None,
                           build_view=None):
     return ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
         run_engine=runner if runner is not None else FakeRunner([]),
         build_view=build_view if build_view is not None else _fake_build_view(tmp_path),
@@ -4680,7 +4698,7 @@ def test_write_fold_carries_observed_sibling_worktrees(tmp_path):
     subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt1], check=True)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt0,
         run_dir=str(tmp_path / "run-observed"), order_id="sib-1", run_engine=fake,
     )
@@ -4699,7 +4717,7 @@ def test_write_forfeit_fold_carries_sibling_worktrees(tmp_path):
             return "", True, 0, ""
 
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-forfeit-sib"), order_id="sib-2",
         run_engine=DirtyTimeoutRunner(), max_wait=120,
@@ -4712,7 +4730,7 @@ def test_write_terminal_refusal_fold_carries_sibling_worktrees(tmp_path):
     wt = _linked_worktree(tmp_path)
     fake = FakeRunner([(_honest_refusal_stdout(), False, 0, "")])
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-refusal-sib"), order_id="sib-3", run_engine=fake,
     )
@@ -4725,7 +4743,7 @@ def test_write_preflight_terminal_omits_sibling_worktrees(tmp_path):
     wt = _linked_worktree(tmp_path)
     missing_prompt = str(tmp_path / "missing.txt")
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=missing_prompt, cwd=wt,
         run_dir=str(tmp_path / "run-preflight-sib"), order_id="sib-4",
         run_engine=_never_call,
@@ -4764,7 +4782,7 @@ def test_sibling_probe_failure_does_not_change_dispatch_outcome(tmp_path, monkey
 
     fake_ok = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_observed = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-probe-ok"), order_id="sib-5", run_engine=fake_ok,
     )
@@ -4777,7 +4795,7 @@ def test_sibling_probe_failure_does_not_change_dispatch_outcome(tmp_path, monkey
     monkeypatch.setattr(ED.sibling_worktree_probe, "snapshot", _snap_indeterminate)
     fake_fail = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_indeterminate = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-probe-boom"), order_id="sib-6", run_engine=fake_fail,
     )
@@ -4793,7 +4811,7 @@ def test_sibling_probe_timeout_does_not_change_dispatch_outcome(tmp_path, monkey
 
     fake_ok = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_observed = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-probe-timeout-ok"), order_id="sib-8", run_engine=fake_ok,
     )
@@ -4805,7 +4823,7 @@ def test_sibling_probe_timeout_does_not_change_dispatch_outcome(tmp_path, monkey
     monkeypatch.setattr(ED.sibling_worktree_probe, "snapshot", _snap_timeout)
     fake_fail = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_indeterminate = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-probe-timeout"), order_id="sib-9", run_engine=fake_fail,
     )
@@ -4859,7 +4877,7 @@ def test_legitimate_concurrent_sibling_change_observed_unattributed(tmp_path):
             return _build_ok_stdout(), False, 0, ""
 
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt0,
         run_dir=str(tmp_path / "run-concurrent"), order_id="sib-7",
         run_engine=SiblingMutator(),
@@ -4928,7 +4946,7 @@ def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_
 def test_mode_brief_check_with_diff_base_refused_before_view_build(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, mode="brief-check", diff_base="a" * 40,
     )
@@ -4941,7 +4959,7 @@ def test_mode_brief_check_with_diff_base_refused_before_view_build(tmp_path):
 def test_mode_invalid_refused_at_library_boundary(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, mode="bogus",
     )
@@ -4960,7 +4978,7 @@ class _ModeEqRaises:
 def test_mode_invalid_non_string_with_eq_raises_returns_structured_refusal(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, mode=_ModeEqRaises(),
     )
@@ -4975,7 +4993,7 @@ def test_continuation_legacy_journal_mode_normalizes_to_review(tmp_path):
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, omit_mode=True)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order", max_wait=0,
     )
@@ -4986,7 +5004,7 @@ def test_continuation_legacy_journal_with_explicit_review_mode_proceeds(tmp_path
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, omit_mode=True)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         mode="review", max_wait=0,
@@ -4999,7 +5017,7 @@ def test_run_dir_mode_mismatch_refused(tmp_path):
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         mode="review", max_wait=0,
@@ -5013,7 +5031,7 @@ def test_continuation_omitted_mode_inherits_journal(tmp_path):
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order", max_wait=0,
     )
@@ -5024,7 +5042,7 @@ def test_continuation_result_kind_pin_on_unpinned_run_refused(tmp_path):
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         expected_result_kind="verdicts", max_wait=0,
@@ -5041,7 +5059,7 @@ def test_continuation_result_kind_pin_disagreeing_refused(tmp_path):
         tmp_path, run_dir, expected_result_kind="findings",
     )
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         expected_result_kind="verdicts", max_wait=0,
@@ -5058,7 +5076,7 @@ def test_continuation_result_kind_pin_agreeing_proceeds(tmp_path):
         tmp_path, run_dir, expected_result_kind="verdicts",
     )
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         expected_result_kind="verdicts", max_wait=0,
@@ -5078,7 +5096,7 @@ def test_continuation_omitted_result_kind_inherits_journal(tmp_path):
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
     )
@@ -5091,7 +5109,7 @@ def test_continuation_agreeing_brief_check_mode_proceeds(tmp_path):
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         mode="brief-check", max_wait=0,
@@ -5104,7 +5122,7 @@ def test_continuation_inherited_brief_check_accepts_diff_base(tmp_path):
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         diff_base="a" * 40, max_wait=0,
@@ -5117,7 +5135,7 @@ def test_continuation_explicit_brief_check_with_diff_base_still_refused(tmp_path
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         mode="brief-check", diff_base="a" * 40, max_wait=0,
@@ -5131,7 +5149,7 @@ def test_dispatch_review_brief_check_end_to_end(tmp_path):
     build_view = _capture_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view, mode="brief-check",
     )
@@ -5160,7 +5178,7 @@ def test_brief_check_notice_absent_from_default_review_fed_prompt(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -5197,8 +5215,8 @@ def test_review_mode_argparse_choices_match_review_modes():
      ED.MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE, False, True),
     ("run-dir-mode-mismatch", {"mode": "review"}, "brief_opened", "brief-check",
      ED.MODE_REFUSAL_RUN_DIR_MISMATCH, False, True),
-    ("engine-config", {"engine": "cursor", "model": "fable", "effort": "composer"},
-     "engine_config", "review", "engine-config:fable-unrunnable", False, True),
+    ("seat-effort-conflict", {"seat": _seat("cursor", "cursor-grok-4.6-xhigh", "low")},
+     None, "review", "effort-token-conflict", False, True),
     ("sanitized-view-error", {}, "view_error", "review", "sanitized-view-export-failed", False, True),
     ("success-review", {}, "success", "review", None, True, True),
     ("success-brief-check", {"mode": "brief-check"}, "success", "brief-check", None, True, True),
@@ -5212,8 +5230,8 @@ def test_dispatch_review_every_outcome_carries_mode(
     repo_root = _repo(tmp_path)
     prompt_path = _valid_prompt(tmp_path)
     base_kwargs = {
-        "model": "sonnet",
-        "effort": "high",
+        "seat": _codex_seat(),
+        "role": _REVIEW_ROLE,
         "prompt_path": prompt_path,
         "repo_root": repo_root,
         "run_engine": _never_call,
@@ -5222,8 +5240,6 @@ def test_dispatch_review_every_outcome_carries_mode(
     if "prompt_path" in kwargs and kwargs["prompt_path"] is None:
         base_kwargs["prompt_path"] = str(tmp_path / "missing-prompt.txt")
     for key, value in kwargs.items():
-        if key == "engine":
-            continue
         if key == "prompt_path" and value is None:
             continue
         base_kwargs[key] = value
@@ -5272,7 +5288,7 @@ def test_dispatch_review_every_outcome_carries_mode(
             "kind": "engine-started", "attempt": 1, "enginePgid": proc.pid, "at": time.time(),
         })
         try:
-            res = ED.dispatch_review("codex", **base_kwargs)
+            res = ED.dispatch_review(**base_kwargs)
             assert "mode" in res
             assert isinstance(res["mode"], str)
             assert res["mode"] == expected_mode
@@ -5286,7 +5302,7 @@ def test_dispatch_review_every_outcome_carries_mode(
         def boom(*_a, **_k):
             raise RuntimeError("wrapper-boom")
         monkeypatch.setattr(ED, "_dispatch_review_impl", boom)
-        res = ED.dispatch_review("codex", **base_kwargs)
+        res = ED.dispatch_review(**base_kwargs)
         assert "mode" in res
         assert isinstance(res["mode"], str)
         assert res["mode"] == expected_mode
@@ -5495,7 +5511,7 @@ def test_dispatch_review_result_key_presence_matrix(tmp_path, row):
     if setup == "unrunnable":
         fake = FakeRunner([])
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
             build_view=_never_build_view,
         )
@@ -5505,7 +5521,7 @@ def test_dispatch_review_result_key_presence_matrix(tmp_path, row):
         repo_root, proc = _manual_running_attempt1_ended_attempt2_live(tmp_path, run_dir)
         try:
             res = ED.dispatch_review(
-                "codex", model="sonnet", effort="high",
+                seat=_codex_seat(), role=_REVIEW_ROLE,
                 prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
                 run_engine=FakeRunner([]), build_view=_never_build_view,
                 run_dir=run_dir, order_id="test-order", max_wait=1,
@@ -5526,7 +5542,7 @@ def test_dispatch_review_result_key_presence_matrix(tmp_path, row):
             repo_root = _repo(tmp_path)
         fake = FakeRunner(row["responses"])
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(), role=_REVIEW_ROLE,
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
             build_view=_fake_build_view(tmp_path),
         )
@@ -5581,7 +5597,7 @@ def test_grade_review_attempt_error_envelope_gate_survives_second_parse(tmp_path
 def test_dispatch_review_expected_result_kind_invalid_reports_effective_mode(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, mode="brief-check", expected_result_kind="rulings",
     )
@@ -5596,7 +5612,7 @@ def test_dispatch_review_expected_result_kind_invalid_reports_effective_mode(tmp
 def test_dispatch_review_expected_result_kind_invalid_default_mode_when_none(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, expected_result_kind="rulings",
     )
@@ -5616,8 +5632,8 @@ def test_dispatch_review_cli_expected_result_kind_invalid_refused_by_argparse(tm
         [
             sys.executable, "-B", mod_path,
             "dispatch-review",
-            "--engine", "codex",
-            "--effort", "high",
+            "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+            "--role", _REVIEW_ROLE,
             "--prompt-path", prompt_path,
             "--repo-root", repo_root,
             "--expected-result-kind", "rulings",
@@ -5632,7 +5648,7 @@ def test_dispatch_review_cli_expected_result_kind_invalid_refused_by_argparse(tm
 def test_dispatch_review_expected_result_kind_non_string_refused_at_library_boundary(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, expected_result_kind=0,
     )
@@ -5647,7 +5663,7 @@ def test_dispatch_review_expected_result_kind_none_not_refused(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), expected_result_kind=None,
     )
@@ -5659,7 +5675,7 @@ def test_dispatch_review_expected_result_kind_pin_refuses_mismatch(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, ""), (_VALID_VERDICTS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), expected_result_kind="findings",
     )
@@ -5671,7 +5687,7 @@ def test_dispatch_review_expected_result_kind_pin_accepts_match(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), expected_result_kind="verdicts",
     )
@@ -5685,7 +5701,7 @@ def test_dispatch_review_expected_result_kind_pin_vacuous_not_masked(tmp_path):
     empty = json.dumps({"findings": []})
     fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), expected_result_kind="verdicts",
     )
@@ -5699,7 +5715,7 @@ def test_dispatch_review_unreadable_not_masked_by_kind_pin(tmp_path):
     unreadable = _UNREADABLE_REVIEW_STDOUT
     fake = FakeRunner([(unreadable, False, 0, ""), (unreadable, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), expected_result_kind="findings",
     )
@@ -5725,8 +5741,8 @@ def _dispatch_write(tmp_path, fake, *, cwd=None, run_dir=None, **kwargs):
     if run_dir is None:
         run_dir = str(tmp_path / "run")
     defaults = {
-        "model": "sonnet",
-        "effort": "high",
+        "seat": _codex_seat(),
+        "role": _WRITE_ROLE,
         "prompt_path": _valid_prompt(tmp_path, "Build this.\n"),
         "cwd": cwd,
         "run_dir": run_dir,
@@ -5734,7 +5750,7 @@ def _dispatch_write(tmp_path, fake, *, cwd=None, run_dir=None, **kwargs):
         "run_engine": fake,
     }
     defaults.update(kwargs)
-    return ED.dispatch_write("codex", **defaults)
+    return ED.dispatch_write(**defaults)
 
 
 def _install_foreign_lease(wt_path):
@@ -8161,7 +8177,7 @@ def test_dispatch_review_pr_body_unpaired_pr_only(tmp_path):
     repo_root = _repo(tmp_path)
     session, body = _session_with_pr_body(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, pr_body_path=body,
     )
@@ -8174,7 +8190,7 @@ def test_dispatch_review_pr_body_unpaired_session_only(tmp_path):
     repo_root = _repo(tmp_path)
     session, _body = _session_with_pr_body(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, session_dir=session,
     )
@@ -8192,7 +8208,7 @@ def test_dispatch_review_pr_body_confinement_refusal(tmp_path):
     session = tmp_path / "session"
     session.mkdir()
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view,
         pr_body_path=str(body), session_dir=str(session),
@@ -8240,7 +8256,7 @@ def test_continuation_pr_body_run_dir_mismatch_refused(tmp_path):
     with open(other_body, "w", encoding="utf-8") as fh:
         fh.write("other body\n")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(), role=_REVIEW_ROLE,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         pr_body_path=other_body, session_dir=session, max_wait=0,

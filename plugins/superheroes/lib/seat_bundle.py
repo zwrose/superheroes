@@ -1,0 +1,414 @@
+"""Single entry for reading and validating a dispatch seat bundle (#1269 WO-A1).
+
+A caller supplies ``{vendor, model, effort}`` exactly once — as JSON or a composed
+``vendor:token`` string — plus the registry ``role`` at dispatch entry. Downstream code
+receives the validated bundle intact; no function re-assembles scalars.
+"""
+from __future__ import annotations
+
+import json
+
+import model_registry
+
+_DROPPED_FLAGS = ("--engine", "--model", "--effort", "--engine-model")
+_LEGACY_KEYWORDS = frozenset({"engine", "model", "effort", "engine_model"})
+
+_SEAT_JSON_SHAPE = (
+    'JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>} '
+    "(the effort key is required; its value may be null)"
+)
+_SEAT_TOKEN_SHAPE = 'composed token "<vendor>:<dispatch-token>"'
+_ACCEPTED_SEAT = f"{_SEAT_JSON_SHAPE}; or {_SEAT_TOKEN_SHAPE}"
+
+
+def _format_valid(values: tuple[str, ...]) -> str:
+    return ", ".join(values)
+
+
+def accepted_seat_detail() -> str:
+    return f"pass --seat as {_ACCEPTED_SEAT}"
+
+
+def accepted_role_detail() -> str:
+    return f"pass --role as one of: {_format_valid(model_registry.roles())}"
+
+
+def legacy_refusal(*, dropped_flags: tuple[str, ...] | None = None) -> dict:
+    """Structured refusal for dropped CLI flags or legacy library call shapes."""
+    parts = [
+        "dispatch seat must be supplied as a whole via --seat and --role;",
+        accepted_seat_detail() + ";",
+        accepted_role_detail() + ".",
+    ]
+    if dropped_flags:
+        flags = ", ".join(sorted(set(dropped_flags)))
+        parts.insert(
+            0,
+            f"removed flag(s) {flags} are no longer accepted "
+            "(vendor now lives inside the --seat bundle, not --engine);",
+        )
+    return {
+        "ok": False,
+        "reason": "legacy-seat-args",
+        "detail": " ".join(parts),
+    }
+
+
+def scan_dropped_flags(argv: list[str]) -> list[str]:
+    """Return dropped legacy flags present in argv (both spellings)."""
+    found: list[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        matched = None
+        for flag in _DROPPED_FLAGS:
+            if arg == flag:
+                matched = flag
+                break
+            prefix = flag + "="
+            if arg.startswith(prefix):
+                matched = flag
+                break
+        if matched is not None:
+            if matched not in found:
+                found.append(matched)
+            if arg == matched and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                i += 2
+                continue
+        i += 1
+    return found
+
+
+def legacy_call_detected(args: tuple, kwargs: dict) -> bool:
+    if args:
+        return True
+    return bool(_LEGACY_KEYWORDS & kwargs.keys())
+
+
+def _normalize_effort(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return stripped.casefold().replace("_", "-")
+
+
+def _match_effort(value: str | None, allowed: tuple[str, ...]) -> str | None:
+    if not allowed:
+        return None if value is None else None
+    norm = _normalize_effort(value)
+    if norm is None:
+        return None
+    for candidate in allowed:
+        if _normalize_effort(candidate) == norm:
+            return candidate
+    return None
+
+
+def _cross_vendor_effort_hint(effort: str) -> str | None:
+    norm = _normalize_effort(effort)
+    if norm is None:
+        return None
+    hits: list[str] = []
+    for vendor in model_registry.vendors():
+        for allowed in model_registry.effort_enum(vendor):
+            if _normalize_effort(allowed) == norm:
+                hits.append(vendor)
+                break
+    if len(hits) == 1:
+        return f"effort {effort!r} is valid for vendor {hits[0]!r}, not for this model"
+    if len(hits) > 1:
+        return (
+            f"effort {effort!r} is valid for vendors "
+            f"{_format_valid(tuple(hits))}, not for this model"
+        )
+    return None
+
+
+def _model_allowed_efforts(vendor: str, model_id: str) -> tuple[str, ...] | None:
+    if not model_registry.is_registered(vendor, model_id):
+        return None
+    return model_registry._allowed_efforts(vendor, model_id)  # noqa: SLF001 — per-model effort home
+
+
+def _parse_json(raw: str) -> dict:
+    try:
+        obj = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {
+            "ok": False,
+            "reason": "seat-unparseable",
+            "detail": (
+                f"seat value is neither valid JSON nor a composed token; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    if not isinstance(obj, dict):
+        return {
+            "ok": False,
+            "reason": "seat-not-object",
+            "detail": f"seat JSON must be an object; accepted: {_ACCEPTED_SEAT}",
+        }
+    if "effort" not in obj:
+        return {
+            "ok": False,
+            "reason": "effort-key-absent",
+            "detail": (
+                'JSON seat must include the "effort" key (value may be null); '
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    vendor = obj.get("vendor")
+    if not isinstance(vendor, str) or not vendor.strip():
+        valid = _format_valid(model_registry.vendors())
+        return {
+            "ok": False,
+            "reason": "vendor-invalid",
+            "detail": (
+                f"seat vendor must be a non-empty string registered in model_registry; "
+                f"valid vendors: {valid}; accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    vendor = vendor.strip()
+    if vendor not in model_registry.vendors():
+        valid = _format_valid(model_registry.vendors())
+        return {
+            "ok": False,
+            "reason": "unknown-vendor",
+            "detail": (
+                f"unknown vendor {vendor!r}; valid vendors: {valid}; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    model = obj.get("model")
+    if model is not None and not isinstance(model, str):
+        return {
+            "ok": False,
+            "reason": "model-invalid",
+            "detail": (
+                f"seat model must be a string or null; accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    effort = obj.get("effort")
+    if effort is not None and not isinstance(effort, str):
+        return {
+            "ok": False,
+            "reason": "effort-invalid",
+            "detail": (
+                f"seat effort must be a string or null; accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    if isinstance(effort, str) and not effort.strip():
+        effort = None
+    return {
+        "ok": True,
+        "vendor": vendor,
+        "model": model,
+        "effort": effort,
+        "source": "json",
+    }
+
+
+def _parse_token(raw: str, *, vendor_hint: str | None) -> dict:
+    text = raw.strip()
+    if ":" not in text:
+        return {
+            "ok": False,
+            "reason": "seat-unparseable",
+            "detail": (
+                f"seat value is neither valid JSON nor a composed token; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    vendor, token = text.split(":", 1)
+    vendor = vendor.strip()
+    token = token.strip()
+    if vendor_hint is not None and vendor != vendor_hint:
+        return {
+            "ok": False,
+            "reason": "vendor-hint-mismatch",
+            "detail": (
+                f"composed token vendor {vendor!r} does not match hint {vendor_hint!r}; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    if vendor not in model_registry.vendors():
+        valid = _format_valid(model_registry.vendors())
+        return {
+            "ok": False,
+            "reason": "unknown-vendor",
+            "detail": (
+                f"unknown vendor {vendor!r}; valid vendors: {valid}; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    parsed = model_registry.parse_dispatch_token(vendor, token)
+    if parsed is None:
+        return {
+            "ok": False,
+            "reason": "token-unresolvable",
+            "detail": (
+                f"composed token {token!r} is not self-contained for vendor {vendor!r}; "
+                f"use JSON seat form {_SEAT_JSON_SHAPE} for this vendor"
+            ),
+        }
+    model_id, effort = parsed
+    return {
+        "ok": True,
+        "vendor": vendor,
+        "model": model_id,
+        "effort": effort,
+        "source": "token",
+    }
+
+
+def parse(raw, *, vendor_hint=None) -> dict:
+    if not isinstance(raw, str) or not raw.strip():
+        return {
+            "ok": False,
+            "reason": "seat-empty",
+            "detail": f"seat value must be non-empty; accepted: {_ACCEPTED_SEAT}",
+        }
+    text = raw.strip()
+    if text.startswith("{"):
+        return _parse_json(text)
+    return _parse_token(text, vendor_hint=vendor_hint)
+
+
+def _validate_model_effort(bundle: dict) -> dict:
+    vendor = bundle["vendor"]
+    model_id = bundle.get("model")
+    effort = bundle.get("effort")
+    source = bundle.get("source")
+
+    if not isinstance(model_id, str) or not model_id:
+        return {
+            "ok": False,
+            "reason": "model-required",
+            "detail": (
+                "seat model must be a registry model id; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+
+    if not model_registry.is_registered(vendor, model_id):
+        parsed = model_registry.parse_dispatch_token(vendor, model_id)
+        if parsed is None:
+            out = dict(bundle)
+            out.update({
+                "ok": True,
+                "vendor": vendor,
+                "model": model_id,
+                "effort": effort,
+                "effortSource": "caller",
+            })
+            return out
+        model_id, tok_effort = parsed
+        if tok_effort is not None and effort is not None and tok_effort != effort:
+            return {
+                "ok": False,
+                "reason": "effort-token-conflict",
+                "detail": (
+                    f"effort {effort!r} conflicts with effort {tok_effort!r} "
+                    f"encoded in model token {bundle.get('model')!r}; "
+                    f"accepted: {_ACCEPTED_SEAT}"
+                ),
+            }
+        if effort is None and tok_effort is not None:
+            effort = tok_effort
+
+    allowed = _model_allowed_efforts(vendor, model_id)
+    if allowed is None:
+        return {
+            "ok": False,
+            "reason": "unknown-model",
+            "detail": (
+                f"model {model_id!r} is not registered for vendor {vendor!r}; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+
+    effort_source = "caller"
+    if not allowed:
+        if effort is not None:
+            return {
+                "ok": False,
+                "reason": "invalid-model-effort",
+                "detail": (
+                    f"model {model_id!r} declares an empty effort set — only null effort "
+                    f"is accepted; got {effort!r}; accepted efforts for this model: (none)"
+                ),
+            }
+        effort_source = "declared-none"
+    else:
+        matched = _match_effort(effort, allowed)
+        if matched is None:
+            allowed_text = _format_valid(allowed) if allowed else "(none)"
+            detail = (
+                f"effort {effort!r} is not valid for model {model_id!r}; "
+                f"accepted efforts for this model: {allowed_text}"
+            )
+            hint = _cross_vendor_effort_hint(effort) if isinstance(effort, str) else None
+            if hint:
+                detail = f"{detail}; {hint}"
+            return {
+                "ok": False,
+                "reason": "invalid-model-effort",
+                "detail": detail,
+            }
+        if effort is None:
+            if len(allowed) == 1:
+                matched = allowed[0]
+                effort_source = "resolved"
+            else:
+                return {
+                    "ok": False,
+                    "reason": "invalid-model-effort",
+                    "detail": (
+                        f"effort is required for model {model_id!r}; "
+                        f"accepted efforts for this model: {_format_valid(allowed)}"
+                    ),
+                }
+        elif source == "token" and bundle.get("effort") is None:
+            effort_source = "resolved"
+        else:
+            effort_source = "caller"
+        effort = matched
+
+    out = dict(bundle)
+    out.update({
+        "ok": True,
+        "vendor": vendor,
+        "model": model_id,
+        "effort": effort,
+        "effortSource": effort_source,
+    })
+    return out
+
+
+def validate(bundle: dict, role: str) -> dict:
+    if not bundle.get("ok"):
+        return bundle
+    if not isinstance(role, str) or role not in model_registry.roles():
+        valid = _format_valid(model_registry.roles())
+        return {
+            "ok": False,
+            "reason": "unknown-role",
+            "detail": (
+                f"unknown role {role!r}; valid roles: {valid}; {accepted_role_detail()}"
+            ),
+        }
+    checked = _validate_model_effort(bundle)
+    if not checked.get("ok"):
+        return checked
+    return checked
+
+
+def validate_effort_only(bundle: dict) -> dict:
+    """Model-level effort validation without registry role allowlist (build-argv entry)."""
+    if not bundle.get("ok"):
+        return bundle
+    return _validate_model_effort(bundle)

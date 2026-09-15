@@ -22,6 +22,7 @@ if _LIB_DIR not in sys.path:
 
 import readout  # noqa: E402  (the band's single scrub seam; same-tree sibling)
 import model_registry  # noqa: E402  (band-wide model taxonomy; same-tree sibling)
+import seat_bundle  # noqa: E402  (single dispatch seat entry; #1269 WO-A1)
 
 # The SINGLE-SOURCED commit trailer. The committer (commit_result, Task 7) and the
 # build_state_cli git-log parser both reference this so the convention cannot fork.
@@ -209,89 +210,90 @@ _BUILD_ARGV_REFUSAL_TOKENS = frozenset({
 })
 
 
-def _refuse(reason):
+def _refuse(reason, *, detail=None):
     assert reason in _BUILD_ARGV_REFUSAL_TOKENS
-    return {"argv": [], "reason": reason}
+    out = {"argv": [], "reason": reason}
+    if detail is not None:
+        out["detail"] = detail
+    return out
 
 
 def _ok(argv):
     return {"argv": argv, "reason": None}
 
 
-def build_argv_result(engine, role_kind, effort, opts):
-    """Like build_argv but returns {argv, reason} with a named refusal token when unrunnable."""
+def build_argv_result(seat, role_kind, opts):
+    """Like build_argv but returns {argv, reason} with a named refusal token when unrunnable.
+
+    ``seat`` is a validated bundle dict (vendor, model, effort). The bundle is read intact —
+    no scalar re-assembly downstream of entry."""
     opts = opts or {}
+    accepted = seat_bundle.accepted_seat_detail()
+    if not isinstance(seat, dict):
+        return _refuse("unknown-engine", detail=accepted)
+    vendor = seat.get("vendor")
+    effort = seat.get("effort")
+    model_id = seat.get("model")
     cwd = opts.get("cwd")
     is_read = role_kind == "review"
     claude_tier = opts.get("model")
     if claude_tier is not None:
         if not isinstance(claude_tier, str) or claude_tier not in model_registry.known_claude_models():
-            return _refuse("unknown-claude-tier")
+            return _refuse("unknown-claude-tier", detail=accepted)
         if claude_tier == "fable":
-            # Config-time gate configured_dispatch_violations is primary; depth for bypass callers.
-            return _refuse("fable-unrunnable")
-    if engine == "codex":
-        engine_model = opts.get("engine_model")
+            return _refuse("fable-unrunnable", detail=accepted)
+    if vendor == "codex":
+        engine_model = model_id
         if isinstance(engine_model, str) and engine_model:
             if model_registry.is_registered("codex", engine_model):
                 pass
             else:
                 parsed = model_registry.parse_dispatch_token("codex", engine_model)
                 if parsed is None:
-                    return _refuse("unregistered-engine-model")
+                    return _refuse("unregistered-engine-model", detail=accepted)
                 engine_model, _tok_effort = parsed
         else:
             try:
                 engine_model = model_registry.codex_peer_for_claude_tier(claude_tier)
-            except ValueError:
-                # Config-time gate configured_dispatch_violations is primary; depth for bypass callers.
-                return _refuse("fable-unrunnable")
+            except (ValueError, TypeError):
+                return _refuse("fable-unrunnable", detail=accepted)
+            except Exception:
+                return _refuse("unregistered-engine-model", detail=accepted)
         ok, _reason = model_registry.validate_config(
             "codex", engine_model, effort, allow_override_only=True)
         if not ok:
-            return _refuse("invalid-model-effort")
+            return _refuse("invalid-model-effort", detail=accepted)
         sandbox = "read-only" if is_read else "workspace-write"
         argv = ["codex", "exec", "--sandbox", sandbox,
                 "-m", engine_model,
                 "-c", "model_reasoning_effort=%s" % effort]
         if cwd:
-            argv += ["-C", cwd]           # write: confine writes to the managed worktree.
-                                          # read (#665): pin the seat to the repo so it can trace
-                                          # into files instead of inheriting the dispatcher's cwd.
-        # trailing `-`: read the prompt from stdin. The dispatch runner redirects the staged
-        # prompt file into stdin (`<argv> < promptPath`) — the prompt is ALWAYS fed here.
+            argv += ["-C", cwd]
         argv += ["-"]
         return _ok(argv)
-    if engine == "cursor":
-        engine_model = opts.get("engine_model")
+    if vendor == "cursor":
+        engine_model = model_id
         if isinstance(engine_model, str) and engine_model:
             if model_registry.is_registered("cursor", engine_model):
-                model_id = engine_model
+                cursor_model_id = engine_model
             else:
                 parsed = model_registry.parse_dispatch_token("cursor", engine_model)
                 if parsed is None:
-                    return _refuse("unregistered-engine-model")
-                model_id, tok_effort = parsed
+                    return _refuse("unregistered-engine-model", detail=accepted)
+                cursor_model_id, tok_effort = parsed
                 if tok_effort is not None and effort is not None and tok_effort != effort:
-                    return _refuse("engine-model-effort-conflict")
+                    return _refuse("engine-model-effort-conflict", detail=accepted)
                 if effort is None and tok_effort is not None:
                     effort = tok_effort
-            ok, _reason = model_registry.validate_config("cursor", model_id, effort)
+            ok, _reason = model_registry.validate_config("cursor", cursor_model_id, effort)
             if not ok:
-                return _refuse("invalid-model-effort")
-            tok = model_registry.dispatch_token("cursor", model_id, effort)
+                return _refuse("invalid-model-effort", detail=accepted)
+            tok = model_registry.dispatch_token("cursor", cursor_model_id, effort)
             if not tok:
-                # defensive: unreachable once validate_config passes for cursor models
-                return _refuse("untokenizable")
+                return _refuse("untokenizable", detail=accepted)
             model = tok
         else:
             model = _CURSOR_MODEL
-        # cursor-agent has no cwd flag; a cursor read dispatch is pinned by the runner's subprocess
-        # cwd (#665), not by argv.
-        # cursor-agent 2026.06.26: model flag is --model (not -m); -p/--print is REQUIRED for a
-        # non-interactive CLI invocation (without it it goes interactive and --output-format is a no-op); --trust
-        # clears the workspace-trust gate that otherwise HANGS a non-interactive CLI invocation (needed for the
-        # read/--mode-plan role — the write role's -f also trusts, but --trust covers both).
         argv = ["cursor-agent", "--model", model, "-p", "--trust"]
         if is_read:
             argv += ["--mode", "plan"]
@@ -299,20 +301,16 @@ def build_argv_result(engine, role_kind, effort, opts):
             argv += ["-f"]
         argv += ["--output-format", "stream-json"]
         return _ok(argv)
-    return _refuse("unknown-engine")
+    return _refuse("unknown-engine", detail=accepted)
 
 
-def build_argv(engine, role_kind, effort, opts):
-    """Return the argv list to dispatch `engine` for `role_kind` at `effort`. READ (review) →
-    read-only sandbox; WRITE (build|fix) → workspace-write. Always explicit
-    model+effort. opts keys: cwd, model (native Claude tier short name from
-    model_registry.known_claude_models()), engine_model (registry id or composed dispatch token).
-    Cursor uses composer by default or an explicit engine_model pin; a non-tier `model` value is
-    refused (never silently substituted). Codex uses a valid engine_model pin or maps the shared
-    tier. The PROMPT is NOT encoded here — codex reads it from stdin (trailing `-`) and
-    cursor-agent reads it from stdin when given no positional prompt; the dispatch runner feeds
-    the staged prompt file to the process stdin. Deterministic; fully unit-testable."""
-    return build_argv_result(engine, role_kind, effort, opts)["argv"]
+def build_argv(seat, role_kind, opts):
+    """Return the argv list to dispatch the validated ``seat`` bundle for ``role_kind``.
+
+    READ (review) → read-only sandbox; WRITE (build|fix) → workspace-write.
+    ``seat`` carries vendor/model/effort intact from entry. opts keys: cwd only (plus internal
+    bypass keys for refusal-token tests). The PROMPT is NOT encoded here."""
+    return build_argv_result(seat, role_kind, opts)["argv"]
 
 
 def _top_level_json_matches(stdout, want_type=None):
@@ -2024,32 +2022,44 @@ def _cmd_build_argv(args):
                  "path": args.prompt_path}) + "\n")
             return 0
 
-    effort = args.effort
-    if isinstance(effort, str) and not effort.strip():
-        effort = None
-    opts = {"cwd": args.cwd, "model": args.model,
-            "engine_model": args.engine_model}
-    res = build_argv_result(args.engine, args.role, effort, opts)
-    if res["reason"] is not None:
+    parsed = seat_bundle.parse(args.seat)
+    if not parsed.get("ok"):
         sys.stdout.write(json.dumps(
-            {"ok": False, "reason": "engine-config", "detail": res["reason"], "argv": []}) + "\n")
+            {"ok": False, "reason": "engine-config", "detail": parsed["reason"],
+             "argv": [], "seat_detail": parsed["detail"]}) + "\n")
+        return 0
+    validated = seat_bundle.validate_effort_only(parsed)
+    if not validated.get("ok"):
+        sys.stdout.write(json.dumps(
+            {"ok": False, "reason": "engine-config", "detail": validated["reason"],
+             "argv": [], "seat_detail": validated["detail"]}) + "\n")
+        return 0
+    opts = {"cwd": args.cwd}
+    res = build_argv_result(validated, args.role, opts)
+    if res["reason"] is not None:
+        detail = res.get("detail") or res["reason"]
+        sys.stdout.write(json.dumps(
+            {"ok": False, "reason": "engine-config", "detail": res["reason"],
+             "argv": [], "seat_detail": detail}) + "\n")
     else:
         sys.stdout.write(json.dumps(res["argv"]) + "\n")
     return 0
 
 
 def main(argv):
+    if argv and argv[0] == "build-argv":
+        dropped = seat_bundle.scan_dropped_flags(argv[1:])
+        if dropped:
+            refusal = seat_bundle.legacy_refusal(dropped_flags=tuple(dropped))
+            sys.stdout.write(json.dumps(refusal) + "\n")
+            return 1
     ap = argparse.ArgumentParser(prog="engine_adapter")
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build-argv")
-    b.add_argument("--engine", required=True, choices=("codex", "cursor"))
+    b.add_argument("--seat", required=True,
+                   help="JSON seat bundle or vendor:token composed dispatch token")
     b.add_argument("--role", required=True, choices=("review", "build", "fix"))
-    b.add_argument("--effort", default=None)
     b.add_argument("--cwd", default=None)
-    b.add_argument("--model", default=None,
-                   help="native Claude tier short name (haiku/sonnet/opus/fable); non-tier values refuse")
-    b.add_argument("--engine-model", default=None,
-                   help="registry model id or composed dispatch token for the selected engine")
     b.add_argument("--verify", action="append", default=None,
                    help="PATH:SHA256 staged-input check; any mismatch/unreadable file fails build-argv closed")
     b.add_argument("--prompt-path", default=None,

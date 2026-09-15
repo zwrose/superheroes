@@ -564,7 +564,7 @@ gives you this per role.
 four dispatch kinds this charter sanctions — an **implementer order**, a **fix-batch order**, a
 **`check-runner` dispatch**, and a **hand-rolled fallback dispatch** — you **run the model gate** on
 the effective `--model` you will pass (explicit or defaulted) *before dispatching*:
-`python3 -B ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/dispatch_guard.py check --role <role> --vendor <engine> --model <model> [--effort <effort>]`.
+`python3 -B ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/dispatch_guard.py check --role <role> --seat '<json-or-vendor:token>'`.
 It validates that model against the seat's **registry allowlist** (`lib/model_registry.py`, the single
 model/vendor taxonomy; #510). **Exit 1 = an unlisted model = a park, not a pick:** the gate prints the
 allowlist, and you **park before any work runs** — never treat a model-within-engine choice as "just a
