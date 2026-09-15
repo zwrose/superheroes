@@ -66,13 +66,8 @@ def _profile_refusal(cwd, root, payload):
     if payload.get("behind"):
         return core_md.BUILDER_DISPATCH_DEFER_SCHEMA_BEHIND
     if payload.get("profileAbsent") or payload.get("profileUnparseable"):
-        try:
-            path = core_md.core_path(cwd, root)
-            cls = core_md._classify_core_md_at_path(path)
-            if cls.status == core_md.CONFIG_ABSENT:
-                return project_config.REASON_PROFILE_ABSENT
-        except Exception:
-            pass
+        if core_md.gate_config_profile_is_absent(cwd, root):
+            return project_config.REASON_PROFILE_ABSENT
         return project_config.REASON_PROFILE_UNPARSEABLE
     return None
 

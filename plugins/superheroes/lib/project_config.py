@@ -574,13 +574,8 @@ def set_item(cwd, slug, value, root=None):
 
     facts = core_md.read(cwd, root)
     if facts is None:
-        try:
-            path = core_md.core_path(cwd, root)
-            cls = core_md._classify_core_md_at_path(path)
-            if cls.status == core_md.CONFIG_ABSENT:
-                return {"action": "refused", "reason": REASON_PROFILE_ABSENT}
-        except Exception:
-            pass
+        if core_md.gate_config_profile_is_absent(cwd, root):
+            return {"action": "refused", "reason": REASON_PROFILE_ABSENT}
         return {"action": "refused", "reason": REASON_PROFILE_UNPARSEABLE}
     if facts.get("behind"):
         return {"action": "behind", "record": facts}

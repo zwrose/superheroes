@@ -20,7 +20,7 @@ if _LIB_DIR not in sys.path:
 import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 2
 
 CONFIG_ABSENT = "absent"
 CONFIG_OK = "ok"
@@ -527,6 +527,18 @@ def gate_config_is_refusal(cfg):
 def gate_config_is_absent(cfg):
     """True when no core.md is present at the resolved gate path."""
     return cfg.status == CONFIG_ABSENT
+
+
+def gate_config_profile_is_absent(cwd, root=None):
+    """True when no core.md is present at the resolved profile path.
+
+    False when core.md exists but is unreadable, or when the repository root cannot be
+    determined. Never raises."""
+    try:
+        cls = _classify_core_md_at_path(core_path(cwd, root))
+    except Exception:
+        return False
+    return cls.status == CONFIG_ABSENT
 
 
 def gate_config_usable_prefs(cfg):
