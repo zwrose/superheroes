@@ -715,10 +715,13 @@ above).
    **How long it lasts.** It applies to the PRs named in it **until they merge**. It is **not tied to
    walks and does not lapse at one**. **No head is recorded at the word.**
    **What puts a PR back outside it — exactly two things.** A PR **opened after the word** (a fix PR,
-   a later stack layer, a fold) is outside it and asks. A PR whose **behavior, scope, or disclosed
-   tradeoffs changed materially** after the word is outside it and asks again — judged against the
-   project's **material-consequence line**. A routine base update or a craft fix with no material
-   consequence **keeps** the word; that is the advisor's judgment and it is **said on the owner half**.
+   a later stack layer, a fold) is outside it and asks — **except** the disclosed follow-up PR on a
+   red train once the last lane has merged: that PR is the **single exception**, and it rides the
+   scope **only** while the fix is craft with no material consequence (see **The red train** below).
+   A PR whose **behavior, scope, or disclosed tradeoffs changed materially** after the word is outside
+   it and asks again — judged against the project's **material-consequence line**. A routine base
+   update or a craft fix with no material consequence **keeps** the word; that is the advisor's
+   judgment and it is **said on the owner half**.
    **Preconditions for executing inside the scope.** The **review and verification evidence the PR's
    lane requires** (a READY vet for a full or light lane; the independent reviewer's **final-head
    receipt** for a micro lane, which has no advisor vet by design); **CI green on the recorded head**;

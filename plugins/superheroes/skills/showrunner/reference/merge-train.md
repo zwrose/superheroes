@@ -39,8 +39,9 @@ route, its DoD, and its advisor vet.
 A red on the train (a per-lane green that goes red on the union or on `main`'s post-merge run) is
 fixed **under the word already given** when the fix is **craft with no material consequence**; the
 disclosed integration commit on the last open PR, or the disclosed follow-up PR once the last lane
-has merged, **rides the scope and is reported in the thread like any merge**. A fix with a **material
-consequence asks**.
+has merged, **rides the scope and is reported in the thread like any merge**. That follow-up PR is
+the **single exception** to the rule that a PR opened after the word asks again — it holds **only**
+while the fix is craft with no material consequence. A fix with a **material consequence asks**.
 
 **Field case:** a test green on the identical tree pre-merge went **deterministically** red post-merge
 in CI only (coverage-instrumented runners lose an assertion race); a disclosed integration commit on

@@ -43,7 +43,8 @@ governs.
   lane's review and verification evidence, CI green on the recorded head, and a branch
   current with its base. Anything opened after the word or materially changed after it
   asks again. Force-push proceeds on a stated reason and a word; releases and publishing
-  are the owner's click.
+  are the owner's click by default, but may be delegated by an in-the-moment word for that
+  specific release.
 - **Review before handback.** Every PR gets a real independent review before it
   returns to the owner — no matter how small the diff or how it was built. "Too small
   to review" is how the worst escapes shipped. (Full rule: rubric/review-discipline.md.)
