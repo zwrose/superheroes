@@ -554,11 +554,11 @@ was stopped outright, and three reached `done` within a minute of their subscrip
 **All five notices were delivered, and not one of them arrived during the trial.** Across every
 tool round from 12:25Z to 12:52Z, and through the whole of the verification, review, and handback
 that followed, no notice appeared. All five then arrived **together, at this session's next turn
-boundary**, each naming its lane and the turn it had finished — including the two lanes that had
-gone idle roughly forty minutes earlier.
+boundary**, at 13:26Z, each naming its lane and the time its last turn had finished: 12:25Z,
+12:26Z, 12:30Z, 12:51Z, and 12:51Z. The earliest had been waiting an hour.
 
-So the notice is not lost. It was **delivered only at the subscribing session's turn boundary**,
-never inside the turn. A supervisor that polls inside its turn, which is what a supervisor must do
+So the notice is not lost. It was **delivered at the subscribing session's turn boundary**, and
+at no point inside the turn that was waiting on it. A supervisor that polls inside its turn, which is what a supervisor must do
 while it still has work in flight, cannot see a notice no matter how long it waits. What was
 observed is exactly that and no more: no notice arrived within any tool round of a working turn.
 This supervising session is headless. It received the five at a turn boundary and went on working
@@ -645,8 +645,8 @@ this trial.
   across all three accounts (`323cc06c`, `f36e02f3`, `0e6d2ec1`, `5258a26b`, `6ab29229`), five
   qualifying transitions, and five notices delivered — every one of them at the supervising
   session's turn boundary, none during the turn. The signal the watcher stands in for exists and
-  arrives too late to stand in for: a wave supervisor learns a lane finished only once the turn that
-  was waiting on it has ended.
+  arrives too late to stand in for it. A wave supervisor learns a lane finished only once the turn
+  that was waiting on it has ended.
   *Delete when:* a re-run of this trial observes completion and wake signals reaching the
   **headless spawning** session **while that session is still working** — inside the turn, not at
   its boundary — for every lane of a wave, not merely for most lanes, and not at an interactive or
@@ -673,7 +673,8 @@ this trial.
   lane's finish in time to act on it, inside the turn and not at its boundary, for every lane of a
   wave and not merely for most lanes, so that ending a turn stops costing the result. Survival of
   the supervising process past a turn end does not satisfy this line on its own. This receipt
-  already records that shape of survival, and the result was still lost.
+  already records that shape of survival, and the waiting turn still ended without learning of
+  the finish.
 
 - **Multi-account provisioning transport.** **Needed.** *Evidence:* the negative case was run.
   With `CLAUDE_CONFIG_DIR` unset, a lane launched from a session running under `~/.claude-three`
@@ -698,9 +699,9 @@ this trial.
   `status: idle`, and the notice it eventually produced described it as having gone idle — so an
   idle signal reports a wedged lane as idle, which is worse than silence, because it reads as
   completion. *Delete when:* a re-run observes the
-  watcher's conditions met and observes a completion or exit signal reaching the headless spawning
-  session inside the turn, not at its boundary, for every lane of a wave, that distinguishes a
-  wedged lane from a finished one.
+  watcher's conditions met and observes a completion or exit signal that distinguishes a wedged lane
+  from a finished one reaching the headless spawning session inside the turn, not at its boundary,
+  for every lane of a wave.
 
 ### 5.5 The outcome
 
@@ -712,9 +713,10 @@ The reason is one reason, not seven. The harness has grown properties this machi
 supply, and grown them on the background path, while the lanes run on the print path. Three of the
 seven conditions — detached spawn, transcript-mtime liveness, and the launcher-enforced
 own-worktree half — turn on the spawn path changing and then being observed again. Three more —
-wave-watch, the turn-end doctrine, and the heartbeat — turn on a completion signal reaching a
-headless spawning session in time to be acted on, which this trial found is delivered only at the
-turn boundary, too late for that. The seventh, multi-account transport, turns on neither: it turns
+wave-watch, the turn-end doctrine, and the heartbeat — each turn on a notice reaching the headless
+session that is waiting on it while that session can still act, which this trial observed only at a
+turn boundary. Each of those three lines states its own further demand, and this summary restates
+none of it; the line is the condition. The seventh, multi-account transport, turns on neither: it turns
 on the config-dir pin becoming unnecessary and on one supervision view carrying lane work state
 across every account, and this run saw neither.
 
@@ -738,6 +740,6 @@ every subscription and is **consistent with** what arrived — each of the five 
 exactly one notice — though nothing here tested a second transition on a spent subscription. The
 twelve-hour expiry was **not** observed: every notice arrived well inside that window. The shared sessions symlink carries the cross-account
 wake and the cross-account name listing; it does not carry the per-account view that reports a
-lane's work state. And on the caveat that nothing had yet run through this path: something has now run through it on this machine
+lane's work state. The caveat that nothing had yet run through this path is answered. Something has now run through it on this machine
 — fourteen sessions across three accounts in one sitting of about forty minutes, which is a first
 run and not a soak, and this section is its record.
