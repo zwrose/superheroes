@@ -129,13 +129,6 @@ _DIFF_PATCH_FLAGS = (
 
 _DIFF_READ_POLL_SECONDS = 1.0
 
-_ANCESTRY_SCRATCH_PREFIX = "superheroes-ancestry-"
-
-_ANCESTRY_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + (
-    "-c",
-    "core.useReplaceRefs=false",
-)
-
 
 def _git_env():
     env = os.environ.copy()
@@ -145,10 +138,8 @@ def _git_env():
     env["GIT_NO_REPLACE_OBJECTS"] = "1"
     env["LC_ALL"] = "C"
     env["LANGUAGE"] = ""
-    # Owner-ruled 2026-08-09 (#797): partial clones are not a supported checkout shape
-    # for sanitized-view construction, and construction must never wait on git's
-    # on-demand object fetching. Every git subprocess this module spawns is built
-    # through this function or _ancestry_env, so the two of them are the whole census.
+    # Every git subprocess this module spawns refuses an on-demand promisor fetch
+    # rather than waiting on one.
     # bite-axis: on-demand fetch suppression — every git subprocess built here
     # refuses a promisor fetch rather than waiting on one.
     env["GIT_NO_LAZY_FETCH"] = "1"
@@ -163,108 +154,6 @@ def _git_run(*args, **kwargs):
 def _git_popen(*args, **kwargs):
     kwargs["env"] = _git_env()
     return subprocess.Popen(*args, **kwargs)
-
-
-# Config markers of a partial clone, read from the repository's OWN config only.
-# ``git config --list`` merges system, global, included and command config, so an
-# ``extensions.partialclone`` line in a user's ~/.gitconfig would mark every repository
-# on that machine as partial; git's own repository-format reader takes extensions from
-# the repository config, and ``--local`` is how we read the same scope it does.
-#
-# Three markers, because git registers a promisor remote from more than one of them:
-# ``extensions.partialclone``; ``remote.<name>.promisor`` when git-true; and
-# ``remote.<name>.partialclonefilter``, which registers the remote on its own —
-# measured on git 2.50.1, a clone with the filter key and NO promisor key still
-# lazy-fetched a missing blob successfully.
-_PARTIAL_CLONE_EXTENSION_KEY = "extensions.partialclone"
-_PROMISOR_REMOTE_KEY_RE = re.compile(r"\Aremote\..+\.promisor\Z")
-_PARTIAL_CLONE_FILTER_KEY_RE = re.compile(r"\Aremote\..+\.partialclonefilter\Z")
-_PARTIAL_CLONE_PROBE_TIMEOUT_SECONDS = 10
-
-
-def _git_config_local_keys(repo_real):
-    """Keys of the repository's own config, or ``None`` when the probe could not run.
-
-    ``None`` is distinct from "no keys": it means the answer is unknown, and callers
-    must not read it as a clean bill of health.
-    """
-    try:
-        proc = _git_run(
-            ["git", "-C", repo_real, "config", "--local", "--list", "-z"],
-            capture_output=True,
-            timeout=_PARTIAL_CLONE_PROBE_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired, ValueError):
-        return None
-    if proc.returncode != 0:
-        return None
-    keys = []
-    for record in proc.stdout.split(b"\0"):
-        if not record:
-            continue
-        key, _sep, _value = record.partition(b"\n")
-        try:
-            keys.append(key.decode("utf-8"))
-        except UnicodeDecodeError:
-            continue
-    return keys
-
-
-def _git_config_says_true(repo_real, key):
-    """Ask **git** whether ``key`` is true, rather than reimplementing its grammar.
-
-    git's boolean grammar is wider than it looks — ``yes``/``on``/``1`` are true,
-    ``no``/``off``/``0``/empty are false, a valueless key is true, and its integer
-    parser additionally accepts ``0x10``, ``010`` and ``1k``/``1m``/``1g`` suffixes,
-    every one of which ``--type=bool`` reports as true (measured, git 2.50.1). Any
-    hand-rolled parser is a running bet against that list, so this delegates.
-    ``--get-all`` is used because a config key may carry several values; any true one
-    counts, which is how git's own promisor-remote reader treats them.
-    """
-    if not _PROMISOR_REMOTE_KEY_RE.match(key):
-        # The caller only ever passes keys matched against that pattern; this refuses
-        # to hand git anything else, so no repository-supplied string can reach argv
-        # as an option.
-        return False
-    try:
-        proc = _git_run(
-            ["git", "-C", repo_real, "config", "--local", "--type=bool", "--get-all", key],
-            capture_output=True,
-            timeout=_PARTIAL_CLONE_PROBE_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired, ValueError):
-        return False
-    if proc.returncode != 0:
-        return False
-    return b"true" in proc.stdout.split()
-
-
-def _is_partial_clone(repo_real):
-    """True when ``repo_real`` is a partial clone — a checkout with a promisor remote.
-
-    Probed from **config only**: this never names an object id, so the probe itself can
-    never be the on-demand fetch the refusal exists to prevent, and — unlike
-    ``GIT_NO_LAZY_FETCH``, which older git versions ignore — its answer does not depend
-    on the git version in front of it.
-
-    An unusable probe answers ``False``, i.e. *proceed*. That is deliberate: a config
-    read that hiccups on an ordinary repository must not turn into a hard refusal for
-    everyone, and ``GIT_NO_LAZY_FETCH=1`` remains underneath as the backstop.
-    """
-    keys = _git_config_local_keys(repo_real)
-    if keys is None:
-        return False
-    promisor_keys = []
-    for key in keys:
-        # bite-axis: shape detection — each of the three markers identifies a partial
-        # clone on its own, and only the promisor key's value is consulted.
-        if key == _PARTIAL_CLONE_EXTENSION_KEY:
-            return True
-        if _PARTIAL_CLONE_FILTER_KEY_RE.match(key):
-            return True
-        if _PROMISOR_REMOTE_KEY_RE.match(key):
-            promisor_keys.append(key)
-    return any(_git_config_says_true(repo_real, key) for key in promisor_keys)
 
 
 def _is_git_object_id_hex(value):
@@ -651,20 +540,19 @@ def _remaining_export_timeout(started):
     return max(remaining, 0.001)
 
 
-def _ancestry_env():
+_SHALLOW_ANSWERS = frozenset({"true", "false"})
+
+
+def _neutral_git_env():
     """Environment for ancestry resolution, built by rule rather than by denylist.
 
     Every inherited ``GIT_*`` variable is dropped — including ones this module has
     never heard of — and only process-owned values are added back. A denylist of
-    dangerous names is exactly what this boundary must not depend on.
+    dangerous names is exactly what this boundary must not depend on: it is what
+    lets an inherited graft file move the merge base without anyone noticing.
     """
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env["GIT_NO_REPLACE_OBJECTS"] = "1"
-    # Added back explicitly, not inherited: this builder drops every GIT_* variable,
-    # so the no-lazy-fetch rule that _git_env applies has to be restated here or the
-    # ancestry probes would be the one channel still able to trigger a promisor fetch.
-    # bite-axis: on-demand fetch suppression, restated — this builder drops every
-    # inherited GIT_* variable, so ancestry probes need their own add-back.
     env["GIT_NO_LAZY_FETCH"] = "1"
     env["GIT_CONFIG_GLOBAL"] = os.devnull
     env["GIT_CONFIG_SYSTEM"] = os.devnull
@@ -673,239 +561,66 @@ def _ancestry_env():
     return env
 
 
-def _ancestry_run(argv, started, *, cwd=None):
-    """Run one ancestry git command under the hermetic environment and the deadline."""
+def _authoritative_merge_base(repo_real, base_sha, head_sha, started):
+    """Merge-base resolved directly in the reviewed repository.
+
+    Scratch isolation is gone: repository-local ancestry overlays — ``.git/info/grafts``
+    in particular — are honoured, as they are for every other git command run against
+    that repository. Inherited ``GIT_*`` environment variables are still stripped via
+    ``_neutral_git_env`` so a hostile ``GIT_GRAFT_FILE`` cannot steer the merge base.
+
+    ``base_sha`` is a pinned commit object id, enforced before any repo-local git.
+    """
     _check_export_deadline(started)
     try:
-        return subprocess.run(
-            argv,
+        proc = subprocess.run(
+            ["git", "-C", repo_real, "rev-parse", "--is-shallow-repository"],
             capture_output=True,
             text=True,
-            encoding=sys.getfilesystemencoding(),
-            errors="surrogateescape",
             timeout=_remaining_export_timeout(started),
-            env=_ancestry_env(),
-            cwd=cwd,
+            env=_neutral_git_env(),
         )
     except subprocess.TimeoutExpired:
         raise SanitizedViewError("sanitized-view-diff-failed")
     except (OSError, UnicodeError):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-
-
-def _reviewed_repo_ancestry_git_argv(repo_real, *args):
-    """Argv prefix for ancestry probes run against the reviewed repository."""
-    return [
-        "git",
-        "-C",
-        repo_real,
-        *_COMMIT_GRAPH_OFF,
-        "-c",
-        "safe.directory=%s" % repo_real,
-        *args,
-    ]
-
-
-_CAPABILITY_UNSUPPORTED = object()
-
-_SHALLOW_ANSWERS = frozenset({"true", "false"})
-
-_OBJECT_FORMAT_ANSWERS = frozenset({"sha1", "sha256"})
-
-_CAPABILITY_PROBE_FLAGS = {
-    "shallow": "--is-shallow-repository",
-    "object_format": "--show-object-format",
-}
-
-
-def _capability_query(repo_real, started, probe):
-    """Run one capability probe; execution and classification are one step."""
-    flag = _CAPABILITY_PROBE_FLAGS[probe]
-    accepted = _SHALLOW_ANSWERS if probe == "shallow" else _OBJECT_FORMAT_ANSWERS
-    proc = _ancestry_run(
-        _reviewed_repo_ancestry_git_argv(repo_real, "rev-parse", flag), started
-    )
-    return _classify_capability_output(proc, accepted)
-
-
-def _classify_capability_output(proc, accepted):
-    """Classify one ancestry ``git rev-parse`` capability-query result by exact match.
-
-    This is the module's single interpreter of capability-query output, and it
-    renders no policy of its own: it returns the exact accepted token, or the
-    ``_CAPABILITY_UNSUPPORTED`` sentinel. Each caller declares the values it
-    accepts and decides for itself what its own unsupported case means.
-
-    Everything that is not an exact accepted answer collapses to the sentinel — a
-    non-zero exit, empty output, output that is not exactly one line, and any
-    single-line value outside ``accepted``. That last case is the one that
-    matters most: ``git rev-parse`` echoes an option it does not recognise and
-    still exits 0, so a git predating the queried option answers with the flag
-    itself. "This git cannot tell us" is never the same as an answer.
-    """
-    if proc.returncode != 0:
-        return _CAPABILITY_UNSUPPORTED
-    raw = proc.stdout
-    if not isinstance(raw, str):
-        return _CAPABILITY_UNSUPPORTED
-    # Exactly the accepted token, plus at most git's single terminating newline.
-    # Nothing else is normalized away: padded, cased, or multi-line output is an
-    # answer this git did not give, not a lenient spelling of one.
-    if raw.endswith("\n"):
-        raw = raw[:-1]
-    if raw not in accepted:
-        return _CAPABILITY_UNSUPPORTED
-    return raw
-
-
-def _repo_object_directory(repo_real, started):
-    """Absolute path of the repository's object store.
-
-    ``rev-parse --git-path objects`` (git 2.5+) yields the *common* object directory
-    from a linked worktree; it may be relative to the repository root, so it is
-    joined and realpath'd here rather than requiring ``--path-format=absolute``
-    (git 2.31+).
-    """
-    proc = _ancestry_run(
-        _reviewed_repo_ancestry_git_argv(repo_real, "rev-parse", "--git-path", "objects"),
-        started,
-    )
-    if proc.returncode != 0:
-        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-    raw = proc.stdout.strip()
-    if not raw:
-        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-    objects_dir = raw if os.path.isabs(raw) else os.path.join(repo_real, raw)
-    objects_dir = os.path.realpath(objects_dir)
-    # The alternates file is newline-delimited; a path containing a newline cannot
-    # be expressed in it, so refuse rather than write a file git will misread.
-    objects_dir_bytes = os.fsencode(objects_dir)
-    if b"\n" in objects_dir_bytes or b"\r" in objects_dir_bytes:
-        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-    if not os.path.isdir(objects_dir):
-        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-    return objects_dir
-
-
-def _repo_object_format(repo_real, started):
-    """Object format name, or None when this git cannot report one (then sha1).
-
-    Accepted answers are declared here; the unsupported policy is this caller's
-    own and is deliberately **not** a refusal. Falling back to ``None`` inits the
-    scratch repository at git's default sha1, which preserves the intentional
-    compatibility path for a git predating ``--show-object-format`` (it echoes
-    the flag back and exits 0). That stays a safe success and must never become
-    an unsafe one: a repository whose real format this build cannot name still
-    fails closed downstream, when ``merge-base`` cannot parse its object ids.
-    """
-    fmt = _capability_query(repo_real, started, "object_format")
-    if fmt is _CAPABILITY_UNSUPPORTED or fmt == "sha1":
-        return None
-    return fmt
-
-
-def _authoritative_merge_base(repo_real, base_sha, head_sha, started):
-    """Merge-base resolved outside the reviewed repository's git directory.
-
-    **Scratch isolation.** Overlays living in a repository's *git directory* —
-    grafts, replacement refs, shallow metadata, repository config — are out of
-    reach by construction: ancestry resolves in a bare scratch repository this
-    process creates, linked to the repo under review only by an
-    ``objects/info/alternates`` pointer. Nothing enumerates them.
-
-    **Commit-graph, stated separately.** Scratch isolation does not cover it. A
-    commit-graph file lives inside the *object* directory the alternate exposes,
-    so that data does reach the scratch repository; it is excluded instead by the
-    documented ``-c core.commitGraph=false`` reader-wide pin applied by every
-    commit-peeling source-repository command. That half of the guarantee is
-    **conditional** on the git executable honoring the control. This is not a
-    claim that every ancestry overlay is structurally inaccessible, and the
-    boundary is not "only oid -> bytes".
-
-    Also outside the claim: an object store that serves wrong bytes for an oid.
-    Content-side config and attributes stay in the reviewed repository's domain,
-    handled by pinned ``-c`` overrides and ``sanitized-view-diff-opaque``. The
-    guarantee is conditional on every reviewed-repository ancestry walk routing
-    through ``_ancestry_run`` — see
-    ``test_subprocess_ancestry_git_calls_route_through_ancestry_run``.
-    ``base_sha`` is a pinned commit object id, enforced before any repo-local git.
-    """
-    shallow = _capability_query(repo_real, started, "shallow")
-    if shallow is _CAPABILITY_UNSUPPORTED:
-        # This caller's unsupported policy: a shallow state this git cannot
-        # report is not "not shallow". Refusing here is before the census, the
-        # patch, and any external spawn.
-        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    shallow = proc.stdout.strip() if proc.returncode == 0 and proc.stdout else ""
     if shallow == "true":
         raise SanitizedViewError("sanitized-view-diff-base-shallow")
-    objects_dir = _repo_object_directory(repo_real, started)
-    object_format = _repo_object_format(repo_real, started)
+    if shallow not in _SHALLOW_ANSWERS:
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
 
-    tmp_base = tempfile.gettempdir()
-    if path_is_under_repo(tmp_base, repo_real):
-        raise SanitizedViewError("sanitized-view-tempbase-inside-repo")
-
-    scratch_parent = None
+    _check_export_deadline(started)
     try:
-        try:
-            scratch_parent = tempfile.mkdtemp(prefix=_ANCESTRY_SCRATCH_PREFIX)
-        except OSError:
-            raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-        if path_is_under_repo(scratch_parent, repo_real):
-            raise SanitizedViewError("sanitized-view-tempbase-inside-repo")
-        # An empty template directory keeps any init.templateDir content out of the
-        # scratch repository.
-        template_dir = os.path.join(scratch_parent, "template")
-        scratch_git_dir = os.path.join(scratch_parent, "ancestry.git")
-        try:
-            os.makedirs(template_dir)
-        except OSError:
-            raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-
-        init_argv = [
-            "git",
-            "init",
-            "-q",
-            "--bare",
-            "--template=%s" % template_dir,
-        ]
-        if object_format is not None:
-            init_argv.append("--object-format=%s" % object_format)
-        init_argv.append(scratch_git_dir)
-        proc = _ancestry_run(init_argv, started, cwd=scratch_parent)
-        if proc.returncode != 0:
-            raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-
-        alternates = os.path.join(scratch_git_dir, "objects", "info", "alternates")
-        try:
-            os.makedirs(os.path.dirname(alternates), exist_ok=True)
-            with open(alternates, "wb") as fh:
-                fh.write(os.fsencode(objects_dir) + b"\n")
-        except (OSError, ValueError, UnicodeError):
-            raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-
-        proc = _ancestry_run(
+        proc = subprocess.run(
             [
                 "git",
-                "--git-dir=%s" % scratch_git_dir,
-                *_ANCESTRY_CONFIG_OVERRIDES,
+                "-C",
+                repo_real,
+                "-c",
+                "core.commitGraph=false",
+                "-c",
+                "core.useReplaceRefs=false",
                 "merge-base",
                 "--end-of-options",
                 base_sha,
                 head_sha,
             ],
-            started,
-            cwd=scratch_parent,
+            capture_output=True,
+            text=True,
+            timeout=_remaining_export_timeout(started),
+            env=_neutral_git_env(),
         )
-        if proc.returncode != 0 or not proc.stdout.strip():
-            raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-        merge_base = proc.stdout.strip()
-        if not _is_git_object_id_hex(merge_base):
-            raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-        return merge_base
-    finally:
-        if scratch_parent is not None:
-            shutil.rmtree(scratch_parent, ignore_errors=True)
+    except subprocess.TimeoutExpired:
+        raise SanitizedViewError("sanitized-view-diff-failed")
+    except (OSError, UnicodeError):
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    merge_base = proc.stdout.strip()
+    if not _is_git_object_id_hex(merge_base):
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    return merge_base
 
 
 class _CatFileBatch:
@@ -1697,28 +1412,6 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     }
 
 
-# Owner-ruled 2026-08-09 (#797), option 1 — fail fast. A partial clone is not a
-# supported checkout shape for sanitized-view construction, so construction refuses the
-# SHAPE, up front, rather than waiting to discover a particular object is absent.
-#
-# Refusing on the shape rather than on a failed object read is what makes the guarantee
-# hold. Two measured facts drove it. A blob-filtered clone WITH a checkout has its HEAD
-# blobs hydrated, so materialization succeeds and only the review diff trips over an
-# absent base-side blob — arriving as an ordinary "git diff failed", indistinguishable
-# at that call site from a dozen other faults; that is the dominant real shape, and
-# detecting absent objects would have missed it. And ``GIT_NO_LAZY_FETCH`` is honoured
-# only by newer git, so a mechanism resting on it alone is silently inert on an older
-# client. The config probe answers the same on every version.
-#
-# The refusal is therefore WIDER than "this clone is missing something we need": a
-# filtered clone that happens to hold every object still refuses. That is the ruling's
-# own line — an unsupported checkout shape, not a best-effort attempt — and the remedy
-# is in reference/auto-fix-loop.md: re-clone without --filter, or drop the filter in
-# place and refetch. Plain ``git fetch --refetch`` is NOT a remedy; it reapplies the
-# configured filter (measured, git 2.50.1).
-SANITIZED_VIEW_PARTIAL_CLONE = "sanitized-view-partial-clone"
-
-
 def build_sanitized_view(repo_root, *, diff_base=None, pr_body_path=None, session_dir=None):
     """Materialize a stripped copy of ``repo_root`` at HEAD from the git tree.
 
@@ -1735,10 +1428,6 @@ def build_sanitized_view(repo_root, *, diff_base=None, pr_body_path=None, sessio
     if not pr_body_set:
         pr_body_info = {"prBodyPath": None, "prBodyBytes": None}
     repo_real = os.path.realpath(repo_root)
-    # bite-axis: unsupported checkout shape — refused BEFORE any object is read, so no
-    # code path can reach an on-demand fetch and no later failure has to be re-attributed.
-    if _is_partial_clone(repo_real):
-        raise SanitizedViewError(SANITIZED_VIEW_PARTIAL_CLONE)
     tmp_base = tempfile.gettempdir()
     if path_is_under_repo(tmp_base, repo_real):
         raise SanitizedViewError("sanitized-view-tempbase-inside-repo")

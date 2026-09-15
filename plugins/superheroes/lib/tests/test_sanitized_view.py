@@ -1337,55 +1337,13 @@ def test_subprocess_census_all_git_calls_use_wrappers():
                 and func.value.id == "subprocess"
             ):
                 owner = self.stack[-1] if self.stack else "<module>"
-                if owner not in ("_git_run", "_git_popen", "_ancestry_run"):
+                if owner not in ("_git_run", "_git_popen", "_authoritative_merge_base"):
                     self.violations.append(owner)
             self.generic_visit(node)
 
     visitor = Visitor()
     visitor.visit(tree)
     assert visitor.violations == []
-
-
-def test_subprocess_ancestry_git_calls_route_through_ancestry_run():
-    import ast
-
-    path = os.path.join(os.path.dirname(sv.__file__), "sanitized_view.py")
-    with open(path, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read())
-
-    ancestry_verbs = frozenset({"merge-base", "rev-list", "log", "describe"})
-    violations = []
-
-    class Visitor(ast.NodeVisitor):
-        def __init__(self):
-            self.stack = []
-
-        def visit_FunctionDef(self, node):
-            self.stack.append(node.name)
-            self.generic_visit(node)
-            self.stack.pop()
-
-        def visit_Call(self, node):
-            func = node.func
-            if (
-                isinstance(func, ast.Name)
-                and func.id in ("_git_run", "_git_popen")
-                and node.args
-                and isinstance(node.args[0], ast.List)
-            ):
-                owner = self.stack[-1] if self.stack else "<module>"
-                for elt in node.args[0].elts:
-                    if not isinstance(elt, ast.Constant) or not isinstance(
-                        elt.value, str
-                    ):
-                        continue
-                    token = elt.value
-                    if token in ancestry_verbs or ".." in token:
-                        violations.append(owner)
-            self.generic_visit(node)
-
-    Visitor().visit(tree)
-    assert violations == [], "ancestry verbs in _git_run/_git_popen: %s" % violations
 
 
 def test_diff_base_none_keys_are_none(tmp_path):
@@ -2094,12 +2052,12 @@ def test_git_env_no_lazy_fetch_survives_a_hostile_inherited_value(monkeypatch):
     """An inherited ``GIT_NO_LAZY_FETCH=0`` cannot re-enable the fetch."""
     monkeypatch.setenv("GIT_NO_LAZY_FETCH", "0")
     assert sv._git_env()["GIT_NO_LAZY_FETCH"] == "1"
-    assert sv._ancestry_env()["GIT_NO_LAZY_FETCH"] == "1"
+    assert sv._neutral_git_env()["GIT_NO_LAZY_FETCH"] == "1"
 
 
-@pytest.mark.parametrize("wrapper", ["_git_run", "_git_popen", "_ancestry_run"])
+@pytest.mark.parametrize("wrapper", ["_git_run", "_git_popen"])
 def test_every_git_spawn_wrapper_passes_no_lazy_fetch(monkeypatch, wrapper):
-    """Leg 1's census: the three wrappers are the only spawn sites (pinned by
+    """Leg 1's census: the two wrappers are the routine spawn sites (pinned by
     ``test_subprocess_census_all_git_calls_use_wrappers``), so proving each one
     passes the variable proves every git subprocess construction spawns carries it."""
     seen = {}
@@ -2115,10 +2073,7 @@ def test_every_git_spawn_wrapper_passes_no_lazy_fetch(monkeypatch, wrapper):
 
     monkeypatch.setattr(sv.subprocess, "run", record)
     monkeypatch.setattr(sv.subprocess, "Popen", record)
-    if wrapper == "_ancestry_run":
-        sv._ancestry_run(["git", "--version"], time.monotonic())
-    else:
-        getattr(sv, wrapper)(["git", "--version"])
+    getattr(sv, wrapper)(["git", "--version"])
     assert seen["env"] is not None
     assert seen["env"]["GIT_NO_LAZY_FETCH"] == "1"
 
@@ -3649,18 +3604,7 @@ def test_diff_stall_after_partial_write(tmp_path, monkeypatch):
     assert _leftover_view_dirs(fake_tmp) == []
 
 
-# --- ancestry hermetic merge-base -------------------------------------------
-
-
-def _leftover_ancestry_dirs(tmp_base):
-    try:
-        return [
-            name
-            for name in os.listdir(tmp_base)
-            if name.startswith(sv._ANCESTRY_SCRATCH_PREFIX)
-        ]
-    except OSError:
-        return []
+# --- ancestry merge-base ----------------------------------------------------
 
 
 def _graft_decoy_fixture(repo_path, *, plant_repo_grafts=True):
@@ -3720,25 +3664,6 @@ def _graft_decoy_fixture(repo_path, *, plant_repo_grafts=True):
     return repo, B, H, D
 
 
-def test_review_diff_ancestry_ignores_repo_graft_metadata(tmp_path):
-    repo, B, H, D = _graft_decoy_fixture(tmp_path / "graft-repo")
-    assert _git(repo, "merge-base", B, H).stdout.strip() == D
-    assert sv._authoritative_merge_base(repo, B, H, time.monotonic()) == B
-    view = None
-    try:
-        view = sv.build_sanitized_view(repo, diff_base=B)
-        assert view["diffBase"] == B
-        with open(_patch_abs(view), "rb") as fh:
-            patch = fh.read()
-        assert b"diff --git a/hidden.txt b/hidden.txt" in patch
-        assert b"diff --git a/visible.txt b/visible.txt" in patch
-        assert b"hidden head" in patch
-        assert view["diffWithheldCount"] == 0
-    finally:
-        if view is not None:
-            sv.destroy_sanitized_view(view["path"])
-
-
 def test_review_diff_ancestry_ignores_inherited_graft_file_env(tmp_path, monkeypatch):
     repo, B, H, D = _graft_decoy_fixture(
         tmp_path / "env-graft-repo", plant_repo_grafts=False
@@ -3781,7 +3706,7 @@ def test_review_diff_ancestry_env_drops_every_git_variable(monkeypatch):
     monkeypatch.setenv("GIT_DIR", "/nope")
     monkeypatch.setenv("GIT_SOMETHING_NOT_YET_INVENTED", "/nope")
     monkeypatch.setenv("SUPERHEROES_TEST_SURVIVOR", "yes")
-    env = sv._ancestry_env()
+    env = sv._neutral_git_env()
     git_keys = {k for k in env if k.startswith("GIT_")}
     assert git_keys == {
         "GIT_NO_REPLACE_OBJECTS",
@@ -3798,61 +3723,10 @@ def test_review_diff_ancestry_env_drops_every_git_variable(monkeypatch):
     assert env["SUPERHEROES_TEST_SURVIVOR"] == "yes"
 
 
-def test_review_diff_ancestry_scratch_directory_is_removed(tmp_path, monkeypatch):
-    fake_tmp = str(tmp_path / "tmpdir")
-    os.makedirs(fake_tmp)
-    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
-    tmp_base = fake_tmp
-    created = []
-
-    real_mkdtemp = sv.tempfile.mkdtemp
-
-    def recording_mkdtemp(*args, **kwargs):
-        path = real_mkdtemp(*args, **kwargs)
-        if kwargs.get("prefix") == sv._ANCESTRY_SCRATCH_PREFIX or (
-            args and args[0] == sv._ANCESTRY_SCRATCH_PREFIX
-        ):
-            created.append(path)
-        return path
-
-    monkeypatch.setattr(sv.tempfile, "mkdtemp", recording_mkdtemp)
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "scratch-reap")
-    view = None
-    try:
-        view = _build(repo, diff_base=B)
-        assert len(created) >= 1
-        assert _leftover_ancestry_dirs(tmp_base) == []
-        for path in created:
-            assert not os.path.exists(path)
-    finally:
-        if view is not None:
-            sv.destroy_sanitized_view(view["path"])
-    repo2 = _init_repo(tmp_path / "unrelated-reap", files={"keep.txt": "v1\n"})
-    first_sha = _git(repo2, "rev-parse", "HEAD").stdout.strip()
-    _git(repo2, "checkout", "--orphan", "other")
-    _git(repo2, "rm", "-rf", ".", check=False)
-    with open(os.path.join(repo2, "other.txt"), "w", encoding="utf-8") as fh:
-        fh.write("other\n")
-    _git(repo2, "add", "-A")
-    _git(
-        repo2,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "other",
-    )
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        _build(repo2, diff_base=first_sha)
-    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
-    assert _leftover_ancestry_dirs(tmp_base) == []
-
-
 def test_review_diff_ancestry_resolves_in_linked_worktree(tmp_path):
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "linked-wt")
+    repo, B, H, _D = _graft_decoy_fixture(
+        tmp_path / "linked-wt", plant_repo_grafts=False
+    )
     linked = str(tmp_path / "linked-checkout")
     os.makedirs(linked, exist_ok=True)
     _git(repo, "worktree", "add", "--detach", linked, H)
@@ -3872,104 +3746,20 @@ def test_review_diff_ancestry_resolves_in_linked_worktree(tmp_path):
         _git(repo, "worktree", "remove", "--force", linked, check=False)
 
 
-def test_review_diff_ancestry_object_directory_probe_nonzero(tmp_path, monkeypatch):
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "objdir-fail")
-    real_run = sv._ancestry_run
-
-    def standin(argv, started, *, cwd=None):
-        if "--git-path" in argv and "objects" in argv:
-            class Proc:
-                returncode = 1
-                stdout = ""
-                stderr = "fail"
-            return Proc()
-        return real_run(argv, started, cwd=cwd)
-
-    monkeypatch.setattr(sv, "_ancestry_run", standin)
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv._authoritative_merge_base(repo, B, H, time.monotonic())
-    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
-
-
-def test_review_diff_ancestry_object_directory_not_a_directory(tmp_path, monkeypatch):
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "objdir-nodir")
-    real_run = sv._ancestry_run
-    bogus = os.path.join(repo, "not-objects-dir")
-    with open(bogus, "w", encoding="utf-8") as fh:
-        fh.write("x\n")
-
-    def standin(argv, started, *, cwd=None):
-        if "--git-path" in argv and "objects" in argv:
-            class Proc:
-                returncode = 0
-                stdout = bogus
-                stderr = ""
-            return Proc()
-        return real_run(argv, started, cwd=cwd)
-
-    monkeypatch.setattr(sv, "_ancestry_run", standin)
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv._authoritative_merge_base(repo, B, H, time.monotonic())
-    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
-
-
-def test_review_diff_ancestry_scratch_init_nonzero(tmp_path, monkeypatch):
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "init-fail")
-    real_run = sv._ancestry_run
-
-    def standin(argv, started, *, cwd=None):
-        if argv and argv[0] == "git" and "init" in argv:
-            class Proc:
-                returncode = 1
-                stdout = ""
-                stderr = "fail"
-            return Proc()
-        return real_run(argv, started, cwd=cwd)
-
-    monkeypatch.setattr(sv, "_ancestry_run", standin)
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv._authoritative_merge_base(repo, B, H, time.monotonic())
-    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
-
-
-def test_review_diff_ancestry_old_git_object_format_echo_succeeds(tmp_path, monkeypatch):
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "old-git-fmt")
-    real_run = sv._ancestry_run
-
-    def standin(argv, started, *, cwd=None):
-        if "--show-object-format" in argv:
-            class Proc:
-                returncode = 0
-                stdout = "--show-object-format"
-                stderr = ""
-            return Proc()
-        return real_run(argv, started, cwd=cwd)
-
-    monkeypatch.setattr(sv, "_ancestry_run", standin)
-    assert sv._authoritative_merge_base(repo, B, H, time.monotonic()) == B
-    view = None
-    try:
-        view = sv.build_sanitized_view(repo, diff_base=B)
-        assert view["diffWithheldCount"] == 0
-    finally:
-        if view is not None:
-            sv.destroy_sanitized_view(view["path"])
-
-
 def test_review_diff_ancestry_shallow_refusal(tmp_path, monkeypatch):
     repo, B, H, _D = _graft_decoy_fixture(tmp_path / "shallow")
-    real_run = sv._ancestry_run
+    real_run = subprocess.run
 
-    def standin(argv, started, *, cwd=None):
+    def standin(argv, **kwargs):
         if "--is-shallow-repository" in argv:
             class Proc:
                 returncode = 0
                 stdout = "true"
                 stderr = ""
             return Proc()
-        return real_run(argv, started, cwd=cwd)
+        return real_run(argv, **kwargs)
 
-    monkeypatch.setattr(sv, "_ancestry_run", standin)
+    monkeypatch.setattr(sv.subprocess, "run", standin)
     with pytest.raises(sv.SanitizedViewError) as exc:
         sv._authoritative_merge_base(repo, B, H, time.monotonic())
     assert exc.value.detail == "sanitized-view-diff-base-shallow"
@@ -3978,13 +3768,13 @@ def test_review_diff_ancestry_shallow_refusal(tmp_path, monkeypatch):
 def test_review_diff_ancestry_merge_base_argv_pins_config(monkeypatch, tmp_path):
     repo, B, H, _D = _graft_decoy_fixture(tmp_path / "argv-pins")
     recorded = []
-    real_run = sv._ancestry_run
+    real_run = subprocess.run
 
-    def recorder(argv, started, *, cwd=None):
+    def recorder(argv, **kwargs):
         recorded.append(list(argv))
-        return real_run(argv, started, cwd=cwd)
+        return real_run(argv, **kwargs)
 
-    monkeypatch.setattr(sv, "_ancestry_run", recorder)
+    monkeypatch.setattr(sv.subprocess, "run", recorder)
     sv._authoritative_merge_base(repo, B, H, time.monotonic())
     merge_argv = next(a for a in recorded if "merge-base" in a)
     # Implementation-coupled assertion protecting a security pin, not behavioural proof.
@@ -4011,10 +3801,10 @@ def test_review_diff_ancestry_shallow_probe_fails_closed(
 ):
     """Only exact `false` proceeds; every other shallow answer is a named refusal."""
     case_path = tmp_path / f"shallow-probe-{returncode}-{stdout!r}"
-    repo, B, H, _D = _graft_decoy_fixture(case_path)
-    real_run = sv._ancestry_run
+    repo, B, H, _D = _graft_decoy_fixture(case_path, plant_repo_grafts=False)
+    real_run = subprocess.run
 
-    def standin(argv, started, *, cwd=None):
+    def standin(argv, **kwargs):
         if "--is-shallow-repository" in argv:
             class Proc:
                 pass
@@ -4023,9 +3813,9 @@ def test_review_diff_ancestry_shallow_probe_fails_closed(
             proc.stdout = stdout
             proc.stderr = ""
             return proc
-        return real_run(argv, started, cwd=cwd)
+        return real_run(argv, **kwargs)
 
-    monkeypatch.setattr(sv, "_ancestry_run", standin)
+    monkeypatch.setattr(sv.subprocess, "run", standin)
     if expected is None:
         result = sv._authoritative_merge_base(repo, B, H, time.monotonic())
         assert result == B
@@ -4041,22 +3831,22 @@ def test_review_diff_ancestry_old_git_shallow_echo_refuses_before_census_or_patc
     """The named old-git case: refusal lands before census, patch generation, or spawn."""
     repo, B, H, _D = _graft_decoy_fixture(tmp_path / "old-git-shallow-echo")
     called = []
-    real_run = sv._ancestry_run
+    real_run = subprocess.run
 
-    def ancestry_standin(argv, started, *, cwd=None):
+    def ancestry_standin(argv, **kwargs):
         if "--is-shallow-repository" in argv:
             class Proc:
                 returncode = 0
                 stdout = "--is-shallow-repository"
                 stderr = ""
             return Proc()
-        return real_run(argv, started, cwd=cwd)
+        return real_run(argv, **kwargs)
 
     def must_not_run(*args, **kwargs):
         called.append(args)
         raise AssertionError("must not run")
 
-    monkeypatch.setattr(sv, "_ancestry_run", ancestry_standin)
+    monkeypatch.setattr(sv.subprocess, "run", ancestry_standin)
     monkeypatch.setattr(sv, "_changed_tree_entries", must_not_run)
     monkeypatch.setattr(sv, "_batch_review_diff_pathspecs", must_not_run)
     monkeypatch.setattr(sv, "_git_diff_batch_output", must_not_run)
@@ -4067,98 +3857,6 @@ def test_review_diff_ancestry_old_git_shallow_echo_refuses_before_census_or_patc
     for root, _dirs, files in os.walk(tmp_path):
         for fname in files:
             assert fname != sv.REVIEW_DIFF_FILE_NAME
-
-
-@pytest.mark.parametrize(
-    "returncode,stdout,accepted,expected_token",
-    [
-        (0, "true\n", ("true", "false"), "true"),
-        (0, "false", ("true", "false"), "false"),
-        (0, "  false  \n", ("true", "false"), None),
-        (0, "sha256\n", ("sha1", "sha256"), "sha256"),
-        (0, "true\n", ("sha1", "sha256"), None),
-        (1, "true\n", ("true", "false"), None),
-        (0, "", ("true", "false"), None),
-        (0, "\n", ("true", "false"), None),
-        (0, "true\nfalse\n", ("true", "false"), None),
-        (0, "--is-shallow-repository\n", ("true", "false"), None),
-        (0, "--show-object-format\n", ("sha1", "sha256"), None),
-        (0, "truex\n", ("true", "false"), None),
-        (0, "TRUE\n", ("true", "false"), None),
-    ],
-)
-def test_capability_output_classifier_is_exact_match_only(
-    returncode, stdout, accepted, expected_token
-):
-    """The classifier returns an exact accepted token or the unsupported sentinel."""
-    class Proc:
-        pass
-    proc = Proc()
-    proc.returncode = returncode
-    proc.stdout = stdout
-    proc.stderr = ""
-    result = sv._classify_capability_output(proc, frozenset(accepted))
-    if expected_token is None:
-        assert result is sv._CAPABILITY_UNSUPPORTED
-    else:
-        assert result == expected_token
-
-
-def test_ancestry_capability_queries_route_through_classifier():
-    """Capability flag literals and classifier calls may appear only in _capability_query."""
-    import ast
-
-    path = os.path.join(os.path.dirname(sv.__file__), "sanitized_view.py")
-    with open(path, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read())
-
-    offenders = []
-    module_flags = set()
-
-    class FlagCollector(ast.NodeVisitor):
-        def visit_Constant(self, node):
-            if isinstance(node.value, str) and (
-                node.value.startswith("--show-") or node.value.startswith("--is-")
-            ):
-                module_flags.add(node.value)
-            self.generic_visit(node)
-
-    FlagCollector().visit(tree)
-
-    class FunctionVisitor(ast.NodeVisitor):
-        def visit_FunctionDef(self, node):
-            if node.name == "_capability_query":
-                self.generic_visit(node)
-                return
-            flags = set()
-            classifier_calls = False
-            for child in ast.walk(node):
-                if isinstance(child, ast.Constant) and isinstance(child.value, str):
-                    if child.value.startswith("--show-") or child.value.startswith("--is-"):
-                        flags.add(child.value)
-                if isinstance(child, ast.Call):
-                    func = child.func
-                    if isinstance(func, ast.Name) and func.id == "_classify_capability_output":
-                        classifier_calls = True
-            if flags or classifier_calls:
-                offenders.append((node.name, sorted(flags), classifier_calls))
-            self.generic_visit(node)
-
-        def visit_AsyncFunctionDef(self, node):
-            self.visit_FunctionDef(node)
-
-    FunctionVisitor().visit(tree)
-    assert offenders == [], (
-        "capability flags or _classify_capability_output outside _capability_query: %s"
-        % offenders
-    )
-
-    expected_flags = {"--show-object-format", "--is-shallow-repository"}
-    assert module_flags == expected_flags, (
-        "a new ancestry capability query was added and must be routed through "
-        "_classify_capability_output and added to this census deliberately: "
-        "found %s, expected %s" % (sorted(module_flags), sorted(expected_flags))
-    )
 
 
 @pytest.mark.parametrize(
@@ -4180,7 +3878,6 @@ def test_stage_review_diff_refuses_unpinned_base_before_any_git(
         raise AssertionError("git must not run")
 
     monkeypatch.setattr(sv, "_git_run", must_not_run)
-    monkeypatch.setattr(sv, "_ancestry_run", must_not_run)
     with pytest.raises(sv.SanitizedViewError) as exc:
         sv._stage_review_diff(
             str(tmp_path),
@@ -4238,7 +3935,8 @@ def test_commit_peeling_paths_pin_commit_graph_off(tmp_path, monkeypatch):
     recorded = []
     ls_tree_export_calls = []
     ls_tree_census_calls = []
-    real_run, real_popen, real_ancestry = sv._git_run, sv._git_popen, sv._ancestry_run
+    real_run, real_popen = sv._git_run, sv._git_popen
+    real_subprocess_run = subprocess.run
     real_ls_tree_export = sv._git_ls_tree_export
     real_tree_entries = sv._git_tree_entries
 
@@ -4274,7 +3972,11 @@ def test_commit_peeling_paths_pin_commit_graph_off(tmp_path, monkeypatch):
     monkeypatch.setattr(sv, "_git_tree_entries", wrapping_tree_entries)
     monkeypatch.setattr(sv, "_git_run", lambda *a, **k: (recorded.append(list(a[0])), real_run(*a, **k))[1])
     monkeypatch.setattr(sv, "_git_popen", lambda *a, **k: (recorded.append(list(a[0])), real_popen(*a, **k))[1])
-    monkeypatch.setattr(sv, "_ancestry_run", lambda argv, s, cwd=None: (recorded.append(list(argv)), real_ancestry(argv, s, cwd=cwd))[1])
+    monkeypatch.setattr(
+        sv.subprocess,
+        "run",
+        lambda argv, **k: (recorded.append(list(argv)), real_subprocess_run(argv, **k))[1],
+    )
     view = sv.build_sanitized_view(repo, diff_base=B)
     try:
         required = {"rev-parse-head", "rev-parse-verify", "merge-base", "diff", "ls-tree"}
@@ -4287,27 +3989,6 @@ def test_commit_peeling_paths_pin_commit_graph_off(tmp_path, monkeypatch):
                 assert has_pin(argv)
     finally:
         sv.destroy_sanitized_view(view["path"])
-
-
-def test_capability_consumers_follow_classifier_not_raw_stdout(tmp_path, monkeypatch):
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "cap-flow")
-
-    def proc(stdout):
-        class P:
-            returncode, stderr = 0, ""
-        P.stdout = stdout
-        return P()
-
-    monkeypatch.setattr(sv, "_ancestry_run", lambda a, s, cwd=None: proc("false\n"))
-    monkeypatch.setattr(sv, "_classify_capability_output", lambda p, a: "true")
-    with pytest.raises(sv.SanitizedViewError, match="sanitized-view-diff-base-shallow"):
-        sv._authoritative_merge_base(repo, B, H, time.monotonic())
-    monkeypatch.setattr(sv, "_ancestry_run", lambda a, s, cwd=None: proc("sha256\n"))
-    monkeypatch.setattr(sv, "_classify_capability_output", lambda p, a: sv._CAPABILITY_UNSUPPORTED)
-    assert sv._repo_object_format(repo, time.monotonic()) is None
-    monkeypatch.setattr(sv, "_ancestry_run", lambda a, s, cwd=None: proc("false\n"))
-    with pytest.raises(sv.SanitizedViewError, match="sanitized-view-diff-base-unresolved"):
-        sv._authoritative_merge_base(repo, B, H, time.monotonic())
 
 
 def _stage_review_diff_must_not_reach(monkeypatch):
@@ -4391,7 +4072,7 @@ def test_build_sanitized_view_refuses_unpinned_base_before_head_resolution(
     assert spawned == []
 
 
-# --- #797: partial clones are not a supported checkout shape ------------------
+# --- GIT_NO_LAZY_FETCH bite receipt -----------------------------------------
 
 
 def _partial_clone_fixture(tmp_path, name, *, checkout=False):
@@ -4416,64 +4097,6 @@ def _partial_clone_fixture(tmp_path, name, *, checkout=False):
     argv += ["--no-local", "file://%s" % origin, clone]
     subprocess.run(argv, capture_output=True, check=True)
     return clone, origin
-
-
-def test_partial_clone_fixture_really_is_missing_objects(tmp_path):
-    """Guards the fixture itself: a clone that silently hydrated proves nothing."""
-    clone, _origin = _partial_clone_fixture(tmp_path, "fixture-check")
-    assert sv._is_partial_clone(clone) is True
-    blob = _git(clone, "ls-tree", "-r", "HEAD").stdout.split()[2]
-    probe = subprocess.run(
-        ["git", "-C", clone, "cat-file", "--batch-check"],
-        input=("%s\n" % blob).encode("ascii"),
-        capture_output=True,
-        env={**os.environ, "GIT_NO_LAZY_FETCH": "1"},
-    )
-    assert probe.stdout.split() == [blob.encode("ascii"), b"missing"]
-
-
-@pytest.mark.parametrize("checkout", [False, True])
-def test_partial_clone_construction_refuses_with_the_named_shape(tmp_path, checkout):
-    """Both filtered shapes refuse — including the checked-out one whose HEAD is hydrated.
-
-    The checked-out case is the reason this refuses on the shape and not on a failed
-    object read: there, materialization would have *succeeded*.
-    """
-    clone, _origin = _partial_clone_fixture(
-        tmp_path, "refuses-%s" % checkout, checkout=checkout
-    )
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        _build(clone)
-    assert exc.value.detail == sv.SANITIZED_VIEW_PARTIAL_CLONE
-    assert exc.value.detail == "sanitized-view-partial-clone"
-    # Cleanup: the autouse fixture asserts no view directory survives the refusal.
-
-
-def test_partial_clone_refused_before_any_object_is_read(tmp_path, monkeypatch):
-    """'Fail fast' means no object is touched at all — not touched and then abandoned."""
-    clone, _origin = _partial_clone_fixture(tmp_path, "before-any-read", checkout=True)
-    reached = []
-
-    def must_not_run(*args, **kwargs):
-        reached.append(args)
-        raise AssertionError("construction touched objects after the shape refusal")
-
-    monkeypatch.setattr(sv, "_git_rev_parse_head", must_not_run)
-    monkeypatch.setattr(sv, "_materialize_from_tree", must_not_run)
-    monkeypatch.setattr(sv, "_CatFileBatch", must_not_run)
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        _build(clone)
-    assert exc.value.detail == sv.SANITIZED_VIEW_PARTIAL_CLONE
-    assert reached == []
-
-
-def test_partial_clone_with_a_diff_base_refuses_the_same_way(tmp_path):
-    """The review path — the one that actually passes a diff base — refuses too."""
-    clone, _origin = _partial_clone_fixture(tmp_path, "diff-base", checkout=True)
-    base = _git(clone, "rev-parse", "HEAD").stdout.strip()
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        _build(clone, diff_base=base)
-    assert exc.value.detail == sv.SANITIZED_VIEW_PARTIAL_CLONE
 
 
 def test_no_lazy_fetch_is_what_stops_git_reaching_the_promisor_remote(tmp_path):
@@ -4507,9 +4130,8 @@ def test_no_lazy_fetch_is_what_stops_git_reaching_the_promisor_remote(tmp_path):
 
 
 def test_ordinary_clone_is_not_refused(tmp_path):
-    """No promisor remote, no refusal — the shape check must not catch normal repos."""
+    """Ordinary repositories still build a sanitized view."""
     repo = _init_repo(tmp_path / "ordinary", files={"a.txt": "a\n"})
-    assert sv._is_partial_clone(repo) is False
     view = None
     try:
         view = _build(repo)
@@ -4525,167 +4147,3 @@ def test_ordinary_clone_failure_keeps_its_own_detail(tmp_path):
     with pytest.raises(sv.SanitizedViewError) as exc:
         _build(repo, diff_base="0" * 40)
     assert exc.value.detail == "sanitized-view-diff-base-unresolved"
-
-
-def test_partial_clone_marker_in_global_config_does_not_condemn_a_normal_repo(tmp_path):
-    """``git config --list`` merges global scope; the probe must read the repo's own.
-
-    A stray ``extensions.partialclone`` in a user's ~/.gitconfig would otherwise refuse
-    every repository on that machine.
-    """
-    repo = _init_repo(tmp_path / "global-marker", files={"a.txt": "a\n"})
-    fake_global = str(tmp_path / "fake-global-gitconfig")
-    with open(fake_global, "w", encoding="utf-8") as fh:
-        fh.write("[extensions]\n\tpartialclone = origin\n")
-        fh.write('[remote "origin"]\n\tpromisor = true\n')
-    env = {**os.environ, "GIT_CONFIG_GLOBAL": fake_global}
-    merged = subprocess.run(
-        ["git", "-C", repo, "config", "--list"], capture_output=True, text=True, env=env
-    ).stdout
-    assert "extensions.partialclone" in merged, "fixture must actually leak into --list"
-
-    real_run = sv._git_run
-
-    def run_with_fake_global(*args, **kwargs):
-        kwargs["env"] = {**sv._git_env(), "GIT_CONFIG_GLOBAL": fake_global}
-        return subprocess.run(*args, **kwargs)
-
-    sv._git_run = run_with_fake_global
-    try:
-        assert sv._is_partial_clone(repo) is False
-    finally:
-        sv._git_run = real_run
-
-
-def test_is_partial_clone_reads_the_filter_key_on_its_own(tmp_path):
-    """``remote.<name>.partialclonefilter`` registers a promisor remote by itself.
-
-    Measured on git 2.50.1: a clone carrying the filter key with NO promisor key still
-    lazy-fetched a missing blob, so treating the promisor key as the only marker left a
-    genuinely filtered checkout undetected.
-    """
-    clone, _origin = _partial_clone_fixture(tmp_path, "filter-key-only")
-    _git(clone, "config", "--unset", "remote.origin.promisor")
-    assert (
-        _git(clone, "config", "--local", "--get", "remote.origin.partialclonefilter")
-        .stdout.strip()
-        == "blob:none"
-    )
-    assert sv._is_partial_clone(clone) is True
-
-
-@pytest.mark.parametrize(
-    "value,expected",
-    [
-        ("true", True),
-        ("TRUE", True),
-        ("yes", True),
-        ("on", True),
-        ("1", True),
-        ("42", True),
-        ("0x10", True),
-        ("010", True),
-        ("1k", True),
-        ("false", False),
-        ("FALSE", False),
-        ("no", False),
-        ("off", False),
-        ("0", False),
-        ("", False),
-    ],
-)
-def test_is_partial_clone_agrees_with_git_on_every_boolean_spelling(
-    tmp_path, value, expected
-):
-    """Delegating to ``git config --type=bool`` means git's grammar, not a guess at it.
-
-    ``0x10``, ``010`` and ``1k`` are the ones a hand-rolled parser gets wrong: git's
-    integer parser accepts base prefixes and k/m/g suffixes, and ``--type=bool`` reports
-    every one of them as true. Each case is cross-checked against git itself below, so
-    this test cannot drift away from the grammar it claims to pin.
-    """
-    repo = _init_repo(
-        tmp_path / ("gitbool-%s" % (value or "empty")), files={"a.txt": "a\n"}
-    )
-    _git(repo, "config", "remote.origin.promisor", value)
-    probed = _git(repo, "config", "--bool", "--get", "remote.origin.promisor").stdout.strip()
-    assert probed == ("true" if expected else "false"), "git itself disagrees with this row"
-    assert sv._is_partial_clone(repo) is expected
-
-
-def test_is_partial_clone_reads_a_valueless_promisor_key_as_true(tmp_path):
-    """``[remote "origin"] promisor`` with no ``=`` is git-true."""
-    repo = _init_repo(tmp_path / "valueless-promisor", files={"a.txt": "a\n"})
-    with open(os.path.join(repo, ".git", "config"), "a", encoding="utf-8") as fh:
-        fh.write('[remote "origin"]\n\tpromisor\n')
-    assert (
-        _git(repo, "config", "--bool", "--get", "remote.origin.promisor").stdout.strip()
-        == "true"
-    )
-    assert sv._is_partial_clone(repo) is True
-
-
-def test_is_partial_clone_answers_false_when_the_probe_exits_nonzero(tmp_path):
-    """Probe failure proceeds under the env-var backstop rather than refusing everyone."""
-    assert sv._is_partial_clone(str(tmp_path / "does-not-exist")) is False
-
-
-@pytest.mark.parametrize(
-    "boom", [OSError("no git"), subprocess.TimeoutExpired("git", 1), ValueError("bad")]
-)
-def test_is_partial_clone_answers_false_when_the_probe_raises(monkeypatch, boom):
-    """The raise leg: the non-zero-exit leg above cannot reach this ``except``."""
-
-    def explode(*args, **kwargs):
-        raise boom
-
-    monkeypatch.setattr(sv, "_git_run", explode)
-    assert sv._is_partial_clone("/anywhere") is False
-
-
-def test_git_config_local_keys_reports_unknown_distinctly_from_empty():
-    """``None`` (probe unusable) must not be readable as 'no markers found'."""
-    assert sv._git_config_local_keys("/definitely/not/a/repo/797") is None
-
-
-def test_git_config_says_true_never_spawns_for_a_key_outside_the_pattern(monkeypatch):
-    """Repository-supplied text is never handed to git at all — not merely rejected by it.
-
-    Asserting only the ``False`` return would pass with the guard deleted, because git
-    exits non-zero on an unknown key anyway. The axis is *reaching argv*, so this asserts
-    that no subprocess is spawned.
-    """
-    spawned = []
-
-    def record(*args, **kwargs):
-        spawned.append(args[0])
-        raise AssertionError("unvetted key reached git argv: %r" % (args[0],))
-
-    monkeypatch.setattr(sv, "_git_run", record)
-    for key in ("--global", "-c", "--type=int", "core.bare", "extensions.partialclone"):
-        assert sv._git_config_says_true("/anywhere", key) is False
-    assert spawned == []
-
-
-def test_git_config_says_true_does_spawn_for_a_matching_key(tmp_path):
-    """The guard must not be so tight that the real key never gets through."""
-    repo = _init_repo(tmp_path / "argv-guard-positive", files={"a.txt": "a\n"})
-    _git(repo, "config", "remote.origin.promisor", "true")
-    assert sv._git_config_says_true(repo, "remote.origin.promisor") is True
-    _git(repo, "config", "remote.origin.promisor", "off")
-    assert sv._git_config_says_true(repo, "remote.origin.promisor") is False
-
-
-def test_is_partial_clone_ignores_a_disabled_promisor_remote(tmp_path):
-    repo = _init_repo(tmp_path / "disabled-promisor", files={"a.txt": "a\n"})
-    _git(repo, "config", "remote.origin.promisor", "false")
-    assert sv._is_partial_clone(repo) is False
-    _git(repo, "config", "remote.origin.promisor", "true")
-    assert sv._is_partial_clone(repo) is True
-
-
-def test_is_partial_clone_reads_the_extensions_spelling(tmp_path):
-    """Older/bare partial clones announce themselves through ``extensions``."""
-    repo = _init_repo(tmp_path / "extensions-spelling", files={"a.txt": "a\n"})
-    _git(repo, "config", "extensions.partialClone", "origin")
-    assert sv._is_partial_clone(repo) is True
