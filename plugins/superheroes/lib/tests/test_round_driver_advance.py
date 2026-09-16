@@ -985,7 +985,10 @@ def test_fixer_head_diff_refuses_at_record_time(tmp_path, adapters, head_path, l
 
 def test_every_recorded_row_carries_the_stored_envelopes_cas_token(tmp_path, adapters):
     """Enumerate the emitted journal — not source call sites — so late subscript assignment inside
-    `_store_head_diff` cannot hide a missing casToken."""
+    `_store_head_diff` cannot hide a missing casToken.
+
+    axis: every `recorded` journal row that carries a revision also carries the stored envelope's
+    CAS token, checked over the emitted journal rather than over source call sites."""
     d = _session(tmp_path)
     assert _state(d).get("schemaVersion") == RD.STATE_SCHEMA_VERSION
     seats = list(RD.DIMENSIONS)
@@ -1025,6 +1028,8 @@ def test_every_recorded_row_carries_the_stored_envelopes_cas_token(tmp_path, ada
 
 
 def test_head_diff_rewrite_keeps_v2_envelope_self_consistent(tmp_path, adapters):
+    # axis: after a head-diff payload rewrite, a seat-result/2 envelopeSha256 still identifies its
+    # (payload, evidence) pair so validate_landing does not re-refuse it as envelope-torn
     d = _fixer_session(tmp_path, adapters)
     head_path = str(tmp_path / "head.diff")
     diff_content = "diff --git a/f.py b/f.py\n+fixed\n"
@@ -1061,6 +1066,8 @@ def test_head_diff_rewrite_keeps_v2_envelope_self_consistent(tmp_path, adapters)
 
 
 def test_head_diff_rewrite_does_not_add_envelope_sha256_to_v1_envelope(tmp_path, adapters):
+    # axis: the head-diff recompute is confined to seat-result/2 and does not add envelopeSha256 to
+    # a v1 envelope
     d = _session(tmp_path)
     pend = _pending(d)
     payload = {"fixes": [], "headDiffPath": str(tmp_path / "head.diff")}

@@ -964,6 +964,8 @@ def test_reconcile_reappends_when_the_store_revision_is_newer_than_the_journal(t
 def test_reconcile_reappends_when_identical_payload_differs_in_execution_evidence(tmp_path):
     """Comparing payloadSha256 on both sides would report clean here — only envelopeSha256
     separates the two revisions."""
+    # axis: reconcile separates two revisions that differ only in execution evidence — comparing
+    # payload hashes on both sides could not
     sd = _session(tmp_path)
     payload = {"findings": ["f1"]}
     e1 = _execution_evidence(runnerNonce="nonce-1")
@@ -991,6 +993,8 @@ def test_reconcile_reappends_when_identical_payload_differs_in_execution_evidenc
 
 
 def test_reconcile_bounded_two_pass_transition_for_v2_without_journal_cas_token(tmp_path):
+    # axis: the pre-transition v2 row reappends once and the second pass is clean — bounded, not
+    # perpetual
     # The transition is bounded at two passes by construction: pass 1 journals casToken; pass 2
     # compares token to token and stops.
     sd = _session(tmp_path)
@@ -1010,6 +1014,7 @@ def test_reconcile_bounded_two_pass_transition_for_v2_without_journal_cas_token(
 
 
 def test_reconcile_v1_without_cas_token_matching_payload_is_clean(tmp_path):
+    # axis: the v1 fallback without casToken leaves pre-existing matching-payload behaviour clean
     sd = _session(tmp_path)
     env = _env()
     _land(sd, env)
@@ -1022,6 +1027,7 @@ def test_reconcile_v1_without_cas_token_matching_payload_is_clean(tmp_path):
 
 
 def test_reconcile_v1_without_cas_token_differing_payload_reappends(tmp_path):
+    # axis: the v1 recovery contract without casToken still reappends when the payload differs
     sd = _session(tmp_path)
     env = _env()
     _land(sd, env)

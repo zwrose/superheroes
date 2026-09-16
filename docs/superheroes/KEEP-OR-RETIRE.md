@@ -645,6 +645,29 @@ The list's units are the census rows, and each entry is keyed to its census id.
   remove the need. No engine family is named for the binding itself; the reason it exists is
   engine-general.
 
+#### D14 — The record-identity CAS-token agreement
+
+- **Component.** The record-identity agreement between the store, the journal, and the reconciler:
+  `round_records.reconcile`'s CAS-token comparison, the `casToken` field on every `recorded`
+  journal row, and the census that proves the field is present on every governed row
+  (`test_every_recorded_row_carries_the_stored_envelopes_cas_token` plus the two head-diff-bind
+  tests in `test_round_driver_round_phase_fence.py`). It costs routing every site that journals a
+  record's revision through one helper, and driving a census session that reaches all six governed
+  sites.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the CAS-token
+  identity or its census as the thing that caught a record/journal disagreement. On firing, a
+  proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** It caught the defect it was built for on this branch: at state v5
+  the reconciler compared a journal payload hash against a store envelope hash, so every recorded
+  seat re-appended on every `advance` and the `advance` raised `caller-error` — any real v5 session
+  would have doubled its journal silently (this PR).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — which hash identifies a stored record is a property of how the record
+  layer is built, and no change of host or model removes the need for the store, the journal, and
+  the reconciler to agree on it. No engine family applies: it guards a data shape, not a model
+  behaviour.
+
 ### E. Board & process machinery
 
 #### E1 — Issue contract checker (three-slot skeleton, anchor, DoD bar)
