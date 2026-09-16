@@ -539,25 +539,26 @@ def _dispatch_observed_land(session_dir, seat, payload=None, pend=None, **over):
   return path, env, _read_bytes(path)
 
 
-def _execution_run_dir(tmp_path, prompt_bytes, echo_nonce="nonce-1", name="run"):
+def _execution_run_dir(tmp_path, order_path, echo_nonce="nonce-1", name="run"):
   run_dir = str(tmp_path / name)
-  os.makedirs(run_dir, exist_ok=True)
   journal_root = str(tmp_path / "dispatch-journal-root")
   os.makedirs(journal_root, exist_ok=True)
   os.environ[ED.JOURNAL_ROOT_ENV] = journal_root
-  with open(os.path.join(run_dir, "journal-root.txt"), "w", encoding="utf-8") as fh:
-    fh.write(journal_root + "\n")
-  prompt_path = os.path.join(run_dir, ED.PROMPT_NAME)
-  with open(prompt_path, "wb") as fh:
-    fh.write(prompt_bytes)
-  opened = {
-    "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
-    "roleKind": ED.RUN_KIND_REVIEW, "orderId": "test-order",
-    "argv": [sys.executable, "-c", "pass"], "cwd": run_dir,
-    "timeout": 30, "retryTimeout": 30, "promptPath": prompt_path,
-    "echoNonce": echo_nonce, "at": time.time(),
-  }
-  ED._journal_append(run_dir, opened)
+  repo_root = str(tmp_path / ("repo-" + name))
+  os.makedirs(repo_root, exist_ok=True)
+  with open(os.path.join(repo_root, ".git"), "w", encoding="utf-8") as fh:
+    fh.write("gitdir: /fake/worktree\n")
+  view_path = str(tmp_path / ("view-" + name))
+  os.makedirs(view_path, exist_ok=True)
+  view_meta = {"headSha": "abc123fake", "stripped": [], "path": view_path}
+  ok, detail = ED._open_review_run(
+    run_dir, engine="codex", argv=[sys.executable, "-c", "pass"], cwd=repo_root,
+    timeout=30, retry_timeout=30, prompt_path=order_path, view_path=view_path,
+    view_meta=view_meta, fed_prompt=None, order_id="test-order",
+    progress_path=os.path.join(run_dir, "progress.jsonl"), repo_root=repo_root,
+    echo_nonce=echo_nonce,
+  )
+  assert ok, detail
   ED._journal_append(run_dir, {
     "kind": "attempt-ended", "attempt": 1,
     "ended": {"wallSeconds": 0.1, "stdoutBytes": 0, "exitCode": 0},
@@ -662,9 +663,7 @@ def test_seam_a_record_ingest_replaces_landing_when_evidence_stamped(tmp_path, a
   path, _env, before = _dispatch_observed_land(d, "code-reviewer")
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
                                      RR.storage_key("code-reviewer"), pend["attempt"])
-  with open(order_path, "rb") as fh:
-    prompt_bytes = fh.read()
-  run_dir = _execution_run_dir(tmp_path, prompt_bytes, name="ev-stamp-run")
+  run_dir = _execution_run_dir(tmp_path, order_path, name="ev-stamp-run")
   out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
   assert out["ok"], out
   after = _read_bytes(path)
@@ -722,12 +721,34 @@ def test_seam_a_record_result_refusal_evidence_run_dir_unreadable_leaves_landing
   assert _read_bytes(path) == before
 
 
+def test_seam_a_record_result_evidence_binding_accepts_genuine_run(tmp_path, adapters):
+  # axis: binding accepts a run directory opened over the real order file
+  d = _session(tmp_path, name="ev-binding-ok")
+  pend = _pending(d)
+  _dispatch_observed_land(d, "code-reviewer")
+  order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
+                                     RR.storage_key("code-reviewer"), pend["attempt"])
+  run_dir = _execution_run_dir(tmp_path, order_path, name="ev-binding-ok-run")
+  out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
+  assert out["ok"], out
+  stored, err = RR.read_json(out["storePath"])
+  assert err is None
+  assert "executionEvidence" in stored
+  record, ev_err = ED.run_execution_record(run_dir)
+  assert ev_err is None
+  assert stored["executionEvidence"] == {
+      key: record[key] for key in RR.EXECUTION_EVIDENCE_FIELDS}
+
+
 def test_seam_a_record_result_refusal_evidence_order_mismatch_leaves_landing_bytes(
     tmp_path, adapters):
   d = _session(tmp_path, name="ev-mismatch")
   path, env, before = _dispatch_observed_land(d, "code-reviewer")
-  run_dir = _execution_run_dir(tmp_path, b"wrong-order-prompt\n", name="ev-mismatch-run")
-  assert hashlib.sha256(b"wrong-order-prompt\n").hexdigest() != env["orderSha256"]
+  wrong_path = str(tmp_path / "wrong-order.txt")
+  with open(wrong_path, "w", encoding="utf-8") as fh:
+    fh.write("wrong-order-prompt\n")
+  run_dir = _execution_run_dir(tmp_path, wrong_path, name="ev-mismatch-run")
+  assert hashlib.sha256("wrong-order-prompt\n".encode("utf-8")).hexdigest() != env["orderSha256"]
   out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
   assert out["ok"] is False
   assert out["reason"] == "evidence-order-mismatch"
@@ -751,9 +772,7 @@ def test_seam_a_recorded_journal_agrees_with_store(tmp_path, adapters):
   _dispatch_observed_land(d, "code-reviewer")
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
                                      RR.storage_key("code-reviewer"), pend["attempt"])
-  with open(order_path, "rb") as fh:
-    prompt_bytes = fh.read()
-  run_dir = _execution_run_dir(tmp_path, prompt_bytes, name="journal-agree-run")
+  run_dir = _execution_run_dir(tmp_path, order_path, name="journal-agree-run")
   out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
   assert out["ok"], out
   recorded = [e for e in _outcomes(d, "recorded") if e.get("seat") == "code-reviewer"]
