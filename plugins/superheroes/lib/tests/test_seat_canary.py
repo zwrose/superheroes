@@ -1118,3 +1118,18 @@ def test_sm2_1269_grounding_refuses_reviewer_deep():
         "requires tier 'reviewer'" in out["detail"]
         or "accepted tiers: reviewer" in out["detail"]
     )
+
+
+def test_sm2_1269_tier_override_below_default_resolves():
+    # axis: tier seat_map emits via override/backfill is accepted, not refused as default-only
+    cell = {
+        "effort": "high",
+        "family": "openai",
+        "model": "gpt-5.6-terra",
+        "source": "rotated",
+        "tier": "reviewer",
+        "vendor": "codex",
+    }
+    resolved = SC._resolve_canary_identity("code-reviewer", cell)
+    assert resolved["ok"] is True
+    assert resolved["tier"] == "reviewer"

@@ -9193,6 +9193,23 @@ def _dict_literal_has_run_opened_key(node):
     return False
 
 
+def _call_stamps_run_dir(node):
+    if not isinstance(node, ast.Call):
+        return False
+    if isinstance(node.func, ast.Attribute) and node.func.attr in ("update", "setdefault"):
+        for arg in node.args:
+            if _dict_literal_has_run_dir_key(arg):
+                return True
+        for kw in node.keywords:
+            if kw.arg == "runDir":
+                return True
+    if isinstance(node.func, ast.Name) and node.func.id == "dict":
+        for kw in node.keywords:
+            if kw.arg == "runDir":
+                return True
+    return False
+
+
 def _entry_refusal_run_dir_stamp_lines(func_node):
     """Line numbers where an entry-refusal function stamps runDir outside the chokepoint."""
     assigned_run_dir = set()
@@ -9201,6 +9218,13 @@ def _entry_refusal_run_dir_stamp_lines(func_node):
             target = node.targets[0]
             if isinstance(target, ast.Name) and _dict_literal_has_run_dir_key(node.value):
                 assigned_run_dir.add(target.id)
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            call = node.value
+            if _call_stamps_run_dir(call):
+                if isinstance(call.func, ast.Attribute) and isinstance(
+                    call.func.value, ast.Name
+                ):
+                    assigned_run_dir.add(call.func.value.id)
     violations = []
     for node in ast.walk(func_node):
         if isinstance(node, ast.Return) and node.value is not None:
@@ -9259,6 +9283,14 @@ def test_entry_refusal_invariant_detector_breadth_self_check():
     )
     update_node = update_tree.body[0]
     assert _assigns_run_opened_in_entry_refusal(update_node.body[0]) is True
+    run_dir_update_tree = ast.parse(
+        "def _probe():\n"
+        "    out = {}\n"
+        "    out.update({\"runDir\": \"\"})\n"
+        "    return out\n"
+    )
+    run_dir_update_node = run_dir_update_tree.body[0]
+    assert _entry_refusal_run_dir_stamp_lines(run_dir_update_node) == [4]
 
 
 def test_entry_unknown_kwargs_refusal_preserves_existing_review_run_provenance(tmp_path):
