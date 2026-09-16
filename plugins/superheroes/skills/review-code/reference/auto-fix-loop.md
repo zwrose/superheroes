@@ -430,7 +430,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > # $PANEL_SEATS — folded per-dimension panel payloads keyed by seat name (the `seats` object you
 > # submit on `dispatch-panel`). One representative seat per cross-vendor vendor that ran with zero
 > # usable findings (dict members only — mirrors `round_driver._usable_findings`).
-> mapfile -t CANARY_SEAT_KEYS < <(python3 -B -c "
+> CANARY_SEAT_KEYS=()
+> while IFS= read -r k; do CANARY_SEAT_KEYS+=("$k"); done < <(python3 -B -c "
 > import json, sys
 > seat_map = json.loads(sys.argv[1])
 > panel = json.loads(sys.argv[2])
