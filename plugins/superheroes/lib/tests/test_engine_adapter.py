@@ -651,8 +651,9 @@ def test_build_argv_cli_refusal_object_shape(capsys):
 
 
 def test_build_argv_cli_empty_effort_normalizes_to_none_for_composer_pin(capsys):
-    rc = EA.main(["build-argv", "--seat", _seat_json("cursor", "composer-2.5", None, "implementer"),
-                  "--run-kind", "build"])
+    rc = EA.main(["build-argv", "--seat", json.dumps({
+        "vendor": "cursor", "model": "composer-2.5", "effort": "", "role": "implementer",
+    }), "--run-kind", "build"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0
     assert out[out.index("--model") + 1] == "composer-2.5"

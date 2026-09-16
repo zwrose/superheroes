@@ -417,9 +417,12 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > path is **unchanged** and is **not** a consumer of the write verb. Do not imply otherwise.
 >
 > **Cross-vendor control probe (#668).** For each **distinct cross-vendor vendor** among the
-> panel's seats that ran with zero findings on that vendor's seat(s), run the planted-defect control
-> probe **once per such vendor** before treating those seats as clean. Use that vendor's own seat
-> model and effort from the seat map. A seat whose registry config is **effort-less** — one the model
+> panel's seats that **ran** with zero findings on that vendor's seat(s), run the planted-defect
+> control probe **once per such vendor** before treating those seats as clean. Select and
+> deduplicate canaries using the same effective-vendor rule as `round_driver.canary_liveness` —
+> trusted `ranManifest` first, configured vendor otherwise — and resolve that effective vendor's
+> model and effort for the seat tier before probing. Exclude seats whose status is not `run`. A seat
+> whose registry config is **effort-less** — one the model
 > registry records with no effort at all — is expressed by **omitting `--effort`** (#963), never by an
 > effort string: `probe`'s `--effort` is optional and defaults to `None`, the registry's own value.
 > Passing an empty `--effort ""` is not the same thing and still refuses at
@@ -428,21 +431,55 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 > # $PANEL_SEATS — folded per-dimension panel payloads keyed by seat name (the `seats` object you
-> # submit on `dispatch-panel`). One representative seat per cross-vendor vendor that ran with zero
-> # usable findings (dict members only — mirrors `round_driver._usable_findings`).
-> CANARY_SEAT_KEYS=()
-> while IFS= read -r k; do CANARY_SEAT_KEYS+=("$k"); done < <(python3 -B -c "
+> # submit on `dispatch-panel`). $PANEL_SEAT_STATUS — per-dimension status map (`run` / `missing` /
+> # etc.) for the same round. $RAN_MANIFEST — trusted `{<dim>: <vendor>}` record of which vendor
+> # produced each seat's folded findings (omit or `{}` when none fell open). One representative seat
+> # per effective cross-vendor vendor that ran with zero usable findings (dict members only — mirrors
+> # `round_driver._usable_findings`).
+> CANARY_PLANS=()
+> while IFS= read -r plan; do CANARY_PLANS+=("$plan"); done < <(python3 -B -c "
 > import json, sys
+> PANEL_VENDORS = ('claude', 'codex', 'cursor')
 > seat_map = json.loads(sys.argv[1])
 > panel = json.loads(sys.argv[2])
+> ran_manifest = json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
+> seat_status = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
 > seats = seat_map.get('seats') or {}
-> seen = set()
-> keys = []
-> for key, cell in seats.items():
+> manifest = ran_manifest if isinstance(ran_manifest, dict) else {}
+> status = seat_status if isinstance(seat_status, dict) else {}
+>
+> def configured_vendor(dim):
+>     cell = seats.get(dim)
+>     vendor = cell.get('vendor') if isinstance(cell, dict) else None
+>     return vendor if isinstance(vendor, str) and vendor in PANEL_VENDORS else None
+>
+> def effective_vendor(dim):
+>     ran = manifest.get(dim)
+>     if isinstance(ran, str) and ran in PANEL_VENDORS:
+>         return ran
+>     return configured_vendor(dim)
+>
+> def resolve_probe_config(dim, vendor):
+>     cell = seats.get(dim)
 >     if not isinstance(cell, dict):
->         continue
->     vendor = cell.get('vendor')
->     if vendor in (None, 'claude'):
+>         return None
+>     tier = cell.get('tier')
+>     if cell.get('vendor') == vendor:
+>         return {'key': dim, 'vendor': vendor, 'model': cell.get('model'),
+>                 'tier': tier, 'effort': cell.get('effort')}
+>     for other_key, other in seats.items():
+>         if not isinstance(other, dict) or other.get('vendor') != vendor:
+>             continue
+>         if tier is not None and other.get('tier') != tier:
+>             continue
+>         return {'key': dim, 'vendor': vendor, 'model': other.get('model'),
+>                 'tier': tier or other.get('tier'), 'effort': other.get('effort')}
+>     return None
+>
+> seen = set()
+> plans = []
+> for key in seats:
+>     if status.get(key) != 'run':
 >         continue
 >     payload = panel.get(key)
 >     if not isinstance(payload, dict):
@@ -452,19 +489,26 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >         findings = []
 >     if any(isinstance(f, dict) for f in findings):
 >         continue
+>     vendor = effective_vendor(key)
+>     if vendor in (None, 'claude'):
+>         continue
 >     if vendor in seen:
 >         continue
+>     cfg = resolve_probe_config(key, vendor)
+>     if not cfg or not cfg.get('model') or not cfg.get('tier'):
+>         continue
 >     seen.add(vendor)
->     keys.append(key)
-> for k in keys:
->     print(k)
-> " "$SEAT_MAP" "$PANEL_SEATS")
+>     plans.append(cfg)
+> for plan in plans:
+>     print(json.dumps(plan))
+> " "$SEAT_MAP" "$PANEL_SEATS" "${RAN_MANIFEST:-{}}" "${PANEL_SEAT_STATUS:-{}}")
 > CANARY_RESULTS=()
-> for CANARY_SEAT_KEY in "${CANARY_SEAT_KEYS[@]}"; do
->   CANARY_VENDOR=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$CANARY_SEAT_KEY\"].vendor")
->   CANARY_ENGINE_MODEL=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$CANARY_SEAT_KEY\"].model")
->   CANARY_TIER=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$CANARY_SEAT_KEY\"].tier")
->   CANARY_EFFORT=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$CANARY_SEAT_KEY\"].effort")
+> for CANARY_PLAN in "${CANARY_PLANS[@]}"; do
+>   CANARY_SEAT_KEY=$(printf '%s' "$CANARY_PLAN" | jq -r '.key')
+>   CANARY_VENDOR=$(printf '%s' "$CANARY_PLAN" | jq -r '.vendor')
+>   CANARY_ENGINE_MODEL=$(printf '%s' "$CANARY_PLAN" | jq -r '.model')
+>   CANARY_TIER=$(printf '%s' "$CANARY_PLAN" | jq -r '.tier')
+>   CANARY_EFFORT=$(printf '%s' "$CANARY_PLAN" | jq -r '.effort')
 >   EFFORT_ARGS=()
 >   if [ "$CANARY_EFFORT" != "null" ]; then EFFORT_ARGS=(--effort "${CANARY_EFFORT}"); fi
 >   CANARY_RESULTS+=("$(
