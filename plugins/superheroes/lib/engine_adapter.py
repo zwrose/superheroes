@@ -277,7 +277,7 @@ def _fable_unrunnable_detail(claude_tier):
 
 
 def _invalid_model_effort_detail(vendor, model_id, effort):
-    allowed = model_registry._allowed_efforts(vendor, model_id)  # noqa: SLF001
+    allowed = model_registry.allowed_efforts(vendor, model_id)
     if allowed is None:
         return f"model {model_id!r} is not registered for vendor {vendor!r}"
     if not allowed:
@@ -303,42 +303,85 @@ def _untokenizable_detail(vendor, model_id, effort):
     return (
         f"no dispatch token for vendor {vendor!r} model {model_id!r} effort {effort!r}; "
         f"accepted efforts for this model: "
-        f"{_format_valid(model_registry._allowed_efforts(vendor, model_id) or ())}"  # noqa: SLF001
+        f"{_format_valid(model_registry.allowed_efforts(vendor, model_id) or ())}"
     )
 
 
-def resolve_engine_model(seat, role_kind, opts):
-    """Return (engine_model, source) for the resolved engine-model pin (#1269 WO-A2).
+def _resolve_engine_model_pin(vendor, model_id, claude_tier):
+    """Single home for vendor/model_id → registry engine-model pin resolution.
 
-    Mirrors build_argv_result's model resolution without constructing argv."""
-    opts = opts or {}
-    vendor = seat.get("vendor")
-    model_id = seat.get("model")
-    claude_tier = opts.get("model")
+    Returns (engine_model, source, refusal_reason, refusal_detail). On success the refusal
+    fields are None."""
     if vendor == "codex":
         engine_model = model_id
         if isinstance(engine_model, str) and engine_model:
             if model_registry.is_registered("codex", engine_model):
-                return engine_model, "caller"
+                return engine_model, "caller", None, None
             parsed = model_registry.parse_dispatch_token("codex", engine_model)
             if parsed is None:
-                return None, "declared-none"
-            return parsed[0], "resolved"
+                return (
+                    None,
+                    "declared-none",
+                    "unregistered-engine-model",
+                    _registered_engine_models_detail("codex"),
+                )
+            return parsed[0], "resolved", None, None
         try:
-            return model_registry.codex_peer_for_claude_tier(claude_tier), "resolved"
+            return (
+                model_registry.codex_peer_for_claude_tier(claude_tier),
+                "resolved",
+                None,
+                None,
+            )
+        except (ValueError, TypeError):
+            return (
+                None,
+                "declared-none",
+                "fable-unrunnable",
+                _fable_unrunnable_detail(claude_tier),
+            )
         except Exception:
-            return None, "declared-none"
+            return (
+                None,
+                "declared-none",
+                "unregistered-engine-model",
+                _registered_engine_models_detail("codex"),
+            )
     if vendor == "cursor":
         engine_model = model_id
         if isinstance(engine_model, str) and engine_model:
             if model_registry.is_registered("cursor", engine_model):
-                return engine_model, "caller"
+                return engine_model, "caller", None, None
             parsed = model_registry.parse_dispatch_token("cursor", engine_model)
             if parsed is None:
-                return None, "declared-none"
-            return parsed[0], "resolved"
-        return "composer-2.5", "default"
-    return None, "declared-none"
+                return (
+                    None,
+                    "declared-none",
+                    "unregistered-engine-model",
+                    _registered_engine_models_detail("cursor"),
+                )
+            return parsed[0], "resolved", None, None
+        return "composer-2.5", "default", None, None
+    return (
+        None,
+        "declared-none",
+        "unknown-engine",
+        _unknown_engine_detail(vendor),
+    )
+
+
+def resolve_engine_model(seat, _run_kind, opts):
+    """Return (engine_model, source) for the resolved engine-model pin (#1269 WO-A2).
+
+    Derives from ``_resolve_engine_model_pin`` — the same ladder ``build_argv_result`` uses."""
+    opts = opts or {}
+    vendor = seat.get("vendor")
+    model_id = seat.get("model")
+    claude_tier = opts.get("model")
+    engine_model, source, _reason, _detail = _resolve_engine_model_pin(
+        vendor, model_id, claude_tier,
+    )
+    return engine_model, source
 
 
 def build_argv_result(seat, role_kind, opts):
@@ -362,28 +405,11 @@ def build_argv_result(seat, role_kind, opts):
         if claude_tier == "fable":
             return _refuse("fable-unrunnable", detail=_fable_unrunnable_detail(claude_tier))
     if vendor == "codex":
-        engine_model = model_id
-        if isinstance(engine_model, str) and engine_model:
-            if model_registry.is_registered("codex", engine_model):
-                pass
-            else:
-                parsed = model_registry.parse_dispatch_token("codex", engine_model)
-                if parsed is None:
-                    return _refuse(
-                        "unregistered-engine-model",
-                        detail=_registered_engine_models_detail("codex"),
-                    )
-                engine_model, _tok_effort = parsed
-        else:
-            try:
-                engine_model = model_registry.codex_peer_for_claude_tier(claude_tier)
-            except (ValueError, TypeError):
-                return _refuse("fable-unrunnable", detail=_fable_unrunnable_detail(claude_tier))
-            except Exception:
-                return _refuse(
-                    "unregistered-engine-model",
-                    detail=_registered_engine_models_detail("codex"),
-                )
+        engine_model, _source, refusal_reason, refusal_detail = _resolve_engine_model_pin(
+            vendor, model_id, claude_tier,
+        )
+        if refusal_reason is not None:
+            return _refuse(refusal_reason, detail=refusal_detail)
         ok, _reason = model_registry.validate_config(
             "codex", engine_model, effort, allow_override_only=True)
         if not ok:
@@ -402,24 +428,24 @@ def build_argv_result(seat, role_kind, opts):
     if vendor == "cursor":
         engine_model = model_id
         if isinstance(engine_model, str) and engine_model:
-            if model_registry.is_registered("cursor", engine_model):
-                cursor_model_id = engine_model
-            else:
+            pin, _source, refusal_reason, refusal_detail = _resolve_engine_model_pin(
+                vendor, model_id, claude_tier,
+            )
+            if refusal_reason is not None:
+                return _refuse(refusal_reason, detail=refusal_detail)
+            cursor_model_id = pin
+            if not model_registry.is_registered("cursor", engine_model):
                 parsed = model_registry.parse_dispatch_token("cursor", engine_model)
-                if parsed is None:
-                    return _refuse(
-                        "unregistered-engine-model",
-                        detail=_registered_engine_models_detail("cursor"),
-                    )
-                cursor_model_id, tok_effort = parsed
-                if tok_effort is not None and effort is not None and tok_effort != effort:
-                    return _refuse(
-                        "engine-model-effort-conflict",
-                        detail=_engine_model_effort_conflict_detail(
-                            tok_effort, effort, engine_model),
-                    )
-                if effort is None and tok_effort is not None:
-                    effort = tok_effort
+                if parsed is not None:
+                    _pin, tok_effort = parsed
+                    if tok_effort is not None and effort is not None and tok_effort != effort:
+                        return _refuse(
+                            "engine-model-effort-conflict",
+                            detail=_engine_model_effort_conflict_detail(
+                                tok_effort, effort, engine_model),
+                        )
+                    if effort is None and tok_effort is not None:
+                        effort = tok_effort
             ok, _reason = model_registry.validate_config("cursor", cursor_model_id, effort)
             if not ok:
                 return _refuse(
@@ -2163,20 +2189,16 @@ def _cmd_build_argv(args):
                  "path": args.prompt_path}) + "\n")
             return 0
 
-    parsed = seat_bundle.parse(args.seat)
-    if not parsed.get("ok"):
+    resolved = seat_bundle.resolve_entry(args.seat, verb="build-argv")
+    if not resolved.get("ok"):
+        token = resolved.get("reason", "seat-refused")
+        detail = resolved.get("detail", token)
         sys.stdout.write(json.dumps(
-            {"ok": False, "reason": "engine-config", "detail": parsed["reason"],
-             "argv": [], "seat_detail": parsed["detail"]}) + "\n")
-        return 0
-    validated = seat_bundle.validate_effort_only(parsed)
-    if not validated.get("ok"):
-        sys.stdout.write(json.dumps(
-            {"ok": False, "reason": "engine-config", "detail": validated["reason"],
-             "argv": [], "seat_detail": validated["detail"]}) + "\n")
+            {"ok": False, "reason": "engine-config", "detail": token,
+             "argv": [], "seat_detail": detail}) + "\n")
         return 0
     opts = {"cwd": args.cwd}
-    res = build_argv_result(validated, args.role, opts)
+    res = build_argv_result(resolved, args.run_kind, opts)
     if res["reason"] is not None:
         detail = res.get("detail") or res["reason"]
         sys.stdout.write(json.dumps(
@@ -2193,7 +2215,12 @@ def build_parser():
     b = sub.add_parser("build-argv")
     b.add_argument("--seat", required=True,
                    help="JSON seat bundle or vendor:token composed dispatch token")
-    b.add_argument("--role", required=True, choices=("review", "build", "fix"))
+    b.add_argument(
+        "--run-kind",
+        required=True,
+        choices=("review", "build", "fix"),
+        help="read vs write sandbox shaping (not the registry role — that rides in --seat)",
+    )
     b.add_argument("--cwd", default=None)
     b.add_argument("--verify", action="append", default=None,
                    help="PATH:SHA256 staged-input check; any mismatch/unreadable file fails build-argv closed")

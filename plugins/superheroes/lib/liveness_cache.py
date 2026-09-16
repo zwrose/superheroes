@@ -90,6 +90,11 @@ def _cache_provenance_reason_suffix(probed_at, remaining):
     )
 
 
+def cache_provenance_reason_suffix(probed_at, remaining):
+    """Public accessor for cache-provenance reason suffix text."""
+    return _cache_provenance_reason_suffix(probed_at, remaining)
+
+
 def extend_notes_with_cache_provenance(notes, receipt, now):
     """Append cache provenance to each note's reason. Mutates notes in place."""
     try:

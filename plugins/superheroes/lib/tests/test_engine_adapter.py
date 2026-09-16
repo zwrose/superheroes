@@ -23,8 +23,8 @@ def _seat(vendor, model, effort):
     return {"vendor": vendor, "model": model, "effort": effort}
 
 
-def _seat_json(vendor, model, effort):
-    return json.dumps({"vendor": vendor, "model": model, "effort": effort})
+def _seat_json(vendor, model, effort, role="reviewer"):
+    return json.dumps({"vendor": vendor, "model": model, "effort": effort, "role": role})
 
 
 
@@ -187,8 +187,8 @@ def test_build_argv_cursor_build_force_write():
 
 
 def test_build_argv_cli(capsys):
-    rc = EA.main(["build-argv", "--seat", _seat_json("codex", "gpt-5.6-terra", "high"), "--role", "build",
-                  "--cwd", "/wt"])
+    rc = EA.main(["build-argv", "--seat", _seat_json("codex", "gpt-5.6-terra", "high", "implementer"),
+                  "--run-kind", "build", "--cwd", "/wt"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out[0] == "codex" and "workspace-write" in out
     assert out[out.index("-m") + 1] == "gpt-5.6-terra"
@@ -542,8 +542,8 @@ def test_build_argv_cli_composed_grok_token_without_effort_flag(capsys):
         [
             "build-argv",
             "--seat",
-            "cursor:cursor-grok-4.6-xhigh",
-            "--role",
+            _seat_json("cursor", "cursor-grok-4.6-xhigh", None, "reviewer-deep"),
+            "--run-kind",
             "review",
         ]
     )
@@ -643,8 +643,8 @@ def test_build_argv_cli_refusal_object_shape(capsys):
 
 
 def test_build_argv_cli_empty_effort_normalizes_to_none_for_composer_pin(capsys):
-    rc = EA.main(["build-argv", "--seat", _seat_json("cursor", "composer-2.5", None),
-                  "--role", "review"])
+    rc = EA.main(["build-argv", "--seat", _seat_json("cursor", "composer-2.5", None, "implementer"),
+                  "--run-kind", "review"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0
     assert out[out.index("--model") + 1] == "composer-2.5"
@@ -666,6 +666,90 @@ def test_build_argv_must_not_regress_measured_invariants():
         "cursor-agent", "--model", "composer-2.5", "-p", "--trust", "-f",
         "--output-format", "stream-json",
     ]
+
+
+_OFF_ALLOWLIST_CODEX = "gpt-5.3-codex-high"
+
+
+def test_build_argv_cli_off_allowlist_refused(capsys):
+    rc = EA.main([
+        "build-argv",
+        "--seat",
+        _seat_json("codex", _OFF_ALLOWLIST_CODEX, "high"),
+        "--run-kind",
+        "review",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["ok"] is False
+    assert out["reason"] == "engine-config"
+    assert out["detail"] == "allowlist-refused"
+    assert "allowlist" in out["seat_detail"]
+
+
+def test_build_argv_cli_old_role_spelling_refused(capsys):
+    rc = EA.main([
+        "build-argv",
+        "--seat",
+        _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--role",
+        "review",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["ok"] is False
+    assert out["reason"] == "legacy-seat-args"
+    assert "--role" in out["detail"] or "role now travels inside --seat" in out["detail"]
+
+
+def test_build_argv_cli_bare_composed_token_refused(capsys):
+    rc = EA.main([
+        "build-argv",
+        "--seat",
+        "cursor:cursor-grok-4.6-xhigh",
+        "--run-kind",
+        "review",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["ok"] is False
+    assert out["detail"] == "seat-token-dropped"
+    assert "role" in out["seat_detail"]
+
+
+def test_build_argv_cli_missing_role_key_refused(capsys):
+    seat = json.dumps({"vendor": "codex", "model": "gpt-5.6-sol", "effort": "high"})
+    rc = EA.main(["build-argv", "--seat", seat, "--run-kind", "review"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["ok"] is False
+    assert out["detail"] == "role-key-absent"
+
+
+def test_resolve_engine_model_pin_matches_build_argv_result_ladder():
+    samples = [
+        ("codex", "gpt-5.6-sol", "high", {}, "review"),
+        ("codex", "gpt-5.6-sol", "high", {"model": "opus"}, "review"),
+        ("codex", None, "high", {"model": "sonnet"}, "review"),
+        ("cursor", "composer-2.5", None, {}, "review"),
+        ("cursor", "cursor-grok-4.6-xhigh", None, {}, "review"),
+        ("cursor", None, None, {}, "build"),
+        ("bogus", None, "high", {}, "review"),
+    ]
+    for vendor, model, effort, opts, run_kind in samples:
+        seat = {"vendor": vendor, "model": model, "effort": effort}
+        resolved_model, source = EA.resolve_engine_model(seat, run_kind, opts)
+        pin, pin_source, refusal, _detail = EA._resolve_engine_model_pin(
+            vendor, model, opts.get("model"),
+        )
+        assert (resolved_model, source) == (pin, pin_source)
+        argv_res = EA.build_argv_result(seat, run_kind, opts)
+        if refusal is None and argv_res["reason"] is None:
+            if vendor == "codex":
+                assert argv_res["argv"][argv_res["argv"].index("-m") + 1] == resolved_model
+            elif vendor == "cursor" and resolved_model:
+                model_tok = argv_res["argv"][argv_res["argv"].index("--model") + 1]
+                assert model_tok.startswith(resolved_model.split("-")[0]) or resolved_model in model_tok
 
 
 def test_engine_reviewer_stdout_contract_is_stated_in_dispatch_reference():
@@ -1243,7 +1327,7 @@ def test_build_argv_verify_match(tmp_path, capsys):
     p = tmp_path / "x.prompt"
     p.write_bytes(b"payload")
     h = hashlib.sha256(b"payload").hexdigest()
-    EA.main(["build-argv", "--seat", _seat_json("codex", "gpt-5.6-sol", "high"), "--role", "review",
+    EA.main(["build-argv", "--seat", _seat_json("codex", "gpt-5.6-sol", "high"), "--run-kind", "review",
              "--verify", "%s:%s" % (p, h)])
     out = json.loads(capsys.readouterr().out)
     assert isinstance(out, list) and out[0] == "codex"
@@ -1253,7 +1337,7 @@ def test_build_argv_verify_mismatch(tmp_path, capsys):
     p = tmp_path / "x.prompt"
     p.write_bytes(b"tampered")
     h = hashlib.sha256(b"payload").hexdigest()
-    EA.main(["build-argv", "--seat", _seat_json("codex", "gpt-5.6-sol", "high"), "--role", "review",
+    EA.main(["build-argv", "--seat", _seat_json("codex", "gpt-5.6-sol", "high"), "--run-kind", "review",
              "--verify", "%s:%s" % (p, h)])
     out = json.loads(capsys.readouterr().out)
     assert out == {"ok": False, "reason": "staged-input-mismatch", "path": str(p)}
@@ -1262,7 +1346,7 @@ def test_build_argv_verify_mismatch(tmp_path, capsys):
 def test_build_argv_verify_missing_file(tmp_path, capsys):
     p = tmp_path / "absent.prompt"
     h = hashlib.sha256(b"payload").hexdigest()
-    EA.main(["build-argv", "--seat", _seat_json("codex", "gpt-5.6-sol", "high"), "--role", "review",
+    EA.main(["build-argv", "--seat", _seat_json("codex", "gpt-5.6-sol", "high"), "--run-kind", "review",
              "--verify", "%s:%s" % (p, h)])
     out = json.loads(capsys.readouterr().out)
     assert out == {"ok": False, "reason": "staged-input-mismatch", "path": str(p)}
@@ -1391,7 +1475,7 @@ def test_parse_result_truncated_tail_never_trusts_echoed_findings(tmp_path, caps
 
 
 def _build_argv_with_prompt(tmp_path, capsys, prompt_path=None, extra_args=None):
-    args = ["build-argv", "--seat", _seat_json("codex", "gpt-5.6-sol", "low"), "--role", "review"]
+    args = ["build-argv", "--seat", _seat_json("codex", "gpt-5.6-sol", "high"), "--run-kind", "review"]
     if prompt_path is not None:
         args += ["--prompt-path", str(prompt_path)]
     if extra_args:

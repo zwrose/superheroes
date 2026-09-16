@@ -439,6 +439,29 @@ def test_chokepoint_invariant_all_paths_use_resolve_entry(monkeypatch, tmp_path)
     assert "sentinel" in verdict["reason"]
 
 
+def test_match_effort_empty_allowed_always_none():
+    assert SB._match_effort(None, ()) is None
+    assert SB._match_effort("high", ()) is None
+
+
+def test_dispatch_review_accepted_params_derived_from_signature():
+    text = SB.dispatch_review_accepted_params()
+    assert "seat" in text
+    assert "prompt_path" in text
+    assert "session_dir" in text
+    assert "args" not in text
+    assert "kwargs" not in text
+
+
+def test_dispatch_write_accepted_params_derived_from_signature():
+    text = SB.dispatch_write_accepted_params()
+    assert "seat" in text
+    assert "cwd" in text
+    assert "expected_items_file" in text
+    assert "args" not in text
+    assert "kwargs" not in text
+
+
 def test_dropped_flag_with_valid_seat_still_refuses():
     argv = [
         "dispatch-review",

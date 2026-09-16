@@ -6,6 +6,7 @@ scalars or resolves role outside ``resolve_entry``.
 """
 from __future__ import annotations
 
+import inspect
 import json
 
 import model_registry
@@ -14,15 +15,31 @@ _DROPPED_FLAGS = ("--engine", "--model", "--effort", "--engine-model", "--vendor
 _LEGACY_KEYWORDS = frozenset({"engine", "model", "effort", "engine_model", "role"})
 _MODE_BRIEF_CHECK = "brief-check"
 
-_DISPATCH_REVIEW_ACCEPTED = (
-    "seat, prompt_path, repo_root, timeout, retry_timeout, progress_path, "
-    "run_engine, build_view, run_dir, max_wait, order_id, diff_base, mode, "
-    "expected_result_kind, pr_body_path, session_dir"
-)
-_DISPATCH_WRITE_ACCEPTED = (
-    "seat, prompt_path, cwd, order_id, base_sha, timeout, retry_timeout, "
-    "progress_path, run_engine, run_dir, max_wait, expected_items, expected_items_file"
-)
+
+def _signature_accepted_params(func) -> str:
+    params = []
+    for name, param in inspect.signature(func).parameters.items():
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+        if name in ("args", "kwargs"):
+            continue
+        params.append(name)
+    return ", ".join(params)
+
+
+def _dispatch_review_accepted() -> str:
+    import engine_dispatch  # noqa: WPS433 — lazy: avoid import cycle at module load
+
+    return _signature_accepted_params(engine_dispatch.dispatch_review)
+
+
+def _dispatch_write_accepted() -> str:
+    import engine_dispatch  # noqa: WPS433 — lazy: avoid import cycle at module load
+
+    return _signature_accepted_params(engine_dispatch.dispatch_write)
 
 _SEAT_JSON_SHAPE = (
     'JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, '
@@ -123,11 +140,11 @@ def unknown_kwargs_refusal(unknown_keys: tuple[str, ...], *, accepted_params: st
 
 
 def dispatch_review_accepted_params() -> str:
-    return _DISPATCH_REVIEW_ACCEPTED
+    return _dispatch_review_accepted()
 
 
 def dispatch_write_accepted_params() -> str:
-    return _DISPATCH_WRITE_ACCEPTED
+    return _dispatch_write_accepted()
 
 
 def _normalize_effort(value: str | None) -> str | None:
@@ -143,7 +160,7 @@ def _normalize_effort(value: str | None) -> str | None:
 
 def _match_effort(value: str | None, allowed: tuple[str, ...]) -> str | None:
     if not allowed:
-        return None if value is None else None
+        return None
     norm = _normalize_effort(value)
     if norm is None:
         return None
@@ -176,7 +193,7 @@ def _cross_vendor_effort_hint(effort: str) -> str | None:
 def _model_allowed_efforts(vendor: str, model_id: str) -> tuple[str, ...] | None:
     if not model_registry.is_registered(vendor, model_id):
         return None
-    return model_registry._allowed_efforts(vendor, model_id)  # noqa: SLF001 — per-model effort home
+    return model_registry.allowed_efforts(vendor, model_id)
 
 
 def _parse_json(raw: str) -> dict:

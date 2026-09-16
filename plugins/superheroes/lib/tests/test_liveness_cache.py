@@ -34,6 +34,12 @@ def _good_needed():
 # --- ttl_seconds ---
 
 
+def test_cache_provenance_reason_suffix_public_accessor():
+    suffix = lc.cache_provenance_reason_suffix(1_700_000_000, 42)
+    assert "served from cache" in suffix
+    assert "42 seconds" in suffix
+
+
 def test_ttl_seconds_default(monkeypatch):
     monkeypatch.delenv(lc._ENV_TTL, raising=False)
     assert lc.ttl_seconds() == 3600
