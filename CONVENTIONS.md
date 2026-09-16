@@ -83,8 +83,9 @@ still produced by The Architect.
   scoped word in chat after the PRs are talked through. **Merge-command execution** is
   delegable inside that word: the advisor executes after the lane's review and verification
   evidence, CI green on the recorded head, and a current branch, and reports each merge in
-  the thread that gave the word. **Release PRs and anything needing a force-push are never
-  delegated.**
+  the thread that gave the word. **A force-push proceeds on its own word once the reason is stated. A release or
+  publication never rides inside a merge word; it stays the owner's click unless
+  handed over in the moment with a word for that release.**
 - **Workhorse** — the builder session: issue-scoped, disposable, parallelizable. Takes a
   routed issue, writes and gets the build brief checked, delegates all implementation to
   tiered subagents or engines, verifies every receipt itself, runs test-pilot and
