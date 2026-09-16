@@ -125,11 +125,25 @@ def _anchor_hashes(session_dir, state, pend, seat, occurrence=0):
         skey, round_records.NOT_EMITTED)
 
 
+def _execution_evidence(**over):
+    evidence = {
+        "source": "runner",
+        "runnerNonce": "nonce-1",
+        "recordDigest": "digest-1",
+        "observation": {"ok": True},
+    }
+    evidence.update(over)
+    return evidence
+
+
 def _land(session_dir, state, pend, seat, payload, occurrence=0):
-    """Write ONE seat's `seat-result/1` envelope into the LANDING area (what the host does)."""
+    """Write ONE seat's envelope into the LANDING area (what the host does)."""
     manifest_sha, order_sha = _anchor_hashes(session_dir, state, pend, seat)
+    schema = round_records.seat_result_schema_for_state_version(state.get("schemaVersion"))
+    if schema is None:
+        schema = round_records.SEAT_RESULT_SCHEMA
     envelope = {
-        "schema": round_records.SEAT_RESULT_SCHEMA,
+        "schema": schema,
         "session": _session_id(session_dir),
         "round": pend["round"],
         "phase": pend["phase"],
@@ -144,6 +158,11 @@ def _land(session_dir, state, pend, seat, payload, occurrence=0):
         "payloadSha256": round_records.payload_sha256(payload),
         "payload": payload,
     }
+    if schema == round_records.SEAT_RESULT_SCHEMA_V2:
+        evidence = _execution_evidence()
+        envelope["executionEvidence"] = evidence
+        envelope["provenance"] = round_records.PROVENANCE_HAND_LANDED
+        envelope["envelopeSha256"] = round_records.envelope_sha256(payload, evidence)
     if occurrence:
         envelope["occurrence"] = occurrence
     path = round_records.landing_path(session_dir, pend["round"], pend["phase"],
@@ -534,7 +553,10 @@ def test_record_missing_addresses_the_second_target(tmp_path):
     other = round_records.store_path(session_dir, pend["round"], pend["phase"],
                                      round_records.storage_key(tid0, 0), pend["attempt"])
     kept, err = round_records.read_json(other)
-    assert err is None and kept["schema"] == round_records.SEAT_RESULT_SCHEMA, (err, kept)
+    expected_schema = round_records.seat_result_schema_for_state_version(state.get("schemaVersion"))
+    if expected_schema is None:
+        expected_schema = round_records.SEAT_RESULT_SCHEMA
+    assert err is None and kept["schema"] == expected_schema, (err, kept)
 
 
 @pytest.mark.parametrize("occurrence", [2, 7])
@@ -563,3 +585,38 @@ def test_recording_an_occurrence_outside_the_roster_is_refused(tmp_path, occurre
                                                   occurrence=occurrence)
     assert out_missing["ok"] is False and out_missing["reason"] == "unknown-occurrence", out_missing
     assert os.path.exists(lpath), "record-missing must not write a landing when one already exists"
+
+
+def test_driver_landing_envelope_schema_derives_from_state_version(tmp_path):
+    """Each driver-landing producer mints schema from the session's schemaVersion."""
+    from test_round_driver_advance import _result_envelope as advance_envelope
+    from test_round_driver_records_cli import _result_envelope as records_cli_envelope
+
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="schema-derive")
+    findings = [_blocking_finding("unchecked index", 2)]
+    _drive_to_phase(session_dir, gitdir, findings, head_path, round_driver.P_PANEL)
+
+    state = _state(session_dir)
+    pend = state["pending"]
+    expected = round_records.seat_result_schema_for_state_version(state.get("schemaVersion"))
+    if expected is None:
+        expected = round_records.SEAT_RESULT_SCHEMA
+    seat = FINDING_SEAT
+    payload = _payload_for(session_dir, state, pend, seat, findings, head_path)
+
+    path = _land(session_dir, state, pend, seat, payload)
+    landed, err = round_records.read_json(path)
+    assert err is None, err
+    assert landed["schema"] == expected
+
+    cli_env = records_cli_envelope(session_dir, seat, payload=payload, pend=pend)
+    assert cli_env["schema"] == expected
+
+    adv_env = advance_envelope(session_dir, seat, payload=payload, pend=pend)
+    assert adv_env["schema"] == expected
+
+    if expected == round_records.SEAT_RESULT_SCHEMA_V2:
+        for env in (landed, cli_env, adv_env):
+            assert env["provenance"] == round_records.PROVENANCE_HAND_LANDED
+            assert "envelopeSha256" in env
+            assert "executionEvidence" in env

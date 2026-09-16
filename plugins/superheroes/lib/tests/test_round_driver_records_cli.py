@@ -57,14 +57,30 @@ def _anchor_hashes(session_dir, rnd, phase, attempt, seat, occurrence=0):
     return anchor["manifestSha256"], (anchor.get("orders") or {}).get(skey, RR.NOT_EMITTED)
 
 
+def _execution_evidence(**over):
+    evidence = {
+        "source": "runner",
+        "runnerNonce": "nonce-1",
+        "recordDigest": "digest-1",
+        "observation": {"ok": True},
+    }
+    evidence.update(over)
+    return evidence
+
+
 def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, **over):
-    pend = pend or RD.load_state(session_dir)[1]["pending"]
+    ok, state = RD.load_state(session_dir)
+    assert ok and state is not None
+    pend = pend or state["pending"]
     payload = {"findings": [], "confidence": "high", "seat": seat,
                "verificationReceipt": {"ran": True}} if payload is None else payload
     manifest_sha, order_sha = _anchor_hashes(session_dir, pend["round"], pend["phase"],
                                              pend["attempt"], seat, occurrence=occurrence)
+    schema = RR.seat_result_schema_for_state_version(state.get("schemaVersion"))
+    if schema is None:
+        schema = RR.SEAT_RESULT_SCHEMA
     env = {
-        "schema": RR.SEAT_RESULT_SCHEMA,
+        "schema": schema,
         "session": _session_id(session_dir),
         "round": pend["round"],
         "phase": pend["phase"],
@@ -79,9 +95,16 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, *
         "payloadSha256": RR.payload_sha256(payload),
         "payload": payload,
     }
+    if schema == RR.SEAT_RESULT_SCHEMA_V2:
+        evidence = _execution_evidence()
+        env["executionEvidence"] = evidence
+        env["provenance"] = RR.PROVENANCE_HAND_LANDED
+        env["envelopeSha256"] = RR.envelope_sha256(payload, evidence)
     if occurrence:
         env["occurrence"] = occurrence
     env.update(over)
+    if schema == RR.SEAT_RESULT_SCHEMA_V2 and "executionEvidence" in over:
+        env["envelopeSha256"] = RR.envelope_sha256(payload, env["executionEvidence"])
     return env
 
 

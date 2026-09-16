@@ -1327,7 +1327,10 @@ def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path,
     assert supersede_out["ok"] is True and supersede_out["superseded"] is True
     stored_result, err = RR.read_json(spath)
     assert err is None
-    assert stored_result["schema"] == RR.SEAT_RESULT_SCHEMA
+    expected_schema = RR.seat_result_schema_for_state_version(_state(d).get("schemaVersion"))
+    if expected_schema is None:
+        expected_schema = RR.SEAT_RESULT_SCHEMA
+    assert stored_result["schema"] == expected_schema
     assert stored_result["payload"]["verdicts"][0]["verdict"] == "CONFIRMED"
 
     # axis: fold applies CONFIRMED from superseded seat-result, not PLAUSIBLE from silent cluster
@@ -1597,7 +1600,10 @@ def test_orchestrator_fulfilled_fold_writes_the_durable_seat_record(tmp_path, ad
 
     record, err = RR.read_json(_verify_store_path(d))
     assert err is None, err
-    assert record["schema"] == RR.SEAT_RESULT_SCHEMA
+    expected_schema = RR.seat_result_schema_for_state_version(_state(d).get("schemaVersion"))
+    if expected_schema is None:
+        expected_schema = RR.SEAT_RESULT_SCHEMA
+    assert record["schema"] == expected_schema
     assert record["phase"] == RD.P_VERIFY and record["seat"] == "verify"
     assert record["round"] == 1 and record["attempt"] == 0 and record["occurrence"] == 0
     assert record["payload"] == {"result": "pass"}
