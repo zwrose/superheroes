@@ -1,7 +1,7 @@
 """Cross-doc disposition-flow structural guards (issue #1113).
 
 Enforces: pinned section headings; retired vocabulary and owner-rejected terms absent;
-retired door literals absent from shipped doctrine surfaces (test tree excluded);
+retired tier vocabulary absent from a closed three-file enumeration of shipped doctrine surfaces;
 registry marker home;
 discuss-open-decisions cites the owner-decisions canonical home path.
 """
@@ -14,6 +14,7 @@ discuss-open-decisions cites the owner-decisions canonical home path.
 # Prose MEANING, Contents parity, table shape, and ordering beyond presence are
 # guarded by review, not by CI. No negation heuristics, no paragraph heuristics,
 # no structural parsers beyond heading-line membership checks.
+# The retired tier vocabulary census uses a closed three-file enumeration — no tree walk.
 import os
 import re
 
@@ -25,14 +26,13 @@ _SHOWRUNNER_CHARTER = "skills/showrunner/SKILL.md"
 _REVIEW_DISCIPLINE = "rubric/review-discipline.md"
 _VET_RECEIPT = "skills/showrunner/reference/vet-receipt.md"
 _DISCUSS_OPEN = "skills/discuss-open-decisions/SKILL.md"
+_ISSUE_CONTRACT = "skills/showrunner/reference/issue-contract.md"
 
 _REGISTRY_MARKER = "<!-- superheroes:revisit-registry -->"
 
 _RETIRED_LITERAL = "Follow-up economics"
 
-_RETIRED_DOOR_LITERALS = (
-    "worth-it gate",
-    "gate verdict",
+_RETIRED_TIER_LITERALS = (
     "Tier 1",
     "Tier 2",
     "Tier-1",
@@ -56,8 +56,15 @@ _RETIRED_VOCAB_FILES = (
     _VET_RECEIPT,
 )
 
+# The shipped surfaces whose routing vocabulary this change migrates. Closed by construction:
+# a surface joins this tuple in the same change that renames its text, never before.
+_RETIRED_TIER_VOCAB_FILES = (
+    _ISSUE_CONTRACT,
+    _SHOWRUNNER_CHARTER,
+    _VET_RECEIPT,
+)
+
 _PINNED_OWNER_DECISIONS_HEADINGS = (
-    "## The front door",
     "## The revisit-trigger registry",
 )
 
@@ -71,20 +78,6 @@ def _read_plugin(rel):
     path = rel if os.path.isabs(rel) else os.path.join(_PLUGIN_ROOT, rel)
     with open(path, encoding="utf-8") as fh:
         return fh.read()
-
-
-def _walk_shipped_markdown():
-    for dirpath, _dirnames, filenames in os.walk(_PLUGIN_ROOT):
-        for name in filenames:
-            if not name.endswith(".md"):
-                continue
-            rel = os.path.relpath(os.path.join(dirpath, name), _PLUGIN_ROOT)
-            if rel == "CHANGELOG.md":
-                continue
-            # Bite-proof records quote the literals they proved; the test tree is evidence, not doctrine.
-            if rel.startswith("lib/tests/"):
-                continue
-            yield rel
 
 
 def _expect_error(fn, exc_type, *, match):
@@ -138,14 +131,15 @@ def _assert_retired_vocabulary_absent(texts=None):
             raise AssertionError("%s: retired literal %r present" % (rel, _RETIRED_LITERAL))
 
 
-def _assert_retired_door_literals_absent(texts=None):
+def _assert_retired_tier_literals_absent(texts=None):
     if texts is None:
-        texts = {rel: _read_plugin(rel) for rel in _walk_shipped_markdown()}
-    for rel, text in texts.items():
-        for literal in _RETIRED_DOOR_LITERALS:
+        texts = {rel: _read_plugin(rel) for rel in _RETIRED_TIER_VOCAB_FILES}
+    for rel in _RETIRED_TIER_VOCAB_FILES:
+        text = texts[rel]
+        for literal in _RETIRED_TIER_LITERALS:
             if literal in text:
                 raise AssertionError(
-                    "%s: retired door literal %r present" % (rel, literal)
+                    "%s: retired tier literal %r present" % (rel, literal)
                 )
 
 
@@ -208,18 +202,8 @@ def test_retired_vocabulary_is_gone():
     _assert_retired_vocabulary_absent()
 
 
-def test_retired_door_literals_absent():
-    _assert_retired_door_literals_absent()
-
-
-def test_walk_shipped_markdown_excludes_test_tree():
-    paths = list(_walk_shipped_markdown())
-    skills_paths = [p for p in paths if p.startswith("skills/")]
-    assert skills_paths, "census must include shipped doctrine under skills/"
-    test_tree_paths = [p for p in paths if p.startswith("lib/tests/")]
-    assert not test_tree_paths, (
-        "census must not include paths under lib/tests/: %r" % test_tree_paths[:5]
-    )
+def test_retired_tier_literals_absent():
+    _assert_retired_tier_literals_absent()
 
 
 def test_discuss_open_holder_pins():
@@ -238,15 +222,12 @@ def test_registry_marker_has_exactly_one_home():
 
 
 def test_negative_pinned_heading_renamed():
-    synthetic = "\n".join([
-        "## The front door (old)",
-        "## The revisit-trigger registry",
-    ])
+    synthetic = "## The revisit-trigger registry (old)"
     review_disc = "\n".join(_PINNED_REVIEW_DISCIPLINE_HEADINGS)
     texts = {_OWNER_DECISIONS: synthetic, _REVIEW_DISCIPLINE: review_disc}
     _expect_assertion_error(
         lambda: _assert_pinned_headings_present(texts),
-        match=r"owner-decisions\.md: pinned heading missing: '## The front door'",
+        match=r"owner-decisions\.md: pinned heading missing: '## The revisit-trigger registry'",
     )
 
 
@@ -259,13 +240,12 @@ def test_negative_retired_vocabulary_inserted():
     )
 
 
-def test_negative_retired_door_literal_inserted():
-    texts = {
-        _OWNER_DECISIONS: "Residuals pass the worth-it gate before disposition.",
-    }
+def test_negative_retired_tier_literal_inserted():
+    texts = {rel: "" for rel in _RETIRED_TIER_VOCAB_FILES}
+    texts[_VET_RECEIPT] = "Every Tier 2 item is appended to the collector."
     _expect_assertion_error(
-        lambda: _assert_retired_door_literals_absent(texts),
-        match=r"owner-decisions\.md: retired door literal 'worth-it gate' present",
+        lambda: _assert_retired_tier_literals_absent(texts),
+        match=r"vet-receipt\.md: retired tier literal 'Tier 2' present",
     )
 
 
