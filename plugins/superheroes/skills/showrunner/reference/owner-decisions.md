@@ -89,7 +89,7 @@ omitted section is exactly what a reader cannot interpret.
 Intake runs through one door for machinery work and product work alike. The door grades every
 proposed item before it reaches the board.
 
-**Two doors, one test at entry.** The door classifies every item at entry as machinery or product,
+**Two branches, one test at entry.** The door classifies every item at entry as machinery or product,
 by the same test the [dial](../../../rubric/glossary.md#dial) uses. **Machinery** work takes the
 evidence bar below. **Product** work does not. Product work enters by the owner's ratification of a
 milestone or an epic, and its discovery needs no reproduced defect. A product item not yet under a
@@ -154,9 +154,15 @@ declined with a trigger by default.
    reaches the owner in the next batch instead of filing silently.
 6. What each tier commits to is not stated here. See [issue-contract.md](issue-contract.md).
 7. **The door helper.** A session reaches for `lib/front_door.py` and its `front_door.grade` entry
-   point when it grades a claim. The helper returns the outcome together with the band, tier, and
-   evidence it graded. A session meets refusal tokens at the door that include `ladder-unstamped`,
-   `band-unknown`, `evidence-argued`, `p0-band-excluded`, and `profile-absent`.
+   point when it validates a **claimed** grading — the band, tier, and evidence the caller supplies
+   — against the project's stamped severity ladder and its configuration. The helper returns the
+   outcome together with the band, tier, and evidence it graded; it never derives the tier from band
+   and evidence — that read belongs to the advisor on the grid, which stays an instrument a person
+   reads. A session meets refusal tokens at the door that include `ladder-unstamped`, `band-unknown`,
+   `evidence-argued`, `p0-band-excluded`, and `profile-absent`, among others; an unstamped ladder
+   **queues** a P2 claim rather than refusing it. The helper's own evidence tokens — `field`, `lab`,
+   and `argued` — are coarser than the grid's evidence tiers, so the tier a session records on the
+   item comes from the grid, not from what the helper was handed.
 
 ## The tiers and the P2 carve-out
 
@@ -181,9 +187,7 @@ declined with a trigger by default.
    be claimed and no item can be graded P2 through the door. Cleared items **queue at the door for
    the owner's word** and nothing files. Missing configuration fails closed for anything that would
    expand authority.
-4. **The tier vocabulary is an intake-and-commitment vocabulary**, orthogonal to how a project
-   structures its roadmap. P2 sits roughly where a backlog does. A P0's displacement of other work
-   meets wave planning. A project extends this vocabulary rather than minting a second one.
+4. For the tier vocabulary, see [issue-contract.md](issue-contract.md).
 
 ## Every grading keeps its scoring, and the misses log
 
@@ -193,11 +197,11 @@ declined with a trigger by default.
    launched-then-regretted, and mis-tiered. The advisor appends **at the moment the miss is
    observed**, whether that is a vet, a field report, or an incident, and reads the log at every
    [gardening pass](../../../rubric/glossary.md#gardening-pass).
-3. **Every vet receipt states the misses-log appends it made, or `None`**, following the receipt's
-   filled-or-`None` convention, and the same line rides the durable record of any field-report
-   processing or incident response. A quiet log is then visibly claimed quiet by each observing act,
-   rather than silently unappended, and the advisor's sole-appender role is auditable from the
-   receipts.
+3. **The misses log is what the advisor appends at the moment a miss is observed** and reads at each
+   [gardening pass](../../../rubric/glossary.md#gardening-pass), as the item above already states.
+   **The gardening record**, not the vet receipt, is where the window's appends are accounted for.
+   Nothing outside the pass reads the log, which the [reader clause](#the-reader-clause) already
+   states.
 4. **A mis-tiered finding re-scores the item itself** at the same gardening pass. The grid re-runs
    with corrected inputs, alongside any recalibration of the instruments. Recalibrations reach the
    owner as proposals to stamp, never as silent re-scores.
@@ -207,9 +211,9 @@ declined with a trigger by default.
 6. **Homes.** The **misses log** lives as a sibling section of the collector's pinned registry
    comment. One surface, one pin, already read at every vet. The **gardening record** lands as a
    durable comment on the collector at each pass.
-7. **The lane is a recorded field.** The routing record and every vet receipt name the lane the work
-   ran in, full, light, or micro, so the receipt corpus can be read by lane. **The grading record
-   does not carry it**, because no lane exists at intake.
+7. **The lane is recorded on the routing record today.** The receipt corpus cannot be read by lane
+   from the receipts alone — the canonical receipt's field spine carries no lane field. **The grading
+   record does not carry it**, because no lane exists at intake.
 
 ## The declined registry and its triggers
 
@@ -317,15 +321,13 @@ finding, a follow-up idea, or a hardening proposal.
 
 **A residual that passes only at continuation cost is a ride-along — eligible for the continue and fold venues only, explicitly droppable, and never a ticket.**
 
-**A residual that passes the door's evidence bar descends the venue ladder: continue the PR, then fold into an existing issue by editing its body rather than filing a new ticket, then a new issue, bundled by shared surface before filing.**
+**A machinery residual that passes the door's evidence bar descends the venue ladder: continue the PR, then fold into an existing issue by editing its body rather than filing a new ticket, then a new issue, bundled by shared surface before filing. A product residual descends the same ladder on the strength of the owner's ratification rather than the bar.**
 
-**No target disposition mix exists: a walk where everything passes the door's evidence bar, or everything fails it, is a signal to inspect the interrogation itself rather than a success in either direction.** Inspecting the interrogation means re-reading how the items were questioned — not re-scoring them.
+**No target disposition mix exists: a walk where every machinery residual passes the door's evidence bar, or every machinery residual fails it, is a signal to inspect the interrogation itself rather than a success in either direction; product residuals enter by ratification, not the bar, and sit outside this mix check.** Inspecting the interrogation means re-reading how the items were questioned — not re-scoring them.
 
 ## Craft calls and owner calls
 
 [Craft call](../../../rubric/glossary.md#craft-call) and [owner call](../../../rubric/glossary.md#owner-call) are defined in the glossary, and the line between them, the [material consequence](../../../rubric/glossary.md#material-consequence), has its plugin default in [issue-contract.md](issue-contract.md).
-
-A **craft call** follows from already-ratified intent and no plausible product preference distinguishes the options. The advisor executes it now and records the determination dated and reasoned for cheap owner veto. An **owner call** is taste, trade, or commitment. It is the owner's word, via the collector. Doubt resolves upward.
 
 Venue-1 continuations and craft declines are craft calls. The advisor executes and records for veto.
 Venue-2 scope changes, product declines (any decline that trades away something a product reading
@@ -333,7 +335,7 @@ could want), and items whose door grading is uncertain are owner calls.
 
 **Every owner call is appended to the collector at vet time, unconditionally, so the collector is the complete register by construction; owner attendance governs only when discussion happens — attended, the item is proposed in the vet-delivery message and may be struck minutes after it was appended; absent, it awaits the batch.**
 
-**Each append carries its door grading, which is the band, the evidence tier, and the resulting tier that the front door recorded, and its venue recommendation, so the owner's batch is one word per item.**
+**Each append carries its door grading for a machinery item — the band, the evidence tier, and the resulting tier the front door recorded — and for a product item the classification and the ratification it rides, since no evidence bar applied to it; each append also carries its venue recommendation, so the owner's batch is one word per item.**
 
 An append made outside a vet — `/superheroes:discuss-open-decisions`, a park sitting, any non-vet
 session applying these primitives — is the non-vet complement of the vet-time clause above, not an
@@ -599,8 +601,8 @@ not per batch.
 consequences (lettered a, b, c…), (4) cost of inaction, (5) recommendation by key, with the why and
 the cost named — Recommendation: b — …. Empty sections stated empty, never dropped.
 
-**Residual disposition:** front door evidence bar (executed evidence on a live surface; dark and future surfaces fail; in-envelope variance is not defect evidence) → venue ladder (continue → fold → file, bundled by surface); decline with a revisit trigger when every venue fails the bar.
-**Call:** craft call — advisor executes and records for veto; owner call — owner's word; a filing whose item clears the evidence bar and grades P2 is the advisor's, and every other filing is an owner call; doubt upward.
+**Residual disposition:** machinery: front door evidence bar (executed evidence on a live surface; dark and future surfaces fail; in-envelope variance is not defect evidence) → venue ladder once past the bar; product: owner ratification, same venue ladder (continue → fold → file, bundled by surface); decline with a revisit trigger when every venue fails the bar.
+**Call:** at a craft call the advisor executes and records for veto; at an owner call the owner's word via the collector; a filing whose item clears the evidence bar and grades P2 is the advisor's, and every other filing is an owner call; doubt upward.
 **Append-always at vet:** every owner call to the collector with door grading and venue on each
 append.
 **Registry:** `<!-- superheroes:revisit-registry -->` — one pinned comment, one line per declined

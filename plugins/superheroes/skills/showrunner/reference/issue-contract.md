@@ -230,15 +230,11 @@ Everywhere the [dial](../../../rubric/glossary.md#dial), N, and the forward shar
 
 ## Craft calls, owner calls, and the material-consequence line
 
-A **[craft call](../../../rubric/glossary.md#craft-call)** is a decision the advisor decides,
-executes, and records for the owner's veto. An **[owner call](../../../rubric/glossary.md#owner-call)**
-is a decision that waits for the owner's word. **Doubt resolves to an owner call.**
-
-These two names are what the owner-decisions contract's two routing tiers are called, and **the
-names in this section are the ones every surface uses**.
-
-A **[material consequence](../../../rubric/glossary.md#material-consequence)** is what separates
-them: a change with a material consequence is the owner's to accept.
+The **[craft call](../../../rubric/glossary.md#craft-call)** and **[owner
+call](../../../rubric/glossary.md#owner-call)** are the owner-decisions contract's two routing
+tiers; **the names in this section are the ones every surface uses**. The **[material
+consequence](../../../rubric/glossary.md#material-consequence)** line routes a decision between
+them. **Doubt resolves to an owner call.**
 
 **The plugin's default, which each project extends.**
 
