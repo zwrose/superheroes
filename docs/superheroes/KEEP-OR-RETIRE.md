@@ -594,6 +594,57 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** mixed — lens detection is structural; deferral-heavy routing around the lenses is
   capability-gap (Cursor-family false forfeits observed on weekly-eats lanes).
 
+#### D11 — The `seat-result/2` envelope authentication
+
+- **Component.** The v2 envelope's authentication block in `round_records.validate_landing`; it
+  costs a contract every producer of a landed envelope must satisfy, and one chokepoint governs five
+  refusals: `provenance-unknown`, `execution-evidence-malformed`,
+  `execution-evidence-not-inline`, `execution-evidence-unexpected`, and `envelope-torn`.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing one of the five
+  tokens as the thing that caught a defect or blocked a landing. On firing, a proposal to the owner
+  at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the envelope binds a payload to the evidence of the act that produced it,
+  and no change of host or model removes the need to know that a landed artifact was not re-paired
+  with different content. No engine family applies: it guards a data shape, not a model behaviour.
+
+#### D12 — The state-version schema fence
+
+- **Component.** The version→schema decode (`seat_result_schema_for_state_version`) and the two
+  refusals that ride it: `schema-version-mismatch` at landing and `state-version-unsupported` in the
+  driver. It costs one decode that every producer must route through.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing either token as
+  the thing that caught a producer minting an envelope for the wrong state version. On firing, a
+  proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** This fence surfaced the drifted test producers on this branch,
+  rather than letting a v1 envelope be stored under a v5 state (this PR).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a stored-state version boundary is a property of how the loop is built.
+
+#### D13 — The order-bound evidence channel
+
+- **Component.** The `--evidence-run-dir` stamping path in `round_driver._assemble_dispatch_evidence`
+  and its two refusals, `evidence-run-dir-unreadable` and `evidence-order-mismatch` — the binding
+  that a stamped runner record belongs to *this* order, by comparing the record's `promptSha256`
+  against the envelope's `orderSha256`. It costs a run-directory read per stamped landing.
+- **Condition.** Usage-based, 60 days: landings recorded **with** `--evidence-run-dir` against
+  landings recorded at all — the channel is optional, so a zero-usage window is the real question
+  about it. On firing when the channel is used on none of the window's landings, a proposal to the
+  owner at a gardening pass.
+  - **Fail direction.** If the records cannot produce the number, the comparison fails toward
+    alerting: any stamped landing observed at a vet whose evidence does not bind to its order counts
+    as a firing.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — it exists because a dispatched seat cannot presently be trusted to
+  report its own engagement, and a host that recorded tool calls natively and verifiably would
+  remove the need. No engine family is named for the binding itself; the reason it exists is
+  engine-general.
+
 ### E. Board & process machinery
 
 #### E1 — Issue contract checker (three-slot skeleton, anchor, DoD bar)
