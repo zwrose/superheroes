@@ -7244,10 +7244,11 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
     record, err = engine_dispatch.run_execution_record(evidence_run_dir)
     if err is not None:
         return None, "evidence-run-dir-unreadable", {"detail": err}
-    prompt_sha = record.get("promptSha256")
+    prompt_sha = record.get("orderPromptSha256")
     order_sha = envelope.get("orderSha256")
+    # Absent order-prompt hash cannot prove the binding — refuse rather than compare promptSha256.
     if not isinstance(prompt_sha, str) or not prompt_sha or prompt_sha != order_sha:
-        return None, "evidence-order-mismatch", {"promptSha256": prompt_sha,
+        return None, "evidence-order-mismatch", {"orderPromptSha256": prompt_sha,
                                                  "orderSha256": order_sha}
     evidence = {key: record[key] for key in round_records.EXECUTION_EVIDENCE_FIELDS}
     out = dict(envelope)

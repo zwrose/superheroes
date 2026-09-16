@@ -3371,6 +3371,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         dest_prompt = os.path.join(run_dir_real, PROMPT_NAME)
         with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
             base = src.read()
+        base_prompt_sha256 = hashlib.sha256(base.encode("utf-8")).hexdigest()
         with open(dest_prompt, "w", encoding="utf-8") as dst:
             dst.write(fed_prompt if fed_prompt else base)
         if progress_path:
@@ -3398,6 +3399,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "viewMeta": view_meta,
         "baseSha": view_meta.get("headSha"),
         "fedPrompt": fed_prompt,
+        "basePromptSha256": base_prompt_sha256,
         "repoRoot": repo_root_real,
         "repoId": repo_id,
         "supervisorPid": os.getpid(),
@@ -3762,6 +3764,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         dest_prompt = os.path.join(run_dir_real, PROMPT_NAME)
         with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
             base = src.read()
+        base_prompt_sha256 = hashlib.sha256(base.encode("utf-8")).hexdigest()
         if base and not base.endswith("\n"):
             content = base + "\n" + engine_adapter.WRITE_REPORT_CONTRACT
         else:
@@ -3788,6 +3791,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "retryTimeout": retry_timeout,
         "promptPath": os.path.join(run_dir_real, PROMPT_NAME),
         "fedPrompt": content,
+        "basePromptSha256": base_prompt_sha256,
         "progressPath": progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
         "viewPath": None,
         "baseSha": base_sha,
@@ -4243,6 +4247,7 @@ def run_execution_record(run_dir):
             "recordDigest": record_digest,
             "observation": observation,
             "promptSha256": prompt_sha256,
+            "orderPromptSha256": opened.get("basePromptSha256"),
         }, None
     except Exception:
         return None, "internal-error"
