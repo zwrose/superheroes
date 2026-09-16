@@ -992,7 +992,9 @@ def test_every_recorded_row_carries_the_stored_envelopes_cas_token(tmp_path, ada
     d = _session(tmp_path)
     assert _state(d).get("schemaVersion") == RD.STATE_SCHEMA_VERSION
     seats = list(RD.DIMENSIONS)
-    for seat in seats[:-1]:
+    pend = _pending(d)
+    assert RD.cmd_record_missing(d, seats[0], pend["attempt"], "forfeit")["ok"] is True
+    for seat in seats[1:-1]:
         _land_and_record(d, seat)
     _land(d, seats[-1])
     assert RD.cmd_record_result(d, sweep=True)["ok"] is True
@@ -1025,6 +1027,25 @@ def test_every_recorded_row_carries_the_stored_envelopes_cas_token(tmp_path, ada
         assert err is None
         assert event["casToken"] == RR.envelope_cas_token(stored)
     assert checked >= len(seats)
+    # axis: seat-missing recorded rows without a revision token still match MISSING_CAS_TOKEN in store
+    no_revision = [event for event in recorded
+                   if "payloadSha256" not in event or event["payloadSha256"] is None]
+    assert no_revision
+    for event in no_revision:
+        rnd = event.get("round", 1)
+        phase = event["phase"]
+        seat = event["seat"]
+        occurrence = event.get("occurrence", 0)
+        attempt = event["attempt"]
+        spath = RR.store_path(d, rnd, phase, RR.storage_key(seat, occurrence), attempt)
+        stored, err = RR.read_json(spath)
+        assert err is None
+        assert stored["schema"] == RR.SEAT_MISSING_SCHEMA
+        assert RR.envelope_cas_token(stored) == RR.MISSING_CAS_TOKEN
+        assert RR.envelope_cas_token(stored) == "seat-missing/1"
+        assert "casToken" not in event or event["casToken"] == RR.MISSING_CAS_TOKEN
+        if "casToken" in event:
+            assert event["casToken"] == "seat-missing/1"
 
 
 def test_head_diff_rewrite_keeps_v2_envelope_self_consistent(tmp_path, adapters):
