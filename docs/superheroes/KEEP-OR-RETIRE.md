@@ -1026,6 +1026,25 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** capability-gap — a person could create two labels by hand; the helper exists so the
   routing vocabulary is present before the first issue is routed.
 
+#### S7 — Retired door-and-routing vocabulary census
+
+- **Component.** The retired-vocabulary census `_assert_retired_door_literals_absent` in
+  `plugins/superheroes/lib/tests/test_disposition_flow.py`, which walks every shipped markdown file
+  under `plugins/superheroes/` (changelog and test tree excluded) and fails on any literal of the
+  retired door-and-routing vocabulary. It costs one tree walk per suite run, and a set that a person
+  maintains as vocabulary retires.
+- **Condition.** Catch-based, 45 days: real catches — a retired literal reappearing in a shipped
+  surface and being caught here rather than in review. On firing, a proposal to the owner at a
+  gardening pass. A zero count means the retired vocabulary is staying retired, which is the expected
+  steady state, not evidence the census should go.
+- **Last demonstrated benefit.** The rename of the routing vocabulary left two shipped copy-holders
+  on the retired names with no detector bound to them, and the single-literal census was green on
+  exactly the drift it was minted to catch; the extended set is what closes that.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a doc-to-doc vocabulary census over a hand-maintained literal set; the set
+  is the part a person keeps current, and it grows only when a vocabulary is retired.
+
 
 ## The workaround-marker inventory
 

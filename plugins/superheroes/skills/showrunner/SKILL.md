@@ -454,10 +454,10 @@ above).
      for the advisor* section; you own what becomes of it, and a routing you only *intend* is a claim
      without a receipt — it evaporates in working context (weekly-eats: ~8 routings recorded as
      intent evaporated across four rapid vets until an owner-forced sweep found 2 genuinely dropped,
-     filed late as we#526/we#527). A [craft call](../../rubric/glossary.md#craft-call) — and the
+     filed late as we#526/we#527). At a [craft call](../../rubric/glossary.md#craft-call) the
      advisor executes it now and records the determination dated and reasoned for cheap owner veto;
-     an [owner call](../../rubric/glossary.md#owner-call) — and it is the owner's word, via the
-     collector. Doubt resolves upward. **Craft calls** — craft record-keeping writes — venue-1
+     at an [owner call](../../rubric/glossary.md#owner-call) it is the owner's word, via the
+     collector; doubt resolves upward. **Craft calls** — craft record-keeping writes — venue-1
      continuations, craft declines with revisit trigger, an owner-owed or relay memory entry — happen
      **immediately**; **Owner calls** — board decisions — new issues, product folds, scope changes,
      product declines — are the owner's word. Venue-3 filings are always owner calls — a new issue
