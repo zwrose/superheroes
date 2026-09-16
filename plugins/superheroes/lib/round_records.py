@@ -543,8 +543,6 @@ def _execution_evidence_has_pointer(value):
 
 
 def _validate_execution_evidence(evidence):
-    if evidence is None:
-        return "execution-evidence-missing"
     if not isinstance(evidence, dict):
         return "execution-evidence-malformed"
     for field in EXECUTION_EVIDENCE_FIELDS:
@@ -666,8 +664,12 @@ def _probe_store_entry(spath):
 
 def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                      supersede=False, expect_sha256=None, anchor=None, occurrence=0,
-                     seat_result_schema=None):
+                     seat_result_schema=None, envelope_override=None):
     """Every check `ingest_landing` performs, with NO write.
+
+    When ``envelope_override`` is a dict, that dict is validated in place of reading the
+    landing file; all checks are unchanged and nothing is written. The default ``None`` reads
+    the landing file exactly as before.
 
     Returns (plan, refusal). Exactly one is None.
       plan = {"storePath": <abs>, "envelope": <the normalized envelope dict to write>,
@@ -706,10 +708,16 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
         reason = "bad-argument" if "non-negative int" in str(exc) else "invalid-path"
         return None, _refuse(reason, message=str(exc))
 
-    envelope, landing_refusal = _read_landing_envelope(session_dir, rnd, phase, skey, attempt,
-                                                       occurrence)
-    if landing_refusal is not None:
-        return None, landing_refusal
+    if envelope_override is None:
+        envelope, landing_refusal = _read_landing_envelope(session_dir, rnd, phase, skey, attempt,
+                                                           occurrence)
+        if landing_refusal is not None:
+            return None, landing_refusal
+    elif isinstance(envelope_override, dict):
+        envelope = envelope_override
+    else:
+        return None, _refuse("bad-argument",
+                             message="envelope_override must be a dict or None")
 
     if envelope.get("attempt") != attempt:
         return None, _refuse("attempt-mismatch", envelopeAttempt=envelope.get("attempt"),
@@ -750,14 +758,15 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
             provenance = envelope.get("provenance")
             if provenance not in SEAT_PROVENANCE:
                 return None, _refuse("provenance-unknown", provenance=provenance)
-            evidence = envelope.get("executionEvidence")
-            if provenance in EVIDENCE_BEARING_PROVENANCE:
-                evidence_reason = _validate_execution_evidence(evidence)
+            evidence_present = "executionEvidence" in envelope
+            if evidence_present:
+                if provenance == PROVENANCE_ORCHESTRATOR_FULFILLED:
+                    return None, _refuse("execution-evidence-unexpected")
+                evidence_reason = _validate_execution_evidence(envelope["executionEvidence"])
                 if evidence_reason is not None:
                     return None, _refuse(evidence_reason)
-            elif provenance == PROVENANCE_ORCHESTRATOR_FULFILLED:
-                if evidence is not None:
-                    return None, _refuse("execution-evidence-unexpected")
+                evidence = envelope["executionEvidence"]
+            else:
                 evidence = None
             computed_envelope_sha = envelope_sha256(envelope.get("payload"), evidence)
             declared_envelope_sha = envelope.get("envelopeSha256")
