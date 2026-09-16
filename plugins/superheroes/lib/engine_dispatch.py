@@ -378,6 +378,68 @@ def _seat_tuple_from_resolved_snapshot(snapshot):
     return role, vendor, model, effort
 
 
+def _seat_dict_from_resolved_snapshot(snapshot):
+    seat_tuple = _seat_tuple_from_resolved_snapshot(snapshot)
+    if seat_tuple is None:
+        return None
+    role, vendor, model, effort = seat_tuple
+    return {"vendor": vendor, "model": model, "effort": effort, "role": role}
+
+
+def _canonical_spawn_argv(opened):
+    """Derive argv from the journal seat snapshot and cwd — G2 coherence source of truth."""
+    snapshot = opened.get("resolvedInputs")
+    seat = _seat_dict_from_resolved_snapshot(snapshot)
+    if seat is None:
+        return None, (
+            "run seat cannot be established — resolvedInputs snapshot lacks valid seat fields; "
+            "re-open the run with a fresh dispatch that persists resolvedInputs"
+        )
+    run_kind = opened.get("runKind", RUN_KIND_REVIEW)
+    role_kind = opened.get("roleKind")
+    if not isinstance(role_kind, str):
+        role_kind = RUN_KIND_REVIEW if run_kind == RUN_KIND_REVIEW else "build"
+    cwd = opened.get("cwd")
+    opts = {"cwd": cwd} if cwd else {}
+    built = engine_adapter.build_argv_result(seat, role_kind, opts)
+    if built.get("reason") is not None:
+        return None, "engine-config:%s" % built["reason"]
+    return list(built["argv"]), None
+
+
+def _spawn_argv_coherence(opened, stored_argv):
+    """G2 argv coherence — refuse when stored argv diverges from the validated snapshot."""
+    canonical, build_err = _canonical_spawn_argv(opened)
+    if build_err:
+        return None, build_err
+    stored = list(stored_argv or [])
+    if canonical == stored:
+        return canonical, None
+    return None, (
+        "spawn argv does not match resolvedInputs snapshot — stored argv %r differs from "
+        "the seat snapshot's canonical argv %r; re-open the run with a fresh dispatch"
+        % (stored, canonical)
+    )
+
+
+def _journal_spawn_guard_refusal(run_dir_real, attempt, reason):
+    """Record a spawn-gate refusal that supervision must fold as terminal unrunnable."""
+    _journal_append(run_dir_real, {
+        "kind": "attempt-ended", "attempt": attempt,
+        "exit": 127, "timedOut": False, "signal": None,
+        "refusal": reason[:_STDERR_TAIL], "at": time.time(),
+        "guardRefusal": True,
+    })
+
+
+def _grade_spawn_guard_refusal(ended):
+    return {
+        "guard_refusal": True,
+        "reason": dispatch_outcome.REASON_UNRUNNABLE,
+        "detail": ended.get("refusal") or "spawn-gate-refused",
+    }
+
+
 def _spawn_allowlist_verdict(opened, *, journal_corrupt=False):
     """G2/R1 spawn gate — validate seat from journal resolvedInputs snapshot."""
     if journal_corrupt:
@@ -2487,12 +2549,13 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     # axis: G2 — no external engine Popen without dispatch_guard.validate on the journal seat.
     guard_verdict = _spawn_allowlist_verdict(opened, journal_corrupt=corrupt)
     if not guard_verdict.get("ok"):
-        _journal_append(run_dir_real, {
-            "kind": "attempt-ended", "attempt": attempt,
-            "exit": 127, "timedOut": False, "signal": None,
-            "refusal": guard_verdict["reason"][:_STDERR_TAIL], "at": time.time(),
-        })
+        _journal_spawn_guard_refusal(run_dir_real, attempt, guard_verdict["reason"])
         return
+    spawn_argv, coherence_err = _spawn_argv_coherence(opened, argv)
+    if coherence_err:
+        _journal_spawn_guard_refusal(run_dir_real, attempt, coherence_err)
+        return
+    argv = spawn_argv
     dispatch_path = _dispatch_path_from_opened(opened)
     try:
         prompt_bytes = os.path.getsize(prompt_path)
@@ -2635,7 +2698,10 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     guard_verdict = _spawn_allowlist_verdict(opened)
     if not guard_verdict.get("ok"):
         return False, guard_verdict["reason"]
-    argv = opened["argv"]
+    spawn_argv, coherence_err = _spawn_argv_coherence(opened, opened.get("argv"))
+    if coherence_err:
+        return False, coherence_err
+    argv = spawn_argv
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, attempt)
     prompt_path = opened["promptPath"]
@@ -2872,6 +2938,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
     stderr_path = os.path.join(run_dir_real, "attempt-%d.stderr" % attempt)
 
+    if ended.get("guardRefusal"):
+        return _grade_spawn_guard_refusal(ended)
     if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
@@ -3052,6 +3120,8 @@ def _grade_write_attempt(run_dir_real, state, attempt):
     ended = slot.get("ended") or {}
     stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
 
+    if ended.get("guardRefusal"):
+        return _grade_spawn_guard_refusal(ended)
     if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
@@ -3472,6 +3542,15 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         run_dir=run_dir_real, argv=argv,
                     )
                     return _fold_run(run_dir_real, state, result)
+
+                if grade.get("guard_refusal"):
+                    return _fold_run(run_dir_real, state, _with_run_fields(
+                        {"ok": False, "terminal": True,
+                         "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": grade.get("detail"),
+                         "attempts": latest, "forfeited": False},
+                        run_dir=run_dir_real, argv=argv,
+                    ))
 
                 reason = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
                 if run_kind == RUN_KIND_WRITE:

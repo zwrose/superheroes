@@ -69,6 +69,39 @@ def _spawn_gate_resolved_inputs(seat, role_source="caller"):
     }
 
 
+def _install_fake_codex(monkeypatch, tmp_path, script_body):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text("#!/usr/bin/env python3\n" + script_body, encoding="utf-8")
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+
+
+def _codex_argv_for_run(seat, role_kind, cwd):
+    built = EA.build_argv_result(seat, role_kind, {"cwd": cwd})
+    assert built["reason"] is None, built
+    return built["argv"]
+
+
+def _journal_codex_run_for_engine_files(
+    run_dir, prompt_path, *, seat, role_kind, run_kind,
+):
+    argv = _codex_argv_for_run(seat, role_kind, run_dir)
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": run_kind, "engine": "codex",
+        "roleKind": role_kind, "orderId": "x", "argv": argv,
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    return argv
+
+
 _EA = importlib.util.spec_from_file_location(
     "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
 EA = importlib.util.module_from_spec(_EA)
@@ -2340,20 +2373,14 @@ def test_run_engine_files_caps_stdout(tmp_path, monkeypatch):
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
-        "roleKind": "build", "orderId": "x", "argv": ["python3", "-c", "x"],
-        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "supervisorPid": 1, "at": time.time(),
-        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(role=_WRITE_ROLE)),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
-    })
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30, os.path.join(run_dir, "progress.jsonl"),
     )
     assert os.path.isfile(stdout_path)
@@ -2566,20 +2593,14 @@ def test_run_engine_files_caps_under_live_writer_stdout_and_stderr(tmp_path, mon
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
-        "roleKind": "build", "orderId": "x", "argv": ["python3", "-c", "x"],
-        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "supervisorPid": 1, "at": time.time(),
-        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(role=_WRITE_ROLE)),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
-    })
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30, os.path.join(run_dir, "progress.jsonl"),
     )
     assert os.path.getsize(stdout_path) <= ED.MAX_STDOUT_CAPTURE
@@ -2611,17 +2632,11 @@ def test_run_engine_files_caps_only_after_terminate_on_timeout(tmp_path, monkeyp
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
-        "roleKind": "build", "orderId": "x", "argv": ["python3", "-c", "x"],
-        "cwd": run_dir, "timeout": 1, "retryTimeout": 1,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "supervisorPid": 1, "at": time.time(),
-        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(role=_WRITE_ROLE)),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
-    })
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
     events = []
     real_cap = ED._cap_file_tail
     real_terminate = ED._terminate_process_group
@@ -2643,7 +2658,7 @@ def test_run_engine_files_caps_only_after_terminate_on_timeout(tmp_path, monkeyp
     monkeypatch.setattr(ED, "_terminate_process_group", obs_terminate)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 1,
         os.path.join(run_dir, "progress.jsonl"),
     )
@@ -2675,21 +2690,15 @@ def test_run_engine_files_journals_wall_seconds_and_stdout_bytes(tmp_path, monke
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
-        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "x",
-        "argv": [sys.executable, "-c", "x"],
-        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "supervisorPid": 1, "at": time.time(),
-        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _REVIEW_ROLE),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
-    })
+    seat = _codex_seat()
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind=ED.RUN_KIND_REVIEW,
+        run_kind=ED.RUN_KIND_REVIEW,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.05)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30,
         os.path.join(run_dir, "progress.jsonl"),
     )
@@ -2699,7 +2708,7 @@ def test_run_engine_files_journals_wall_seconds_and_stdout_bytes(tmp_path, monke
     assert ended["stdoutBytes"] == os.path.getsize(stdout_path)
 
 
-def test_run_engine_files_spawn_failure_omits_timing_keys(tmp_path):
+def test_run_engine_files_spawn_failure_omits_timing_keys(tmp_path, monkeypatch):
     """E2: spawn-failure attempt-ended records must not invent wallSeconds/stdoutBytes."""
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
@@ -2707,19 +2716,13 @@ def test_run_engine_files_spawn_failure_omits_timing_keys(tmp_path):
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
-        "roleKind": "build", "orderId": "x", "argv": ["/no/such/engine-binary-687"],
-        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "supervisorPid": 1, "at": time.time(),
-        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(role=_WRITE_ROLE)),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
-    })
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    monkeypatch.setenv("PATH", "/nonexistent")
     ED._run_engine_files(
-        run_dir, 1, ["/no/such/engine-binary-687"], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30,
         os.path.join(run_dir, "progress.jsonl"),
     )
@@ -2738,17 +2741,11 @@ def test_run_engine_files_journal_append_failed_omits_timing_keys(tmp_path, monk
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
-        "roleKind": "build", "orderId": "x", "argv": [sys.executable, "-c", "print('ok')"],
-        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "supervisorPid": 1, "at": time.time(),
-        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(role=_WRITE_ROLE)),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
-    })
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, "print('ok')\n")
     real_append = ED._journal_append
     calls = {"n": 0}
 
@@ -2760,7 +2757,7 @@ def test_run_engine_files_journal_append_failed_omits_timing_keys(tmp_path, monk
 
     monkeypatch.setattr(ED, "_journal_append", fail_engine_started)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", "print('ok')"], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30,
         os.path.join(run_dir, "progress.jsonl"),
     )
@@ -2786,20 +2783,14 @@ def test_run_engine_files_stdout_bytes_is_pre_cap_size(tmp_path, monkeypatch):
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
     monkeypatch.setattr(ED, "MAX_STDOUT_CAPTURE", 8192)
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
-        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "x",
-        "argv": [sys.executable, "-c", "x"],
-        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "supervisorPid": 1, "at": time.time(),
-        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _REVIEW_ROLE),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
-    })
+    seat = _codex_seat()
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind=ED.RUN_KIND_REVIEW,
+        run_kind=ED.RUN_KIND_REVIEW,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30,
         os.path.join(run_dir, "progress.jsonl"),
     )
@@ -3529,15 +3520,17 @@ def test_dispatch_poll_running_graded_attempt1_ended_attempt2_live(tmp_path):
 # --- WO-2 (#747): per-attempt telemetry + terminal-record supersede (PR #783) ---
 
 
-def _wo2_open_run(run_dir, prompt_path, **opened_overrides):
+def _wo2_open_run(run_dir, prompt_path, *, seat=None, role_kind=ED.RUN_KIND_REVIEW, **opened_overrides):
+    seat = seat or _codex_seat()
+    argv = _codex_argv_for_run(seat, role_kind, run_dir)
     opened = {
         "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
-        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "wo2",
-        "argv": [sys.executable, "-c", "x"],
+        "roleKind": role_kind, "orderId": "wo2",
+        "argv": argv,
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "supervisorPid": 1, "at": time.time(),
-        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _REVIEW_ROLE),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
     }
     opened.update(opened_overrides)
     ED._journal_append(run_dir, opened)
@@ -3545,18 +3538,22 @@ def _wo2_open_run(run_dir, prompt_path, **opened_overrides):
         "kind": "engine-launching", "attempt": 1, "childPid": 1,
         "argv": opened["argv"], "at": time.time(),
     })
+    return argv
 
 
-def _wo2_run_engine(run_dir, script, timeout=30, heartbeat=None, monkeypatch=None):
+def _wo2_run_engine(run_dir, script, timeout=30, heartbeat=None, monkeypatch=None, tmp_path=None):
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    _wo2_open_run(run_dir, prompt_path)
+    argv = _wo2_open_run(run_dir, prompt_path)
+    if monkeypatch is not None:
+        assert tmp_path is not None
+        _install_fake_codex(monkeypatch, tmp_path, script)
     if monkeypatch is not None and heartbeat is not None:
         monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", heartbeat)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, timeout,
         os.path.join(run_dir, "progress.jsonl"),
     )
@@ -3608,7 +3605,7 @@ def test_run_engine_files_telemetry_stdout_activity(tmp_path, monkeypatch):
         "    sys.exit(4)\n"
     ) % (progress_path,)
     ended, stdout_path, _ = _wo2_run_engine(
-        run_dir, script, timeout=50, monkeypatch=monkeypatch, heartbeat=0.05)
+        run_dir, script, timeout=50, monkeypatch=monkeypatch, heartbeat=0.05, tmp_path=tmp_path)
     assert ended["exit"] == 0
     assert ended.get("signal") is None
     assert ended.get("signalSource") is None
@@ -3630,7 +3627,8 @@ def test_run_engine_files_telemetry_stderr_activity(tmp_path, monkeypatch):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
     script = "import sys\nsys.stderr.write('codex-progress')\n"
-    ended, _, stderr_path = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    ended, _, stderr_path = _wo2_run_engine(
+        run_dir, script, monkeypatch=monkeypatch, tmp_path=tmp_path)
     assert ended.get("activityStream") == "stderr"
     assert ended.get("stderrBytes", 0) > 0
     assert os.path.getsize(stderr_path) > 0
@@ -3645,7 +3643,8 @@ def test_run_engine_files_telemetry_sigkill(tmp_path, monkeypatch):
         "import os, signal\n"
         "os.kill(os.getpid(), signal.SIGKILL)\n"
     )
-    ended, _, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch, heartbeat=0.05)
+    ended, _, _ = _wo2_run_engine(
+        run_dir, script, monkeypatch=monkeypatch, heartbeat=0.05, tmp_path=tmp_path)
     assert ended["exit"] < 0
     assert ended.get("signal") == signal.SIGKILL
     assert ended.get("signalSource") == "engine"
@@ -3658,6 +3657,7 @@ def test_run_engine_files_telemetry_timeout(tmp_path, monkeypatch):
     script = "import time\ntime.sleep(2)\n"
     ended, _, _ = _wo2_run_engine(
         run_dir, script, timeout=0.15, heartbeat=0.05, monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
     )
     assert ended.get("timedOut") is True
     assert ended.get("capSeconds") == 0.15
@@ -3702,7 +3702,8 @@ def test_run_engine_files_telemetry_answer_at_exit_stdout(tmp_path, monkeypatch)
     os.makedirs(run_dir)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", _SAMPLER_OFF)
     script = "import sys\nsys.stdout.write('final')\n"
-    ended, stdout_path, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    ended, stdout_path, _ = _wo2_run_engine(
+        run_dir, script, monkeypatch=monkeypatch, tmp_path=tmp_path)
     _assert_answer_at_exit(ended, "stdout", stdout_path)
 
 
@@ -3712,7 +3713,8 @@ def test_run_engine_files_telemetry_answer_at_exit_stderr(tmp_path, monkeypatch)
     os.makedirs(run_dir)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", _SAMPLER_OFF)
     script = "import sys\nsys.stderr.write('final')\n"
-    ended, _, stderr_path = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    ended, _, stderr_path = _wo2_run_engine(
+        run_dir, script, monkeypatch=monkeypatch, tmp_path=tmp_path)
     _assert_answer_at_exit(ended, "stderr", stderr_path)
 
 
@@ -5924,11 +5926,12 @@ def test_file_over_cap_grades_truncated_despite_under_cap_recorded_count(tmp_pat
     assert ED._attempt_stdout_truncated(run_dir, state, 1) == over
 
 
-def test_run_engine_files_stamps_stdout_bytes_pre_cap(tmp_path):
+def test_run_engine_files_stamps_stdout_bytes_pre_cap(tmp_path, monkeypatch):
     """axis: _run_engine_files stamps stdoutBytesPreCap on the attempt-ended record."""
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
-    ended, stdout_path, _ = _wo2_run_engine(run_dir, "print('hello stdout')")
+    ended, stdout_path, _ = _wo2_run_engine(
+        run_dir, "print('hello stdout')", monkeypatch=monkeypatch, tmp_path=tmp_path)
     assert ended["stdoutBytesPreCap"] is True
     assert ended["stdoutBytes"] == os.path.getsize(stdout_path)
 
@@ -5949,7 +5952,7 @@ def test_straggler_write_during_cap_window_grades_truncated(tmp_path, monkeypatc
 
     monkeypatch.setattr(ED, "_cap_file_tail", straggler_cap)
     ended, _, _ = _wo2_run_engine(
-        run_dir, "print('hello stdout')", monkeypatch=monkeypatch)
+        run_dir, "print('hello stdout')", monkeypatch=monkeypatch, tmp_path=tmp_path)
     state = {"attempts": {1: {"ended": ended}}}
     assert ED._attempt_stdout_truncated(run_dir, state, 1) is not None
 
@@ -6080,7 +6083,7 @@ def test_rewrite_failure_capture_grades_truncated(tmp_path, monkeypatch):
 
     monkeypatch.setattr("builtins.open", patched_open)
     ended, _, _ = _wo2_run_engine(
-        run_dir, "print('x' * 9000)", monkeypatch=monkeypatch)
+        run_dir, "print('x' * 9000)", monkeypatch=monkeypatch, tmp_path=tmp_path)
     state = {"attempts": {1: {"ended": ended}}}
     assert write_attempted is True
     assert os.path.getsize(stdout_path) == 0
@@ -6611,7 +6614,7 @@ def test_stderr_cap_file_tail_carries_stderr_marker_not_stdout(tmp_path, monkeyp
     monkeypatch.setattr(ED, "MAX_STDERR_CAPTURE", 512)
     script = "import sys; sys.stderr.write('e' * 2000); sys.stdout.write('ok\\n')"
     _ended, _stdout_path, stderr_path = _wo2_run_engine(
-        run_dir, script, monkeypatch=monkeypatch,
+        run_dir, script, monkeypatch=monkeypatch, tmp_path=tmp_path,
     )
     text = open(stderr_path, encoding="utf-8", errors="ignore").read()
     assert "<<<SUPERHEROES-STDERR-TRUNCATED:" in text
@@ -8644,6 +8647,174 @@ def test_run_child_spawn_gate_refuses_off_allowlist_snapshot(tmp_path):
     ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
     assert ended.get("exit") == 127
     assert _OFF_ALLOWLIST_CODEX in (ended.get("refusal") or "")
+
+
+def _production_run_child_setup(tmp_path, run_dir, *, tamper_argv=None, tamper_snapshot=None):
+    """Open a review run and journal attempt-started for production _run_engine_files."""
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    if tamper_argv or tamper_snapshot:
+        for rec in records:
+            if rec.get("kind") != "run-opened":
+                continue
+            if tamper_argv is not None:
+                rec["argv"] = tamper_argv
+            if tamper_snapshot is not None:
+                tamper_snapshot(rec["resolvedInputs"])
+        path = ED._journal_path(run_dir)
+        with open(path, "w", encoding="utf-8") as fh:
+            for rec in records:
+                fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+        records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1,
+        "childPid": os.getpid(), "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1,
+        "childPid": os.getpid(), "argv": list(opened["argv"]), "at": time.time(),
+    })
+    return opened
+
+
+# --- #1269 WO-10: spawn gate argv coherence + guard-refusal disposition ----------
+
+
+def test_wo10_edge1_run_child_refuses_argv_snapshot_mismatch(tmp_path, monkeypatch):
+    # axis: allowlisted snapshot but stored argv names a different model — no spawn
+    run_dir = str(tmp_path / "wo10-edge1")
+    opened = _production_run_child_setup(
+        tmp_path, run_dir,
+        tamper_argv=["codex", "exec", "--sandbox", "read-only",
+                     "-m", _OFF_ALLOWLIST_CODEX, "-c", "model_reasoning_effort=high", "-"],
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text("#!/usr/bin/env python3\nimport sys; sys.exit(0)\n", encoding="utf-8")
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended.get("guardRefusal") is True
+    assert "does not match resolvedInputs snapshot" in (ended.get("refusal") or "")
+    assert _OFF_ALLOWLIST_CODEX in (ended.get("refusal") or "")
+    assert not any(r.get("kind") == "engine-started" for r in records)
+
+
+def test_wo10_edge2_injected_seam_refuses_argv_snapshot_mismatch(tmp_path):
+    # axis: injected execution seam applies the same argv coherence check
+    run_dir = str(tmp_path / "wo10-edge2")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["argv"] = [
+                "codex", "exec", "--sandbox", "read-only",
+                "-m", _OFF_ALLOWLIST_CODEX, "-c", "model_reasoning_effort=high", "-",
+            ]
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    assert ok is False
+    assert "does not match resolvedInputs snapshot" in detail
+    assert _OFF_ALLOWLIST_CODEX in detail
+    assert fake.calls == []
+
+
+def test_wo10_edge3_supervise_folds_guard_refusal_terminal_unrunnable_no_retry(tmp_path, monkeypatch):
+    # axis: off-allowlist snapshot via production run-child path — terminal unrunnable, no retry
+    run_dir = str(tmp_path / "wo10-edge3")
+    opened = _production_run_child_setup(
+        tmp_path, run_dir,
+        tamper_snapshot=lambda snap: snap.update({"model": _OFF_ALLOWLIST_CODEX}),
+    )
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended.get("guardRefusal") is True
+    assert _OFF_ALLOWLIST_CODEX in (ended.get("refusal") or "")
+    res = ED._supervise(
+        run_dir, run_kind=ED.RUN_KIND_REVIEW,
+        deadline=time.monotonic() + 5,
+    )
+    assert res["terminal"] is True
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["forfeited"] is False
+    assert res["attempts"] == 1
+    assert _OFF_ALLOWLIST_CODEX in res["detail"]
+    records, _ = ED._journal_read(run_dir)
+    started = [r for r in records if r.get("kind") == "attempt-started"]
+    assert len(started) == 1
+    assert not any(r.get("kind") == "attempt-started" and r.get("attempt") == 2 for r in records)
+
+
+def test_wo10_edge4_corrupt_journal_spawn_guard_refusal_preserved(tmp_path):
+    # axis: corrupt journal at spawn keeps the named refusal and guardRefusal disposition
+    run_dir = str(tmp_path / "wo10-edge4")
+    opened = _production_run_child_setup(tmp_path, run_dir)
+    with open(ED._journal_path(run_dir), "ab") as fh:
+        fh.write(b"not-json\n")
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    records, corrupt = ED._journal_read(run_dir)
+    assert corrupt is True
+    ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended.get("guardRefusal") is True
+    assert "journal is corrupt" in (ended.get("refusal") or "")
+
+
+def test_wo10_edge5_run_child_coherent_argv_spawns_unchanged(tmp_path, monkeypatch):
+    # axis: coherent allowlisted run still spawns through production run-child path
+    run_dir = str(tmp_path / "wo10-edge5")
+    opened = _production_run_child_setup(tmp_path, run_dir)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stdout.write(%r)\n" % _VALID_FINDINGS_STDOUT,
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    records, _ = ED._journal_read(run_dir)
+    assert any(r.get("kind") == "engine-started" for r in records)
+    ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended.get("guardRefusal") is not True
+    assert ended.get("exit") == 0
 
 
 def test_cached_liveness_does_not_bypass_entry_allowlist(tmp_path, monkeypatch):

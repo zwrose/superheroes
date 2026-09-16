@@ -148,6 +148,21 @@ def _spawn_gate_resolved_inputs(seat, role_source="caller"):
     }
 
 
+def _install_fake_codex(monkeypatch, tmp_path, script_body):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text("#!/usr/bin/env python3\n" + script_body, encoding="utf-8")
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+
+
+def _codex_argv_for_run(seat, role_kind, cwd):
+    built = EA.build_argv_result(seat, role_kind, {"cwd": cwd})
+    assert built["reason"] is None, built
+    return built["argv"]
+
+
 def _cursor_seat(model="composer-2.5", effort=None):
     return _seat("cursor", model, effort)
 
@@ -1135,17 +1150,20 @@ def test_engine_started_append_failure_terminates_engine(tmp_path, monkeypatch):
     open(prompt_path, "w").write("go\n")
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _codex_argv_for_run(seat, "build", run_dir)
     ED._journal_append(run_dir, {
         "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
-        "roleKind": "build", "orderId": "x", "argv": [sys.executable, "-c", "import time; time.sleep(120)"],
+        "roleKind": "build", "orderId": "x", "argv": argv,
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "supervisorPid": 1, "at": time.time(),
-        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(role=_WRITE_ROLE)),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
     })
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
     })
+    _install_fake_codex(monkeypatch, tmp_path, "import time\ntime.sleep(120)\n")
     real_append = ED._journal_append
 
     def fail_engine_started(rd, record):
@@ -1155,7 +1173,7 @@ def test_engine_started_append_failure_terminates_engine(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ED, "_journal_append", fail_engine_started)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", "import time; time.sleep(120)"], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30, os.path.join(run_dir, "progress.jsonl"),
     )
     records, _ = ED._journal_read(run_dir)

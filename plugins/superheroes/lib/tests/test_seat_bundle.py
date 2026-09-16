@@ -541,6 +541,11 @@ def test_wo8_edge8_brief_check_reviewer_refused_before_allowlist(monkeypatch):
     test_edge6_brief_check_mode_reviewer_refused_before_allowlist(monkeypatch)
 
 
+def test_wo10_edge6_brief_check_reviewer_refused_before_allowlist(monkeypatch):
+    # axis: WO-10 edge 6 — entry chokepoint leg order refuses before allowlist
+    test_edge6_brief_check_mode_reviewer_refused_before_allowlist(monkeypatch)
+
+
 def test_dropped_flag_with_valid_seat_still_refuses():
     argv = [
         "dispatch-review",
