@@ -69,9 +69,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **corroborating evidence only** and can never satisfy that investigation floor. The parser also
 > **tolerates a bare top-level array** `[...]` of finding objects as of #196, but anything else
 > (prose with no parseable JSON object/array, an empty stream, an array of non-objects) parses as
-> `unreadable`, which forfeits the slot to a re-run on **the host model** — whatever runs the current
-> session, read from the hook payload, never assumed — (UFR-7) and silently doubles the round's
-> cost.
+> `unreadable`, which forfeits the slot to a re-run on the host model (UFR-7) and silently doubles the
+> round's cost.
 
 > **Reviewer-seat dispatch runs through the dispatch RUNNER (#563 DoD 2/4) — reviewer role ONLY.**
 > When `$REVIEWER_ENGINE` is `codex` or `cursor`, dispatch each read-only reviewer seat through
