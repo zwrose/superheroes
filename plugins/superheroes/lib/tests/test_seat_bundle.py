@@ -392,6 +392,21 @@ def test_brief_check_role_guard_check_omitted_mode_accepted():
     assert resolved["role"] == _BRIEF_ROLE
 
 
+@pytest.mark.parametrize("verb", ["dispatch-review", "dispatch-write"])
+def test_claude_vendor_refused_at_dispatch_chokepoint(verb):
+    # axis: vendor with no engine adapter is refused at resolve_entry, not engine-config later
+    role = _REVIEW_ROLE if verb == "dispatch-review" else _WRITE_ROLE
+    resolved = SB.resolve_entry(
+        _seat_json("claude", "opus-5", "xhigh", role),
+        verb=verb,
+    )
+    assert resolved["ok"] is False
+    assert resolved["reason"] == "undispatchable-vendor"
+    assert "claude" in resolved["detail"]
+    assert "codex" in resolved["detail"]
+    assert "cursor" in resolved["detail"]
+
+
 @pytest.mark.parametrize("role", ["mechanical", "synthesis", "pilot"])
 @pytest.mark.parametrize("verb", ["dispatch-review", "dispatch-write"])
 def test_unclassified_role_refused_for_dispatch_verbs(role, verb):

@@ -988,6 +988,23 @@ def _normalize_allowlist_verdict(verdict, *, role: str, vendor: str, model: str,
     return {"ok": True, "allowlistVerdict": verdict}
 
 
+def _dispatch_adapter_vendors():
+    import engine_adapter  # noqa: WPS433 — lazy: argv-capable vendor roster lives in adapter
+
+    return engine_adapter._BUILD_ARGV_VENDORS
+
+
+def _undispatchable_vendor_refusal(vendor: str, *, verb: str) -> dict:
+    valid = _format_valid(_dispatch_adapter_vendors())
+    return _entry_refusal(
+        "undispatchable-vendor",
+        (
+            f"vendor {vendor!r} has no engine adapter for {verb}; "
+            f"valid dispatch vendors: {valid}; accepted: {_ACCEPTED_SEAT}"
+        ),
+    )
+
+
 def resolve_entry(
     seat_raw, *, verb, mode=None, mode_for_role_check=_MODE_ROLE_CHECK_UNSET,
 ) -> dict:
@@ -1020,6 +1037,9 @@ def resolve_entry(
     vendor = checked["vendor"]
     model = checked["model"]
     effort = checked.get("effort")
+    if verb in ("dispatch-review", "dispatch-write"):
+        if vendor not in _dispatch_adapter_vendors():
+            return _undispatchable_vendor_refusal(vendor, verb=verb)
     try:
         verdict = dispatch_allowlist.validate(role, vendor, model, effort)
     except Exception:
