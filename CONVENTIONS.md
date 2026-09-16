@@ -975,18 +975,23 @@ statement of the band's review convention (no unreviewed PRs, §7.4).
 **One home per cross-boundary fact.** A fact consumed across a **module or language
 boundary** (event/verb names, schema field sets, verdict/reason tokens, path layouts,
 reviewer rosters) has **exactly one authoritative definition**. Every other consumer
-either **reads that home at runtime**, or keeps a **copy guarded by a drift test**
-that reads the authoritative home and asserts equality — so a change to the truth **breaks
-CI in every copy-holder**. **Two hand-maintained copies with no drift test is a
-review-blocking violation, citable by name (this §).** A reviewer seeing a bare
-constant re-typed from another language now has a rule to object with, citable by name.
+**reads that home** (§11.1) or **cites it** (§11.4). Those are the two patterns. There
+is no third. A **second hand-maintained copy** of a cross-boundary fact is a
+**review-blocking violation, whether or not a drift test guards it**. A drift test does
+not make a copy legitimate. It makes the cost of the copy recur. A reviewer seeing a
+constant re-typed from another language still has a rule to object with, citable by this
+section number.
+
+The band-level statement of this rule ships in the plugin, at
+`plugins/superheroes/rubric/review-discipline.md` under `### One home per rule, and the
+pin rule`, and this section stays this repository's own statement of it.
 
 **Scope — what counts.** The boundary is what matters, not the value. A constant with a
 single owner and only same-module callers is not in scope (that is ordinary code). A fact
 becomes cross-boundary when a **second language, module, skill doc, or fixture restates it**
 so that the two can silently disagree. When in doubt, ask: *if I renamed the authoritative
-copy, would anything else keep the old value and still pass CI?* If yes, it needs one of the
-two patterns below.
+copy, would anything else keep the old value and still pass CI?* If yes, it needs to read the
+home (§11.1) or cite it (§11.4).
 
 **Concrete model ids — roles in authored prose.** Charters, agents, rubric, and skills
 reference **roles**, never concrete model ids; only `skills/configure/` may name them.
@@ -1001,7 +1006,14 @@ every consumer (a skill's doc-generation step, a Python harness) loads directly 
 startup — one edit, both move; nothing to drift. Prefer this pattern for any new
 cross-boundary fact with several runtime consumers.
 
-### 11.2 Pattern 2 — copy + drift test (fail-closed reader + equality assertion)
+### 11.2 Retired pattern: copy + drift test (fail-closed reader + equality assertion)
+
+This pattern is **closed**. No new copy is written under it. The copies that exist today are
+**legacy**. They are a record of what the repository already holds, not a model to follow.
+Each legacy copy retires when the fact it mirrors reaches its one home. A drift pin that goes
+red because the text it mirrors changed is closed by **deleting the mirror and its pin**,
+never by updating the copy to match. The body that follows is kept because it records what
+those copies are and where each is blind, which a reader retiring one needs.
 
 A consumer keeps its own copy for ergonomics, but a **drift test parses (or reads) the
 authoritative home and asserts equality**. The reader **must fail closed** — if it parses
