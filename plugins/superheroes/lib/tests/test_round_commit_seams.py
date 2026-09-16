@@ -162,6 +162,8 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, *
   schema = RR.seat_result_schema_for_state_version(_state(session_dir).get("schemaVersion"))
   if schema is None:
     schema = RR.SEAT_RESULT_SCHEMA
+  if over.get("schema") in (RR.SEAT_RESULT_SCHEMA, RR.SEAT_RESULT_SCHEMA_V2):
+    schema = over["schema"]
   env = {
     "schema": schema,
     "session": _session_id(session_dir),
@@ -614,7 +616,7 @@ def test_seam_a_supersede_staged_preserves_old_record(tmp_path, adapters, monkey
   _stop_at_kind(monkeypatch, "record-ingest", "staged")
   with pytest.raises(RC.StopPoint):
     RD.cmd_record_result(d, "dispatch-fixer", supersede=True,
-                           expect_sha256=first["payloadSha256"])
+                           expect_sha256=first["casToken"])
   RC.recover(d)
   assert _read_bytes(first["storePath"]) == before_store
   assert _read_bytes(first["headDiffStorePath"]) == before_blob
@@ -634,7 +636,7 @@ def test_seam_a_supersede_applied_agrees_on_new_revision(tmp_path, adapters, mon
   _stop_at_kind(monkeypatch, "record-ingest", "applied")
   with pytest.raises(RC.StopPoint):
     RD.cmd_record_result(d, "dispatch-fixer", supersede=True,
-                           expect_sha256=first["payloadSha256"])
+                           expect_sha256=first["casToken"])
   RC.recover(d)
   stored, _ = RR.read_json(first["storePath"])
   recorded = [e for e in _outcomes(d, "recorded")
@@ -670,7 +672,13 @@ def test_seam_a_record_ingest_replaces_landing_when_evidence_stamped(tmp_path, a
   stored, err = RR.read_json(out["storePath"])
   assert err is None
   assert "executionEvidence" in stored
-  assert after == RR.canonical(stored).encode("utf-8")
+  record, ev_err = ED.run_execution_record(run_dir)
+  assert ev_err is None
+  evidence = {key: record[key] for key in RR.EXECUTION_EVIDENCE_FIELDS}
+  assembled = dict(_env)
+  assembled["executionEvidence"] = evidence
+  assembled["envelopeSha256"] = RR.envelope_sha256(assembled.get("payload"), evidence)
+  assert after == RR.canonical(assembled).encode("utf-8")
 
 
 def test_seam_a_dispatch_observed_without_evidence_leaves_landing_bytes(tmp_path, adapters):
@@ -752,11 +760,9 @@ def test_seam_a_recorded_journal_agrees_with_store(tmp_path, adapters):
   assert row["executionEvidencePresent"] is True
 
 
-def test_seam_a_recorded_journal_agrees_with_store_seat_result_v1(tmp_path, adapters):
+def test_seam_a_recorded_journal_agrees_with_store_seat_result_v1(tmp_path, adapters, monkeypatch):
   d = _session(tmp_path, name="journal-v1")
-  state = _state(d)
-  state["schemaVersion"] = 4
-  RD.save_state(d, state)
+  monkeypatch.setattr(RD, "_seat_result_schema", lambda _state: RR.SEAT_RESULT_SCHEMA)
   _land(d, "code-reviewer", schema=RR.SEAT_RESULT_SCHEMA)
   out = RD.cmd_record_result(d, "code-reviewer")
   assert out["ok"], out
