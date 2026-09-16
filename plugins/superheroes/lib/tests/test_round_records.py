@@ -1935,6 +1935,29 @@ def test_v2_execution_evidence_observation_missing_telemetry_refuses_malformed(t
 
 
 @pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_observation_bad_telemetry_value_refuses_malformed(tmp_path, provenance):
+    # axis: execution-evidence-malformed — wo_r3_1271 telemetry literal check
+    sd = _session(tmp_path)
+    obs = _well_formed_observation(telemetry="maybe")
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(observation=obs))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_observation_missing_required_key_refuses_malformed(tmp_path, provenance):
+    # axis: execution-evidence-malformed — wo_r3_1271 observation key-set check
+    sd = _session(tmp_path)
+    obs = _well_formed_observation()
+    del obs["read"]
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(observation=obs))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
 def test_v2_execution_evidence_observation_extra_key_refuses_unknown_field(tmp_path, provenance):
     # axis: execution-evidence-unknown-field — wo_r2_1271 observation enumeration
     sd = _session(tmp_path)

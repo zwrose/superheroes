@@ -630,7 +630,8 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** The `--evidence-run-dir` stamping path in `round_driver._assemble_dispatch_evidence`
   and its two refusals, `evidence-run-dir-unreadable` and `evidence-order-mismatch` — the binding
   that a stamped runner record belongs to *this* order, by comparing the record's
-  `orderPromptSha256` against the envelope's `orderSha256`. It costs a run-directory read per stamped landing.
+  `orderPromptSha256` against the envelope's `orderSha256`.
+  It costs a run-directory read per stamped landing.
 - **Condition.** Usage-based, 60 days: landings recorded **with** `--evidence-run-dir` against
   landings recorded at all — the channel is optional, so a zero-usage window is the real question
   about it. On firing when the channel is used on none of the window's landings, a proposal to the
