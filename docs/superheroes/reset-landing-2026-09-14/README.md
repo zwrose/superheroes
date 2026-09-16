@@ -14,7 +14,7 @@ every spec sentence a builder needs):
 
 - `coverage-map.md` — every acceptance criterion of both specs owned by exactly one child.
 - `register.md` — the cross-child contract register; children quote it verbatim.
-- `children/C01..C17.md` — the child issue bodies as filed.
+- `children/C01..C18.md` — the child issue bodies as filed (C18 split from C2 on the owner's word of 2026-09-16).
 - `package-read-audit.md` — the adversarial package read's trail (tool-written).
 
 The epic is the strategic reset (Spec A FR-A6): outside the dial and the trend, graded once on
