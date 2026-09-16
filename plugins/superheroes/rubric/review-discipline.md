@@ -370,6 +370,11 @@ out of class is an extractor that parses document structure or judges what prose
 parsers**, **table checks**, and **message/meaning guards** are **out of class** — permanently.
 Prose *meaning* and *structure* are review's job, not CI's.
 
+On a [doctrine surface](glossary.md#doctrine-surface), the pin rule narrows the kept classes from
+four to two: **cross-doc literal-agreement pins** and **hard-line sentence pins** close, because
+both pin sentences; **register-quote checks** and **cardinality floors** survive, because they pin
+data and counts rather than prose. See `### One home per rule, and the pin rule`.
+
 **Prose-executed paths are pinned structurally, not driven end-to-end by an executable harness.**
 A skill's prose path is executed by a model reading the prose — there is no process to drive.
 What *can* be pinned — within the byte-literal floor above — is the prose file itself through
@@ -508,6 +513,162 @@ written down (*Follow-ups for the advisor*, item 9). Two executions, both succes
 reconstructable from the plugin surfaces at the time. The owner pre-authorization this paragraph
 records was the rule **at the time** and is **retired for everything outside the
 owner-authority-gate family** by the 2026-08-25 ruling — historical evidence, not current procedure.
+
+## Machinery, homes, and what a review may ask for
+
+This section holds the standing rules about what machinery this band builds, where each rule
+lives, and what a review may ask a build to add. Read it before you propose new standing
+machinery or answer a finding that does.
+
+### Guards do not get guards
+
+Standing machinery may watch the work. It never watches other machinery. A guard's complete
+verification diet, for its whole life, is three things and nothing else: its birth bite-proof,
+the sampled probes a vet runs, and its entry on the [keep-or-retire list](glossary.md#keep-or-retire-list).
+
+Evidence that a single act of work actually ran, riding in-band with that act, is part of the
+work and is fine. A control probe inside one review and CI running one pull request are the
+examples. What this rule forbids is standing machinery whose **subject** is other machinery: a
+watcher, a census, or a gate that exists to check a guard.
+
+A guard's own tests, including its birth bite-proof kept as a regression pin, are part of its
+diet and live with the guard. They are allowed. What is forbidden is a separate standing
+mechanism whose subject is another guard: a census over guards, a watcher on a gate, a drift pin
+whose subject is another detector. CI running a guard's own tests is in-band execution, not a
+guard on a guard.
+
+"Nothing mechanically watches guard X" stops being a buildable finding. It is answered by citing
+this rule, the way a decision to decline cites policy. Record the citation as a disposition on
+the review or intake record where the finding arose. It is never an unrecorded wave-off. When the
+finding arose in a review of a pull request, the recorded citation lands in that request's
+dispositions and follows the existing severity-keyed disclosure rule. Citing this rule, or
+routing a finding to the door, never removes an Important finding from the surface the owner
+reads. A proposer who believes a finding is not guard-on-guard routes it to the door, where
+declining it earns a registry line.
+
+The [ground-truth sources](glossary.md#ground-truth-sources) list is the sources whose word is
+taken as true without further checking, such as CI's exit code or git's history, and every claim
+points at one of them in a single step. It is an enumeration, not a scoring instrument, and each
+project configures it.
+
+This rule is enforced as prose, at the door and at the vet, deliberately. A gate that enforced
+it would itself be a guard on guards.
+
+### Prefer shapes that cannot fail
+
+When you need assurance, prefer these shapes in order:
+
+1. Make the bad state impossible.
+2. Verify at an already-trusted boundary.
+3. Spot-check by sampling.
+4. Build a detector, the last resort.
+
+Rung 4 owes three birth duties, all required:
+
+1. A **bite-proof**: the detector demonstrably fires on a planted defect, and being deterministic
+   by construction is part of the bar, so no wall-clock assertions and no inference from the
+   environment. Read `rubric/bite-proof.md` for the obligation, the ways a bite-proof is vacuous,
+   and the record shape.
+2. A **[retirement condition](glossary.md#retirement-condition)**, with the component's tag, on
+   its [keep-or-retire entry](glossary.md#keep-or-retire-entry).
+3. **By-construction coverage**: the detector's scope is complete because of how it is built, one
+   chokepoint or a closed enumeration, and never a hand-maintained list chased case by case.
+
+Any hand-maintained parallel enumeration is rung-4-shaped even when nothing calls it a detector: a
+field list patched site by site, an enum whose consumers are chased one at a time, a spelling
+census. A closed set gets one owner and exhaustive consumption by construction, or it does not ship.
+
+The test suite is machinery, at two granularities.
+
+- **Detector-shaped tests** (drift pins, invariant guards, censuses written as tests) are rung-4
+  detectors individually. Each owes the three birth duties and enters the keep-or-retire list. One
+  that never failed for a real reason and has flaked twice is a retirement candidate like any other
+  [plugin component](glossary.md#plugin-component). A detector-shaped test on a
+  [doctrine surface](glossary.md#doctrine-surface) also obeys the pin rule below.
+- **Ordinary behavior tests on the work** are part of the work. They carry normal test craft, not
+  individual birth duties and not their own keep-or-retire lines. The behavior-test class holds one
+  keep-or-retire line as a class.
+- Whether a given test is a guard's own diet or a separate guard-subject mechanism is answered by
+  the tests rule in `### Guards do not get guards`.
+
+The three birth duties bind **at birth**: new detectors from here forward. An existing
+detector-shaped test owes no immediate back-fill. It enters the metabolism as its surface is next
+touched, at fold-in pace. Read literally, the scope line captures every existing census, pin, and
+bite-proof at once, and this bound is what keeps that reading from creating a mass obligation with
+no mechanism. The obligation is real and it drains at fold-in pace.
+
+This rule is enforced as prose at the door and at the vet, for the same reason as the rule above.
+
+### A finding that proposes machinery goes to the door
+
+The silent-failure question keeps its full force **on the work**. Nothing here softens it.
+
+A review finding that proposes new standing machinery, meaning a new detector, gate, watcher,
+census, or a test whose subject is a guard, does not spawn a build and does not become an in-lane
+filing decision. It becomes a front-door item, scored and tiered like anything else. The door's
+home is `skills/showrunner/reference/owner-decisions.md`.
+
+Ordinary test findings on the work stay in-lane review findings exactly as before: a missing case,
+a weak assertion on the diff's own behaviour. Tests on the work are part of the work.
+
+Proposing stays free. What changes is that the machine no longer pays for proposals by default.
+
+In a project whose front door is not yet calibrated, a machinery-proposing finding routes to the
+owner-decisions collector exactly as it does today. The door-routing rule activates only with
+calibration, so adopting this plugin never leaves such a finding with nowhere to go.
+
+A "watch the guard" finding is answered by citing `### Guards do not get guards`, and the citation
+is recorded the way that section says.
+
+The direction toward calmer reviews is ratified, and the design lands with the review loop's own
+contract.
+
+### One home per rule, and the pin rule
+
+Every rule, schema, and contract gets exactly one home. Every other surface points at it and never
+restates it.
+
+A drift pin on a mirror is a **delete signal**, meaning delete the mirror, and not a maintenance
+obligation. Maintaining two copies costs more than the duplication ever saved, and the pin makes
+the cost recur rather than end.
+
+**The pin rule.** A test on a [doctrine surface](glossary.md#doctrine-surface) pins **structure**,
+never **sentences**. It may assert that a check id, a heading, or a column exists where code and
+doc both need it. It never asserts a doctrine sentence. This rule keeps the mirror class from
+growing back inside the test suite.
+
+**What happens to a sentence pin that already exists.**
+
+- No new sentence pin is written on a doctrine surface.
+- An existing sentence pin that goes red because the text it pins changed is closed by **deleting
+  the pin**. It is never updated to match the new text, and it is never moved to a new home. A red
+  pin on replaced text is the expected outcome, not a surprise.
+
+**The reconciliation with the byte-literal floor**, stated here and pointed at from there. On a
+doctrine surface the byte-literal floor's kept classes shrink from four to two: cross-doc
+literal-agreement pins and hard-line sentence pins are closed, because both pin sentences;
+register-quote checks and cardinality floors survive, because they pin data and counts rather than
+prose. Off a doctrine surface the floor is unchanged.
+
+### A behavior test that goes red
+
+When a behavior test goes red under your change, classify it before you touch it.
+
+When the red is a **genuine regression** in the behaviour the test claims to prove, fix the
+behaviour and keep the test.
+
+When the red is an **obsolete expectation**, meaning the behaviour changed on purpose, **delete**
+the test rather than rewriting its expectation, unless the project's [keep list](glossary.md#keep-list)
+names the file.
+
+Either way, put the classification and its reason in the pull request body.
+
+The [keep list](glossary.md#keep-list) is the whole apparatus. There is no per-file record of
+catches or kills to consult and none to build. At contact you check one list for one file name. A
+project names its keep list as a [project configuration](glossary.md#project-configuration) item.
+
+This rule activates only once the owner has stamped the project's keep list. Before that, nothing
+is deleted and expectations are not rewritten.
 
 ## Prose-driven review (`--review-only`)
 
