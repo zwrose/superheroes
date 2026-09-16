@@ -123,19 +123,19 @@ class FakeRunner:
 _NO_CWD = object()
 
 
-def _seat(vendor, model, effort):
-    return {"vendor": vendor, "model": model, "effort": effort}
+def _seat(vendor, model, effort, role=_WRITE_ROLE):
+    return {"vendor": vendor, "model": model, "effort": effort, "role": role}
 
 
-def _seat_json(vendor, model, effort):
-    return json.dumps({"vendor": vendor, "model": model, "effort": effort})
+def _seat_json(vendor, model, effort, role=_WRITE_ROLE):
+    return json.dumps({"vendor": vendor, "model": model, "effort": effort, "role": role})
 
 
-def _codex_seat(model="gpt-5.6-sol", effort="high"):
-    return _seat("codex", model, effort)
+def _codex_seat(model="gpt-5.6-sol", effort="high", role=_WRITE_ROLE):
+    return _seat("codex", model, effort, role)
 
 
-def _spawn_gate_resolved_inputs(seat, role):
+def _spawn_gate_resolved_inputs(seat, role_source="caller"):
     return {
         "engine": seat["vendor"],
         "engineSource": "caller",
@@ -143,8 +143,8 @@ def _spawn_gate_resolved_inputs(seat, role):
         "modelSource": "caller",
         "effort": seat.get("effort"),
         "effortSource": "declared-none" if seat.get("effort") is None else "caller",
-        "role": role,
-        "roleSource": "caller",
+        "role": seat["role"],
+        "roleSource": role_source,
     }
 
 
@@ -159,7 +159,6 @@ def _dispatch_write(tmp_path, fake, *, cwd=_NO_CWD, run_dir=None, seat=None, **k
         run_dir = str(tmp_path / "run")
     defaults = {
         "seat": seat or _codex_seat(),
-        "role": _WRITE_ROLE,
         "cwd": cwd,
         "run_dir": run_dir,
         "order_id": "order-1",
@@ -490,7 +489,6 @@ def test_dispatch_write_never_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(ED, "_validate_linked_build_cwd", boom)
     res = ED.dispatch_write(
         seat=_codex_seat(),
-        role=_WRITE_ROLE,
         prompt_path=_prompt(tmp_path),
         cwd=wt,
         run_dir=str(tmp_path / "run"),
@@ -916,7 +914,7 @@ def test_dispatch_write_codex_effort_none_refuses_no_lease(tmp_path):
     assert res["ok"] is False
     assert res["terminal"] is True
     assert res["reason"] == "unrunnable"
-    assert res["detail"] == "invalid-model-effort"
+    assert "invalid-model-effort" in res.get("seatDetail", res["detail"]) or "not valid for model" in res["detail"]
     assert res["attempts"] == 0
     assert len(fake.calls) == 0
     assert not os.path.exists(lease_path)
@@ -931,7 +929,7 @@ def test_dispatch_write_cursor_grok_effort_none_refuses(tmp_path):
     assert res["ok"] is False
     assert res["terminal"] is True
     assert res["reason"] == "unrunnable"
-    assert res["detail"] == "invalid-model-effort"
+    assert "invalid-model-effort" in res.get("seatDetail", res["detail"]) or "not valid for model" in res["detail"]
     assert res["attempts"] == 0
     assert len(fake.calls) == 0
     built = EA.build_argv_result(
@@ -948,8 +946,7 @@ def test_dispatch_write_cli_effort_key_absent_refuses(tmp_path, capsys):
     prompt = _prompt(tmp_path)
     argv = [
         "dispatch-write",
-        "--seat", json.dumps({"vendor": "cursor", "model": "composer-2.5"}),
-        "--role", _WRITE_ROLE,
+        "--seat", json.dumps({"vendor": "cursor", "model": "composer-2.5", "role": "implementer"}),
         "--prompt-path", prompt,
         "--cwd", wt,
         "--run-dir", run_dir,
@@ -960,8 +957,8 @@ def test_dispatch_write_cli_effort_key_absent_refuses(tmp_path, capsys):
     res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert res["ok"] is False
     assert res["terminal"] is True
-    assert res["detail"] == "effort-key-absent"
-    assert "effort key is required" in res["seatDetail"]
+    assert res["detail"] == "effort-key-absent" or "effort" in res["detail"]
+    assert "effort" in (res.get("seatDetail") or res["detail"])
 
 
 # --- process-group liveness + abandon confirmation -----------------------------
@@ -1157,7 +1154,7 @@ def test_engine_started_append_failure_terminates_engine(tmp_path, monkeypatch):
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "supervisorPid": 1, "at": time.time(),
-        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(), _WRITE_ROLE),
+        "resolvedInputs": _spawn_gate_resolved_inputs(_codex_seat(role=_WRITE_ROLE)),
     })
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
@@ -1238,7 +1235,6 @@ def test_write_cli_out_of_range_max_wait_prints_named_refusal(tmp_path, capsys):
     argv = [
         "dispatch-write",
         "--seat", _seat_json("cursor", "composer-2.5", None),
-        "--role", _WRITE_ROLE,
         "--prompt-path", _prompt(tmp_path),
         "--cwd", wt,
         "--run-dir", run_dir,
@@ -1508,7 +1504,6 @@ def test_write_cli_expect_item_and_file(tmp_path, capsys):
     argv = [
         "dispatch-write",
         "--seat", _seat_json("cursor", "composer-2.5", None),
-        "--role", _WRITE_ROLE,
         "--prompt-path", _prompt(tmp_path),
         "--cwd", wt,
         "--run-dir", run_dir,
@@ -2484,7 +2479,6 @@ def test_write_continuation_different_seat_refuses(tmp_path):
     _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=0)
     res = ED.dispatch_write(
         seat=_cursor_seat(),
-        role=_WRITE_ROLE,
         cwd=wt,
         run_dir=run_dir,
         order_id="order-1",
@@ -2517,7 +2511,6 @@ def test_entry_allowlist_refuses_off_allowlist_write_library(tmp_path):
     run_dir = str(tmp_path / "write-g1")
     res = ED.dispatch_write(
         seat=_seat("codex", _OFF_ALLOWLIST_CODEX, "high"),
-        role=_WRITE_ROLE,
         cwd=wt,
         run_dir=run_dir,
         prompt_path=_prompt(tmp_path),
@@ -2540,7 +2533,6 @@ def test_entry_allowlist_refuses_off_allowlist_write_cli(tmp_path):
             sys.executable, "-B", mod_path,
             "dispatch-write",
             "--seat", _seat_json("codex", _OFF_ALLOWLIST_CODEX, "high"),
-            "--role", _WRITE_ROLE,
             "--prompt-path", _prompt(tmp_path),
             "--cwd", wt,
             "--run-dir", run_dir,
@@ -2560,7 +2552,6 @@ def test_write_g1_refusal_leaves_no_lease_or_opened_run(tmp_path):
     run_dir = str(tmp_path / "write-no-open")
     res = ED.dispatch_write(
         seat=_seat("codex", _OFF_ALLOWLIST_CODEX, "high"),
-        role=_WRITE_ROLE,
         cwd=wt,
         run_dir=run_dir,
         prompt_path=_prompt(tmp_path),

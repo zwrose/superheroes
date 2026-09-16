@@ -149,11 +149,16 @@ def validate(
 
 
 def _cli_check(args: argparse.Namespace) -> int:
-    parsed = seat_bundle.parse(args.seat)
-    if not parsed.get("ok"):
+    resolved = seat_bundle.resolve_entry(args.seat, verb="guard-check")
+    if not resolved.get("ok"):
+        allowlist_verdict = resolved.get("allowlistVerdict")
+        if isinstance(allowlist_verdict, dict):
+            print(json.dumps(allowlist_verdict))
+            print(allowlist_verdict.get("reason") or resolved.get("detail"), file=sys.stderr)
+            return 1
         payload = {
             "ok": False,
-            "role": args.role,
+            "role": None,
             "vendor": None,
             "model_id": None,
             "effort": None,
@@ -162,37 +167,13 @@ def _cli_check(args: argparse.Namespace) -> int:
             "resolved_model": None,
             "allowlist": [],
             "allowlist_pairs": [],
-            "reason": parsed.get("reason"),
-            "seat_detail": parsed.get("detail"),
+            "reason": resolved.get("reason"),
+            "seat_detail": resolved.get("detail"),
         }
         print(json.dumps(payload))
-        print(parsed.get("detail") or parsed.get("reason"), file=sys.stderr)
+        print(resolved.get("detail") or resolved.get("reason"), file=sys.stderr)
         return 1
-    validated = seat_bundle.validate(parsed, args.role)
-    if not validated.get("ok"):
-        payload = {
-            "ok": False,
-            "role": args.role,
-            "vendor": validated.get("vendor"),
-            "model_id": None,
-            "effort": None,
-            "dispatch_token": None,
-            "effort_source": None,
-            "resolved_model": None,
-            "allowlist": [],
-            "allowlist_pairs": [],
-            "reason": validated.get("reason"),
-            "seat_detail": validated.get("detail"),
-        }
-        print(json.dumps(payload))
-        print(validated.get("detail") or validated.get("reason"), file=sys.stderr)
-        return 1
-    result = validate(
-        args.role,
-        validated["vendor"],
-        validated["model"],
-        validated["effort"],
-    )
+    result = resolved["allowlistVerdict"]
     print(json.dumps(result))
     if not result["ok"]:
         print(result["reason"], file=sys.stderr)
@@ -205,8 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     check = sub.add_parser("check", help="Validate a dispatch against the allowlist")
     cc.add_argument(check, "--seat", contract="free-text", required=True,
-                    help="JSON seat bundle or vendor:token composed dispatch token")
-    cc.add_argument(check, "--role", contract="role", required=True, type=cc.role)
+                    help="JSON seat bundle with vendor, model, effort, and role")
     check.set_defaults(func=_cli_check)
     return parser
 

@@ -172,21 +172,9 @@ def _expected_result_kind_invalid_refusal(rejected_kind, effective_mode):
 
 
 def _coerce_seat_input(seat):
-    if isinstance(seat, str):
-        return seat_bundle.parse(seat)
-    if isinstance(seat, dict):
-        if seat.get("ok") is True:
-            return seat
-        if isinstance(seat.get("vendor"), str):
-            out = dict(seat)
-            out.setdefault("ok", True)
-            out.setdefault("source", "json")
-            return out
-    return {
-        "ok": False,
-        "reason": "seat-invalid",
-        "detail": seat_bundle.accepted_seat_detail(),
-    }
+    """Route library dict/str seat input through resolve_entry parse legs (#1269 WO-1)."""
+    resolved = seat_bundle.resolve_entry(seat, verb="guard-check")
+    return resolved
 
 
 def _unknown_kwargs_refusal(unknown_keys, *, accepted_params):
@@ -253,7 +241,7 @@ def _seat_dispatch_refusal(seat_result, *, mode=None):
     base = {
         "ok": False,
         "reason": dispatch_outcome.REASON_UNRUNNABLE,
-        "detail": seat_result.get("reason", "seat-invalid"),
+        "detail": seat_result.get("detail") or seat_result.get("reason", "seat-invalid"),
         "seatDetail": seat_result.get("detail"),
         "attempts": 0,
         "forfeited": False,
@@ -306,11 +294,24 @@ def _normalize_allowlist_verdict(verdict, *, role=None, vendor=None):
 
 
 def _dispatch_allowlist_validate(role, vendor, model, effort):
-    try:
-        verdict = dispatch_guard.validate(role, vendor, model, effort)
-    except Exception:
-        verdict = {"ok": False, "reason": "allowlist guard raised unexpectedly"}
-    return _normalize_allowlist_verdict(verdict, role=role, vendor=vendor)
+    seat_raw = {
+        "vendor": vendor,
+        "model": model,
+        "effort": effort,
+        "role": role,
+    }
+    resolved = seat_bundle.resolve_entry(seat_raw, verb="guard-check")
+    if resolved.get("ok"):
+        return resolved["allowlistVerdict"]
+    verdict = resolved.get("allowlistVerdict")
+    if isinstance(verdict, dict):
+        return _normalize_allowlist_verdict(verdict, role=role, vendor=vendor)
+    return {
+        "ok": False,
+        "reason": resolved.get("detail") or resolved.get("reason"),
+        "allowlist": [],
+        "allowlist_pairs": [],
+    }
 
 
 def _allowlist_guard_payload(verdict):
@@ -422,7 +423,27 @@ def _spawn_allowlist_verdict(opened, *, journal_corrupt=False):
             "allowlist_pairs": [],
         }
     role, vendor, model, effort = seat_tuple
-    return _dispatch_allowlist_validate(role, vendor, model, effort)
+    run_kind = opened.get("runKind", RUN_KIND_REVIEW)
+    verb = "dispatch-review" if run_kind == RUN_KIND_REVIEW else "dispatch-write"
+    mode = opened.get("mode")
+    seat_raw = {
+        "vendor": vendor,
+        "model": model,
+        "effort": effort,
+        "role": role,
+    }
+    resolved = seat_bundle.resolve_entry(seat_raw, verb=verb, mode=mode)
+    if resolved.get("ok"):
+        return resolved["allowlistVerdict"]
+    verdict = resolved.get("allowlistVerdict")
+    if isinstance(verdict, dict):
+        return _normalize_allowlist_verdict(verdict, role=role, vendor=vendor)
+    return {
+        "ok": False,
+        "reason": resolved.get("detail") or resolved.get("reason"),
+        "allowlist": list((verdict or {}).get("allowlist") or []),
+        "allowlist_pairs": list((verdict or {}).get("allowlist_pairs") or []),
+    }
 
 
 def _scrub_env(env=None):
@@ -509,15 +530,15 @@ def _continuation_seat_tuple(snapshot):
     )
 
 
-def _incoming_seat_tuple(seat, role):
-    return (seat.get("vendor"), seat.get("model"), seat.get("effort"), role)
+def _incoming_seat_tuple(seat):
+    return (seat.get("vendor"), seat.get("model"), seat.get("effort"), seat.get("role"))
 
 
-def _continuation_seat_mismatch(opened, seat, role):
+def _continuation_seat_mismatch(opened, seat):
     snapshot = opened.get("resolvedInputs")
     if not isinstance(snapshot, dict):
         return None
-    if _continuation_seat_tuple(snapshot) != _incoming_seat_tuple(seat, role):
+    if _continuation_seat_tuple(snapshot) != _incoming_seat_tuple(seat):
         return SEAT_REFUSAL_RUN_DIR_MISMATCH
     return None
 
@@ -525,7 +546,6 @@ def _continuation_seat_mismatch(opened, seat, role):
 def _build_resolved_inputs(
     *,
     seat,
-    role,
     role_kind,
     repo_root,
     run_dir_real,
@@ -559,7 +579,7 @@ def _build_resolved_inputs(
         seat, role_kind, engine_model_opts,
     )
     _put_resolved(snapshot, "engineModel", engine_model, engine_model_source)
-    _put_resolved(snapshot, "role", role, "caller")
+    _put_resolved(snapshot, "role", seat.get("role"), seat.get("roleSource", "seat"))
     _put_resolved(snapshot, "repoRoot", repo_root, "resolved")
     _put_resolved(snapshot, "runDir", run_dir_real, run_dir_source)
     _put_resolved(snapshot, "promptPath", staged_prompt_path, "resolved")
@@ -3675,7 +3695,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     return True, ""
 
 
-def dispatch_review(*args, seat=None, role=None, prompt_path=None,
+def dispatch_review(*args, seat=None, prompt_path=None,
                     repo_root=None, timeout=_PARAM_UNSET,
                     retry_timeout=_PARAM_UNSET, progress_path=None, run_engine=_run_engine,
                     build_view=sanitized_view.build_sanitized_view,
@@ -3686,7 +3706,7 @@ def dispatch_review(*args, seat=None, role=None, prompt_path=None,
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
     caller always sees JSON and can fall open to Claude."""
-    resolved = {"mode": None}
+    resolved_mode = {"mode": None}
     timeout_source = "default" if timeout is _PARAM_UNSET else "caller"
     if timeout is _PARAM_UNSET:
         timeout = RETRY_MIN_TIMEOUT
@@ -3720,40 +3740,48 @@ def dispatch_review(*args, seat=None, role=None, prompt_path=None,
             if not isinstance(expected_result_kind, str) or expected_result_kind not in REVIEW_RESULT_KINDS:
                 return _expected_result_kind_invalid_refusal(
                     expected_result_kind, mode or sanitized_view.MODE_REVIEW)
-        parsed = _coerce_seat_input(seat)
-        if not parsed.get("ok"):
-            stamped = _seat_dispatch_refusal(parsed, mode=mode or sanitized_view.MODE_REVIEW)
+        entry = seat_bundle.resolve_entry(
+            seat, verb="dispatch-review", mode=mode,
+        )
+        if not entry.get("ok"):
+            allowlist_verdict = entry.get("allowlistVerdict")
+            if isinstance(allowlist_verdict, dict):
+                entry_refusal = _entry_allowlist_refusal(
+                    allowlist_verdict,
+                    repo_root=repo_root,
+                    engine=allowlist_verdict.get("vendor"),
+                    role=allowlist_verdict.get("role"),
+                    mode=mode or sanitized_view.MODE_REVIEW,
+                )
+                if entry_refusal is not None:
+                    return entry_refusal
+            stamped = _seat_dispatch_refusal(
+                entry, mode=mode or sanitized_view.MODE_REVIEW,
+            )
+            stamped["runOpened"] = False
             return stamped
-        validated = seat_bundle.validate(parsed, role)
-        if not validated.get("ok"):
-            stamped = _seat_dispatch_refusal(validated, mode=mode or sanitized_view.MODE_REVIEW)
-            return stamped
-        role_refusal = _role_verb_mismatch_refusal(role, verb="dispatch-review")
-        if role_refusal is not None:
-            role_refusal["mode"] = mode or sanitized_view.MODE_REVIEW
-            return role_refusal
         result = _dispatch_review_impl(
-            validated, role=role, prompt_path=prompt_path,
+            entry, prompt_path=prompt_path,
             repo_root=repo_root, timeout=timeout, timeout_source=timeout_source,
             retry_timeout=retry_timeout, retry_timeout_source=retry_timeout_source,
             progress_path=progress_path, run_engine=run_engine,
             build_view=build_view, run_dir=run_dir, run_dir_supplied=run_dir_supplied,
             max_wait=max_wait, max_wait_source=max_wait_source, order_id=order_id,
-            diff_base=diff_base, mode=mode, resolved_mode=resolved,
+            diff_base=diff_base, mode=mode, resolved_mode=resolved_mode,
             expected_result_kind=expected_result_kind,
             pr_body_path=pr_body_path, session_dir=session_dir)
         stamped = dict(result)
-        stamped["mode"] = resolved["mode"] or (mode or sanitized_view.MODE_REVIEW)
+        stamped["mode"] = resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW)
         return stamped
     except Exception as exc:
         return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                 "detail": "internal-%s" % type(exc).__name__,
                 "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
-                "mode": resolved["mode"] or (mode or sanitized_view.MODE_REVIEW),
+                "mode": resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW),
                 "runOpened": False}
 
 
-def _dispatch_review_impl(seat, *, role, prompt_path,
+def _dispatch_review_impl(seat, *, prompt_path,
                           repo_root=None, timeout=RETRY_MIN_TIMEOUT, timeout_source="default",
                           retry_timeout=RETRY_MIN_TIMEOUT, retry_timeout_source="default",
                           progress_path=None, run_engine=_run_engine,
@@ -3765,6 +3793,7 @@ def _dispatch_review_impl(seat, *, role, prompt_path,
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
     engine = seat["vendor"]
+    role = seat["role"]
     role_kind = RUN_KIND_REVIEW
     if resolved_mode is None:
         resolved_mode = {"mode": None}
@@ -3872,7 +3901,7 @@ def _dispatch_review_impl(seat, *, role, prompt_path,
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=opened.get("argv") or [], engine=engine,
                     )
-                seat_detail = _continuation_seat_mismatch(opened, seat, role)
+                seat_detail = _continuation_seat_mismatch(opened, seat)
                 if seat_detail is not None:
                     return _finish_preflight_terminal(
                         repo_detail,
@@ -3931,17 +3960,6 @@ def _dispatch_review_impl(seat, *, role, prompt_path,
                 )
 
         if not continuation:
-            # axis: G1 — entry gate on fresh open only; no lease, opened run, or child without allowlist pass.
-            guard_verdict = _dispatch_allowlist_validate(
-                role, engine, seat.get("model"), seat.get("effort"),
-            )
-            entry_refusal = _entry_allowlist_refusal(
-                guard_verdict, repo_root=repo_detail, engine=engine, role=role,
-                run_dir=run_dir_real or "", mode=resolved_mode.get("mode"),
-            )
-            if entry_refusal is not None:
-                return entry_refusal
-
             resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
             try:
                 view = build_view(
@@ -4004,7 +4022,6 @@ def _dispatch_review_impl(seat, *, role, prompt_path,
             )
             resolved_inputs = _build_resolved_inputs(
                 seat=seat,
-                role=role,
                 role_kind=role_kind,
                 repo_root=repo_detail,
                 run_dir_real=run_dir_real,
@@ -4171,7 +4188,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     return True, ""
 
 
-def dispatch_write(*args, seat=None, role=None, prompt_path=None, cwd,
+def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                    order_id=None, base_sha=None, timeout=_PARAM_UNSET,
                    retry_timeout=_PARAM_UNSET, progress_path=None, run_engine=_run_engine,
                    run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, expected_items=None,
@@ -4204,21 +4221,25 @@ def dispatch_write(*args, seat=None, role=None, prompt_path=None, cwd,
             )
             refusal["runOpened"] = False
             return refusal
-        parsed = _coerce_seat_input(seat)
-        if not parsed.get("ok"):
-            refusal = _seat_dispatch_refusal(parsed)
+        resolved = seat_bundle.resolve_entry(seat, verb="dispatch-write")
+        if not resolved.get("ok"):
+            allowlist_verdict = resolved.get("allowlistVerdict")
+            if isinstance(allowlist_verdict, dict):
+                entry_refusal = _entry_allowlist_refusal(
+                    allowlist_verdict,
+                    repo_root=None,
+                    engine=allowlist_verdict.get("vendor"),
+                    role=allowlist_verdict.get("role"),
+                    run_kind=RUN_KIND_WRITE,
+                )
+                if entry_refusal is not None:
+                    entry_refusal["runOpened"] = False
+                    return entry_refusal
+            refusal = _seat_dispatch_refusal(resolved)
             refusal["runOpened"] = False
             return refusal
-        validated = seat_bundle.validate(parsed, role)
-        if not validated.get("ok"):
-            refusal = _seat_dispatch_refusal(validated)
-            refusal["runOpened"] = False
-            return refusal
-        role_refusal = _role_verb_mismatch_refusal(role, verb="dispatch-write")
-        if role_refusal is not None:
-            return role_refusal
         return _dispatch_write_impl(
-            validated, role=role, prompt_path=prompt_path, cwd=cwd, order_id=order_id,
+            resolved, prompt_path=prompt_path, cwd=cwd, order_id=order_id,
             base_sha=base_sha, timeout=timeout, timeout_source=timeout_source,
             retry_timeout=retry_timeout, retry_timeout_source=retry_timeout_source,
             progress_path=progress_path, run_engine=run_engine, run_dir=run_dir,
@@ -4232,7 +4253,7 @@ def dispatch_write(*args, seat=None, role=None, prompt_path=None, cwd,
                 "runOpened": False}
 
 
-def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
+def _dispatch_write_impl(seat, *, prompt_path, cwd,
                          order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
                          timeout_source="default", retry_timeout=RETRY_MIN_TIMEOUT,
                          retry_timeout_source="default", progress_path=None,
@@ -4241,6 +4262,7 @@ def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
                          expected_items_file=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     engine = seat["vendor"]
+    role = seat["role"]
     role_kind = "build"
     argv = []
     ok, wait_detail = _validate_max_wait(max_wait)
@@ -4316,18 +4338,6 @@ def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
         state = _journal_state(records)
         opened = state.get("opened")
 
-        if opened is None:
-            # axis: G1 — entry gate on fresh open only; no lease, opened run, or child without allowlist pass.
-            guard_verdict = _dispatch_allowlist_validate(
-                role, engine, seat.get("model"), seat.get("effort"),
-            )
-            entry_refusal = _entry_allowlist_refusal(
-                guard_verdict, repo_root=repo_root, engine=engine, role=role,
-                run_dir=run_dir_real, argv=[], run_kind=RUN_KIND_WRITE,
-            )
-            if entry_refusal is not None:
-                return entry_refusal
-
         opts = {"cwd": cwd_real}
         built = engine_adapter.build_argv_result(seat, role_kind, opts)
         if built["reason"] is not None:
@@ -4352,7 +4362,7 @@ def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
-            seat_detail = _continuation_seat_mismatch(opened, seat, role)
+            seat_detail = _continuation_seat_mismatch(opened, seat)
             if seat_detail is not None:
                 return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
@@ -4469,7 +4479,6 @@ def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
                 base_sha_source = "declared-none"
             resolved_inputs = _build_resolved_inputs(
                 seat=seat,
-                role=role,
                 role_kind=role_kind,
                 repo_root=repo_root,
                 run_dir_real=run_dir_real,
@@ -4785,8 +4794,7 @@ def build_parser():
 
     d = sub.add_parser("dispatch-review")
     cc.add_argument(d, "--seat", contract="free-text", required=True,
-                    help="JSON seat bundle or vendor:token composed dispatch token")
-    cc.add_argument(d, "--role", contract="role", required=True, type=cc.role)
+                    help="JSON seat bundle with vendor, model, effort, and role")
     cc.add_argument(d, "--prompt-path", contract="free-text", required=True)
     cc.add_argument(d, "--timeout", contract="integer", default=RETRY_MIN_TIMEOUT, type=int)
     cc.add_argument(d, "--retry-timeout", contract="integer",
@@ -4810,8 +4818,7 @@ def build_parser():
 
     w = sub.add_parser("dispatch-write")
     cc.add_argument(w, "--seat", contract="free-text", required=True,
-                    help="JSON seat bundle or vendor:token composed dispatch token")
-    cc.add_argument(w, "--role", contract="role", required=True, type=cc.role)
+                    help="JSON seat bundle with vendor, model, effort, and role")
     cc.add_argument(w, "--prompt-path", contract="free-text", required=True)
     cc.add_argument(w, "--cwd", contract="existing-directory", required=True)
     cc.add_argument(w, "--order-id", contract="free-text", default=None)
@@ -4845,7 +4852,7 @@ def main(argv):
         return 1
     args = build_parser().parse_args(argv)
     if args.cmd == "dispatch-review":
-        res = dispatch_review(seat=args.seat, role=args.role,
+        res = dispatch_review(seat=args.seat,
                               prompt_path=args.prompt_path,
                               repo_root=args.repo_root,
                               timeout=args.timeout, retry_timeout=args.retry_timeout,
@@ -4855,7 +4862,7 @@ def main(argv):
                               expected_result_kind=args.expected_result_kind,
                               pr_body_path=args.pr_body_path, session_dir=args.session_dir)
     elif args.cmd == "dispatch-write":
-        res = dispatch_write(seat=args.seat, role=args.role,
+        res = dispatch_write(seat=args.seat,
                              prompt_path=args.prompt_path,
                              cwd=args.cwd, order_id=args.order_id, base_sha=args.base_sha,
                              run_dir=args.run_dir, timeout=args.timeout,

@@ -1,8 +1,8 @@
-"""Single entry for reading and validating a dispatch seat bundle (#1269 WO-A1).
+"""Single entry for reading and validating a dispatch seat bundle (#1269).
 
-A caller supplies ``{vendor, model, effort}`` exactly once — as JSON or a composed
-``vendor:token`` string — plus the registry ``role`` at dispatch entry. Downstream code
-receives the validated bundle intact; no function re-assembles scalars.
+A caller supplies a four-key JSON seat ``{vendor, model, effort, role}`` at dispatch
+entry. Downstream code receives the validated bundle intact; no function re-assembles
+scalars or resolves role outside ``resolve_entry``.
 """
 from __future__ import annotations
 
@@ -10,25 +10,29 @@ import json
 
 import model_registry
 
-_DROPPED_FLAGS = ("--engine", "--model", "--effort", "--engine-model", "--vendor")
-_LEGACY_KEYWORDS = frozenset({"engine", "model", "effort", "engine_model"})
+_DROPPED_FLAGS = ("--engine", "--model", "--effort", "--engine-model", "--vendor", "--role")
+_LEGACY_KEYWORDS = frozenset({"engine", "model", "effort", "engine_model", "role"})
+_MODE_BRIEF_CHECK = "brief-check"
 
 _DISPATCH_REVIEW_ACCEPTED = (
-    "seat, role, prompt_path, repo_root, timeout, retry_timeout, progress_path, "
+    "seat, prompt_path, repo_root, timeout, retry_timeout, progress_path, "
     "run_engine, build_view, run_dir, max_wait, order_id, diff_base, mode, "
     "expected_result_kind, pr_body_path, session_dir"
 )
 _DISPATCH_WRITE_ACCEPTED = (
-    "seat, role, prompt_path, cwd, order_id, base_sha, timeout, retry_timeout, "
+    "seat, prompt_path, cwd, order_id, base_sha, timeout, retry_timeout, "
     "progress_path, run_engine, run_dir, max_wait, expected_items, expected_items_file"
 )
 
 _SEAT_JSON_SHAPE = (
-    'JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>} '
-    "(the effort key is required; its value may be null)"
+    'JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, '
+    '"role": "<role>"} (the effort key is required; its value may be null; role is '
+    "required and must not be null)"
 )
-_SEAT_TOKEN_SHAPE = 'composed token "<vendor>:<dispatch-token>"'
-_ACCEPTED_SEAT = f"{_SEAT_JSON_SHAPE}; or {_SEAT_TOKEN_SHAPE}"
+_ACCEPTED_SEAT = _SEAT_JSON_SHAPE
+_ENTRY_VERBS = frozenset({
+    "dispatch-review", "dispatch-write", "build-argv", "guard-check",
+})
 
 
 def _format_valid(values: tuple[str, ...]) -> str:
@@ -40,22 +44,26 @@ def accepted_seat_detail() -> str:
 
 
 def accepted_role_detail() -> str:
-    return f"pass --role as one of: {_format_valid(model_registry.roles())}"
+    roles = _format_valid(model_registry.roles())
+    return f'role must be a member of the seat JSON "role" key; valid roles: {roles}'
 
 
 def legacy_refusal(*, dropped_flags: tuple[str, ...] | None = None) -> dict:
     """Structured refusal for dropped CLI flags or legacy library call shapes."""
     parts = [
-        "dispatch seat must be supplied as a whole via --seat and --role;",
-        accepted_seat_detail() + ";",
-        accepted_role_detail() + ".",
+        "dispatch seat must be supplied as a whole via --seat;",
+        accepted_seat_detail() + ".",
     ]
     if dropped_flags:
         flags = ", ".join(sorted(set(dropped_flags)))
+        role_note = ""
+        if "--role" in dropped_flags:
+            role_note = " (role now travels inside --seat)"
         parts.insert(
             0,
             f"removed flag(s) {flags} are no longer accepted "
-            "(vendor now lives inside the --seat bundle, not --engine);",
+            f"(vendor and role now live inside the --seat bundle, not separate flags)"
+            f"{role_note};",
         )
     return {
         "ok": False,
@@ -449,3 +457,248 @@ def validate_effort_only(bundle: dict) -> dict:
     if not bundle.get("ok"):
         return bundle
     return _validate_model_effort(bundle)
+
+
+def _entry_refusal(reason: str, detail: str) -> dict:
+    return {"ok": False, "reason": reason, "detail": detail}
+
+
+def _parse_entry_dict(obj: dict) -> dict:
+    if not isinstance(obj, dict):
+        return _entry_refusal(
+            "seat-not-object",
+            f"seat JSON must be an object; accepted: {_ACCEPTED_SEAT}",
+        )
+    if "effort" not in obj:
+        return _entry_refusal(
+            "effort-key-absent",
+            (
+                'JSON seat must include the "effort" key (value may be null); '
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        )
+    if "role" not in obj:
+        return _entry_refusal(
+            "role-key-absent",
+            (
+                'JSON seat must include the "role" key; '
+                f"accepted: {_ACCEPTED_SEAT}; {accepted_role_detail()}"
+            ),
+        )
+    role = obj.get("role")
+    if role is None:
+        return _entry_refusal(
+            "role-null",
+            (
+                'JSON seat "role" must not be null; '
+                f"accepted: {_ACCEPTED_SEAT}; {accepted_role_detail()}"
+            ),
+        )
+    if not isinstance(role, str) or role not in model_registry.roles():
+        valid = _format_valid(model_registry.roles())
+        return _entry_refusal(
+            "unknown-role",
+            (
+                f"unknown role {role!r}; valid roles: {valid}; "
+                f"accepted: {_ACCEPTED_SEAT}; {accepted_role_detail()}"
+            ),
+        )
+    vendor = obj.get("vendor")
+    if not isinstance(vendor, str) or not vendor.strip():
+        valid = _format_valid(model_registry.vendors())
+        return _entry_refusal(
+            "vendor-invalid",
+            (
+                f"seat vendor must be a non-empty string registered in model_registry; "
+                f"valid vendors: {valid}; accepted: {_ACCEPTED_SEAT}"
+            ),
+        )
+    vendor = vendor.strip()
+    if vendor not in model_registry.vendors():
+        valid = _format_valid(model_registry.vendors())
+        return _entry_refusal(
+            "unknown-vendor",
+            (
+                f"unknown vendor {vendor!r}; valid vendors: {valid}; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        )
+    model = obj.get("model")
+    if model is not None and not isinstance(model, str):
+        return _entry_refusal(
+            "model-invalid",
+            f"seat model must be a string or null; accepted: {_ACCEPTED_SEAT}",
+        )
+    effort = obj.get("effort")
+    if effort is not None and not isinstance(effort, str):
+        return _entry_refusal(
+            "effort-invalid",
+            f"seat effort must be a string or null; accepted: {_ACCEPTED_SEAT}",
+        )
+    if isinstance(effort, str) and not effort.strip():
+        effort = None
+    return {
+        "ok": True,
+        "vendor": vendor,
+        "model": model,
+        "effort": effort,
+        "role": role,
+        "source": "json",
+    }
+
+
+def _parse_entry_raw(seat_raw) -> dict:
+    if isinstance(seat_raw, dict):
+        return _parse_entry_dict(seat_raw)
+    if not isinstance(seat_raw, str) or not seat_raw.strip():
+        return _entry_refusal(
+            "seat-empty",
+            f"seat value must be non-empty; accepted: {_ACCEPTED_SEAT}",
+        )
+    text = seat_raw.strip()
+    if text.startswith("{"):
+        try:
+            obj = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return _entry_refusal(
+                "seat-unparseable",
+                (
+                    f"seat value is not valid JSON; accepted: {_ACCEPTED_SEAT}"
+                ),
+            )
+        return _parse_entry_dict(obj)
+    return _entry_refusal(
+        "seat-token-dropped",
+        (
+            "bare composed-token --seat form is no longer accepted because it cannot "
+            f"carry a role; pass --seat as {_ACCEPTED_SEAT}"
+        ),
+    )
+
+
+def _mode_role_coherence_refusal(role: str) -> dict:
+    return _entry_refusal(
+        "mode-role-mismatch",
+        (
+            f"--mode {_MODE_BRIEF_CHECK} requires seat role 'brief-check'; "
+            f"got role {role!r}; accepted: {_ACCEPTED_SEAT}; "
+            f'{accepted_role_detail()}'
+        ),
+    )
+
+
+def _verb_role_coherence_refusal(role: str, *, verb: str) -> dict:
+    rw = model_registry.role_read_write(role)
+    if verb == "dispatch-write" and rw == "read":
+        detail = (
+            f"role {role!r} is read-only (read_write=read); "
+            f"dispatch-write requires a write role; accepted: {_ACCEPTED_SEAT}; "
+            f"{accepted_role_detail()}"
+        )
+    elif verb == "dispatch-review" and rw == "write":
+        detail = (
+            f"role {role!r} is write-only (read_write=write); "
+            f"dispatch-review requires a read role; accepted: {_ACCEPTED_SEAT}; "
+            f"{accepted_role_detail()}"
+        )
+    else:
+        return None
+    return _entry_refusal("verb-role-mismatch", detail)
+
+
+def _malformed_allowlist_verdict_detail(role: str, vendor: str) -> str:
+    return (
+        "allowlist guard returned malformed verdict — expected dispatch_guard.validate("
+        f"{role!r}, {vendor!r}, model, effort) to return ok, reason, allowlist, and "
+        "allowlist_pairs naming the sanctioned model allowlist for this role and vendor, "
+        "with echoed role, vendor, model_id (or resolved_model), effort, and a non-empty "
+        "allowlist_pairs containing the resolved (model, effort) pair; "
+        "fix the seat or re-run dispatch_guard check"
+    )
+
+
+def _normalize_allowlist_verdict(verdict, *, role: str, vendor: str, model: str, effort):
+    malformed = _malformed_allowlist_verdict_detail(role, vendor)
+    if not isinstance(verdict, dict):
+        return _entry_refusal("allowlist-malformed", malformed)
+    if verdict.get("ok") is not True:
+        reason = verdict.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return _entry_refusal("allowlist-malformed", malformed)
+        return {
+            "ok": False,
+            "reason": "allowlist-refused",
+            "detail": reason,
+            "allowlistVerdict": verdict,
+        }
+    if verdict.get("role") != role or verdict.get("vendor") != vendor:
+        return _entry_refusal("allowlist-malformed", malformed)
+    resolved_model = verdict.get("model_id")
+    if resolved_model is None:
+        resolved_model = verdict.get("resolved_model")
+    if resolved_model is None or verdict.get("effort") != effort:
+        return _entry_refusal("allowlist-malformed", malformed)
+    pairs = verdict.get("allowlist_pairs")
+    if not isinstance(pairs, (list, tuple)) or not pairs:
+        return _entry_refusal("allowlist-malformed", malformed)
+    normalized_pairs = []
+    for pair in pairs:
+        if (
+            isinstance(pair, (list, tuple))
+            and len(pair) == 2
+        ):
+            normalized_pairs.append((pair[0], pair[1]))
+    if (model, effort) not in normalized_pairs:
+        return _entry_refusal("allowlist-malformed", malformed)
+    return {"ok": True, "allowlistVerdict": verdict}
+
+
+def resolve_entry(seat_raw, *, verb, mode=None) -> dict:
+    """Single chokepoint for dispatch entry seat resolution (#1269 WO-1)."""
+    if verb not in _ENTRY_VERBS:
+        return _entry_refusal(
+            "unknown-verb",
+            f"unknown resolve_entry verb {verb!r}; accepted verbs: "
+            f"{_format_valid(tuple(sorted(_ENTRY_VERBS)))}",
+        )
+    parsed = _parse_entry_raw(seat_raw)
+    if not parsed.get("ok"):
+        return parsed
+    role = parsed["role"]
+    if mode == _MODE_BRIEF_CHECK and role != "brief-check":
+        return _mode_role_coherence_refusal(role)
+    if verb in ("dispatch-review", "dispatch-write"):
+        verb_refusal = _verb_role_coherence_refusal(role, verb=verb)
+        if verb_refusal is not None:
+            return verb_refusal
+    checked = _validate_model_effort(parsed)
+    if not checked.get("ok"):
+        return checked
+    role = checked["role"]
+    vendor = checked["vendor"]
+    model = checked["model"]
+    effort = checked.get("effort")
+    import dispatch_guard  # noqa: WPS433 — lazy: dispatch_guard imports this module
+
+    try:
+        verdict = dispatch_guard.validate(role, vendor, model, effort)
+    except Exception:
+        return _entry_refusal(
+            "allowlist-raised",
+            "allowlist guard raised unexpectedly",
+        )
+    normalized = _normalize_allowlist_verdict(
+        verdict, role=role, vendor=vendor, model=model, effort=effort,
+    )
+    if not normalized.get("ok"):
+        return normalized
+    return {
+        "ok": True,
+        "vendor": vendor,
+        "model": model,
+        "effort": effort,
+        "role": role,
+        "effortSource": checked.get("effortSource", "caller"),
+        "roleSource": "seat",
+        "allowlistVerdict": normalized["allowlistVerdict"],
+    }
