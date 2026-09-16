@@ -614,12 +614,14 @@ def test_persist_backfill_false_does_not_write_and_default_still_does(tmp_path, 
 # --- calibration_state: tri-state ----------------------------------------------
 
 def test_calibration_state_registry_present_is_calibrated(monkeypatch, tmp_path):
+    # axis: a valid registry record must short-circuit to calibrated.
     monkeypatch.setattr(mr, "read_registry",
                         lambda cwd, root=None: {"storageMode": "in-repo"})
     assert mr.calibration_state(str(tmp_path)) == "calibrated"
 
 
 def test_calibration_state_hero_evidence_present_is_calibrated(monkeypatch, tmp_path):
+    # axis: hero evidence with no registry file must return calibrated, not uncalibrated.
     monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
     monkeypatch.setattr(mr, "registry_path",
                         lambda cwd, root=None: str(tmp_path / "no-such-registry.json"))
@@ -629,6 +631,7 @@ def test_calibration_state_hero_evidence_present_is_calibrated(monkeypatch, tmp_
 
 
 def test_calibration_state_no_registry_no_evidence_is_uncalibrated(monkeypatch, tmp_path):
+    # axis: absent registry and absent hero evidence must return uncalibrated.
     monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
     monkeypatch.setattr(mr, "registry_path",
                         lambda cwd, root=None: str(tmp_path / "no-such-registry.json"))
@@ -638,6 +641,7 @@ def test_calibration_state_no_registry_no_evidence_is_uncalibrated(monkeypatch, 
 
 
 def test_calibration_state_registry_file_present_but_corrupt_is_indeterminate(monkeypatch, tmp_path):
+    # axis: a present but unreadable registry file must return indeterminate, not uncalibrated.
     # read_registry returns None (corrupt), but the registry FILE exists → indeterminate,
     # distinct from a plain absence (uncalibrated).
     reg = tmp_path / "registry.json"
@@ -652,6 +656,7 @@ def test_calibration_state_registry_file_present_but_corrupt_is_indeterminate(mo
 
 
 def test_calibration_state_dangling_symlink_is_indeterminate(monkeypatch, tmp_path):
+    # axis: a dangling registry symlink must return indeterminate via lstat, not uncalibrated.
     # A DANGLING symlink at the registry path: os.path.exists would follow it, find nothing, and
     # report "absent" → falling through to hero-evidence and possibly dropping the floor to
     # uncalibrated. os.lstat succeeds on the link itself → present → indeterminate (fail-closed).
@@ -667,6 +672,7 @@ def test_calibration_state_dangling_symlink_is_indeterminate(monkeypatch, tmp_pa
 
 
 def test_calibration_state_read_registry_raises_is_indeterminate(monkeypatch, tmp_path):
+    # axis: read_registry raising UnknownSchemaVersion must return indeterminate.
     def _raise(cwd, root=None):
         raise mr.UnknownSchemaVersion("newer schema")
 
@@ -675,6 +681,7 @@ def test_calibration_state_read_registry_raises_is_indeterminate(monkeypatch, tm
 
 
 def test_calibration_state_read_registry_generic_error_is_indeterminate(monkeypatch, tmp_path):
+    # axis: read_registry raising a generic exception must return indeterminate.
     def _raise(cwd, root=None):
         raise RuntimeError("boom")
 
@@ -683,6 +690,7 @@ def test_calibration_state_read_registry_generic_error_is_indeterminate(monkeypa
 
 
 def test_calibration_state_registry_path_error_is_indeterminate(monkeypatch, tmp_path):
+    # axis: registry_path raising must return indeterminate, not uncalibrated.
     monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
 
     def _raise(cwd, root=None):
@@ -693,6 +701,7 @@ def test_calibration_state_registry_path_error_is_indeterminate(monkeypatch, tmp
 
 
 def test_calibration_state_registry_lstat_error_is_indeterminate(monkeypatch, tmp_path):
+    # axis: os.lstat raising on the registry path must return indeterminate, not uncalibrated.
     # os.lstat raises (non-FileNotFoundError) on the registry path → indeterminate, not uncalibrated.
     monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
     reg = str(tmp_path / "registry.json")
@@ -706,6 +715,7 @@ def test_calibration_state_registry_lstat_error_is_indeterminate(monkeypatch, tm
 
 
 def test_calibration_state_evidence_error_is_indeterminate(monkeypatch, tmp_path):
+    # axis: hero_evidence raising must return indeterminate, not uncalibrated.
     monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
     monkeypatch.setattr(mr, "registry_path",
                         lambda cwd, root=None: str(tmp_path / "no-such-registry.json"))
@@ -718,16 +728,21 @@ def test_calibration_state_evidence_error_is_indeterminate(monkeypatch, tmp_path
 
 
 def test_calibration_state_never_calls_resolve(monkeypatch, tmp_path):
-    # A probe must be strictly read-only: resolve() and write_registry() can backfill-WRITE the
-    # registry and must never be reached from calibration_state.
+    # axis: calibration_state must not invoke write-capable registry paths on the fallback path.
     def _tripwire(*a, **k):
         raise AssertionError("write-capable registry path must not be called from the probe")
 
     monkeypatch.setattr(mr, "resolve", _tripwire)
     monkeypatch.setattr(mr, "write_registry", _tripwire)
-    monkeypatch.setattr(mr, "read_registry",
-                        lambda cwd, root=None: {"storageMode": "in-repo"})
-    assert mr.calibration_state(str(tmp_path)) == "calibrated"
+    monkeypatch.setattr(mr, "ensure_project_store", _tripwire)
+    monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
+    monkeypatch.setattr(mr, "registry_path",
+                        lambda cwd, root=None: str(tmp_path / "no-such-registry.json"))
+    monkeypatch.setattr(mr, "hero_evidence",
+                        lambda cwd, root=None, hero_roots=None: {"review-crew": "none"})
+    store_dir = tmp_path / "store"
+    assert mr.calibration_state(str(tmp_path)) == "uncalibrated"
+    assert not store_dir.exists()
 
 
 # --- calibrated-path integration: a real on-disk registry (no subprocess) ------
