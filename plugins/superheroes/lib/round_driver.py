@@ -5725,6 +5725,11 @@ def _envelope_with_head_diff(session_dir, envelope, content, rnd, phase, seat_ke
     final["landedPayloadSha256"] = envelope.get("payloadSha256")
     final["payload"] = payload
     final["payloadSha256"] = round_records.payload_sha256(payload)
+    if final.get("schema") == round_records.SEAT_RESULT_SCHEMA_V2:
+        # Recompute envelopeSha256 so the stored envelope stays self-consistent after the
+        # payload rewrite; otherwise validate_landing rejects it as envelope-torn.
+        final["envelopeSha256"] = round_records.envelope_sha256(payload,
+                                                                final.get("executionEvidence"))
     return diff_path, content.encode("utf-8"), final, final["payloadSha256"]
 
 
@@ -6970,10 +6975,22 @@ def _seat_slot_records(session_dir, rnd, phase, attempt, roster):
     return out
 
 
+def _journal_revision_fields(envelope):
+    """The revision identity a `recorded` row carries: the payload hash (kept, never removed —
+    FR-D5) and the ENVELOPE's own CAS token, which is what `reconcile` compares. Every site that
+    journals a stored envelope's revision splats this; a site that journals a revision without it
+    is the defect this helper exists to make impossible. Takes an ENVELOPE — a reconcile entry is
+    not an envelope and must not be passed here."""
+    if not isinstance(envelope, dict):
+        return {"payloadSha256": None, "casToken": None}
+    return {"payloadSha256": envelope.get("payloadSha256"),
+            "casToken": round_records.envelope_cas_token(envelope)}
+
+
 def _journal_record_identities(session_dir, rnd, phase):
     """Every record identity this session's journal logged for a phase — `reconcile`'s view of the
-    LOG half of the two-commit window. The latest `payloadSha256` per slot rides with each identity
-    so a supersede whose journal append never landed still reconciles."""
+    LOG half of the two-commit window. The latest payload hash and CAS token per slot ride with
+    each identity so a supersede whose journal append never landed still reconciles."""
     latest = {}
     for event in read_journal(session_dir):
         if event.get("phase") != phase or event.get("round") != rnd:
@@ -6993,6 +7010,8 @@ def _journal_record_identities(session_dir, rnd, phase):
         entry = dict(ident)
         if "payloadSha256" in event:
             entry["payloadSha256"] = event.get("payloadSha256")
+        if "casToken" in event:
+            entry["casToken"] = event.get("casToken")
         latest[key] = entry
     return list(latest.values())
 
@@ -7086,7 +7105,7 @@ def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurr
         c.add_replace_file(diff_path, diff_bytes)
         c.add_replace_file(spath, round_records.canonical(final).encode("utf-8"))
         if journal_entry is not None:
-            journal_entry["payloadSha256"] = payload_sha
+            journal_entry.update(_journal_revision_fields(final))
             c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
@@ -7397,7 +7416,7 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
             session_dir, envelope, head_content, rnd, phase, seat, cur_attempt, occurrence)
     journal_entry = _journal_entry_for_commit(
         session_dir, "record-result", "recorded", phase=phase, round=rnd, attempt=cur_attempt,
-        seat=seat, occurrence=occurrence, payloadSha256=payload_sha,
+        seat=seat, occurrence=occurrence, **_journal_revision_fields(envelope),
         superseded=bool(plan["superseded"]), headDiffStorePath=head_store_path,
         provenance=envelope.get("provenance") if isinstance(envelope, dict) else None,
         envelopeSha256=envelope.get("envelopeSha256") if isinstance(envelope, dict) else None,
@@ -7545,8 +7564,15 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                 payload_sha = rehashed or payload_sha
                 head_diff_journaled = True
         if not head_diff_journaled:
+            skey = round_records.storage_key(seat, occurrence)
+            spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
+            stored_envelope, read_err = round_records.read_json(spath)
+            if read_err is None and isinstance(stored_envelope, dict):
+                revision_fields = _journal_revision_fields(stored_envelope)
+            else:
+                revision_fields = {"payloadSha256": payload_sha}
             _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
-                           seat=seat, occurrence=occurrence, payloadSha256=payload_sha,
+                           seat=seat, occurrence=occurrence, **revision_fields,
                            **_journal_addressing_fields(expect_round, expect_phase),
                            **_journal_identity_fields(phase, seat, occurrence, attempt))
         recorded.append(_slot_label(seat, occurrence))
@@ -8259,7 +8285,7 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
         "journal": _journal_entry_for_commit(
             session_dir, "advance", "recorded", phase=phase, round=rnd, attempt=attempt,
             seat=seat_key, occurrence=occurrence,
-            payloadSha256=envelope["payloadSha256"], superseded=False,
+            **_journal_revision_fields(envelope), superseded=False,
             **_journal_identity_fields(phase, seat_key, occurrence, attempt)),
     }
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), payload,
@@ -8369,11 +8395,12 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
         ident = entry.get("recordIdentity")
         if not isinstance(ident, dict) and slot is not None:
             ident = round_records.record_identity(phase, slot[0], slot[1], entry.get("attempt"))
+        # Reconcile entry, not an envelope — casToken is already resolved on the entry.
         _journal_event(session_dir, "advance", "recorded", phase=phase, round=rnd,
                        attempt=entry.get("attempt"), seat=slot[0] if slot else None,
                        occurrence=slot[1] if slot else None,
-                       payloadSha256=entry.get("payloadSha256"), reappended=True,
-                       recordIdentity=ident)
+                       payloadSha256=entry.get("payloadSha256"), casToken=entry.get("casToken"),
+                       reappended=True, recordIdentity=ident)
     orphans = rec.get("journalOrphan") or []
     if orphans:
         seats = sorted(set(_seat_for_record_identity(session_dir, ident) or str(ident)

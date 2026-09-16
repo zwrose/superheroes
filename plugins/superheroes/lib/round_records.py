@@ -1007,10 +1007,12 @@ def reconcile(session_dir, rnd, phase, journal_identities):
         the ONE machinery-failure class here: the log claims a record that does not exist on disk.
         The caller turns it into a refusal naming the seat; nothing here deletes or invents a file.
 
-    Record identity is `(phase, seat, occurrence, attempt)` — NOT the payload hash alone. Payload
-    hashes ride the journal as the revision token: a supersede writes a new store file into the SAME
-    slot, so reconcile must reappend when the store's current token differs from the latest token the
-    journal recorded for that slot.
+    Record identity is `(phase, seat, occurrence, attempt)` — NOT the payload hash alone. The CAS
+    token rides the journal as the revision token; reconcile resolves journal-side casToken,
+    payloadSha256-for-v1, or a one-shot reappend for pre-transition v2 rows against the store's
+    envelope_cas_token. A supersede writes a new store file into the SAME slot, so reconcile must
+    reappend when the store's current token differs from the latest token the journal recorded for
+    that slot.
     """
     identities = []
     for ident in (journal_identities or []):
@@ -1018,14 +1020,12 @@ def reconcile(session_dir, rnd, phase, journal_identities):
         if key is not None:
             identities.append(ident)
     journal_keys = set()
-    journal_tokens = {}
+    journal_idents = {}
     for ident in identities:
         key = _identity_key_from_mapping(ident, default_phase=phase)
         if key is not None:
             journal_keys.add(key)
-            token = ident.get("payloadSha256")
-            if token is not None:
-                journal_tokens[key] = token
+            journal_idents[key] = ident
     try:
         ldir = landing_dir(session_dir, rnd, phase)
         sdir = store_dir(session_dir, rnd, phase)
@@ -1047,18 +1047,29 @@ def reconcile(session_dir, rnd, phase, journal_identities):
         obj, err = read_json(entry["path"])
         sha = obj.get("payloadSha256") if (err is None and isinstance(obj, dict)) else None
         entry["payloadSha256"] = sha
+        store_token = envelope_cas_token(obj) if (err is None and isinstance(obj, dict)) else None
+        entry["casToken"] = store_token
         if err is None and isinstance(obj, dict):
             key = _identity_key_from_mapping(
                 record_identity(phase, obj.get("seat"), obj.get("occurrence", 0), obj.get("attempt")))
             if key is not None:
                 store_keys.add(key)
                 entry["recordIdentity"] = record_identity(*key)
-                store_token = envelope_cas_token(obj)
-                journaled = journal_tokens.get(key)
                 if key not in journal_keys:
                     reappend.append(entry)
-                elif journaled is not None and store_token is not None and journaled != store_token:
-                    reappend.append(entry)
+                else:
+                    ident = journal_idents.get(key)
+                    journaled_cas = ident.get("casToken") if ident else None
+                    if journaled_cas is not None:
+                        if store_token is not None and journaled_cas != store_token:
+                            reappend.append(entry)
+                    elif obj.get("schema") == SEAT_RESULT_SCHEMA_V2:
+                        reappend.append(entry)
+                    else:
+                        journaled_payload = ident.get("payloadSha256") if ident else None
+                        if (journaled_payload is not None and store_token is not None
+                                and journaled_payload != store_token):
+                            reappend.append(entry)
     orphans = [ident for ident in identities
                if _identity_key_from_mapping(ident, default_phase=phase) not in store_keys]
     return {"ingestNow": ingest_now, "reappend": reappend, "journalOrphan": orphans}
