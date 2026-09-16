@@ -4111,6 +4111,98 @@ def _poll_projection(state):
     return dict(base, terminal=False, state="running" if alive else "idle")
 
 
+def _observation_from_attempt(run_dir_real, state, attempt):
+    """Engagement summary for one completed attempt. Never raises."""
+    opened = state.get("opened") or {}
+    engine = opened.get("engine")
+    slot = (state.get("attempts") or {}).get(attempt) or {}
+    ended = slot.get("ended") or {}
+    stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+    stderr_path = os.path.join(run_dir_real, "attempt-%d.stderr" % attempt)
+    try:
+        with open(stderr_path, encoding="utf-8", errors="ignore") as fh:
+            stderr_tail = fh.read()
+    except OSError:
+        stderr_tail = ended.get("stderrTail", "")
+    stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+    elapsed = ended.get("wallSeconds", 0)
+    stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
+    if engine == "codex":
+        tokens = engine_adapter.codex_tokens_used(stderr_tail)
+        tool_calls = None
+        source = "codex-stderr" if tokens is not None else "none"
+    elif engine == "cursor":
+        tokens = None
+        tool_calls = engine_adapter.cursor_tool_calls(stdout)
+        source = "cursor-stream" if tool_calls is not None else "none"
+    else:
+        tokens = None
+        tool_calls = None
+        source = "none"
+    engagement = {
+        "tokens": tokens,
+        "toolCalls": tool_calls,
+        "stdoutBytes": stdout_bytes,
+        "wallSeconds": elapsed,
+        "source": source,
+    }
+    return _engagement_with_read(engagement)
+
+
+def run_execution_record(run_dir):
+    """The runner's own record of a completed dispatch, for a consumer that must prove the act
+    happened. Returns (record, error). Never raises, never writes, never spawns."""
+    try:
+        ok, detail = _validate_run_dir(run_dir)
+        if not ok:
+            return None, detail
+        run_dir_real = detail
+        records, interior_corrupt = _journal_read(run_dir_real)
+        if interior_corrupt:
+            return None, "journal-corrupt"
+        state = _journal_state(records)
+        opened = state.get("opened")
+        if not isinstance(opened, dict):
+            return None, "run-not-opened"
+        attempts = state.get("attempts") or {}
+        completed = sorted(att for att in attempts if (attempts[att].get("ended") is not None))
+        if not completed:
+            return None, "no-completed-attempt"
+        attempt = completed[-1]
+        engine = opened.get("engine")
+        if not isinstance(engine, str) or not engine:
+            return None, "engine-missing"
+        echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
+        if not echo_nonce:
+            return None, "runner-nonce-missing"
+        journal_path = _journal_path(run_dir_real)
+        try:
+            with open(journal_path, "rb") as fh:
+                journal_bytes = fh.read()
+        except OSError:
+            return None, "journal-unreadable"
+        record_digest = hashlib.sha256(journal_bytes).hexdigest()
+        prompt_path = opened.get("promptPath") or os.path.join(run_dir_real, PROMPT_NAME)
+        try:
+            with open(prompt_path, "rb") as fh:
+                prompt_bytes = fh.read()
+        except OSError:
+            return None, "prompt-unreadable"
+        prompt_sha256 = hashlib.sha256(prompt_bytes).hexdigest()
+        observation = _observation_from_attempt(run_dir_real, state, attempt)
+        if not isinstance(observation, dict):
+            return None, "observation-unavailable"
+        return {
+            "source": engine,
+            "runnerNonce": echo_nonce,
+            "recordDigest": record_digest,
+            "observation": observation,
+            "promptSha256": prompt_sha256,
+        }, None
+    except Exception:
+        return None, "internal-error"
+
+
 def dispatch_poll(run_dir):
     """Observational poll — never spawns."""
     try:

@@ -65,7 +65,12 @@ SEAT_RESULT_FIELDS = ("schema", "session", "round", "phase", "seat", "attempt", 
                       "payloadSha256", "payload")
 SEAT_RESULT_V2_FIELDS = SEAT_RESULT_FIELDS + ("executionEvidence", "provenance",
                                               "envelopeSha256")
-SEAT_PROVENANCE = ("dispatch-observed", "hand-landed")
+PROVENANCE_DISPATCH_OBSERVED = "dispatch-observed"
+PROVENANCE_HAND_LANDED = "hand-landed"
+PROVENANCE_ORCHESTRATOR_FULFILLED = "orchestrator-fulfilled"
+SEAT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED,
+                   PROVENANCE_ORCHESTRATOR_FULFILLED)
+EVIDENCE_BEARING_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
 EXECUTION_EVIDENCE_FIELDS = ("source", "runnerNonce", "recordDigest", "observation")
 _EXECUTION_EVIDENCE_POINTER_KEYS = frozenset(
     ("path", "file", "filePath", "ref", "href", "uri", "url", "evidencePath"))
@@ -584,6 +589,9 @@ def _wrap_bare_payload(stub, payload, occurrence):
     envelope["payloadSha256"] = payload_sha256(payload)
     envelope["recordedAt"] = _now_iso()
     envelope["payloadHashSource"] = "driver-computed"
+    if envelope.get("schema") == SEAT_RESULT_SCHEMA_V2:
+        evidence = envelope.get("executionEvidence")
+        envelope["envelopeSha256"] = envelope_sha256(payload, evidence)
     return envelope
 
 
@@ -739,14 +747,19 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
             return None, _refuse("landing-torn", computed=stored_sha,
                                  declared=envelope.get("payloadSha256"), landingPath=lpath)
         if schema == SEAT_RESULT_SCHEMA_V2:
-            evidence_reason = _validate_execution_evidence(envelope.get("executionEvidence"))
-            if evidence_reason is not None:
-                return None, _refuse(evidence_reason)
             provenance = envelope.get("provenance")
             if provenance not in SEAT_PROVENANCE:
                 return None, _refuse("provenance-unknown", provenance=provenance)
-            computed_envelope_sha = envelope_sha256(envelope.get("payload"),
-                                                    envelope.get("executionEvidence"))
+            evidence = envelope.get("executionEvidence")
+            if provenance in EVIDENCE_BEARING_PROVENANCE:
+                evidence_reason = _validate_execution_evidence(evidence)
+                if evidence_reason is not None:
+                    return None, _refuse(evidence_reason)
+            elif provenance == PROVENANCE_ORCHESTRATOR_FULFILLED:
+                if evidence is not None:
+                    return None, _refuse("execution-evidence-unexpected")
+                evidence = None
+            computed_envelope_sha = envelope_sha256(envelope.get("payload"), evidence)
             declared_envelope_sha = envelope.get("envelopeSha256")
             if declared_envelope_sha != computed_envelope_sha:
                 return None, _refuse("envelope-torn", computed=computed_envelope_sha,

@@ -294,7 +294,7 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, *
     if schema == RR.SEAT_RESULT_SCHEMA_V2:
         evidence = _execution_evidence()
         env["executionEvidence"] = evidence
-        env["provenance"] = "dispatch-observed"
+        env["provenance"] = RR.PROVENANCE_HAND_LANDED
         env["envelopeSha256"] = RR.envelope_sha256(payload, evidence)
     if occurrence:
         env["occurrence"] = occurrence

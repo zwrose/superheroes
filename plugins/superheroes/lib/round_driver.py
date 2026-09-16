@@ -6702,6 +6702,8 @@ def _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence
     }
     if occurrence:
         header["occurrence"] = occurrence
+    if schema == round_records.SEAT_RESULT_SCHEMA_V2:
+        header["provenance"] = round_records.PROVENANCE_DISPATCH_OBSERVED
     return header
 
 
@@ -7027,7 +7029,7 @@ def _preflight_payload_fault(phase, envelope, seat_key):
     None. Only seat-result landings are checked — missing envelopes have no payload contract."""
     if not isinstance(envelope, dict):
         return None
-    if envelope.get("schema") != round_records.SEAT_RESULT_SCHEMA:
+    if envelope.get("schema") not in round_records.SEAT_RESULT_SCHEMAS:
         return None
     return _adapters().payload_fault(phase, envelope.get("payload"), seat_key,
                                      record_boundary=True)
@@ -7186,7 +7188,8 @@ def _roster_of(session_dir, state, cmd, phase, rnd, attempt):
 
 
 def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, expect_sha256=None,
-                      sweep=False, occurrence=0, expect_round=None, expect_phase=None):
+                      sweep=False, occurrence=0, expect_round=None, expect_phase=None,
+                      evidence_run_dir=None):
     """Ingest ONE landed seat envelope (or, with `sweep`, every unclaimed landing) into the durable
     store, and journal the outcome carrying its `payloadSha256`.
 
@@ -7208,14 +7211,35 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
                                              supersede=supersede, expect_sha256=expect_sha256,
                                              sweep=sweep, occurrence=occurrence,
                                              expect_round=expect_round,
-                                             expect_phase=expect_phase)
+                                             expect_phase=expect_phase,
+                                             evidence_run_dir=evidence_run_dir)
     except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "record-result", held)
 
 
+def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
+    """Bind runner telemetry to the driver's order hash. Returns (envelope, refusal_reason, extra)."""
+    import engine_dispatch
+    if not evidence_run_dir:
+        return None, "evidence-run-dir-required", {}
+    record, err = engine_dispatch.run_execution_record(evidence_run_dir)
+    if err is not None:
+        return None, "evidence-run-dir-unreadable", {"detail": err}
+    prompt_sha = record.get("promptSha256")
+    order_sha = envelope.get("orderSha256")
+    if not isinstance(prompt_sha, str) or not prompt_sha or prompt_sha != order_sha:
+        return None, "evidence-order-mismatch", {"promptSha256": prompt_sha,
+                                                 "orderSha256": order_sha}
+    evidence = {key: record[key] for key in round_records.EXECUTION_EVIDENCE_FIELDS}
+    out = dict(envelope)
+    out["executionEvidence"] = evidence
+    out["envelopeSha256"] = round_records.envelope_sha256(out.get("payload"), evidence)
+    return out, None, {}
+
+
 def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=False,
                               expect_sha256=None, sweep=False, occurrence=0,
-                              expect_round=None, expect_phase=None):
+                              expect_round=None, expect_phase=None, evidence_run_dir=None):
     state, refusal = _load_driver_state(session_dir, "record-result")
     if refusal is not None:
         return refusal
@@ -7311,10 +7335,34 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         return _sweep_record(session_dir, state, "record-result", phase, rnd, cur_attempt, roster,
                              anchor, expect_round=expect_round, expect_phase=expect_phase)
 
+    seat_schema = _seat_result_schema(state)
+    if seat_schema is None:
+        return _refuse_cmd(session_dir, "record-result", "state-version-unsupported", phase=phase,
+                           rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence))
+
     # Validate BEFORE storing: a refusal must leave nothing behind.
     if isinstance(seat, str) and seat in roster:
         envelope, _lerr = _read_landing_envelope(session_dir, rnd, phase, seat, cur_attempt,
                                                  occurrence)
+        if _lerr is not None:
+            return _refuse_cmd(session_dir, "record-result", _lerr, phase=phase, rnd=rnd,
+                               attempt=cur_attempt, seat=_slot_label(seat, occurrence))
+        if (seat_schema == round_records.SEAT_RESULT_SCHEMA_V2 and isinstance(envelope, dict)
+                and envelope.get("provenance") == round_records.PROVENANCE_DISPATCH_OBSERVED):
+            assembled, ev_reason, ev_extra = _assemble_dispatch_evidence(
+                session_dir, envelope, evidence_run_dir)
+            if ev_reason is not None:
+                return _refuse_cmd(session_dir, "record-result", ev_reason, phase=phase,
+                                   rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
+                                   **ev_extra)
+            try:
+                skey = round_records.storage_key(seat, occurrence)
+                lpath = round_records.landing_path(session_dir, rnd, phase, skey, cur_attempt)
+            except ValueError as exc:
+                return _refuse_cmd(session_dir, "record-result", "bad-argument", phase=phase,
+                                   rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
+                                   detail=str(exc))
+            round_records.atomic_write_json(lpath, assembled)
         fault = _preflight_payload_fault(phase, envelope, seat)
         if fault:
             return _refuse_cmd(session_dir, "record-result", "payload-fault", phase=phase,
@@ -7330,11 +7378,6 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                                        attempt=cur_attempt, seat=seat, headDiffPath=head_path)
     else:
         head_content = None
-
-    seat_schema = _seat_result_schema(state)
-    if seat_schema is None:
-        return _refuse_cmd(session_dir, "record-result", "state-version-unsupported", phase=phase,
-                           rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence))
     plan, landing_refusal = round_records.validate_landing(
         session_dir, rnd, phase, seat, cur_attempt, current_attempt=cur_attempt, roster=roster,
         supersede=supersede, expect_sha256=expect_sha256, anchor=anchor, occurrence=occurrence,
@@ -8084,7 +8127,7 @@ def _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt, se
     schema = _seat_result_schema(state)
     if schema is None:
         raise ValueError("unknown-state-version")
-    return {
+    envelope = {
         "schema": schema,
         "session": session_id,
         "round": rnd,
@@ -8102,6 +8145,10 @@ def _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt, se
         "payload": payload,
         "fulfilledBy": "orchestrator",
     }
+    if schema == round_records.SEAT_RESULT_SCHEMA_V2:
+        envelope["provenance"] = round_records.PROVENANCE_ORCHESTRATOR_FULFILLED
+        envelope["envelopeSha256"] = round_records.envelope_sha256(payload, None)
+    return envelope
 
 
 def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt, config,
@@ -8963,6 +9010,10 @@ def build_parser():
                               help="expected pending round; when supplied, a mismatch refuses")
     cli_contract.add_argument(pr, "--phase", contract="free-text", default=None,
                               help="expected pending phase; when supplied, a mismatch refuses")
+    cli_contract.add_argument(pr, "--evidence-run-dir", contract="free-text", default=None,
+                              dest="evidence_run_dir",
+                              help="runner run directory whose journal supplies execution evidence "
+                                   "for a dispatch-observed landing under state schema v5")
 
     pm = sub.add_parser("record-missing")
     cli_contract.add_argument(pm, "--session-dir", contract="existing-directory", required=True)
@@ -9155,7 +9206,8 @@ def _dispatch(args):
         out = cmd_record_result(args.session_dir, args.seat, attempt=args.attempt,
                                 supersede=args.supersede, expect_sha256=args.expect_sha256,
                                 sweep=args.sweep, occurrence=args.occurrence,
-                                expect_round=args.round, expect_phase=args.phase)
+                                expect_round=args.round, expect_phase=args.phase,
+                                evidence_run_dir=args.evidence_run_dir)
     elif args.cmd == "record-missing":
         out = cmd_record_missing(args.session_dir, args.seat, args.attempt, args.reason,
                                  evidence_path=args.evidence, occurrence=args.occurrence,
