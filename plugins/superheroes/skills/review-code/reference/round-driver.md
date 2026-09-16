@@ -699,9 +699,12 @@ is the home for the driver-or-park valve.
 
 **Receipt (`round-receipt.json`).** Required keys (shape-checked by `validate_receipt`, fail-closed):
 
-- `schemaVersion` — `2`, `3` or `4` (`validate_receipt` accepts all). It is the **state's** version,
+- `schemaVersion` — `2`, `3`, `4`, or `5` (`validate_receipt` accepts all). It is the **state's** version,
   not a constant: a session bootstrapped at v2 still terminates to a v2 receipt, while a fresh session
-  (`STATE_SCHEMA_VERSION` = 4) emits 4.
+  (`STATE_SCHEMA_VERSION` = 5) emits 5. State v5 lands `seat-result/2` envelopes carrying `provenance`
+  (required) and `executionEvidence` (optional), bound together by `envelopeSha256`; sessions at v2–v4
+  continue to land `seat-result/1`. No stored state field is removed at the bump, so in-flight lanes
+  complete on their recorded version.
 - `verdict` — `converged`, `halted`, `held`, `stalled`, `cannot-certify`, `capped-with-open-critical`, …
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
