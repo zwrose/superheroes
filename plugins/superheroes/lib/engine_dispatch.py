@@ -396,9 +396,15 @@ def _canonical_spawn_argv(opened):
             "re-open the run with a fresh dispatch that persists resolvedInputs"
         )
     run_kind = opened.get("runKind", RUN_KIND_REVIEW)
-    role_kind = opened.get("roleKind")
-    if not isinstance(role_kind, str):
-        role_kind = RUN_KIND_REVIEW if run_kind == RUN_KIND_REVIEW else "build"
+    expected_role_kind = "build" if run_kind == RUN_KIND_WRITE else RUN_KIND_REVIEW
+    journal_role_kind = opened.get("roleKind")
+    if isinstance(journal_role_kind, str) and journal_role_kind != expected_role_kind:
+        return None, (
+            "spawn sandbox roleKind %r disagrees with runKind %r — only roleKind %r is "
+            "accepted for this run; re-open the run with a fresh dispatch"
+            % (journal_role_kind, run_kind, expected_role_kind)
+        )
+    role_kind = expected_role_kind
     cwd = opened.get("cwd")
     opts = {"cwd": cwd} if cwd else {}
     built = engine_adapter.build_argv_result(seat, role_kind, opts)

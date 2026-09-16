@@ -8768,6 +8768,29 @@ def test_wo10_edge3_supervise_folds_guard_refusal_terminal_unrunnable_no_retry(t
     assert not any(r.get("kind") == "attempt-started" and r.get("attempt") == 2 for r in records)
 
 
+def test_spawn_sandbox_role_kind_follows_run_kind_not_journal(tmp_path):
+    # axis: runKind review with journal roleKind build must not reach write-capable sandbox
+    run_dir = str(tmp_path / "spawn-sandbox-role-kind")
+    os.makedirs(run_dir, exist_ok=True)
+    seat = _codex_seat()
+    opened = {
+        "kind": "run-opened",
+        "runKind": ED.RUN_KIND_REVIEW,
+        "roleKind": "build",
+        "engine": "codex",
+        "argv": _codex_argv_for_run(seat, "review", run_dir),
+        "cwd": run_dir,
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    canonical, err = ED._canonical_spawn_argv(opened)
+    assert canonical is None
+    assert err is not None
+    assert "roleKind 'build'" in err
+    assert "runKind 'review'" in err
+    assert "only roleKind 'review' is accepted" in err
+    assert "workspace-write" not in err
+
+
 def test_wo10_edge4_corrupt_journal_spawn_guard_refusal_preserved(tmp_path):
     # axis: corrupt journal at spawn keeps the named refusal and guardRefusal disposition
     run_dir = str(tmp_path / "wo10-edge4")
