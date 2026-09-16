@@ -14,6 +14,8 @@
 
 - **axis:** probe without seat identity refuses before dispatch
 
+**prerequisite (red arm only):** create a git repository at `/r` so `repo-root-missing` does not mask the guarded refusal when the identity check is neutralized. **Unrunnable here** on the WO-4 dispatch host: `/` is read-only (`mkdir /r` → `Read-only file system`). Red arm recorded below without that prerequisite; failure is still via `repo-root-missing`, not the guarded `seat-identity-absent` path.
+
 **neutralization** (`plugins/superheroes/lib/seat_canary.py`, `_resolve_canary_identity`):
 ```python
     if False and (not isinstance(seat_key, str) or not seat_key.strip()):  # bite-proof neutralization
@@ -55,5 +57,5 @@ FAILED plugins/superheroes/lib/tests/test_seat_canary.py::test_probe_without_sea
 **raw green:**
 ```
 .                                                                        [100%]
-1 passed in 0.14s
+1 passed in 0.27s
 ```

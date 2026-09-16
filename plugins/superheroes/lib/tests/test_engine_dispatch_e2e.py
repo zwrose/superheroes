@@ -32,20 +32,20 @@ _REVIEW_ROLE = "reviewer"
 _WRITE_ROLE = "implementer"
 
 
-def _seat(vendor, model, effort):
-    return {"vendor": vendor, "model": model, "effort": effort}
+def _seat(vendor, model, effort, role=_REVIEW_ROLE):
+    return {"vendor": vendor, "model": model, "effort": effort, "role": role}
 
 
-def _seat_json(vendor, model, effort):
-    return json.dumps({"vendor": vendor, "model": model, "effort": effort})
+def _seat_json(vendor, model, effort, role=_REVIEW_ROLE):
+    return json.dumps({"vendor": vendor, "model": model, "effort": effort, "role": role})
 
 
 def _codex_seat(model="gpt-5.6-terra", effort="high"):
-    return _seat("codex", model, effort)
+    return _seat("codex", model, effort, _REVIEW_ROLE)
 
 
 def _cursor_seat(model="composer-2.5", effort=None):
-    return _seat("cursor", model, effort)
+    return _seat("cursor", model, effort, _WRITE_ROLE)
 
 
 _EA = importlib.util.spec_from_file_location(
@@ -224,7 +224,7 @@ def _poll_write_terminal(wt, run_dir, prompt_path, *, order_id="e2e-order", time
     last = None
     while time.monotonic() < deadline:
         last = ED.dispatch_write(
-            seat=_cursor_seat(), role=_WRITE_ROLE,
+            seat=_cursor_seat(),
             prompt_path=prompt_path, cwd=wt, run_dir=run_dir,
             order_id=order_id, timeout=60, retry_timeout=60,
         )
@@ -244,7 +244,7 @@ def _poll_review_terminal(repo_root, run_dir, prompt_path, *, timeout=120):
     last = None
     while time.monotonic() < deadline:
         last = ED.dispatch_review(
-            seat=_codex_seat(), role=_REVIEW_ROLE,
+            seat=_codex_seat(),
             prompt_path=prompt_path, repo_root=repo_root, run_dir=run_dir,
         )
         if last.get("terminal"):
@@ -432,7 +432,7 @@ def test_e2e_supervisor_rotation_survives(tmp_path, monkeypatch):
     )
 
     first = ED.dispatch_write(
-        seat=_cursor_seat(), role=_WRITE_ROLE,
+        seat=_cursor_seat(),
         prompt_path=prompt_path, cwd=wt, run_dir=run_dir,
         order_id="rotate-1", timeout=60, retry_timeout=60, max_wait=1,
     )
@@ -462,7 +462,7 @@ def test_e2e_exit_code_survives_supervisor(tmp_path, monkeypatch):
     )
 
     first = ED.dispatch_write(
-        seat=_cursor_seat(), role=_WRITE_ROLE,
+        seat=_cursor_seat(),
         prompt_path=prompt_path, cwd=wt, run_dir=run_dir,
         order_id="exit-1", timeout=60, retry_timeout=60, max_wait=1,
     )
@@ -504,7 +504,7 @@ def test_e2e_no_second_engine_pgroup_gate(tmp_path, monkeypatch):
     )
 
     first = ED.dispatch_write(
-        seat=_cursor_seat(), role=_WRITE_ROLE,
+        seat=_cursor_seat(),
         prompt_path=prompt_path, cwd=wt, run_dir=run_dir,
         order_id="pgroup-1", timeout=180, retry_timeout=180, max_wait=1,
     )
@@ -512,7 +512,7 @@ def test_e2e_no_second_engine_pgroup_gate(tmp_path, monkeypatch):
     assert _count_attempt_started(run_dir) == 1
 
     again = ED.dispatch_write(
-        seat=_cursor_seat(), role=_WRITE_ROLE,
+        seat=_cursor_seat(),
         prompt_path=prompt_path, cwd=wt, run_dir=run_dir,
         order_id="pgroup-1", timeout=180, retry_timeout=180, max_wait=1,
     )
@@ -539,7 +539,7 @@ def test_e2e_no_second_engine_pgroup_gate(tmp_path, monkeypatch):
     assert ED._process_group_alive(pgid), "engine pgroup must outlive run-child kill"
 
     again2 = ED.dispatch_write(
-        seat=_cursor_seat(), role=_WRITE_ROLE,
+        seat=_cursor_seat(),
         prompt_path=prompt_path, cwd=wt, run_dir=run_dir,
         order_id="pgroup-1", timeout=180, retry_timeout=180, max_wait=1,
     )
@@ -564,7 +564,7 @@ def test_e2e_lease_blocks_second_run_dir(tmp_path, monkeypatch):
     )
 
     res_a = ED.dispatch_write(
-        seat=_cursor_seat(), role=_WRITE_ROLE,
+        seat=_cursor_seat(),
         prompt_path=prompt_path, cwd=wt, run_dir=run_a,
         order_id="lease-a", timeout=180, retry_timeout=180, max_wait=1,
     )
@@ -572,7 +572,7 @@ def test_e2e_lease_blocks_second_run_dir(tmp_path, monkeypatch):
     assert os.path.exists(_lease_path(wt))
 
     res_b = ED.dispatch_write(
-        seat=_cursor_seat(), role=_WRITE_ROLE,
+        seat=_cursor_seat(),
         prompt_path=prompt_path, cwd=wt, run_dir=run_b,
         order_id="lease-b", timeout=180, retry_timeout=180,
     )
@@ -614,7 +614,7 @@ def test_e2e_lease_released_on_terminal(tmp_path, monkeypatch, scenario):
             stdout=_build_ok_stdout(), sleep_s=120,
         )
         ED.dispatch_write(
-            seat=_cursor_seat(), role=_WRITE_ROLE,
+            seat=_cursor_seat(),
             prompt_path=prompt_path, cwd=wt, run_dir=run_dir,
             order_id="lease-" + scenario, timeout=180, retry_timeout=180, max_wait=2,
         )
@@ -641,7 +641,7 @@ def test_e2e_lease_retained_on_non_terminal_slice(tmp_path, monkeypatch):
     )
 
     res = ED.dispatch_write(
-        seat=_cursor_seat(), role=_WRITE_ROLE,
+        seat=_cursor_seat(),
         prompt_path=prompt_path, cwd=wt, run_dir=run_dir,
         order_id="lease-running", timeout=180, retry_timeout=180, max_wait=1,
     )
@@ -664,7 +664,7 @@ def test_e2e_dispatch_poll_never_spawns(tmp_path, monkeypatch):
     _install_fake_engine(tmp_path, monkeypatch, "codex", stdout=_findings_stdout())
 
     opened = ED.dispatch_review(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(),
         prompt_path=prompt_path, repo_root=repo, run_dir=run_dir, max_wait=0,
     )
     assert opened["reason"] == "running"
@@ -723,7 +723,7 @@ def test_e2e_dispatch_abandon_order_and_idempotent(tmp_path, monkeypatch):
     )
 
     ED.dispatch_write(
-        seat=_cursor_seat(), role=_WRITE_ROLE,
+        seat=_cursor_seat(),
         prompt_path=prompt_path, cwd=wt, run_dir=run_dir,
         order_id="abandon-1", timeout=180, retry_timeout=180, max_wait=2,
     )
@@ -781,8 +781,7 @@ def test_e2e_caller_exit_pgroup_kill_engine_survives_reattaches(tmp_path, monkey
             stdout=_findings_stdout(), sleep_s=engine_sleep_s,
         )
         cli_args = [
-            "--seat", _seat_json("codex", "gpt-5.6-terra", "high"),
-            "--role", _REVIEW_ROLE,
+            "--seat", _seat_json("codex", "gpt-5.6-terra", "high", _REVIEW_ROLE),
             "--prompt-path", prompt_path, "--repo-root", repo,
             "--run-dir", run_dir, "--max-wait", max_wait_s,
             *timeout_args,
@@ -796,8 +795,7 @@ def test_e2e_caller_exit_pgroup_kill_engine_survives_reattaches(tmp_path, monkey
             stdout=_build_ok_stdout(), sleep_s=engine_sleep_s,
         )
         cli_args = [
-            "--seat", _seat_json("cursor", "composer-2.5", None),
-            "--role", _WRITE_ROLE,
+            "--seat", _seat_json("cursor", "composer-2.5", None, _WRITE_ROLE),
             "--prompt-path", prompt_path, "--cwd", wt,
             "--run-dir", run_dir, "--order-id", order_id,
             "--max-wait", max_wait_s,

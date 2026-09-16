@@ -524,7 +524,7 @@ def live_vendors_for_composition(
                 "reason": (
                     "reused liveness receipt (age %ds)"
                     % int(now - probed_at)
-                    + liveness_cache._cache_provenance_reason_suffix(probed_at, remaining)
+                    + liveness_cache.cache_provenance_reason_suffix(probed_at, remaining)
                 ),
             })
             liveness_cache.extend_notes_with_cache_provenance(dead_notes, rec, now)

@@ -36,8 +36,8 @@ _REVIEW_ROLE = "reviewer"
 _WRITE_ROLE = "implementer"
 
 
-def _seat_json(vendor, model, effort):
-    return json.dumps({"vendor": vendor, "model": model, "effort": effort})
+def _seat_json(vendor, model, effort, role=_REVIEW_ROLE):
+    return json.dumps({"vendor": vendor, "model": model, "effort": effort, "role": role})
 
 
 _CENSUS_MODULES = (
@@ -113,8 +113,7 @@ def test_dispatch_review_run_dir_symlink_refused_through_cli(tmp_path, capsys):
     prompt.write_text("review this", encoding="utf-8")
     rc = ED.main([
         "dispatch-review",
-        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
-        "--role", _REVIEW_ROLE,
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
         "--prompt-path", str(prompt),
         "--repo-root", str(repo),
         "--run-dir", str(symlink),
@@ -128,7 +127,7 @@ def test_dispatch_review_run_dir_symlink_refused_through_cli(tmp_path, capsys):
 def test_dispatch_review_main_forwards_mode_kwarg(tmp_path, monkeypatch, capsys):
     captured = {}
 
-    def fake_dispatch_review(seat=None, role=None, **kwargs):
+    def fake_dispatch_review(seat=None, **kwargs):
         captured.update(kwargs)
         return {
             "ok": False, "terminal": True, "reason": "unrunnable", "detail": "test",
@@ -142,8 +141,7 @@ def test_dispatch_review_main_forwards_mode_kwarg(tmp_path, monkeypatch, capsys)
     prompt.write_text("review this", encoding="utf-8")
     rc = ED.main([
         "dispatch-review",
-        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
-        "--role", _REVIEW_ROLE,
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
         "--prompt-path", str(prompt),
         "--repo-root", str(repo),
         "--mode", "brief-check",
@@ -154,14 +152,9 @@ def test_dispatch_review_main_forwards_mode_kwarg(tmp_path, monkeypatch, capsys)
 
 
 def test_role_rejects_valid_vendor_name():
-    with pytest.raises(SystemExit):
-        DG.build_parser().parse_args(
-            [
-                "check",
-                "--seat", _seat_json("cursor", "composer-2.5", None),
-                "--role", "claude",
-            ]
-        )
+    seat = _seat_json("cursor", "composer-2.5", None, "claude")
+    rc = DG.main(["check", "--seat", seat])
+    assert rc == 1
 
 
 def test_model_slot_rejects_valid_role_name():
@@ -174,8 +167,7 @@ def test_model_slot_accepts_unknown_registry_model():
     args = DG.build_parser().parse_args(
         [
             "check",
-            "--seat", _seat_json("cursor", unknown, None),
-            "--role", _WRITE_ROLE,
+            "--seat", _seat_json("cursor", unknown, None, _WRITE_ROLE),
         ]
     )
     assert json.loads(args.seat)["model"] == unknown
@@ -189,9 +181,7 @@ def test_dispatch_review_repo_root_omitted_refused_at_argparse(tmp_path):
             [
                 "dispatch-review",
                 "--seat",
-                _seat_json("codex", "gpt-5.6-sol", "high"),
-                "--role",
-                _REVIEW_ROLE,
+                _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
                 "--prompt-path",
                 str(prompt),
             ]
@@ -209,9 +199,7 @@ def test_dispatch_review_repo_root_not_a_git_repo_refused_at_argparse(tmp_path):
             [
                 "dispatch-review",
                 "--seat",
-                _seat_json("codex", "gpt-5.6-sol", "high"),
-                "--role",
-                _REVIEW_ROLE,
+                _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
                 "--prompt-path",
                 str(prompt),
                 "--repo-root",
@@ -232,9 +220,7 @@ def test_dispatch_write_run_dir_creatable_when_parent_exists(tmp_path):
         [
             "dispatch-write",
             "--seat",
-            _seat_json("cursor", "composer-2.5", None),
-            "--role",
-            _WRITE_ROLE,
+            _seat_json("cursor", "composer-2.5", None, _WRITE_ROLE),
             "--prompt-path",
             str(prompt),
             "--cwd",
@@ -257,9 +243,7 @@ def test_dispatch_write_run_dir_creatable_when_parent_missing(tmp_path):
         [
             "dispatch-write",
             "--seat",
-            _seat_json("cursor", "composer-2.5", None),
-            "--role",
-            _WRITE_ROLE,
+            _seat_json("cursor", "composer-2.5", None, _WRITE_ROLE),
             "--prompt-path",
             str(prompt),
             "--cwd",
@@ -281,9 +265,7 @@ def test_dispatch_review_run_dir_creatable_when_parent_missing(tmp_path):
         [
             "dispatch-review",
             "--seat",
-            _seat_json("codex", "gpt-5.6-sol", "high"),
-            "--role",
-            _REVIEW_ROLE,
+            _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
             "--prompt-path",
             str(prompt),
             "--repo-root",
@@ -309,9 +291,7 @@ def test_dispatch_write_run_dir_refused_when_nearest_ancestor_is_file(tmp_path):
             [
                 "dispatch-write",
                 "--seat",
-                _seat_json("cursor", "composer-2.5", None),
-                "--role",
-                _WRITE_ROLE,
+                _seat_json("cursor", "composer-2.5", None, _WRITE_ROLE),
                 "--prompt-path",
                 str(prompt),
                 "--cwd",
@@ -334,9 +314,7 @@ def test_run_dir_existing_file_refused(tmp_path):
             [
                 "dispatch-write",
                 "--seat",
-                _seat_json("cursor", "composer-2.5", None),
-                "--role",
-                _WRITE_ROLE,
+                _seat_json("cursor", "composer-2.5", None, _WRITE_ROLE),
                 "--prompt-path",
                 str(prompt),
                 "--cwd",
@@ -397,7 +375,6 @@ def test_census_reads_contract_from_parser_not_hand_list():
     assert write["run_dir"] == "creatable-path"
     assert review["repo_root"] == "repo-root"
     assert review["seat"] == write["seat"] == "free-text"
-    assert review["role"] == write["role"] == "role"
     assert review["mode"] == "choices:review,brief-check"
 
 
