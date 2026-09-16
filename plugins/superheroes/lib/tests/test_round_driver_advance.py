@@ -713,6 +713,7 @@ def test_record_result_refuses_when_no_phase_is_pending(tmp_path, adapters):
 def test_record_result_supersede_is_a_compare_and_swap(tmp_path, adapters):
     d = _session(tmp_path)
     first = _land_and_record(d, "code-reviewer")
+    assert "casToken" in first and first["casToken"]
     # a second ingest without --supersede is refused: the record is immutable
     _land(d, "code-reviewer", payload={"findings": ["x"]})
     assert RD.cmd_record_result(d, "code-reviewer")["reason"] == "store-exists"
@@ -722,8 +723,19 @@ def test_record_result_supersede_is_a_compare_and_swap(tmp_path, adapters):
                                 expect_sha256="dead")["reason"] == "cas-mismatch"
     # A/B: the CAS with the RIGHT expectation succeeds
     out = RD.cmd_record_result(d, "code-reviewer", supersede=True,
-                               expect_sha256=first["payloadSha256"])
+                               expect_sha256=first["casToken"])
     assert out["ok"] is True and out["superseded"] is True
+    assert "casToken" in out and out["casToken"]
+    stored, err = RR.read_json(out["storePath"])
+    assert err is None
+    assert out["casToken"] == RR.envelope_cas_token(stored)
+    # Round trip: the token a successful record hands back is the token that supersedes it.
+    _land(d, "code-reviewer", payload={"findings": ["round-trip"], "confidence": "high",
+                                       "seat": "code-reviewer",
+                                       "verificationReceipt": {"ran": True}})
+    round_trip = RD.cmd_record_result(d, "code-reviewer", supersede=True,
+                                      expect_sha256=out["casToken"])
+    assert round_trip["ok"] is True and round_trip["superseded"] is True
 
 
 def test_advance_after_supersede_does_not_journal_orphan(tmp_path, adapters):
@@ -731,12 +743,17 @@ def test_advance_after_supersede_does_not_journal_orphan(tmp_path, adapters):
     slot identity — the same pending phase must advance cleanly."""
     d = _session(tmp_path)
     first = _land_and_record(d, "code-reviewer")
+    assert "casToken" in first and first["casToken"]
     replacement = {"findings": ["replaced"], "confidence": "high", "seat": "code-reviewer",
                    "verificationReceipt": {"ran": True}}
     _land(d, "code-reviewer", payload=replacement)
     out = RD.cmd_record_result(d, "code-reviewer", supersede=True,
-                               expect_sha256=first["payloadSha256"])
+                               expect_sha256=first["casToken"])
     assert out["ok"] is True and out["superseded"] is True
+    assert "casToken" in out and out["casToken"]
+    stored, err = RR.read_json(out["storePath"])
+    assert err is None
+    assert out["casToken"] == RR.envelope_cas_token(stored)
     for seat in RD.DIMENSIONS:
         if seat == "code-reviewer":
             continue
@@ -996,7 +1013,7 @@ def test_record_result_sweep_supersede_refuses_by_name(tmp_path, adapters):
                                         "seat": "code-reviewer",
                                         "verificationReceipt": {"ran": True}})
     out = RD.cmd_record_result(d, sweep=True, supersede=True,
-                               expect_sha256=first["payloadSha256"])
+                               expect_sha256=first["casToken"])
     assert out["ok"] is False and out["reason"] == "sweep-supersede-unsupported"
 
 
@@ -3362,7 +3379,9 @@ def test_death_between_ingest_and_journal_append(tmp_path, adapters):
     # ingest WITHOUT the journal half — the kill lands between the two commits
     anchor = RD._orders_anchor(_state(d), d, 1, RD.P_PANEL, 0)
     ingested = RR.ingest_landing(d, 1, RD.P_PANEL, "test-reviewer", 0, current_attempt=0,
-                                 roster=list(RD.DIMENSIONS), anchor=anchor)
+                                 roster=list(RD.DIMENSIONS), anchor=anchor,
+                                 seat_result_schema=RR.seat_result_schema_for_state_version(
+                                     _state(d).get("schemaVersion")))
     assert ingested["ok"] is True
     before = open(ingested["storePath"], "rb").read()
     assert not [e for e in _outcomes(d, "recorded") if e["seat"] == "test-reviewer"]
