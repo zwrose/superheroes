@@ -674,11 +674,18 @@ def test_seam_a_record_ingest_replaces_landing_when_evidence_stamped(tmp_path, a
   assert "executionEvidence" in stored
   record, ev_err = ED.run_execution_record(run_dir)
   assert ev_err is None
-  evidence = {key: record[key] for key in RR.EXECUTION_EVIDENCE_FIELDS}
-  assembled = dict(_env)
-  assembled["executionEvidence"] = evidence
-  assembled["envelopeSha256"] = RR.envelope_sha256(assembled.get("payload"), evidence)
-  assert after == RR.canonical(assembled).encode("utf-8")
+  after_obj, after_err = RR.read_json(path)
+  assert after_err is None
+  assert set(after_obj) - set(_env) == {"executionEvidence", "payloadHashSource"}
+  assert set(_env) - set(after_obj) == set()
+  assert after_obj["executionEvidence"] == {
+      key: record[key] for key in RR.EXECUTION_EVIDENCE_FIELDS}
+  assert after_obj["envelopeSha256"] == RR.envelope_sha256(
+      after_obj["payload"], after_obj["executionEvidence"])
+  assert after_obj["payloadHashSource"] == "seat-declared"
+  for key, value in _env.items():
+    if key != "envelopeSha256":
+      assert after_obj[key] == value
 
 
 def test_seam_a_dispatch_observed_without_evidence_leaves_landing_bytes(tmp_path, adapters):
