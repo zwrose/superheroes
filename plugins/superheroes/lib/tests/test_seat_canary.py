@@ -48,7 +48,7 @@ def _seat(vendor, model, effort):
     return {"vendor": vendor, "model": model, "effort": effort}
 
 
-def _seat_config(vendor, model, effort, tier="reviewer"):
+def _seat_config(vendor, model, effort, tier="reviewer-deep"):
     return {"vendor": vendor, "model": model, "effort": effort, "tier": tier}
 
 
@@ -191,7 +191,7 @@ def test_vacuous_no_telemetry_not_engaged():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
@@ -213,7 +213,7 @@ def test_high_token_spend_alone_not_engaged():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
@@ -233,7 +233,7 @@ def test_wall_time_alone_not_engaged():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
@@ -260,7 +260,7 @@ def test_vacuous_with_investigation_still_engaged_path_alive():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is True
@@ -287,7 +287,7 @@ def test_vacuous_with_tool_calls_only_not_engaged():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
@@ -310,7 +310,7 @@ def test_finding_with_fast_wall_engaged():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch_finding,
     )
     assert out["engaged"] is True
@@ -349,7 +349,7 @@ def test_investigated_without_findings_engaged():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is True
@@ -366,7 +366,7 @@ def test_non_terminal_running_maps_to_non_terminal_slice():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["outcome"] == "unrunnable"
@@ -386,7 +386,7 @@ def test_unrunnable_attempts_zero_not_engaged_despite_telemetry():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
@@ -400,7 +400,7 @@ def test_dispatch_raises_becomes_unrunnable_no_escape():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["outcome"] == "unrunnable"
@@ -420,7 +420,7 @@ def test_no_residue_and_repo_untouched(tmp_path):
 
     SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root=repo, dispatch=dispatch,
     )
     assert marker.read_text(encoding="utf-8") == "keep-me"
@@ -443,7 +443,7 @@ def test_dispatch_receives_fixture_prompt_and_repo_root(tmp_path):
 
     SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root=repo, dispatch=dispatch,
     )
     assert seen["repo_root"] == repo
@@ -465,7 +465,7 @@ def test_run_canary_pins_findings_expected_result_kind(tmp_path):
 
     SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root=repo, dispatch=dispatch,
     )
     assert seen.get("expected_result_kind") == "findings"
@@ -481,11 +481,11 @@ def test_run_canary_default_dispatch_uses_seat_and_role(tmp_path):
 
     SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root=repo, dispatch=dispatch,
     )
     assert seen["seat"] == {
-        "vendor": "codex", "model": "gpt-5.6-terra", "effort": "high", "role": "reviewer",
+        "vendor": "codex", "model": "gpt-5.6-sol", "effort": "xhigh", "role": "reviewer-deep",
     }
     assert "role" not in seen
     assert "engine" not in seen
@@ -539,7 +539,7 @@ def test_detected_plant_does_not_drive_engaged():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
@@ -570,7 +570,7 @@ def test_probe_passes_sanitized_view_from_dispatch(tmp_path):
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root=repo, dispatch=dispatch,
     )
     assert out["sanitizedView"] == block
@@ -607,7 +607,7 @@ def test_probe_passes_sanitized_view_on_vacuous_dispatch(tmp_path):
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root=repo, dispatch=dispatch,
     )
     assert out["sanitizedView"] == block
@@ -625,7 +625,7 @@ def test_probe_sanitized_view_absent_when_dispatch_unrunnable(tmp_path):
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out.get("sanitizedView") is None
@@ -641,7 +641,7 @@ def test_dispatch_exception_still_cleans_temp_file(tmp_path):
 
     SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root=repo, dispatch=dispatch,
     )
     assert created
@@ -729,7 +729,7 @@ def test_dod_row1_field_recurrence_specimen_not_engaged():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
@@ -747,7 +747,7 @@ def test_dod_row2_engaged_dispatch_plant_undetected_when_marker_missing():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is True
@@ -843,7 +843,7 @@ def test_detected_plant_names_verify_submission_naturally():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["detectedPlant"] is True
@@ -866,7 +866,7 @@ def test_check_receipt_echo_no_longer_scores_detection():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["detectedPlant"] is False
@@ -1002,7 +1002,7 @@ def test_run_canary_engaged_artifact_not_engaged():
 
     out = SC.run_canary(
         "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high"),
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
         repo_root="/r", dispatch=dispatch,
     )
     assert out["outcome"] == "forfeit-with-engaged-artifact"
@@ -1049,8 +1049,8 @@ def test_codex_reviewer_and_reviewer_deep_resolve_independently():
         return _base_dispatch_result()
 
     SC.run_canary(
-        "code-reviewer",
-        _seat_config("codex", "gpt-5.6-terra", "high", "reviewer"),
+        "grounding-seat",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh", "reviewer"),
         repo_root="/r", dispatch=dispatch,
     )
     SC.run_canary(
@@ -1061,3 +1061,15 @@ def test_codex_reviewer_and_reviewer_deep_resolve_independently():
     assert seen[0]["role"] == "reviewer"
     assert seen[1]["role"] == "reviewer-deep"
     assert seen[0] != seen[1]
+
+
+def test_grounding_seat_rejects_mismatched_tier():
+    # axis: seat key tier binding — grounding-seat requires reviewer, not reviewer-deep
+    out = SC.run_canary(
+        "grounding-seat",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh", "reviewer-deep"),
+        repo_root="/r",
+    )
+    assert out["outcome"] == "unrunnable"
+    assert "requires tier 'reviewer'" in out["detail"]
+    assert "tier: 'reviewer'" in out["detail"]

@@ -352,7 +352,6 @@ def _entry_allowlist_refusal(
         "attempts": 0,
         "forfeited": False,
         "terminal": True,
-        "runOpened": False,
     }
     if mode is not None:
         result["mode"] = mode
@@ -3858,6 +3857,7 @@ def dispatch_review(*args, seat=None, prompt_path=None,
                     repo_root=repo_root,
                     engine=allowlist_verdict.get("vendor"),
                     role=allowlist_verdict.get("role"),
+                    run_dir=run_dir or "",
                     mode=mode or sanitized_view.MODE_REVIEW,
                 )
                 if entry_refusal is not None:
@@ -4337,10 +4337,10 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                     repo_root=None,
                     engine=allowlist_verdict.get("vendor"),
                     role=allowlist_verdict.get("role"),
+                    run_dir=run_dir or "",
                     run_kind=RUN_KIND_WRITE,
                 )
                 if entry_refusal is not None:
-                    entry_refusal["runOpened"] = False
                     return entry_refusal
             refusal = _seat_dispatch_refusal(resolved)
             refusal["runOpened"] = False

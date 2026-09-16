@@ -8920,6 +8920,34 @@ def test_g1_refusal_leaves_no_opened_run(tmp_path):
     assert not any(r.get("kind") == "run-opened" for r in records)
 
 
+def test_entry_allowlist_refusal_preserves_existing_run_provenance(tmp_path):
+    # axis: G1 refusal on continuation echoes journal provenance from active run
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "active-run")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(model=_OFF_ALLOWLIST_CODEX),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    _assert_allowlist_refusal(res, run_opened=True)
+    assert res["resolvedInputs"] == snapshot_before
+
+
 def test_old_head_continuation_preserves_caller_role_source(tmp_path):
     # axis: opened runs with roleSource caller survive continuation through the chokepoint
     run_dir = str(tmp_path / "old-head-cont")

@@ -19,6 +19,7 @@ import engine_dispatch  # noqa: E402
 import model_registry  # noqa: E402
 import review_findings_schema  # noqa: E402
 import seat_bundle  # noqa: E402
+import seat_map  # noqa: E402
 
 PLANT_MARKER = "verify_submission"
 
@@ -85,6 +86,22 @@ def _resolve_canary_identity(seat_key, seat_config):
         return _identity_refusal(
             "unknown-tier",
             "tier %r is not a registry role; valid roles: %s" % (tier, valid),
+        )
+    seat_name = seat_key.strip()
+    if seat_name not in seat_map.PANEL_ROSTER:
+        valid = ", ".join(sorted(seat_map.PANEL_ROSTER))
+        return _identity_refusal(
+            "unknown-seat-key",
+            "seat key %r is not a panel seat; accepted seat keys: %s"
+            % (seat_name, valid),
+        )
+    canonical_tier = seat_map.DEFAULT_TIER_BY_SEAT.get(seat_name)
+    if tier != canonical_tier:
+        return _identity_refusal(
+            "seat-tier-mismatch",
+            "seat key %r requires tier %r (registry role); accepted canonical "
+            "seat-bundle shape is {vendor, model, effort, tier: %r}"
+            % (seat_name, canonical_tier, canonical_tier),
         )
     vendor = seat_config.get("vendor")
     model = seat_config.get("model")
