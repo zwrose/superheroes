@@ -3,7 +3,7 @@
 The eight enumerated checks the advisor runs before launching a builder session. Read them at dispatch time.
 
 <!-- launch-doctrine:preflight-charter:begin -->
-   1. **Account and quota headroom** (`quota`, always) — a mid-batch weekly-limit death killed a launch outright.
+   1. **Account headroom — not measured; records pass on the auth exercise only** (`quota`, always) — does not verify headroom; pass marks a successful auth exercise.
    2. **Engine and CLI authentication** (`engine-auth`, always) — relaunch practice, not policy, until this makes it policy.
    3. **Base state matches the premise** (`base-state`, always) — merged, green (stale-retarget premise; stacked-base
       collapses).

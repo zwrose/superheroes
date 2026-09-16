@@ -10,7 +10,7 @@ does not run.
 This module is the effectful counterpart to engine_adapter's pure core: it composes build_argv +
 parse_result + prompt_path_ok, spawns the engine in its own process group with a bounded timeout,
 emits liveness heartbeats, detects terminal forfeit (timeout OR unreadable parse), and retries ONCE
-tight-inline before forfeiting to the caller (which falls open to Claude). Review dispatches
+tight-inline before forfeiting to the caller (which falls open to the host model). Review dispatches
 prepend the anti-hijack preamble. The supervisor journal (outside the run directory) is the
 decision record — spawn, retry, fold, and abandon transitions consult journal state, not engine
 output. Engine writes to the build worktree are the deliverable; engine stdout/stderr and any
@@ -118,7 +118,7 @@ HEARTBEAT_INTERVAL = 10     # DoD 4: seconds between liveness heartbeats (time-b
 _STDERR_TAIL = 4096
 MAX_STDOUT_CAPTURE = 8 * 1024 * 1024   # keep only the last 8 MB of engine stdout — the result JSON
 # is at the TAIL (parse_result reads the tail), and an unbounded read would let a runaway engine OOM
-# the runner before it can return the structured forfeit that triggers the Claude fall-open (#563).
+# the runner before it can return the structured forfeit that triggers the host-model fall-open (#563).
 MAX_STDERR_CAPTURE = 64 * 1024
 
 MODE_REFUSAL_INVALID = "mode-invalid"
@@ -2912,7 +2912,7 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
             "disclosure": (
                 "%s reviewer returned no findings and no verifiable investigation "
                 "record twice (vacuous forfeit — a seat that proved nothing is a seat "
-                "that never ran); fall open to a Claude reviewer and disclose the "
+                "that never ran); fall open to a reviewer on the host model and disclose the "
                 "degraded vendor mix" % engine
             ),
         }
@@ -2927,7 +2927,7 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
         "forfeited": True,
         "disclosure": (
             "%s reviewer forfeited twice (timeout or unreadable); "
-            "fall open to a Claude reviewer and disclose the degraded vendor mix" % engine
+            "fall open to a reviewer on the host model and disclose the degraded vendor mix" % engine
         ),
         "engagement": engagement,
     }
@@ -3422,7 +3422,7 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
-    caller always sees JSON and can fall open to Claude."""
+    caller always sees JSON and can fall open to the host model."""
     resolved = {"mode": None}
     try:
         if mode is not None:

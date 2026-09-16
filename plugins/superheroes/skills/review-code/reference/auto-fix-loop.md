@@ -69,8 +69,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **corroborating evidence only** and can never satisfy that investigation floor. The parser also
 > **tolerates a bare top-level array** `[...]` of finding objects as of #196, but anything else
 > (prose with no parseable JSON object/array, an empty stream, an array of non-objects) parses as
-> `unreadable`, which forfeits the slot to a Claude re-run (UFR-7) and silently doubles the round's
-> cost.
+> `unreadable`, which forfeits the slot to a re-run on the host model (UFR-7) and silently doubles the
+> round's cost.
 
 > **Reviewer-seat dispatch runs through the dispatch RUNNER (#563 DoD 2/4) — reviewer role ONLY.**
 > When `$REVIEWER_ENGINE` is `codex` or `cursor`, dispatch each read-only reviewer seat through
@@ -88,7 +88,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > attempt ended vacuous — e.g. attempt 1 timing out and attempt 2 coming back vacuous still yields
 > `vacuous`, not only a double vacuous forfeit; or `reason: "forfeit-with-engaged-artifact"` when
 > stdout was engaged but our transport could not grade it — still a forfeit, the seat does not count
-> toward the panel, and the loop's behaviour is unchanged). A forfeit → the seat falls open to a Claude re-run (UFR-7) and the
+> toward the panel, and the loop's behaviour is unchanged). A forfeit → the seat falls open to a re-run on the host model (UFR-7) and the
 > orchestrator **discloses** the degraded vendor mix (the `disclosure` string); making that fall-open
 > loud by machinery in the receipt is #563 PR C.
 >
@@ -192,7 +192,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `run-dir-mode-mismatch` | continuation with an explicitly disagreeing `--mode` |
 >
 > **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
-> the investigation floor and forfeits vacuously — fail-safe (the seat falls open to Claude), never a
+> the investigation floor and forfeits vacuously — fail-safe (the seat falls open to the host model), never a
 > false clean.
 >
 > **#685 CLI `parse-result` echo gap.** The CLI `parse-result --role review` path does not receive the
@@ -463,8 +463,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `wait` forever (a hang is **not** fail-open — CONVENTIONS `§7.5`). You do **not** compose a
 > per-dispatch watchdog. What this file owns is the **expiry contract**: treat a killed/timed-out
 > dispatch as an **expired slot** — its stdout is absent or partial, so `engine_adapter.parse_result`
-> returns `unreadable`. A timed-out **reviewer** then takes the existing UFR-7 re-run-on-Claude path;
-> a timed-out **fixer** commits no external write and the fix falls open to Claude. A hang becomes a
+> returns `unreadable`. A timed-out **reviewer** then takes the existing UFR-7 re-run-on-the-host-model path;
+> a timed-out **fixer** commits no external write and the fix falls open to the host model. A hang becomes a
 > bounded cost, never a stuck loop.
 >
 > **Settled dispatch contract (issue #865).** The reconciliation between this skill's dispatch

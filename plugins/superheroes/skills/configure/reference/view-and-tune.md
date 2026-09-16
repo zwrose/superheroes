@@ -116,7 +116,7 @@ action that owns it, leaving the rest of the calibration untouched:
   `skills/configure/reference/set-up.md` §4.5 (availability → preference → show-authorization → test-dispatch),
   writing `enginePreferences` through `core_md` (keys `reviewer`, `implementation`, `briefCheck`,
   `pilot`). Set a role back to `claude` (or clear it) to fall fully open — **except `briefCheck`**,
-  which falls open to **codex** (the cross-vendor default; a Claude brief-check is a disclosed
+  which falls open to **codex** (the cross-vendor default; a brief-check on the host model is a disclosed
   degradation running at opus, one tier up from the implementer).
 - **Change the per-role model tier** (reviewer/reviewer-deep/verifier/mechanical/synthesis/code-fixer/doc-reviser/
   implementer/pilot) → show the effective map first, then write only the `## Model tiers` block in
