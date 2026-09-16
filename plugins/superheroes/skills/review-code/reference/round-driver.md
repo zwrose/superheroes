@@ -729,7 +729,7 @@ receipt round `"0"`.
 
 | Round field | Set when | `degraded` line |
 | --- | --- | --- |
-| `fellOpen` | A `run` seat's `ranManifest` vendor differs from the seat map's configured vendor (cross-vendor seat fell open to Claude). | `reviewer-fell-open (round N): …` |
+| `fellOpen` | A `run` seat's `ranManifest` vendor differs from the seat map's configured vendor (cross-vendor seat fell open to **the host model** — whatever runs the current session, read from the hook payload, never assumed). | `reviewer-fell-open (round N): …` |
 | `fellOpenProvenanceMissing` | A cross-vendor seat ran but has no trusted `ranManifest` entry. | `reviewer-fell-open-provenance-unavailable (round N): …` |
 | `seatMapUnavailable` | No `seatMap` was submitted while the panel ran (live panel-vendor pool recorded; never empty — `["unknown"]` when unknowable). | `reviewer-fell-open-seatmap-unavailable (round N): …` |
 | `seatMapUnjudgeable` | A seat map was submitted and is readable, but its violation basis is incomplete (basis literal(s) recorded). | `seat-map-unjudgeable (round N): …` (terminal `degraded`; `shapeDrivers` includes `seat-map-unavailable` and certification shape uses `-degraded`, not a third suffix) |
