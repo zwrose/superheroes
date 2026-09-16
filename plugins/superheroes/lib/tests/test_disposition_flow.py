@@ -116,9 +116,8 @@ def _normalize_prose(text):
 def _assert_append_before_propose_ordering(text):
     normalized = _normalize_prose(text)
     if not re.search(
-        r"append(?:ed)?\b.*?before\b.*?proposed",
+        r"append(?:ed)?\b[^.]*?before\b[^.]*?proposed",
         normalized,
-        re.DOTALL,
     ):
         raise AssertionError(
             "%s: append-before-propose ordering missing"
@@ -408,6 +407,21 @@ def test_negative_discuss_open_append_before_propose_reflowed_passes():
         _OWNER_DECISIONS: "\n".join(_PINNED_OWNER_DECISIONS_HEADINGS),
     }
     _assert_discuss_open_holder_pins(texts)
+
+
+def test_negative_discuss_open_inverted_append_before_propose():
+    texts = {
+        _DISCUSS_OPEN: (
+            "See %s. Every owner call is appended to the collector "
+            "after it is proposed in this session's delivery message."
+            % _OWNER_DECISIONS
+        ),
+        _OWNER_DECISIONS: "\n".join(_PINNED_OWNER_DECISIONS_HEADINGS),
+    }
+    _expect_assertion_error(
+        lambda: _assert_discuss_open_holder_pins(texts),
+        match="append-before-propose ordering missing",
+    )
 
 
 def test_negative_registry_marker_outside_home():

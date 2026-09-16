@@ -468,8 +468,9 @@ above).
      construction; owner attendance governs only when discussion happens — attended, the item is
      proposed in the vet-delivery message and may be struck minutes after it was appended; absent,
      it awaits the batch. This replaces the previous availability-branching rule. Each append
-     carries its gate verdict and its venue recommendation, so the owner's batch is one word per
-     item. Read attendance from whether the owner is actually reachable here, never inferred from who
+     carries its door grading for a machinery item — the band, the evidence tier, and the resulting
+     tier the front door recorded — and its venue recommendation, so the owner's batch is one word
+     per item. Read attendance from whether the owner is actually reachable here, never inferred from who
      launched the advisor (duty 9's three states are independent axes, not a proxy for absence) —
      attendance governs **discussion**, not appending:
      - **Attended** — the owner is here now and the vet-delivery message reaches them in this session.

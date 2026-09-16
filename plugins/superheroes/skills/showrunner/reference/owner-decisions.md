@@ -203,8 +203,9 @@ declined with a trigger by default.
    own filled-or-`None` convention. The same line rides the durable record of any field-report
    processing or incident response — so a quiet log is visibly claimed quiet by each observing act
    rather than silently unappended, and the advisor's sole-appender role is auditable from the
-   receipts. **This file states the obligation; `skills/showrunner/reference/vet-receipt.md` carries
-   the field.** **The gardening record**, not the vet receipt, is where the window's appends are
+   receipts. **This file states the obligation; the owner of
+   `skills/showrunner/reference/vet-receipt.md` must land the field on that receipt per its own
+   contract.** **The gardening record**, not the vet receipt, is where the window's appends are
    accounted for.
 4. **A mis-tiered finding re-scores the item itself** at the same gardening pass. The grid re-runs
    with corrected inputs, alongside any recalibration of the instruments. Recalibrations reach the
@@ -217,8 +218,9 @@ declined with a trigger by default.
    durable comment on the collector at each pass.
 7. **The lane is a recorded field — the routing record and every vet receipt name the lane the work
    ran in, full, light, or micro,** so the receipt corpus can be read by lane. **This file states
-   the obligation; `skills/showrunner/reference/vet-receipt.md` carries the field.** **The grading
-   record does not carry it**, because no lane exists at intake.
+   the obligation; the owner of `skills/showrunner/reference/vet-receipt.md` must land the field on
+   that receipt per its own contract.** **The grading record does not carry it**, because no lane
+   exists at intake.
 
 ## The declined registry and its triggers
 
