@@ -8390,13 +8390,14 @@ def test_run_execution_record_codex_engaged_by_investigated_paths(tmp_path):
     """Round-trip: codex empty payload with accepted investigated paths stamps engaged."""
     run_dir = str(tmp_path / "codex-engaged-investigated")
     rel = "src/main.py"
-    repo_root, view = _execution_record_completed_attempt(
-        tmp_path, run_dir, stdout=json.dumps({"findings": [], "investigated": [rel]}),
-    )
-    real_file = os.path.join(view["path"], rel)
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, rel)
     os.makedirs(os.path.dirname(real_file), exist_ok=True)
     with open(real_file, "w", encoding="utf-8") as fh:
         fh.write("# main\n")
+    _execution_record_completed_attempt(
+        tmp_path, run_dir, stdout=json.dumps({"findings": [], "investigated": [rel]}),
+    )
     record, error = ED.run_execution_record(run_dir)
     assert error is None
     assert isinstance(record, dict)
