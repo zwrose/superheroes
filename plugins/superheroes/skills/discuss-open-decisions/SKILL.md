@@ -44,11 +44,11 @@ Read the collector before searching parks — it is authoritative and may alread
 
 Apply `## The filter — what is the owner's, and on what grounds`; present filtered items per that section before batch 1.
 
-For each Tier-2 item that will be delivered in batch 1 or batch 2, apply `## The worth-it gate and the venue ladder` and append it to the collector immediately, **before** it is proposed in this session's delivery message. This skill is owner-present by construction; the canonical append-always rule lives in `skills/showrunner/reference/owner-decisions.md`, and this skill applies it at delivery time rather than at vet time.
+For each owner call that will be delivered in batch 1 or batch 2, grade it through `## The front door`, disposition it per `## Folding backlog items in`, and append it to the collector immediately, **before** it is proposed in this session's delivery message. This skill is owner-present by construction; the canonical append-always rule lives in `skills/showrunner/reference/owner-decisions.md`, and this skill applies it at delivery time rather than at vet time.
 
 ## Step 4 — Deliver batch 1
 
-Each batch-1 item has already passed the worth-it gate and been appended per Step 3.
+Each batch-1 item has already cleared the front door and been appended per Step 3.
 
 Deliver per `## Delivery mechanics`, `## The per-item spine`, and `## Formatting — one block per spine section`; write the numbered batch-1 list to a durable artifact now — the collector entry where the item has one, otherwise a durable note on the issue or PR it belongs to — and resume from that record, not session memory.
 
@@ -64,7 +64,7 @@ Partial batch-1 answers still block batch-1 execution for the items left unanswe
 
 ## Step 6 — Deliver batch 2
 
-Deliver batch 2 as soon as batch-1 rulings land — batch-1 execution runs alongside batch-2 rulings, not ahead of them. Each batch-2 item passes the worth-it gate and is appended per Step 3 immediately before it is added to the durable numbered list and presented — per `## Delivery mechanics`, `## The per-item spine`, and `## Formatting — one block per spine section`.
+Deliver batch 2 as soon as batch-1 rulings land — batch-1 execution runs alongside batch-2 rulings, not ahead of them. Each batch-2 item clears the front door and is appended per Step 3 immediately before it is added to the durable numbered list and presented — per `## Delivery mechanics`, `## The per-item spine`, and `## Formatting — one block per spine section`.
 
 ## Step 7 — Execute and close
 
@@ -85,4 +85,4 @@ When a batch-2 ruling closes or declines a collector-backed item, strike it from
 | "The contract is long — I'll work from what I remember" | Step 1 reads the file every invocation. |
 | "I'll deliver batch 2 after execution finishes" | see `## Delivery mechanics` |
 | "The numbers live in the chat — I'll remember" | see Step 4 |
-| "I'll append follow-ups to the collector — the owner can review them later" | see `## The worth-it gate and the venue ladder`, showrunner duty 4, and `skills/showrunner/reference/owner-decisions.md` — every Tier-2 item is appended **before** it is proposed in this session's delivery message and discussed now. |
+| "I'll append follow-ups to the collector — the owner can review them later" | see `## The tiers and the P2 carve-out`, showrunner duty 4, and `skills/showrunner/reference/owner-decisions.md` — every owner call is appended **before** it is proposed in this session's delivery message and discussed now. |

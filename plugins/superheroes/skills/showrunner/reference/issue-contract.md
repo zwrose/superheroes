@@ -157,7 +157,7 @@ A routed issue that carries the four is gradable at vet without asking anyone wh
 The [priority tiers](../../../rubric/glossary.md#priority-tiers) entry defines the tiers. This
 section carries what each tier **commits to**. The front door's grading rules, the grid that
 produces a tier, and the P2 carve-out live in
-[`owner-decisions.md`](owner-decisions.md). Write none of them here.
+[`owner-decisions.md`](owner-decisions.md).
 
 - **P0, next wave.** Requires the ladder's top band **by citation** together with field evidence,
   or the **owner's explicit override**. The override is the owner's own act and **nobody else may
@@ -183,8 +183,8 @@ its roadmap, and a project extends it rather than minting a second one.
    **stack or layer design** (one concern per layer, merged bottom-up, using the project's
    sanctioned stacking tool) or a **recorded reason a single pull request is right**. The estimate is
    a routing estimate, never a measurement.
-2. **This is a mandatory consideration with a durable trace, never a mandatory split.** State that
-   plainly, because the failure mode is reading it as a split rule.
+2. **This is a mandatory consideration with a durable trace, never a mandatory split.** A reader who
+   takes this for a split rule has misread it.
 3. **The stacking tool is a project configuration item**; its home is the
    [configure profile](../../configure/SKILL.md). Name no specific tool.
 4. Mid-build growth is covered by the existing tripwire at twice the brief's estimate, which lives in
@@ -225,9 +225,8 @@ those labels **by hand**.
 two labels and its own dial value. The labels are created in a consuming project's repository at
 calibration; see [`../../configure/reference/set-up.md`](../../configure/reference/set-up.md).
 
-Everywhere the [dial](../../../rubric/glossary.md#dial), N, and the
-[machinery lane](../../../rubric/glossary.md#machinery-lane) read the word "machinery", this is the
-definition they read.
+Everywhere the [dial](../../../rubric/glossary.md#dial), N, and the forward share read the word
+"machinery", this is the definition they read.
 
 ## Craft calls, owner calls, and the material-consequence line
 
