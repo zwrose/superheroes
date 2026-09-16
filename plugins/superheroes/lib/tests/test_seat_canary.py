@@ -1072,15 +1072,18 @@ def test_codex_reviewer_and_reviewer_deep_resolve_independently():
 
 
 def test_grounding_seat_rejects_mismatched_tier():
-    # axis: seat key tier binding — grounding-seat requires reviewer, not reviewer-deep
-    out = SC.run_canary(
-        "grounding-seat",
-        _seat_config("codex", "gpt-5.6-sol", "xhigh", "reviewer-deep"),
-        repo_root="/r",
-    )
+    # axis: seat key tier binding — grounding-seat refuses tiers outside seat_map's accepted set
+    SM = _load_seat_map()
+    foreign_tier = "verifier"
+    assert foreign_tier not in SM.accepted_tiers_for_seat("grounding-seat")
+    cfg = _seat_config("codex", "gpt-5.6-sol", "xhigh", foreign_tier)
+    resolved = SC._resolve_canary_identity("grounding-seat", cfg)
+    assert resolved.get("reason") == "seat-tier-mismatch"
+    out = SC.run_canary("grounding-seat", cfg, repo_root="/r")
     assert out["outcome"] == "unrunnable"
-    assert "requires tier 'reviewer'" in out["detail"]
-    assert "tier: 'reviewer'" in out["detail"]
+    assert "accepted tiers:" in out["detail"]
+    assert "reviewer" in out["detail"]
+    assert "reviewer-deep" in out["detail"]
 
 
 def test_sm2_1269_backfilled_tier_probes_not_refuses():
@@ -1136,16 +1139,31 @@ def test_sm4_1269_grounding_backfill_reviewer_deep_probes():
 
 def test_sm2_1269_grounding_refuses_reviewer_deep():
     # axis: tier seat_map cannot emit for grounding-seat refuses naming accepted tiers
-    out = SC.run_canary(
-        "grounding-seat",
-        _seat_config("codex", "gpt-5.6-sol", "xhigh", "reviewer-deep"),
-        repo_root="/r",
-    )
+    SM = _load_seat_map()
+    foreign_tier = "implementer"
+    assert foreign_tier not in SM.accepted_tiers_for_seat("grounding-seat")
+    cfg = _seat_config("codex", "gpt-5.6-sol", "xhigh", foreign_tier)
+    resolved = SC._resolve_canary_identity("grounding-seat", cfg)
+    assert resolved.get("reason") == "seat-tier-mismatch"
+    out = SC.run_canary("grounding-seat", cfg, repo_root="/r")
     assert out["outcome"] == "unrunnable"
-    assert (
-        "requires tier 'reviewer'" in out["detail"]
-        or "accepted tiers: reviewer" in out["detail"]
-    )
+    assert "accepted tiers:" in out["detail"]
+    assert foreign_tier in out["detail"]
+
+
+def test_sm5_1269_grounding_reviewer_deep_passes_tier_check():
+    # axis: reviewer-deep passes the tier check for grounding-seat (claude fallback can emit it)
+    SM = _load_seat_map()
+    assert "reviewer-deep" in SM.accepted_tiers_for_seat("grounding-seat")
+    tier_cfg = _seat_config("codex", "gpt-5.6-sol", "xhigh", "reviewer-deep")
+    resolved = SC._resolve_canary_identity("grounding-seat", tier_cfg)
+    assert resolved.get("reason") != "seat-tier-mismatch"
+    assert resolved.get("ok") is True
+    # Whether claude fallback ought to upgrade a seat above its configured tier is seat_map selection behaviour — out of scope; canary accepts what build emits.
+    claude_cfg = _seat_config("claude", "opus-5", "xhigh", "reviewer-deep")
+    out = SC.run_canary("grounding-seat", claude_cfg, repo_root="/r")
+    assert out["outcome"] == "unrunnable"
+    assert "seat-tier-mismatch" not in out["detail"]
 
 
 def test_sm2_1269_tier_override_below_default_resolves():
