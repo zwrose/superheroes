@@ -309,6 +309,11 @@ def _allowed_efforts(vendor: str, model_id: str) -> tuple[str, ...] | None:
     return _EFFORT_ENUM.get(vendor, ())
 
 
+def allowed_efforts(vendor: str, model_id: str) -> tuple[str, ...] | None:
+    """Public accessor for per-model effort constraints."""
+    return _allowed_efforts(vendor, model_id)
+
+
 def dispatch_token(vendor: str, model_id: str, effort: str | None = None) -> str | None:
     if not is_registered(vendor, model_id):
         return None

@@ -247,6 +247,11 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write("dispatch_entry_doc error: %s\n" % exc)
         return 1
     if argv and argv[0] == "--check":
+        if not os.path.isfile(out_path):
+            sys.stderr.write(
+                "dispatch_entry_doc error: %s is missing — run the generator\n" % out_path
+            )
+            return 1
         with open(out_path, encoding="utf-8") as fh:
             committed = fh.read()
         if committed != text:

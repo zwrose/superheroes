@@ -48,8 +48,15 @@ def _model_flag_index(engine):
     return "-m" if engine == "codex" else "--model"
 
 
-def _seat(vendor, model_id, effort):
-    return {"vendor": vendor, "model": model_id, "effort": effort, "ok": True, "source": "json"}
+def _seat(vendor, model_id, effort, role="reviewer"):
+    return {
+        "vendor": vendor,
+        "model": model_id,
+        "effort": effort,
+        "role": role,
+        "ok": True,
+        "source": "json",
+    }
 
 
 def _assert_build_argv_invariant(vendor, role_kind, model_id, effort, failures, checked, where_base):
@@ -382,8 +389,13 @@ def _leg_cli(failures, checked):
             "cli composer no effort",
             [
                 "--seat",
-                json.dumps({"vendor": "cursor", "model": "composer-2.5", "effort": None}),
-                "--role",
+                json.dumps({
+                    "vendor": "cursor",
+                    "model": "composer-2.5",
+                    "effort": None,
+                    "role": "implementer",
+                }),
+                "--run-kind",
                 "build",
             ],
             True,
@@ -392,27 +404,35 @@ def _leg_cli(failures, checked):
             "cli grok by registry id",
             [
                 "--seat",
-                json.dumps(
-                    {"vendor": "cursor", "model": "cursor-grok-4.6", "effort": "xhigh"}
-                ),
-                "--role",
+                json.dumps({
+                    "vendor": "cursor",
+                    "model": "cursor-grok-4.6",
+                    "effort": "xhigh",
+                    "role": "reviewer-deep",
+                }),
+                "--run-kind",
                 "review",
             ],
             True,
         ),
         (
-            "cli grok by composed token",
+            "cli grok by composed token in model field",
             [
                 "--seat",
-                "cursor:cursor-grok-4.6-xhigh",
-                "--role",
+                json.dumps({
+                    "vendor": "cursor",
+                    "model": "cursor-grok-4.6-xhigh",
+                    "effort": None,
+                    "role": "reviewer-deep",
+                }),
+                "--run-kind",
                 "review",
             ],
             True,
         ),
         (
             "cli dropped engine flag",
-            ["--engine", "codex", "--role", "build"],
+            ["--engine", "codex", "--run-kind", "build"],
             False,
         ),
     ]

@@ -137,16 +137,18 @@ def test_undeclared_contract_is_a_generator_defect():
         DED.engine_dispatch.build_parser = original
 
 
-def test_cli_writes_file():
-    with tempfile.TemporaryDirectory() as tmp:
-        out = os.path.join(tmp, "dispatch-entry.md")
-        env = os.environ.copy()
-        # Point generator at a temp path by patching module constant is overkill;
-        # run generate() directly and compare bytes.
-        text = DED.generate()
-        with open(out, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        again = DED.generate()
-        with open(out, encoding="utf-8") as fh:
-            on_disk = fh.read()
-        assert on_disk == again
+def test_cli_writes_file(tmp_path, monkeypatch):
+    out = tmp_path / "dispatch-entry.md"
+    monkeypatch.setattr(DED, "_DEFAULT_OUT", str(out))
+    rc = DED.main([])
+    assert rc == 0
+    assert out.is_file()
+    on_disk = out.read_text(encoding="utf-8")
+    assert on_disk == DED.generate()
+
+
+def test_cli_check_absent_file_refuses(tmp_path, monkeypatch):
+    missing = tmp_path / "dispatch-entry.md"
+    monkeypatch.setattr(DED, "_DEFAULT_OUT", str(missing))
+    rc = DED.main(["--check"])
+    assert rc == 1
