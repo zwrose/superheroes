@@ -8331,3 +8331,160 @@ def test_grade_review_pr_body_payload_without_investigation_forfeit(tmp_path):
     assert grade.get("forfeit") is True
     assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
 
+
+# --- #1271 WO-L1-F: run_execution_record engagement.read round-trip ---
+
+
+def _execution_record_completed_attempt(
+    tmp_path, run_dir, *, stdout, stderr="", engine="codex", ended_overrides=None,
+    echo_nonce="execution-record-nonce", write_stdout=True, already_opened=False,
+):
+    """One completed review attempt on disk for run_execution_record round-trips."""
+    if already_opened:
+        repo_root, view = None, None
+    else:
+        repo_root, view = _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["echoNonce"] = echo_nonce
+            if engine != "codex":
+                rec["engine"] = engine
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    if write_stdout:
+        with open(stdout_path, "w", encoding="utf-8") as fh:
+            fh.write(stdout)
+    with open(stderr_path, "w", encoding="utf-8") as fh:
+        fh.write(stderr)
+    ended = {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "signal": None,
+        "refusal": None, "at": time.time(),
+        "wallSeconds": 1.0, "stdoutBytes": len(stdout) if write_stdout else 0,
+    }
+    if ended_overrides:
+        ended.update(ended_overrides)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, ended)
+    return repo_root, view
+
+
+def test_run_execution_record_codex_engaged_by_payload(tmp_path):
+    """Round-trip: codex stdout with non-empty registered review payload stamps engaged."""
+    run_dir = str(tmp_path / "codex-engaged-payload")
+    _execution_record_completed_attempt(tmp_path, run_dir, stdout=_VALID_FINDINGS_STDOUT)
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "engaged"
+
+
+def test_run_execution_record_codex_engaged_by_investigated_paths(tmp_path):
+    """Round-trip: codex empty payload with accepted investigated paths stamps engaged."""
+    run_dir = str(tmp_path / "codex-engaged-investigated")
+    rel = "src/main.py"
+    repo_root, view = _execution_record_completed_attempt(
+        tmp_path, run_dir, stdout=json.dumps({"findings": [], "investigated": [rel]}),
+    )
+    real_file = os.path.join(view["path"], rel)
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "engaged"
+
+
+def test_run_execution_record_codex_vacuous_prompt_echo(tmp_path):
+    """Round-trip: codex prompt-echo-only stdout stamps unknown."""
+    run_dir = str(tmp_path / "codex-vacuous-echo")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    fed = next(r["fedPrompt"] for r in records if r.get("kind") == "run-opened")
+    _execution_record_completed_attempt(
+        tmp_path, run_dir, stdout=fed, already_opened=True,
+    )
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "unknown"
+
+
+def test_run_execution_record_codex_vacuous_empty_payload(tmp_path):
+    """Round-trip: codex empty findings with no investigated paths stamps unknown."""
+    run_dir = str(tmp_path / "codex-vacuous-empty")
+    _execution_record_completed_attempt(
+        tmp_path, run_dir, stdout=json.dumps({"findings": []}),
+    )
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "unknown"
+
+
+def test_run_execution_record_codex_unparseable_stdout(tmp_path):
+    """Round-trip: codex unparseable stdout stamps unknown without raising."""
+    run_dir = str(tmp_path / "codex-unparseable")
+    _execution_record_completed_attempt(tmp_path, run_dir, stdout="not json at all\n")
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "unknown"
+
+
+def test_run_execution_record_cursor_tool_calls_engaged(tmp_path):
+    """Round-trip: cursor toolCalls >= 1 stamps engaged."""
+    run_dir = str(tmp_path / "cursor-tool-calls")
+    stream = "\n".join([
+        '{"type":"tool_call","call_id":"c1","subtype":"started"}',
+    ])
+    _execution_record_completed_attempt(
+        tmp_path, run_dir, stdout=stream, engine="cursor",
+    )
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "engaged"
+    assert record["observation"]["toolCalls"] == 1
+
+
+def test_run_execution_record_codex_tokens_alone_never_engaged(tmp_path):
+    """Round-trip: codex high tokens/wall/stdout without action evidence stamps unknown."""
+    run_dir = str(tmp_path / "codex-tokens-alone")
+    stderr_tail = "log line\ntokens used\n23,000\n"
+    _execution_record_completed_attempt(
+        tmp_path, run_dir,
+        stdout=json.dumps({"findings": []}),
+        stderr=stderr_tail,
+        ended_overrides={"wallSeconds": 99999.0, "stdoutBytes": 999999},
+    )
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "unknown"
+    assert record["observation"]["tokens"] == 23000
+    assert record["observation"]["wallSeconds"] == 99999.0
+    assert record["observation"]["stdoutBytes"] == 999999
+
+
+def test_run_execution_record_missing_stdout_never_raises(tmp_path):
+    """Round-trip: missing stdout still returns record or refusal without raising."""
+    run_dir = str(tmp_path / "missing-stdout")
+    _execution_record_completed_attempt(
+        tmp_path, run_dir, stdout="", write_stdout=False,
+    )
+    record, error = ED.run_execution_record(run_dir)
+    if record is None:
+        assert isinstance(error, str)
+    else:
+        assert error is None
+        assert isinstance(record["observation"], dict)
+
