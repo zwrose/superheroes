@@ -644,7 +644,7 @@ def test_build_argv_cli_refusal_object_shape(capsys):
 
 def test_build_argv_cli_empty_effort_normalizes_to_none_for_composer_pin(capsys):
     rc = EA.main(["build-argv", "--seat", _seat_json("cursor", "composer-2.5", None, "implementer"),
-                  "--run-kind", "review"])
+                  "--run-kind", "build"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0
     assert out[out.index("--model") + 1] == "composer-2.5"
@@ -685,6 +685,52 @@ def test_build_argv_cli_off_allowlist_refused(capsys):
     assert out["reason"] == "engine-config"
     assert out["detail"] == "allowlist-refused"
     assert "allowlist" in out["seat_detail"]
+
+
+def test_build_argv_cli_reviewer_run_kind_build_refused(capsys):
+    rc = EA.main([
+        "build-argv",
+        "--seat",
+        _seat_json("codex", "gpt-5.6-terra", "high", "reviewer"),
+        "--run-kind",
+        "build",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["ok"] is False
+    assert out["argv"] == []
+    assert "accepted run kind for this role: 'review'" in out["seat_detail"]
+    assert "workspace-write" not in json.dumps(out)
+
+
+def test_build_argv_cli_implementer_run_kind_review_refused(capsys):
+    rc = EA.main([
+        "build-argv",
+        "--seat",
+        _seat_json("codex", "gpt-5.6-terra", "high", "implementer"),
+        "--run-kind",
+        "review",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["ok"] is False
+    assert out["argv"] == []
+    assert "accepted run kind for this role: 'build'" in out["seat_detail"]
+
+
+def test_build_argv_cli_unclassified_role_refused(capsys):
+    rc = EA.main([
+        "build-argv",
+        "--seat",
+        _seat_json("claude", "sonnet-5", "high", "pilot"),
+        "--run-kind",
+        "review",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["ok"] is False
+    assert out["argv"] == []
+    assert "no read_write classification" in out["seat_detail"]
 
 
 def test_build_argv_cli_old_role_spelling_refused(capsys):

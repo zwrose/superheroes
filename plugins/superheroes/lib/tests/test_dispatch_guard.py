@@ -376,3 +376,28 @@ def test_fail_closed_edge_11_override_only_fable():
     assert result["ok"] is False
     assert result["resolved_model"] is None
     assert _PARK_TAIL in result["reason"]
+
+
+def test_dispatch_guard_no_module_level_seat_bundle_import():
+    with open(_MOD, encoding="utf-8") as fh:
+        for line in fh:
+            if line.startswith((" ", "\t")):
+                continue
+            stripped = line.strip()
+            if stripped.startswith("import seat_bundle") or stripped.startswith("from seat_bundle"):
+                pytest.fail(f"module-level seat_bundle import found: {stripped!r}")
+
+
+def test_dispatch_guard_and_seat_bundle_import_without_cycle():
+    lib_dir = os.path.join(_HERE, "..")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = lib_dir
+    for mod in ("dispatch_guard", "seat_bundle"):
+        cp = subprocess.run(
+            [sys.executable, "-c", f"import {mod}"],
+            cwd=lib_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert cp.returncode == 0, cp.stderr

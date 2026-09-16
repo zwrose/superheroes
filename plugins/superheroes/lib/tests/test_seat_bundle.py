@@ -76,7 +76,8 @@ def test_four_key_seat_json_accepted(cli_module, subcmd, role, tmp_path, monkeyp
     def _sentinel(*_a, **_k):
         return {"ok": False, "reason": "chokepoint-sentinel", "detail": "sentinel"}
 
-    monkeypatch.setattr(cli_module.seat_bundle, "resolve_entry", _sentinel)
+    patch_target = SB if cli_module is DG else cli_module.seat_bundle
+    monkeypatch.setattr(patch_target, "resolve_entry", _sentinel)
     rc = cli_module.main(argv)
     if cli_module is DG:
         assert rc == 1
@@ -145,6 +146,18 @@ def test_dispatch_write_legacy_library_refusal(kwargs):
     res = ED.dispatch_write(prompt_path="p", cwd="/tmp", **kwargs)
     assert res["ok"] is False
     assert res["reason"] == "legacy-seat-args"
+
+
+def test_dispatch_write_legacy_library_refusal_full_terminal_envelope():
+    res = ED.dispatch_write(prompt_path="p", cwd="/tmp", engine="cursor")
+    assert res["ok"] is False
+    assert res["reason"] == "legacy-seat-args"
+    assert res["terminal"] is True
+    assert res["runDir"] == ""
+    assert res["argv"] == []
+    assert res["attempts"] == 0
+    assert res["forfeited"] is False
+    assert res.get("runOpened") is False
 
 
 def test_dispatch_review_unknown_keyword_refused():
@@ -394,8 +407,7 @@ def test_chokepoint_invariant_all_paths_use_resolve_entry(monkeypatch, tmp_path)
     def _sentinel(*_a, **_k):
         return sentinel
 
-    monkeypatch.setattr(ED.seat_bundle, "resolve_entry", _sentinel)
-    monkeypatch.setattr(DG.seat_bundle, "resolve_entry", _sentinel)
+    monkeypatch.setattr(SB, "resolve_entry", _sentinel)
 
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -25,7 +25,6 @@ if _LIB_DIR not in sys.path:
 
 import cli_contract as cc  # noqa: E402
 import model_registry  # noqa: E402
-import seat_bundle  # noqa: E402
 
 _PARK_TAIL = (
     "an unlisted model is a park, not a pick (#600). "
@@ -149,6 +148,8 @@ def validate(
 
 
 def _cli_check(args: argparse.Namespace) -> int:
+    import seat_bundle  # noqa: WPS433 — CLI leg only: keep validate() free of this import
+
     resolved = seat_bundle.resolve_entry(args.seat, verb="guard-check")
     if not resolved.get("ok"):
         allowlist_verdict = resolved.get("allowlistVerdict")
@@ -192,6 +193,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import seat_bundle  # noqa: WPS433 — CLI leg only: keep validate() free of this import
+
     argv = argv if argv is not None else sys.argv[1:]
     dropped = seat_bundle.scan_dropped_flags(argv)
     if dropped:

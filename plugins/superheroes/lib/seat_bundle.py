@@ -9,8 +9,10 @@ from __future__ import annotations
 import inspect
 import json
 
+import dispatch_guard
 import model_registry
 
+_BUILD_ARGV_RUN_KINDS = frozenset({"review", "build", "fix"})
 _DROPPED_FLAGS = ("--engine", "--model", "--effort", "--engine-model", "--vendor", "--role")
 _LEGACY_KEYWORDS = frozenset({"engine", "model", "effort", "engine_model", "role"})
 _MODE_BRIEF_CHECK = "brief-check"
@@ -604,6 +606,44 @@ def _mode_role_coherence_refusal(role: str) -> dict:
     )
 
 
+def run_kind_for_role(role: str) -> str | None:
+    """Derive build-argv sandbox run kind from a registry role's read_write classification."""
+    rw = model_registry.role_read_write(role)
+    if rw == "read":
+        return "review"
+    if rw == "write":
+        kind = model_registry.engine_pref_role_kind(role)
+        if kind in _BUILD_ARGV_RUN_KINDS:
+            return kind
+        return "build"
+    return None
+
+
+def _run_kind_unclassified_refusal(role: str) -> dict:
+    return _entry_refusal(
+        "run-kind-unclassified",
+        (
+            f"role {role!r} has no read_write classification; "
+            f"build-argv requires a read or write role; accepted: {_ACCEPTED_SEAT}; "
+            f"{accepted_role_detail()}"
+        ),
+    )
+
+
+def build_argv_run_kind_mismatch_refusal(
+    role: str, *, supplied: str, accepted: str,
+) -> dict:
+    return _entry_refusal(
+        "run-kind-role-mismatch",
+        (
+            f"--run-kind {supplied!r} disagrees with seat role {role!r} "
+            f"(read_write={model_registry.role_read_write(role)!r}); "
+            f"accepted run kind for this role: {accepted!r}; "
+            f"accepted: {_ACCEPTED_SEAT}; {accepted_role_detail()}"
+        ),
+    )
+
+
 def _verb_role_coherence_refusal(role: str, *, verb: str) -> dict:
     rw = model_registry.role_read_write(role)
     if verb == "dispatch-write" and rw == "read":
@@ -688,6 +728,8 @@ def resolve_entry(seat_raw, *, verb, mode=None) -> dict:
         verb_refusal = _verb_role_coherence_refusal(role, verb=verb)
         if verb_refusal is not None:
             return verb_refusal
+    if verb == "build-argv" and run_kind_for_role(role) is None:
+        return _run_kind_unclassified_refusal(role)
     checked = _validate_model_effort(parsed)
     if not checked.get("ok"):
         return checked
@@ -695,8 +737,6 @@ def resolve_entry(seat_raw, *, verb, mode=None) -> dict:
     vendor = checked["vendor"]
     model = checked["model"]
     effort = checked.get("effort")
-    import dispatch_guard  # noqa: WPS433 — lazy: dispatch_guard imports this module
-
     try:
         verdict = dispatch_guard.validate(role, vendor, model, effort)
     except Exception:

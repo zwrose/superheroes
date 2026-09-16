@@ -2197,8 +2197,18 @@ def _cmd_build_argv(args):
             {"ok": False, "reason": "engine-config", "detail": token,
              "argv": [], "seat_detail": detail}) + "\n")
         return 0
+    role = resolved["role"]
+    derived_run_kind = seat_bundle.run_kind_for_role(role)
+    if args.run_kind != derived_run_kind:
+        mismatch = seat_bundle.build_argv_run_kind_mismatch_refusal(
+            role, supplied=args.run_kind, accepted=derived_run_kind,
+        )
+        sys.stdout.write(json.dumps(
+            {"ok": False, "reason": "engine-config", "detail": mismatch["reason"],
+             "argv": [], "seat_detail": mismatch["detail"]}) + "\n")
+        return 0
     opts = {"cwd": args.cwd}
-    res = build_argv_result(resolved, args.run_kind, opts)
+    res = build_argv_result(resolved, derived_run_kind, opts)
     if res["reason"] is not None:
         detail = res.get("detail") or res["reason"]
         sys.stdout.write(json.dumps(

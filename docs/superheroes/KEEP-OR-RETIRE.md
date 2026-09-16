@@ -934,7 +934,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
   owner at a gardening pass.
 - **Last demonstrated benefit.** Separated stdout-cap truncation from `worktree-dirtied-by-attempt`
   so a long implementer report forfeits with an explicit cap reason instead of a dirtied-worktree
-  misread (#1109 hardening class, `dispatch-mechanics.md`).
+  misread (dispatch hardening class, `dispatch-mechanics.md`).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — external engines paste long receipts; the cap bounds what the runner

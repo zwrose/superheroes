@@ -4216,9 +4216,9 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
         run_dir = None
     try:
         if seat_bundle.legacy_call_detected(args, kwargs):
-            refusal = seat_bundle.legacy_refusal()
-            refusal["runOpened"] = False
-            return refusal
+            stamped = _legacy_dispatch_refusal()
+            stamped["runOpened"] = False
+            return stamped
         unknown = seat_bundle.unknown_kwargs_detected(kwargs)
         if unknown:
             refusal = _unknown_kwargs_refusal(
