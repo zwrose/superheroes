@@ -1810,11 +1810,17 @@ def _validate_max_wait(max_wait):
     return True, ""
 
 
-def _max_wait_refusal(detail):
-    return _with_run_fields(
-        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": detail,
-         "attempts": 0, "forfeited": False, "terminal": True},
-        run_dir="", argv=[],
+def _max_wait_refusal(
+    detail, *, run_dir=None, mode=None, repo_root=None, engine=None,
+    run_kind=RUN_KIND_REVIEW,
+):
+    refusal = {
+        "ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": detail,
+        "attempts": 0, "forfeited": False, "terminal": True,
+    }
+    return _entry_refusal_terminal(
+        refusal, run_dir=run_dir, mode=mode, argv=[],
+        repo_root=repo_root, engine=engine, run_kind=run_kind,
     )
 
 
@@ -3938,7 +3944,10 @@ def _dispatch_review_impl(seat, *, prompt_path,
 
     ok, wait_detail = _validate_max_wait(max_wait)
     if not ok:
-        return _max_wait_refusal(wait_detail)
+        return _max_wait_refusal(
+            wait_detail, run_dir=run_dir, mode=resolved_mode["mode"],
+            run_kind=RUN_KIND_REVIEW,
+        )
 
     ok, repo_detail = _validate_repo_root(repo_root)
     if not ok:
@@ -4409,7 +4418,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
     argv = []
     ok, wait_detail = _validate_max_wait(max_wait)
     if not ok:
-        return _max_wait_refusal(wait_detail)
+        return _max_wait_refusal(wait_detail, run_dir=run_dir, run_kind=RUN_KIND_WRITE)
     if max_wait is not None:
         preflight_timeout = max(int(max_wait), 1)
         preflight_timeout_source = "clamped" if int(max_wait) < 1 else "caller"

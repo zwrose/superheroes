@@ -2933,15 +2933,21 @@ def test_critical_diversity_pinned_with_family_still_excused_by_pin():
     ]
 
 
-def _collect_backfill_tier_literals_from_source():
-    """AST walk of nested ``_backfill`` collecting tier literals from its rotation iterables."""
+def _collect_backfill_tier_literals_from_source(source=None):
+    """AST walk of nested ``_backfill`` — whitelist census of every tier-recording site.
+
+    Collects every ``for`` rotation, every ``[\"tier\"]`` assignment, and every returned
+    ``tier`` value. Unresolvable constructs are ``undecidable`` and fail the census test.
+    """
     import ast
 
-    with open(_MOD, encoding="utf-8") as fh:
-        source = fh.read()
+    if source is None:
+        with open(_MOD, encoding="utf-8") as fh:
+            source = fh.read()
     tree = ast.parse(source, filename=_MOD)
 
     module_string_constants: dict[str, str] = {}
+    parametric_tier_values = set(SM.DEFAULT_TIER_BY_SEAT.values()) | {"reviewer"}
 
     def _string_constant(node):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -2986,7 +2992,26 @@ def _collect_backfill_tier_literals_from_source():
                 downgrade = module_string_constants.get("_BACKFILL_DOWNGRADE_TO")
                 if downgrade is None:
                     return None, "%s (_BACKFILL_DOWNGRADE_TO unresolved)" % site
-                return [downgrade], None
+                return sorted(parametric_tier_values | {downgrade}), None
+        seg = ast.get_source_segment(source, node) or type(node).__name__
+        return None, "%s (%s)" % (site, seg)
+
+    def _subscript_tier_key(target):
+        if not isinstance(target, ast.Subscript):
+            return False
+        sl = target.slice
+        return isinstance(sl, ast.Constant) and sl.value == "tier"
+
+    def _resolve_tier_value(node, *, site, loop_tier_sources):
+        lit = _string_constant(node)
+        if lit is not None:
+            return [lit], None
+        if isinstance(node, ast.Name):
+            if node.id == "tier":
+                return sorted(parametric_tier_values), None
+            if node.id in loop_tier_sources:
+                return loop_tier_sources[node.id], None
+            return None, "%s (name %r)" % (site, node.id)
         seg = ast.get_source_segment(source, node) or type(node).__name__
         return None, "%s (%s)" % (site, seg)
 
@@ -2998,35 +3023,84 @@ def _collect_backfill_tier_literals_from_source():
         if isinstance(n, ast.FunctionDef) and n.name == "_backfill"
     )
 
+    def _loop_var_records_tier(for_node, var_name):
+        for child in ast.walk(for_node):
+            if isinstance(child, ast.Assign):
+                for target in child.targets:
+                    if _subscript_tier_key(target):
+                        if isinstance(child.value, ast.Name) and child.value.id == var_name:
+                            return True
+            if isinstance(child, ast.Return) and isinstance(child.value, ast.Dict):
+                for key, val in zip(child.value.keys, child.value.values):
+                    if isinstance(key, ast.Constant) and key.value == "tier":
+                        if isinstance(val, ast.Name) and val.id == var_name:
+                            return True
+        return False
+
+    loop_tier_sources: dict[str, list[str]] = {}
     collected: set[str] = set()
     undecidable: list[str] = []
     for node in ast.walk(backfill_fn):
-        if (
-            isinstance(node, ast.For)
-            and isinstance(node.target, ast.Name)
-            and node.target.id == "try_tier"
-        ):
-            tiers, bad = _strings_from_iterable(node.iter, site="for try_tier in")
-            if bad is not None:
-                undecidable.append(bad)
-            else:
+        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            site = "for %s in" % node.target.id
+            tiers, bad = _strings_from_iterable(node.iter, site=site)
+            if tiers is not None:
                 collected.update(tiers)
+                loop_tier_sources[node.target.id] = tiers
+            elif _loop_var_records_tier(node, node.target.id):
+                undecidable.append(bad)
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if _subscript_tier_key(target):
+                    tiers, bad = _resolve_tier_value(
+                        node.value, site="assign tier", loop_tier_sources=loop_tier_sources,
+                    )
+                    if bad is not None:
+                        undecidable.append(bad)
+                    else:
+                        collected.update(tiers)
         if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
             for key, val in zip(node.value.keys, node.value.values):
                 if isinstance(key, ast.Constant) and key.value == "tier":
-                    if isinstance(val, ast.Name) and val.id == "tier":
-                        # Parametric: ``tier`` is ``_tier_for(seat)``; covered via DEFAULT_TIER_BY_SEAT.
-                        pass
+                    tiers, bad = _resolve_tier_value(
+                        val, site="return tier", loop_tier_sources=loop_tier_sources,
+                    )
+                    if bad is not None:
+                        undecidable.append(bad)
                     else:
-                        lit = _string_constant(val)
-                        if lit is None:
-                            seg = ast.get_source_segment(source, val) or type(val).__name__
-                            undecidable.append("return tier (%s)" % seg)
-                        else:
-                            collected.add(lit)
+                        collected.update(tiers)
 
-    collected.update(SM.DEFAULT_TIER_BY_SEAT.values())
     return collected, undecidable
+
+
+def test_sm6_1269_backfill_tier_census_rejects_planted_shapes():
+    """Prove whitelist default-deny: shapes that evaded the old blacklist must fail."""
+    planted_rotation = (
+        "def build():\n"
+        "    def _backfill(seat):\n"
+        "        for alt_tier in (\"reviewer-lite\", \"reviewer\"):\n"
+        "            return {\"tier\": alt_tier}\n"
+        "        return {\"tier\": \"reviewer\"}\n"
+    )
+    rotation_tiers, rotation_undecidable = _collect_backfill_tier_literals_from_source(
+        planted_rotation,
+    )
+    assert "reviewer-lite" in rotation_tiers
+    assert SM.accepted_tiers_for_seat("grounding-seat") != frozenset(rotation_tiers)
+
+    planted_assign = (
+        "def build():\n"
+        "    def _backfill(seat):\n"
+        "        cfg = {}\n"
+        "        cfg[\"tier\"] = \"reviewer-lite\"\n"
+        "        return cfg\n"
+    )
+    assign_tiers, assign_undecidable = _collect_backfill_tier_literals_from_source(
+        planted_assign,
+    )
+    assert "reviewer-lite" in assign_tiers
+    assert not assign_undecidable
+    assert SM.accepted_tiers_for_seat("grounding-seat") != frozenset(assign_tiers)
 
 
 def test_sm4_1269_backfill_tier_census_matches_accepted_tiers():

@@ -9122,175 +9122,141 @@ def _entry_refusal_call_graph(module_funcs):
     return graph - _ENTRY_REFUSAL_PROVENANCE_HELPERS
 
 
-def _subscript_key_is_run_opened(target):
-    if not isinstance(target, ast.Subscript):
+# Whitelist, not blacklist: approved producers are the only permitted return sources on
+# entry-refusal surfaces. Any syntactic shape not traceable to them fails by default.
+_ENTRY_REFUSAL_APPROVED_RETURN_PRODUCERS = frozenset({
+    "_entry_refusal_terminal",
+    "_dispatch_review_impl",
+    "_dispatch_write_impl",
+    "_entry_allowlist_refusal",
+})
+
+_ENTRY_REFUSAL_AUDITED_FUNCTIONS = frozenset({
+    "dispatch_review",
+    "dispatch_write",
+    "_max_wait_refusal",
+})
+
+
+def _approved_return_producers_for_function(func_name):
+    if func_name == "_max_wait_refusal":
+        return frozenset({"_entry_refusal_terminal"})
+    producers = set(_ENTRY_REFUSAL_APPROVED_RETURN_PRODUCERS)
+    if func_name == "dispatch_review":
+        producers.discard("_dispatch_write_impl")
+    elif func_name == "dispatch_write":
+        producers.discard("_dispatch_review_impl")
+    return frozenset(producers)
+
+
+def _expr_traces_to_approved_producer(expr, func_node, approved_producers, seen_names):
+    if isinstance(expr, ast.Call):
+        if isinstance(expr.func, ast.Name) and expr.func.id in approved_producers:
+            return True
+        if isinstance(expr.func, ast.Name) and expr.func.id == "dict" and expr.args:
+            return _expr_traces_to_approved_producer(
+                expr.args[0], func_node, approved_producers, seen_names,
+            )
         return False
-    sl = target.slice
-    if isinstance(sl, ast.Constant):
-        return sl.value == "runOpened"
-    return False
-
-
-def test_entry_refusal_chokepoint_invariant_no_inline_run_dir_or_run_opened_stamp():
-    """Assert I1 by construction: dispatch_review/dispatch_write entry-refusal paths and
-    their helper call graph must not return dict literals carrying runDir or assign runOpened.
-    A hand-maintained site list would miss new paths; this AST walk fails when anyone adds one."""
-    module_funcs = _engine_dispatch_module_functions()
-    assert "dispatch_review" in module_funcs, "invariant roots missing dispatch_review"
-    assert "dispatch_write" in module_funcs, "invariant roots missing dispatch_write"
-    graph = _entry_refusal_call_graph(module_funcs)
-    run_dir_violations = []
-    run_opened_violations = []
-    for name in sorted(graph):
-        func_node = module_funcs.get(name)
-        if func_node is None:
-            continue
-        run_dir_violations.extend(
-            (name, lineno) for lineno in _entry_refusal_run_dir_stamp_lines(func_node)
+    if isinstance(expr, ast.Name):
+        return _name_traces_to_approved_producer(
+            expr.id, func_node, approved_producers, seen_names,
         )
-        for node in ast.walk(func_node):
-            if _assigns_run_opened_in_entry_refusal(node):
-                run_opened_violations.append((name, node.lineno))
-    assert run_dir_violations == []
-    assert run_opened_violations == []
-
-
-def _dict_literal_has_run_dir_key(node):
-    if isinstance(node, ast.Dict):
-        for key in node.keys:
-            if isinstance(key, ast.Constant) and key.value == "runDir":
-                return True
-    if isinstance(node, ast.Call):
-        if isinstance(node.func, ast.Name) and node.func.id == "dict":
-            for kw in node.keywords:
-                if kw.arg == "runDir":
-                    return True
-        for arg in node.args:
-            if _dict_literal_has_run_dir_key(arg):
-                return True
-        for kw in node.keywords:
-            if _dict_literal_has_run_dir_key(kw.value):
-                return True
     return False
 
 
-def _dict_literal_has_run_opened_key(node):
-    if isinstance(node, ast.Dict):
-        for key in node.keys:
-            if isinstance(key, ast.Constant) and key.value == "runOpened":
-                return True
-    if isinstance(node, ast.Call):
-        if isinstance(node.func, ast.Name) and node.func.id == "dict":
-            for kw in node.keywords:
-                if kw.arg == "runOpened":
-                    return True
-        for arg in node.args:
-            if _dict_literal_has_run_opened_key(arg):
-                return True
-        for kw in node.keywords:
-            if _dict_literal_has_run_opened_key(kw.value):
-                return True
-    return False
+def _assign_value_traces_to_approved(value, func_node, approved_producers, seen_names):
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+        if value.func.id in approved_producers:
+            return True
+        if value.func.id == "dict" and value.args:
+            return _expr_traces_to_approved_producer(
+                value.args[0], func_node, approved_producers, set(seen_names),
+            )
+    return _expr_traces_to_approved_producer(
+        value, func_node, approved_producers, set(seen_names),
+    )
 
 
-def _call_stamps_run_dir(node):
-    if not isinstance(node, ast.Call):
+def _name_traces_to_approved_producer(name, func_node, approved_producers, seen_names):
+    if name in seen_names:
         return False
-    if isinstance(node.func, ast.Attribute) and node.func.attr in ("update", "setdefault"):
-        for arg in node.args:
-            if _dict_literal_has_run_dir_key(arg):
-                return True
-        for kw in node.keywords:
-            if kw.arg == "runDir":
-                return True
-    if isinstance(node.func, ast.Name) and node.func.id == "dict":
-        for kw in node.keywords:
-            if kw.arg == "runDir":
-                return True
+    seen_names.add(name)
+    for stmt in ast.walk(func_node):
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    if _assign_value_traces_to_approved(
+                        stmt.value, func_node, approved_producers, set(seen_names),
+                    ):
+                        return True
+        elif isinstance(stmt, ast.AnnAssign):
+            if isinstance(stmt.target, ast.Name) and stmt.target.id == name:
+                if stmt.value is not None and _assign_value_traces_to_approved(
+                    stmt.value, func_node, approved_producers, set(seen_names),
+                ):
+                    return True
     return False
 
 
-def _entry_refusal_run_dir_stamp_lines(func_node):
-    """Line numbers where an entry-refusal function stamps runDir outside the chokepoint."""
-    assigned_run_dir = set()
-    for node in ast.walk(func_node):
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
-            if isinstance(target, ast.Name) and _dict_literal_has_run_dir_key(node.value):
-                assigned_run_dir.add(target.id)
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-            call = node.value
-            if _call_stamps_run_dir(call):
-                if isinstance(call.func, ast.Attribute) and isinstance(
-                    call.func.value, ast.Name
-                ):
-                    assigned_run_dir.add(call.func.value.id)
+def _entry_refusal_unapproved_return_lines(func_node, func_name):
+    approved_producers = _approved_return_producers_for_function(func_name)
     violations = []
     for node in ast.walk(func_node):
-        if isinstance(node, ast.Return) and node.value is not None:
-            if _dict_literal_has_run_dir_key(node.value):
-                violations.append(node.lineno)
-            elif isinstance(node.value, ast.Name) and node.value.id in assigned_run_dir:
-                violations.append(node.lineno)
+        if not isinstance(node, ast.Return) or node.value is None:
+            continue
+        if not _expr_traces_to_approved_producer(
+            node.value, func_node, approved_producers, set(),
+        ):
+            violations.append(node.lineno)
     return violations
 
 
-def _assigns_run_opened_in_entry_refusal(node):
-    if isinstance(node, ast.Assign):
-        return any(_subscript_key_is_run_opened(t) for t in node.targets)
-    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-        return _call_stamps_run_opened(node.value)
-    return False
+def test_entry_refusal_chokepoint_invariant_returns_trace_to_approved_producers():
+    """Assert I1 by construction: entry-refusal surfaces return only through the chokepoint,
+    dispatch impl, or a value traceable to one of those — never a hand-built dict escape."""
+    module_funcs = _engine_dispatch_module_functions()
+    assert "dispatch_review" in module_funcs, "invariant roots missing dispatch_review"
+    assert "dispatch_write" in module_funcs, "invariant roots missing dispatch_write"
+    _entry_refusal_call_graph(module_funcs)
+    violations = []
+    for name in sorted(_ENTRY_REFUSAL_AUDITED_FUNCTIONS):
+        func_node = module_funcs.get(name)
+        if func_node is None:
+            violations.append((name, 0))
+            continue
+        for lineno in _entry_refusal_unapproved_return_lines(func_node, name):
+            violations.append((name, lineno))
+    assert violations == []
 
 
-def _call_stamps_run_opened(node):
-    if not isinstance(node, ast.Call):
-        return False
-    if isinstance(node.func, ast.Attribute) and node.func.attr in ("update", "setdefault"):
-        for arg in node.args:
-            if _dict_literal_has_run_opened_key(arg):
-                return True
-        for kw in node.keywords:
-            if kw.arg == "runOpened":
-                return True
-    if isinstance(node.func, ast.Name) and node.func.id == "dict":
-        for kw in node.keywords:
-            if kw.arg == "runOpened":
-                return True
-    return False
-
-
-def test_entry_refusal_invariant_detector_breadth_self_check():
-    """Pin detector breadth: indirect dict-literal return must be reported."""
-    tree = ast.parse(
-        "def _probe():\n"
-        "    out = {\"runDir\": \"\"}\n"
-        "    return out\n"
+def test_entry_refusal_census_rejects_planted_bypass_shapes():
+    """Prove whitelist default-deny: shapes that evaded the old blacklist must fail here."""
+    planted = (
+        (
+            "setdefault_run_dir",
+            "def dispatch_review():\n"
+            "    out = {}\n"
+            "    out.setdefault(\"runDir\", \"\")\n"
+            "    return out\n",
+        ),
+        (
+            "dict_run_opened_false",
+            "def dispatch_review():\n"
+            "    out = dict(runOpened=False)\n"
+            "    return out\n",
+        ),
+        (
+            "subscript_run_dir",
+            "def dispatch_review():\n"
+            "    out = {}\n"
+            "    out[\"runDir\"] = \"\"\n"
+            "    return out\n",
+        ),
     )
-    func_node = tree.body[0]
-    assert _entry_refusal_run_dir_stamp_lines(func_node) == [3]
-    keyword_tree = ast.parse(
-        "def _probe():\n"
-        "    return _finish_preflight_terminal("
-        "repo_root, refusal, result={\"runDir\": \"\"})\n"
-    )
-    keyword_node = keyword_tree.body[0]
-    ret = keyword_node.body[0].value
-    assert _dict_literal_has_run_dir_key(ret) is True
-    update_tree = ast.parse(
-        "def _probe():\n"
-        "    out.update({\"runOpened\": False})\n"
-    )
-    update_node = update_tree.body[0]
-    assert _assigns_run_opened_in_entry_refusal(update_node.body[0]) is True
-    run_dir_update_tree = ast.parse(
-        "def _probe():\n"
-        "    out = {}\n"
-        "    out.update({\"runDir\": \"\"})\n"
-        "    return out\n"
-    )
-    run_dir_update_node = run_dir_update_tree.body[0]
-    assert _entry_refusal_run_dir_stamp_lines(run_dir_update_node) == [4]
+    for _label, src in planted:
+        func_node = ast.parse(src).body[0]
+        assert _entry_refusal_unapproved_return_lines(func_node, "dispatch_review")
 
 
 def test_entry_unknown_kwargs_refusal_preserves_existing_review_run_provenance(tmp_path):
@@ -9350,6 +9316,80 @@ def test_entry_unknown_kwargs_refusal_preserves_existing_write_run_provenance(tm
     assert res.get("runOpened") is True
     assert res["runDir"] == os.path.realpath(run_dir)
     assert res["resolvedInputs"] == snapshot_before
+
+
+def test_max_wait_refusal_preserves_existing_review_run_provenance(tmp_path):
+    # axis: I1 — out-of-range --max-wait on continuation echoes journal provenance
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "max-wait-review")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        max_wait=ED.MAX_SYNC_WAIT + 1,
+    )
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_max_wait_refusal_preserves_existing_write_run_provenance(tmp_path):
+    # axis: I1 — out-of-range --max-wait on write continuation echoes journal provenance
+    wt = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "max-wait-write")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=_valid_prompt(tmp_path),
+        cwd=wt,
+        run_dir=run_dir,
+        order_id="max-wait-write-open",
+        run_engine=fake,
+        max_wait=0,
+    )
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=_valid_prompt(tmp_path),
+        cwd=wt,
+        run_dir=run_dir,
+        max_wait=ED.MAX_SYNC_WAIT + 1,
+        run_engine=FakeRunner([]),
+    )
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_max_wait_refusal_fail_closed_without_opened_run(tmp_path):
+    # axis: I1 — out-of-range --max-wait with no opened run reports runOpened false
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        max_wait=ED.MAX_SYNC_WAIT + 1,
+    )
+    assert res.get("runOpened") is False
+    assert res["runDir"] == ""
 
 
 def test_continuation_brief_check_mode_on_review_run_refuses_with_provenance(tmp_path):
