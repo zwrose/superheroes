@@ -87,6 +87,32 @@ def test_generator_idempotent():
     assert first == second
 
 
+def _generate_in_subprocess() -> str:
+    code = (
+        "import importlib.util, os, sys\n"
+        "lib = %r\n"
+        "path = os.path.join(lib, 'dispatch_entry_doc.py')\n"
+        "spec = importlib.util.spec_from_file_location('dispatch_entry_doc', path)\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(mod)\n"
+        "sys.stdout.write(mod.generate())\n"
+    ) % _LIB
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def test_generator_deterministic_across_processes():
+    # bite-axis: two independent interpreter processes produce byte-identical output.
+    first = _generate_in_subprocess()
+    second = _generate_in_subprocess()
+    assert first == second
+
+
 def test_every_subcommand_appears_in_output():
     text = DED.generate()
     for label in _expected_subcommand_labels():

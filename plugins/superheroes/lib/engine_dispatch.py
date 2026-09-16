@@ -133,7 +133,16 @@ SEAT_REFUSAL_RUN_DIR_MISMATCH = "run-dir-seat-mismatch"
 ALLOWLIST_GUARD_DETAIL = "allowlist-guard"
 SEAT_UNVERIFIABLE_DETAIL = "run-seat-unverifiable"
 
-_PARAM_UNSET = object()
+class _ParamUnsetType:
+    """Sentinel: argparse default meaning caller omitted a provenance-tracked optional flag."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "none"
+
+
+_PARAM_UNSET = _ParamUnsetType()
 
 _JOURNAL_ROOT_SOURCE_POINTER = "run-dir-pointer"
 _JOURNAL_ROOT_SOURCE_ENV = "environment-variable"

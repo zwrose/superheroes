@@ -40,6 +40,8 @@ def _format_default(action: argparse.Action) -> str:
         return "none"
     if action.default is argparse.SUPPRESS:
         return "none"
+    if action.default is engine_dispatch._PARAM_UNSET:
+        return "none"
     if isinstance(action.default, str):
         return action.default
     return repr(action.default)
