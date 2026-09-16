@@ -28,6 +28,9 @@ def _load(name):
 RD = _load("round_driver")
 RR = _load("round_records")
 ED = _load("engine_dispatch")
+_SV = _load("sanitized_view")
+_EA = _load("engine_adapter")
+_RFS = _load("review_findings_schema")
 RC = RD.round_commit
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
@@ -539,7 +542,19 @@ def _dispatch_observed_land(session_dir, seat, payload=None, pend=None, **over):
   return path, env, _read_bytes(path)
 
 
-def _execution_run_dir(tmp_path, order_path, echo_nonce="nonce-1", name="run"):
+def _decorated_review_fed_prompt(base_prompt, view_meta, echo_nonce="nonce-1",
+                                 expected_result_kind=None):
+  notice = _SV.sanitized_view_notice(view_meta, mode="review")
+  fed_prompt = ED.ANTIHIJACK_PREAMBLE + notice + base_prompt
+  sep = "\n\n"
+  if expected_result_kind == "findings":
+    fed_prompt += sep + _RFS.example_prompt_block(echo_nonce)
+  fed_prompt += sep + _EA.REVIEW_RESULT_CONTRACT(expected_result_kind)
+  return fed_prompt
+
+
+def _execution_run_dir(tmp_path, order_path, echo_nonce="nonce-1", name="run",
+                       decorated=True, expected_result_kind=None):
   run_dir = str(tmp_path / name)
   journal_root = str(tmp_path / "dispatch-journal-root")
   os.makedirs(journal_root, exist_ok=True)
@@ -551,12 +566,17 @@ def _execution_run_dir(tmp_path, order_path, echo_nonce="nonce-1", name="run"):
   view_path = str(tmp_path / ("view-" + name))
   os.makedirs(view_path, exist_ok=True)
   view_meta = {"headSha": "abc123fake", "stripped": [], "path": view_path}
+  with open(order_path, "r", encoding="utf-8") as fh:
+    base_prompt = fh.read()
+  fed_prompt = (_decorated_review_fed_prompt(base_prompt, view_meta, echo_nonce=echo_nonce,
+                                               expected_result_kind=expected_result_kind)
+                if decorated else None)
   ok, detail = ED._open_review_run(
     run_dir, engine="codex", argv=[sys.executable, "-c", "pass"], cwd=repo_root,
     timeout=30, retry_timeout=30, prompt_path=order_path, view_path=view_path,
-    view_meta=view_meta, fed_prompt=None, order_id="test-order",
+    view_meta=view_meta, fed_prompt=fed_prompt, order_id="test-order",
     progress_path=os.path.join(run_dir, "progress.jsonl"), repo_root=repo_root,
-    echo_nonce=echo_nonce,
+    echo_nonce=echo_nonce, base_prompt=base_prompt,
   )
   assert ok, detail
   ED._journal_append(run_dir, {
@@ -664,6 +684,10 @@ def test_seam_a_record_ingest_replaces_landing_when_evidence_stamped(tmp_path, a
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
                                      RR.storage_key("code-reviewer"), pend["attempt"])
   run_dir = _execution_run_dir(tmp_path, order_path, name="ev-stamp-run")
+  record, err = ED.run_execution_record(run_dir)
+  assert err is None
+  # axis: fixture must decorate prompt so order hash differs from prompt hash
+  assert record["orderPromptSha256"] != record["promptSha256"]
   out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
   assert out["ok"], out
   after = _read_bytes(path)
@@ -729,6 +753,10 @@ def test_seam_a_record_result_evidence_binding_accepts_genuine_run(tmp_path, ada
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
                                      RR.storage_key("code-reviewer"), pend["attempt"])
   run_dir = _execution_run_dir(tmp_path, order_path, name="ev-binding-ok-run")
+  record, err = ED.run_execution_record(run_dir)
+  assert err is None
+  # axis: fixture must decorate prompt so order hash differs from prompt hash
+  assert record["orderPromptSha256"] != record["promptSha256"]
   out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
   assert out["ok"], out
   stored, err = RR.read_json(out["storePath"])
@@ -807,6 +835,10 @@ def test_seam_a_recorded_journal_agrees_with_store(tmp_path, adapters):
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
                                      RR.storage_key("code-reviewer"), pend["attempt"])
   run_dir = _execution_run_dir(tmp_path, order_path, name="journal-agree-run")
+  record, err = ED.run_execution_record(run_dir)
+  assert err is None
+  # axis: fixture must decorate prompt so order hash differs from prompt hash
+  assert record["orderPromptSha256"] != record["promptSha256"]
   out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
   assert out["ok"], out
   recorded = [e for e in _outcomes(d, "recorded") if e.get("seat") == "code-reviewer"]
