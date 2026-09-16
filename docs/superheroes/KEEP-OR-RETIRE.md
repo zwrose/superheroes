@@ -996,11 +996,14 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 - **Component.** Not a census row. The grading helper that refuses a P0 or P1 claim, and queues a
   cleared P2 instead of filing, when the project has no stamped severity ladder
-  (`front_door.py`). It costs one profile read per graded claim.
+  (`front_door.py`); it also refuses any P0 claim when the project has no stamped
+  `p0Definition`, because an unstamped definition gives nothing to govern the claim against.
+  It costs one profile read per graded claim.
 - **Condition.** Citation-based, 45 days: vet, walk, or incident receipts citing a door refusal
-  (`ladder-unstamped`, `band-unknown`, `evidence-argued`, `p0-band-excluded`) that stopped a filing
-  from expanding its own authority. On firing, a proposal to the owner at a gardening pass. A zero
-  citation count means no filing tried to claim a band it could not cite, not that the door can go.
+  (`ladder-unstamped`, `band-unknown`, `evidence-argued`, `p0-band-excluded`,
+  `p0-definition-unstamped`) that stopped a filing from expanding its own authority. On firing, a
+  proposal to the owner at a gardening pass. A zero citation count means no filing tried to claim a
+  band it could not cite, not that the door can go.
 - **Last demonstrated benefit.** Recorded refusals on a throwaway profile with no ladder, and the
   advisor's own probe at vet reproducing every refusal (the configuration-items child's build
   record and its vet receipt).

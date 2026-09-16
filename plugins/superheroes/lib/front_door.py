@@ -16,6 +16,7 @@ REASON_LADDER_UNSTAMPED = "ladder-unstamped"
 REASON_BAND_UNKNOWN = "band-unknown"
 REASON_EVIDENCE_ARGUED = "evidence-argued"
 REASON_P0_BAND_EXCLUDED = "p0-band-excluded"
+REASON_P0_DEFINITION_UNSTAMPED = "p0-definition-unstamped"
 REASON_P0_DEFINITION_NAMES_NO_BAND = "p0-definition-names-no-band"
 REASON_P0_EVIDENCE_EXCLUDED = "p0-evidence-excluded"
 REASON_BAND_WITHOUT_LADDER = "band-without-ladder"
@@ -150,7 +151,7 @@ def _p0_policy(ladder_entry, p0_entry):
     if p0_entry.get("malformed"):
         return None, None, project_config.REASON_MALFORMED_VALUE
     if p0_entry.get("source") != "stamped":
-        return {top}, None, None
+        return None, None, REASON_P0_DEFINITION_UNSTAMPED
     prose = p0_entry.get("effective")
     if not isinstance(prose, str) or not prose.strip():
         return None, None, project_config.REASON_MALFORMED_VALUE

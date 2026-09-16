@@ -157,9 +157,54 @@ def test_argued_evidence_refused(tmp_path):
     assert got["reason"] == FD.REASON_EVIDENCE_ARGUED
 
 
-def test_p0_doctrinal_default_top_band_grades(tmp_path):
+def test_p0_unstamped_definition_refuses_top_band_field(tmp_path):
     repo, store = _setup_repo(tmp_path)
     _stamp_ladder(repo, store)
+    got = FD.grade(
+        repo,
+        _claim(tier="P0", band="Band 1", evidence="field"),
+        root=store,
+    )
+    assert got["outcome"] == "refused"
+    assert got["reason"] == FD.REASON_P0_DEFINITION_UNSTAMPED
+    assert got["tier"] is None
+
+
+def test_p0_unstamped_definition_refuses_top_band_lab(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    _stamp_ladder(repo, store)
+    got = FD.grade(
+        repo,
+        _claim(tier="P0", band="Band 1", evidence="lab"),
+        root=store,
+    )
+    assert got["outcome"] == "refused"
+    assert got["reason"] == FD.REASON_P0_DEFINITION_UNSTAMPED
+    assert got["tier"] is None
+
+
+def test_p0_unstamped_definition_refuses_non_top_band(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    _stamp_ladder(repo, store)
+    got = FD.grade(
+        repo,
+        _claim(tier="P0", band="Band 2", evidence="field"),
+        root=store,
+    )
+    assert got["outcome"] == "refused"
+    assert got["reason"] == FD.REASON_P0_DEFINITION_UNSTAMPED
+    assert got["tier"] is None
+
+
+def test_p0_stamped_definition_still_grades_conforming_claim(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    _stamp_ladder(repo, store)
+    PC.set_item(
+        repo,
+        "p0Definition",
+        "Band 1 by citation plus field evidence",
+        root=store,
+    )
     got = FD.grade(
         repo,
         _claim(tier="P0", band="Band 1", evidence="field"),
@@ -168,6 +213,25 @@ def test_p0_doctrinal_default_top_band_grades(tmp_path):
     assert got["outcome"] == "graded"
     assert got["tier"] == "P0"
     assert got["reason"] is None
+
+
+def test_p1_and_p2_unaffected_by_unstamped_p0_definition(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    _stamp_ladder(repo, store)
+    p1 = FD.grade(
+        repo,
+        _claim(tier="P1", band="Band 2", evidence="lab"),
+        root=store,
+    )
+    assert p1["outcome"] == "graded"
+    assert p1["tier"] == "P1"
+    p2 = FD.grade(
+        repo,
+        _claim(tier="P2", band="Band 2", evidence="field"),
+        root=store,
+    )
+    assert p2["outcome"] == "graded"
+    assert p2["tier"] == "P2"
 
 
 def test_p0_stamped_definition_excludes_band(tmp_path):
