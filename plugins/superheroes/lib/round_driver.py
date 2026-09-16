@@ -7220,7 +7220,7 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
 def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
     """Bind runner telemetry to the driver's order hash. Returns (envelope, refusal_reason, extra)."""
     if not evidence_run_dir:
-        return envelope, None, {}
+        return None, None, {}
     import engine_dispatch
     record, err = engine_dispatch.run_execution_record(evidence_run_dir)
     if err is not None:
