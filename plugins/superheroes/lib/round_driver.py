@@ -7417,8 +7417,10 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     except round_commit.CommitRefused as exc:
         return _commit_refused_response(session_dir, "record-result", exc, phase=phase, rnd=rnd,
                                       attempt=cur_attempt, seat=_slot_label(seat, occurrence))
+    cas_token = round_records.envelope_cas_token(envelope)
     return {"ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
             "occurrence": occurrence, "payloadSha256": payload_sha,
+            "casToken": cas_token,
             "superseded": bool(plan["superseded"]),
             "storePath": plan["storePath"], "headDiffStorePath": head_store_path}
 
