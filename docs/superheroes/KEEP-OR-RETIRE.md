@@ -672,6 +672,23 @@ The list's units are the census rows, and each entry is keyed to its census id.
   the reconciler to agree on it. No engine family applies: it guards a data shape, not a model
   behaviour.
 
+#### D15 — The stamping-chokepoint `investigated` census
+
+- **Component.** The two AST tests named above; they cost one parse of `engine_dispatch.py` per suite
+  run and a floor that must be raised if the call-site count ever legitimately drops below nine.
+- **Condition.** Citation-based, 45 days — vet, review, or incident receipts citing either test as
+  the thing that caught a seat-authored value being threaded back into the engagement read. On
+  firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** Tag it **structural** — whether a seat-authored value can reach the engagement read is a
+  property of how the dispatch layer is built, and no change of host or model removes the need for
+  the stamping function to be unable to receive one. No engine family applies: it guards a call
+  shape, not a model behaviour. Name its reader: register R7's invariant, and the certification
+  receipt writer in layer 2, which reads `engagement.read` and must be able to trust that no
+  seat-authored list contributed to it.
+
 ### E. Board & process machinery
 
 #### E1 — Issue contract checker (three-slot skeleton, anchor, DoD bar)
