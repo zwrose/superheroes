@@ -1,0 +1,10 @@
+{
+  "fixture": "accepted-exposure",
+  "description": "Security lens accepted-exposure dry-run fixture. Plants an unauthenticated health handler; calibration declares GET /api/health accepted. Acceptance bar: dry_run_security_reviewer_stub returns ok with zero findings.",
+  "seeds": [],
+  "acceptedExposure": {
+    "file": "src/routes/health.ts",
+    "line": 1,
+    "declaration": "Unauthenticated read of `GET /api/health`"
+  }
+}
