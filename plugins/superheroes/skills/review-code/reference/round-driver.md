@@ -338,7 +338,7 @@ Paths (round `N`, phase `P`, attempt `K`, storage key `skey`):
 | Seat kind | Landing path | What the seat writes |
 | --- | --- | --- |
 | **Engine** (`codex`/`cursor`) | `.../landing/P/skey.aK.json` | **Orchestrator** writes the full seat-result envelope (stub header + payload; schema from state version) from the folded `dispatch-review` stdout result; the engine seat emits JSON on stdout only. At state v5 the stub carries `provenance: dispatch-observed`; `record-result --evidence-run-dir` may stamp `executionEvidence` and compute `envelopeSha256` before ingest. |
-| **Host** (`claude` native subagent) | `.../landing/P/skey.aK.payload.json` | Payload only; driver wraps with the stub at ingest. At state v5 the wrapped envelope is `seat-result/2` with `provenance: dispatch-observed`; when execution evidence is stamped the driver writes the full envelope to `.../skey.aK.json` and removes the bare payload so the slot is not `landing-ambiguous`. |
+| **Host** (`claude` native subagent) | `.../landing/P/skey.aK.payload.json` | Payload only; driver wraps with the stub at ingest. At state v5 the wrapped envelope is `seat-result/2` with `provenance: dispatch-observed`; when execution evidence is stamped, the bare-payload landing stays single-file and the stamped envelope is written to the durable store copy only. |
 
 Both shapes present → `landing-ambiguous`. The order's landing block names the paths; seats copy
 stub header fields verbatim and never recompute hashes.
