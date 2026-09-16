@@ -3,7 +3,7 @@
 (UFR-4) + the configure CLIs (snippet / test-dispatch). Authorization is HOST-ENFORCED — the band
 never writes the owner's autoMode.allow grant; it shows the exact snippet and, at run time,
 behaviorally observes allow vs deny via a throwaway external write, run through THAT engine's own
-write command, inside the managed worktree. A wrong assumption only falls OPEN to Claude (a cost,
+write command, inside the managed worktree. A wrong assumption only falls OPEN to the host model (a cost,
 never a corrupt result), so the failure mode is safe by construction."""
 import argparse
 import json
@@ -21,7 +21,7 @@ _DISPATCH_CMD = {"codex": "codex exec", "cursor": "cursor-agent"}
 
 def _codex_capability_model():
     """The strongest default GPT-5.6 tier from the registry, or None if unresolvable
-    (caller then reports codex not-ready → falls open to Claude). Never raises."""
+    (caller then reports codex not-ready → falls open to the host model). Never raises."""
     try:
         import model_registry
         return model_registry.codex_peer_for_claude_tier("opus")
@@ -75,7 +75,7 @@ def implementation_dispatch_allowed(cwd, engine, run=None, overrides=None):
     `engine`'s OWN write command (`codex exec …` / `cursor-agent …`) so the host's per-engine
     autoMode.allow rule (`Bash(codex exec:*)` vs `Bash(cursor-agent:*)`) is exactly what is tested.
     An unknown engine, a denied/failed/errored/timed-out write → False (→ implementation role falls
-    open to Claude, UFR-4). The subprocess is bounded by the SAME configurable, test-settable limit
+    open to the host model, UFR-4). The subprocess is bounded by the SAME configurable, test-settable limit
     as UFR-5 (`engine_pref.resolve_timeout(overrides)`, default 300s) — `overrides` is threaded
     straight through so callers/tests can set it exactly like UFR-5's stall limit. Never raises."""
     if run is None:
@@ -95,7 +95,7 @@ def implementation_dispatch_allowed(cwd, engine, run=None, overrides=None):
         # during configure and defer the failure until the real build.
         probe_model = _codex_probe_model(cwd)
         if not probe_model:
-            return False  # cannot resolve the probe model → codex not-ready → fall open to Claude
+            return False  # cannot resolve the probe model → codex not-ready → fall open to the host model
         argv = ["codex", "exec", "-m", probe_model,
                 "--sandbox", "workspace-write", "-C", cwd, write_prompt]
     else:  # cursor

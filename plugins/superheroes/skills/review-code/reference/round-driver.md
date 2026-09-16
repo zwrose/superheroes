@@ -408,7 +408,7 @@ vendor the driver cannot resolve — renders the **stdout** contract instead. Th
 asymmetric, because the two mistakes are not: a host seat handed the stdout contract still returns
 its payload for the orchestrator to land, while an engine seat handed a write contract forfeits on
 the forbidden write (#767 class). **A vendor the driver DEFAULTED to is not a resolved vendor**: the
-reviewer phases (verifiers, gap-sweep, scoped) fall back to an all-claude stand-in when the
+reviewer phases (verifiers, gap-sweep, scoped) fall back to a stand-in on the host model when the
 engine-preference read cannot answer — `engine_pref.load_engine_prefs` never raises, so that
 failure arrives as `refusal_engine_prefs(readError=…)`, and `readError` is what marks it (a
 genuinely absent config is `degenerate_engine_prefs()`, whose documented defaults *are* the
