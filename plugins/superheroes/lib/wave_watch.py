@@ -535,6 +535,8 @@ def _transcript_config_dirs(env, recorded=None):
     return [_expand_home(_TRANSCRIPT_DEFAULT_CONFIG_DIR, env)]
 
 
+# WORKAROUND: transcript file mtime as lane liveness when idle signals are unreliable
+# delete-when: the background-session trial receipt marks transcript-mtime liveness not needed
 def _session_transcript_mtime(session_id, env, config_dir=None):
     """(mtime, ambiguous, unresolved) for the lane's own transcript, by recorded id.
 
@@ -1080,6 +1082,8 @@ def run(
         return result
 
 
+# WORKAROUND: loop re-arms wave_watch run because there is no durable batch watcher daemon
+# delete-when: the background-session trial receipt marks wave-watch arming not needed
 def loop(
     repo_root,
     batch_id,

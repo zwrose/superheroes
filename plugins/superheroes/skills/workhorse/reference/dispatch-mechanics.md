@@ -155,6 +155,9 @@ readers.
 
 ## Launch slice vs continuation slice
 
+<!-- WORKAROUND: 540 s continuation and short launch slice recipes for turn-end survival
+     delete-when: the background-session trial receipt marks turn-end slice recipes not needed -->
+
 Every `dispatch-review` / `dispatch-write` call names a `--max-wait` **slice** on that `--run-dir`.
 The slice you choose depends on whether the run is a **launch** or a **continuation**:
 
@@ -228,8 +231,9 @@ when this invocation also asserts `--mode brief-check` explicitly, which refuses
 Optional **`--diff-base <commit-oid>`** stages the reviewed change as
 `SUPERHEROES_REVIEW_DIFF.patch` inside the gitless sanitized view — the machinery external seats need
 because `git diff <ref>` and `git log` cannot work there; the `sanitizedView` receipt then also
-carries `diffBase`, `diffPath`, `diffBytes`, and `diffWithheldCount` (all `null` when the flag is
-omitted, or under `--mode brief-check`). On a continuation (`--run-dir` naming an existing run),
+carries `diffBase`, `diffPath`, `diffBytes`, `diffWithheldCount`, `configDiffPath`, and
+`configDiffBytes` (all `null` when the flag is omitted, or under `--mode brief-check`). On a
+continuation (`--run-dir` naming an existing run),
 `--diff-base` is accepted but ignored — the live run's view is not rebuilt — except when this
 invocation also asserts `--mode brief-check` explicitly, which refuses
 `mode-brief-check-with-diff-base` before the journal is read. Full contract — refusals,
@@ -362,7 +366,7 @@ supplying a disagreeing `--mode` is `run-dir-mode-mismatch`, `attempts: 0`. Expl
 `--mode brief-check` together with `--diff-base` always refuses `mode-brief-check-with-diff-base`
 (continuation included); `--diff-base` is accepted-and-ignored only when brief-check mode is
 inherited from the journal and `--mode` is omitted. The terminal journaled result — `mode:
-brief-check`, `attempts ≥ 1`, engagement read, `sanitizedView` with all four diff keys `null` — is
+brief-check`, `attempts ≥ 1`, engagement read, `sanitizedView` with all six diff keys `null` — is
 the receipt that the brief check happened.
 
 **The standing lens: the foreign-contract round-trip.** Whatever else the brief prompt asks, the

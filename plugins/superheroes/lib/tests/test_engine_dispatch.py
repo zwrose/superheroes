@@ -162,6 +162,8 @@ def _fake_view_receipt(**overrides):
         "diffPath": None,
         "diffBytes": None,
         "diffWithheldCount": None,
+        "configDiffPath": None,
+        "configDiffBytes": None,
         "prBodyPath": None,
         "prBodyBytes": None,
     }
@@ -4128,14 +4130,20 @@ def test_sanitized_view_receipt_forwards_diff_keys_with_get():
     assert receipt["diffPath"] is None
     assert receipt["diffBytes"] is None
     assert receipt["diffWithheldCount"] is None
+    assert receipt["configDiffPath"] is None
+    assert receipt["configDiffBytes"] is None
 
     full = dict(old_shape, diffBase="b" * 40, diffPath="SUPERHEROES_REVIEW_DIFF.patch",
-                diffBytes=99, diffWithheldCount=1)
+                diffBytes=99, diffWithheldCount=1,
+                configDiffPath="SUPERHEROES_CONFIG_CHANGES_UNDER_REVIEW.txt",
+                configDiffBytes=55)
     receipt = ED._sanitized_view_receipt(full)
     assert receipt["diffBase"] == "b" * 40
     assert receipt["diffPath"] == "SUPERHEROES_REVIEW_DIFF.patch"
     assert receipt["diffBytes"] == 99
     assert receipt["diffWithheldCount"] == 1
+    assert receipt["configDiffPath"] == "SUPERHEROES_CONFIG_CHANGES_UNDER_REVIEW.txt"
+    assert receipt["configDiffBytes"] == 55
 
 
 def test_review_continuation_ignores_diff_base(tmp_path):
@@ -4221,6 +4229,49 @@ def test_grade_review_view_meta_diff_path_rejects_patch_only_investigation(tmp_p
         tmp_path,
         {"diffPath": "SUPERHEROES_REVIEW_DIFF.patch", "headSha": "abc"},
     )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
+    assert "generated-artifact" in grade.get("investigatedRejected", [])
+
+
+def test_grade_review_view_meta_config_path_rejects_config_only_investigation(tmp_path):
+    config_name = "SUPERHEROES_CONFIG_CHANGES_UNDER_REVIEW.txt"
+    run_dir = str(tmp_path / "config-only-investigated")
+    repo_root, view = _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["viewMeta"] = {
+                "diffPath": "SUPERHEROES_REVIEW_DIFF.patch",
+                "configDiffPath": config_name,
+                "headSha": "abc",
+            }
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    stdout = json.dumps({"findings": [], "investigated": [config_name]})
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "signal": None,
+        "refusal": None, "at": time.time(), "wallSeconds": 1.0, "stdoutBytes": len(stdout),
+    })
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    patch_path = os.path.join(view["path"], "SUPERHEROES_REVIEW_DIFF.patch")
+    with open(patch_path, "w", encoding="utf-8") as fh:
+        fh.write("diff\n")
+    config_path = os.path.join(view["path"], config_name)
+    with open(config_path, "w", encoding="utf-8") as fh:
+        fh.write("config\n")
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
     assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS

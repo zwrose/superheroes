@@ -2956,6 +2956,9 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         pr_body_path = view_meta.get("prBodyPath")
         if isinstance(pr_body_path, str) and pr_body_path:
             generated = generated + (pr_body_path,)
+        config_diff_path = view_meta.get("configDiffPath")
+        if isinstance(config_diff_path, str) and config_diff_path:
+            generated = generated + (config_diff_path,)
     _, accepted, spot_rejected = engine_adapter.spot_check_investigated(
         res.get("investigated"), cwd, generated_artifacts=generated)
     rejected_records, rejected_reasons = _merge_investigated_rejections(res, spot_rejected)
@@ -3617,6 +3620,8 @@ def _sanitized_view_receipt(view):
         "diffPath": view.get("diffPath"),
         "diffBytes": view.get("diffBytes"),
         "diffWithheldCount": view.get("diffWithheldCount"),
+        "configDiffPath": view.get("configDiffPath"),
+        "configDiffBytes": view.get("configDiffBytes"),
         "prBodyPath": view.get("prBodyPath"),
         "prBodyBytes": view.get("prBodyBytes"),
     }

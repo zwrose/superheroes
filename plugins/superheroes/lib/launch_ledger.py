@@ -16,6 +16,8 @@ every ledger door fails closed until the file is cleared. Recovery is deleting
 the ledger file at the path ``ledger_path()`` reports — there is no in-place
 prune or forward-compat skip for unknown events.
 """
+# WORKAROUND: file-backed launch batch ledger when the host has no durable batch accounting
+# delete-when: the host records launch batches durably without this ledger module
 import fcntl
 import hashlib
 import json

@@ -3,6 +3,8 @@
 
 Workhorse full-lane intake declares ``build-lane.json`` beside the handback sidecar so the
 receipt gate can arm before review starts. stdlib only."""
+# WORKAROUND: build-lane sidecar marker so the receipt gate can arm before review starts
+# delete-when: the host session carries build scope without a build-lane.json sidecar file
 import argparse
 import json
 import os

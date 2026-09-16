@@ -40,6 +40,19 @@ action that owns it, leaving the rest of the calibration untouched:
 
 - **Change a single discrete field** (the verify command, the threat model) → a focused guided edit
   through `core_md`.
+- **Change one project-configuration item** → write only that item's home through `project_config`.
+  Show the current value from the view first, then pipe the new value on stdin. A refusal is
+  reported to the owner and never worked around.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '%s\n' '"gh-stack"' | python3 -B "$ROOT_DIR/lib/project_config.py" set --item stackingTool --cwd .
+  ```
+
+  **Read the result, don't assume success.** `set` returns `{action, reason?}`. Only `written` or
+  `noop` means the item was saved — surface any other `action` (`refused`, `deferred`, `behind`)
+  to the owner with its `reason`; the command exits 0 either way, so check `action`, not exit
+  status.
 - **Re-calibrate a prose-heavy hero layer** → re-run that hero's own (now-internal) calibration.
 - **Tune the guardian calibration** → read the existing `guardian.md` layer first, change the
   knob you want inside the `guardian-config` JSON fence, and submit the **complete** body (the

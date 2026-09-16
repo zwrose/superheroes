@@ -466,3 +466,302 @@ decided on evidence rather than in the middle of a bad day.
 - Corroborating the existing upstream report ([#74685](https://github.com/anthropics/claude-code/issues/74685))
   is approved rather than filing a duplicate.
 - This section (§4) is the canonical in-repo home of the ruling set.
+
+## 5. Background-session trial receipt
+
+The decide-by for the orchestration retirements. One wave was run by hand on the harness
+primitives, across the three Claude accounts on this machine, with no replacement code written
+first. This section is the record: what ran, what each named failure class did, and, piece by
+piece, what the harness now carries and what it still lacks.
+
+**Run:** 2026-09-15, 12:09Z to 12:52Z. **Harness:** Claude Code 2.1.251 on Darwin 25.6.0.
+**Accounts:** `~/.claude`, `~/.claude-two`, `~/.claude-three`. **Supervising session:** a headless,
+non-interactive build session under `~/.claude-three`. Fourteen sessions were started: eleven
+background sessions and three print-mode sessions.
+
+**How to read the piece lines, and what a clean re-run would take.** A piece whose distinguishing
+failure class was not exercised reads **needed**. A class that could not be exercised is never a
+pass, and silence about a class is never evidence that the piece it guards can go. In the other
+direction: a piece reads **not needed** only when a later run of this trial observes the condition
+on its line directly, on the path the plugin actually uses. **Every delete-when condition below is
+a condition on a re-run of this trial, not on a diff.** Reading a later child's diff and seeing
+that it changed the spawn path satisfies no condition here; the condition is satisfied when the
+trial is run again against that changed path and the observation comes back. The set outcome is
+stated once, at the end.
+
+### 5.1 The wave
+
+Three lanes, one per account, each a real task with a verifiable artifact.
+
+| Lane | Account | Session id | Launch acknowledgement | Idle notification | Terminal state | Result retrieved by |
+|---|---|---|---|---|---|---|
+| A | `~/.claude` | `323cc06c-2fb9-4037-8db3-597b00949c94` | `Starting background service… / backgrounded · 323cc06c` | subscribed; **delivered at this session's next turn boundary**, long after the lane went idle | `done`, later `blocked` | `result.json` = `{"lane":"A","sum":76127}` |
+| B | `~/.claude-two` | `43733a69-7f41-4f3e-8685-08ca749052a3` | `Starting background service… / backgrounded · 43733a69` | subscription covered by lane B2 below | `done` | `result.json` = `{"lane":"B","sum":277050}` |
+| C | `~/.claude-three` | `03f1b03c-c58a-4c38-b93b-a75975cd589b` | `backgrounded · 03f1b03c` (no service line; the service was already up) | subscription covered by lane `6ab29229` below | `done` | `result.json` = `{"lane":"C","sum":593823}` |
+
+All three sums were checked against a sieve computed independently in the supervising session, and
+all three match. Every result was retrieved from the lane's artifact on disk. None was retrieved
+from `claude logs`, which replays the raw interactive terminal with its escape sequences and is not
+a machine-readable channel.
+
+The notification leg was then run to completion across all three accounts, because two of the
+three wave lanes finished before a subscription was placed on them and an unexercised notification
+path is not evidence about notification. All five were eventually delivered, at this session's next
+turn boundary rather than during the trial; see 5.2. Five subscriptions in total, every account represented:
+lane A (`~/.claude`), lane A2 `f36e02f3` (`~/.claude`), lane B2 `0e6d2ec1` (`~/.claude-two`), the
+stall lane `5258a26b` (`~/.claude-three`), and lane `6ab29229` (`~/.claude-three`).
+
+Seven further sessions carried the rest, beyond the seven named above: a contract smoke
+(`daf1d3b4`), a turn-end survivor (`22818a88`), a background primary-checkout probe (`0df35673`),
+a pin-absent probe (`daccce1f`), and three print-mode sessions — the dying controller, a
+print-mode primary-checkout probe, and a print-mode listing probe.
+
+### 5.2 The failure classes
+
+**A session dying at turn end — exercised.** A disposable `claude -p` controller under
+`~/.claude-two` was given one instruction: launch a background lane, then finish the turn. It
+printed `22818a88` and exited at 12:26:53Z, after which `pgrep` found no `claude -p` process. The
+lane it had launched kept working and wrote `survived.txt` two minutes later. A background lane
+outlives the headless session that spawned it. What this shows is survival past the **spawning
+session's** turn end, and only that: the lane is held by a per-account background service, so it
+trades a dependency on its spawner for a dependency on that service, and the death of the service
+or the host is the class below that could not be exercised.
+
+**A stale-with-live-pid stall — exercised.** One lane was wedged on a permission prompt nobody
+would answer. Measured together at 12:28Z: the wedged lane had a live pid, a transcript 145.8
+seconds cold, and `state: blocked`; a second wedged lane, lane A (`323cc06c`), had a live pid, a transcript 144.0
+seconds cold, and `state: blocked`; a genuinely working lane had a live pid, a transcript 8.5
+seconds fresh, and `state: working`. That is the raw condition the watcher's stale class is built
+to infer — a live process, a cold transcript, no progress — and the harness labels it directly.
+It is not a run of the watcher's own code path: the watcher keys its stale class on the lane's
+semantic heartbeat and would route a lane it could see as blocked down a
+higher-precedence blocked branch, so this is the underlying condition reproduced, not that branch
+exercised.
+
+Three traps came with it. Every one of those lanes reported `status: idle`, so `status` alone
+cannot tell working from wedged from done — only `state` discriminates. The cross-session listing
+does report `busy` for a background session, but not reliably at the moment of launch: sampled
+immediately after launch it showed a mid-task lane as idle, and sampled twenty seconds later it
+showed two mid-task lanes as busy, so a reading taken right after launch can be wrong. And after
+the wedged lane was stopped, its recorded pid was still a live process — a recycled background
+spare — so a liveness probe against a recorded pid can read live when the lane is gone.
+
+**A lost idle notice — exercised. The notice was late rather than lost, and it is the finding that decides the set.** Five
+`notify_when_idle` subscriptions were placed from the supervising session, across all three
+accounts, and all five were acknowledged. Their targets: one went idle about a minute later, one
+was stopped outright, and three reached `done` within a minute of their subscription.
+
+**All five notices were delivered, and not one of them arrived during the trial.** Across every
+tool round from 12:25Z to 12:52Z, and through the whole of the verification, review, and handback
+that followed, no notice appeared. All five then arrived **together, at this session's next turn
+boundary**, at 13:26Z, each naming its lane and the time its last turn had finished: 12:25Z,
+12:26Z, 12:30Z, 12:51Z, and 12:51Z. The earliest had been waiting an hour.
+
+So the notice is not lost. It was **delivered at the subscribing session's turn boundary**, and
+at no point inside the turn that was waiting on it. A supervisor that polls inside its turn, which is what a supervisor must do
+while it still has work in flight, cannot see a notice no matter how long it waits. What was
+observed is exactly that and no more. No notice arrived within any tool round of a working turn.
+This supervising session is headless. It received the five at a turn boundary and went on working
+afterwards, so a turn boundary is not the same event as the session's exit. The cost of boundary
+delivery is narrower than exit, and still decisive for a wave. In this run, a turn that ended with lanes in
+flight learned of each finish only after that turn was over, when nothing in it could act on the
+finish. The
+acknowledgement text's "you will get one notice here" is true; what it does not say is when.
+
+This correction was made after the section was first committed, when the notices arrived. The
+original text claimed no notice was delivered, which was wrong — the trial had confused *did not
+arrive within the turn* with *did not arrive*. The distinction changes the reason every
+notification-dependent line below gives, and it changes two delete-when conditions, which had been
+written so loosely that the corrected evidence would have satisfied them.
+
+The bound on this observation: five subscriptions across three accounts, three transition kinds
+(idle, stopped, and done), one delivery event at one turn boundary. One flush event cannot separate
+delivery that happens only at boundaries from delivery that was blocked by something else and flushed
+at that boundary. A re-run that places a subscription and then idles across several boundaries would
+separate them. It says nothing about an interactive supervisor.
+
+A smaller finding from the same leg: a background session's addressable name changes shortly after
+launch, from the prompt text it was given to a short generated name. A subscription addressed to
+the launch-time name was refused as unreachable and succeeded against the settled name, so a
+supervisor that captures a lane's name at launch can hold a name that no longer resolves.
+
+**A cross-instance wake — exercised.** A message sent from the supervising session under
+`~/.claude-three` to lane A under `~/.claude`, addressed by the name the cross-session listing
+printed, was delivered and acted on: lane A wrote the file the message asked for. Wake crosses
+accounts.
+
+The supervision view does not cross accounts, and wake and supervision are different channels with different reach.
+`claude agents --json` is scoped to the config dir it runs under, and showed the trial's lanes
+split three, three, and five across the three accounts, each account seeing only its own. The
+cross-session listing used for messaging showed all of them together. So one channel can address
+a lane in another account and a different channel is needed to read that lane's work state — the
+cross-session listing carries names and a coarse busy or idle marker, not the `state` field that
+made the stall legible.
+
+**A machine-shutdown death — not exercisable.** Exercising it means rebooting this machine or
+killing the shared background service mid-wave, and unrelated live sessions were running on this
+machine throughout. Neither was in bounds. The nearest evidence, labelled a proxy and not the
+class: a lane stopped by `claude stop` was restored by `claude respawn` under the same id and
+session id with a new pid. That is a supervisor-initiated stop followed by a supervisor-initiated
+restart, so it shows the id survives a stop this trial performed itself. It shows nothing about a
+lane whose host or background service dies underneath it, and nothing about whether anything
+re-arms a lane after a reboot.
+
+### 5.3 The finding that governs every piece line
+
+Every new capability this trial found attaches to the **background** shape, and the launcher does
+not spawn that shape.
+
+A background session launched from a repository's primary checkout was given a task that
+overwrites a tracked file. The harness created `.claude/worktrees/<name>` on its own branch,
+locked it, ran the session inside it, and left the primary checkout untouched. The same repository,
+same task, run as `claude -p`, edited the primary checkout directly and created no worktree at
+all. A live `claude -p` session does appear in the session listing, but as an interactive session
+carrying no `status` and no `state` field, so the work-state signal that made the stall legible
+does not exist for it.
+
+So on the evidence of this trial the harness supplies three of the properties this machinery was
+built for — survival past the spawner's turn end, a direct wedged-or-working state, and worktree
+isolation from the primary checkout — and supplies all three only to lanes launched as background
+sessions. Today's lanes are not. Each of the three rests on a small number of observations in a
+single run on one machine, which is why every line below turns on seeing it again rather than on
+this paragraph.
+
+### 5.4 The pieces
+
+One line per piece: the piece, whether it is needed after the trial, the evidence, and, where it
+is still needed, its restated delete-when condition. Each condition is a condition on a re-run of
+this trial.
+
+- **Detached spawn in the launcher.** **Needed.** *Evidence:* a background lane survived its
+  spawning headless session's death (`22818a88-2bf2-444e-911f-3127805c06c4`; the controller exited
+  12:26:53Z and the lane wrote its artifact two minutes later), so the harness does supply survival
+  past the spawner's turn end — on the background path, which the launcher does not use, and by
+  holding the lane in a per-account service whose own death was not exercised. *Delete when:* a
+  re-run of this trial observes the launcher's own lanes surviving their spawner's turn end on the
+  path the launcher actually spawns, and the service that holds them has been exercised or its
+  failure is accepted by the owner, on the record and cited by id, as a known unexercised class.
+
+- **Wave-watch arming and the re-arm ritual.** **Needed.** *Evidence:* five idle subscriptions
+  across all three accounts (`323cc06c`, `f36e02f3`, `0e6d2ec1`, `5258a26b`, `6ab29229`), five
+  qualifying transitions, and five notices delivered — every one of them at the supervising
+  session's turn boundary, none during the turn. The signal the watcher stands in for exists, and in
+  this run it arrived too late to replace the watcher. The wave supervisor learned that a lane had
+  finished only once the turn that was waiting on it had ended.
+  *Delete when:* a re-run of this trial observes completion and wake signals reaching the
+  **headless spawning** session **while that session is still working** — inside the turn, not at
+  its boundary — for every lane of a wave, not merely for most lanes, and not at an interactive or
+  root session standing in for it.
+
+- **Transcript-mtime liveness.** **Needed.** *Evidence:* a direct `state` field discriminates
+  wedged from working without a transcript stat (`5258a26b` blocked with a 145.8-second cold
+  transcript against `22818a88` working with an 8.5-second fresh one), which would retire this
+  inference — but that field exists only for background sessions, a `claude -p` lane is listed with
+  no `status` and no `state` at all, and this run also found that `status` alone misreads all three
+  conditions as idle, that the cross-session busy marker is unreliable right after launch, and that
+  a recorded pid can outlive its lane as a recycled spare. *Delete when:* a re-run observes the
+  launcher's own lanes carrying a readable `state`, and observes that reading it distinguishes
+  working, wedged, and finished without falling back on the transcript.
+
+- **The turn-end doctrine, with its 540 and 600 second slice recipes.** **Needed.** *Evidence:*
+  the doctrine's premise was re-demonstrated live in this trial — the disposable `claude -p`
+  controller exited the moment its turn ended. What changed is that the work it launched survived;
+  what did not change is that the supervisor dies with the result still owed. The five notices did
+  arrive, at a turn boundary, and none inside the turn that was waiting on them, so in this run a
+  turn that ended with finishes owed was not rescued by its notices. A supervisor that ends its turn
+  still ends it without the finish.
+  *Delete when:* a re-run observes that a headless supervising session is notified of each
+  lane's finish in time to act on it, inside the turn and not at its boundary, for every lane of a
+  wave and not merely for most lanes, so that ending a turn stops costing the result. Survival of
+  the supervising process past a turn boundary does not satisfy this line on its own. This receipt
+  already records that shape of survival, and the waiting turn still ended without learning of
+  the finish.
+
+- **Multi-account provisioning transport.** **Needed.** *Evidence:* the negative case was run.
+  With `CLAUDE_CONFIG_DIR` unset, a lane launched from a session running under `~/.claude-three`
+  started successfully and landed under the **default** account `~/.claude` (`daccce1f`), where the
+  launching session's own supervision view cannot see it — so the pin does not merely accompany a
+  working launch, it prevents a silent misrouting. Alongside it: background sessions are visible
+  only under their own account (three, three, and five across the three accounts), and every lane's
+  transcript was written under its own account's root, which is what a cross-account supervisor
+  must know to find it. *Delete when:* a re-run observes a lane launched without the pin landing
+  under the account its launcher intended, and observes one supervision view — the one that
+  carries lane work state, not only names — spanning every account's lanes.
+
+- **The launcher-enforced half of the own-worktree ruling.** **Needed.** *Evidence:* the harness
+  provisions a locked worktree and leaves the primary checkout untouched for a background session
+  (`0df35673`), and does neither for a `claude -p` session, which edited the primary checkout
+  directly. The structural guarantee exists on a path the launcher does not use. *Delete when:* a
+  re-run observes the shape the launcher actually spawns being kept out of the primary checkout by
+  the harness itself. The direct-builder prose stays regardless; it was never the launcher's half.
+
+- **The semantic heartbeat.** **Needed.** It retires with the watcher, and the watcher stays. Its
+  own distinguishing case also came back against retirement: the wedged lane `5258a26b` reported
+  `status: idle`, and the notice it eventually produced described it as having gone idle — so an
+  idle signal reports a wedged lane as idle, which is worse than silence, because it reads as
+  completion. *Delete when:* a re-run observes the
+  watcher's conditions met and observes a completion or exit signal that distinguishes a wedged lane
+  from a finished one reaching the headless spawning session inside the turn, not at its boundary,
+  for every lane of a wave.
+
+### 5.5 The outcome
+
+**The receipt does not come back clean.** Every one of the seven lines reads needed, so all six
+pieces stay as plain keeps with their markers and their restated delete-when conditions above, and
+the semantic heartbeat stays with the watcher. Nothing on this list retires on this receipt.
+
+The reason is one reason, not seven. The harness has grown properties this machinery was built to
+supply, and grown them on the background path, while the lanes run on the print path. Three of the
+seven conditions — detached spawn, transcript-mtime liveness, and the launcher-enforced
+own-worktree half — turn on the spawn path changing and then being observed again. Three more —
+wave-watch, the turn-end doctrine, and the heartbeat — each turn on a notice reaching the headless
+session that is waiting on it while that session can still act. This trial observed such notices
+only at a turn boundary. Each of those three lines states its own further demand, and this summary
+restates none of it. The line is the condition. The seventh, multi-account transport, turns on neither: it turns
+on the config-dir pin becoming unnecessary and on one supervision view carrying lane work state
+across every account, and this run saw neither.
+
+That ordering is a description of the conditions, not a recommendation to move the spawn path
+first. Moving it first would trade a result channel that is delimited by the process exiting for
+one whose completion signal this trial could not get to arrive, and it would put the lanes inside a
+shared per-account service whose failure was never exercised. Anyone sequencing this work should
+settle how a background lane's completion is going to be learned before moving lanes onto that
+path, and should expect to re-run this trial against the changed path rather than reading a diff.
+
+The trial may be re-run. A re-run should carry the same discipline this one did: an induced stall
+rather than an absent one, a notice subscription observed separately from polling, the negative
+case run for each condition rather than the positive case alone, and the print-versus-background
+distinction held throughout, because that distinction is what separates a green that means
+something from a green that does not.
+
+### 5.6 What the advisor observed after the trial
+
+Two probes the advisor ran at vet, on 2026-09-16, with one background lane per account in throwaway
+repositories. They are recorded here because a later reader of 5.4 needs them, and they change no
+verdict and no condition.
+
+**An interactive session can message a background lane, on the same account and across accounts.**
+Both lanes appeared in the advisor's session list under their settled names. The advisor sent each a
+message; each woke from idle and wrote the file the message asked for within about a minute. The
+supervisor that could not see the idle notice in 5.2 was headless. An interactive advisor has a
+working steer channel to a background lane today, and the lane's state is readable per account by
+polling the listing. That polled state, not the notice, is the completion signal a supervisor can
+use. The line for wave-watch above keeps its condition because the launcher does not spawn this
+shape yet.
+
+**The worktree isolation in 5.3 is conditional.** Neither lane got a worktree of its own. Both
+wrote directly into the repository they were launched in, and no worktree directory was created.
+The lane in 5.3 that did get one had been asked to overwrite a tracked file; these were asked to
+add files. What decides it is not yet pinned down, so the line for the launcher-enforced
+own-worktree half keeps its condition exactly as written, and a re-run should provoke both cases.
+
+**Caveats this trial was asked to state.** The research-preview standing caveat holds: nothing
+here misbehaved, but the surface can change under us. Machine-shutdown death was not observed and
+was not exercisable here. The notice's one-shot property is stated by the contract text returned on
+every subscription and is **consistent with** what arrived — each of the five subscriptions produced
+exactly one notice — though nothing here tested a second transition on a spent subscription. The
+twelve-hour expiry was **not** observed: every notice arrived well inside that window. The shared sessions symlink carries the cross-account
+wake and the cross-account name listing; it does not carry the per-account view that reports a
+lane's work state. The caveat that nothing had yet run through this path is answered. Something has now run through it on this machine
+— fourteen sessions across three accounts in one sitting of about forty minutes, which is a first
+run and not a soak, and this section is its record.

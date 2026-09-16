@@ -106,7 +106,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **`--mode {review,brief-check}` (optional, default `review`).** `--mode review` or omitted →
 > behaviour identical to today, including `--diff-base` resolving to an empty patch →
 > `sanitized-view-diff-empty`, `attempts: 0`. `--mode brief-check` → the sanitized view is built
-> **diff-less**; all four `sanitizedView` diff keys below are `null`. Supplying **both**
+> **diff-less**; all six `sanitizedView` diff keys below are `null`. Supplying **both**
 > `--mode brief-check` and `--diff-base` is a terminal refusal `mode-brief-check-with-diff-base`,
 > `attempts: 0`, no spawn — **including on continuation**, because the check runs before the journal
 > read. On continuation, an explicitly disagreeing `--mode` is
@@ -117,7 +117,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > pre-spawn refusal alike. Registry/model gate, sanitized-view export and config strip, the #666
 > investigation floor, engagement read, and vacuous-forfeit accounting are unchanged in both modes.
 >
-> **`--diff-base <commit-oid>` (optional).** Omitted → nothing is staged and the four receipt keys
+> **`--diff-base <commit-oid>` (optional).** Omitted → nothing is staged and the six receipt keys
 > below are `null` (this has always been true — `--diff-base` was never required). Supplied → the value must be a **pinned commit object id**
 > (40 hex characters, or 64 in a SHA-256 repository); a revision expression, branch name or tag is
 > refused as `sanitized-view-diff-base-unresolved` **before any repository-local git command runs**.
@@ -136,49 +136,51 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `--mode brief-check` explicitly, which refuses `mode-brief-check-with-diff-base` before the
 > journal is read.
 >
-> The staged patch is **rejected from the #666 investigation floor**: a seat whose `investigated` array
-> cites only the patch fails the floor and forfeits vacuously, exactly as if it had cited nothing.
+> The staged review patch, the review-only configuration-changes file, and the staged PR body are
+> **rejected from the #666 investigation floor**: a seat whose `investigated` array cites only these
+> artifacts fails the floor and forfeits vacuously, exactly as if it had cited nothing.
 > Rejection is by resolved file identity, so `./NAME`, `a/../NAME` and a symlink to it are all
 > rejected. The rejection reason string is `generated-artifact`.
 >
-> **Four `sanitizedView` receipt keys** (always present, `null` when `--diff-base` was not used):
+> **Six `sanitizedView` receipt keys** (always present, `null` when `--diff-base` was not used):
 >
 > | key | meaning |
 > |---|---|
 > | `diffBase` | the resolved **merge-base** sha the patch is against (40 hex chars, or 64 in a SHA-256 repository) |
 > | `diffPath` | `SUPERHEROES_REVIEW_DIFF.patch`, relative to the view root |
 > | `diffBytes` | patch size in bytes |
-> | `diffWithheldCount` | **only** the changed non-tree entries the stripped-config policy withheld; underivable, unrecognized, unaccounted, and opaque content **refuse the dispatch** rather than being counted here — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
+> | `diffWithheldCount` | **only** the changed non-tree entries the stripped-config policy withheld; undecodable paths, unrecognized spans, unaccounted census entries, and opaque content **refuse the dispatch** rather than being counted here — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
+> | `configDiffPath` | `SUPERHEROES_CONFIG_CHANGES_UNDER_REVIEW.txt`, relative to the view root, when withheld configuration hunks were staged; `null` when nothing was withheld |
+> | `configDiffBytes` | size in bytes of that configuration-changes file; `null` when `configDiffPath` is `null` |
 >
 > The census of changed paths comes from direct two-tree enumeration (`git ls-tree` on the
 > merge-base and head), not from patch presentation — `git diff`, rendered patch text, or a list of
-> presently-known dangerous configuration keys. Every changed recursively enumerated **non-tree**
-> entry — blob/file, symlink or gitlink — must be **rendered**, **policy-withheld**, or **refused**
-> before any external engine spawns. The merge-base the census is taken against is resolved outside
-> the reviewed repository's git directory — in a scratch repository linked only by its object store,
-> under an environment with every inherited `GIT_*` variable dropped — so repository-controlled
-> ancestry overlays cannot select a base that omits a genuine change, and dispatch **refuses** when
-> authoritative ancestry cannot be established. An empty directory added or removed in a commit is a
-> tree-only change carrying no file, symlink or gitlink content, `git diff` renders nothing for it
-> either, and it is therefore outside this contract. Until a follow-up issue
-> lands, opaque or unaccounted content returns a named terminal refusal (`attempts: 0`) that is
-> never interpreted as zero findings or a clean review; there is no automatic fallback, and that
-> absence is an explicitly accepted availability limitation.
+> presently-known dangerous configuration keys. Sections on stripped paths are filtered out of the
+> review patch; a section whose path cannot be decoded refuses; an unrecognized span refuses. The
+> merge-base is resolved directly in the reviewed repository under an environment built by dropping
+> every inherited `GIT_*` variable, with replace-refs and the commit-graph pinned off — and
+> repository-local ancestry overlays such as `.git/info/grafts` are honoured. An empty directory
+> added or removed in a commit is a tree-only change carrying no file, symlink or gitlink content,
+> `git diff` renders nothing for it either, and it is therefore outside this contract. Opaque or
+> unaccounted content returns a named terminal refusal (`attempts: 0`) that is never interpreted as
+> zero findings or a clean review; there is no automatic fallback.
 >
 > **Diff refusals** (all `attempts: 0`, no token spend), joining the existing `sanitized-view-*`
 > family:
 >
 > | token | when |
 > |---|---|
-> | `sanitized-view-diff-base-unresolved` | the base is empty, begins with `-`, is not a pinned 40-/64-hex commit object id, does not resolve to a commit, shares no merge base with head, the repository's shallow state cannot be determined from its git, the repository's object store cannot be located, the scratch ancestry repository cannot be created, or the merge-base cannot be established from it |
+> | `sanitized-view-diff-base-unresolved` | the base is empty, begins with `-`, is not a pinned 40-/64-hex commit object id, does not resolve to a commit, shares no merge base with head, the repository's shallow state cannot be determined from its git, or the merge-base cannot be established |
 > | `sanitized-view-diff-base-shallow` | the reviewed repository is a shallow clone, so the genuine merge-base cannot be established from its object store; fetch full history (for example `fetch-depth: 0` or `git fetch --unshallow`) and dispatch again |
 > | `sanitized-view-diff-empty` | a base was requested and the resulting patch is empty with nothing withheld |
 > | `sanitized-view-diff-fully-withheld` | every changed path was withheld as stripped config — an external seat could not review this change at all |
 > | `sanitized-view-diff-too-large` | the patch exceeds the 8 MiB ceiling, or census `ls-tree` stdout exceeds the export byte ceiling |
 > | `sanitized-view-diff-path-collision` | the repository already tracks a file named `SUPERHEROES_REVIEW_DIFF.patch` |
+> | `sanitized-view-diff-config-path-collision` | the review-only configuration-changes file could not be created at its name in the view, or did not read back as written |
+> | `sanitized-view-diff-config-too-large` | the assembled review-only configuration-changes file exceeds its size cap, or patch streaming hits its byte ceiling while those hunks are being generated |
 > | `sanitized-view-diff-failed` | a git subprocess failed while resolving ancestry or generating the patch (spawn error, non-zero exit, timeout) — command failure only |
-> | `sanitized-view-diff-unaccounted` | an unrecognized non-`diff --git` span, a duplicate path within one census tree, a changed census entry that survived the stripped policy but has no rendered section, a rendered section for a path the census does not contain, or a duplicate rendered section for the same path |
 > | `sanitized-view-diff-opaque` | a rendered section whose content is opaque — `Binary files … differ` (or `GIT binary patch`) instead of hunks |
+> | `sanitized-view-diff-unaccounted` | a census tree containing the same path more than once, a patch section whose path cannot be decoded, or an unrecognized span in the patch text |
 >
 > **Mode refusals** (all `attempts: 0`, no spawn — not members of the `sanitized-view-*`
 > diff-refusal family above):
@@ -204,67 +206,10 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **View build refusal (no fallback).** If the sanitized view cannot be built, `dispatch-review`
 > returns a named `unrunnable` refusal with `attempts: 0` and **no spawn** — alongside post-argparse
 > refusals such as `sanitized-view-tempbase-inside-repo`, `sanitized-view-head-unresolved`,
-> `sanitized-view-export-failed`, `sanitized-view-export-timeout`, `sanitized-view-partial-clone`,
+> `sanitized-view-export-failed`, `sanitized-view-export-timeout`,
 > and `sanitized-view-init-failed`
 > (also `attempts: 0`). There is
 > **no fallback to the raw repo and no opt-out**.
->
-> **Partial clones are an unsupported checkout shape** (owner-ruled 2026-08-09, #797). View
-> construction **refuses the shape up front**, before it reads a single object:
-> **`sanitized-view-partial-clone` — partial or unhydrated clone detected; sanitized-view
-> construction refused. Hydrate the checkout and dispatch again.** Nothing is materialized, so
-> there is no partial view to clean up. As defence in depth, every git subprocess construction
-> spawns also runs under `GIT_NO_LAZY_FETCH=1`, so no path can wait on git's on-demand fetching of
-> an object the checkout does not hold — the quiet-hang class PR #761 recorded.
->
-> **Hydrating.** Re-cloning without `--filter` is the reliable remedy. To fix a checkout in place,
-> every marker the detector reads has to go — not just `origin`'s two keys — because any one of
-> them on its own re-triggers the refusal:
->
-> ```bash
-> # 1. list what is actually there (any of these three shapes counts, on ANY remote name)
-> git config --local --get-regexp '^remote\..*\.(promisor|partialclonefilter)$'
-> git config --local --get extensions.partialclone
->
-> # 2. clear every line the first step printed, substituting the real remote name
-> git config --local --unset-all remote.<name>.partialclonefilter
-> git config --local --unset-all remote.<name>.promisor
-> git config --local --unset-all extensions.partialclone
->
-> # 3. fetch the objects the filter had been skipping
-> git fetch --refetch <name>
-> ```
->
-> A checkout whose only marker is `extensions.partialclone`, or whose promisor remote is not named
-> `origin`, is still refused after unsetting `origin`'s keys alone.
->
-> **`git fetch --refetch` on its own is not a remedy** — it deliberately reapplies the filter
-> recorded in `remote.<name>.partialCloneFilter`, so it downloads another filtered pack and leaves
-> the required objects absent, returning the operator to the identical refusal. (Measured on git
-> 2.50.1 against a `--filter=blob:none` clone: the blob was still reported `missing` after a bare
-> `--refetch`, and present after the unset-then-refetch above.)
->
-> **The refusal is wider than "this clone is missing something we need", deliberately.** A filtered
-> clone that happens to hold every object it needs still refuses. Three measured facts make the
-> narrower reading untenable. A blob-filtered clone **with a checkout** — the shape real users have
-> — has its HEAD blobs already hydrated, so materialization succeeds and only the review diff trips
-> over an absent base-side blob, arriving as an ordinary "git diff failed" that is
-> indistinguishable at that call site from a dozen unrelated faults. The outward refusal tokens are
-> umbrellas (`sanitized-view-export-failed` also covers a census type mismatch and a
-> destination-filesystem error), so renaming one would tell an operator to hydrate their checkout
-> when their disk was full. And `GIT_NO_LAZY_FETCH` is honoured only by newer git, so a mechanism
-> resting on it alone is silently inert on an older client. Refusing the shape, from config, is the
-> one answer that holds on every git version and every filter.
->
-> **What counts as the shape.** The repository's **own** config (`--local`, so a marker in a user's
-> global config cannot condemn every repository on the machine) carrying any of
-> `extensions.partialclone`, `remote.<name>.partialCloneFilter`, or a git-true
-> `remote.<name>.promisor`. Boolean values are evaluated by `git config --type=bool` itself rather
-> than by a hand-rolled parser — git reads `yes`/`on`/`1` as true and also `0x10`, `010` and `1k`.
-> A config probe that cannot run answers "not partial" and lets the build proceed under the
-> `GIT_NO_LAZY_FETCH` backstop, so a config hiccup on an ordinary repository never becomes a hard
-> refusal. No timeout machinery is involved — the ruling replaced the earlier bounded-deadline
-> design.
 >
 > **Argparse vs JSON refusals.** `--repo-root` is **required** and validated by argparse before
 > `dispatch-review` runs: a missing flag, an empty expansion from an unset shell variable
@@ -278,8 +223,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > **Receipt.** Every dispatch result carries a `sanitizedView` block (`strategy`, `stripped`,
 > `strippedCount`, `headSha`, `sourceDirty`, `buildSeconds`, `bytes`, `fileCount`, plus `diffBase`,
-> `diffPath`, `diffBytes`, `diffWithheldCount` — the last four always present, `null` when
-> `--diff-base` was not used). The `bytes` and `fileCount` figures **include** the staged patch when
+> `diffPath`, `diffBytes`, `diffWithheldCount`, `configDiffPath`, and `configDiffBytes` — the last
+> six always present, `null` when `--diff-base` was not used). The `bytes` and `fileCount` figures
+> **include** the staged patch when
 > one was written. The view is the **committed** tree at `headSha`; `sourceDirty: true` flags modified
 > tracked files in the source repo
 > so a caller reviewing uncommitted work is disclosed rather than silently given the pre-change tree.
