@@ -79,11 +79,12 @@ still produced by The Architect.
   launch prompt (command + issue pointer; durable build context lives in the issue), vets every
   PR from its artifacts against the
   issue/spec and the build brief, owns board hygiene and release coordination, keeps
-  durable memory. **Never builds.** The never-delegable act is the **approval** — the gate
-  click, the release cut, the publish decision. **Merge-command execution** is delegable, but
-  **only where a mechanical per-merge approval checkpoint exists on that host or path**; where
-  none exists, execution stays in the owner's hands. **Release PRs and anything needing a
-  force-push are never delegated.**
+  durable memory. **Never builds.** The never-delegable act is **approval** — the owner's
+  scoped word in chat after the PRs are talked through. **Merge-command execution** is
+  delegable inside that word: the advisor executes after the lane's review and verification
+  evidence, CI green on the recorded head, and a current branch, and reports each merge in
+  the thread that gave the word. **Release PRs and anything needing a force-push are never
+  delegated.**
 - **Workhorse** — the builder session: issue-scoped, disposable, parallelizable. Takes a
   routed issue, writes and gets the build brief checked, delegates all implementation to
   tiered subagents or engines, verifies every receipt itself, runs test-pilot and
@@ -750,12 +751,9 @@ not an oversight.
 
 **Confinement + hygiene.** External reviewers run read-only; external implementers run
 workspace-write, confined to the builder's own worktree, with **no remote authority** —
-the band owns every push / PR / merge, mechanically backstopped by the owner-authority
-gate (a minimal PreToolUse hook, `LEDGERS.md` §1.1) that prompts the owner before any
-merge/release/force-push shape, and never bypassed by an external engine. The
-never-merge floor (`lib/owner_authority.py`) is another name for this owner-authority
-gate; the owner-approval rule (`PHILOSOPHY.md` §4, ruling #706) is the doctrine the gate
-backstops — where the gate does not fire, the rule still governs. A second
+the band owns every push / PR / merge, and an external engine never bypasses that. The
+owner-approval rule (`PHILOSOPHY.md` promise 1) governs every merge: approval is the
+owner's scoped word, and executing inside it is the advisor's act. A second
 Claude Code hook (`LEDGERS.md` §1.1) denies git commands that would irrecoverably
 discard uncommitted worktree content — the checkout-revert wipe class every implementer
 and mutation-probe path can trigger. All external
@@ -1277,15 +1275,13 @@ before it ships, both of:**
 Both are load-bearing, not paperwork: a hook without a named consumer is exactly how a
 charter re-accumulates the spine's machinery one "just this one small check" at a time;
 a hook without a ledger entry is an unexamined divergence with no trigger to retire it.
-The restored owner-authority gate (`LEDGERS.md` §1.1 — a minimal PreToolUse hook
-mechanically enforcing the never-merge/never-release line) is the live example of a
-divergence that earned its entry: it names its consumer (every session, via the
-covenant's hardest line), states the platform primitive it awaits (plugin-shippable
-native permission rules), and carries the trigger that retires it. The worktree guard
-(`LEDGERS.md` §1.1 — a minimal PreToolUse hook on Claude Code that denies git commands
-that would silently destroy uncommitted work) also satisfies both: its consumer is every
-Claude Code build session's revert/mutation-probe path (workhorse charter §8) and every
-implementer subagent, since plugin hooks fire inside subagents.
+The worktree guard (`LEDGERS.md` §1.1 — a minimal PreToolUse hook on Claude Code that
+denies git commands that would silently destroy uncommitted work) is the live example of
+a divergence that earned its entry: it names its consumer (every Claude Code build
+session's revert/mutation-probe path — workhorse charter §8 — and every implementer
+subagent, since plugin hooks fire inside subagents), states the platform primitive it
+awaits (plugin-shippable native permission rules that can express a state-conditional
+deny), and carries the trigger that retires it.
 
 This rule is enforced the same way review discipline is: at review, a reviewer citing
 this section is enough to block a hook or gate that skipped either step.
