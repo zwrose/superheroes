@@ -14,6 +14,22 @@ headings.
   none** — a new heading or a new restated clause is silently unguarded until someone adds it;
 - the guard proves nothing about whether the doctrine is correct, obeyed, or actually recorded for
   any change.
+
+**Birth duties.** This detector is rung-4 machinery under the rule in
+``rubric/review-discipline.md``, section ``Prefer shapes that cannot fail``, and it carries all
+three:
+
+- **Bite-proof** — recorded at ``lib/tests/bite_proofs/c3_1262_pointer_census.md``. The pointer
+  count assertion and the roster completeness walker were each driven red on a planted defect and
+  returned to green.
+- **Retirement condition and tag** — entry **S7** on the project's keep-or-retire record, which
+  lives with the project's definition-docs.
+- **By-construction coverage, for the pointer half only** — ``_walk_plugin_pointer_sections`` walks
+  every markdown file under the plugin root and ``_check_pointer_roster_complete`` refuses any
+  pointer-carrying section the roster does not name, so a new consumer cannot be missed silently.
+  ``_census_excluded`` is the walk's one exclusion chokepoint. The **heading and clause rosters have
+  no such walker**; they are hand-maintained, which is the residual recorded above and is not
+  covered by this duty.
 """
 import os
 import re

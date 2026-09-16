@@ -370,7 +370,7 @@ out of class is an extractor that parses document structure or judges what prose
 parsers**, **table checks**, and **message/meaning guards** are **out of class** — permanently.
 Prose *meaning* and *structure* are review's job, not CI's.
 
-On a [doctrine surface](glossary.md#doctrine-surface), the pin rule narrows the kept classes; see
+On a [doctrine surface](rubric/glossary.md#doctrine-surface), the pin rule narrows the kept classes; see
 `### One home per rule, and the pin rule`.
 
 **Prose-executed paths are pinned structurally, not driven end-to-end by an executable harness.**
@@ -522,7 +522,7 @@ machinery or answer a finding that does.
 
 Standing machinery may watch the work. It never watches other machinery. A guard's complete
 verification diet, for its whole life, is three things and nothing else: its birth bite-proof,
-the sampled probes a vet runs, and its entry on the [keep-or-retire list](glossary.md#keep-or-retire-list).
+the sampled probes a vet runs, and its entry on the [keep-or-retire list](rubric/glossary.md#keep-or-retire-list).
 
 Evidence that a single act of work actually ran, riding in-band with that act, is part of the
 work and is fine. A control probe inside one review and CI running one pull request are the
@@ -544,7 +544,7 @@ routing a finding to the door, never removes an Important finding from the surfa
 reads. A proposer who believes a finding is not guard-on-guard routes it to the door, where
 declining it earns a registry line.
 
-The [ground-truth sources](glossary.md#ground-truth-sources) list is the sources whose word is
+The [ground-truth sources](rubric/glossary.md#ground-truth-sources) list is the sources whose word is
 taken as true without further checking, such as CI's exit code or git's history, and every claim
 points at one of them in a single step. It is an enumeration, not a scoring instrument, and each
 project configures it.
@@ -567,8 +567,8 @@ Rung 4 owes three birth duties, all required:
    by construction is part of the bar, so no wall-clock assertions and no inference from the
    environment. Read `rubric/bite-proof.md` for the obligation, the ways a bite-proof is vacuous,
    and the record shape.
-2. A **[retirement condition](glossary.md#retirement-condition)**, with the component's tag, on
-   its [keep-or-retire entry](glossary.md#keep-or-retire-entry).
+2. A **[retirement condition](rubric/glossary.md#retirement-condition)**, with the component's tag, on
+   its [keep-or-retire entry](rubric/glossary.md#keep-or-retire-entry).
 3. **By-construction coverage**: the detector's scope is complete because of how it is built, one
    chokepoint or a closed enumeration, and never a hand-maintained list chased case by case.
 
@@ -581,8 +581,8 @@ The test suite is machinery, at two granularities.
 - **Detector-shaped tests** (drift pins, invariant guards, censuses written as tests) are rung-4
   detectors individually. Each owes the three birth duties and enters the keep-or-retire list. One
   that never failed for a real reason is a retirement candidate like any other
-  [plugin component](glossary.md#plugin-component). A detector-shaped test on a
-  [doctrine surface](glossary.md#doctrine-surface) also obeys the pin rule below.
+  [plugin component](rubric/glossary.md#plugin-component). A detector-shaped test on a
+  [doctrine surface](rubric/glossary.md#doctrine-surface) also obeys the pin rule below.
 - **Ordinary behavior tests on the work** are part of the work. They carry normal test craft, not
   individual birth duties and not their own keep-or-retire lines. The behavior-test class holds one
   keep-or-retire line as a class.
@@ -625,11 +625,17 @@ is recorded the way that section says.
 Every rule, schema, and contract gets exactly one home. Every other surface points at it and never
 restates it.
 
+Pointing and restating are told apart by what the second surface reproduces. A surface **points**
+when it names, in its own scope, the bar that applies there and cites the home for everything a
+reader would act on. A surface **restates** when it reproduces the rule's operative clauses, the
+sentences a vet would grade a change against, so that a reader could act on the second copy without
+ever opening the home. A scope statement with a pointer is not a copy.
+
 A drift pin on a mirror is a **delete signal**, meaning delete the mirror, and not a maintenance
 obligation. Maintaining two copies costs more than the duplication ever saved, and the pin makes
 the cost recur rather than end.
 
-**The pin rule.** A test on a [doctrine surface](glossary.md#doctrine-surface) pins **structure**,
+**The pin rule.** A test on a [doctrine surface](rubric/glossary.md#doctrine-surface) pins **structure**,
 never **sentences**. It may assert that a check id, a heading, or a column exists where code and
 doc both need it. It never asserts a doctrine sentence. This rule keeps the mirror class from
 growing back inside the test suite.
@@ -642,21 +648,24 @@ growing back inside the test suite.
   pin on replaced text is the expected outcome, not a surprise.
 - A pin whose subject is a **hard line**, a rule written as one that never bends, wherever it is
   stated, including the covenant's hard lines and those of an
-  [authority surface](glossary.md#authority-surface), is outside this closure. Such a pin is not
+  [authority surface](rubric/glossary.md#authority-surface), is outside this closure. Such a pin is not
   written anew, it is not deleted when it goes red, and it retires only on the owner's word. When
   it goes red, the hard line it guards is what you investigate first. Deleting such a pin when it
   goes red would invert the fail direction of the one check standing over a hard line.
 
-**The reconciliation with the byte-literal floor**, stated here and pointed at from there. On a
-doctrine surface the byte-literal floor's kept classes shrink from four to two: cross-doc
-literal-agreement pins and hard-line sentence pins are closed, because both pin sentences;
-register-quote checks survive, and cardinality floors survive only when their census counts
-structural identifiers or data (headings, check ids, columns, register entries). A cardinality
-floor whose census elements are sentences is closed exactly as a sentence pin is, and retires the
-same way. A pin whose subject is a **hard line**, a rule written as one that never bends, wherever
-it is stated, including the covenant's hard lines and those of an
-[authority surface](glossary.md#authority-surface), is outside this closure. Off a doctrine
-surface the floor is unchanged.
+**The reconciliation with the byte-literal floor**, stated here and pointed at from there. The floor
+keeps four classes of mechanical guard over prose. On a doctrine surface each of the four is decided
+by the same test this section opens with: does the pin hold a copy of the surface's operative
+doctrine sentences? A pin that holds such a copy is closed, because the copy is a second home. A pin
+that holds structural identifiers or data, a heading, a check id, a column, or a register entry, is
+not a copy and stays open.
+
+Class by class. A **cross-doc literal-agreement pin** over doctrine sentences is closed. A
+**register-quote check** stays open, because a register entry is data its own register owns. A
+**cardinality floor** stays open when its census counts structural identifiers or data, and is
+closed when its census elements are doctrine sentences, retiring the way a sentence pin does. A
+**hard-line sentence pin** is governed by the hard-line bullet above rather than by this test, and
+stands. Off a doctrine surface the floor is unchanged.
 
 ### A behavior test that goes red
 
@@ -666,14 +675,14 @@ When the red is a **genuine regression** in the behaviour the test claims to pro
 behaviour and keep the test.
 
 When the red is an **obsolete expectation**, meaning the behaviour changed on purpose, **delete**
-the test rather than rewriting its expectation, unless the project's [keep list](glossary.md#keep-list)
+the test rather than rewriting its expectation, unless the project's [keep list](rubric/glossary.md#keep-list)
 names the file.
 
 Either way, put the classification and its reason in the pull request body.
 
-The [keep list](glossary.md#keep-list) is the whole apparatus. There is no per-file record of
+The [keep list](rubric/glossary.md#keep-list) is the whole apparatus. There is no per-file record of
 catches or kills to consult and none to build. At contact you check one list for one file name. A
-project names its keep list as a [project configuration](glossary.md#project-configuration) item.
+project names its keep list as a [project configuration](rubric/glossary.md#project-configuration) item.
 
 This rule activates only once the owner has stamped the project's keep list. Before that, nothing
 is deleted and expectations are not rewritten.
