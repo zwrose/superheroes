@@ -56,7 +56,7 @@ def _census_excluded(rel):
 # implementer § Validating — validity rule 6 names expected bite-proof (count=1)
 # test-reviewer § Named test-smell taxonomy — axis-line smell cites doctrine home (count=1)
 # review-discipline § Review bars — Mechanical guards subsection structural-pin doctrine (count=1)
-# review-discipline § Machinery — One home per rule subsection bite-proof pointer (count=1)
+# review-discipline § Machinery — Prefer shapes that cannot fail subsection bite-proof pointer (count=1)
 # CONVENTIONS §12 — verification contracts pointer to vacuity-trap home (count=2)
 _CONSUMER_ROSTER = [
     ("skills/workhorse/SKILL.md", "## 6. Decompose into work orders", 1),

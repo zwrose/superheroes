@@ -1013,7 +1013,9 @@ This pattern is **closed**. No new copy is written under it. The copies that exi
 Each legacy copy retires when the fact it mirrors reaches its one home. A drift pin that goes
 red because the text it mirrors changed is closed by **deleting the mirror and its pin**,
 never by updating the copy to match. The body that follows is kept because it records what
-those copies are and where each is blind, which a reader retiring one needs.
+those copies are and where each is blind, which a reader retiring one needs. The "add a new
+copy here" notes embedded in existing drift tests are roster-maintenance notes for the copies
+that already exist, and license no new copy.
 
 A consumer keeps its own copy for ergonomics, but a **drift test parses (or reads) the
 authoritative home and asserts equality**. The reader **must fail closed** — if it parses

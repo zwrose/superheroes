@@ -57,15 +57,12 @@ Minor and Nit findings never change the verdict regardless of strictness.
    sanctioned spec construct (CONVENTIONS §3.2), not leaked implementation detail and
    not a leftover placeholder — never strip or flag it as tech-leak, a path reference,
    or `{{…}}`/TBD noise.
-6. **Single source of truth for cross-boundary facts.** A fact consumed across a
-   module or language boundary (phase lists, event/verb names, schema field sets,
-   verdict/reason tokens, path layouts, reviewer rosters) must have one
-   authoritative home; every other consumer **reads the home** or **cites it**. A
-   second hand-maintained copy is review-blocking **whether or not a drift test
-   guards it**. A contract test that restates the constant instead of reading the
-   home proves nothing. (In this repo the rule is formalized as **CONVENTIONS §11**,
-   citable by number; the band-level rule's home is `rubric/review-discipline.md`
-   under `### One home per rule, and the pin rule`.)
+6. **Single source of truth for cross-boundary facts.** A second hand-maintained
+   copy of a fact used across a module or language boundary is review-blocking,
+   whether or not a drift test guards it; a contract test that restates the constant
+   instead of reading the home proves nothing. Homes: **CONVENTIONS.md** section 11
+   for this repository's statement; `rubric/review-discipline.md` under
+   `### One home per rule, and the pin rule` for the band rule.
 7. **A review seat never changes the repository, and never claims a run it did not make.**
    Both halves are **obligations on the seat, not consequences of its tool grant.** What a
    seat is *able* to do varies by host and dispatch shape — a frontmatter grant constrains
