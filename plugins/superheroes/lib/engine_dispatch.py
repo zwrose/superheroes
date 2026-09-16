@@ -4146,6 +4146,47 @@ def _observation_from_attempt(run_dir_real, state, attempt):
         "wallSeconds": elapsed,
         "source": source,
     }
+    try:
+        role_kind = opened.get("roleKind", RUN_KIND_REVIEW)
+        fed_prompt = opened.get("fedPrompt", "")
+        echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
+        cwd = opened.get("cwd", "")
+        norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+        if not norm_strip.get("echoOnly"):
+            envelope_error = norm_strip["rawEnvelopeError"]
+            res = engine_adapter.parse_result(
+                engine, role_kind, stdout, raw_envelope_error=envelope_error,
+                echo_nonce=echo_nonce)
+            if not _parse_review_has_payload(res):
+                stripped_text = norm_strip["text"]
+                if stripped_text and stripped_text.strip():
+                    res = engine_adapter.parse_result(
+                        engine, role_kind, stripped_text, raw_envelope_error=envelope_error,
+                        echo_nonce=echo_nonce)
+            if res.get("ok") and not _review_parse_kind_invalid(res):
+                kind = res["resultKind"]
+                has_payload, payload = _review_result_payload(res, kind)
+                view_meta = opened.get("viewMeta")
+                generated = ()
+                if isinstance(view_meta, dict):
+                    diff_path = view_meta.get("diffPath")
+                    if isinstance(diff_path, str) and diff_path:
+                        generated = (diff_path,)
+                    pr_body_path = view_meta.get("prBodyPath")
+                    if isinstance(pr_body_path, str) and pr_body_path:
+                        generated = generated + (pr_body_path,)
+                    config_diff_path = view_meta.get("configDiffPath")
+                    if isinstance(config_diff_path, str) and config_diff_path:
+                        generated = generated + (config_diff_path,)
+                _, accepted, _spot_rejected = engine_adapter.spot_check_investigated(
+                    res.get("investigated"), cwd, generated_artifacts=generated)
+                if has_payload:
+                    return _engagement_with_read(engagement, result_kind=kind, items=payload)
+                if accepted:
+                    return _engagement_with_read(
+                        engagement, result_kind=kind, items=[], investigated=accepted)
+    except Exception:
+        pass
     return _engagement_with_read(engagement)
 
 
