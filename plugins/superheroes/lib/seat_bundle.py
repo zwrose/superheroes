@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 
 import dispatch_allowlist
 import model_registry
@@ -348,6 +349,15 @@ def parse(raw, *, vendor_hint=None) -> dict:
 
 _EFFORT_SOURCE_CANONICAL = frozenset({"caller", "default", "resolved"})
 
+# Producer vocabulary from model_registry.resolve_dispatch — keys must cover every token.
+_REGISTRY_EFFORT_SOURCES = frozenset({
+    "seat-default",
+    "given",
+    "token-encoded",
+    "resolved-unique",
+    "resolved-lowest-rung",
+})
+
 _EFFORT_SOURCE_MAP = {
     "seat-default": "default",
     "given": "caller",
@@ -356,9 +366,12 @@ _EFFORT_SOURCE_MAP = {
     "resolved-lowest-rung": "resolved",
 }
 
+_MODE_ROLE_CHECK_UNSET = object()
+_MODE_ROLE_CHECK_SKIP = object()
+
 
 def _map_effort_source(registry_source: str) -> str:
-    return _EFFORT_SOURCE_MAP.get(registry_source, registry_source)
+    return _EFFORT_SOURCE_MAP[registry_source]
 
 
 def _model_source_from_resolution(parsed_model, registry_effort_source: str) -> str:
@@ -796,9 +809,64 @@ def _brief_check_role_mode_refusal(effective_mode: str) -> dict:
     )
 
 
-def _dispatch_review_mode_role_refusal(role: str, mode: str | None) -> dict | None:
-    """Bidirectional brief-check mode/role coherence for dispatch-review."""
-    effective = mode if mode is not None else "review"
+def _dispatch_review_mode_for_role_check(mode: str | None, run_dir) -> object | str | None:
+    """Continuation-aware effective mode for post-allowlist role coherence."""
+    if run_dir is None:
+        return None
+    import engine_dispatch as ed  # noqa: WPS433 — lazy: journal peek only on dispatch-review
+
+    try:
+        run_dir_real = os.path.realpath(run_dir)
+    except OSError:
+        return None
+    records, _corrupt = ed._journal_read(run_dir_real)
+    opened = ed._journal_state(records).get("opened")
+    if opened is None:
+        return None
+    journal_mode = opened.get("mode") or ed.sanitized_view.MODE_REVIEW
+    if mode is None:
+        return journal_mode
+    if mode != journal_mode:
+        return _MODE_ROLE_CHECK_SKIP
+    return mode
+
+
+def _infer_dispatch_review_mode_for_role_check(mode: str | None):
+    """Read dispatch_review run_dir from the caller when resolve_entry omits mode_for_role_check."""
+    frame = inspect.currentframe()
+    try:
+        caller = frame.f_back if frame is not None else None
+        while caller is not None:
+            if (
+                caller.f_code.co_name == "dispatch_review"
+                and os.path.basename(caller.f_code.co_filename) == "engine_dispatch.py"
+            ):
+                import engine_dispatch as ed  # noqa: WPS433 — lazy: sentinel + journal peek
+
+                run_dir = caller.f_locals.get("run_dir")
+                if run_dir is ed._PARAM_UNSET:
+                    run_dir = None
+                return _dispatch_review_mode_for_role_check(mode, run_dir)
+            caller = caller.f_back
+    finally:
+        del frame
+    return None
+
+
+def _dispatch_review_mode_role_refusal(
+    role: str,
+    *,
+    mode: str | None,
+    mode_for_role_check,
+) -> dict | None:
+    """Post-allowlist brief-check mode/role coherence for dispatch-review."""
+    if mode_for_role_check is _MODE_ROLE_CHECK_SKIP:
+        return None
+    effective = (
+        mode_for_role_check
+        if mode_for_role_check is not None
+        else (mode if mode is not None else "review")
+    )
     if effective == _MODE_BRIEF_CHECK and role != "brief-check":
         return _mode_role_coherence_refusal(role)
     if role == "brief-check" and effective != _MODE_BRIEF_CHECK:
@@ -919,7 +987,9 @@ def _normalize_allowlist_verdict(verdict, *, role: str, vendor: str, model: str,
     return {"ok": True, "allowlistVerdict": verdict}
 
 
-def resolve_entry(seat_raw, *, verb, mode=None) -> dict:
+def resolve_entry(
+    seat_raw, *, verb, mode=None, mode_for_role_check=_MODE_ROLE_CHECK_UNSET,
+) -> dict:
     """Single chokepoint for dispatch entry seat resolution (#1269 WO-1)."""
     if verb not in _ENTRY_VERBS:
         return _entry_refusal(
@@ -927,14 +997,14 @@ def resolve_entry(seat_raw, *, verb, mode=None) -> dict:
             f"unknown resolve_entry verb {verb!r}; accepted verbs: "
             f"{_format_valid(tuple(sorted(_ENTRY_VERBS)))}",
         )
+    if mode_for_role_check is _MODE_ROLE_CHECK_UNSET and verb == "dispatch-review":
+        mode_for_role_check = _infer_dispatch_review_mode_for_role_check(mode)
     parsed = _parse_entry_raw(seat_raw)
     if not parsed.get("ok"):
         return parsed
     role = parsed["role"]
-    if verb == "dispatch-review":
-        mode_refusal = _dispatch_review_mode_role_refusal(role, mode)
-        if mode_refusal is not None:
-            return mode_refusal
+    if verb == "dispatch-review" and mode == _MODE_BRIEF_CHECK and role != "brief-check":
+        return _mode_role_coherence_refusal(role)
     elif mode == _MODE_BRIEF_CHECK and role != "brief-check":
         return _mode_role_coherence_refusal(role)
     if verb in ("dispatch-review", "dispatch-write"):
@@ -961,6 +1031,12 @@ def resolve_entry(seat_raw, *, verb, mode=None) -> dict:
     )
     if not normalized.get("ok"):
         return normalized
+    if verb == "dispatch-review":
+        mode_refusal = _dispatch_review_mode_role_refusal(
+            role, mode=mode, mode_for_role_check=mode_for_role_check,
+        )
+        if mode_refusal is not None:
+            return mode_refusal
     effort_source = checked.get("effortSource", "caller")
     allowlist_verdict = dict(normalized["allowlistVerdict"])
     allowlist_verdict["effort_source"] = effort_source

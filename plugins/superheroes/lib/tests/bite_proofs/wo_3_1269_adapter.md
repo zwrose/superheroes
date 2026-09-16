@@ -29,7 +29,7 @@ BP-B not recorded — model-pin ladder drift closed by extraction (`_resolve_eng
             "roleSource": "seat",
         }
 ```
-(inserted immediately before `import dispatch_guard`)
+(inserted immediately before `verdict = dispatch_allowlist.validate(...)`)
 
 **command:**
 ```
@@ -68,14 +68,12 @@ FAILED plugins/superheroes/lib/tests/test_engine_adapter.py::test_build_argv_cli
 1 failed in 0.36s
 ```
 
-**restore:** removed the `if verb == "build-argv":` early-return block; `import dispatch_guard` again precedes the allowlist leg for every verb including `build-argv`.
+**restore:** removed the `if verb == "build-argv":` early-return block; `dispatch_allowlist.validate` again precedes success for every verb including `build-argv`.
 
 **restored lines quoted back:**
 ```python
-    import dispatch_guard  # noqa: WPS433 — lazy: dispatch_guard imports this module
-
     try:
-        verdict = dispatch_guard.validate(role, vendor, model, effort)
+        verdict = dispatch_allowlist.validate(role, vendor, model, effort)
 ```
 
 **raw green:**

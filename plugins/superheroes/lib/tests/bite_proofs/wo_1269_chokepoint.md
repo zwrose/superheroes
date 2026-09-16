@@ -10,6 +10,8 @@
 | BP-2 | `_normalize_allowlist_verdict` semantic success gate | empty `allowlist_pairs` on `ok: True` refuses | `test_semantic_allowlist_verdict_empty_pairs_refused` |
 | BP-3 | `_parse_entry_dict` required `role` key | missing `role` key refuses | `test_role_key_absent_refused` |
 | BP-4 | `_spawn_allowlist_verdict` resolver call | off-allowlist journal seat refuses at spawn | `test_run_child_spawn_gate_refuses_off_allowlist_snapshot` |
+| BP-5 | `_dispatch_review_mode_role_refusal` inverse leg | `brief-check` role with normal/omitted mode refused after allowlist | `test_brief_check_role_normal_review_mode_refused` |
+| BP-6 | `_verb_role_coherence_refusal` unclassified-role leg | unclassified write roles refused for dispatch verbs | `test_unclassified_role_refused_for_dispatch_verbs` |
 
 ---
 
@@ -17,15 +19,14 @@
 
 - **axis:** `--mode brief-check` with a `reviewer` seat refuses before allowlist
 
-**neutralization** (removed mode/role legs in `resolve_entry`):
+**neutralization** (removed early `--mode brief-check` leg in `resolve_entry`):
 ```python
-    if verb == "dispatch-review":
-        mode_refusal = _dispatch_review_mode_role_refusal(role, mode)
-        if mode_refusal is not None:
-            return mode_refusal
+    if verb == "dispatch-review" and mode == _MODE_BRIEF_CHECK and role != "brief-check":
+        return _mode_role_coherence_refusal(role)
     elif mode == _MODE_BRIEF_CHECK and role != "brief-check":
         return _mode_role_coherence_refusal(role)
 ```
+(delete the `if verb == "dispatch-review" and mode == _MODE_BRIEF_CHECK ...` block only)
 
 **command:**
 ```
@@ -53,14 +54,12 @@ FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_brief_check_mode_
 1 failed in 1.19s
 ```
 
-**restore:** reinstated the bidirectional mode/role coherence block in `resolve_entry`.
+**restore:** reinstated the early `--mode brief-check` / role coherence block in `resolve_entry`.
 
 **restore receipt:**
 ```python
-    if verb == "dispatch-review":
-        mode_refusal = _dispatch_review_mode_role_refusal(role, mode)
-        if mode_refusal is not None:
-            return mode_refusal
+    if verb == "dispatch-review" and mode == _MODE_BRIEF_CHECK and role != "brief-check":
+        return _mode_role_coherence_refusal(role)
     elif mode == _MODE_BRIEF_CHECK and role != "brief-check":
         return _mode_role_coherence_refusal(role)
 ```
@@ -221,4 +220,108 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_run_child_spa
 ```
 .                                                                        [100%]
 1 passed in 2.27s
+```
+
+---
+
+## BP-5 — brief-check role requires brief-check mode (inverse leg)
+
+- **axis:** `brief-check` role with `--mode review` refused after allowlist on `dispatch-review`
+
+**neutralization** (removed inverse branch in `_dispatch_review_mode_role_refusal`):
+```python
+    if role == "brief-check" and effective != _MODE_BRIEF_CHECK:
+        return _brief_check_role_mode_refusal(effective)
+```
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_seat_bundle.py::test_brief_check_role_normal_review_mode_refused plugins/superheroes/lib/tests/test_seat_bundle.py::test_brief_check_role_omitted_mode_refused_on_dispatch_review -q
+```
+
+**raw red** (exit 1):
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_______________ test_brief_check_role_normal_review_mode_refused _______________
+
+    def test_brief_check_role_normal_review_mode_refused():
+        resolved = SB.resolve_entry(
+            _seat_json("codex", "gpt-5.6-sol", "xhigh", _BRIEF_ROLE),
+            verb="dispatch-review",
+            mode="review",
+        )
+>       assert resolved["ok"] is False
+E       assert True is False
+
+plugins/superheroes/lib/tests/test_seat_bundle.py:372: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_brief_check_role_normal_review_mode_refused
+FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_brief_check_role_omitted_mode_refused_on_dispatch_review
+2 failed in 0.64s
+```
+
+**restore:** reinstated the inverse branch in `_dispatch_review_mode_role_refusal`.
+
+**raw green** (exit 0):
+```
+..                                                                       [100%]
+2 passed in 0.58s
+```
+
+---
+
+## BP-6 — unclassified roles refused for dispatch verbs
+
+- **axis:** mechanical/synthesis/pilot seats refused for `dispatch-review` / `dispatch-write`
+
+**neutralization** (removed unclassified-role branch in `_verb_role_coherence_refusal`):
+```python
+    if verb in ("dispatch-review", "dispatch-write") and rw is None:
+        return _entry_refusal(
+            "verb-role-mismatch",
+            (
+                f"role {role!r} has no read_write classification; "
+                f"{verb} requires a classified read or write role; "
+                f"accepted: {_ACCEPTED_SEAT}; {accepted_role_detail()}"
+            ),
+        )
+```
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_seat_bundle.py::test_unclassified_role_refused_for_dispatch_verbs -q
+```
+
+**raw red** (exit 1):
+```
+FFFFFF                                                                   [100%]
+=================================== FAILURES ===================================
+_ test_unclassified_role_refused_for_dispatch_verbs[mechanical-dispatch-review] _
+
+    def test_unclassified_role_refused_for_dispatch_verbs(role, verb):
+        resolved = SB.resolve_entry(
+            _seat_json("claude", "haiku-4.5", "medium", role),
+            verb=verb,
+        )
+>       assert resolved["ok"] is False
+E       assert True is False
+
+plugins/superheroes/lib/tests/test_seat_bundle.py:402: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_unclassified_role_refused_for_dispatch_verbs[mechanical-dispatch-review]
+FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_unclassified_role_refused_for_dispatch_verbs[mechanical-dispatch-write]
+FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_unclassified_role_refused_for_dispatch_verbs[synthesis-dispatch-review]
+FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_unclassified_role_refused_for_dispatch_verbs[synthesis-dispatch-write]
+FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_unclassified_role_refused_for_dispatch_verbs[pilot-dispatch-review]
+FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_unclassified_role_refused_for_dispatch_verbs[pilot-dispatch-write]
+6 failed in 0.71s
+```
+
+**restore:** reinstated the unclassified-role refusal branch in `_verb_role_coherence_refusal`.
+
+**raw green** (exit 0):
+```
+......                                                                   [100%]
+6 passed in 0.62s
 ```

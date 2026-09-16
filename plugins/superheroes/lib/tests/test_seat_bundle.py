@@ -447,6 +447,7 @@ def test_effort_source_matches_allowlist_verdict():
 
 
 def test_effort_source_map_is_closed_canonical_vocabulary():
+    assert set(SB._EFFORT_SOURCE_MAP.keys()) == SB._REGISTRY_EFFORT_SOURCES
     mapped = set(SB._EFFORT_SOURCE_MAP.values())
     assert mapped <= SB._EFFORT_SOURCE_CANONICAL
 
