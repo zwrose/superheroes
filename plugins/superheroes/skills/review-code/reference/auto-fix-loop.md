@@ -413,6 +413,37 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+> # $PANEL_SEATS — folded per-dimension panel payloads keyed by seat name (the `seats` object you
+> # submit on `dispatch-panel`). One representative seat per cross-vendor vendor that ran with zero
+> # usable findings (dict members only — mirrors `round_driver._usable_findings`).
+> mapfile -t CANARY_SEAT_KEYS < <(python3 -B -c "
+> import json, sys
+> seat_map = json.loads(sys.argv[1])
+> panel = json.loads(sys.argv[2])
+> seats = seat_map.get('seats') or {}
+> seen = set()
+> keys = []
+> for key, cell in seats.items():
+>     if not isinstance(cell, dict):
+>         continue
+>     vendor = cell.get('vendor')
+>     if vendor in (None, 'claude'):
+>         continue
+>     payload = panel.get(key)
+>     if not isinstance(payload, dict):
+>         continue
+>     findings = payload.get('findings')
+>     if not isinstance(findings, list):
+>         findings = []
+>     if any(isinstance(f, dict) for f in findings):
+>         continue
+>     if vendor in seen:
+>         continue
+>     seen.add(vendor)
+>     keys.append(key)
+> for k in keys:
+>     print(k)
+> " "$SEAT_MAP" "$PANEL_SEATS")
 > CANARY_RESULTS=()
 > for CANARY_SEAT_KEY in "${CANARY_SEAT_KEYS[@]}"; do
 >   CANARY_VENDOR=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$CANARY_SEAT_KEY\"].vendor")

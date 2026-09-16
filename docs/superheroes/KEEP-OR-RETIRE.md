@@ -383,20 +383,6 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — fail-loud go/no-go before dispatch is load-bearing wave hygiene.
 
-#### C4 — Forfeit ledger
-
-- **Component.** The durable forfeit ledger and attribution decider (`forfeit_ledger.py`); it costs
-  disk rows and gardening-pass read time, and records every terminal dispatch with telemetry and
-  attribution outside the session that produced it.
-- **Condition.** Usage-based, 60 days: the signal is `forfeit_ledger.py report` reads or gardening
-  pass rows that cite a ledger path when attributing a dispatch forfeit. On firing, a proposal to
-  the owner at a gardening pass.
-- **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural — the ledger is a record, never a control input; absence of reads is not
-  proof it is unused.
-
 #### C5 — Payload/findings contracts
 
 - **Component.** Declared per-seat payload contracts and the review-findings schema guards

@@ -414,15 +414,16 @@ the full CLI argument surface, read `skills/workhorse/reference/dispatch-entry.m
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-# Resolve implementer cell from dispatch calibration + registry matrix (model/effort)
+# Resolve implementer cell from dispatch calibration + registry (honor configured model pin)
 read -r IMPL_ENGINE IMPL_ENGINE_MODEL IMPL_EFFORT <<<"$(python3 -B -c "
 import sys
 sys.path.insert(0, sys.argv[1] + '/lib')
 import model_registry as mr
 import preflight_probe as pp
 row = next(r for r in pp.dispatch_calibration() if r.get('role') == 'implementer')
-cell = mr.matrix_config('implementer', row['engine'])
-model, effort = cell
+resolved = mr.resolve_dispatch('implementer', row['engine'], row['model'])
+model = resolved['model_id']
+effort = resolved['effort']
 effort_s = '' if effort is None else effort
 print(row['engine'], model, effort_s)
 " "$ROOT_DIR")"

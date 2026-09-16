@@ -45,7 +45,7 @@ _BRIEF_ROLE = "brief-check"
         (DG, "check", _REVIEW_ROLE),
     ],
 )
-def test_entry_clis_route_through_chokepoint_and_expose_seat_flag(cli_module, subcmd, role, tmp_path, monkeypatch):
+def test_entry_clis_route_through_chokepoint_and_expose_seat_flag(cli_module, subcmd, role, tmp_path, monkeypatch, capsys):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".git").mkdir()
@@ -71,18 +71,21 @@ def test_entry_clis_route_through_chokepoint_and_expose_seat_flag(cli_module, su
     else:
         argv = ["check", "--seat", json_seat]
 
-    captured = {}
-
     def _sentinel(*_a, **_k):
         return {"ok": False, "reason": "chokepoint-sentinel", "detail": "sentinel"}
 
     patch_target = SB if cli_module is DG else cli_module.seat_bundle
     monkeypatch.setattr(patch_target, "resolve_entry", _sentinel)
     rc = cli_module.main(argv)
+    out = capsys.readouterr().out.strip()
     if cli_module is DG:
         assert rc == 1
+        payload = json.loads(out.splitlines()[0])
+        assert payload["reason"] == "chokepoint-sentinel"
     else:
         assert rc == 0
+        result = json.loads(out.splitlines()[-1])
+        assert result["detail"] == "sentinel"
 
     parser = cli_module.build_parser()
     if cli_module is ED:
@@ -422,7 +425,7 @@ def test_dict_seat_without_ok_promotion_refused():
     assert resolved["reason"] == "role-key-absent"
 
 
-def test_chokepoint_invariant_all_paths_use_resolve_entry(monkeypatch, tmp_path):
+def test_chokepoint_invariant_all_paths_use_resolve_entry(monkeypatch, tmp_path, capsys):
     sentinel = {"ok": False, "reason": "chokepoint-sentinel", "detail": "sentinel"}
 
     def _sentinel(*_a, **_k):
@@ -444,6 +447,8 @@ def test_chokepoint_invariant_all_paths_use_resolve_entry(monkeypatch, tmp_path)
         "--prompt-path", str(prompt), "--repo-root", str(repo), "--run-dir", str(run_dir),
     ]
     assert ED.main(review_argv) == 0
+    review_out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert review_out["detail"] == "sentinel"
 
     wt = tmp_path / "wt"
     wt.mkdir()
@@ -454,8 +459,12 @@ def test_chokepoint_invariant_all_paths_use_resolve_entry(monkeypatch, tmp_path)
         "--prompt-path", str(prompt), "--cwd", str(wt), "--run-dir", str(run_dir),
     ]
     assert ED.main(write_argv) == 0
+    write_out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert write_out["detail"] == "sentinel"
 
     assert DG.main(["check", "--seat", seat]) == 1
+    guard_out = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert guard_out["reason"] == "chokepoint-sentinel"
 
     opened = {
         "resolvedInputs": {
