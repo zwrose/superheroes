@@ -734,6 +734,27 @@ case run for each condition rather than the positive case alone, and the print-v
 distinction held throughout, because that distinction is what separates a green that means
 something from a green that does not.
 
+### 5.6 What the advisor observed after the trial
+
+Two probes the advisor ran at vet, on 2026-09-16, with one background lane per account in throwaway
+repositories. They are recorded here because a later reader of 5.4 needs them, and they change no
+verdict and no condition.
+
+**An interactive session can message a background lane, on the same account and across accounts.**
+Both lanes appeared in the advisor's session list under their settled names. The advisor sent each a
+message; each woke from idle and wrote the file the message asked for within about a minute. The
+supervisor that could not see the idle notice in 5.2 was headless. An interactive advisor has a
+working steer channel to a background lane today, and the lane's state is readable per account by
+polling the listing. That polled state, not the notice, is the completion signal a supervisor can
+use. The line for wave-watch above keeps its condition because the launcher does not spawn this
+shape yet.
+
+**The worktree isolation in 5.3 is conditional.** Neither lane got a worktree of its own. Both
+wrote directly into the repository they were launched in, and no worktree directory was created.
+The lane in 5.3 that did get one had been asked to overwrite a tracked file; these were asked to
+add files. What decides it is not yet pinned down, so the line for the launcher-enforced
+own-worktree half keeps its condition exactly as written, and a re-run should provoke both cases.
+
 **Caveats this trial was asked to state.** The research-preview standing caveat holds: nothing
 here misbehaved, but the surface can change under us. Machine-shutdown death was not observed and
 was not exercisable here. The notice's one-shot property is stated by the contract text returned on
