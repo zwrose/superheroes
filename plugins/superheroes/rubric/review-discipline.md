@@ -590,11 +590,11 @@ The test suite is machinery, at two granularities.
   the tests rule in `### Guards do not get guards`.
 
 The three birth duties bind **at birth**: new detectors from here forward. An existing
-detector-shaped test owes the three birth duties the next time a change edits the detector itself,
-meaning its own assertion logic or the enumeration it maintains. A change that only edits the
-thing the detector watches is not such an edit. Read literally, the scope line captures every
-existing census, pin, and bite-proof at once, and this bound is what keeps that reading from
-creating a mass obligation with no mechanism. The obligation is real.
+detector-shaped test owes no immediate back-fill. It enters the metabolism through the
+keep-or-retire rollout, at fold-in pace, its retirement condition and tag added when its surface is
+next touched. Read literally, the scope line captures every existing census, pin, and bite-proof at
+once, and this bound is what keeps that reading from creating a mass retroactive obligation with no
+mechanism. The obligation is real, and it drains at fold-in pace.
 
 This rule is enforced as prose at the door and at the vet, for the same reason as the rule above.
 

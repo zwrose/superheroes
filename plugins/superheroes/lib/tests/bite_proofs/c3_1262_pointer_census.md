@@ -1,11 +1,12 @@
 # Reset C3 (#1262) bite-proof — the bite-proof pointer census
 
 This change set adds one row to the hand-maintained `_CONSUMER_ROSTER` in
-`plugins/superheroes/lib/tests/test_bite_proof_doctrine.py`, and it also lands the rule
-(`rubric/review-discipline.md`, `### Prefer shapes that cannot fail`) saying that an existing
-detector-shaped test owes the three birth duties the next time a change edits the detector itself or
-the enumeration it maintains. Editing the roster is exactly such an edit, so the pointer census owes
-a proof. This record is that proof.
+`plugins/superheroes/lib/tests/test_bite_proof_doctrine.py`. Under the rule this change set lands
+(`rubric/review-discipline.md`, `### Prefer shapes that cannot fail`) the three birth duties bind at
+birth, and an existing detector-shaped test such as this one owes no immediate back-fill; it enters
+the metabolism through the keep-or-retire rollout at fold-in pace. The duties were discharged here
+anyway, because this change set touches the roster's own surface, which is the moment the rollout
+names for adding a condition and a tag. This record is the bite-proof half of that.
 
 Two elements are proved: the **roster row's own pointer-count assertion**, and the **completeness
 walker** that the docstring's by-construction-coverage claim rests on. Nothing else on this branch is
