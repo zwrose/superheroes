@@ -755,6 +755,40 @@ def test_seam_a_record_result_refusal_evidence_order_mismatch_leaves_landing_byt
   assert _read_bytes(path) == before
 
 
+def test_seam_a_record_result_refusal_sweep_evidence_unsupported_fires(tmp_path, adapters):
+  # axis: sweep plus evidence-run-dir returns sweep-evidence-unsupported
+  d = _session(tmp_path, name="sweep-ev-refuse")
+  pend = _pending(d)
+  _dispatch_observed_land(d, "code-reviewer")
+  order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
+                                     RR.storage_key("code-reviewer"), pend["attempt"])
+  run_dir = _execution_run_dir(tmp_path, order_path, name="sweep-ev-refuse-run")
+  out = RD.cmd_record_result(d, sweep=True, evidence_run_dir=run_dir)
+  assert out["ok"] is False
+  assert out["reason"] == "sweep-evidence-unsupported"
+
+
+def test_seam_a_record_result_refusal_sweep_evidence_unsupported_leaves_disk_and_sweep_alone_ok(
+    tmp_path, adapters):
+  # axis: combination refusal is fail-closed; sweep alone still ingests
+  d = _session(tmp_path, name="sweep-ev-intact")
+  pend = _pending(d)
+  path, _env, before = _dispatch_observed_land(d, "code-reviewer")
+  order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
+                                     RR.storage_key("code-reviewer"), pend["attempt"])
+  run_dir = _execution_run_dir(tmp_path, order_path, name="sweep-ev-intact-run")
+  spath = RR.store_path(d, pend["round"], pend["phase"],
+                        RR.storage_key("code-reviewer"), pend["attempt"])
+  assert not os.path.exists(spath)
+  out = RD.cmd_record_result(d, sweep=True, evidence_run_dir=run_dir)
+  assert out["ok"] is False
+  assert out["reason"] == "sweep-evidence-unsupported"
+  assert _read_bytes(path) == before
+  assert not os.path.exists(spath)
+  sweep_ok = RD.cmd_record_result(d, sweep=True)
+  assert sweep_ok["ok"], sweep_ok
+
+
 def test_seam_a_record_result_refusal_commit_refused_leaves_landing_bytes(tmp_path, adapters,
                                                                           monkeypatch):
   d = _session(tmp_path, name="commit-refused")
