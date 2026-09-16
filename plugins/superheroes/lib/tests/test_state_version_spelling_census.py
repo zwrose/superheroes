@@ -5,6 +5,7 @@ import re
 import sys
 from collections import namedtuple
 
+import pytest
 import round_driver as RD
 
 _TESTS = os.path.dirname(os.path.abspath(__file__))
@@ -592,6 +593,46 @@ def census_prose(doc_text=None):
     return errors
 
 
+def _inject_prose_schema_version_list(doc_text, desired_versions):
+    """Rewrite the schemaVersion bullet's backticked version list for synthetic prose tests."""
+    m = _SCHEMA_VERSION_BULLET_RE.search(doc_text)
+    if not m:
+        pytest.fail(
+            "schemaVersion bullet regex did not match round-driver.md prose"
+        )
+    version_fragment = m.group(1)
+    tokens = list(re.finditer(r"`(\d+)`", version_fragment))
+    if not tokens:
+        pytest.fail(
+            "schemaVersion bullet matched but has no backticked versions"
+        )
+    list_start = tokens[0].start()
+    list_end = tokens[-1].end()
+    style_sample = version_fragment[list_start:list_end]
+    versions = sorted(desired_versions)
+    parts = ["`%d`" % v for v in versions]
+    if len(parts) == 1:
+        new_list = parts[0]
+    else:
+        final_sep = style_sample[tokens[-2].end() - list_start:tokens[-1].start() - list_start]
+        if len(parts) == 2:
+            new_list = parts[0] + final_sep + parts[1]
+        else:
+            mid_sep = style_sample[tokens[0].end() - list_start:tokens[1].start() - list_start]
+            new_list = mid_sep.join(parts[:-1]) + final_sep + parts[-1]
+    new_group = (
+        version_fragment[:list_start]
+        + new_list
+        + version_fragment[list_end:]
+    )
+    new_doc = doc_text[:m.start(1)] + new_group + doc_text[m.end(1):]
+    if new_doc == doc_text:
+        pytest.fail(
+            "prose schemaVersion injection was a no-op; fixture anchor may be stale"
+        )
+    return new_doc
+
+
 def test_spelling_allowlist_reasons_are_non_empty():
     for key, entry in _SPELLING_ALLOWLIST.items():
         assert entry["reason"].strip(), "empty allowlist reason for %r" % (key,)
@@ -733,11 +774,9 @@ def test_synthetic_injection_constant_assignment_outside_block():
 def test_synthetic_injection_prose_doc_has_extra_version():
     with open(_ROUND_DRIVER_MD, encoding="utf-8") as fh:
         real = fh.read()
-    injected = real.replace(
-        "`2`, `3` or `4`",
-        "`2`, `3`, `4` or `5`",
-        1,
-    )
+    supported = set(RD.SUPPORTED_STATE_VERSIONS)
+    extra = max(supported) + 1
+    injected = _inject_prose_schema_version_list(real, supported | {extra})
     errors = census_prose(injected)
     assert any(
         "states receipt schemaVersion" in e for e in errors
@@ -747,10 +786,9 @@ def test_synthetic_injection_prose_doc_has_extra_version():
 def test_synthetic_injection_prose_doc_missing_code_version():
     with open(_ROUND_DRIVER_MD, encoding="utf-8") as fh:
         real = fh.read()
-    injected = real.replace(
-        "`2`, `3` or `4`",
-        "`2` or `3`",
-        1,
+    supported = sorted(RD.SUPPORTED_STATE_VERSIONS)
+    injected = _inject_prose_schema_version_list(
+        real, supported[:-1],
     )
     errors = census_prose(injected)
     assert any(
