@@ -12,6 +12,8 @@
 - [Folding backlog items in](#folding-backlog-items-in)
 - [The reader clause](#the-reader-clause)
 - [The revisit-trigger registry](#the-revisit-trigger-registry)
+- [The gardening pass](#the-gardening-pass)
+- [The gardening record](#the-gardening-record)
 - [Delivery mechanics](#delivery-mechanics)
 - [Formatting — one block per spine section](#formatting--one-block-per-spine-section)
 - [Where the items come from, and the bound on that sweep](#where-the-items-come-from-and-the-bound-on-that-sweep)
@@ -170,7 +172,7 @@ declined with a trigger by default.
    P2 still bind. The owner-absent collector still appends. The append-always clause still binds.
    The venue ladder still applies.
 
-   **Venue-3 filings are always Tier 2 — a new issue spends board attention, a commitment call by definition, even when its content is craft, except a machinery filing that clears the evidence bar and grades P2, which the advisor may file with the grading record on the item.**
+   **Venue-3 filings are always owner calls.** A new issue spends board attention, a commitment call by definition, even when its content is craft, except a machinery filing that clears the evidence bar and grades P2, which the advisor may file with the grading record on the item.
 
 3. **The no-ladder rider, stated as a fail direction.** **The carve-out is inactive in a project
    with no stamped severity ladder.** With no ladder there is no band to cite, so no P0 or P1 can
@@ -181,13 +183,15 @@ declined with a trigger by default.
    structures its roadmap. P2 sits roughly where a backlog does. A P0's displacement of other work
    meets wave planning. A project extends this vocabulary rather than minting a second one.
 
-**Tier 1 is craft — the resolution follows from already-ratified intent and no plausible product preference distinguishes the options — and the advisor executes it now and records the determination dated and reasoned for cheap owner veto; Tier 2 is product — taste, trade, or commitment — and it is the owner's word, via the collector. Doubt resolves upward.**
+[Craft call](../../../rubric/glossary.md#craft-call) and [owner call](../../../rubric/glossary.md#owner-call) are defined in the glossary, and the line between them, the [material consequence](../../../rubric/glossary.md#material-consequence), has its plugin default in [issue-contract.md](issue-contract.md).
 
-Venue-1 continuations and craft declines are Tier 1 — the advisor executes and records for veto.
+A **craft call** follows from already-ratified intent and no plausible product preference distinguishes the options. The advisor executes it now and records the determination dated and reasoned for cheap owner veto. An **owner call** is taste, trade, or commitment. It is the owner's word, via the collector. Doubt resolves upward.
+
+Venue-1 continuations and craft declines are craft calls. The advisor executes and records for veto.
 Venue-2 scope changes, product declines (any decline that trades away something a product reading
-could want), and gate-uncertain items are Tier 2.
+could want), and gate-uncertain items are owner calls.
 
-**Every Tier-2 item is appended to the collector at vet time, unconditionally, so the collector is the complete register by construction; owner attendance governs only when discussion happens — attended, the item is proposed in the vet-delivery message and may be struck minutes after it was appended; absent, it awaits the batch.**
+**Every owner call is appended to the collector at vet time, unconditionally, so the collector is the complete register by construction; owner attendance governs only when discussion happens — attended, the item is proposed in the vet-delivery message and may be struck minutes after it was appended; absent, it awaits the batch.**
 
 **Each append carries its gate verdict and its venue recommendation, so the owner's batch is one word per item.**
 
@@ -342,7 +346,7 @@ rule.
 
 ## The revisit-trigger registry
 
-**The revisit-trigger registry is one pinned, always-current comment on the project's collector issue, one line per declined item — what was declined, the worth-it verdict, the revisit trigger, and the date with a pointer to the full record — archiving declines from both tiers.**
+**The revisit-trigger registry is one pinned, always-current comment on the project's collector issue, one line per declined item — what was declined, how it failed the evidence bar, the revisit trigger, and the date with a pointer to the full record — archiving declines from craft calls and owner calls alike.**
 
 **The collector is the pre-ruling queue and the registry is the post-ruling archive.**
 
@@ -352,17 +356,18 @@ own first line. An advisor updating it **reads that comment, edits it in place, 
 comment on the collector carries the marker, the advisor **creates one and pins it**; when more than
 one does, that is a defect to repair by consolidating into the oldest rather than by adding a third.
 
-Each registry row is one line per declined item carrying what was declined, the worth-it verdict,
-the revisit trigger, and the date with a pointer to the full record. This row shape follows the ledger
+Each registry row is one line per declined item carrying what was declined, how it failed the
+evidence bar, the revisit trigger, and the date with a pointer to the full record. This row shape follows the ledger
 family — cite-instead-of-re-arguing, and a named condition that reopens the decision — and it
 assumes no `LEDGERS.md` file in a consuming project; a project that keeps a strategic ledger may
 graduate rows into it, and that is optional.
 
-Both tiers are archived here. Tier-1 craft declines land in the registry too — which is what makes
-them visible and veto-able — and Tier-2 declines land after the owner's word.
+Craft-call declines and owner-call declines are both archived here. Craft-call declines land in the
+registry too, which is what makes them visible and veto-able. Owner-call declines land after the
+owner's word.
 
 Archiving a decline is two writes with no transaction — the registry row and, where the declined
-item has a collector entry, its strike (a Tier-1 craft decline that never reached the collector has
+item has a collector entry, its strike (a craft-call decline that never reached the collector has
 only the row, which lands at determination time). The order is fixed (owner ruling 2026-08-24,
 recorded on the collector —
 [issue #695 comment](https://github.com/zwrose/superheroes/issues/695#issuecomment-5390859217)):
@@ -383,6 +388,60 @@ used.
 **Any session processing a field report, and any vet whose evidence includes an observed-in-the-field failure, reads the registry.**
 
 **The registry scan is prose-bound and nothing mechanical enforces it; the registry's floor value is that whether we already declined something is one comment away.** This limit is known and carried knowingly — not a defect to be fixed later.
+
+## The gardening pass
+
+The [gardening pass](../../../rubric/glossary.md#gardening-pass) is the periodic sweep the owner and advisor run together to keep calibration honest.
+
+**The trigger.**
+
+1. **The pass is owed seven days after the last [gardening record](../../../rubric/glossary.md#gardening-record)**, and it is done **at an opportune sitting, not the first one**.
+2. **The check runs at the start of any [decision walk](../../../rubric/glossary.md#decision-walk)**, never on its own and never on an ordinary [ruling](../../../rubric/glossary.md#ruling). When seven or more days have passed since the last record and no "gardening pass owed" item is on the [collector](../../../rubric/glossary.md#collector), **the advisor appends one, dated, and says so at the walk**.
+3. The item **stays on the collector until the pass runs and its record lands**, which closes it.
+4. **The owner picks the sitting.** The advisor may prepare the sweep beforehand so the sitting is short. **A walk opened for one urgent ruling is never turned into a pass by the calendar.**
+5. **There is no scheduler.** Until the first gardening record exists, **the project's calibration date stands in for "the last gardening record"** everywhere this rule is read, so the first pass falls on the first walk a week after calibration.
+
+**The seven duties, a closed list.**
+
+1. **Age the P1s.** Each P1 older than two passes is proposed for promotion, demotion, or decline.
+2. **Sweep four things, then draw from the queue.** The four: the declined registry's [triggers](../../../rubric/glossary.md#trigger); the [retirement conditions](../../../rubric/glossary.md#retirement-condition) whose [condition windows](../../../rubric/glossary.md#condition-window) have elapsed; the tripwires the verification doctrine names, **written up as one short outcome account, never as a separate readout each**; and the **open consumer reports** since the last pass, which land as receipts in the entries' consumer-evidence field.
+   - **Keep two distinctions sharp.** An open consumer report is an **observation**, not a firing. A consumer report of the class the tripwires name **is** a firing of that condition and generates a [proposal](../../../rubric/glossary.md#proposal).
+   - **A tripwire firing separates what was observed from what it infers.** Every firing is **a prompt for an owner conversation, never a diagnosis**. Its record carries two parts, kept apart: the **observation**, the count, the window, and the records it was read from, and the **cause the firing proposes, marked as inferred, with the plain alternative reading named beside it**. **A proposal that states its inference as fact is a defective firing**, and the owner rules on the observation. For example, two fixes to the same defect may be one unresolved defect fixed twice rather than a loop that should go.
+   - **Tripwires are read here and nowhere else.** Nothing watches a tripwire between passes.
+   - **The keep-or-retire record's home.** The sweep of retirement conditions reads the project's **[keep-or-retire list](../../../rubric/glossary.md#keep-or-retire-list)**, which is **project record kept by a person, living with the project's definition-docs wherever the project's doc policy keeps them**. **It is never a shipped reference document and never an issue.** Do not name a path. The project's doc policy decides it.
+   - **The draw.** Then draw the next proposals off the queue, **about five per pass, ordered by lines reclaimed**. When the batch is done and the queue is not empty, the advisor **says how many remain and asks whether to draw another batch of about five**. Batches continue on the owner's word until the queue is empty or the owner stops.
+3. **Read the [misses log](../../../rubric/glossary.md#misses-log)** and propose any recalibrations for the owner's stamp.
+4. **Re-measure the forward share for the window and read it against the [dial](../../../rubric/glossary.md#dial) in one sentence**. Record the **decisions-asked count** for the same window. List the [folded-in items](../../../rubric/glossary.md#folded-in-items), one line each. List the window's declines with their triggers, one per line.
+5. **Report the [workaround markers](../../../rubric/glossary.md#workaround-marker)**, whose inventory is a section of the same keep-or-retire record, proposing promote-or-retire for any marker whose [delete-when condition](../../../rubric/glossary.md#delete-when-condition) has come true.
+6. **Read guardian staleness**, merges and days since the project's last triaged sweep, a project configuration item with plugin defaults of ten merges and fourteen days, and, **when stale, run the sweep in the pass and triage its report in the same sitting**. **Sweep and triage are one duty**. If the sitting ends before triage is recorded, the record carries the untriaged report as a pending item and **the staleness clock does not reset**. The sweep needs no owner word. **Filing from it goes through the front door like anything else**. A P2 files on the advisor's authority. Higher tiers wait for a word. **Nothing reads guardian staleness between passes.**
+7. **Classify the window's red continuous-integration runs and fix pull requests** by the verification policy's classes: own broken test, real catch, infrastructure, flake, and escape. **Credit each real catch to the test file that caught it.** **One rate comes out of it: the escape rate**, escapes over the window's merged pull requests, and it is the one rate every rule that reads an escape rate consumes. **"Flake" is a classification word here**, so a flake is neither an escape nor a catch, and **no flake rate is computed at the pass**. A flake rate, if anyone wants one, is measured on demand from run receipts as a reference point the owner reads, never a gate and never a trigger. The duty also records **the latest mutation run's survivors and kills per test file the run covered**. **A file no run covered reads as unmeasured for mutation, never as no kills**.
+
+**After the duties**, three closing rules:
+
+- **The pass's output is batched words for the owner, delivered in the walk itself.**
+- **The decisions-asked count, and the baseline the forward share is read against, come from the project's own record**, its configuration profile and its gardening records, **never from a founding document**.
+- **If the full pass proves overwhelming, the named fallback is a bounded pass**: urgent exceptions plus one or two retirement proposals per pass, the rest carried forward on the queue, the guardian sweep produced before the sitting. **Moving to the bounded pass is the owner's word at a walk.**
+
+## The gardening record
+
+**The contents, in one place.** A gardening record carries:
+
+- the batched words, each with its full per-item spine;
+- the [pending-words line](../../../rubric/glossary.md#pending-words-line);
+- **the figures block**: the forward share read against the dial, the **decisions-asked count**, and the escape rate;
+- **the lists**: the folded-in items, and the declines with their triggers;
+- the workaround-marker state;
+- the guardian staleness read and any pending triage;
+- the open questions the passes carry until settled;
+- and **the misses-log appends made**.
+
+**What the decisions-asked count counts.** The decisions that needed the owner's word in the window: P0 rulings, batched P1 words, launch words, retirement rulings, and recalibration stamps. **Nothing compares it to anything yet.** The window's misses are **not** a second count, because the record's misses-log line already lists the entries appended. The escape rate is a different measure recorded beside it. **No instrument is built for the count**. It is an advisor's read over board data.
+
+**The shape.** **The record has no length cap.** Each batched word carries the full per-item spine this contract defines. **Length pressure is answered by fewer items per pass, never by thinner spines.**
+
+**The windows are calendar days.** The [gardening window](../../../rubric/glossary.md#gardening-window) is the measurement window for the trend counts. **Condition windows are stated in calendar days and read at the first pass after they elapse, never earlier**. A pass is the reading moment, not the unit.
+
+**The tripwire on the instrument.** When the owner says at any walk that the pass or its keep-or-retire list is taking too long, **or an issue is filed to automate any part of it**, the response is **fewer and coarser components on the keep-or-retire list, never automation**. **There is no timing comparison**. The owner's own judgment is the trigger. **The keep-or-retire list is an instrument read by a person and never gets a guard.** This section is the one home of that rule.
 
 ## Delivery mechanics
 
@@ -467,12 +526,9 @@ not per batch.
 consequences (lettered a, b, c…), (4) cost of inaction, (5) recommendation by key, with the why and
 the cost named — Recommendation: b — …. Empty sections stated empty, never dropped.
 
-**Residual disposition:** worth-it gate (what breaks / for whom / has it happened / cost of ignoring,
-vs cheapest venue) → venue ladder (continue → fold → file, bundled by surface); decline with a
-revisit trigger when every venue fails the gate.
-**Tier:** Tier 1 craft — advisor executes and records for veto; Tier 2 product — owner's word;
-filings always Tier 2; doubt upward.
-**Append-always at vet:** every Tier-2 item to the collector with gate verdict and venue on each
+**Residual disposition:** front door evidence bar (executed evidence on a live surface; dark and future surfaces fail; in-envelope variance is not defect evidence) → venue ladder (continue → fold → file, bundled by surface); decline with a revisit trigger when every venue fails the bar.
+**Tier:** craft call — advisor executes and records for veto; owner call — owner's word; a filing whose item clears the evidence bar and grades P2 is the advisor's, and every other filing is an owner call; doubt upward.
+**Append-always at vet:** every owner call to the collector with gate verdict and venue on each
 append.
 **Registry:** `<!-- superheroes:revisit-registry -->` — one pinned comment, one line per declined
 item.
