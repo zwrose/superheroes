@@ -4,6 +4,11 @@
 - [The three-slot skeleton](#the-three-slot-skeleton)
 - [The Anchor slot](#the-anchor-slot)
 - [The build-ready block](#the-build-ready-block)
+- [The four routing-time calls](#the-four-routing-time-calls)
+- [The priority tiers and what each commits to](#the-priority-tiers-and-what-each-commits-to)
+- [The size-consideration slot](#the-size-consideration-slot)
+- [Machinery, product, and the two kind labels](#machinery-product-and-the-two-kind-labels)
+- [Craft calls, owner calls, and the material-consequence line](#craft-calls-owner-calls-and-the-material-consequence-line)
 - [Anchor resolution](#anchor-resolution)
 - [Pre-doctrine issues](#pre-doctrine-issues)
 - [The standing anchor-coverage vet row](#the-standing-anchor-coverage-vet-row)
@@ -18,9 +23,9 @@
 
 This file is the one home for the **issue contract** — the shape every routed issue body owes,
 the DoD bar its bullets must meet, the currency duty that keeps bodies current, and the
-standing NFR vet row graded at every child PR vet in a spec package. **The advisor reads it
-when filing, routing, and vetting** — not from memory. The showrunner charter points here; this
-file carries the detail.
+standing NFR vet row graded at every child PR vet in a spec package. It is also the one home
+for the routing-time vocabulary. **The advisor reads it when filing, routing, and vetting** —
+not from memory. The showrunner charter points here; this file carries the detail.
 
 ## The three-slot skeleton
 
@@ -126,6 +131,136 @@ reading the JSON result from stdout.
 
 **Empty What or DoD** are **reported but never blocking** at filing — they are graded at vet,
 not refused at build-ready marking.
+
+## The four routing-time calls
+
+Four calls are recorded together in the routed issue body, at the same moment. They are:
+
+1. The **lane call**, full, light, or micro. Its rules live in the showrunner charter
+   ([`../SKILL.md`](../SKILL.md)) and in
+   [`../../../rubric/review-discipline.md`](../../../rubric/review-discipline.md).
+2. The **presentation call**, show it, say it, or nothing to see. Its rules live in the same
+   two homes.
+3. The **size-consideration slot**, [The size-consideration slot](#the-size-consideration-slot)
+   below.
+4. The **kind label**, [Machinery, product, and the two kind labels](#machinery-product-and-the-two-kind-labels)
+   below.
+
+The first three are recorded in the issue body and the fourth is a label on the issue, one record
+plus one label, written at the same moment. For micro work the record lives in the pull request
+instead, because micro carries no routed issue body.
+
+A routed issue that carries the four is gradable at vet without asking anyone what was decided.
+
+## The priority tiers and what each commits to
+
+The [priority tiers](../../../rubric/glossary.md#priority-tiers) entry defines the tiers. This
+section carries what each tier **commits to**. The front door's grading rules, the grid that
+produces a tier, and the P2 carve-out live in
+[`owner-decisions.md`](owner-decisions.md). Write none of them here.
+
+- **P0, next wave.** Requires the ladder's top band **by citation** together with field evidence,
+  or the **owner's explicit override**. The override is the owner's own act and **nobody else may
+  invoke it**. **Every P0 names what it displaces.** The displaced item returns to the head of its
+  tier's queue with that disposition recorded in the wave plan. **Displacement re-orders work, it
+  never cancels it**, and it applies at wave boundaries, never to lanes already running. Rare by
+  construction.
+- **P1, enters the standing budget soon.** The owner's agreement, batched cheaply as a word at a
+  walk. **P1s age**: at each [gardening pass](../../../rubric/glossary.md#gardening-pass) each old
+  P1 is proposed for promotion, demotion, or decline. **None are immortal.**
+- **P2, should eventually happen.** Files free, with no owner word needed; the evidence bar is what
+  earned that. Lives in the backlog, out of default views, and drains mostly through folding in.
+- **Declined, below the bar.** A line in the
+  [declined registry](../../../rubric/glossary.md#declined-registry) with a named
+  [trigger](../../../rubric/glossary.md#trigger), and nothing on the board.
+
+The tier vocabulary is an intake-and-commitment vocabulary, orthogonal to how a project structures
+its roadmap, and a project extends it rather than minting a second one.
+
+## The size-consideration slot
+
+1. **At routing, any issue estimated over 1,000 non-test lines carries one of two things**: a
+   **stack or layer design** (one concern per layer, merged bottom-up, using the project's
+   sanctioned stacking tool) or a **recorded reason a single pull request is right**. The estimate is
+   a routing estimate, never a measurement.
+2. **This is a mandatory consideration with a durable trace, never a mandatory split.** State that
+   plainly, because the failure mode is reading it as a split rule.
+3. **The stacking tool is a project configuration item**; its home is the
+   [configure profile](../../configure/SKILL.md). Name no specific tool.
+4. Mid-build growth is covered by the existing tripwire at twice the brief's estimate, which lives in
+   the [workhorse charter](../../workhorse/SKILL.md).
+5. **The slot is recorded in the issue body beside the lane call and the presentation call**, at the
+   same moment the kind label is applied.
+
+## Machinery, product, and the two kind labels
+
+**Machinery** is work whose **subject is the development process itself** rather than the product's
+behavior: guards, detectors, censuses, review and dispatch and launch tooling, continuous-integration
+configuration and runners, process documents and their upkeep, and keep-or-retire lists. **Product**
+is everything else.
+
+**The classification test** a person applies: **if this work's subject disappeared, would the
+product's user-facing behavior change?** **No** means machinery.
+
+**Classification is by subject, never by file location.** The heroes and the product's own features
+are **product** even when what they ship is tooling. The substrate serves the product. The test suite
+is machinery. **Work that exercises the product classifies as product**, because it exercises the
+product and not the machine.
+
+**A routing that cannot classify a lane records the call and its reason.** An unclassifiable lane is
+**a naming defect to fix**, never a silent exemption.
+
+**The judgment-only rule.** The classification is the advisor's judgment, applied when it is needed
+and **never by a tool**. **No classifier, script, census, or check makes or verifies it**, and a
+filing to build one is declined at the door with a registry line. A classifier for this is the
+framework growing machinery of its own, which is the thing the classification exists to hold down.
+
+**The two labels.** The call is made visible as a label on the issue: **`kind:machinery`** or
+**`kind:product`**. The advisor applies it **at routing**, with a one-line reason in the body **only
+when the call was close**. The owner applies it to an **epic at ratification**. A milestone, which
+cannot carry a label, **says it in its description**. The gardening pass reads the window's share off
+those labels **by hand**.
+
+**The labels are plugin doctrine, not one project's habit.** Every calibrated project uses the same
+two labels and its own dial value. The labels are created in a consuming project's repository at
+calibration; see [`../../configure/reference/set-up.md`](../../configure/reference/set-up.md).
+
+Everywhere the [dial](../../../rubric/glossary.md#dial), N, and the
+[machinery lane](../../../rubric/glossary.md#machinery-lane) read the word "machinery", this is the
+definition they read.
+
+## Craft calls, owner calls, and the material-consequence line
+
+A **[craft call](../../../rubric/glossary.md#craft-call)** is a decision the advisor decides,
+executes, and records for the owner's veto. An **[owner call](../../../rubric/glossary.md#owner-call)**
+is a decision that waits for the owner's word. **Doubt resolves to an owner call.**
+
+These two names are what the owner-decisions contract's two routing tiers are called, and **the
+names in this section are the ones every surface uses**.
+
+A **[material consequence](../../../rubric/glossary.md#material-consequence)** is what separates
+them: a change with a material consequence is the owner's to accept.
+
+**The plugin's default, which each project extends.**
+
+- **Material** is: anything a user or a consuming project would see differently; scope outside the
+  issue's named surfaces; a disclosed tradeoff; a change to what a review's evidence covers; a change
+  to a mechanism's fail direction; and anything a plausible product preference could distinguish.
+- **Craft** is: a base update, a rename, a test fix on the diff's own behavior, an integration fix
+  that makes a union build, and their kin.
+- **Doubt resolves to an owner call.**
+
+**How a project extends it.** Each project adds its own examples in its configure profile, **mined
+from its own ruling record** the way its severity ladder is, never from recent memory. **The default
+is never narrowed, only illustrated.** It evolves one way: when the owner says at a walk that a call
+the advisor made was material, or was craft, **that example lands in the profile**.
+
+**How it is used.** **The advisor cites the line when making the call**, on the pull request's owner
+half or in the thread. **Nothing checks it**, and a classifier for it is declined at the door.
+
+**What reads it.** The scope exception and the red-train fix in the merge doctrine, the fold rule at
+routing, the craft-versus-product boundary in the P2 carve-out, and the vet's judgment about a
+deviation all turn on "material".
 
 ## Anchor resolution
 
