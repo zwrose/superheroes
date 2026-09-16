@@ -232,7 +232,7 @@ Everywhere the [dial](../../../rubric/glossary.md#dial), N, and the forward shar
 
 The **[craft call](../../../rubric/glossary.md#craft-call)** and **[owner
 call](../../../rubric/glossary.md#owner-call)** are the owner-decisions contract's two routing
-tiers; **the names in this section are the ones every surface uses**. The **[material
+calls; **the names in this section are the ones every surface uses**. The **[material
 consequence](../../../rubric/glossary.md#material-consequence)** line routes a decision between
 them. **Doubt resolves to an owner call.**
 
