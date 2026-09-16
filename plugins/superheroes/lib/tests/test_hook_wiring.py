@@ -49,7 +49,7 @@ def test_worktree_guard_gate_wired_fail_closed_before_bash_timeout():
 
     guard_idx = next(i for i, c in enumerate(cmds) if "worktree_guard_gate.py" in c)
     to_idx = next(i for i, c in enumerate(cmds) if "bash_timeout.py" in c)
-    # axis: worktree guard precedes bash_timeout on the Bash matcher after owner_authority gate retirement
+    # axis: the worktree guard precedes bash_timeout on the Bash matcher
     assert guard_idx < to_idx, \
         "worktree guard must be listed before bash_timeout on the Bash matcher"
 
@@ -71,7 +71,7 @@ def test_handback_receipt_gate_is_not_wired_shipped_dark():
         "worktree_guard_gate.py",
         "bash_timeout.py",
     ]
-    # axis: Bash PreToolUse chain is exactly two hooks after owner_authority gate retirement
+    # axis: the Bash PreToolUse chain is exactly two hooks — the worktree guard, then bash_timeout
     assert len(cmds) == len(expected), (
         f"Bash PreToolUse chain must be exactly {len(expected)} hooks, got {len(cmds)}"
     )
