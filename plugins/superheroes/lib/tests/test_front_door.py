@@ -196,6 +196,20 @@ def test_p0_unstamped_definition_refuses_non_top_band(tmp_path):
     assert got["tier"] is None
 
 
+def test_p0_definition_unstamped_pins_contract_literal(tmp_path):
+    # axis: refusal token spelling — p0-definition-unstamped
+    assert FD.REASON_P0_DEFINITION_UNSTAMPED == "p0-definition-unstamped"
+    repo, store = _setup_repo(tmp_path)
+    _stamp_ladder(repo, store)
+    got = FD.grade(
+        repo,
+        _claim(tier="P0", band="Band 1", evidence="field"),
+        root=store,
+    )
+    assert got["outcome"] == "refused"
+    assert got["reason"] == "p0-definition-unstamped"
+
+
 def test_p0_stamped_definition_still_grades_conforming_claim(tmp_path):
     repo, store = _setup_repo(tmp_path)
     _stamp_ladder(repo, store)
