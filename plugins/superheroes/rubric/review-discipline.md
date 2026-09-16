@@ -65,12 +65,14 @@ events — do not collapse them:**
    independence) and taking the **full lane**. Never the builder's or advisor's own call.
 2. **The reviewer forfeits mid-run** (the dispatch returns a **terminal forfeit** — its
    structural timeout firing, a nonzero exit, unreadable or unparseable output, or a vacuous
-   forfeit — *silence is not forfeit; a terminal forfeit result is*). **Light:** Claude may
-   stand in with the **independence loss disclosed** — a disclosed degradation, not an owner
-   decision, acceptable because the advisor's vet still runs afterward. **Micro:** no Claude
-   stand-in (no advisor vet behind it) — **resolve upward to the full lane or park**.
-3. **Micro at kickoff.** The reviewer must be **non-Anthropic** (the advisor *is* the
-   maker). No same-family fallback at kickoff and no Claude stand-in mid-run — unavailable
+   forfeit — *silence is not forfeit; a terminal forfeit result is*). **Light:** **The host
+   model** — whatever runs the current session, read from the hook payload, never assumed —
+   may stand in with the **independence loss disclosed** — a disclosed degradation, not an
+   owner decision, acceptable because the advisor's vet still runs afterward. **Micro:** no
+   host-model stand-in (no advisor vet behind it) — **resolve upward to the full lane or park**.
+3. **Micro at kickoff.** The reviewer must be **not the maker's family** (the advisor *is*
+   the maker). No same-family fallback at kickoff and no host-model stand-in mid-run —
+   unavailable
    or forfeited reviewers **resolve upward to the full lane or park** in both cases.
 
 **Salvage valve (`forfeit-with-engaged-artifact`).** A `forfeit-with-engaged-artifact` is a
@@ -120,8 +122,8 @@ alignment with practice is **in-sample** — fitted to the same changes it valid
 ### Micro — owner authorization
 
 In micro the advisor is the maker, so the advisor's independent vet-from-artifacts does
-not exist for that PR; the whole independent check is the one non-Anthropic reviewer
-plus the owner's per-change authorization.
+not exist for that PR; the whole independent check is the one reviewer **not the maker's
+family** plus the owner's per-change authorization.
 
 **Durable home.** Micro is already recorded in the PR, not an issue — the **micro PR
 itself** is the one named home for both halves of the independent check. The **reviewer
@@ -151,7 +153,7 @@ when they state the risk explicitly — **owner-only, per change, never a standi
 The advisor must say what could go wrong before the owner decides.
 
 **Re-review to convergence.** After the advisor resolves reviewer findings, the
-**non-Anthropic reviewer re-reviews the final head**, carrying the mandatory control probe
+**reviewer not the maker's family re-reviews the final head**, carrying the mandatory control probe
 on each re-review, until no blocking findings remain — or the change **parks**. When the
 contract under review is **prose**, the bounded acceptance bar in
 `### Bounded acceptance — prose-contract DoDs` below is the scoped exception to this paragraph.
