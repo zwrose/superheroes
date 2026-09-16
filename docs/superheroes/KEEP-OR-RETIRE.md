@@ -1049,6 +1049,12 @@ file, returns exactly that set.
 - `plugins/superheroes/lib/build_lane.py` — build-lane sidecar marker so the receipt gate can arm
   before review starts. **delete-when:** the host session carries build scope without a
   build-lane.json sidecar file.
+- `plugins/superheroes/lib/core_md.py` — the profile schema stays at 2 while it carries the
+  project-configuration keys an older build does not know, so an older build re-calibrating from
+  scratch can drop them. **delete-when:** the keep list is stamped and a release carrying the
+  configuration items has shipped; then the version is raised with the new literal pinned in the
+  tests rather than referenced from the constant. (Lands with the configuration-items child; the
+  tree carries this marker once that child merges.)
 - `plugins/superheroes/lib/harness_probe.py` — tripwire that native project-context injection still
   holds on every spawn path. **delete-when:** every spawn path is confirmed and recorded without
   this probe, or the probe retires.
