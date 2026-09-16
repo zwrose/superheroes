@@ -373,15 +373,24 @@ Prose *meaning* and *structure* are review's job, not CI's.
 On a [doctrine surface](glossary.md#doctrine-surface), the pin rule narrows the kept classes from
 four to two: **cross-doc literal-agreement pins** and **hard-line sentence pins** close, because
 both pin sentences; **register-quote checks** and **cardinality floors** survive, because they pin
-data and counts rather than prose. See `### One home per rule, and the pin rule`.
+data and counts rather than prose. A hard-line sentence pin over an
+[authority surface](glossary.md#authority-surface) is outside this narrowing: it is not written
+anew, not deleted when it goes red, and retires only on the owner's word, because deleting such a
+pin when it goes red would invert the fail direction of the one check standing over a hard line.
+See `### One home per rule, and the pin rule`.
 
 **Prose-executed paths are pinned structurally, not driven end-to-end by an executable harness.**
 A skill's prose path is executed by a model reading the prose — there is no process to drive.
-What *can* be pinned — within the byte-literal floor above — is the prose file itself through
-**the four kept classes** (cross-doc literal-agreement pins, hard-line sentence pins,
-register-quote checks, and cardinality floors over those censuses, plus the in-class extractor
-that bounds a pin to its home block). "Pinned structurally" means exactly that application to a
-shipped prose file — not structural parsers, table checks, or message/meaning guards, which
+What *can* be pinned — within the byte-literal floor above — is the prose file itself. Off a
+[doctrine surface](glossary.md#doctrine-surface), **the four kept classes** (cross-doc
+literal-agreement pins, hard-line sentence pins, register-quote checks, and cardinality floors
+over those censuses, plus the in-class extractor that bounds a pin to its home block). On a
+doctrine surface, only **register-quote checks** and **cardinality floors** over those censuses
+(plus that extractor); cross-doc literal-agreement pins and hard-line sentence pins that are not
+over an [authority surface](glossary.md#authority-surface) are closed — an existing doctrine
+sentence pin that goes red is deleted, not repaired. Pins over hard lines on an authority surface
+are outside that closure. "Pinned structurally" means exactly that application to a shipped prose
+file — not structural parsers, table checks, or message/meaning guards, which
 stay out of class, permanently, per the owner ruling 2026-08-17 recorded on issue #695. This
 does **not** reopen those out-of-class guards. This is **not**
 bite-proof vacuity mode 4 (*"delivered through a path the guarded input can never take"*) — for a
@@ -567,7 +576,7 @@ Rung 4 owes three birth duties, all required:
 
 1. A **bite-proof**: the detector demonstrably fires on a planted defect, and being deterministic
    by construction is part of the bar, so no wall-clock assertions and no inference from the
-   environment. Read `rubric/bite-proof.md` for the obligation, the ways a bite-proof is vacuous,
+   environment. Read `bite-proof.md` for the obligation, the ways a bite-proof is vacuous,
    and the record shape.
 2. A **[retirement condition](glossary.md#retirement-condition)**, with the component's tag, on
    its [keep-or-retire entry](glossary.md#keep-or-retire-entry).
@@ -592,10 +601,11 @@ The test suite is machinery, at two granularities.
   the tests rule in `### Guards do not get guards`.
 
 The three birth duties bind **at birth**: new detectors from here forward. An existing
-detector-shaped test owes no immediate back-fill. It enters the metabolism as its surface is next
-touched, at fold-in pace. Read literally, the scope line captures every existing census, pin, and
-bite-proof at once, and this bound is what keeps that reading from creating a mass obligation with
-no mechanism. The obligation is real and it drains at fold-in pace.
+detector-shaped test owes the three birth duties the next time a change edits the detector itself,
+meaning its own assertion logic or the enumeration it maintains. A change that only edits the
+thing the detector watches is not such an edit. Read literally, the scope line captures every
+existing census, pin, and bite-proof at once, and this bound is what keeps that reading from
+creating a mass obligation with no mechanism. The obligation is real.
 
 This rule is enforced as prose at the door and at the vet, for the same reason as the rule above.
 
@@ -606,16 +616,17 @@ The silent-failure question keeps its full force **on the work**. Nothing here s
 A review finding that proposes new standing machinery, meaning a new detector, gate, watcher,
 census, or a test whose subject is a guard, does not spawn a build and does not become an in-lane
 filing decision. It becomes a front-door item, scored and tiered like anything else. The door's
-home is `skills/showrunner/reference/owner-decisions.md`.
+home is `../skills/showrunner/reference/owner-decisions.md`.
 
 Ordinary test findings on the work stay in-lane review findings exactly as before: a missing case,
 a weak assertion on the diff's own behaviour. Tests on the work are part of the work.
 
 Proposing stays free. What changes is that the machine no longer pays for proposals by default.
 
-In a project whose front door is not yet calibrated, a machinery-proposing finding routes to the
-owner-decisions collector exactly as it does today. The door-routing rule activates only with
-calibration, so adopting this plugin never leaves such a finding with nowhere to go.
+In a project whose configuration does not yet carry the front door's items, meaning its severity
+ladder and its priority-tier definitions — or when those items are absent, unreadable, or in any
+state you cannot settle — a machinery-proposing finding routes to the owner-decisions collector
+exactly as it does today.
 
 A "watch the guard" finding is answered by citing `### Guards do not get guards`, and the citation
 is recorded the way that section says.
@@ -643,12 +654,17 @@ growing back inside the test suite.
 - An existing sentence pin that goes red because the text it pins changed is closed by **deleting
   the pin**. It is never updated to match the new text, and it is never moved to a new home. A red
   pin on replaced text is the expected outcome, not a surprise.
+- A pin over the hard lines of an [authority surface](glossary.md#authority-surface) is outside
+  this closure: it is not written anew, it is not deleted when it goes red, and it retires only on
+  the owner's word. Deleting such a pin when it goes red would invert the fail direction of the one
+  check standing over a hard line.
 
 **The reconciliation with the byte-literal floor**, stated here and pointed at from there. On a
 doctrine surface the byte-literal floor's kept classes shrink from four to two: cross-doc
 literal-agreement pins and hard-line sentence pins are closed, because both pin sentences;
 register-quote checks and cardinality floors survive, because they pin data and counts rather than
-prose. Off a doctrine surface the floor is unchanged.
+prose. Hard-line sentence pins over an [authority surface](glossary.md#authority-surface) are
+outside this closure. Off a doctrine surface the floor is unchanged.
 
 ### A behavior test that goes red
 
