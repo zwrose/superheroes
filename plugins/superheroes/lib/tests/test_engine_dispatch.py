@@ -1059,6 +1059,26 @@ def test_dispatch_relative_repo_root_absolutized_for_cwd_and_codex_c(tmp_path, m
     assert argv[i + 1] == view_cwd
 
 
+def test_edge4_dropped_role_flag_carries_terminal_envelope_review(capsys):
+    argv = [
+        "dispatch-review",
+        "--role", _REVIEW_ROLE,
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--prompt-path", "p",
+        "--repo-root", "/tmp",
+        "--run-dir", "/tmp/r",
+    ]
+    assert ED.main(argv) == 1
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res["reason"] == "legacy-seat-args"
+    assert res["terminal"] is True
+    assert res.get("runOpened") is False
+    assert res["attempts"] == 0
+    assert res["forfeited"] is False
+    assert res["runDir"] == ""
+    assert res["argv"] == []
+
+
 def test_main_dispatch_review_without_repo_root_argparse_refusal(tmp_path):
     prompt = _valid_prompt(tmp_path)
     with pytest.raises(SystemExit) as excinfo:

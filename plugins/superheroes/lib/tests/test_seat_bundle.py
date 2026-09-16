@@ -474,6 +474,68 @@ def test_dispatch_write_accepted_params_derived_from_signature():
     assert "kwargs" not in text
 
 
+@pytest.mark.parametrize("verb", ["guard-check", "dispatch-write"])
+def test_edge1_cursor_implementer_null_model_resolves(verb):
+    resolved = SB.resolve_entry(
+        _seat_json("cursor", None, None, _WRITE_ROLE),
+        verb=verb,
+    )
+    assert resolved["ok"] is True
+    assert resolved["model"] == "composer-2.5"
+    assert resolved["modelSource"] == "seat-default"
+    assert resolved["effortSource"] == "seat-default"
+
+
+@pytest.mark.parametrize("verb", ["guard-check", "dispatch-review"])
+def test_edge2_codex_reviewer_null_effort_resolves(verb):
+    resolved = SB.resolve_entry(
+        _seat_json("codex", "gpt-5.6-sol", None, _REVIEW_ROLE),
+        verb=verb,
+    )
+    assert resolved["ok"] is True
+    assert resolved["model"] == "gpt-5.6-sol"
+    assert resolved["effort"] == "high"
+    assert resolved["modelSource"] == "caller"
+    assert resolved["effortSource"] == "resolved"
+
+
+@pytest.mark.parametrize("verb", ["guard-check", "dispatch-review"])
+def test_edge3_null_model_ambiguous_effort_refuses_naming_models(verb):
+    resolved = SB.resolve_entry(
+        _seat_json("codex", None, "high", _REVIEW_ROLE),
+        verb=verb,
+    )
+    assert resolved["ok"] is False
+    assert resolved["reason"] == "model-ambiguous"
+    assert "gpt-5.6-terra" in resolved["detail"]
+    assert "gpt-5.6-sol" in resolved["detail"]
+
+
+@pytest.mark.parametrize("verb", ["guard-check", "dispatch-write"])
+def test_edge5_off_allowlist_model_null_effort_refused_at_allowlist(verb):
+    resolved = SB.resolve_entry(
+        _seat_json("cursor", "gpt-5.3-codex-high", None, _WRITE_ROLE),
+        verb=verb,
+    )
+    assert resolved["ok"] is False
+    assert resolved["reason"] == "allowlist-refused"
+    assert "composer-2.5" in resolved["detail"] or "allowlist" in resolved["detail"]
+
+
+def test_edge6_brief_check_mode_reviewer_refused_before_allowlist(monkeypatch):
+    def _boom(*_a, **_k):
+        raise RuntimeError("allowlist reached")
+
+    monkeypatch.setattr(DG, "validate", _boom)
+    resolved = SB.resolve_entry(
+        _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
+        verb="dispatch-review",
+        mode="brief-check",
+    )
+    assert resolved["ok"] is False
+    assert resolved["reason"] == "mode-role-mismatch"
+
+
 def test_dropped_flag_with_valid_seat_still_refuses():
     argv = [
         "dispatch-review",

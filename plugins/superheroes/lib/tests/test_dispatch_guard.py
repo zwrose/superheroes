@@ -371,6 +371,83 @@ def test_fail_closed_edge_10_model_none_seat_default():
     assert result["effort_source"] == "seat-default"
 
 
+def test_edge1_null_model_cursor_implementer_resolves_via_cli():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            _MOD,
+            "check",
+            "--seat",
+            json.dumps({
+                "vendor": "cursor",
+                "model": None,
+                "effort": None,
+                "role": "implementer",
+            }),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["model_id"] == "composer-2.5"
+    assert payload["resolved_model"] == "composer-2.5"
+
+
+def test_edge2_null_effort_codex_reviewer_resolves_via_cli():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            _MOD,
+            "check",
+            "--seat",
+            json.dumps({
+                "vendor": "codex",
+                "model": "gpt-5.6-sol",
+                "effort": None,
+                "role": "reviewer",
+            }),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["model_id"] == "gpt-5.6-sol"
+    assert payload["effort"] == "high"
+    assert payload["resolved_model"]
+
+
+def test_edge3_null_model_ambiguous_effort_refuses_via_cli():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            _MOD,
+            "check",
+            "--seat",
+            json.dumps({
+                "vendor": "codex",
+                "model": None,
+                "effort": "high",
+                "role": "reviewer",
+            }),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "model-ambiguous"
+    assert "gpt-5.6-terra" in payload["seat_detail"]
+    assert "gpt-5.6-sol" in payload["seat_detail"]
+
+
 def test_fail_closed_edge_11_override_only_fable():
     result = DG.validate("implementer", "claude", "fable")
     assert result["ok"] is False

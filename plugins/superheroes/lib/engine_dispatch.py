@@ -222,6 +222,10 @@ def _role_verb_mismatch_refusal(role, *, verb):
 
 def _legacy_dispatch_refusal(*, mode=None):
     refusal = seat_bundle.legacy_refusal()
+    return _terminal_pre_open_refusal(refusal, mode=mode)
+
+
+def _terminal_pre_open_refusal(refusal: dict, *, mode=None) -> dict:
     base = {
         "ok": False,
         "reason": refusal["reason"],
@@ -231,6 +235,7 @@ def _legacy_dispatch_refusal(*, mode=None):
         "terminal": True,
         "runDir": "",
         "argv": [],
+        "runOpened": False,
     }
     if mode is not None:
         base["mode"] = mode
@@ -4852,7 +4857,9 @@ def build_parser():
 def main(argv):
     dropped = seat_bundle.scan_dropped_flags(argv)
     if dropped:
-        refusal = seat_bundle.legacy_refusal(dropped_flags=tuple(dropped))
+        refusal = _terminal_pre_open_refusal(
+            seat_bundle.legacy_refusal(dropped_flags=tuple(dropped)),
+        )
         sys.stdout.write(json.dumps(refusal) + "\n")
         return 1
     args = build_parser().parse_args(argv)

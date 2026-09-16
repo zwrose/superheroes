@@ -582,6 +582,14 @@ def test_build_argv_result_untokenizable(monkeypatch):
     assert got["reason"] == "untokenizable"
 
 
+def test_unknown_engine_refusal_lists_only_build_argv_vendors():
+    res = EA.build_argv_result(_seat("openai", None, "high"), "review", {})
+    assert res["reason"] == "unknown-engine"
+    assert "codex" in res["detail"]
+    assert "cursor" in res["detail"]
+    assert "claude" not in res["detail"]
+
+
 def test_build_argv_result_fail_closed_edges():
     # 1 unknown engine
     assert EA.build_argv_result(_seat("openai", None, "high"), "review", {})["reason"] == "unknown-engine"

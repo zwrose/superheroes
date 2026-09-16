@@ -906,37 +906,24 @@ def test_write_argv_shape_cursor(tmp_path):
     assert "--mode" in review_built["argv"]
 
 
-def test_dispatch_write_codex_effort_none_refuses_no_lease(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    lease_path = ED._worktree_lease_path(os.path.realpath(wt))
-    fake = FakeRunner([])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, seat=_seat("codex", "gpt-5.6-sol", None))
-    assert res["ok"] is False
-    assert res["terminal"] is True
-    assert res["reason"] == "unrunnable"
-    assert "invalid-model-effort" in res.get("seatDetail", res["detail"]) or "not valid for model" in res["detail"]
-    assert res["attempts"] == 0
-    assert len(fake.calls) == 0
-    assert not os.path.exists(lease_path)
+def test_dispatch_write_codex_null_effort_resolves_at_entry():
+    resolved = ED.seat_bundle.resolve_entry(
+        _seat_json("codex", "gpt-5.6-sol", None, _WRITE_ROLE),
+        verb="dispatch-write",
+    )
+    assert resolved["ok"] is True
+    assert resolved["effort"] == "high"
+    assert resolved["effortSource"] == "resolved"
 
 
-def test_dispatch_write_cursor_grok_effort_none_refuses(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    fake = FakeRunner([])
-    res = _dispatch_write(
-        tmp_path, fake, cwd=wt, seat=_seat("cursor", "cursor-grok-4.6", None),
+def test_dispatch_write_cursor_grok_null_effort_resolves_at_entry():
+    resolved = ED.seat_bundle.resolve_entry(
+        _seat_json("cursor", "cursor-grok-4.6", None, _WRITE_ROLE),
+        verb="dispatch-write",
     )
-    assert res["ok"] is False
-    assert res["terminal"] is True
-    assert res["reason"] == "unrunnable"
-    assert "invalid-model-effort" in res.get("seatDetail", res["detail"]) or "not valid for model" in res["detail"]
-    assert res["attempts"] == 0
-    assert len(fake.calls) == 0
-    built = EA.build_argv_result(
-        _seat("cursor", "cursor-grok-4.6", None), "build",
-        {"engine_model": "cursor-grok-4.6", "cwd": os.path.realpath(wt)},
-    )
-    assert built["reason"] == "invalid-model-effort"
+    assert resolved["ok"] is True
+    assert resolved["effort"] == "xhigh"
+    assert resolved["effortSource"] == "resolved"
 
 
 def test_dispatch_write_cli_effort_key_absent_refuses(tmp_path, capsys):
@@ -1494,6 +1481,26 @@ def test_write_terminal_folded_returns_stored_before_expectation_check(tmp_path,
     assert res["reason"] == "plan_wrong"
     assert res.get("detail") != "expected-items-mismatch"
     assert "itemCheck" not in res
+
+
+def test_edge4_dropped_role_flag_carries_terminal_envelope_write(capsys):
+    argv = [
+        "dispatch-write",
+        "--role", _WRITE_ROLE,
+        "--seat", _seat_json("cursor", "composer-2.5", None, _WRITE_ROLE),
+        "--prompt-path", "p",
+        "--cwd", "/tmp",
+        "--run-dir", "/tmp/r",
+    ]
+    assert ED.main(argv) == 1
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res["reason"] == "legacy-seat-args"
+    assert res["terminal"] is True
+    assert res.get("runOpened") is False
+    assert res["attempts"] == 0
+    assert res["forfeited"] is False
+    assert res["runDir"] == ""
+    assert res["argv"] == []
 
 
 def test_write_cli_expect_item_and_file(tmp_path, capsys):

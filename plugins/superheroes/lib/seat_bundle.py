@@ -16,6 +16,10 @@ _BUILD_ARGV_RUN_KINDS = frozenset({"review", "build", "fix"})
 _DROPPED_FLAGS = ("--engine", "--model", "--effort", "--engine-model", "--vendor", "--role")
 _LEGACY_KEYWORDS = frozenset({"engine", "model", "effort", "engine_model", "role"})
 _MODE_BRIEF_CHECK = "brief-check"
+_PARK_TAIL = (
+    "an unlisted model is a park, not a pick (#600). "
+    "Pick a listed model or amend lib/model_registry.py."
+)
 
 
 def _signature_accepted_params(func) -> str:
@@ -340,6 +344,166 @@ def parse(raw, *, vendor_hint=None) -> dict:
     if text.startswith("{"):
         return _parse_json(text)
     return _parse_token(text, vendor_hint=vendor_hint)
+
+
+_EFFORT_SOURCE_MAP = {
+    "seat-default": "seat-default",
+    "given": "caller",
+    "token-encoded": "resolved",
+    "resolved-unique": "resolved",
+    "resolved-lowest-rung": "resolved",
+}
+
+
+def _map_effort_source(registry_source: str) -> str:
+    return _EFFORT_SOURCE_MAP.get(registry_source, registry_source)
+
+
+def _model_source_from_resolution(parsed_model, registry_effort_source: str) -> str:
+    if parsed_model is not None:
+        return "caller"
+    if registry_effort_source == "seat-default":
+        return "seat-default"
+    return "resolved"
+
+
+def _ambiguous_null_model_refusal(
+    role: str, vendor: str, effort: str, models: tuple[str, ...],
+) -> dict:
+    names = _format_valid(models)
+    return _entry_refusal(
+        "model-ambiguous",
+        (
+            f"model is required — effort {effort!r} matches multiple models on the "
+            f"{role}/{vendor} allowlist: {names}; pass an explicit model id in "
+            f"{_ACCEPTED_SEAT}"
+        ),
+    )
+
+
+def _allowlist_tokens(vendor: str, pairs: list[tuple[str, str | None]]) -> list[str]:
+    tokens: list[str] = []
+    for model_id, effort in pairs:
+        tok = model_registry.dispatch_token(vendor, model_id, effort)
+        if tok is not None:
+            tokens.append(tok)
+    return sorted(set(tokens))
+
+
+def _resolve_dispatch_refusal(
+    resolved: dict, *, role: str, vendor: str,
+) -> dict:
+    reason = resolved.get("reason") or "allowlist-refused"
+    candidates = resolved.get("candidates") or []
+    if candidates:
+        reason = f"{reason} — {_PARK_TAIL}"
+    detail = reason
+    if candidates:
+        pairs_text = ", ".join("(%s, %s)" % (m, e) for m, e in candidates)
+        detail = f"{reason}; sanctioned pairs: {pairs_text}"
+    refusal = _entry_refusal("allowlist-refused", detail)
+    if candidates:
+        refusal["allowlistVerdict"] = {
+            "ok": False,
+            "role": role,
+            "vendor": vendor,
+            "model_id": None,
+            "effort": None,
+            "dispatch_token": None,
+            "effort_source": None,
+            "resolved_model": None,
+            "allowlist": _allowlist_tokens(vendor, candidates),
+            "allowlist_pairs": [[m, e] for m, e in candidates],
+            "reason": detail,
+        }
+    return refusal
+
+
+def _resolve_entry_model_effort(parsed: dict, role: str) -> dict:
+    """Resolve nullable model/effort through the registry allowlist before allowlist consult."""
+    vendor = parsed["vendor"]
+    model = parsed.get("model")
+    effort = parsed.get("effort")
+
+    if model is not None and not isinstance(model, str):
+        return _entry_refusal(
+            "model-invalid",
+            f"seat model must be a string or null; accepted: {_ACCEPTED_SEAT}",
+        )
+    if effort is not None and not isinstance(effort, str):
+        return _entry_refusal(
+            "effort-invalid",
+            f"seat effort must be a string or null; accepted: {_ACCEPTED_SEAT}",
+        )
+
+    pairs = model_registry.allowlist(role, vendor)
+    if model is None and effort is not None and pairs:
+        matching = [pair for pair in pairs if pair[1] == effort]
+        distinct = sorted({pair[0] for pair in matching})
+        if len(distinct) > 1:
+            return _ambiguous_null_model_refusal(role, vendor, effort, tuple(distinct))
+
+    resolved = model_registry.resolve_dispatch(role, vendor, model, effort)
+    if not resolved.get("ok"):
+        if isinstance(model, str) and model:
+            allowed = _model_allowed_efforts(vendor, model)
+            if allowed is not None and not allowed:
+                if effort is not None:
+                    return _entry_refusal(
+                        "invalid-model-effort",
+                        (
+                            f"model {model!r} declares an empty effort set — only null effort "
+                            f"is accepted; got {effort!r}; accepted efforts for this model: (none)"
+                        ),
+                    )
+            elif allowed and effort is not None:
+                if _match_effort(effort, allowed) is None:
+                    allowed_text = _format_valid(allowed) if allowed else "(none)"
+                    detail = (
+                        f"effort {effort!r} is not valid for model {model!r}; "
+                        f"accepted efforts for this model: {allowed_text}"
+                    )
+                    hint = _cross_vendor_effort_hint(effort)
+                    if hint:
+                        detail = f"{detail}; {hint}"
+                    return _entry_refusal("invalid-model-effort", detail)
+        fail_reason = resolved.get("reason") or ""
+        if "conflicts with" in fail_reason and "dispatch token" in fail_reason:
+            detail = fail_reason.replace(
+                "conflicts with the effort", "conflicts with effort",
+            )
+            return _entry_refusal(
+                "effort-token-conflict",
+                f"{detail}; accepted: {_ACCEPTED_SEAT}",
+            )
+        return _resolve_dispatch_refusal(resolved, role=role, vendor=vendor)
+
+    model_id = resolved["model_id"]
+    effort_val = resolved["effort"]
+    reg_effort_source = resolved["effort_source"]
+    effort_source = _map_effort_source(reg_effort_source)
+    model_source = _model_source_from_resolution(model, reg_effort_source)
+    allowed = _model_allowed_efforts(vendor, model_id)
+    if (
+        allowed is not None
+        and not allowed
+        and effort_val is None
+        and reg_effort_source != "seat-default"
+        and model is not None
+    ):
+        effort_source = "declared-none"
+
+    out = dict(parsed)
+    out.update({
+        "ok": True,
+        "vendor": vendor,
+        "model": model_id,
+        "effort": effort_val,
+        "role": role,
+        "modelSource": model_source,
+        "effortSource": effort_source,
+    })
+    return out
 
 
 def _validate_model_effort(bundle: dict) -> dict:
@@ -730,10 +894,9 @@ def resolve_entry(seat_raw, *, verb, mode=None) -> dict:
             return verb_refusal
     if verb == "build-argv" and run_kind_for_role(role) is None:
         return _run_kind_unclassified_refusal(role)
-    checked = _validate_model_effort(parsed)
+    checked = _resolve_entry_model_effort(parsed, role)
     if not checked.get("ok"):
         return checked
-    role = checked["role"]
     vendor = checked["vendor"]
     model = checked["model"]
     effort = checked.get("effort")
@@ -755,6 +918,7 @@ def resolve_entry(seat_raw, *, verb, mode=None) -> dict:
         "model": model,
         "effort": effort,
         "role": role,
+        "modelSource": checked.get("modelSource", "caller"),
         "effortSource": checked.get("effortSource", "caller"),
         "roleSource": "seat",
         "allowlistVerdict": normalized["allowlistVerdict"],

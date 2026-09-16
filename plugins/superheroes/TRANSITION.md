@@ -45,8 +45,9 @@ like every other refusal.
 
 ### Composition-liveness cache
 
-The default lifetime for a composition-liveness receipt is 3600 seconds. Override with the
-`SUPERHEROES_LIVENESS_TTL_SECONDS` environment variable when you need a different TTL.
+The default lifetime for a composition-liveness receipt is 3600 seconds. Set
+`SUPERHEROES_LIVENESS_TTL_SECONDS` to configure the lifetime ceiling; a receipt expires at the
+shorter of its stamped TTL and that value.
 
 ### Registered consumers
 
