@@ -370,27 +370,16 @@ out of class is an extractor that parses document structure or judges what prose
 parsers**, **table checks**, and **message/meaning guards** are **out of class** — permanently.
 Prose *meaning* and *structure* are review's job, not CI's.
 
-On a [doctrine surface](glossary.md#doctrine-surface), the pin rule narrows the kept classes from
-four to two: **cross-doc literal-agreement pins** and **hard-line sentence pins** close, because
-both pin sentences; **register-quote checks** and **cardinality floors** survive, because they pin
-data and counts rather than prose. A hard-line sentence pin over an
-[authority surface](glossary.md#authority-surface) is outside this narrowing: it is not written
-anew, not deleted when it goes red, and retires only on the owner's word, because deleting such a
-pin when it goes red would invert the fail direction of the one check standing over a hard line.
-See `### One home per rule, and the pin rule`.
+On a [doctrine surface](glossary.md#doctrine-surface), the pin rule narrows the kept classes; see
+`### One home per rule, and the pin rule`.
 
 **Prose-executed paths are pinned structurally, not driven end-to-end by an executable harness.**
 A skill's prose path is executed by a model reading the prose — there is no process to drive.
-What *can* be pinned — within the byte-literal floor above — is the prose file itself. Off a
-[doctrine surface](glossary.md#doctrine-surface), **the four kept classes** (cross-doc
-literal-agreement pins, hard-line sentence pins, register-quote checks, and cardinality floors
-over those censuses, plus the in-class extractor that bounds a pin to its home block). On a
-doctrine surface, only **register-quote checks** and **cardinality floors** over those censuses
-(plus that extractor); cross-doc literal-agreement pins and hard-line sentence pins that are not
-over an [authority surface](glossary.md#authority-surface) are closed — an existing doctrine
-sentence pin that goes red is deleted, not repaired. Pins over hard lines on an authority surface
-are outside that closure. "Pinned structurally" means exactly that application to a shipped prose
-file — not structural parsers, table checks, or message/meaning guards, which
+What *can* be pinned — within the byte-literal floor above — is the prose file itself through
+**the four kept classes** (cross-doc literal-agreement pins, hard-line sentence pins,
+register-quote checks, and cardinality floors over those censuses, plus the in-class extractor
+that bounds a pin to its home block). "Pinned structurally" means exactly that application to a
+shipped prose file — not structural parsers, table checks, or message/meaning guards, which
 stay out of class, permanently, per the owner ruling 2026-08-17 recorded on issue #695. This
 does **not** reopen those out-of-class guards. This is **not**
 bite-proof vacuity mode 4 (*"delivered through a path the guarded input can never take"*) — for a
@@ -576,7 +565,7 @@ Rung 4 owes three birth duties, all required:
 
 1. A **bite-proof**: the detector demonstrably fires on a planted defect, and being deterministic
    by construction is part of the bar, so no wall-clock assertions and no inference from the
-   environment. Read `bite-proof.md` for the obligation, the ways a bite-proof is vacuous,
+   environment. Read `rubric/bite-proof.md` for the obligation, the ways a bite-proof is vacuous,
    and the record shape.
 2. A **[retirement condition](glossary.md#retirement-condition)**, with the component's tag, on
    its [keep-or-retire entry](glossary.md#keep-or-retire-entry).
@@ -591,7 +580,7 @@ The test suite is machinery, at two granularities.
 
 - **Detector-shaped tests** (drift pins, invariant guards, censuses written as tests) are rung-4
   detectors individually. Each owes the three birth duties and enters the keep-or-retire list. One
-  that never failed for a real reason and has flaked twice is a retirement candidate like any other
+  that never failed for a real reason is a retirement candidate like any other
   [plugin component](glossary.md#plugin-component). A detector-shaped test on a
   [doctrine surface](glossary.md#doctrine-surface) also obeys the pin rule below.
 - **Ordinary behavior tests on the work** are part of the work. They carry normal test craft, not
@@ -616,7 +605,7 @@ The silent-failure question keeps its full force **on the work**. Nothing here s
 A review finding that proposes new standing machinery, meaning a new detector, gate, watcher,
 census, or a test whose subject is a guard, does not spawn a build and does not become an in-lane
 filing decision. It becomes a front-door item, scored and tiered like anything else. The door's
-home is `../skills/showrunner/reference/owner-decisions.md`.
+home is `skills/showrunner/reference/owner-decisions.md`.
 
 Ordinary test findings on the work stay in-lane review findings exactly as before: a missing case,
 a weak assertion on the diff's own behaviour. Tests on the work are part of the work.
@@ -630,9 +619,6 @@ exactly as it does today.
 
 A "watch the guard" finding is answered by citing `### Guards do not get guards`, and the citation
 is recorded the way that section says.
-
-The direction toward calmer reviews is ratified, and the design lands with the review loop's own
-contract.
 
 ### One home per rule, and the pin rule
 
@@ -654,17 +640,23 @@ growing back inside the test suite.
 - An existing sentence pin that goes red because the text it pins changed is closed by **deleting
   the pin**. It is never updated to match the new text, and it is never moved to a new home. A red
   pin on replaced text is the expected outcome, not a surprise.
-- A pin over the hard lines of an [authority surface](glossary.md#authority-surface) is outside
-  this closure: it is not written anew, it is not deleted when it goes red, and it retires only on
-  the owner's word. Deleting such a pin when it goes red would invert the fail direction of the one
-  check standing over a hard line.
+- A pin whose subject is a **hard line**, a rule written as one that never bends, wherever it is
+  stated, including the covenant's hard lines and those of an
+  [authority surface](glossary.md#authority-surface), is outside this closure. Such a pin is not
+  written anew, it is not deleted when it goes red, and it retires only on the owner's word. When
+  it goes red, the hard line it guards is what you investigate first. Deleting such a pin when it
+  goes red would invert the fail direction of the one check standing over a hard line.
 
 **The reconciliation with the byte-literal floor**, stated here and pointed at from there. On a
 doctrine surface the byte-literal floor's kept classes shrink from four to two: cross-doc
 literal-agreement pins and hard-line sentence pins are closed, because both pin sentences;
-register-quote checks and cardinality floors survive, because they pin data and counts rather than
-prose. Hard-line sentence pins over an [authority surface](glossary.md#authority-surface) are
-outside this closure. Off a doctrine surface the floor is unchanged.
+register-quote checks survive, and cardinality floors survive only when their census counts
+structural identifiers or data (headings, check ids, columns, register entries). A cardinality
+floor whose census elements are sentences is closed exactly as a sentence pin is, and retires the
+same way. A pin whose subject is a **hard line**, a rule written as one that never bends, wherever
+it is stated, including the covenant's hard lines and those of an
+[authority surface](glossary.md#authority-surface), is outside this closure. Off a doctrine
+surface the floor is unchanged.
 
 ### A behavior test that goes red
 
