@@ -53,7 +53,7 @@ def test_implementation_dispatch_allowed_true_when_probe_succeeds(tmp_path):
 
 
 def test_implementation_dispatch_allowed_false_when_denied_ufr4(tmp_path):
-    # a denied write (nonzero exit) → False → implementation role falls open to Claude (UFR-4).
+    # a denied write (nonzero exit) → False → implementation role falls open to the host model (UFR-4).
     def run(args, **k):
         return _Proc(returncode=1, stderr="denied by autoMode")
     assert AZ.implementation_dispatch_allowed(str(tmp_path), "cursor", run=run) is False
