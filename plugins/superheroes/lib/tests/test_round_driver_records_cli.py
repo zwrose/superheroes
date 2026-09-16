@@ -739,6 +739,64 @@ def test_cmd_advance_recover_uses_injected_git_seam_for_legacy_sidecar(
     assert not os.path.exists(root) or os.listdir(root) == []
 
 
+def _panel_session(tmp_path):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir, exist_ok=True)
+    out = RD.cmd_next(session_dir, _cfg())
+    assert out["ok"], out
+    return session_dir
+
+
+def _persist_undecodable_schema_version(session_dir, monkeypatch):
+    """Persist schemaVersion at max(SUPPORTED)+1 — loadable but not seat-result-decodable."""
+    unsupported = max(RD.SUPPORTED_STATE_VERSIONS) + 1
+    monkeypatch.setattr(
+        RD, "SUPPORTED_STATE_VERSIONS",
+        tuple(sorted(RD.SUPPORTED_STATE_VERSIONS + (unsupported,))))
+    monkeypatch.setattr(RD, "STATE_SCHEMA_VERSION", unsupported)
+    seat_map = dict(RD.round_records.SEAT_RESULT_SCHEMA_BY_STATE_VERSION)
+    seat_map.pop(unsupported, None)
+    monkeypatch.setattr(RD.round_records, "SEAT_RESULT_SCHEMA_BY_STATE_VERSION", seat_map)
+    ok, state = RD.load_state(session_dir)
+    assert ok and state is not None
+    state["schemaVersion"] = unsupported
+    RD.save_state(session_dir, state)
+    return unsupported
+
+
+def test_cmd_record_result_refuses_state_version_unsupported(tmp_path, monkeypatch):
+    # axis: state-version-unsupported — record-result
+    session_dir = _panel_session(tmp_path)
+    seat = RD.DIMENSIONS[0]
+    _land(session_dir, seat)
+    _persist_undecodable_schema_version(session_dir, monkeypatch)
+    out = RD.cmd_record_result(session_dir, seat)
+    assert out["ok"] is False
+    assert out["reason"] == "state-version-unsupported"
+
+
+def test_cmd_record_result_sweep_refuses_state_version_unsupported(tmp_path, monkeypatch):
+    # axis: state-version-unsupported — sweep (_sweep_record)
+    session_dir = _panel_session(tmp_path)
+    _persist_undecodable_schema_version(session_dir, monkeypatch)
+    out = RD.cmd_record_result(session_dir, sweep=True)
+    assert out["ok"] is False
+    assert out["reason"] == "state-version-unsupported"
+
+
+def test_cmd_record_missing_refuses_state_version_unsupported(tmp_path, monkeypatch):
+    # axis: state-version-unsupported — record-missing
+    session_dir = _panel_session(tmp_path)
+    ok, state = RD.load_state(session_dir)
+    assert ok and state is not None
+    pend = state["pending"]
+    seat = RD.DIMENSIONS[0]
+    _persist_undecodable_schema_version(session_dir, monkeypatch)
+    out = RD.cmd_record_missing(session_dir, seat, pend["attempt"], "timeout")
+    assert out["ok"] is False
+    assert out["reason"] == "state-version-unsupported"
+
+
 def test_sidecar_temp_refuses_a_planted_symlink_and_leaves_victim_intact(tmp_path):
     """#1200 vet-197 named finding: the ``O_NOFOLLOW`` half of the sidecar temp open is behavior,
     not spelling — a symlink pre-planted at the deterministic temp name is refused (ELOOP), the
