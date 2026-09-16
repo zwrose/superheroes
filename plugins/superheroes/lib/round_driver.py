@@ -7031,16 +7031,26 @@ def _seat_for_record_identity(session_dir, ident):
 
 
 def _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt, occurrence=0):
-    """(envelope, err) for a landed seat file — full envelope or bare host payload. Never raises."""
+    """(envelope, err, landing_replace_path) for a landed seat file — full envelope or bare host
+    payload. ``landing_replace_path`` is the envelope file to rewrite when evidence stamping applies;
+    ``None`` when the slot is bare-payload shaped and must stay single-file. Never raises."""
     try:
         skey = round_records.storage_key(seat_key, occurrence)
     except ValueError as exc:
-        return None, str(exc)
+        return None, str(exc), None
     envelope, refusal = round_records._read_landing_envelope(
         session_dir, rnd, phase, skey, attempt, occurrence)
     if refusal is not None:
-        return None, refusal.get("reason")
-    return envelope, None
+        return None, refusal.get("reason"), None
+    landing_replace_path = None
+    try:
+        env_path = round_records.landing_path(session_dir, rnd, phase, skey, attempt)
+        # Full-envelope slot: replace that file; bare-payload slot: env absent, leave path None.
+        if os.path.lexists(env_path):
+            landing_replace_path = env_path
+    except ValueError:
+        pass
+    return envelope, None, landing_replace_path
 
 
 def _preflight_payload_fault(phase, envelope, seat_key):
@@ -7284,6 +7294,12 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     if refusal is not None:
         return refusal
     anchor = _orders_anchor(state, session_dir, rnd, phase, cur_attempt)
+    if sweep and evidence_run_dir:
+        # A sweep spans every seat — one run directory cannot bind evidence for all of them.
+        return _refuse_cmd(session_dir, "record-result", "sweep-evidence-unsupported",
+                           phase=phase, rnd=rnd, attempt=cur_attempt,
+                           detail=("--sweep cannot take --evidence-run-dir: evidence binds one "
+                                   "seat's order hash; a sweep covers the whole roster."))
     if sweep and (supersede or expect_sha256 is not None):
         recovery = []
         for seat_key, occurrence in round_records.roster_slots(roster):
@@ -7309,8 +7325,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                              "command cannot be issued until the record is readable"),
                 })
                 continue
-            envelope, landing_err = _read_landing_envelope(session_dir, rnd, phase, seat_key,
-                                                           cur_attempt, occurrence)
+            envelope, landing_err, _ = _read_landing_envelope(session_dir, rnd, phase, seat_key,
+                                                             cur_attempt, occurrence)
             if landing_err is not None:
                 # Only `landing-missing` means there is genuinely nothing landed. EVERY other
                 # refusal — including one a future reason introduces — means a landing IS present
@@ -7361,11 +7377,11 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence))
 
     # Validate BEFORE storing: a refusal must leave nothing behind.
-    lpath = None
+    landing_replace_path = None
     assembled = None
     if isinstance(seat, str) and seat in roster:
-        envelope, _lerr = _read_landing_envelope(session_dir, rnd, phase, seat, cur_attempt,
-                                                 occurrence)
+        envelope, _lerr, landing_replace_path = _read_landing_envelope(
+            session_dir, rnd, phase, seat, cur_attempt, occurrence)
         if _lerr is not None:
             return _refuse_cmd(session_dir, "record-result", _lerr, phase=phase, rnd=rnd,
                                attempt=cur_attempt, seat=_slot_label(seat, occurrence))
@@ -7377,13 +7393,6 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                 return _refuse_cmd(session_dir, "record-result", ev_reason, phase=phase,
                                    rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                                    **ev_extra)
-            try:
-                skey = round_records.storage_key(seat, occurrence)
-                lpath = round_records.landing_path(session_dir, rnd, phase, skey, cur_attempt)
-            except ValueError as exc:
-                return _refuse_cmd(session_dir, "record-result", "bad-argument", phase=phase,
-                                   rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
-                                   detail=str(exc))
         fault = _preflight_payload_fault(phase, envelope, seat)
         if fault:
             return _refuse_cmd(session_dir, "record-result", "payload-fault", phase=phase,
@@ -7427,8 +7436,11 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     try:
         c = round_commit.begin(session_dir, "record-ingest")
-        if lpath is not None and assembled is not None:
-            c.add_replace_file(lpath, round_records.canonical(assembled).encode("utf-8"))
+        # Stamp the landing file only when read from the full-envelope slot — bare-payload slots
+        # stay single-file; the stamped envelope is written to the store copy alone.
+        if landing_replace_path is not None and assembled is not None:
+            c.add_replace_file(landing_replace_path,
+                                round_records.canonical(assembled).encode("utf-8"))
         c.add_replace_file(plan["storePath"], round_records.canonical(envelope).encode("utf-8"))
         if head_store_path is not None:
             c.add_replace_file(head_store_path, head_diff_bytes)
@@ -7491,8 +7503,8 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
             bare_path is not None and os.path.exists(bare_path))
         if not has_landing or os.path.exists(spath):
             continue
-        envelope, _lerr = _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt,
-                                                 occurrence)
+        envelope, _lerr, _ = _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt,
+                                                    occurrence)
         fault = _preflight_payload_fault(phase, envelope, seat_key)
         if fault:
             return _refuse_cmd(session_dir, cmd, "payload-fault", phase=phase, rnd=rnd,
