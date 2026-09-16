@@ -1,7 +1,8 @@
 """Cross-doc disposition-flow structural guards (issue #1113).
 
 Enforces: pinned section headings; retired vocabulary and owner-rejected terms absent;
-retired door literals absent from shipped markdown; registry marker home;
+retired door literals absent from shipped doctrine surfaces (test tree excluded);
+registry marker home;
 discuss-open-decisions cites the owner-decisions canonical home path.
 """
 # What this file guards and does not guard (issue #1113).
@@ -72,6 +73,9 @@ def _walk_shipped_markdown():
                 continue
             rel = os.path.relpath(os.path.join(dirpath, name), _PLUGIN_ROOT)
             if rel == "CHANGELOG.md":
+                continue
+            # Bite-proof records quote the literals they proved; the test tree is evidence, not doctrine.
+            if rel.startswith("lib/tests/"):
                 continue
             yield rel
 
@@ -199,6 +203,16 @@ def test_retired_vocabulary_is_gone():
 
 def test_retired_door_literals_absent():
     _assert_retired_door_literals_absent()
+
+
+def test_walk_shipped_markdown_excludes_test_tree():
+    paths = list(_walk_shipped_markdown())
+    skills_paths = [p for p in paths if p.startswith("skills/")]
+    assert skills_paths, "census must include shipped doctrine under skills/"
+    test_tree_paths = [p for p in paths if p.startswith("lib/tests/")]
+    assert not test_tree_paths, (
+        "census must not include paths under lib/tests/: %r" % test_tree_paths[:5]
+    )
 
 
 def test_discuss_open_holder_pins():
