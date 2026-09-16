@@ -155,9 +155,9 @@ A routed issue that carries the four is gradable at vet without asking anyone wh
 ## The priority tiers and what each commits to
 
 The [priority tiers](../../../rubric/glossary.md#priority-tiers) entry defines the tiers. This
-section carries what each tier **commits to**. The front door's grading rules, the grid that
-produces a tier, and the P2 carve-out live in
-[`owner-decisions.md`](owner-decisions.md).
+section carries what each tier **commits to**. How a tier is graded — the evidence bar, the grid
+of severity ladder and evidence tier, and the carve-out that lets a P2 file — belongs to the intake
+contract, whose one home is [`owner-decisions.md`](owner-decisions.md).
 
 - **P0, next wave.** Requires the ladder's top band **by citation** together with field evidence,
   or the **owner's explicit override**. The override is the owner's own act and **nobody else may
@@ -168,8 +168,10 @@ produces a tier, and the P2 carve-out live in
 - **P1, enters the standing budget soon.** The owner's agreement, batched cheaply as a word at a
   walk. **P1s age**: at each [gardening pass](../../../rubric/glossary.md#gardening-pass) each old
   P1 is proposed for promotion, demotion, or decline. **None are immortal.**
-- **P2, should eventually happen.** Files free, with no owner word needed; the evidence bar is what
-  earned that. Lives in the backlog, out of default views, and drains mostly through folding in.
+- **P2, should eventually happen.** The one carve-out from *no filing without the owner's word*,
+  granted by the intake contract and exercised only where that contract grants it: the item files on
+  the advisor's authority with its grading recorded, and the evidence bar is what earned that.
+  Lives in the backlog, out of default views, and drains mostly through folding in.
 - **Declined, below the bar.** A line in the
   [declined registry](../../../rubric/glossary.md#declined-registry) with a named
   [trigger](../../../rubric/glossary.md#trigger), and nothing on the board.
