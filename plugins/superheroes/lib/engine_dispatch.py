@@ -577,13 +577,14 @@ def _build_resolved_inputs(
     engine_model_opts,
 ):
     snapshot = {}
+    model_source = seat.get("modelSource", "caller")
     _put_resolved(snapshot, "engine", seat.get("vendor"), "caller")
-    _put_resolved(snapshot, "model", seat.get("model"), "caller")
+    _put_resolved(snapshot, "model", seat.get("model"), model_source)
     _put_resolved(snapshot, "effort", seat.get("effort"), seat.get("effortSource", "caller"))
-    engine_model, engine_model_source = engine_adapter.resolve_engine_model(
+    engine_model, _engine_model_source = engine_adapter.resolve_engine_model(
         seat, role_kind, engine_model_opts,
     )
-    _put_resolved(snapshot, "engineModel", engine_model, engine_model_source)
+    _put_resolved(snapshot, "engineModel", engine_model, model_source)
     _put_resolved(snapshot, "role", seat.get("role"), seat.get("roleSource", "seat"))
     _put_resolved(snapshot, "repoRoot", repo_root, "resolved")
     _put_resolved(snapshot, "runDir", run_dir_real, run_dir_source)
@@ -607,17 +608,19 @@ def _build_resolved_inputs(
 def _resolved_inputs_echo_from_run_dir(run_dir_real):
     try:
         records, corrupt = _journal_read(run_dir_real)
-        if corrupt:
-            return {"runOpened": True, "resolvedInputsStatus": "journal-corrupt"}
         opened = _journal_state(records).get("opened")
         if opened is None:
+            if corrupt:
+                return {"runOpened": False, "resolvedInputsStatus": "unverifiable"}
             return {"runOpened": False}
         status = _resolved_inputs_status_from_opened(opened)
         echo = {
             "runOpened": True,
             "resolvedInputs": _resolved_inputs_from_opened(opened),
         }
-        if status is not None:
+        if corrupt:
+            echo["resolvedInputsStatus"] = "journal-corrupt"
+        elif status is not None:
             echo["resolvedInputsStatus"] = status
         return echo
     except Exception:
@@ -4806,13 +4809,13 @@ def build_parser():
     cc.add_argument(d, "--seat", contract="free-text", required=True,
                     help="JSON seat bundle with vendor, model, effort, and role")
     cc.add_argument(d, "--prompt-path", contract="free-text", required=True)
-    cc.add_argument(d, "--timeout", contract="integer", default=RETRY_MIN_TIMEOUT, type=int)
+    cc.add_argument(d, "--timeout", contract="integer", default=_PARAM_UNSET, type=int)
     cc.add_argument(d, "--retry-timeout", contract="integer",
-                    default=RETRY_MIN_TIMEOUT, type=int)
+                    default=_PARAM_UNSET, type=int)
     cc.add_argument(d, "--progress-file", contract="free-text", default=None)
     cc.add_argument(d, "--repo-root", contract="repo-root", required=True)
-    cc.add_argument(d, "--run-dir", contract="creatable-path", default=None)
-    cc.add_argument(d, "--max-wait", contract="integer", default=None, type=int)
+    cc.add_argument(d, "--run-dir", contract="creatable-path", default=_PARAM_UNSET)
+    cc.add_argument(d, "--max-wait", contract="integer", default=_PARAM_UNSET, type=int)
     cc.add_argument(d, "--order-id", contract="free-text", default=None)
     cc.add_argument(d, "--diff-base", contract="free-text", default=None, metavar="<commit-oid>",
                     help="pinned commit object id (40 hex, or 64 in a SHA-256 repository) "
@@ -4834,10 +4837,10 @@ def build_parser():
     cc.add_argument(w, "--order-id", contract="free-text", default=None)
     cc.add_argument(w, "--base-sha", contract="free-text", default=None)
     cc.add_argument(w, "--run-dir", contract="creatable-path", required=True)
-    cc.add_argument(w, "--timeout", contract="integer", default=RETRY_MIN_TIMEOUT, type=int)
+    cc.add_argument(w, "--timeout", contract="integer", default=_PARAM_UNSET, type=int)
     cc.add_argument(w, "--retry-timeout", contract="integer",
-                    default=RETRY_MIN_TIMEOUT, type=int)
-    cc.add_argument(w, "--max-wait", contract="integer", default=None, type=int)
+                    default=_PARAM_UNSET, type=int)
+    cc.add_argument(w, "--max-wait", contract="integer", default=_PARAM_UNSET, type=int)
     cc.add_argument(w, "--progress-file", contract="free-text", default=None)
     cc.add_argument(w, "--expect-item", contract="free-text", action="append", default=None)
     cc.add_argument(w, "--expect-items-file", contract="free-text", default=None)

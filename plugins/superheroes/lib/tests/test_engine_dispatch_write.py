@@ -2570,3 +2570,26 @@ def test_write_g1_refusal_leaves_no_lease_or_opened_run(tmp_path):
     assert not any(r.get("kind") == "run-opened" for r in records)
     lease_path = ED._worktree_lease_path(os.path.realpath(wt))
     assert not os.path.exists(lease_path)
+
+
+# --- #1269 WO-8: provenance truthfulness on write path ------------------------
+
+
+def test_wo8_edge1_cursor_implementer_null_model_snapshot_sources(tmp_path):
+    # axis: resolved model must not be recorded as caller-supplied
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([])
+    run_dir = str(tmp_path / "wo8-null-model")
+    _dispatch_write(
+        tmp_path,
+        fake,
+        cwd=wt,
+        run_dir=run_dir,
+        seat=_seat_json("cursor", None, None),
+        max_wait=0,
+    )
+    snapshot = _write_opened_resolved_inputs(run_dir)
+    assert snapshot["model"] == "composer-2.5"
+    assert snapshot["modelSource"] == "seat-default"
+    assert snapshot["engineModel"] == "composer-2.5"
+    assert snapshot["engineModelSource"] == "seat-default"

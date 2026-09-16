@@ -9,7 +9,7 @@ from __future__ import annotations
 import inspect
 import json
 
-import dispatch_guard
+import dispatch_allowlist
 import model_registry
 
 _BUILD_ARGV_RUN_KINDS = frozenset({"review", "build", "fix"})
@@ -901,7 +901,7 @@ def resolve_entry(seat_raw, *, verb, mode=None) -> dict:
     model = checked["model"]
     effort = checked.get("effort")
     try:
-        verdict = dispatch_guard.validate(role, vendor, model, effort)
+        verdict = dispatch_allowlist.validate(role, vendor, model, effort)
     except Exception:
         return _entry_refusal(
             "allowlist-raised",

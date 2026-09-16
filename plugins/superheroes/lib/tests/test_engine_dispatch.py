@@ -8700,7 +8700,7 @@ def test_entry_allowlist_malformed_guard_verdict_refuses(tmp_path, monkeypatch):
     def _empty_ok_verdict(*_a, **_k):
         return {"ok": True, "reason": None, "allowlist": [], "allowlist_pairs": []}
 
-    monkeypatch.setattr(ED.dispatch_guard, "validate", _empty_ok_verdict)
+    monkeypatch.setattr(ED.seat_bundle.dispatch_allowlist, "validate", _empty_ok_verdict)
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
         seat=_codex_seat(),
@@ -8775,4 +8775,83 @@ def test_old_head_continuation_preserves_caller_role_source(tmp_path):
     assert opened["resolvedInputs"]["roleSource"] == "caller"
     poll = ED.dispatch_poll(run_dir)
     assert poll["resolvedInputs"]["roleSource"] == "caller"
+
+
+# --- #1269 WO-8: provenance, corrupt-journal echo, CLI defaults ---------------
+
+
+def test_wo8_edge2_review_omitted_provenance_tracked_flags_defaulted(tmp_path):
+    # axis: omitted timeout/retry-timeout/max-wait/run-dir record defaulted or resolved
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        order_id="wo8-edge2",
+    )
+    run_dir = res["runDir"]
+    assert run_dir
+    snapshot = _opened_resolved_inputs(run_dir)
+    assert snapshot["timeoutSource"] == "default"
+    assert snapshot["retryTimeoutSource"] == "default"
+    assert snapshot["maxWaitSource"] == "default"
+    assert snapshot["runDirSource"] == "resolved"
+
+
+def test_wo8_edge3_review_explicit_provenance_tracked_flags_caller(tmp_path):
+    # axis: explicitly passed timeout/retry-timeout/max-wait/run-dir record caller
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "wo8-edge3")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        timeout=120,
+        retry_timeout=90,
+        max_wait=0,
+        order_id="wo8-edge3",
+    )
+    snapshot = _opened_resolved_inputs(run_dir)
+    assert snapshot["timeout"] == 120
+    assert snapshot["timeoutSource"] == "caller"
+    assert snapshot["retryTimeout"] == 90
+    assert snapshot["retryTimeoutSource"] == "caller"
+    assert snapshot["maxWaitSource"] == "caller"
+    assert snapshot["runDirSource"] == "caller"
+
+
+def test_wo8_edge4_corrupt_journal_without_opened_not_reported_opened(tmp_path):
+    # axis: corrupt journal with no valid run-opened must not claim runOpened true
+    run_dir = str(tmp_path / "wo8-corrupt-empty")
+    os.makedirs(run_dir, exist_ok=True)
+    path = ED._journal_path(run_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not-json\n")
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo["runOpened"] is False
+    assert echo["resolvedInputsStatus"] == "unverifiable"
+    assert "resolvedInputs" not in echo
+
+
+def test_wo8_edge5_corrupt_journal_with_opened_carries_snapshot_and_status(tmp_path):
+    # axis: corrupt journal with valid run-opened keeps snapshot and corruption status
+    run_dir = str(tmp_path / "wo8-corrupt-opened")
+    _manual_open_review_run(tmp_path, run_dir)
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    with open(ED._journal_path(run_dir), "ab") as fh:
+        fh.write(b"not-json\n")
+    records, corrupt = ED._journal_read(run_dir)
+    assert corrupt is True
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo["runOpened"] is True
+    assert echo["resolvedInputsStatus"] == "journal-corrupt"
+    assert echo["resolvedInputs"] == snapshot_before
 

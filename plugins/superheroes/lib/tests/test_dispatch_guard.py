@@ -455,17 +455,7 @@ def test_fail_closed_edge_11_override_only_fable():
     assert _PARK_TAIL in result["reason"]
 
 
-def test_dispatch_guard_no_module_level_seat_bundle_import():
-    with open(_MOD, encoding="utf-8") as fh:
-        for line in fh:
-            if line.startswith((" ", "\t")):
-                continue
-            stripped = line.strip()
-            if stripped.startswith("import seat_bundle") or stripped.startswith("from seat_bundle"):
-                pytest.fail(f"module-level seat_bundle import found: {stripped!r}")
-
-
-def test_dispatch_guard_and_seat_bundle_import_without_cycle():
+def test_wo8_edge6_dispatch_guard_and_seat_bundle_import_without_cycle():
     lib_dir = os.path.join(_HERE, "..")
     env = os.environ.copy()
     env["PYTHONPATH"] = lib_dir
@@ -478,3 +468,43 @@ def test_dispatch_guard_and_seat_bundle_import_without_cycle():
             text=True,
         )
         assert cp.returncode == 0, cp.stderr
+    for first, second in (("dispatch_guard", "seat_bundle"), ("seat_bundle", "dispatch_guard")):
+        cp = subprocess.run(
+            [sys.executable, "-c", f"import {first}; import {second}"],
+            cwd=lib_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert cp.returncode == 0, cp.stderr
+
+
+def test_wo8_edge7_dispatch_guard_check_valid_and_off_allowlist_unchanged():
+    # axis: documented CLI check command keeps success and refusal text
+    lib_dir = os.path.join(_HERE, "..")
+    mod_path = os.path.join(lib_dir, "dispatch_guard.py")
+    valid = subprocess.run(
+        [sys.executable, "-B", mod_path, "check", "--seat",
+         json.dumps({"vendor": "cursor", "model": "composer-2.5", "effort": None,
+                     "role": "implementer"})],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert valid.returncode == 0
+    payload = json.loads(valid.stdout)
+    assert payload["ok"] is True
+    assert payload["resolved_model"] == "composer-2.5"
+    off = subprocess.run(
+        [sys.executable, "-B", mod_path, "check", "--seat",
+         json.dumps({"vendor": "cursor", "model": "gpt-5.3-codex-high", "effort": None,
+                     "role": "implementer"})],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert off.returncode == 1
+    off_payload = json.loads(off.stdout)
+    assert off_payload["ok"] is False
+    assert "gpt-5.3-codex-high" in off_payload["reason"]
+    assert _PARK_TAIL in off.stderr

@@ -343,7 +343,7 @@ def test_semantic_allowlist_verdict_empty_pairs_refused(monkeypatch):
     def _fake_validate(role, vendor, model, effort):
         return {"ok": True, "reason": None, "allowlist": [], "allowlist_pairs": []}
 
-    monkeypatch.setattr(DG, "validate", _fake_validate)
+    monkeypatch.setattr(SB.dispatch_allowlist, "validate", _fake_validate)
     resolved = SB.resolve_entry(
         _seat_json("codex", "gpt-5.6-sol", "high"),
         verb="guard-check",
@@ -357,7 +357,7 @@ def test_semantic_allowlist_verdict_role_vendor_mismatch_refused(monkeypatch):
     verdict = DG.validate("reviewer", "codex", "gpt-5.6-sol", "high")
     verdict = dict(verdict)
     verdict["role"] = "implementer"
-    monkeypatch.setattr(DG, "validate", lambda *a, **k: verdict)
+    monkeypatch.setattr(SB.dispatch_allowlist, "validate", lambda *a, **k: verdict)
     resolved = SB.resolve_entry(
         _seat_json("codex", "gpt-5.6-sol", "high"),
         verb="guard-check",
@@ -370,7 +370,7 @@ def test_semantic_allowlist_verdict_pair_absent_refused(monkeypatch):
     verdict = DG.validate("reviewer", "codex", "gpt-5.6-sol", "high")
     verdict = dict(verdict)
     verdict["allowlist_pairs"] = [["gpt-5.6-terra", "high"]]
-    monkeypatch.setattr(DG, "validate", lambda *a, **k: verdict)
+    monkeypatch.setattr(SB.dispatch_allowlist, "validate", lambda *a, **k: verdict)
     resolved = SB.resolve_entry(
         _seat_json("codex", "gpt-5.6-sol", "high"),
         verb="guard-check",
@@ -383,7 +383,7 @@ def test_allowlist_guard_raise_refused(monkeypatch):
     def _boom(*_a, **_k):
         raise RuntimeError("guard exploded")
 
-    monkeypatch.setattr(DG, "validate", _boom)
+    monkeypatch.setattr(SB.dispatch_allowlist, "validate", _boom)
     resolved = SB.resolve_entry(
         _seat_json("codex", "gpt-5.6-sol", "high"),
         verb="guard-check",
@@ -526,7 +526,7 @@ def test_edge6_brief_check_mode_reviewer_refused_before_allowlist(monkeypatch):
     def _boom(*_a, **_k):
         raise RuntimeError("allowlist reached")
 
-    monkeypatch.setattr(DG, "validate", _boom)
+    monkeypatch.setattr(SB.dispatch_allowlist, "validate", _boom)
     resolved = SB.resolve_entry(
         _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
         verb="dispatch-review",
@@ -534,6 +534,11 @@ def test_edge6_brief_check_mode_reviewer_refused_before_allowlist(monkeypatch):
     )
     assert resolved["ok"] is False
     assert resolved["reason"] == "mode-role-mismatch"
+
+
+def test_wo8_edge8_brief_check_reviewer_refused_before_allowlist(monkeypatch):
+    # axis: WO-8 edge 8 — mode brief-check with reviewer seat refuses before allowlist
+    test_edge6_brief_check_mode_reviewer_refused_before_allowlist(monkeypatch)
 
 
 def test_dropped_flag_with_valid_seat_still_refuses():
