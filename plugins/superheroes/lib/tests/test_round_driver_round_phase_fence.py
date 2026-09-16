@@ -343,6 +343,44 @@ def _last_sweep_repair_journal_recorded(session_dir):
     return rows[-1]
 
 
+def _setup_fixer_sweep_fresh_head_diff_pending(tmp_path):
+    """Pending fixer phase with a landed (not stored) fixer record for sweep head-diff bind."""
+    findings = [_blocking_finding("missing bounds guard", 2)]
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="fence-fixer-sweep-bind")
+    _drive_to_phase(session_dir, gitdir, findings, head_path, P_FIXER)
+    state = _state(session_dir)
+    pend = state["pending"]
+    assert pend["phase"] == P_FIXER
+    roster, _ = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
+    seat = roster[0]
+    slots = _slots_of(roster)
+    _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
+    bind_head_path = str(tmp_path / "fixer-sweep-bind-head.diff")
+    with open(bind_head_path, "w", encoding="utf-8") as fh:
+        fh.write("diff --git a/f.py b/f.py\n+sweep-bind\n")
+    payload = _TDI._payload_for(session_dir, state, pend, seat, findings, bind_head_path)
+    _land(session_dir, state, pend, seat, payload, occurrence=0)
+    return session_dir, pend, seat
+
+
+def _assert_cas_token_on_head_diff_row(session_dir, row):
+    assert "casToken" in row
+    assert row.get("payloadSha256")
+    rnd = row["round"]
+    phase = row["phase"]
+    seat = row["seat"]
+    occurrence = row.get("occurrence", 0)
+    attempt = row["attempt"]
+    spath = round_records.store_path(
+        session_dir, rnd, phase, round_records.storage_key(seat, occurrence), attempt)
+    stored, err = round_records.read_json(spath)
+    assert err is None
+    assert row["casToken"] == round_records.envelope_cas_token(stored)
+    if stored.get("schema") == round_records.SEAT_RESULT_SCHEMA_V2:
+        assert row["casToken"] == stored["envelopeSha256"]
+        assert row["casToken"] != row["payloadSha256"]
+
+
 def test_journal_addressed_true_when_round_phase_echoed(tmp_path):
     """#1177-C bite-proof: journal addressed distinguishes fenced durable-record calls."""
     session_dir, _gitdir, _head_path, _findings, pend, tid, _slots = _setup_audits_pending(tmp_path)
@@ -405,6 +443,36 @@ def test_journal_addressed_sweep_fixer_repair_branch(tmp_path):
     assert out["ok"] is True, out
     entry = _last_sweep_repair_journal_recorded(session_dir)
     assert entry["addressed"] is True
+
+
+def test_repair_fixer_head_diff_journal_carries_envelope_cas_token(tmp_path):
+    """Stored fixer head-diff repair journals the stored envelope's CAS token."""
+    # axis: _repair_fixer_head_diff → _store_head_diff late subscript — headDiffRepaired row
+    session_dir, pend, seat = _setup_fixer_sweep_repair_pending(tmp_path)
+    out = round_driver.cmd_record_result(session_dir, sweep=True)
+    assert out["ok"] is True, out
+    row = _last_sweep_repair_journal_recorded(session_dir)
+    assert row.get("headDiffRepaired") is True
+    assert row.get("seat") == seat
+    assert row.get("round") == pend["round"]
+    assert row.get("phase") == P_FIXER
+    _assert_cas_token_on_head_diff_row(session_dir, row)
+
+
+def test_sweep_fresh_fixer_head_diff_bind_journal_carries_envelope_cas_token(tmp_path):
+    """Sweep ingest head-diff bind journals the stored envelope's CAS token."""
+    # axis: _sweep_record head-diff branch → _store_head_diff late subscript — fresh bind row
+    session_dir, pend, seat = _setup_fixer_sweep_fresh_head_diff_pending(tmp_path)
+    out = round_driver.cmd_record_result(session_dir, sweep=True)
+    assert out["ok"] is True, out
+    rows = [e for e in round_driver.read_journal(session_dir)
+            if e.get("cmd") == "record-result" and e.get("outcome") == "recorded"
+            and e.get("headDiffRepaired") is not True and e.get("seat") == seat]
+    assert rows, "no sweep fresh head-diff bind recorded journal row"
+    row = rows[-1]
+    assert row.get("round") == pend["round"]
+    assert row.get("phase") == P_FIXER
+    _assert_cas_token_on_head_diff_row(session_dir, row)
 
 
 def test_cli_record_result_matching_round_wrong_phase_refuses(tmp_path, capsys):
