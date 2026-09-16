@@ -603,8 +603,7 @@ result also refuses (fail-closed). The fixer never pushes/merges/deploys (those 
 **Where those findings go next.** A refusal here means this loop **cannot converge on that surface** —
 that is the guard's designed bound, not a defect, an engine failure, or an escalation trigger. The
 route from the refusal to a fix — ordered implementer work orders on advisor or builder authority
-with loud disclosure, the owner's word required only for the owner-authority-gate family, and the
-park branch scoped to that family — is
+with loud disclosure — is
 `rubric/review-discipline.md` § *The safety-machinery route — the guard refuses the fixer*. Follow it
 rather than re-deriving it; do not retry the fixer, and never narrow the guard to converge a round.
 
