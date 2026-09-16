@@ -8331,12 +8331,14 @@ def test_resolved_inputs_echo_identical_across_five_exits(tmp_path):
     _manual_open_review_run(tmp_path, abandon_dir)
     abandoned = ED.dispatch_abandon(abandon_dir)
     folded_run = str(tmp_path / "fold-run")
+    fold_runner = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     folded_first = ED.dispatch_review(
         seat=_codex_seat(),
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path), run_dir=folded_run, max_wait=0,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fold_runner,
+        build_view=_fake_build_view(tmp_path), run_dir=folded_run,
         order_id="order-fold",
     )
+    assert folded_first["terminal"] is True
     folded_replay = ED.dispatch_review(
         seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
@@ -8346,8 +8348,7 @@ def test_resolved_inputs_echo_identical_across_five_exits(tmp_path):
     assert continuation["resolvedInputs"] == echo
     assert polled["resolvedInputs"] == echo
     assert abandoned["resolvedInputs"] == _opened_resolved_inputs(abandon_dir)
-    if folded_first.get("terminal"):
-        assert folded_replay["resolvedInputs"] == folded_first["resolvedInputs"]
+    assert folded_replay["resolvedInputs"] == folded_first["resolvedInputs"]
 
 
 def test_resolved_inputs_poll_echo_matches_opened_snapshot_without_seat(tmp_path):

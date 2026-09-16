@@ -63,10 +63,10 @@ def test_ttl_seconds_env_invalid_falls_back(monkeypatch, val):
 
 
 @pytest.mark.parametrize("stored", [None, "600", -1, 0, float("nan"), float("inf")])
-def test_effective_ttl_invalid_stored_falls_back_to_configured(monkeypatch, stored):
+def test_effective_ttl_invalid_stored_is_zero_not_configured(monkeypatch, stored):
     monkeypatch.delenv(lc._ENV_TTL, raising=False)
     receipt = {"ttl": stored} if stored is not None else {}
-    assert lc.effective_ttl(receipt) == 3600
+    assert lc.effective_ttl(receipt) == 0
 
 
 def test_effective_ttl_configured_wins_over_larger_stored(monkeypatch):

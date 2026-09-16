@@ -54,16 +54,23 @@ def ttl_seconds():
     return DEFAULT_TTL_SECONDS
 
 
+def _stored_ttl_valid(stored):
+    """True when stored is a positive finite number suitable for min(stored, configured)."""
+    if not isinstance(stored, (int, float)) or isinstance(stored, bool):
+        return False
+    if not math.isfinite(stored) or stored <= 0:
+        return False
+    return True
+
+
 def effective_ttl(receipt):
     """Effective TTL for expiry: min(stored, configured) when stored is a positive number."""
     configured = ttl_seconds()
     if not isinstance(receipt, dict):
         return configured
     stored = receipt.get("ttl")
-    if not isinstance(stored, (int, float)) or isinstance(stored, bool):
-        return configured
-    if not math.isfinite(stored) or stored <= 0:
-        return configured
+    if not _stored_ttl_valid(stored):
+        return 0
     return min(int(stored), configured)
 
 
@@ -212,10 +219,16 @@ def write(liveness, needed, *, path, now, ttl=None):
             existing_at = existing.get("probedAt")
             if _is_timestamp(existing_at) and float(existing_at) >= float(now):
                 return True
+        if ttl is None:
+            stored_ttl = DEFAULT_TTL_SECONDS
+        elif not _stored_ttl_valid(ttl):
+            return False
+        else:
+            stored_ttl = int(ttl)
         payload = {
             "schemaVersion": SCHEMA_VERSION,
             "probedAt": float(now),
-            "ttl": int(ttl) if ttl is not None else DEFAULT_TTL_SECONDS,
+            "ttl": stored_ttl,
             "needed": _normalize_needed(needed),
             "liveness": liveness,
         }
@@ -256,6 +269,8 @@ def read(path, *, now):
     if not _is_timestamp(probed_at):
         return None
     if probed_at > now:
+        return None
+    if not _stored_ttl_valid(raw.get("ttl")):
         return None
     if (now - probed_at) >= effective_ttl(raw):
         return None

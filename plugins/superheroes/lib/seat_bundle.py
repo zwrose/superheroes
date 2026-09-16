@@ -437,7 +437,8 @@ def _resolve_dispatch_refusal(
 def _resolve_entry_model_effort(parsed: dict, role: str) -> dict:
     """Resolve nullable model/effort through the registry allowlist before allowlist consult."""
     vendor = parsed["vendor"]
-    model = parsed.get("model")
+    parsed_model = parsed.get("model")
+    model = parsed_model
     effort = parsed.get("effort")
 
     if model is not None and not isinstance(model, str):
@@ -510,7 +511,7 @@ def _resolve_entry_model_effort(parsed: dict, role: str) -> dict:
     effort_val = resolved["effort"]
     reg_effort_source = resolved["effort_source"]
     effort_source = _map_effort_source(reg_effort_source)
-    model_source = _model_source_from_resolution(model, reg_effort_source)
+    model_source = _model_source_from_resolution(parsed_model, reg_effort_source)
     allowed = _model_allowed_efforts(vendor, model_id)
     if (
         allowed is not None

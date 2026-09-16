@@ -413,6 +413,7 @@ def test_null_model_unique_effort_match_review_role(verb):
     assert resolved["ok"] is True
     assert resolved["model"] == "gpt-5.6-sol"
     assert resolved["effort"] == "xhigh"
+    assert resolved["modelSource"] == "resolved"
 
 
 @pytest.mark.parametrize("verb", ["guard-check", "dispatch-write"])
@@ -424,6 +425,7 @@ def test_null_model_unique_effort_match_write_role(verb):
     assert resolved["ok"] is True
     assert resolved["model"] == "gpt-5.6-sol"
     assert resolved["effort"] == "xhigh"
+    assert resolved["modelSource"] == "resolved"
 
 
 def test_null_model_effort_without_allowlist_pair_refused():
