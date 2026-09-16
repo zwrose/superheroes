@@ -408,7 +408,6 @@ after it names *how*.
 Dispatch **one fresh-context reviewer** over the brief. Because you (the orchestrator) are already
 high-tier, the default is a **cross-vendor reviewer at comparable tier**; a fresh-context reviewer on
 **the host model** is the fallback **only with disclosed degradation** (never a silent downgrade).
-**The host model** means whatever runs the current session, read from the hook payload, never assumed.
 One pass:
 fold its findings in, or dispute each with a reason. Post the dispositions.
 

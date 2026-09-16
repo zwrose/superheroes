@@ -332,8 +332,7 @@ above).
    `review-discipline.md`): check the single reviewer's availability **while the owner is
    present**. **Mid-run forfeit** follows the rubric's three-case rule (kickoff unavailability,
    mid-run forfeit with disclosed stand-in on the host model on **light** only, **micro** resolving upward to
-   the full lane or parking — silence is not forfeit; a terminal forfeit result is). **The host model**
-   means whatever runs the current session, read from the hook payload, never assumed. One honest
+   the full lane or parking — silence is not forfeit; a terminal forfeit result is). One honest
    consequence:
    the cross-vendor engine has stalled for long stretches at near-zero CPU in practice, and the
    reviewer keeps its normal ceiling rather than a tighter one (a tighter timeout would only trade

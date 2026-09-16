@@ -224,7 +224,6 @@ After the verify command (§3) is set — external implementers are verify-gated
 bring **Codex** and/or **Cursor** into the loop per role on the owner's word. The **primary path**
 is the named provisional defaults — **reviewer**, **implementer**, and **pilot** → `claude`;
 **briefCheck** → `codex` (the cross-vendor default — a brief-check on **the host model** is a disclosed degradation).
-**The host model** means whatever runs the current session, read from the hook payload, never assumed.
 NOTIFY:
 probe availability, record the per-role defaults (or owner overrides from
 this turn) into `enginePreferences` and disclose the picks in the set-up output and carry them

@@ -725,7 +725,7 @@ migration). `build_receipt`'s `seatMap` is a derived union projection (latest se
 union by whole-row identity, other keys last-receipt-wins). `--seat-map` at fresh state seeds
 receipt round `"0"`.
 
-**Per-round fields and `degraded` disclosures (#563, #666, #668).** Machinery records these on the round when `_fold_panel` (or dispatch-provenance folding) detects them; `_finalize_receipt` mirrors each into a `degraded` line except `canaryVerified` (evidence-only, no disclosure). **The host model** means whatever runs the current session, read from the hook payload, never assumed.
+**Per-round fields and `degraded` disclosures (#563, #666, #668).** Machinery records these on the round when `_fold_panel` (or dispatch-provenance folding) detects them; `_finalize_receipt` mirrors each into a `degraded` line except `canaryVerified` (evidence-only, no disclosure).
 
 | Round field | Set when | `degraded` line |
 | --- | --- | --- |

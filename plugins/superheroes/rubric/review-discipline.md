@@ -67,8 +67,7 @@ events — do not collapse them:**
    structural timeout firing, a nonzero exit, unreadable or unparseable output, or a vacuous
    forfeit — *silence is not forfeit; a terminal forfeit result is*). **Light:** **The host
    model** may stand in with the **independence loss disclosed** — a disclosed degradation, not an
-   owner decision, acceptable because the advisor's vet still runs afterward. **The host model**
-   means whatever runs the current session, read from the hook payload, never assumed. **Micro:** no
+   owner decision, acceptable because the advisor's vet still runs afterward. **Micro:** no
    host-model stand-in (no advisor vet behind it) — **resolve upward to the full lane or park**.
 3. **Micro at kickoff.** The reviewer must be **outside the maker's family** (the advisor *is*
    the maker). No same-family fallback at kickoff and no host-model stand-in mid-run —

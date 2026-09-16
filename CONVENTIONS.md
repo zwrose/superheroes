@@ -483,7 +483,8 @@ truncated to **16 hex** (`short_hash`).
 Claude Code is the supported host; Codex loads the skills and runs the discipline layer with
 no host guarantees. Doctrine and skills stay host-neutral — the **mechanical floors are
 host-specific**, and a host that cannot carry one gets a disclosed absence, never a parity
-sentence. The harness has **two layers**:
+sentence. **"The host model"** means whatever runs the current session, read from the hook payload
+and never assumed. The harness has **two layers**:
 
 ### 7.1 Shared layer (host-neutral)
 
@@ -593,8 +594,7 @@ selected *below* the host, at the dispatch leaf.
 
 Two postures are held strictly separate, mirroring `model_tier`:
 - **Engine *selection* fails open.** An unknown / unavailable / unauthorized / stalled
-  engine silently degrades to **the host model** — whatever runs the current session, read
-  from the hook payload, never assumed — the same posture `model_tier` documents for a bad
+  engine silently degrades to **the host model** — the same posture `model_tier` documents for a bad
   tier ("a wrong/absent tier is a cost concern, never a safety one"). No run hangs or
   hard-fails on engine choice.
 - **A completed external *result* fails closed.** A build or fix that fails or can't run

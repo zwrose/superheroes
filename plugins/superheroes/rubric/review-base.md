@@ -117,8 +117,6 @@ the cannot-certify signal and re-runs on **the host model**), and collection sti
 that path only, so this stdout copy never substitutes for the named file and is
 not automatic recovery.
 
-**The host model** means whatever runs the current session, read from the hook payload, never assumed.
-
 Delivery is part of the review, not a step after it. Findings that do not
 arrive in the contract shape for your channel do not exist — the orchestrator
 reads the channel, never your reasoning.
