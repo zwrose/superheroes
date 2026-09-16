@@ -27,7 +27,7 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 <!-- launch-doctrine:rulings:end -->
 
 <!-- launch-doctrine:preflight:begin -->
-- `quota` (always) — Account and quota headroom
+- `quota` (always) — Authentication exercise
 - `engine-auth` (always) — Engine and CLI authentication
 - `base-state` (always) — Base state matches the premise
 - `disjoint-surfaces` (conditional) — Overlap with a live lane recorded, with its landing order

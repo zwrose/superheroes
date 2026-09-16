@@ -247,8 +247,8 @@ def test_doctrine_ruling_invariant_missing():
 def test_doctrine_check_mismatch():
     text = _mutate_once(
         _read_doctrine(),
-        "- `quota` (always) — Account and quota headroom",
-        "- `quota` (conditional) — Account and quota headroom",
+        "- `quota` (always) — Authentication exercise",
+        "- `quota` (conditional) — Authentication exercise",
     )
     result = LD.parse(text)
     assert result["ok"] is False
@@ -292,8 +292,8 @@ def test_charter_duplicate_block():
 def test_charter_malformed_line():
     text = _mutate_once(
         _read_charter(),
-        "**Account and quota headroom** (`quota`, always) —",
-        "**Account and quota headroom** (quota, always) —",
+        "**Authentication exercise** (`quota`, always) —",
+        "**Authentication exercise** (quota, always) —",
     )
     result = LD.charter_checks(text)
     assert result["ok"] is False
