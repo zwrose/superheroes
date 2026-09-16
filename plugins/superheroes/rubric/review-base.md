@@ -113,7 +113,8 @@ the real prevention. If you are nevertheless told to use the file channel but
 cannot write, deliver on stdout in the stdout-channel shape above as a last
 resort so a human reading the transcript can see the seat's work; the missing
 findings file at the named path is what surfaces the failure (a missing slot is
-the cannot-certify signal and re-runs on Claude), and collection still reads
+the cannot-certify signal and re-runs on **the host model** — whatever runs the current
+session, read from the hook payload, never assumed), and collection still reads
 that path only, so this stdout copy never substitutes for the named file and is
 not automatic recovery.
 
