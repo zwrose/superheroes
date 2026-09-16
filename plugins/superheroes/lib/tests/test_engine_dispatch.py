@@ -9473,3 +9473,111 @@ def test_main_dropped_flag_attached_run_dir_carries_provenance(capsys, tmp_path)
     assert res.get("runOpened") is True
     assert res["runDir"] == os.path.realpath(run_dir)
 
+
+# --- #1269 WO-SM2: journal-state discrimination for entry refusal ---------------
+
+def test_sm2_1269_edge_journal_absent(tmp_path):
+    # axis: absent journal is no run — runOpened false, no unverifiable status
+    run_dir = str(tmp_path / "absent")
+    os.makedirs(run_dir, exist_ok=True)
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo == {"runOpened": False}
+
+
+def test_sm2_1269_edge_journal_empty(tmp_path):
+    # axis: empty readable journal is no run
+    run_dir = str(tmp_path / "empty")
+    os.makedirs(run_dir, exist_ok=True)
+    path = ED._journal_path(run_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        pass
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo == {"runOpened": False}
+
+
+def test_sm2_1269_edge_journal_unreadable(tmp_path, monkeypatch):
+    # axis: OSError on journal read is unreadable provenance, not no-run
+    run_dir = str(tmp_path / "unreadable")
+    os.makedirs(run_dir, exist_ok=True)
+    path = ED._journal_path(run_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("{}\n")
+
+    real_open = open
+
+    def _raising_open(file, *args, **kwargs):
+        if os.path.realpath(file) == os.path.realpath(path) and "rb" in args:
+            raise OSError("permission denied")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", _raising_open)
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo["runOpened"] is False
+    assert echo["resolvedInputsStatus"] == "unverifiable"
+
+
+def test_sm2_1269_edge_corrupt_no_opened(tmp_path):
+    # axis: structurally corrupt journal without opened record is unreadable provenance
+    run_dir = str(tmp_path / "corrupt-no-open")
+    os.makedirs(run_dir, exist_ok=True)
+    path = ED._journal_path(run_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not-json\n")
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo["runOpened"] is False
+    assert echo["resolvedInputsStatus"] == "unverifiable"
+    assert "resolvedInputs" not in echo
+
+
+def test_sm2_1269_edge_corrupt_with_opened(tmp_path):
+    # axis: corrupt journal with readable opened record keeps snapshot and journal-corrupt
+    run_dir = str(tmp_path / "corrupt-opened")
+    _manual_open_review_run(tmp_path, run_dir)
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    with open(ED._journal_path(run_dir), "ab") as fh:
+        fh.write(b"not-json\n")
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo["runOpened"] is True
+    assert echo["resolvedInputsStatus"] == "journal-corrupt"
+    assert echo["resolvedInputs"] == snapshot_before
+
+
+def test_sm2_1269_edge_no_run_dir_supplied():
+    # axis: no run_dir supplied is no run
+    out = {}
+    ED._attach_resolved_inputs_echo(out, run_dir=None)
+    assert out["runOpened"] is False
+    assert "resolvedInputsStatus" not in out
+
+
+def test_sm2_1269_edge_run_dir_missing(tmp_path):
+    # axis: non-existent run_dir is no run
+    run_dir = str(tmp_path / "does-not-exist")
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo == {"runOpened": False}
+
+
+def test_sm2_1269_unreadable_journal_preserves_run_dir_on_refusal(tmp_path):
+    # axis: entry refusal on unreadable journal keeps runDir and reports unverifiable
+    run_dir = str(tmp_path / "corrupt-refusal")
+    os.makedirs(run_dir, exist_ok=True)
+    path = ED._journal_path(run_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not-json\n")
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        prompt_pat="typo",
+    )
+    assert res.get("runOpened") is False
+    assert res.get("resolvedInputsStatus") == "unverifiable"
+    assert res["runDir"] == os.path.realpath(run_dir)
+

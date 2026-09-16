@@ -54,6 +54,23 @@ UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
 DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
 
+# Tiers _backfill's primary rotation tries after the seat's configured tier (#1269).
+_BACKFILL_DOWNGRADE_TO = "reviewer"
+
+
+def _backfill_rotation_tiers(primary_tier: str) -> tuple[str, ...]:
+    """Tiers ``_backfill`` tries in order: configured tier, then reviewer."""
+    return (primary_tier, _BACKFILL_DOWNGRADE_TO)
+
+
+def accepted_tiers_for_seat(seat: str, tier_by_seat: dict[str, str] | None = None) -> frozenset[str]:
+    """Every tier seat_map.build may record for ``seat`` — default, override, and backfill."""
+    tiers_map = dict(DEFAULT_TIER_BY_SEAT)
+    if tier_by_seat:
+        tiers_map.update(tier_by_seat)
+    primary = tiers_map.get(seat, "reviewer")
+    return frozenset(_backfill_rotation_tiers(primary))
+
 ALT_LIVE = "alternative-live"
 ALT_NONE = "no-alternative-live"
 ALT_UNUSABLE = "evidence-unusable"
@@ -489,7 +506,7 @@ def build(
 
     def _backfill(seat: str) -> dict:
         tier = _tier_for(seat)
-        for try_tier in (tier, "reviewer"):
+        for try_tier in _backfill_rotation_tiers(tier):
             for vendor in seating_vendors:
                 cfg = _resolve_at_tier(seat, vendor, try_tier)
                 if cfg is not None:

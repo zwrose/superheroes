@@ -269,7 +269,7 @@ def _entry_refusal_terminal(
         )
     else:
         out = _with_run_fields(result, run_dir=run_dir_value, argv=argv_value)
-    if not out.get("runOpened"):
+    if not out.get("runOpened") and out.get("resolvedInputsStatus") != "unverifiable":
         out["runDir"] = ""
     return out
 
@@ -687,10 +687,10 @@ def _build_resolved_inputs(
 
 def _resolved_inputs_echo_from_run_dir(run_dir_real):
     try:
-        records, corrupt = _journal_read(run_dir_real)
+        records, corrupt, journal_state = _journal_read_raw(run_dir_real)
         opened = _journal_state(records).get("opened")
         if opened is None:
-            if corrupt:
+            if journal_state == "unreadable" or corrupt:
                 return {"runOpened": False, "resolvedInputsStatus": "unverifiable"}
             return {"runOpened": False}
         status = _resolved_inputs_status_from_opened(opened)
@@ -704,7 +704,7 @@ def _resolved_inputs_echo_from_run_dir(run_dir_real):
             echo["resolvedInputsStatus"] = status
         return echo
     except Exception:
-        return {"runOpened": False}
+        return {"runOpened": False, "resolvedInputsStatus": "unverifiable"}
 
 
 def _attach_resolved_inputs_echo(out, *, run_dir, snapshot=None):
@@ -719,6 +719,7 @@ def _attach_resolved_inputs_echo(out, *, run_dir, snapshot=None):
             out["runOpened"] = False
     except Exception:
         out["runOpened"] = False
+        out["resolvedInputsStatus"] = "unverifiable"
     return out
 
 
@@ -743,18 +744,23 @@ def _journal_append(run_dir_real, record):
         return False
 
 
-def _journal_read(run_dir_real):
-    """Return (records, interior_corrupt). Skips torn trailing write; never raises."""
+def _journal_read_raw(run_dir_real):
+    """Return (records, interior_corrupt, journal_state).
+
+    journal_state is one of: absent, empty, ok, unreadable. Never raises.
+    """
     path = _journal_path(run_dir_real)
     records = []
     interior_corrupt = False
     try:
+        if not os.path.isfile(path):
+            return records, interior_corrupt, "absent"
         with open(path, "rb") as fh:
             raw = fh.read()
     except OSError:
-        return records, interior_corrupt
+        return records, interior_corrupt, "unreadable"
     if not raw:
-        return records, interior_corrupt
+        return records, interior_corrupt, "empty"
     text = raw.decode("utf-8", "ignore")
     if not text.endswith("\n"):
         text = text.rsplit("\n", 1)[0] if "\n" in text else ""
@@ -765,6 +771,12 @@ def _journal_read(run_dir_real):
             records.append(json.loads(line))
         except (ValueError, TypeError):
             interior_corrupt = True
+    return records, interior_corrupt, "ok"
+
+
+def _journal_read(run_dir_real):
+    """Return (records, interior_corrupt). Skips torn trailing write; never raises."""
+    records, interior_corrupt, _journal_state = _journal_read_raw(run_dir_real)
     return records, interior_corrupt
 
 

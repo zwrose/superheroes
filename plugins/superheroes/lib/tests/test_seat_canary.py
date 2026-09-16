@@ -1073,3 +1073,48 @@ def test_grounding_seat_rejects_mismatched_tier():
     assert out["outcome"] == "unrunnable"
     assert "requires tier 'reviewer'" in out["detail"]
     assert "tier: 'reviewer'" in out["detail"]
+
+
+def test_sm2_1269_backfilled_tier_probes_not_refuses():
+    # axis: legitimately backfilled reviewer tier probes rather than recording canaryUnverified
+    seen = []
+
+    def dispatch(**kwargs):
+        seen.append(kwargs.get("seat"))
+        return _base_dispatch_result()
+
+    out = SC.run_canary(
+        "security-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh", "reviewer"),
+        repo_root="/r",
+        dispatch=dispatch,
+    )
+    assert out["outcome"] != "unrunnable"
+    assert seen
+    assert seen[0]["role"] == "reviewer"
+
+
+def test_sm2_1269_refuses_tier_outside_seat_map_emission():
+    # axis: tier seat_map cannot emit refuses naming accepted tiers
+    out = SC.run_canary(
+        "security-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh", "implementer"),
+        repo_root="/r",
+    )
+    assert out["outcome"] == "unrunnable"
+    assert "accepted tiers:" in out["detail"]
+    assert "implementer" in out["detail"]
+
+
+def test_sm2_1269_grounding_refuses_reviewer_deep():
+    # axis: tier seat_map cannot emit for grounding-seat refuses naming accepted tiers
+    out = SC.run_canary(
+        "grounding-seat",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh", "reviewer-deep"),
+        repo_root="/r",
+    )
+    assert out["outcome"] == "unrunnable"
+    assert (
+        "requires tier 'reviewer'" in out["detail"]
+        or "accepted tiers: reviewer" in out["detail"]
+    )

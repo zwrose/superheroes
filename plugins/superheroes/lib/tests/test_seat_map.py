@@ -2931,3 +2931,14 @@ def test_critical_diversity_pinned_with_family_still_excused_by_pin():
     assert "critical-diversity" in [
         v.get("constraint") for v in classified["excusedByPin"]
     ]
+
+
+def test_accepted_tiers_for_seat_matches_default_override_and_backfill():
+    # axis: accepted tier set derives from default, override channel, and backfill rotation
+    assert SM.accepted_tiers_for_seat("security-reviewer") == frozenset(
+        {"reviewer-deep", "reviewer"},
+    )
+    assert SM.accepted_tiers_for_seat("grounding-seat") == frozenset({"reviewer"})
+    assert SM.accepted_tiers_for_seat(
+        "code-reviewer", tier_by_seat={"code-reviewer": "reviewer"},
+    ) == frozenset({"reviewer"})

@@ -95,13 +95,21 @@ def _resolve_canary_identity(seat_key, seat_config):
             "seat key %r is not a panel seat; accepted seat keys: %s"
             % (seat_name, valid),
         )
-    canonical_tier = seat_map.DEFAULT_TIER_BY_SEAT.get(seat_name)
-    if tier != canonical_tier:
+    accepted_tiers = seat_map.accepted_tiers_for_seat(seat_name)
+    if tier not in accepted_tiers:
+        if len(accepted_tiers) == 1:
+            canonical_tier = next(iter(accepted_tiers))
+            return _identity_refusal(
+                "seat-tier-mismatch",
+                "seat key %r requires tier %r (registry role); accepted canonical "
+                "seat-bundle shape is {vendor, model, effort, tier: %r}"
+                % (seat_name, canonical_tier, canonical_tier),
+            )
+        accepted_label = ", ".join(sorted(accepted_tiers))
         return _identity_refusal(
             "seat-tier-mismatch",
-            "seat key %r requires tier %r (registry role); accepted canonical "
-            "seat-bundle shape is {vendor, model, effort, tier: %r}"
-            % (seat_name, canonical_tier, canonical_tier),
+            "seat key %r tier %r is not accepted; accepted tiers: %s"
+            % (seat_name, tier, accepted_label),
         )
     vendor = seat_config.get("vendor")
     model = seat_config.get("model")
