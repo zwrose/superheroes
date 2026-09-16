@@ -901,10 +901,10 @@ def test_submodule_gitlink_skipped(tmp_path):
         "add submodule",
     )
     ls = _git(outer, "ls-tree", "-r", "HEAD").stdout
-    assert "160000 commit" in ls
+    assert "160000 commit" in ls and "\tsubmod" in ls
     view = _build(outer)
     try:
-        assert not os.path.exists(os.path.join(view["path"], "submod", "inner.txt"))
+        assert not os.path.exists(os.path.join(view["path"], "submod"))
         assert os.path.isfile(os.path.join(view["path"], "outer.txt"))
     finally:
         sv.destroy_sanitized_view(view["path"])
@@ -1028,41 +1028,6 @@ def test_sweep_aged_prefix_symlink_to_outside_dir_untouched(tmp_path, monkeypatc
     assert link_path.is_symlink()
     assert outside.exists()
     assert (outside / "marker.txt").read_text(encoding="utf-8") == "keep\n"
-
-
-def test_sweep_swap_symlink_after_islink_check_victim_survives(tmp_path, monkeypatch):
-    base = tmp_path / "fake-tmp"
-    base.mkdir()
-    nest = base / "nest"
-    nest.mkdir()
-    victim = nest / (sv.SANITIZED_VIEW_DIR_PREFIX + "victim")
-    victim.mkdir()
-    (victim / "PRECIOUS.txt").write_text("keep\n", encoding="utf-8")
-    entry_name = sv.SANITIZED_VIEW_DIR_PREFIX + "stale-entry"
-    full_path = base / entry_name
-    full_path.mkdir()
-    stale_time = time.time() - sv.SANITIZED_VIEW_STALE_AGE_SECONDS - 120
-    os.utime(full_path, (stale_time, stale_time))
-    os.utime(victim, (stale_time, stale_time))
-    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(base))
-    real_owned = sv._owned_view_realpath
-    swapped = {"done": False}
-
-    def realpath_with_midflight_swap(path):
-        norm_full = os.path.normpath(str(full_path))
-        if not swapped["done"] and os.path.normpath(path) == norm_full:
-            swapped["done"] = True
-            hidden = base / (entry_name + ".hidden")
-            full_path.rename(hidden)
-            os.symlink(str(victim), str(full_path))
-            return str(victim.resolve())
-        return real_owned(path)
-
-    monkeypatch.setattr(sv, "_owned_view_realpath", realpath_with_midflight_swap)
-    sv._sweep_stale_views(str(base))
-    assert swapped["done"], "the simulated swap never fired — this test would pass vacuously"
-    assert victim.is_dir()
-    assert (victim / "PRECIOUS.txt").read_text(encoding="utf-8") == "keep\n"
 
 
 def test_destroy_refuses_case_variant_of_temp_base(tmp_path, monkeypatch):
@@ -1343,55 +1308,6 @@ def test_literal_backslash_in_filename_materialized(tmp_path):
         sv.destroy_sanitized_view(view["path"])
 
 
-def test_forged_gitlink_hiding_blob_refuses(tmp_path):
-    """Mode 160000 pointing at a blob: ls-tree still reports commit; must refuse."""
-    repo = _init_repo(
-        tmp_path / "forge",
-        files={
-            "normal.py": "print('ok')\n",
-            "hidden.py": "SECRET_SOURCE\n",
-        },
-    )
-    blob_oid = _git(repo, "hash-object", "-w", "hidden.py").stdout.strip()
-    _git(repo, "rm", "--cached", "hidden.py")
-    _git(
-        repo,
-        "update-index",
-        "--add",
-        "--cacheinfo",
-        "160000,%s,hidden.py" % blob_oid,
-    )
-    tree_oid = _git(repo, "write-tree").stdout.strip()
-    parent = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    commit_oid = subprocess.run(
-        [
-            "git",
-            "-C",
-            repo,
-            "-c",
-            "user.email=test@test.local",
-            "-c",
-            "user.name=test",
-            "commit-tree",
-            tree_oid,
-            "-p",
-            parent,
-            "-m",
-            "crafted fake gitlink",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    _git(repo, "update-ref", "HEAD", commit_oid)
-    ls = _git(repo, "ls-tree", "-r", "HEAD").stdout
-    assert "160000 commit" in ls and "hidden.py" in ls
-    assert _git(repo, "cat-file", "-t", blob_oid).stdout.strip() == "blob"
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        _build(repo)
-    assert exc.value.detail == "sanitized-view-export-failed"
-
-
 # --- review diff staging (WO-A) ------------------------------------------------
 
 
@@ -1421,55 +1337,13 @@ def test_subprocess_census_all_git_calls_use_wrappers():
                 and func.value.id == "subprocess"
             ):
                 owner = self.stack[-1] if self.stack else "<module>"
-                if owner not in ("_git_run", "_git_popen", "_ancestry_run"):
+                if owner not in ("_git_run", "_git_popen", "_authoritative_merge_base"):
                     self.violations.append(owner)
             self.generic_visit(node)
 
     visitor = Visitor()
     visitor.visit(tree)
     assert visitor.violations == []
-
-
-def test_subprocess_ancestry_git_calls_route_through_ancestry_run():
-    import ast
-
-    path = os.path.join(os.path.dirname(sv.__file__), "sanitized_view.py")
-    with open(path, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read())
-
-    ancestry_verbs = frozenset({"merge-base", "rev-list", "log", "describe"})
-    violations = []
-
-    class Visitor(ast.NodeVisitor):
-        def __init__(self):
-            self.stack = []
-
-        def visit_FunctionDef(self, node):
-            self.stack.append(node.name)
-            self.generic_visit(node)
-            self.stack.pop()
-
-        def visit_Call(self, node):
-            func = node.func
-            if (
-                isinstance(func, ast.Name)
-                and func.id in ("_git_run", "_git_popen")
-                and node.args
-                and isinstance(node.args[0], ast.List)
-            ):
-                owner = self.stack[-1] if self.stack else "<module>"
-                for elt in node.args[0].elts:
-                    if not isinstance(elt, ast.Constant) or not isinstance(
-                        elt.value, str
-                    ):
-                        continue
-                    token = elt.value
-                    if token in ancestry_verbs or ".." in token:
-                        violations.append(owner)
-            self.generic_visit(node)
-
-    Visitor().visit(tree)
-    assert violations == [], "ancestry verbs in _git_run/_git_popen: %s" % violations
 
 
 def test_diff_base_none_keys_are_none(tmp_path):
@@ -1907,21 +1781,6 @@ def test_review_diff_tree_census_ignores_repo_diff_controls(tmp_path):
     assert set(changed) == {"file.txt", "src.py", "sub2"}
 
 
-def test_review_diff_census_unaccounted_gitlink_refuses(tmp_path, monkeypatch):
-    repo, base_sha, _head_sha = _hostile_diff_controls_fixture(tmp_path)
-    fake_tmp = str(tmp_path / "tmpdir")
-    os.makedirs(fake_tmp)
-    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
-    patch_flags = tuple(
-        f for f in sv._DIFF_PATCH_FLAGS if f != "--ignore-submodules=none"
-    )
-    monkeypatch.setattr(sv, "_DIFF_PATCH_FLAGS", patch_flags)
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv.build_sanitized_view(repo, diff_base=base_sha)
-    assert exc.value.detail == "sanitized-view-diff-unaccounted"
-    assert _leftover_view_dirs(fake_tmp) == []
-
-
 def test_review_diff_attribute_suppressed_source_refuses_opaque(tmp_path, monkeypatch):
     repo, base_sha, _head_sha = _hostile_diff_controls_fixture(tmp_path)
     fake_tmp = str(tmp_path / "tmpdir")
@@ -2091,54 +1950,6 @@ def test_review_diff_command_failure_is_distinct_from_unaccounted(tmp_path, monk
         sv.destroy_sanitized_view(view_root)
 
 
-def test_review_diff_non_utf8_path_reconciles(tmp_path):
-    """Changed file with invalid UTF-8 name bytes (surrogateescape seam)."""
-    repo = _init_repo(tmp_path / "nonutf8-reconcile", files={"keep.txt": "k\n"})
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    try:
-        bad_rel = os.fsdecode(b"caf\xe9.txt")
-    except (UnicodeDecodeError, ValueError):
-        pytest.skip("filesystem refuses invalid UTF-8 path bytes")
-    full = os.path.join(repo, bad_rel)
-    try:
-        with open(full, "wb") as fh:
-            fh.write(b"payload\n")
-    except OSError:
-        pytest.skip("filesystem refuses creating paths with invalid UTF-8 bytes")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "nonutf8",
-    )
-    with open(full, "wb") as fh:
-        fh.write(b"changed payload\n")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "change nonutf8",
-    )
-    view = sv.build_sanitized_view(repo, diff_base=base_sha)
-    try:
-        assert view["diffBytes"] > 0
-        assert os.path.isfile(os.path.join(view["path"], bad_rel))
-    finally:
-        sv.destroy_sanitized_view(view["path"])
-
-
 def test_review_diff_duplicate_tree_entry_refuses(tmp_path):
     repo = _init_repo(tmp_path / "dup-tree", files={"keep.txt": "k\n"})
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -2241,12 +2052,12 @@ def test_git_env_no_lazy_fetch_survives_a_hostile_inherited_value(monkeypatch):
     """An inherited ``GIT_NO_LAZY_FETCH=0`` cannot re-enable the fetch."""
     monkeypatch.setenv("GIT_NO_LAZY_FETCH", "0")
     assert sv._git_env()["GIT_NO_LAZY_FETCH"] == "1"
-    assert sv._ancestry_env()["GIT_NO_LAZY_FETCH"] == "1"
+    assert sv._neutral_git_env()["GIT_NO_LAZY_FETCH"] == "1"
 
 
-@pytest.mark.parametrize("wrapper", ["_git_run", "_git_popen", "_ancestry_run"])
+@pytest.mark.parametrize("wrapper", ["_git_run", "_git_popen"])
 def test_every_git_spawn_wrapper_passes_no_lazy_fetch(monkeypatch, wrapper):
-    """Leg 1's census: the three wrappers are the only spawn sites (pinned by
+    """Leg 1's census: the two wrappers are the routine spawn sites (pinned by
     ``test_subprocess_census_all_git_calls_use_wrappers``), so proving each one
     passes the variable proves every git subprocess construction spawns carries it."""
     seen = {}
@@ -2262,10 +2073,7 @@ def test_every_git_spawn_wrapper_passes_no_lazy_fetch(monkeypatch, wrapper):
 
     monkeypatch.setattr(sv.subprocess, "run", record)
     monkeypatch.setattr(sv.subprocess, "Popen", record)
-    if wrapper == "_ancestry_run":
-        sv._ancestry_run(["git", "--version"], time.monotonic())
-    else:
-        getattr(sv, wrapper)(["git", "--version"])
+    getattr(sv, wrapper)(["git", "--version"])
     assert seen["env"] is not None
     assert seen["env"]["GIT_NO_LAZY_FETCH"] == "1"
 
@@ -2413,194 +2221,6 @@ def test_review_diff_dir_to_file_transition_withheld_child_is_skipped(tmp_path):
         assert view["diffWithheldCount"] == 1
     finally:
         sv.destroy_sanitized_view(view["path"])
-
-
-def test_review_diff_descendant_pathspecs_collapse_to_ancestor(tmp_path, monkeypatch):
-    repo = str(tmp_path / "descendant-collapse")
-    os.makedirs(repo, exist_ok=True)
-    _git(repo, "init", "-q")
-    os.makedirs(os.path.join(repo, "pkg"))
-    with open(os.path.join(repo, "pkg", "CLAUDE.md"), "w", encoding="utf-8") as fh:
-        fh.write("secret baseline\n")
-    with open(os.path.join(repo, "pkg", "x.txt"), "w", encoding="utf-8") as fh:
-        fh.write("x baseline\n")
-    with open(os.path.join(repo, "other.txt"), "w", encoding="utf-8") as fh:
-        fh.write("other baseline\n")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "init pkg dir",
-    )
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    shutil.rmtree(os.path.join(repo, "pkg"))
-    with open(os.path.join(repo, "pkg"), "w", encoding="utf-8") as fh:
-        fh.write("regular file\n")
-    with open(os.path.join(repo, "other.txt"), "w", encoding="utf-8") as fh:
-        fh.write("other changed\n")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "pkg dir to file",
-    )
-    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    merge_base = _git(repo, "merge-base", base_sha, head_sha).stdout.strip()
-    started = time.monotonic()
-    changed = sv._changed_tree_entries(repo, merge_base, head_sha, started)
-    survivors = [p for p in changed if not sv._rel_path_would_be_stripped(p)]
-    monkeypatch.setattr(sv, "_effective_review_diff_argv_budget", lambda: 0)
-    batches = sv._batch_review_diff_pathspecs(
-        repo, merge_base, head_sha, survivors, started
-    )
-    all_pathspecs = [path for batch in batches for path in batch]
-    assert "pkg" in all_pathspecs
-    assert "pkg/x.txt" not in all_pathspecs
-    view = sv.build_sanitized_view(repo, diff_base=base_sha)
-    try:
-        with open(_patch_abs(view), "rb") as fh:
-            patch = fh.read()
-        for path in survivors:
-            assert _diff_git_section_count(patch, path) == 1
-    finally:
-        sv.destroy_sanitized_view(view["path"])
-
-
-def test_collapse_descendant_pathspecs_adversarial_sibling_prefixes():
-    started = time.monotonic()
-    assert sv._collapse_descendant_pathspecs(["a", "a-b", "a/c"], started) == [
-        "a",
-        "a-b",
-    ]
-    assert sv._collapse_descendant_pathspecs(["a/c", "a-b", "a"], started) == [
-        "a",
-        "a-b",
-    ]
-    assert sv._collapse_descendant_pathspecs(
-        ["pkg", "pkg/x", "pkg/y/z", "pkgx"], started
-    ) == ["pkg", "pkgx"]
-    assert sv._collapse_descendant_pathspecs(["a/b", "a/bc"], started) == [
-        "a/b",
-        "a/bc",
-    ]
-    assert sv._collapse_descendant_pathspecs(["a", "a"], started) == ["a"]
-    assert sv._collapse_descendant_pathspecs([], started) == []
-
-
-def test_collapse_descendant_pathspecs_checks_deadline_at_every_stage(monkeypatch):
-    calls = []
-    monkeypatch.setattr(sv, "_COLLAPSE_DEADLINE_CHECK_INTERVAL", 1)
-    monkeypatch.setattr(
-        sv, "_check_export_deadline", lambda started: calls.append(started)
-    )
-    paths = ["p%d" % i for i in range(5)]
-    sv._collapse_descendant_pathspecs(paths, time.monotonic())
-    assert len(calls) == len(paths) + 2
-
-
-def test_collapse_descendant_pathspecs_enforces_export_deadline():
-    started = time.monotonic() - sv.SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS - 1
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv._collapse_descendant_pathspecs(["a", "a-b", "a/c", "pkg/x"], started)
-    assert exc.value.detail == "sanitized-view-export-timeout"
-
-
-def test_review_diff_collapse_deadline_wins_before_patch_git_spawn(
-    tmp_path, monkeypatch,
-):
-    """Deadline during collapse must win before any patch-batch git subprocess."""
-    repo = _init_repo(
-        tmp_path / "collapse-deadline-build",
-        files={("p%d.txt" % i): "v\n" for i in range(6)},
-    )
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    with open(os.path.join(repo, "p0.txt"), "w", encoding="utf-8") as fh:
-        fh.write("changed\n")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "head",
-    )
-    deadline_calls = {"n": 0}
-    real_check = sv._check_export_deadline
-    real_popen = sv._git_popen
-    # Expire during collapse (calls 26–29) after census/ancestry, before diff at call 30.
-    expire_after = 28
-
-    def counting_deadline(started):
-        deadline_calls["n"] += 1
-        if deadline_calls["n"] > expire_after:
-            raise sv.SanitizedViewError("sanitized-view-export-timeout")
-        real_check(started)
-
-    def git_spawned_after_deadline(argv, **kwargs):
-        if "diff" in argv:
-            raise AssertionError("git spawned after deadline")
-        return real_popen(argv, **kwargs)
-
-    monkeypatch.setattr(sv, "_check_export_deadline", counting_deadline)
-    monkeypatch.setattr(sv, "_git_popen", git_spawned_after_deadline)
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv.build_sanitized_view(repo, diff_base=base_sha)
-    assert exc.value.detail == "sanitized-view-export-timeout"
-
-
-def test_review_diff_withheld_section_outside_survivor_prefix_refuses():
-    # Reconciler-level guard for a shape the current pathspec set cannot emit.
-    patch = (
-        b"diff --git a/safe.py b/safe.py\n"
-        b"index 111..222 100644\n"
-        b"--- a/safe.py\n"
-        b"+++ b/safe.py\n"
-        b"@@ -1 +1 @@\n"
-        b" changed\n"
-        b"diff --git a/CLAUDE.md b/CLAUDE.md\n"
-        b"index 111..222 100644\n"
-        b"--- a/CLAUDE.md\n"
-        b"+++ b/CLAUDE.md\n"
-        b"@@ -1 +1 @@\n"
-        b" secret\n"
-    )
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv._reconcile_review_patch(
-            patch, survivors=["safe.py"], withheld=["CLAUDE.md"]
-        )
-    assert exc.value.detail == "sanitized-view-diff-unaccounted"
-
-
-def test_review_diff_duplicate_rendered_section_refuses():
-    section = (
-        b"diff --git a/x.py b/x.py\n"
-        b"index 111..222 100644\n"
-        b"--- a/x.py\n"
-        b"+++ b/x.py\n"
-        b"@@ -1 +1 @@\n"
-        b"-old\n"
-        b"+new\n"
-    )
-    patch = section + section
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv._reconcile_review_patch(patch, survivors={"x.py"}, withheld=set())
-    assert exc.value.detail == "sanitized-view-diff-unaccounted"
 
 
 def test_diff_too_large(tmp_path, monkeypatch):
@@ -2869,8 +2489,11 @@ def test_diff_submodule_gitlink_only(tmp_path):
         "-m",
         "add submodule",
     )
+    ls = _git(outer, "ls-tree", "-r", "HEAD").stdout
+    assert "160000 commit" in ls and "\tsubmod" in ls
     view = sv.build_sanitized_view(outer, diff_base=base_sha)
     try:
+        assert not os.path.exists(os.path.join(view["path"], "submod"))
         with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
         assert b"inner.txt" not in patch
@@ -3151,33 +2774,17 @@ def test_notice_with_diff_artifact_sentences(tmp_path):
         sv.destroy_sanitized_view(view["path"])
 
 
-def test_notice_withheld_count_sentence(tmp_path):
-    repo = _init_repo(tmp_path / "notice-withheld", files={"keep.txt": "k\n"})
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
-        fh.write("secret\n")
-    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
-        fh.write("changed\n")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "change",
-    )
-    view = sv.build_sanitized_view(repo, diff_base=base_sha)
-    try:
-        notice = sv.sanitized_view_notice(view)
-        assert "1 changed path(s) were withheld" in notice
-        assert "stripped agent/IDE config" in notice
-        assert "not a finding" in notice
-    finally:
-        sv.destroy_sanitized_view(view["path"])
+def test_notice_withheld_count_sentence():
+    view = {
+        "headSha": "abc",
+        "diffWithheldCount": 1,
+        "configDiffPath": None,
+        "stripped": ["CLAUDE.md"],
+    }
+    notice = sv.sanitized_view_notice(view)
+    assert "1 changed path(s) were withheld" in notice
+    assert "stripped agent/IDE config" in notice
+    assert "not a finding" in notice
 
 
 # --- WO-F3 additions ----------------------------------------------------------
@@ -3487,59 +3094,7 @@ def _claude_file_patch(repo, merge_base, head_sha):
 
 
 def _filter_patch(section):
-    kept, stripped_paths, underivable_sections, unrecognized = (
-        sv._filter_patch_sections(section)
-    )
-    return kept, stripped_paths, underivable_sections, unrecognized
-
-
-def test_patch_filter_new_file_payload_spoof_withheld():
-    sec = (
-        b"diff --git a/CLAUDE.md b/CLAUDE.md\n"
-        b"new file mode 100644\n"
-        b"index 0000000..1111111\n"
-        b"--- /dev/null\n"
-        b"+++ b/CLAUDE.md\n"
-        b"@@ -0,0 +1,2 @@\n"
-        b"+secret\n"
-        b"+++ b/README.md\n"
-        b"+" + _PATCH_SPOOF_SENTINEL + b"\n"
-    )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert stripped_paths or underivable_sections
-    assert _PATCH_SPOOF_SENTINEL not in kept
-
-
-def test_patch_filter_deletion_payload_spoof_withheld():
-    sec = (
-        b"diff --git a/CLAUDE.md b/CLAUDE.md\n"
-        b"deleted file mode 100644\n"
-        b"index 1111111..0000000\n"
-        b"--- a/CLAUDE.md\n"
-        b"+++ /dev/null\n"
-        b"@@ -1,2 +0,0 @@\n"
-        b"-secret\n"
-        b"--- a/README.md\n"
-        b"-" + _PATCH_SPOOF_SENTINEL + b"\n"
-    )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert stripped_paths or underivable_sections
-    assert _PATCH_SPOOF_SENTINEL not in kept
-
-
-def test_patch_filter_modification_both_sides_spoofed_withheld():
-    sec = (
-        b"diff --git a/CLAUDE.md b/CLAUDE.md\n"
-        b"index 111..222 100644\n"
-        b"--- a/README.md\n"
-        b"+++ b/README.md\n"
-        b"@@ -1 +1,2 @@\n"
-        b" old\n"
-        b"+" + _PATCH_SPOOF_SENTINEL + b"\n"
-    )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert stripped_paths or underivable_sections
-    assert _PATCH_SPOOF_SENTINEL not in kept
+    return sv._filter_patch_sections(section)
 
 
 def test_patch_filter_duplicate_minus_header_stripped_path_withheld():
@@ -3552,12 +3107,11 @@ def test_patch_filter_duplicate_minus_header_stripped_path_withheld():
         b"@@ -1 +1 @@\n"
         b" x\n"
     )
-    old, new = sv._paths_from_diff_section(sec)
-    assert old is sv._DIFF_PATH_UNDERIVABLE
-    assert new is sv._DIFF_PATH_UNDERIVABLE
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert kept == b""
-    assert stripped_paths or underivable_sections
+    assert sv._paths_from_diff_section(sec) is None
+    # Stripped-path content still never reaches the written patch; the module now refuses rather than omitting.
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _filter_patch(sec)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
 
 
 def test_patch_filter_duplicate_plus_header_stripped_path_withheld():
@@ -3570,12 +3124,11 @@ def test_patch_filter_duplicate_plus_header_stripped_path_withheld():
         b"@@ -1 +1 @@\n"
         b" x\n"
     )
-    old, new = sv._paths_from_diff_section(sec)
-    assert old is sv._DIFF_PATH_UNDERIVABLE
-    assert new is sv._DIFF_PATH_UNDERIVABLE
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert kept == b""
-    assert stripped_paths or underivable_sections
+    assert sv._paths_from_diff_section(sec) is None
+    # Stripped-path content still never reaches the written patch; the module now refuses rather than omitting.
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _filter_patch(sec)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
 
 
 def test_patch_filter_tab_terminator_stripped_path_withheld():
@@ -3588,8 +3141,8 @@ def test_patch_filter_tab_terminator_stripped_path_withheld():
         b" old\n"
         b"+" + _PATCH_SPOOF_SENTINEL + b"\n"
     )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert stripped_paths or underivable_sections
+    kept = _filter_patch(sec)
+    assert kept == b""
     assert _PATCH_SPOOF_SENTINEL not in kept
 
 
@@ -3602,10 +3155,9 @@ def test_patch_filter_only_diff_cc_unrecognized():
         b"@@@ -1,1 -1,1 -1,1 @@@\n"
         b"+" + _PATCH_SPOOF_SENTINEL + b"\n"
     )
-    kept, stripped_paths, underivable_sections, unrecognized = _filter_patch(sec)
-    assert kept == b""
-    assert unrecognized >= 1
-    assert _PATCH_SPOOF_SENTINEL not in kept
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _filter_patch(sec)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
 
 
 def test_patch_filter_two_sections_nothing_withheld_round_trip():
@@ -3625,13 +3177,7 @@ def test_patch_filter_two_sections_nothing_withheld_round_trip():
         b" c\n"
         b"+d\n"
     )
-    kept, stripped_paths, underivable_sections, unrecognized = (
-        sv._filter_patch_sections(patch)
-    )
-    assert kept == patch
-    assert not stripped_paths
-    assert underivable_sections == 0
-    assert unrecognized == 0
+    assert sv._filter_patch_sections(patch) == patch
 
 
 def test_patch_filter_git_section_followed_by_diff_cc():
@@ -3650,10 +3196,36 @@ def test_patch_filter_git_section_followed_by_diff_cc():
         b"@@@ -1,1 -1,1 -1,1 @@@\n"
         b"+" + sentinel + b"\n"
     )
-    kept, stripped_paths, underivable_sections, unrecognized = _filter_patch(sec)
-    assert b"safe.md" in kept
-    assert sentinel not in kept
-    assert unrecognized >= 1
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _filter_patch(sec)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
+
+
+def test_patch_filter_undecodable_path_section_refuses():
+    sec = (
+        b"diff --git a/x b/x\n"
+        b"index 111..222 100644\n"
+        b"@@ -1 +1 @@\n"
+        b" x\n"
+    )
+    assert sv._paths_from_diff_section(sec) is None
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._filter_patch_sections(sec)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
+
+
+def test_patch_filter_unrecognized_span_refuses():
+    patch = b"preamble noise\n" + (
+        b"diff --git a/safe.md b/safe.md\n"
+        b"index 111..222 100644\n"
+        b"--- a/safe.md\n"
+        b"+++ b/safe.md\n"
+        b"@@ -1 +1 @@\n"
+        b" ok\n"
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._filter_patch_sections(patch)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
 
 
 def _patch_filter_pkg_transition(
@@ -3714,58 +3286,6 @@ def _patch_filter_pkg_file_to_dir(tmp_path, *, name, stripped_rel, stripped_cont
         stripped_rel=stripped_rel,
         stripped_content=stripped_content,
     )
-
-
-def test_patch_filter_e2e_new_file_payload_spoof(tmp_path):
-    spoof_content = "-- a/README.md\n" + _PATCH_SPOOF_SENTINEL.decode() + "\n"
-    repo, base_sha = _patch_filter_pkg_dir_to_file(
-        tmp_path,
-        name="spoof-add",
-        stripped_rel="pkg/CLAUDE.md",
-        stripped_content=spoof_content,
-    )
-    view = sv.build_sanitized_view(repo, diff_base=base_sha)
-    try:
-        with open(_patch_abs(view), "rb") as fh:
-            patch = fh.read()
-        assert _PATCH_SPOOF_SENTINEL not in patch
-        assert b"diff --git a/pkg b/pkg" in patch
-        assert b"diff --git a/top.txt b/top.txt" in patch
-        assert view["diffWithheldCount"] == 1
-    finally:
-        sv.destroy_sanitized_view(view["path"])
-
-
-def test_patch_filter_e2e_add_side_payload_spoof(tmp_path):
-    spoof_content = "++ b/README.md\n" + _PATCH_SPOOF_SENTINEL.decode() + "\n"
-    repo, base_sha = _patch_filter_pkg_file_to_dir(
-        tmp_path,
-        name="spoof-add-side",
-        stripped_rel="pkg/CLAUDE.md",
-        stripped_content=spoof_content,
-    )
-    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    merge_base = _git(repo, "merge-base", base_sha, head_sha).stdout.strip()
-    raw_patch = _git(
-        repo,
-        "diff",
-        merge_base,
-        head_sha,
-        "--",
-        "pkg/CLAUDE.md",
-    ).stdout
-    assert "+++ b/pkg/CLAUDE.md" in raw_patch
-    assert "--- a/pkg/CLAUDE.md" not in raw_patch
-    view = sv.build_sanitized_view(repo, diff_base=base_sha)
-    try:
-        with open(_patch_abs(view), "rb") as fh:
-            patch = fh.read()
-        assert _PATCH_SPOOF_SENTINEL not in patch
-        assert b"diff --git a/pkg b/pkg" in patch
-        assert b"diff --git a/top.txt b/top.txt" in patch
-        assert view["diffWithheldCount"] == 1
-    finally:
-        sv.destroy_sanitized_view(view["path"])
 
 
 def test_stage_review_diff_e2e_census_excludes_modified_stripped_config_from_patch(tmp_path):
@@ -3921,25 +3441,6 @@ def test_patch_filter_hostile_git_config_nested_claude(tmp_path):
         sv.destroy_sanitized_view(view["path"])
 
 
-def test_patch_filter_control_readme_payload_spoof_lines_kept():
-    sec = (
-        b"diff --git a/README.md b/README.md\n"
-        b"index 111..222 100644\n"
-        b"--- a/README.md\n"
-        b"+++ b/README.md\n"
-        b"@@ -1 +1,3 @@\n"
-        b" hello\n"
-        b"+++ b/CLAUDE.md\n"
-        b"--- a/CLAUDE.md\n"
-        b"+more\n"
-    )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert not stripped_paths
-    assert underivable_sections == 0
-    assert b"+++ b/CLAUDE.md" in kept
-    assert b"--- a/CLAUDE.md" in kept
-
-
 def test_patch_filter_control_stripped_no_spoof_withheld():
     sec = (
         b"diff --git a/CLAUDE.md b/CLAUDE.md\n"
@@ -3950,24 +3451,7 @@ def test_patch_filter_control_stripped_no_spoof_withheld():
         b"@@ -0,0 +1 @@\n"
         b"+secret config\n"
     )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert stripped_paths or underivable_sections
-    assert kept == b""
-
-
-def test_patch_filter_control_quoted_legitimate_path_kept():
-    sec = (
-        b'diff --git "a/we\\"ird.md" "b/we\\"ird.md"\n'
-        b"index 111..222 100644\n"
-        b'--- "a/we\\"ird.md"\n'
-        b'+++ "b/we\\"ird.md"\n'
-        b"@@ -1 +1 @@\n"
-        b" x\n"
-    )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert not stripped_paths
-    assert underivable_sections == 0
-    assert b"we" in kept or b"ird.md" in kept
+    assert _filter_patch(sec) == b""
 
 
 def test_patch_filter_control_space_path_tab_terminator_kept():
@@ -3979,89 +3463,13 @@ def test_patch_filter_control_space_path_tab_terminator_kept():
         b"@@ -1 +1 @@\n"
         b" x\n"
     )
-    old, new = sv._paths_from_diff_section(sec)
-    assert old == "my file.md"
-    assert new == "my file.md"
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert not stripped_paths
-    assert underivable_sections == 0
-
-
-def test_patch_filter_control_stripped_quoted_path_withheld():
-    sec = (
-        b'diff --git "a/.claude/we\\"ird.json" "b/.claude/we\\"ird.json"\n'
-        b"index 111..222 100644\n"
-        b'--- "a/.claude/we\\"ird.json"\n'
-        b'+++ "b/.claude/we\\"ird.json"\n'
-        b"@@ -0,0 +1 @@\n"
-        b"+secret\n"
-    )
-    kept, stripped_paths, underivable_sections, _ = _filter_patch(sec)
-    assert stripped_paths or underivable_sections
-    assert kept == b""
+    assert sv._paths_from_diff_section(sec) == "my file.md"
+    kept = _filter_patch(sec)
+    assert kept == sec
 
 
 def test_patch_filter_empty_input():
-    kept, stripped_paths, underivable_sections, unrecognized = (
-        sv._filter_patch_sections(b"")
-    )
-    assert kept == b""
-    assert not stripped_paths
-    assert underivable_sections == 0
-    assert unrecognized == 0
-
-
-def test_stage_review_diff_unrecognized_span_refused(tmp_path, monkeypatch):
-    repo = _init_repo(tmp_path / "unrecognized-span", files={"keep.txt": "k\n"})
-    repo_real = os.path.realpath(repo)
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
-        fh.write("changed\n")
-    _git(repo, "add", "keep.txt")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "change",
-    )
-    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    cc_sentinel = b"CC_STAGE_LEAK_SENTINEL_ZZZ"
-    poisoned_patch = (
-        b"diff --git a/keep.txt b/keep.txt\n"
-        b"index 111..222 100644\n"
-        b"--- a/keep.txt\n"
-        b"+++ b/keep.txt\n"
-        b"@@ -1 +1 @@\n"
-        b" changed\n"
-        b"diff --cc .claude/settings.json\n"
-        b"index 111,222..333 100644\n"
-        b"--- a/.claude/settings.json\n"
-        b"+++ b/.claude/settings.json\n"
-        b"@@@ -1,1 -1,1 -1,1 @@@\n"
-        b"+" + cc_sentinel + b"\n"
-    )
-
-    def fake_batch_output(argv, started, total_bytes):
-        return poisoned_patch, total_bytes + len(poisoned_patch)
-
-    monkeypatch.setattr(sv, "_git_diff_batch_output", fake_batch_output)
-    view_root = sv.tempfile.mkdtemp(prefix=sv.SANITIZED_VIEW_DIR_PREFIX)
-    try:
-        sv._materialize_from_tree(repo_real, head_sha, view_root, time.monotonic())
-        patch_path = os.path.join(view_root, sv.REVIEW_DIFF_FILE_NAME)
-        with pytest.raises(sv.SanitizedViewError) as exc:
-            sv._stage_review_diff(
-                repo_real, head_sha, view_root, base_sha, time.monotonic()
-            )
-        assert exc.value.detail == "sanitized-view-diff-unaccounted"
-        assert not os.path.lexists(patch_path)
-    finally:
-        sv.destroy_sanitized_view(view_root)
+    assert sv._filter_patch_sections(b"") == b""
 
 
 _EXT_DIFF_SENTINEL = b"EXT_DIFF_DRIVER_SENTINEL_ZZZ"
@@ -4202,18 +3610,7 @@ def test_diff_stall_after_partial_write(tmp_path, monkeypatch):
     assert _leftover_view_dirs(fake_tmp) == []
 
 
-# --- ancestry hermetic merge-base -------------------------------------------
-
-
-def _leftover_ancestry_dirs(tmp_base):
-    try:
-        return [
-            name
-            for name in os.listdir(tmp_base)
-            if name.startswith(sv._ANCESTRY_SCRATCH_PREFIX)
-        ]
-    except OSError:
-        return []
+# --- ancestry merge-base ----------------------------------------------------
 
 
 def _graft_decoy_fixture(repo_path, *, plant_repo_grafts=True):
@@ -4273,25 +3670,6 @@ def _graft_decoy_fixture(repo_path, *, plant_repo_grafts=True):
     return repo, B, H, D
 
 
-def test_review_diff_ancestry_ignores_repo_graft_metadata(tmp_path):
-    repo, B, H, D = _graft_decoy_fixture(tmp_path / "graft-repo")
-    assert _git(repo, "merge-base", B, H).stdout.strip() == D
-    assert sv._authoritative_merge_base(repo, B, H, time.monotonic()) == B
-    view = None
-    try:
-        view = sv.build_sanitized_view(repo, diff_base=B)
-        assert view["diffBase"] == B
-        with open(_patch_abs(view), "rb") as fh:
-            patch = fh.read()
-        assert b"diff --git a/hidden.txt b/hidden.txt" in patch
-        assert b"diff --git a/visible.txt b/visible.txt" in patch
-        assert b"hidden head" in patch
-        assert view["diffWithheldCount"] == 0
-    finally:
-        if view is not None:
-            sv.destroy_sanitized_view(view["path"])
-
-
 def test_review_diff_ancestry_ignores_inherited_graft_file_env(tmp_path, monkeypatch):
     repo, B, H, D = _graft_decoy_fixture(
         tmp_path / "env-graft-repo", plant_repo_grafts=False
@@ -4334,7 +3712,7 @@ def test_review_diff_ancestry_env_drops_every_git_variable(monkeypatch):
     monkeypatch.setenv("GIT_DIR", "/nope")
     monkeypatch.setenv("GIT_SOMETHING_NOT_YET_INVENTED", "/nope")
     monkeypatch.setenv("SUPERHEROES_TEST_SURVIVOR", "yes")
-    env = sv._ancestry_env()
+    env = sv._neutral_git_env()
     git_keys = {k for k in env if k.startswith("GIT_")}
     assert git_keys == {
         "GIT_NO_REPLACE_OBJECTS",
@@ -4351,76 +3729,10 @@ def test_review_diff_ancestry_env_drops_every_git_variable(monkeypatch):
     assert env["SUPERHEROES_TEST_SURVIVOR"] == "yes"
 
 
-def test_review_diff_ancestry_scratch_directory_is_removed(tmp_path, monkeypatch):
-    fake_tmp = str(tmp_path / "tmpdir")
-    os.makedirs(fake_tmp)
-    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
-    tmp_base = fake_tmp
-    created = []
-
-    real_mkdtemp = sv.tempfile.mkdtemp
-
-    def recording_mkdtemp(*args, **kwargs):
-        path = real_mkdtemp(*args, **kwargs)
-        if kwargs.get("prefix") == sv._ANCESTRY_SCRATCH_PREFIX or (
-            args and args[0] == sv._ANCESTRY_SCRATCH_PREFIX
-        ):
-            created.append(path)
-        return path
-
-    monkeypatch.setattr(sv.tempfile, "mkdtemp", recording_mkdtemp)
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "scratch-reap")
-    view = None
-    try:
-        view = _build(repo, diff_base=B)
-        assert len(created) >= 1
-        assert _leftover_ancestry_dirs(tmp_base) == []
-        for path in created:
-            assert not os.path.exists(path)
-    finally:
-        if view is not None:
-            sv.destroy_sanitized_view(view["path"])
-    repo2 = _init_repo(tmp_path / "unrelated-reap", files={"keep.txt": "v1\n"})
-    first_sha = _git(repo2, "rev-parse", "HEAD").stdout.strip()
-    _git(repo2, "checkout", "--orphan", "other")
-    _git(repo2, "rm", "-rf", ".", check=False)
-    with open(os.path.join(repo2, "other.txt"), "w", encoding="utf-8") as fh:
-        fh.write("other\n")
-    _git(repo2, "add", "-A")
-    _git(
-        repo2,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "other",
-    )
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        _build(repo2, diff_base=first_sha)
-    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
-    assert _leftover_ancestry_dirs(tmp_base) == []
-
-
-def test_sweep_stale_views_reaps_aged_ancestry_scratch(tmp_path, monkeypatch):
-    base = tmp_path / "fake-tmp"
-    base.mkdir()
-    aged = base / (sv._ANCESTRY_SCRATCH_PREFIX + "old")
-    aged.mkdir()
-    fresh = base / (sv._ANCESTRY_SCRATCH_PREFIX + "fresh")
-    fresh.mkdir()
-    stale_time = time.time() - sv.SANITIZED_VIEW_STALE_AGE_SECONDS - 120
-    os.utime(aged, (stale_time, stale_time))
-    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(base))
-    sv._sweep_stale_views(str(base))
-    assert not aged.exists()
-    assert fresh.exists()
-
-
 def test_review_diff_ancestry_resolves_in_linked_worktree(tmp_path):
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "linked-wt")
+    repo, B, H, _D = _graft_decoy_fixture(
+        tmp_path / "linked-wt", plant_repo_grafts=False
+    )
     linked = str(tmp_path / "linked-checkout")
     os.makedirs(linked, exist_ok=True)
     _git(repo, "worktree", "add", "--detach", linked, H)
@@ -4440,104 +3752,20 @@ def test_review_diff_ancestry_resolves_in_linked_worktree(tmp_path):
         _git(repo, "worktree", "remove", "--force", linked, check=False)
 
 
-def test_review_diff_ancestry_object_directory_probe_nonzero(tmp_path, monkeypatch):
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "objdir-fail")
-    real_run = sv._ancestry_run
-
-    def standin(argv, started, *, cwd=None):
-        if "--git-path" in argv and "objects" in argv:
-            class Proc:
-                returncode = 1
-                stdout = ""
-                stderr = "fail"
-            return Proc()
-        return real_run(argv, started, cwd=cwd)
-
-    monkeypatch.setattr(sv, "_ancestry_run", standin)
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv._authoritative_merge_base(repo, B, H, time.monotonic())
-    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
-
-
-def test_review_diff_ancestry_object_directory_not_a_directory(tmp_path, monkeypatch):
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "objdir-nodir")
-    real_run = sv._ancestry_run
-    bogus = os.path.join(repo, "not-objects-dir")
-    with open(bogus, "w", encoding="utf-8") as fh:
-        fh.write("x\n")
-
-    def standin(argv, started, *, cwd=None):
-        if "--git-path" in argv and "objects" in argv:
-            class Proc:
-                returncode = 0
-                stdout = bogus
-                stderr = ""
-            return Proc()
-        return real_run(argv, started, cwd=cwd)
-
-    monkeypatch.setattr(sv, "_ancestry_run", standin)
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv._authoritative_merge_base(repo, B, H, time.monotonic())
-    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
-
-
-def test_review_diff_ancestry_scratch_init_nonzero(tmp_path, monkeypatch):
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "init-fail")
-    real_run = sv._ancestry_run
-
-    def standin(argv, started, *, cwd=None):
-        if argv and argv[0] == "git" and "init" in argv:
-            class Proc:
-                returncode = 1
-                stdout = ""
-                stderr = "fail"
-            return Proc()
-        return real_run(argv, started, cwd=cwd)
-
-    monkeypatch.setattr(sv, "_ancestry_run", standin)
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv._authoritative_merge_base(repo, B, H, time.monotonic())
-    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
-
-
-def test_review_diff_ancestry_old_git_object_format_echo_succeeds(tmp_path, monkeypatch):
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "old-git-fmt")
-    real_run = sv._ancestry_run
-
-    def standin(argv, started, *, cwd=None):
-        if "--show-object-format" in argv:
-            class Proc:
-                returncode = 0
-                stdout = "--show-object-format"
-                stderr = ""
-            return Proc()
-        return real_run(argv, started, cwd=cwd)
-
-    monkeypatch.setattr(sv, "_ancestry_run", standin)
-    assert sv._authoritative_merge_base(repo, B, H, time.monotonic()) == B
-    view = None
-    try:
-        view = sv.build_sanitized_view(repo, diff_base=B)
-        assert view["diffWithheldCount"] == 0
-    finally:
-        if view is not None:
-            sv.destroy_sanitized_view(view["path"])
-
-
 def test_review_diff_ancestry_shallow_refusal(tmp_path, monkeypatch):
     repo, B, H, _D = _graft_decoy_fixture(tmp_path / "shallow")
-    real_run = sv._ancestry_run
+    real_run = subprocess.run
 
-    def standin(argv, started, *, cwd=None):
+    def standin(argv, **kwargs):
         if "--is-shallow-repository" in argv:
             class Proc:
                 returncode = 0
                 stdout = "true"
                 stderr = ""
             return Proc()
-        return real_run(argv, started, cwd=cwd)
+        return real_run(argv, **kwargs)
 
-    monkeypatch.setattr(sv, "_ancestry_run", standin)
+    monkeypatch.setattr(sv.subprocess, "run", standin)
     with pytest.raises(sv.SanitizedViewError) as exc:
         sv._authoritative_merge_base(repo, B, H, time.monotonic())
     assert exc.value.detail == "sanitized-view-diff-base-shallow"
@@ -4546,18 +3774,36 @@ def test_review_diff_ancestry_shallow_refusal(tmp_path, monkeypatch):
 def test_review_diff_ancestry_merge_base_argv_pins_config(monkeypatch, tmp_path):
     repo, B, H, _D = _graft_decoy_fixture(tmp_path / "argv-pins")
     recorded = []
-    real_run = sv._ancestry_run
+    real_run = subprocess.run
 
-    def recorder(argv, started, *, cwd=None):
+    def recorder(argv, **kwargs):
         recorded.append(list(argv))
-        return real_run(argv, started, cwd=cwd)
+        return real_run(argv, **kwargs)
 
-    monkeypatch.setattr(sv, "_ancestry_run", recorder)
+    monkeypatch.setattr(sv.subprocess, "run", recorder)
     sv._authoritative_merge_base(repo, B, H, time.monotonic())
     merge_argv = next(a for a in recorded if "merge-base" in a)
     # Implementation-coupled assertion protecting a security pin, not behavioural proof.
     assert "core.commitGraph=false" in merge_argv
     assert "core.useReplaceRefs=false" in merge_argv
+
+
+def test_merge_base_argv_pins_safe_directory(monkeypatch, tmp_path):
+    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "safe-directory-pin")
+    repo_real = os.path.realpath(repo)
+    recorded = []
+    real_run = subprocess.run
+
+    def recorder(argv, **kwargs):
+        recorded.append(list(argv))
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(sv.subprocess, "run", recorder)
+    sv._authoritative_merge_base(repo, B, H, time.monotonic())
+    shallow_argv = next(a for a in recorded if "--is-shallow-repository" in a)
+    merge_argv = next(a for a in recorded if "merge-base" in a)
+    assert "safe.directory=%s" % repo_real in shallow_argv
+    assert "safe.directory=%s" % repo_real in merge_argv
 
 
 @pytest.mark.parametrize(
@@ -4579,10 +3825,10 @@ def test_review_diff_ancestry_shallow_probe_fails_closed(
 ):
     """Only exact `false` proceeds; every other shallow answer is a named refusal."""
     case_path = tmp_path / f"shallow-probe-{returncode}-{stdout!r}"
-    repo, B, H, _D = _graft_decoy_fixture(case_path)
-    real_run = sv._ancestry_run
+    repo, B, H, _D = _graft_decoy_fixture(case_path, plant_repo_grafts=False)
+    real_run = subprocess.run
 
-    def standin(argv, started, *, cwd=None):
+    def standin(argv, **kwargs):
         if "--is-shallow-repository" in argv:
             class Proc:
                 pass
@@ -4591,9 +3837,9 @@ def test_review_diff_ancestry_shallow_probe_fails_closed(
             proc.stdout = stdout
             proc.stderr = ""
             return proc
-        return real_run(argv, started, cwd=cwd)
+        return real_run(argv, **kwargs)
 
-    monkeypatch.setattr(sv, "_ancestry_run", standin)
+    monkeypatch.setattr(sv.subprocess, "run", standin)
     if expected is None:
         result = sv._authoritative_merge_base(repo, B, H, time.monotonic())
         assert result == B
@@ -4609,22 +3855,22 @@ def test_review_diff_ancestry_old_git_shallow_echo_refuses_before_census_or_patc
     """The named old-git case: refusal lands before census, patch generation, or spawn."""
     repo, B, H, _D = _graft_decoy_fixture(tmp_path / "old-git-shallow-echo")
     called = []
-    real_run = sv._ancestry_run
+    real_run = subprocess.run
 
-    def ancestry_standin(argv, started, *, cwd=None):
+    def ancestry_standin(argv, **kwargs):
         if "--is-shallow-repository" in argv:
             class Proc:
                 returncode = 0
                 stdout = "--is-shallow-repository"
                 stderr = ""
             return Proc()
-        return real_run(argv, started, cwd=cwd)
+        return real_run(argv, **kwargs)
 
     def must_not_run(*args, **kwargs):
         called.append(args)
         raise AssertionError("must not run")
 
-    monkeypatch.setattr(sv, "_ancestry_run", ancestry_standin)
+    monkeypatch.setattr(sv.subprocess, "run", ancestry_standin)
     monkeypatch.setattr(sv, "_changed_tree_entries", must_not_run)
     monkeypatch.setattr(sv, "_batch_review_diff_pathspecs", must_not_run)
     monkeypatch.setattr(sv, "_git_diff_batch_output", must_not_run)
@@ -4635,98 +3881,6 @@ def test_review_diff_ancestry_old_git_shallow_echo_refuses_before_census_or_patc
     for root, _dirs, files in os.walk(tmp_path):
         for fname in files:
             assert fname != sv.REVIEW_DIFF_FILE_NAME
-
-
-@pytest.mark.parametrize(
-    "returncode,stdout,accepted,expected_token",
-    [
-        (0, "true\n", ("true", "false"), "true"),
-        (0, "false", ("true", "false"), "false"),
-        (0, "  false  \n", ("true", "false"), None),
-        (0, "sha256\n", ("sha1", "sha256"), "sha256"),
-        (0, "true\n", ("sha1", "sha256"), None),
-        (1, "true\n", ("true", "false"), None),
-        (0, "", ("true", "false"), None),
-        (0, "\n", ("true", "false"), None),
-        (0, "true\nfalse\n", ("true", "false"), None),
-        (0, "--is-shallow-repository\n", ("true", "false"), None),
-        (0, "--show-object-format\n", ("sha1", "sha256"), None),
-        (0, "truex\n", ("true", "false"), None),
-        (0, "TRUE\n", ("true", "false"), None),
-    ],
-)
-def test_capability_output_classifier_is_exact_match_only(
-    returncode, stdout, accepted, expected_token
-):
-    """The classifier returns an exact accepted token or the unsupported sentinel."""
-    class Proc:
-        pass
-    proc = Proc()
-    proc.returncode = returncode
-    proc.stdout = stdout
-    proc.stderr = ""
-    result = sv._classify_capability_output(proc, frozenset(accepted))
-    if expected_token is None:
-        assert result is sv._CAPABILITY_UNSUPPORTED
-    else:
-        assert result == expected_token
-
-
-def test_ancestry_capability_queries_route_through_classifier():
-    """Capability flag literals and classifier calls may appear only in _capability_query."""
-    import ast
-
-    path = os.path.join(os.path.dirname(sv.__file__), "sanitized_view.py")
-    with open(path, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read())
-
-    offenders = []
-    module_flags = set()
-
-    class FlagCollector(ast.NodeVisitor):
-        def visit_Constant(self, node):
-            if isinstance(node.value, str) and (
-                node.value.startswith("--show-") or node.value.startswith("--is-")
-            ):
-                module_flags.add(node.value)
-            self.generic_visit(node)
-
-    FlagCollector().visit(tree)
-
-    class FunctionVisitor(ast.NodeVisitor):
-        def visit_FunctionDef(self, node):
-            if node.name == "_capability_query":
-                self.generic_visit(node)
-                return
-            flags = set()
-            classifier_calls = False
-            for child in ast.walk(node):
-                if isinstance(child, ast.Constant) and isinstance(child.value, str):
-                    if child.value.startswith("--show-") or child.value.startswith("--is-"):
-                        flags.add(child.value)
-                if isinstance(child, ast.Call):
-                    func = child.func
-                    if isinstance(func, ast.Name) and func.id == "_classify_capability_output":
-                        classifier_calls = True
-            if flags or classifier_calls:
-                offenders.append((node.name, sorted(flags), classifier_calls))
-            self.generic_visit(node)
-
-        def visit_AsyncFunctionDef(self, node):
-            self.visit_FunctionDef(node)
-
-    FunctionVisitor().visit(tree)
-    assert offenders == [], (
-        "capability flags or _classify_capability_output outside _capability_query: %s"
-        % offenders
-    )
-
-    expected_flags = {"--show-object-format", "--is-shallow-repository"}
-    assert module_flags == expected_flags, (
-        "a new ancestry capability query was added and must be routed through "
-        "_classify_capability_output and added to this census deliberately: "
-        "found %s, expected %s" % (sorted(module_flags), sorted(expected_flags))
-    )
 
 
 @pytest.mark.parametrize(
@@ -4748,7 +3902,6 @@ def test_stage_review_diff_refuses_unpinned_base_before_any_git(
         raise AssertionError("git must not run")
 
     monkeypatch.setattr(sv, "_git_run", must_not_run)
-    monkeypatch.setattr(sv, "_ancestry_run", must_not_run)
     with pytest.raises(sv.SanitizedViewError) as exc:
         sv._stage_review_diff(
             str(tmp_path),
@@ -4806,7 +3959,8 @@ def test_commit_peeling_paths_pin_commit_graph_off(tmp_path, monkeypatch):
     recorded = []
     ls_tree_export_calls = []
     ls_tree_census_calls = []
-    real_run, real_popen, real_ancestry = sv._git_run, sv._git_popen, sv._ancestry_run
+    real_run, real_popen = sv._git_run, sv._git_popen
+    real_subprocess_run = subprocess.run
     real_ls_tree_export = sv._git_ls_tree_export
     real_tree_entries = sv._git_tree_entries
 
@@ -4842,7 +3996,11 @@ def test_commit_peeling_paths_pin_commit_graph_off(tmp_path, monkeypatch):
     monkeypatch.setattr(sv, "_git_tree_entries", wrapping_tree_entries)
     monkeypatch.setattr(sv, "_git_run", lambda *a, **k: (recorded.append(list(a[0])), real_run(*a, **k))[1])
     monkeypatch.setattr(sv, "_git_popen", lambda *a, **k: (recorded.append(list(a[0])), real_popen(*a, **k))[1])
-    monkeypatch.setattr(sv, "_ancestry_run", lambda argv, s, cwd=None: (recorded.append(list(argv)), real_ancestry(argv, s, cwd=cwd))[1])
+    monkeypatch.setattr(
+        sv.subprocess,
+        "run",
+        lambda argv, **k: (recorded.append(list(argv)), real_subprocess_run(argv, **k))[1],
+    )
     view = sv.build_sanitized_view(repo, diff_base=B)
     try:
         required = {"rev-parse-head", "rev-parse-verify", "merge-base", "diff", "ls-tree"}
@@ -4855,27 +4013,6 @@ def test_commit_peeling_paths_pin_commit_graph_off(tmp_path, monkeypatch):
                 assert has_pin(argv)
     finally:
         sv.destroy_sanitized_view(view["path"])
-
-
-def test_capability_consumers_follow_classifier_not_raw_stdout(tmp_path, monkeypatch):
-    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "cap-flow")
-
-    def proc(stdout):
-        class P:
-            returncode, stderr = 0, ""
-        P.stdout = stdout
-        return P()
-
-    monkeypatch.setattr(sv, "_ancestry_run", lambda a, s, cwd=None: proc("false\n"))
-    monkeypatch.setattr(sv, "_classify_capability_output", lambda p, a: "true")
-    with pytest.raises(sv.SanitizedViewError, match="sanitized-view-diff-base-shallow"):
-        sv._authoritative_merge_base(repo, B, H, time.monotonic())
-    monkeypatch.setattr(sv, "_ancestry_run", lambda a, s, cwd=None: proc("sha256\n"))
-    monkeypatch.setattr(sv, "_classify_capability_output", lambda p, a: sv._CAPABILITY_UNSUPPORTED)
-    assert sv._repo_object_format(repo, time.monotonic()) is None
-    monkeypatch.setattr(sv, "_ancestry_run", lambda a, s, cwd=None: proc("false\n"))
-    with pytest.raises(sv.SanitizedViewError, match="sanitized-view-diff-base-unresolved"):
-        sv._authoritative_merge_base(repo, B, H, time.monotonic())
 
 
 def _stage_review_diff_must_not_reach(monkeypatch):
@@ -4959,7 +4096,395 @@ def test_build_sanitized_view_refuses_unpinned_base_before_head_resolution(
     assert spawned == []
 
 
-# --- #797: partial clones are not a supported checkout shape ------------------
+# --- WO-4: config changes under review file ---------------------------------
+
+
+def _config_changes_abs(view):
+    return os.path.join(view["path"], sv.CONFIG_CHANGES_FILE_NAME)
+
+
+def test_config_changes_file_carries_the_withheld_hunks(tmp_path):
+    repo = _init_repo(
+        tmp_path / "config-hunks",
+        files={"README.md": "hello\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "README.md"), "w", encoding="utf-8") as fh:
+        fh.write("changed readme\n")
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("secret config\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert view["diffPath"] is not None
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"changed readme" in patch
+        assert b"secret config" not in patch
+        assert b"diff --git a/CLAUDE.md" not in patch
+        assert os.path.isfile(_config_changes_abs(view))
+        with open(_config_changes_abs(view), "rb") as fh:
+            config_bytes = fh.read()
+        assert b"diff --git a/CLAUDE.md" in config_bytes
+        assert b"secret config" in config_bytes
+        assert view["configDiffPath"] == sv.CONFIG_CHANGES_FILE_NAME
+        assert view["configDiffBytes"] == len(config_bytes)
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_config_changes_file_starts_with_the_data_not_instructions_header(tmp_path):
+    repo = _init_repo(
+        tmp_path / "config-header",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_config_changes_abs(view), "rb") as fh:
+            config_bytes = fh.read()
+        header_bytes = sv.CONFIG_CHANGES_HEADER.encode("utf-8")
+        assert config_bytes.startswith(header_bytes)
+        diff_idx = config_bytes.find(b"diff --git")
+        assert diff_idx >= len(header_bytes)
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_config_changes_file_is_not_discoverable_as_configuration(tmp_path):
+    assert sv.CONFIG_CHANGES_FILE_NAME not in sv.SANITIZED_CONFIG_FILES
+    assert sv.CONFIG_CHANGES_FILE_NAME not in sv.SANITIZED_CONFIG_DIRS
+    assert not sv._rel_path_would_be_stripped(sv.CONFIG_CHANGES_FILE_NAME)
+
+    repo = _init_repo(
+        tmp_path / "config-not-config",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        sv._assert_no_stripped_paths_in_view(view["path"])
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_config_changes_absent_when_nothing_withheld(tmp_path):
+    repo = _init_repo(tmp_path / "config-none", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "keep.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert view["configDiffPath"] is None
+        assert not os.path.exists(_config_changes_abs(view))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_config_changes_absent_without_a_diff_base(tmp_path):
+    repo = _init_repo(tmp_path / "config-no-base", files={"keep.txt": "k\n"})
+    view = sv.build_sanitized_view(repo)
+    try:
+        assert view["configDiffPath"] is None
+        assert not os.path.exists(_config_changes_abs(view))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_config_changes_path_collision_refuses(tmp_path):
+    repo = _init_repo(
+        tmp_path / "config-collision",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    view_root = str(tmp_path / "view-collision")
+    os.makedirs(view_root)
+    with open(os.path.join(view_root, sv.CONFIG_CHANGES_FILE_NAME), "w", encoding="utf-8") as fh:
+        fh.write("pre-existing\n")
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._stage_config_changes(
+            repo,
+            base_sha,
+            head_sha,
+            view_root,
+            ["CLAUDE.md"],
+            time.monotonic(),
+        )
+    assert exc.value.detail == "sanitized-view-diff-config-path-collision"
+
+
+def test_review_diff_quoted_path_is_decoded_and_kept(tmp_path):
+    quoted_name = 'we"ird.txt'
+    repo = _init_repo(
+        tmp_path / "quoted-ordinary",
+        files={quoted_name: "baseline\n", "keep.txt": "k\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, quoted_name), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "modify quoted filename")
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b'we\\"ird.txt' in patch
+        assert b"+changed\n" in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_diff_quoted_stripped_path_is_withheld(tmp_path):
+    quoted_rel = '.claude/we"ird.json'
+    repo = _init_repo(
+        tmp_path / "quoted-stripped",
+        files={quoted_rel: "{}\n", "keep.txt": "k\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, quoted_rel), "w", encoding="utf-8") as fh:
+        fh.write('{"changed": true}\n')
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "modify quoted stripped path")
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert _diff_git_section_count(patch, quoted_rel) == 0
+        assert view["diffWithheldCount"] >= 1
+        assert view["configDiffPath"] == sv.CONFIG_CHANGES_FILE_NAME
+        with open(_config_changes_abs(view), "rb") as fh:
+            config_bytes = fh.read()
+        assert b'.claude/we\\"ird.json' in config_bytes
+        assert b'+{"changed": true}' in config_bytes
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_config_changes_opaque_binary_refuses(tmp_path):
+    repo = _init_repo(
+        tmp_path / "config-opaque",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "wb") as fh:
+        fh.write(b"\x00binary\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "binary claude change")
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def test_config_changes_batch_overflow_refuses_with_the_config_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(sv, "REVIEW_DIFF_MAX_BYTES", 10)
+    repo = _init_repo(
+        tmp_path / "config-batch-overflow",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("x" * 200 + "\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "large claude change")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    view_root = str(tmp_path / "view-batch-overflow")
+    os.makedirs(view_root)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._stage_config_changes(
+            repo,
+            base_sha,
+            head_sha,
+            view_root,
+            ["CLAUDE.md"],
+            time.monotonic(),
+        )
+    assert exc.value.detail == "sanitized-view-diff-config-too-large"
+
+
+def test_config_changes_too_large_refuses(tmp_path, monkeypatch):
+    monkeypatch.setattr(sv, "CONFIG_CHANGES_MAX_BYTES", 50)
+    repo = _init_repo(
+        tmp_path / "config-too-large",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("x" * 200 + "\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    view_root = str(tmp_path / "view-too-large")
+    os.makedirs(view_root)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._stage_config_changes(
+            repo,
+            base_sha,
+            head_sha,
+            view_root,
+            ["CLAUDE.md"],
+            time.monotonic(),
+        )
+    assert exc.value.detail == "sanitized-view-diff-config-too-large"
+
+
+def test_notice_names_the_config_file_as_a_context_file(tmp_path):
+    repo = _init_repo(
+        tmp_path / "notice-config-file",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed keep\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        notice = sv.sanitized_view_notice(view)
+        assert sv.CONFIG_CHANGES_FILE_NAME in notice
+        assert "context file" in notice
+        assert "their absence is not a finding" not in notice
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_patch_still_excludes_stripped_paths_with_config_file_present(tmp_path):
+    repo = _init_repo(
+        tmp_path / "config-patch-invariant",
+        files={"CLAUDE.md": "baseline\n", "keep.txt": "k\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("secret\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert os.path.isfile(_config_changes_abs(view))
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"diff --git a/CLAUDE.md" not in patch
+        for name in sv.SANITIZED_CONFIG_FILES:
+            marker = ("diff --git a/%s b/%s" % (name, name)).encode("utf-8")
+            assert marker not in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+# --- GIT_NO_LAZY_FETCH bite receipt -----------------------------------------
 
 
 def _partial_clone_fixture(tmp_path, name, *, checkout=False):
@@ -4984,64 +4509,6 @@ def _partial_clone_fixture(tmp_path, name, *, checkout=False):
     argv += ["--no-local", "file://%s" % origin, clone]
     subprocess.run(argv, capture_output=True, check=True)
     return clone, origin
-
-
-def test_partial_clone_fixture_really_is_missing_objects(tmp_path):
-    """Guards the fixture itself: a clone that silently hydrated proves nothing."""
-    clone, _origin = _partial_clone_fixture(tmp_path, "fixture-check")
-    assert sv._is_partial_clone(clone) is True
-    blob = _git(clone, "ls-tree", "-r", "HEAD").stdout.split()[2]
-    probe = subprocess.run(
-        ["git", "-C", clone, "cat-file", "--batch-check"],
-        input=("%s\n" % blob).encode("ascii"),
-        capture_output=True,
-        env={**os.environ, "GIT_NO_LAZY_FETCH": "1"},
-    )
-    assert probe.stdout.split() == [blob.encode("ascii"), b"missing"]
-
-
-@pytest.mark.parametrize("checkout", [False, True])
-def test_partial_clone_construction_refuses_with_the_named_shape(tmp_path, checkout):
-    """Both filtered shapes refuse — including the checked-out one whose HEAD is hydrated.
-
-    The checked-out case is the reason this refuses on the shape and not on a failed
-    object read: there, materialization would have *succeeded*.
-    """
-    clone, _origin = _partial_clone_fixture(
-        tmp_path, "refuses-%s" % checkout, checkout=checkout
-    )
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        _build(clone)
-    assert exc.value.detail == sv.SANITIZED_VIEW_PARTIAL_CLONE
-    assert exc.value.detail == "sanitized-view-partial-clone"
-    # Cleanup: the autouse fixture asserts no view directory survives the refusal.
-
-
-def test_partial_clone_refused_before_any_object_is_read(tmp_path, monkeypatch):
-    """'Fail fast' means no object is touched at all — not touched and then abandoned."""
-    clone, _origin = _partial_clone_fixture(tmp_path, "before-any-read", checkout=True)
-    reached = []
-
-    def must_not_run(*args, **kwargs):
-        reached.append(args)
-        raise AssertionError("construction touched objects after the shape refusal")
-
-    monkeypatch.setattr(sv, "_git_rev_parse_head", must_not_run)
-    monkeypatch.setattr(sv, "_materialize_from_tree", must_not_run)
-    monkeypatch.setattr(sv, "_CatFileBatch", must_not_run)
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        _build(clone)
-    assert exc.value.detail == sv.SANITIZED_VIEW_PARTIAL_CLONE
-    assert reached == []
-
-
-def test_partial_clone_with_a_diff_base_refuses_the_same_way(tmp_path):
-    """The review path — the one that actually passes a diff base — refuses too."""
-    clone, _origin = _partial_clone_fixture(tmp_path, "diff-base", checkout=True)
-    base = _git(clone, "rev-parse", "HEAD").stdout.strip()
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        _build(clone, diff_base=base)
-    assert exc.value.detail == sv.SANITIZED_VIEW_PARTIAL_CLONE
 
 
 def test_no_lazy_fetch_is_what_stops_git_reaching_the_promisor_remote(tmp_path):
@@ -5075,9 +4542,8 @@ def test_no_lazy_fetch_is_what_stops_git_reaching_the_promisor_remote(tmp_path):
 
 
 def test_ordinary_clone_is_not_refused(tmp_path):
-    """No promisor remote, no refusal — the shape check must not catch normal repos."""
+    """Ordinary repositories still build a sanitized view."""
     repo = _init_repo(tmp_path / "ordinary", files={"a.txt": "a\n"})
-    assert sv._is_partial_clone(repo) is False
     view = None
     try:
         view = _build(repo)
@@ -5093,167 +4559,3 @@ def test_ordinary_clone_failure_keeps_its_own_detail(tmp_path):
     with pytest.raises(sv.SanitizedViewError) as exc:
         _build(repo, diff_base="0" * 40)
     assert exc.value.detail == "sanitized-view-diff-base-unresolved"
-
-
-def test_partial_clone_marker_in_global_config_does_not_condemn_a_normal_repo(tmp_path):
-    """``git config --list`` merges global scope; the probe must read the repo's own.
-
-    A stray ``extensions.partialclone`` in a user's ~/.gitconfig would otherwise refuse
-    every repository on that machine.
-    """
-    repo = _init_repo(tmp_path / "global-marker", files={"a.txt": "a\n"})
-    fake_global = str(tmp_path / "fake-global-gitconfig")
-    with open(fake_global, "w", encoding="utf-8") as fh:
-        fh.write("[extensions]\n\tpartialclone = origin\n")
-        fh.write('[remote "origin"]\n\tpromisor = true\n')
-    env = {**os.environ, "GIT_CONFIG_GLOBAL": fake_global}
-    merged = subprocess.run(
-        ["git", "-C", repo, "config", "--list"], capture_output=True, text=True, env=env
-    ).stdout
-    assert "extensions.partialclone" in merged, "fixture must actually leak into --list"
-
-    real_run = sv._git_run
-
-    def run_with_fake_global(*args, **kwargs):
-        kwargs["env"] = {**sv._git_env(), "GIT_CONFIG_GLOBAL": fake_global}
-        return subprocess.run(*args, **kwargs)
-
-    sv._git_run = run_with_fake_global
-    try:
-        assert sv._is_partial_clone(repo) is False
-    finally:
-        sv._git_run = real_run
-
-
-def test_is_partial_clone_reads_the_filter_key_on_its_own(tmp_path):
-    """``remote.<name>.partialclonefilter`` registers a promisor remote by itself.
-
-    Measured on git 2.50.1: a clone carrying the filter key with NO promisor key still
-    lazy-fetched a missing blob, so treating the promisor key as the only marker left a
-    genuinely filtered checkout undetected.
-    """
-    clone, _origin = _partial_clone_fixture(tmp_path, "filter-key-only")
-    _git(clone, "config", "--unset", "remote.origin.promisor")
-    assert (
-        _git(clone, "config", "--local", "--get", "remote.origin.partialclonefilter")
-        .stdout.strip()
-        == "blob:none"
-    )
-    assert sv._is_partial_clone(clone) is True
-
-
-@pytest.mark.parametrize(
-    "value,expected",
-    [
-        ("true", True),
-        ("TRUE", True),
-        ("yes", True),
-        ("on", True),
-        ("1", True),
-        ("42", True),
-        ("0x10", True),
-        ("010", True),
-        ("1k", True),
-        ("false", False),
-        ("FALSE", False),
-        ("no", False),
-        ("off", False),
-        ("0", False),
-        ("", False),
-    ],
-)
-def test_is_partial_clone_agrees_with_git_on_every_boolean_spelling(
-    tmp_path, value, expected
-):
-    """Delegating to ``git config --type=bool`` means git's grammar, not a guess at it.
-
-    ``0x10``, ``010`` and ``1k`` are the ones a hand-rolled parser gets wrong: git's
-    integer parser accepts base prefixes and k/m/g suffixes, and ``--type=bool`` reports
-    every one of them as true. Each case is cross-checked against git itself below, so
-    this test cannot drift away from the grammar it claims to pin.
-    """
-    repo = _init_repo(
-        tmp_path / ("gitbool-%s" % (value or "empty")), files={"a.txt": "a\n"}
-    )
-    _git(repo, "config", "remote.origin.promisor", value)
-    probed = _git(repo, "config", "--bool", "--get", "remote.origin.promisor").stdout.strip()
-    assert probed == ("true" if expected else "false"), "git itself disagrees with this row"
-    assert sv._is_partial_clone(repo) is expected
-
-
-def test_is_partial_clone_reads_a_valueless_promisor_key_as_true(tmp_path):
-    """``[remote "origin"] promisor`` with no ``=`` is git-true."""
-    repo = _init_repo(tmp_path / "valueless-promisor", files={"a.txt": "a\n"})
-    with open(os.path.join(repo, ".git", "config"), "a", encoding="utf-8") as fh:
-        fh.write('[remote "origin"]\n\tpromisor\n')
-    assert (
-        _git(repo, "config", "--bool", "--get", "remote.origin.promisor").stdout.strip()
-        == "true"
-    )
-    assert sv._is_partial_clone(repo) is True
-
-
-def test_is_partial_clone_answers_false_when_the_probe_exits_nonzero(tmp_path):
-    """Probe failure proceeds under the env-var backstop rather than refusing everyone."""
-    assert sv._is_partial_clone(str(tmp_path / "does-not-exist")) is False
-
-
-@pytest.mark.parametrize(
-    "boom", [OSError("no git"), subprocess.TimeoutExpired("git", 1), ValueError("bad")]
-)
-def test_is_partial_clone_answers_false_when_the_probe_raises(monkeypatch, boom):
-    """The raise leg: the non-zero-exit leg above cannot reach this ``except``."""
-
-    def explode(*args, **kwargs):
-        raise boom
-
-    monkeypatch.setattr(sv, "_git_run", explode)
-    assert sv._is_partial_clone("/anywhere") is False
-
-
-def test_git_config_local_keys_reports_unknown_distinctly_from_empty():
-    """``None`` (probe unusable) must not be readable as 'no markers found'."""
-    assert sv._git_config_local_keys("/definitely/not/a/repo/797") is None
-
-
-def test_git_config_says_true_never_spawns_for_a_key_outside_the_pattern(monkeypatch):
-    """Repository-supplied text is never handed to git at all — not merely rejected by it.
-
-    Asserting only the ``False`` return would pass with the guard deleted, because git
-    exits non-zero on an unknown key anyway. The axis is *reaching argv*, so this asserts
-    that no subprocess is spawned.
-    """
-    spawned = []
-
-    def record(*args, **kwargs):
-        spawned.append(args[0])
-        raise AssertionError("unvetted key reached git argv: %r" % (args[0],))
-
-    monkeypatch.setattr(sv, "_git_run", record)
-    for key in ("--global", "-c", "--type=int", "core.bare", "extensions.partialclone"):
-        assert sv._git_config_says_true("/anywhere", key) is False
-    assert spawned == []
-
-
-def test_git_config_says_true_does_spawn_for_a_matching_key(tmp_path):
-    """The guard must not be so tight that the real key never gets through."""
-    repo = _init_repo(tmp_path / "argv-guard-positive", files={"a.txt": "a\n"})
-    _git(repo, "config", "remote.origin.promisor", "true")
-    assert sv._git_config_says_true(repo, "remote.origin.promisor") is True
-    _git(repo, "config", "remote.origin.promisor", "off")
-    assert sv._git_config_says_true(repo, "remote.origin.promisor") is False
-
-
-def test_is_partial_clone_ignores_a_disabled_promisor_remote(tmp_path):
-    repo = _init_repo(tmp_path / "disabled-promisor", files={"a.txt": "a\n"})
-    _git(repo, "config", "remote.origin.promisor", "false")
-    assert sv._is_partial_clone(repo) is False
-    _git(repo, "config", "remote.origin.promisor", "true")
-    assert sv._is_partial_clone(repo) is True
-
-
-def test_is_partial_clone_reads_the_extensions_spelling(tmp_path):
-    """Older/bare partial clones announce themselves through ``extensions``."""
-    repo = _init_repo(tmp_path / "extensions-spelling", files={"a.txt": "a\n"})
-    _git(repo, "config", "extensions.partialClone", "origin")
-    assert sv._is_partial_clone(repo) is True

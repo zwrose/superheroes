@@ -11,6 +11,7 @@ and there is nothing to render. Owner-authority narrowing is via a hand-edited a
 this screen carries the v2 dispatch-calibration observability surface: the EFFECTIVE engine +
 model for each v2 dispatch role (`## Dispatch calibration`), and the Codex model-pin detail
 (`## Engine model pins (Codex)`)."""
+import json
 import os
 import sys
 
@@ -21,6 +22,7 @@ if _LIB_DIR not in sys.path:
 import core_md         # noqa: E402
 import engine_pref     # noqa: E402
 import guardian_ledger  # noqa: E402
+import project_config  # noqa: E402
 import guardian_store  # noqa: E402
 import guardian_sweep  # noqa: E402
 import guardian_vitals  # noqa: E402
@@ -31,8 +33,8 @@ import review_gate_policy  # noqa: E402
 import store_sweep     # noqa: E402
 
 _NON_LAYER = ("core.md", "patterns.md")
-
-
+_PROSE_CONFIG_SHAPES = frozenset({"prose"})
+_PROSE_DISPLAY_MAX = 120
 def _read(path):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -202,6 +204,98 @@ def _collect_review_gate_policy(cwd, root):
         "overlayParse": layers["overlayParse"],
         "shipped": layers["shipped"],
     }
+
+
+def _json_display(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _one_line_prose(text, limit=_PROSE_DISPLAY_MAX):
+    line = " ".join(str(text).splitlines())
+    if len(line) <= limit:
+        return line
+    return line[: limit - 1] + "…"
+
+
+def _config_item_display(item_def, entry):
+    """Format one configuration row for the one-screen view. Read-only."""
+    if entry.get("malformed"):
+        return "malformed (stamped value not applied)"
+    source = entry.get("source")
+    slug = item_def["slug"]
+    shape = item_def.get("shape")
+    effective = entry.get("effective")
+    if source == "unset":
+        return "unset (absence disables the rules that read it)"
+    if source == "plugin-default":
+        if isinstance(effective, dict):
+            shown = _json_display(effective)
+        elif effective is None:
+            shown = "null"
+        else:
+            shown = str(effective)
+        return "%s (plugin default)" % shown
+    if source == "derived":
+        if slug == "budgetN":
+            return "derived from dial (%s)" % project_config.BUDGET_DERIVATION_PROSE
+        return "derived"
+    if source == "stamped":
+        if shape in _PROSE_CONFIG_SHAPES and isinstance(effective, str):
+            return _one_line_prose(effective)
+        if isinstance(effective, dict):
+            return _json_display(effective)
+        if effective is None:
+            return "null"
+        return str(effective)
+    return str(effective)
+
+
+def _project_config_lines(cwd, root):
+    """Plain-text project-configuration rows for the one-screen view."""
+    try:
+        payload = project_config.view(cwd, root)
+    except Exception:
+        return ["(not available)"]
+    lines = []
+    if payload.get("profileUnparseable"):
+        lines.append("profile: core.md unreadable — no stamped values shown")
+    if payload.get("behind"):
+        lines.append("profile: schema behind plugin — view only")
+    if payload.get("profileAbsent"):
+        lines.append("profile: no core calibration yet")
+    by_slug = {entry["slug"]: entry for entry in payload.get("items") or []}
+    for item_def in project_config.ITEMS:
+        entry = by_slug.get(item_def["slug"])
+        if entry is None:
+            entry = {
+                "slug": item_def["slug"],
+                "raw": None,
+                "effective": None,
+                "source": "unset",
+                "malformed": False,
+            }
+        elif payload.get("profileUnparseable") and entry.get("source") == "stamped":
+            entry = dict(entry)
+            entry["source"] = "unset"
+            entry["malformed"] = False
+        number = item_def["number"]
+        name = item_def["name"]
+        value = _config_item_display(item_def, entry)
+        lines.append("%d. %s — %s" % (number, name, value))
+    try:
+        deps = project_config.dependencies(cwd, root)
+    except Exception:
+        lines.append("dependencies: (not available)")
+        return lines
+    for key in project_config.DEPENDENCY_ORDER:
+        info = deps.get(key) or {}
+        status = info.get("status") or "unknown"
+        if status == "absent":
+            fallback = info.get("fallback") or ""
+            lines.append("%s: absent — fallback: %s" % (key, fallback))
+        else:
+            lines.append("%s: %s" % (key, status))
+    return lines
 
 
 def _review_gate_policy_lines(data):
@@ -487,6 +581,10 @@ def render(cwd, *, root=None):
         out.append("## Review gate policy")
         for line in _review_gate_policy_lines(data.get("reviewGatePolicy") or {}):
             out.append(line)
+    out.append("")
+    out.append("## Project configuration")
+    for line in _project_config_lines(cwd, root):
+        out.append(line)
     for hero, text in data["layers"]:
         out.append("")
         out.append(f"## Layer: {hero}")
