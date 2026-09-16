@@ -6,7 +6,8 @@
 - §4 — Optional heavier heroes — provisional defaults disclose (FR-3)
 - §4.4 — Show-it surface — provisional default
 - §4.5 — Engine preferences — per-role defaults (FR-11/12/13/14)
-- §4.6 — Review-discipline CLAUDE.md — offer recorded, not written unasked
+- §4.6 — Project-configuration dependencies and kind labels
+- §4.7 — Review-discipline CLAUDE.md — offer recorded, not written unasked
 - §5 — Secrets stay out of shared calibration (NFR)
 - Recovering an interrupted set-up (UFR-7)
 
@@ -278,7 +279,41 @@ until the owner grants and tests it via `/superheroes:configure`.
 
 <!-- /decision-point: id=configure-setup-engine-preferences -->
 
-## 4.6 — Review-discipline CLAUDE.md — offer recorded, not written unasked
+## 4.6 — Project-configuration dependencies and kind labels
+
+At calibration, report the four declared dependencies and ensure the two kind labels exist. Neither
+step blocks set-up.
+
+1. **Declared dependencies.** Run the dependency check and write each result into the set-up output.
+   Name the fallback for every dependency that is absent. A missing dependency never blocks
+   calibration.
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   python3 -B "$ROOT_DIR/lib/project_config.py" dependencies --cwd .
+   ```
+
+   When the project has a dependency to declare, persist it with JSON on stdin:
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   printf '%s' '"standing-proposals"' | \
+     python3 -B "$ROOT_DIR/lib/project_config.py" declare --dependency collector --cwd .
+   ```
+
+   An undeclared dependency is not a failure — its fallback applies.
+
+2. **Kind labels.** When `kind:machinery` or `kind:product` is missing on the repository, create
+   only the missing labels through `kind_labels`. Report what was created. A label failure
+   degrades calibration with a disclosure and never refuses it.
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+   python3 -B "$ROOT_DIR/lib/kind_labels.py" --repo "$REPO" --apply
+   ```
+
+## 4.7 — Review-discipline CLAUDE.md — offer recorded, not written unasked
 
 <!-- decision-point: id=configure-setup-claude-md-section mode=notify kind=ask-user-question default="never write the project CLAUDE.md unasked; record the offer as un-made" carrier=review-crew-layer -->
 
