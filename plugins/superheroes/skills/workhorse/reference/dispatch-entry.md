@@ -16,7 +16,7 @@ Generated from the dispatch shell's argparse declarations. To refresh after an a
 
 ## Accepted seat shapes
 
-pass --seat as JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>} (the effort key is required; its value may be null); or composed token "<vendor>:<dispatch-token>". pass --role as one of: implementer, code-fixer, doc-reviser, reviewer, reviewer-deep, verifier, brief-check, synthesis, mechanical, pilot
+pass --seat as JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, "role": "<role>"} (the effort key is required; its value may be null; role is required and must not be null). role must be a member of the seat JSON "role" key; valid roles: implementer, code-fixer, doc-reviser, reviewer, reviewer-deep, verifier, brief-check, synthesis, mechanical, pilot
 
 ## Dispatch CLIs
 
@@ -46,8 +46,7 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 
 | Flag | Required | Contract | Default | Help |
 | --- | --- | --- | --- | --- |
-| `--seat` | yes | `free-text` | none | JSON seat bundle or vendor:token composed dispatch token |
-| `--role` | yes | `role` | none |  |
+| `--seat` | yes | `free-text` | none | JSON seat bundle with vendor, model, effort, and role |
 | `--prompt-path` | yes | `free-text` | none |  |
 | `--cwd` | yes | `existing-directory` | none |  |
 | `--order-id` | no | `free-text` | none |  |
@@ -64,8 +63,7 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 
 | Flag | Required | Contract | Default | Help |
 | --- | --- | --- | --- | --- |
-| `--seat` | yes | `free-text` | none | JSON seat bundle or vendor:token composed dispatch token |
-| `--role` | yes | `role` | none |  |
+| `--seat` | yes | `free-text` | none | JSON seat bundle with vendor, model, effort, and role |
 | `--prompt-path` | yes | `free-text` | none |  |
 | `--timeout` | no | `integer` | 900 |  |
 | `--retry-timeout` | no | `integer` | 900 |  |
@@ -103,7 +101,7 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | Flag | Required | Contract | Default | Help |
 | --- | --- | --- | --- | --- |
 | `--seat` | yes | `undeclared` | none | JSON seat bundle or vendor:token composed dispatch token |
-| `--role` | yes | `choices:review,build,fix` | none |  |
+| `--run-kind` | yes | `choices:review,build,fix` | none | read vs write sandbox shaping (not the registry role — that rides in --seat) |
 | `--cwd` | no | `undeclared` | none |  |
 | `--verify` | no | `undeclared` | none | PATH:SHA256 staged-input check; any mismatch/unreadable file fails build-argv closed |
 | `--prompt-path` | no | `undeclared` | none | if set, fail build-argv closed unless PATH is a readable regular file with non-whitespace content (prevents dispatching an empty prompt that would hang codex on stdin — #563) |
@@ -114,8 +112,7 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 
 | Flag | Required | Contract | Default | Help |
 | --- | --- | --- | --- | --- |
-| `--seat` | yes | `free-text` | none | JSON seat bundle or vendor:token composed dispatch token |
-| `--role` | yes | `role` | none |  |
+| `--seat` | yes | `free-text` | none | JSON seat bundle with vendor, model, effort, and role |
 
 ## Variance envelope
 
