@@ -10,8 +10,18 @@ import json
 
 import model_registry
 
-_DROPPED_FLAGS = ("--engine", "--model", "--effort", "--engine-model")
+_DROPPED_FLAGS = ("--engine", "--model", "--effort", "--engine-model", "--vendor")
 _LEGACY_KEYWORDS = frozenset({"engine", "model", "effort", "engine_model"})
+
+_DISPATCH_REVIEW_ACCEPTED = (
+    "seat, role, prompt_path, repo_root, timeout, retry_timeout, progress_path, "
+    "run_engine, build_view, run_dir, max_wait, order_id, diff_base, mode, "
+    "expected_result_kind, pr_body_path, session_dir"
+)
+_DISPATCH_WRITE_ACCEPTED = (
+    "seat, role, prompt_path, cwd, order_id, base_sha, timeout, retry_timeout, "
+    "progress_path, run_engine, run_dir, max_wait, expected_items, expected_items_file"
+)
 
 _SEAT_JSON_SHAPE = (
     'JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>} '
@@ -83,6 +93,33 @@ def legacy_call_detected(args: tuple, kwargs: dict) -> bool:
     if args:
         return True
     return bool(_LEGACY_KEYWORDS & kwargs.keys())
+
+
+def unknown_kwargs_detected(kwargs: dict) -> tuple[str, ...]:
+    if not kwargs:
+        return ()
+    return tuple(sorted(kwargs.keys()))
+
+
+def unknown_kwargs_refusal(unknown_keys: tuple[str, ...], *, accepted_params: str) -> dict:
+    keys = ", ".join(unknown_keys)
+    return {
+        "ok": False,
+        "reason": "unknown-dispatch-kwargs",
+        "detail": (
+            f"unknown keyword argument(s) {keys}; "
+            f"accepted parameters: {accepted_params}; "
+            f"{accepted_seat_detail()}; {accepted_role_detail()}."
+        ),
+    }
+
+
+def dispatch_review_accepted_params() -> str:
+    return _DISPATCH_REVIEW_ACCEPTED
+
+
+def dispatch_write_accepted_params() -> str:
+    return _DISPATCH_WRITE_ACCEPTED
 
 
 def _normalize_effort(value: str | None) -> str | None:

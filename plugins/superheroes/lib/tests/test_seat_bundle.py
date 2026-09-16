@@ -62,20 +62,62 @@ def test_seat_json_and_token_accepted(cli_module, subcmd, extra, tmp_path, monke
         ]
     json_seat = _seat_json("codex", "gpt-5.6-sol", "high")
     token_seat = "cursor:composer-2.5"
-    for seat in (json_seat, token_seat):
+    seat_cases = (
+        (json_seat, "codex", "gpt-5.6-sol", "high"),
+        (token_seat, "cursor", "composer-2.5", None),
+    )
+    for seat, exp_vendor, exp_model, exp_effort in seat_cases:
         argv = argv_base + ["--seat", seat]
         if cli_module is DG:
             argv = ["check", "--role", _REVIEW_ROLE, "--seat", seat]
         dropped = SB.scan_dropped_flags(argv)
         assert dropped == []
+        captured = {}
         if cli_module is ED:
-            monkeypatch.setattr(cli_module, "_dispatch_review_impl", lambda *a, **k: {"ok": True, "terminal": True})
-            monkeypatch.setattr(cli_module, "_dispatch_write_impl", lambda *a, **k: {"ok": True, "terminal": True})
             if "dispatch-review" in subcmd[0]:
-                monkeypatch.setattr(cli_module, "dispatch_review", cli_module.dispatch_review)
+                def _fake_review_impl(seat_bundle, *, role, **kwargs):
+                    captured["seat"] = seat_bundle
+                    captured["role"] = role
+                    return {"ok": True, "terminal": True}
+
+                monkeypatch.setattr(cli_module, "_dispatch_review_impl", _fake_review_impl)
+            else:
+                def _fake_write_impl(seat_bundle, *, role, **kwargs):
+                    captured["seat"] = seat_bundle
+                    captured["role"] = role
+                    return {"ok": True, "terminal": True}
+
+                monkeypatch.setattr(cli_module, "_dispatch_write_impl", _fake_write_impl)
+            rc = cli_module.main(argv)
+            assert rc == 0
+            assert captured["seat"]["vendor"] == exp_vendor
+            assert captured["seat"]["model"] == exp_model
+            assert captured["seat"]["effort"] == exp_effort
         if cli_module is DG:
-            monkeypatch.setattr(cli_module, "validate", lambda *a, **k: {"ok": True, "resolved_model": "x"})
-        # parse-only gate: dropped-flag scan must not fire; argparse shape must include --seat
+            def _fake_validate(role, vendor, model, effort):
+                captured.update(
+                    role=role, vendor=vendor, model=model, effort=effort,
+                )
+                return {
+                    "ok": True,
+                    "role": role,
+                    "vendor": vendor,
+                    "model_id": model,
+                    "effort": effort,
+                    "dispatch_token": None,
+                    "effort_source": None,
+                    "resolved_model": model,
+                    "allowlist": [],
+                    "allowlist_pairs": [],
+                    "reason": None,
+                }
+
+            monkeypatch.setattr(cli_module, "validate", _fake_validate)
+            rc = cli_module.main(argv)
+            assert rc == 0
+            assert captured["vendor"] == exp_vendor
+            assert captured["model"] == exp_model
+            assert captured["effort"] == exp_effort
         parser = cli_module.build_parser()
         if cli_module is ED:
             sub = subcmd[0]
@@ -86,7 +128,7 @@ def test_seat_json_and_token_accepted(cli_module, subcmd, extra, tmp_path, monke
         assert any(a.dest == "role" for a in actions)
 
 
-_DROPPED = ("--engine", "--model", "--effort", "--engine-model")
+_DROPPED = ("--engine", "--model", "--effort", "--engine-model", "--vendor")
 _CLI_CASES = [
     (ED, "dispatch-review", ["--prompt-path", "p", "--repo-root", "/tmp", "--run-dir", "/tmp/r"]),
     (ED, "dispatch-write", ["--prompt-path", "p", "--cwd", "/tmp", "--run-dir", "/tmp/r"]),
@@ -135,6 +177,78 @@ def test_dispatch_write_legacy_library_refusal(kwargs):
     res = ED.dispatch_write(prompt_path="p", cwd="/tmp", **kwargs)
     assert res["ok"] is False
     assert res["reason"] == "legacy-seat-args"
+
+
+def test_dispatch_review_unknown_keyword_refused():
+    res = ED.dispatch_review(
+        seat=_seat_json("codex", "gpt-5.6-sol", "high"),
+        role=_REVIEW_ROLE,
+        prompt_path="p",
+        repo_root="/tmp",
+        prompt_pat="typo",
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "unknown-dispatch-kwargs"
+    assert "prompt_pat" in res["detail"]
+    assert "prompt_path" in res["detail"]
+
+
+def test_dispatch_write_unknown_keyword_refused():
+    res = ED.dispatch_write(
+        seat=_seat_json("codex", "gpt-5.6-sol", "high"),
+        role=_WRITE_ROLE,
+        prompt_path="p",
+        cwd="/tmp",
+        prompt_pat="typo",
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "unknown-dispatch-kwargs"
+    assert "prompt_pat" in res["detail"]
+    assert "prompt_path" in res["detail"]
+
+
+def test_dispatch_write_refuses_read_only_role():
+    res = ED.dispatch_write(
+        seat=_seat_json("codex", "gpt-5.6-sol", "high"),
+        role=_REVIEW_ROLE,
+        prompt_path="p",
+        cwd="/tmp",
+        run_dir="/tmp/r",
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "unrunnable"
+    assert "read-only" in res["detail"]
+    assert res["attempts"] == 0
+    assert res.get("runOpened") is False
+
+
+def test_dispatch_review_refuses_write_only_role():
+    res = ED.dispatch_review(
+        seat=_seat_json("codex", "gpt-5.6-sol", "high"),
+        role=_WRITE_ROLE,
+        prompt_path="p",
+        repo_root="/tmp",
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "unrunnable"
+    assert "write-only" in res["detail"]
+    assert res["attempts"] == 0
+    assert res.get("runOpened") is False
+
+
+def test_dropped_vendor_flag_refuses():
+    argv = [
+        "dispatch-review",
+        "--vendor", "codex",
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--role", _REVIEW_ROLE,
+        "--prompt-path", "p",
+        "--repo-root", "/tmp",
+        "--run-dir", "/tmp/r",
+    ]
+    assert SB.scan_dropped_flags(argv) == ["--vendor"]
+    rc = ED.main(argv)
+    assert rc == 1
 
 
 def test_composer_null_effort_accepted():

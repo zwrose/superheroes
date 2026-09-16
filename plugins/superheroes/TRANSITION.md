@@ -21,6 +21,7 @@ On `engine_dispatch dispatch-review`, `engine_dispatch dispatch-write`, and `dis
 | `--model` | `--seat` |
 | `--effort` | `--seat` |
 | `--engine-model` | `--seat` (model and effort resolve from the bundle) |
+| `--vendor` | `--seat` (vendor lives inside the seat bundle) |
 
 **Newly required.**
 

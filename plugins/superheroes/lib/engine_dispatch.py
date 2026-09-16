@@ -44,6 +44,7 @@ import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok â€
 import seat_bundle  # noqa: E402  single dispatch seat entry (#1269 WO-A1)
 import file_lock  # noqa: E402
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
+import model_registry  # noqa: E402  role read_write classification (#1269 WO-FIX1)
 import review_findings_schema  # noqa: E402  findings example renderer (#1145 WO-C)
 import sanitized_view  # noqa: E402
 import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
@@ -185,6 +186,49 @@ def _coerce_seat_input(seat):
         "ok": False,
         "reason": "seat-invalid",
         "detail": seat_bundle.accepted_seat_detail(),
+    }
+
+
+def _unknown_kwargs_refusal(unknown_keys, *, accepted_params):
+    refusal = seat_bundle.unknown_kwargs_refusal(
+        unknown_keys, accepted_params=accepted_params,
+    )
+    return {
+        "ok": False,
+        "reason": refusal["reason"],
+        "detail": refusal["detail"],
+        "attempts": 0,
+        "forfeited": False,
+        "terminal": True,
+        "runDir": "",
+        "argv": [],
+    }
+
+
+def _role_verb_mismatch_refusal(role, *, verb):
+    rw = model_registry.role_read_write(role)
+    if verb == "dispatch-write" and rw == "read":
+        detail = (
+            f"role {role!r} is read-only (read_write=read); "
+            f"dispatch-write requires a write role"
+        )
+    elif verb == "dispatch-review" and rw == "write":
+        detail = (
+            f"role {role!r} is write-only (read_write=write); "
+            f"dispatch-review requires a read role"
+        )
+    else:
+        return None
+    return {
+        "ok": False,
+        "reason": dispatch_outcome.REASON_UNRUNNABLE,
+        "detail": detail,
+        "attempts": 0,
+        "forfeited": False,
+        "terminal": True,
+        "runDir": "",
+        "argv": [],
+        "runOpened": False,
     }
 
 
@@ -3661,6 +3705,14 @@ def dispatch_review(*args, seat=None, role=None, prompt_path=None,
             stamped["mode"] = mode or sanitized_view.MODE_REVIEW
             stamped["runOpened"] = False
             return stamped
+        unknown = seat_bundle.unknown_kwargs_detected(kwargs)
+        if unknown:
+            stamped = _unknown_kwargs_refusal(
+                unknown, accepted_params=seat_bundle.dispatch_review_accepted_params(),
+            )
+            stamped["mode"] = mode or sanitized_view.MODE_REVIEW
+            stamped["runOpened"] = False
+            return stamped
         if mode is not None:
             if not isinstance(mode, str) or mode not in sanitized_view.REVIEW_MODES:
                 return _mode_invalid_refusal(mode)
@@ -3676,6 +3728,10 @@ def dispatch_review(*args, seat=None, role=None, prompt_path=None,
         if not validated.get("ok"):
             stamped = _seat_dispatch_refusal(validated, mode=mode or sanitized_view.MODE_REVIEW)
             return stamped
+        role_refusal = _role_verb_mismatch_refusal(role, verb="dispatch-review")
+        if role_refusal is not None:
+            role_refusal["mode"] = mode or sanitized_view.MODE_REVIEW
+            return role_refusal
         result = _dispatch_review_impl(
             validated, role=role, prompt_path=prompt_path,
             repo_root=repo_root, timeout=timeout, timeout_source=timeout_source,
@@ -4141,6 +4197,13 @@ def dispatch_write(*args, seat=None, role=None, prompt_path=None, cwd,
             refusal = seat_bundle.legacy_refusal()
             refusal["runOpened"] = False
             return refusal
+        unknown = seat_bundle.unknown_kwargs_detected(kwargs)
+        if unknown:
+            refusal = _unknown_kwargs_refusal(
+                unknown, accepted_params=seat_bundle.dispatch_write_accepted_params(),
+            )
+            refusal["runOpened"] = False
+            return refusal
         parsed = _coerce_seat_input(seat)
         if not parsed.get("ok"):
             refusal = _seat_dispatch_refusal(parsed)
@@ -4151,6 +4214,9 @@ def dispatch_write(*args, seat=None, role=None, prompt_path=None, cwd,
             refusal = _seat_dispatch_refusal(validated)
             refusal["runOpened"] = False
             return refusal
+        role_refusal = _role_verb_mismatch_refusal(role, verb="dispatch-write")
+        if role_refusal is not None:
+            return role_refusal
         return _dispatch_write_impl(
             validated, role=role, prompt_path=prompt_path, cwd=cwd, order_id=order_id,
             base_sha=base_sha, timeout=timeout, timeout_source=timeout_source,
@@ -4431,6 +4497,15 @@ def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
                 ),
                 engine_model_opts={"cwd": cwd_real},
             )
+            ok_lease, lease_detail, _token, lease_path = _acquire_worktree_lease(
+                cwd_real, run_dir_real,
+            )
+            if not ok_lease:
+                return _write_preflight_terminal(
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": lease_detail,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
             ok_open, open_detail = _open_write_run(
                 run_dir_real, engine=engine, argv=argv, cwd=cwd_real,
                 timeout=timeout, retry_timeout=retry_timeout,
@@ -4444,17 +4519,11 @@ def _dispatch_write_impl(seat, *, role, prompt_path, cwd,
                 resolved_inputs=resolved_inputs,
             )
             if not ok_open:
+                holder = file_lock.read_holder(lease_path)
+                if holder.get("dispatchToken"):
+                    file_lock.release(lease_path)
                 return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": open_detail,
-                     "attempts": 0, "forfeited": False, "terminal": True},
-                    run_dir=run_dir_real, argv=argv,
-                )
-            ok_lease, lease_detail, _token, lease_path = _acquire_worktree_lease(
-                cwd_real, run_dir_real,
-            )
-            if not ok_lease:
-                return _write_preflight_terminal(
-                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": lease_detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )

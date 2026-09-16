@@ -490,6 +490,13 @@ def engine_pref_key(role: str) -> str | None:
     return meta["engine_pref_key"] if meta else None
 
 
+def role_read_write(role: str) -> str | None:
+    meta = _ROLE_META.get(role)
+    if not meta:
+        return None
+    return meta.get("read_write")
+
+
 def engine_pref_role_kind(role: str) -> str | None:
     """Codex effort / argv role_kind for a model-tier dispatch role.
 

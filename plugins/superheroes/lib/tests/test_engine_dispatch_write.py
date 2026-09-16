@@ -349,6 +349,26 @@ def test_worktree_lease_held_no_spawn(tmp_path):
         file_lock.release(lease_path)
 
 
+def test_worktree_lease_refused_twice_leaves_no_run_opened(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run-a")
+    lease_path = ED._worktree_lease_path(os.path.realpath(wt))
+    os.makedirs(os.path.dirname(lease_path), exist_ok=True)
+    import file_lock
+    file_lock.acquire(lease_path)
+    try:
+        fake = FakeRunner([])
+        for _ in range(2):
+            res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir)
+            assert res["detail"] == "worktree-lease-held"
+            assert res["attempts"] == 0
+            assert len(fake.calls) == 0
+            records, _ = ED._journal_read(run_dir)
+            assert not any(r.get("kind") == "run-opened" for r in records)
+    finally:
+        file_lock.release(lease_path)
+
+
 def test_lease_journal_append_failed_releases(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
     lease_path = ED._worktree_lease_path(os.path.realpath(wt))
