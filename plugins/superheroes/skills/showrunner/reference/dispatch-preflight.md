@@ -3,7 +3,7 @@
 The eight enumerated checks the advisor runs before launching a builder session. Read them at dispatch time.
 
 <!-- launch-doctrine:preflight-charter:begin -->
-   1. **Authentication exercise** (`quota`, always) — quota is no longer watched; the check exercises authentication and records pass.
+   1. **Account headroom** (`quota`, always) — quota is no longer watched; the check records pass on the auth exercise.
    2. **Engine and CLI authentication** (`engine-auth`, always) — relaunch practice, not policy, until this makes it policy.
    3. **Base state matches the premise** (`base-state`, always) — merged, green (stale-retarget premise; stacked-base
       collapses).

@@ -506,7 +506,7 @@ once per bash block) lets skills reference bundled helpers on both hosts. Bare
 `${CLAUDE_PLUGIN_ROOT}` is banned — use the seam form above; `validate_hosts.py` enforces
 it. The pointer line above uses
 that same seam so it resolves at the plugin **root** (where `hosts/` lives); a bare
-relative `hosts/` path would resolve against the skill's own folder, which has none. `validate_hosts.py` enforces the seam form.
+relative `hosts/` path would resolve against the skill's own folder, which has none.
 
 ### 7.2 Host-adaptation layer (thin, per-host)
 

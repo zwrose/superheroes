@@ -396,8 +396,7 @@ says so. The failure this catches is not a bug in our code: our code is exactly 
 and the contract we designed against was never real. *Teaching examples.* **#307** — the codex **review** role's
 `codex exec --output-schema` was handed a schema that is valid JSON Schema but invalid under OpenAI
 strict mode; every codex review dispatch 400'd at request time, **32/32 failures, zero successes ever**, and the
-silent fallback to **the host model** — whatever runs the current session, read from the hook payload,
-never assumed — made the loss read as a working cross-vendor panel. The same class recurred
+silent fallback to **the host model** made the loss read as a working cross-vendor panel. The same class recurred
 **2026-08-09** in the weekly-eats project: a hand-rolled schema, request-time 400s, and three
 re-dispatches of a review that had already come back clean — the repair landed as **#949**'s
 canonical result contract. In both, one local validation of the foreign contract's rules at brief
