@@ -5985,7 +5985,7 @@ def _reviewer_engine_vendor(repo_root):
     """`(vendor, source)` for single-seat reviewer phases (verifiers, gap-sweep, scoped).
 
     `source` is the marker `_vendor_is_resolved` reads: `configured` when the preference read
-    answered from real configuration, `defaulted` when it did not and the all-claude stand-in
+    answered from real configuration, `defaulted` when it did not and the stand-in on the host model
     below was used instead. Returning the bare string lost that distinction — a defaulted
     `"claude"` read as positive host evidence, and the seat was handed the write contract even
     when the orchestrator dispatched it on a real engine (a forfeit).
