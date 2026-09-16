@@ -418,6 +418,7 @@ def model_no_op_argv(engine, model, effort=None):
         effort = _probe_effort(engine, model, effort)
         seat = {"vendor": engine, "model": model, "effort": effort}
         parsed = seat_bundle.parse(json.dumps(seat))
+        # Role-agnostic model-config check — not a dispatch entry; no registry role is known here.
         validated = seat_bundle.validate_effort_only(parsed)
         if not validated.get("ok"):
             return None

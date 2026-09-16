@@ -397,10 +397,17 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+> # Per external seat — read vendor, model, effort, and tier (registry role) from the seat map
+> SEAT_VENDOR=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$SEAT_KEY\"].vendor")
+> SEAT_ENGINE_MODEL=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$SEAT_KEY\"].model")
+> SEAT_TIER=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$SEAT_KEY\"].tier")
+> SEAT_EFFORT=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$SEAT_KEY\"].effort")
+> if [ "$SEAT_EFFORT" = "null" ]; then SEAT_EFFORT_JSON=null; else SEAT_EFFORT_JSON="\"$SEAT_EFFORT\""; fi
+> SEAT_JSON='{"vendor":"'"$SEAT_VENDOR"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":'"$SEAT_EFFORT_JSON"',"role":"'"$SEAT_TIER"'"}'
 > # Keep $SEAT_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
 > # LAUNCH — first call on each --run-dir: short positive slice (see dispatch-mechanics.md)
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
->   --seat '{"vendor":"'"$REVIEWER_ENGINE"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":"'"$SEAT_EFFORT"'"}' --role "$SEAT_TIER" \
+>   --seat "$SEAT_JSON" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
 >   --expected-result-kind findings \
@@ -408,7 +415,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
->   --seat '{"vendor":"'"$REVIEWER_ENGINE"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":"'"$SEAT_EFFORT"'"}' --role "$SEAT_TIER" \
+>   --seat "$SEAT_JSON" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
 >   --expected-result-kind findings \
@@ -461,14 +468,17 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 > CANARY_RESULTS=()
-> for VENDOR in "${CROSS_VENDOR_VENDORS[@]}"; do
->   SEAT_ENGINE_MODEL="${SEAT_MODEL_BY_VENDOR[${VENDOR}]}"
->   SEAT_EFFORT="${SEAT_EFFORT_BY_VENDOR[${VENDOR}]}"
+> for CANARY_SEAT_KEY in "${CANARY_SEAT_KEYS[@]}"; do
+>   CANARY_VENDOR=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$CANARY_SEAT_KEY\"].vendor")
+>   CANARY_ENGINE_MODEL=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$CANARY_SEAT_KEY\"].model")
+>   CANARY_TIER=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$CANARY_SEAT_KEY\"].tier")
+>   CANARY_EFFORT=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$CANARY_SEAT_KEY\"].effort")
 >   EFFORT_ARGS=()
->   if [ -n "${SEAT_EFFORT}" ]; then EFFORT_ARGS=(--effort "${SEAT_EFFORT}"); fi
+>   if [ "$CANARY_EFFORT" != "null" ]; then EFFORT_ARGS=(--effort "${CANARY_EFFORT}"); fi
 >   CANARY_RESULTS+=("$(
 >     python3 -B "${ROOT_DIR}/lib/seat_canary.py" probe \
->       --engine "${VENDOR}" --engine-model "${SEAT_ENGINE_MODEL}" "${EFFORT_ARGS[@]}" \
+>       --seat-key "${CANARY_SEAT_KEY}" --tier "${CANARY_TIER}" \
+>       --engine "${CANARY_VENDOR}" --engine-model "${CANARY_ENGINE_MODEL}" "${EFFORT_ARGS[@]}" \
 >       --repo-root "${REPO_ROOT}"
 >   )")
 > done

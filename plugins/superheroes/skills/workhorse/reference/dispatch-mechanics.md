@@ -318,16 +318,29 @@ the runner itself is unavailable** (disclosed degradation in the PR body, never 
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+# Resolve brief-check cell from dispatch calibration + registry matrix (model/effort)
+read -r BRIEF_ENGINE BRIEF_ENGINE_MODEL BRIEF_EFFORT <<<"$(python3 -B -c "
+import sys
+sys.path.insert(0, sys.argv[1] + '/lib')
+import model_registry as mr
+import preflight_probe as pp
+row = next(r for r in pp.dispatch_calibration() if r.get('role') == 'brief-check')
+cell = mr.matrix_config('brief-check', row['engine'])
+model, effort = cell
+effort_s = '' if effort is None else effort
+print(row['engine'], model, effort_s)
+" "$ROOT_DIR")"
+if [ -z "${BRIEF_EFFORT}" ]; then BRIEF_EFFORT_JSON=null; else BRIEF_EFFORT_JSON="\"$BRIEF_EFFORT\""; fi
+BRIEF_SEAT='{"vendor":"'"$BRIEF_ENGINE"'","model":"'"$BRIEF_ENGINE_MODEL"'","effort":'"$BRIEF_EFFORT_JSON"',"role":"brief-check"}'
 # $BRIEF_PATH is reviewer instructions + the brief — it is fed verbatim as the whole prompt, so
 # the standing lens below must be inside it (see "The standing lens", after this recipe)
 # Keep $BRIEF_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
-# Gate first — thread model_id / effort from the JSON
-python3 -B "$ROOT_DIR/lib/dispatch_guard.py" check \
-  --role brief-check --seat '{"vendor":"'"$BRIEF_ENGINE"'","model":"'"$BRIEF_MODEL"'","effort":null}'
+# Gate first — four-key seat carries role inside --seat
+python3 -B "$ROOT_DIR/lib/dispatch_guard.py" check --seat "$BRIEF_SEAT"
 # LAUNCH — fresh --run-dir outside the repo; no --diff-base
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
   --mode brief-check \
-  --seat '{"vendor":"'"$BRIEF_ENGINE"'","model":"'"$BRIEF_ENGINE_MODEL"'","effort":"'"$BRIEF_EFFORT"'"}' --role brief-check \
+  --seat "$BRIEF_SEAT" \
   --prompt-path "$BRIEF_PATH" --repo-root "$REPO_ROOT" \
   --order-id "$ORDER_ID" \
   --run-dir "$RUN_DIR" --max-wait 12 \
@@ -335,7 +348,7 @@ python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 # CONTINUATION — re-invoke while .terminal is false
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
   --mode brief-check \
-  --seat '{"vendor":"'"$BRIEF_ENGINE"'","model":"'"$BRIEF_ENGINE_MODEL"'","effort":"'"$BRIEF_EFFORT"'"}' --role brief-check \
+  --seat "$BRIEF_SEAT" \
   --prompt-path "$BRIEF_PATH" --repo-root "$REPO_ROOT" \
   --order-id "$ORDER_ID" \
   --run-dir "$RUN_DIR" --max-wait 540 \
@@ -397,16 +410,30 @@ the full CLI argument surface, read `skills/workhorse/reference/dispatch-entry.m
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+# Resolve implementer cell from dispatch calibration + registry matrix (model/effort)
+read -r IMPL_ENGINE IMPL_ENGINE_MODEL IMPL_EFFORT <<<"$(python3 -B -c "
+import sys
+sys.path.insert(0, sys.argv[1] + '/lib')
+import model_registry as mr
+import preflight_probe as pp
+row = next(r for r in pp.dispatch_calibration() if r.get('role') == 'implementer')
+cell = mr.matrix_config('implementer', row['engine'])
+model, effort = cell
+effort_s = '' if effort is None else effort
+print(row['engine'], model, effort_s)
+" "$ROOT_DIR")"
+if [ -z "${IMPL_EFFORT}" ]; then IMPL_EFFORT_JSON=null; else IMPL_EFFORT_JSON="\"$IMPL_EFFORT\""; fi
+IMPL_SEAT='{"vendor":"'"$IMPL_ENGINE"'","model":"'"$IMPL_ENGINE_MODEL"'","effort":'"$IMPL_EFFORT_JSON"',"role":"implementer"}'
 # LAUNCH — first call on a fresh --run-dir; on dispatch-write --max-wait is also the git-preflight
 # timeout, so size this slice to the repository's preflight cost, not just rotation headroom
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
-  --seat '{"vendor":"'"$IMPL_ENGINE"'","model":"'"$IMPL_ENGINE_MODEL"'","effort":null}' --role implementer \
+  --seat "$IMPL_SEAT" \
   --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
   --expect-item "<path-from-order>" \
   --run-dir "$RUN_DIR" --max-wait 45
 # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
-  --seat '{"vendor":"'"$IMPL_ENGINE"'","model":"'"$IMPL_ENGINE_MODEL"'","effort":null}' --role implementer \
+  --seat "$IMPL_SEAT" \
   --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
   --expect-item "<path-from-order>" \
   --run-dir "$RUN_DIR" --max-wait 540
@@ -423,8 +450,9 @@ may be another session's settings.
 Repeat `--expect-item` for every file the order must deliver (or use `--expect-items-file` instead).
 See `skills/workhorse/reference/dispatch-entry.md` for every flag on `dispatch-write`.
 
-`$IMPL_ENGINE` and `$IMPL_ENGINE_MODEL` come from the project's dispatch calibration for the
-**implementer** role. Re-invoke the **originating verb** (`dispatch-write`, never `dispatch-poll`)
+`$IMPL_ENGINE`, `$IMPL_ENGINE_MODEL`, and `$IMPL_EFFORT` come from the project's dispatch
+calibration for the **implementer** role and the registry matrix cell for that engine — never
+hardcode effort to one vendor's shape. Re-invoke the **originating verb** (`dispatch-write`, never `dispatch-poll`)
 with the same `--run-dir` and `--max-wait 540` while `.terminal` is false. A non-terminal
 `{"reason": "running", "terminal": false}` is **not** a forfeit. `dispatch-poll` is observational
 and never spawns; `dispatch-abandon` abandons a run directory. Omitting `--max-wait` loops until

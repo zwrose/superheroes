@@ -564,7 +564,7 @@ gives you this per role.
 four dispatch kinds this charter sanctions — an **implementer order**, a **fix-batch order**, a
 **`check-runner` dispatch**, and a **hand-rolled fallback dispatch** — you **run the model gate** on
 the effective `--model` you will pass (explicit or defaulted) *before dispatching*:
-`python3 -B ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/dispatch_guard.py check --role <role> --seat '<json-or-vendor:token>'`.
+`python3 -B ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/dispatch_guard.py check --seat '{"vendor":"<vendor>","model":"<id>","effort":<str-or-null>,"role":"<role>"}'`.
 For the full dispatch CLI argument surface, read `skills/workhorse/reference/dispatch-entry.md`.
 It validates that
 model against the seat's **registry allowlist** (`lib/model_registry.py`, the single
