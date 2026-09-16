@@ -1026,9 +1026,9 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** capability-gap — a person could create two labels by hand; the helper exists so the
   routing vocabulary is present before the first issue is routed.
 
-#### S7 — Retired door-and-routing vocabulary census
+#### S7 — Retired tier-vocabulary census
 
-- **Component.** the retired-tier-vocabulary census
+- **Component.** The retired-tier-vocabulary census
   `_assert_retired_tier_literals_absent` in `plugins/superheroes/lib/tests/test_disposition_flow.py`,
   which reads a **closed in-module enumeration of three shipped surfaces** —
   `skills/showrunner/reference/issue-contract.md`, `skills/showrunner/SKILL.md`, and
@@ -1046,7 +1046,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
   exactly the drift it was minted to catch; the extended set is what closes that.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** `structural` — a doc-to-doc vocabulary census over a closed file enumeration;
+- **Notes.** structural — a doc-to-doc vocabulary census over a closed file enumeration;
   the enumeration is the part a person keeps current, and it grows only when a surface's text
   migrates to the new vocabulary.
 
