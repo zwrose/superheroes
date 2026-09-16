@@ -30,7 +30,14 @@ _REGISTRY_MARKER = "<!-- superheroes:revisit-registry -->"
 
 _RETIRED_LITERAL = "Follow-up economics"
 
-_RETIRED_DOOR_LITERALS = ("worth-it gate",)
+_RETIRED_DOOR_LITERALS = (
+    "worth-it gate",
+    "gate verdict",
+    "Tier 1",
+    "Tier 2",
+    "Tier-1",
+    "Tier-2",
+)
 
 _OWNER_REJECTED_LITERALS = ("knob-polish",)
 
