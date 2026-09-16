@@ -165,19 +165,15 @@ def _coerce_rejected_mode(mode):
 def _mode_invalid_refusal(rejected_mode):
     return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
             "detail": MODE_REFUSAL_INVALID,
-            "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
             "mode": sanitized_view.MODE_REVIEW,
-            "rejectedMode": _coerce_rejected_mode(rejected_mode),
-            "runOpened": False}
+            "rejectedMode": _coerce_rejected_mode(rejected_mode)}
 
 
 def _expected_result_kind_invalid_refusal(rejected_kind, effective_mode):
     return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
             "detail": RESULT_KIND_REFUSAL_INVALID,
-            "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
             "mode": effective_mode,
-            "rejectedResultKind": _coerce_rejected_mode(rejected_kind),
-            "runOpened": False}
+            "rejectedResultKind": _coerce_rejected_mode(rejected_kind)}
 
 
 def _coerce_seat_input(seat):
@@ -194,11 +190,6 @@ def _unknown_kwargs_refusal(unknown_keys, *, accepted_params):
         "ok": False,
         "reason": refusal["reason"],
         "detail": refusal["detail"],
-        "attempts": 0,
-        "forfeited": False,
-        "terminal": True,
-        "runDir": "",
-        "argv": [],
     }
 
 
@@ -220,12 +211,6 @@ def _role_verb_mismatch_refusal(role, *, verb):
         "ok": False,
         "reason": dispatch_outcome.REASON_UNRUNNABLE,
         "detail": detail,
-        "attempts": 0,
-        "forfeited": False,
-        "terminal": True,
-        "runDir": "",
-        "argv": [],
-        "runOpened": False,
     }
 
 
@@ -239,12 +224,6 @@ def _terminal_pre_open_refusal(refusal: dict, *, mode=None) -> dict:
         "ok": False,
         "reason": refusal["reason"],
         "detail": refusal["detail"],
-        "attempts": 0,
-        "forfeited": False,
-        "terminal": True,
-        "runDir": "",
-        "argv": [],
-        "runOpened": False,
     }
     if mode is not None:
         base["mode"] = mode
@@ -257,15 +236,42 @@ def _seat_dispatch_refusal(seat_result, *, mode=None):
         "reason": dispatch_outcome.REASON_UNRUNNABLE,
         "detail": seat_result.get("detail") or seat_result.get("reason", "seat-invalid"),
         "seatDetail": seat_result.get("detail"),
-        "attempts": 0,
-        "forfeited": False,
-        "terminal": True,
-        "runDir": "",
-        "argv": [],
     }
     if mode is not None:
         base["mode"] = mode
     return base
+
+
+def _entry_refusal_terminal(
+    refusal,
+    *,
+    run_dir=None,
+    mode=None,
+    argv=None,
+    repo_root=None,
+    engine=None,
+    run_kind=RUN_KIND_REVIEW,
+):
+    """Single chokepoint for dispatch_review/dispatch_write entry refusals (#1269)."""
+    result = dict(refusal)
+    result.setdefault("attempts", 0)
+    result.setdefault("forfeited", False)
+    result.setdefault("terminal", True)
+    if mode is not None and "mode" not in result:
+        result["mode"] = mode
+    run_dir_value = run_dir or ""
+    argv_value = list(argv or [])
+    if repo_root is not None:
+        out = _finish_preflight_terminal(
+            repo_root, result,
+            run_dir=run_dir_value, argv=argv_value,
+            engine=engine, run_kind=run_kind,
+        )
+    else:
+        out = _with_run_fields(result, run_dir=run_dir_value, argv=argv_value)
+    if not out.get("runOpened"):
+        out["runDir"] = ""
+    return out
 
 
 def _malformed_allowlist_verdict_reason(role, vendor):
@@ -353,11 +359,9 @@ def _entry_allowlist_refusal(
         "forfeited": False,
         "terminal": True,
     }
-    if mode is not None:
-        result["mode"] = mode
-    return _finish_preflight_terminal(
-        repo_root, result, run_dir=run_dir, argv=argv or [], engine=engine,
-        run_kind=run_kind,
+    return _entry_refusal_terminal(
+        result, run_dir=run_dir, mode=mode, argv=argv,
+        repo_root=repo_root, engine=engine, run_kind=run_kind,
     )
 
 
@@ -3827,25 +3831,36 @@ def dispatch_review(*args, seat=None, prompt_path=None,
         run_dir = None
     try:
         if seat_bundle.legacy_call_detected(args, kwargs):
-            stamped = _legacy_dispatch_refusal(mode=mode or sanitized_view.MODE_REVIEW)
-            stamped["mode"] = mode or sanitized_view.MODE_REVIEW
-            stamped["runOpened"] = False
-            return stamped
+            return _entry_refusal_terminal(
+                _legacy_dispatch_refusal(mode=mode or sanitized_view.MODE_REVIEW),
+                run_dir=run_dir,
+                mode=mode or sanitized_view.MODE_REVIEW,
+            )
         unknown = seat_bundle.unknown_kwargs_detected(kwargs)
         if unknown:
-            stamped = _unknown_kwargs_refusal(
-                unknown, accepted_params=seat_bundle.dispatch_review_accepted_params(),
+            return _entry_refusal_terminal(
+                _unknown_kwargs_refusal(
+                    unknown, accepted_params=seat_bundle.dispatch_review_accepted_params(),
+                ),
+                run_dir=run_dir,
+                mode=mode or sanitized_view.MODE_REVIEW,
             )
-            stamped["mode"] = mode or sanitized_view.MODE_REVIEW
-            stamped["runOpened"] = False
-            return stamped
         if mode is not None:
             if not isinstance(mode, str) or mode not in sanitized_view.REVIEW_MODES:
-                return _mode_invalid_refusal(mode)
+                return _entry_refusal_terminal(
+                    _mode_invalid_refusal(mode),
+                    run_dir=run_dir,
+                    mode=mode or sanitized_view.MODE_REVIEW,
+                )
         if expected_result_kind is not None:
             if not isinstance(expected_result_kind, str) or expected_result_kind not in REVIEW_RESULT_KINDS:
-                return _expected_result_kind_invalid_refusal(
-                    expected_result_kind, mode or sanitized_view.MODE_REVIEW)
+                return _entry_refusal_terminal(
+                    _expected_result_kind_invalid_refusal(
+                        expected_result_kind, mode or sanitized_view.MODE_REVIEW,
+                    ),
+                    run_dir=run_dir,
+                    mode=mode or sanitized_view.MODE_REVIEW,
+                )
         entry = seat_bundle.resolve_entry(
             seat, verb="dispatch-review", mode=mode,
         )
@@ -3862,11 +3877,13 @@ def dispatch_review(*args, seat=None, prompt_path=None,
                 )
                 if entry_refusal is not None:
                     return entry_refusal
-            stamped = _seat_dispatch_refusal(
-                entry, mode=mode or sanitized_view.MODE_REVIEW,
+            return _entry_refusal_terminal(
+                _seat_dispatch_refusal(
+                    entry, mode=mode or sanitized_view.MODE_REVIEW,
+                ),
+                run_dir=run_dir,
+                mode=mode or sanitized_view.MODE_REVIEW,
             )
-            stamped["runOpened"] = False
-            return stamped
         result = _dispatch_review_impl(
             entry, prompt_path=prompt_path,
             repo_root=repo_root, timeout=timeout, timeout_source=timeout_source,
@@ -3881,11 +3898,12 @@ def dispatch_review(*args, seat=None, prompt_path=None,
         stamped["mode"] = resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW)
         return stamped
     except Exception as exc:
-        return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                "detail": "internal-%s" % type(exc).__name__,
-                "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
-                "mode": resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW),
-                "runOpened": False}
+        return _entry_refusal_terminal(
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+             "detail": "internal-%s" % type(exc).__name__},
+            run_dir=run_dir,
+            mode=resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW),
+        )
 
 
 def _dispatch_review_impl(seat, *, prompt_path,
@@ -4318,16 +4336,18 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
         run_dir = None
     try:
         if seat_bundle.legacy_call_detected(args, kwargs):
-            stamped = _legacy_dispatch_refusal()
-            stamped["runOpened"] = False
-            return stamped
+            return _entry_refusal_terminal(
+                _legacy_dispatch_refusal(),
+                run_dir=run_dir,
+            )
         unknown = seat_bundle.unknown_kwargs_detected(kwargs)
         if unknown:
-            refusal = _unknown_kwargs_refusal(
-                unknown, accepted_params=seat_bundle.dispatch_write_accepted_params(),
+            return _entry_refusal_terminal(
+                _unknown_kwargs_refusal(
+                    unknown, accepted_params=seat_bundle.dispatch_write_accepted_params(),
+                ),
+                run_dir=run_dir,
             )
-            refusal["runOpened"] = False
-            return refusal
         resolved = seat_bundle.resolve_entry(seat, verb="dispatch-write")
         if not resolved.get("ok"):
             allowlist_verdict = resolved.get("allowlistVerdict")
@@ -4342,9 +4362,10 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                 )
                 if entry_refusal is not None:
                     return entry_refusal
-            refusal = _seat_dispatch_refusal(resolved)
-            refusal["runOpened"] = False
-            return refusal
+            return _entry_refusal_terminal(
+                _seat_dispatch_refusal(resolved),
+                run_dir=run_dir,
+            )
         return _dispatch_write_impl(
             resolved, prompt_path=prompt_path, cwd=cwd, order_id=order_id,
             base_sha=base_sha, timeout=timeout, timeout_source=timeout_source,
@@ -4355,9 +4376,11 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
             expected_items_file=expected_items_file,
         )
     except Exception as exc:
-        return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "internal-%s" % type(exc).__name__,
-                "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
-                "runOpened": False}
+        return _entry_refusal_terminal(
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+             "detail": "internal-%s" % type(exc).__name__},
+            run_dir=run_dir,
+        )
 
 
 def _dispatch_write_impl(seat, *, prompt_path, cwd,
@@ -4954,8 +4977,19 @@ def build_parser():
 def main(argv):
     dropped = seat_bundle.scan_dropped_flags(argv)
     if dropped:
-        refusal = _terminal_pre_open_refusal(
-            seat_bundle.legacy_refusal(dropped_flags=tuple(dropped)),
+        run_dir = None
+        for i, arg in enumerate(argv):
+            if arg == "--run-dir" and i + 1 < len(argv):
+                run_dir = argv[i + 1]
+                break
+            if arg.startswith("--run-dir="):
+                run_dir = arg.split("=", 1)[1]
+                break
+        refusal = _entry_refusal_terminal(
+            _terminal_pre_open_refusal(
+                seat_bundle.legacy_refusal(dropped_flags=tuple(dropped)),
+            ),
+            run_dir=run_dir,
         )
         sys.stdout.write(json.dumps(refusal) + "\n")
         return 1

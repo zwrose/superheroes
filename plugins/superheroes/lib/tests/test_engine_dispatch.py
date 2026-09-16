@@ -9078,3 +9078,306 @@ def test_wo8_edge5_corrupt_journal_with_opened_carries_snapshot_and_status(tmp_p
     assert echo["resolvedInputsStatus"] == "journal-corrupt"
     assert echo["resolvedInputs"] == snapshot_before
 
+
+# --- #1269 WO-INV: entry-refusal run provenance by invariant ------------------
+
+_ENTRY_REFUSAL_PROVENANCE_HELPERS = frozenset({
+    "_entry_refusal_terminal",
+    "_with_run_fields",
+    "_attach_resolved_inputs_echo",
+    "_finish_preflight_terminal",
+    "_resolved_inputs_echo_from_run_dir",
+    "_entry_allowlist_refusal",
+})
+
+
+def _engine_dispatch_module_functions():
+    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    with open(mod_path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=mod_path)
+    return {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+
+
+def _module_func_calls(func_node, module_funcs):
+    called = set()
+    for child in ast.walk(func_node):
+        if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+            if child.func.id in module_funcs:
+                called.add(child.func.id)
+    return called
+
+
+def _entry_refusal_call_graph(module_funcs):
+    graph = {"dispatch_review", "dispatch_write"}
+    changed = True
+    while changed:
+        changed = False
+        for name in list(graph):
+            if name not in module_funcs:
+                continue
+            for called in _module_func_calls(module_funcs[name], module_funcs):
+                if called not in graph:
+                    graph.add(called)
+                    changed = True
+    return graph - _ENTRY_REFUSAL_PROVENANCE_HELPERS
+
+
+def _subscript_key_is_run_opened(target):
+    if not isinstance(target, ast.Subscript):
+        return False
+    sl = target.slice
+    if isinstance(sl, ast.Constant):
+        return sl.value == "runOpened"
+    return False
+
+
+def test_entry_refusal_chokepoint_invariant_no_inline_run_dir_or_run_opened_stamp():
+    """Assert I1 by construction: dispatch_review/dispatch_write entry-refusal paths and
+    their helper call graph must not return dict literals carrying runDir or assign runOpened.
+    A hand-maintained site list would miss new paths; this AST walk fails when anyone adds one."""
+    module_funcs = _engine_dispatch_module_functions()
+    graph = _entry_refusal_call_graph(module_funcs)
+    run_dir_violations = []
+    run_opened_violations = []
+    for name in sorted(graph):
+        func_node = module_funcs.get(name)
+        if func_node is None:
+            continue
+        for node in ast.walk(func_node):
+            if isinstance(node, ast.Return) and node.value is not None:
+                if _dict_literal_has_run_dir_key(node.value):
+                    run_dir_violations.append((name, node.lineno))
+            if _assigns_run_opened_in_entry_refusal(node):
+                run_opened_violations.append((name, node.lineno))
+    assert run_dir_violations == []
+    assert run_opened_violations == []
+
+
+def _dict_literal_has_run_dir_key(node):
+    if isinstance(node, ast.Dict):
+        for key in node.keys:
+            if isinstance(key, ast.Constant) and key.value == "runDir":
+                return True
+    if isinstance(node, ast.Call):
+        return any(_dict_literal_has_run_dir_key(arg) for arg in node.args)
+    return False
+
+
+def _assigns_run_opened_in_entry_refusal(node):
+    if isinstance(node, ast.Assign):
+        return any(_subscript_key_is_run_opened(t) for t in node.targets)
+    return False
+
+
+def test_entry_unknown_kwargs_refusal_preserves_existing_review_run_provenance(tmp_path):
+    # axis: I1 — non-allowlist entry refusal on continuation echoes journal provenance
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "kw-review")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        prompt_pat="typo",
+    )
+    assert res["reason"] == "unknown-dispatch-kwargs"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_entry_unknown_kwargs_refusal_preserves_existing_write_run_provenance(tmp_path):
+    # axis: I1 — dispatch_write entry refusal on continuation echoes journal provenance
+    wt = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "kw-write")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=_valid_prompt(tmp_path),
+        cwd=wt,
+        run_dir=run_dir,
+        order_id="kw-write-open",
+        run_engine=fake,
+        max_wait=0,
+    )
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=_valid_prompt(tmp_path),
+        cwd=wt,
+        run_dir=run_dir,
+        prompt_pat="typo",
+        run_engine=FakeRunner([]),
+    )
+    assert res["reason"] == "unknown-dispatch-kwargs"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_continuation_brief_check_mode_on_review_run_refuses_with_provenance(tmp_path):
+    # axis: I2 — mode/role sentinel honoured; run-dir-mode-mismatch carries provenance
+    run_dir = str(tmp_path / "i2-run")
+    repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="review")
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        mode="brief-check",
+        max_wait=0,
+    )
+    assert res["detail"] == ED.MODE_REFUSAL_RUN_DIR_MISMATCH
+    assert res.get("detail") != "mode-role-mismatch"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert "resolvedInputs" in res
+
+
+def test_entry_refusal_fail_closed_no_run_dir_supplied(tmp_path):
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        prompt_pat="typo",
+    )
+    assert res.get("runOpened") is False
+    assert res["runDir"] == ""
+
+
+def test_entry_refusal_fail_closed_run_dir_unopened(tmp_path):
+    run_dir = str(tmp_path / "unopened")
+    os.makedirs(run_dir, exist_ok=True)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        prompt_pat="typo",
+    )
+    assert res.get("runOpened") is False
+
+
+def test_entry_refusal_fail_closed_corrupt_journal(tmp_path):
+    run_dir = str(tmp_path / "corrupt-no-open")
+    os.makedirs(run_dir, exist_ok=True)
+    path = ED._journal_path(run_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not-json\n")
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        prompt_pat="typo",
+    )
+    assert res.get("runOpened") is False
+    assert res.get("resolvedInputsStatus") == "unverifiable"
+
+
+def test_entry_refusal_fail_closed_run_dir_missing(tmp_path):
+    run_dir = str(tmp_path / "does-not-exist")
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        prompt_pat="typo",
+    )
+    assert res.get("runOpened") is False
+
+
+def test_dispatch_review_engine_config_refusal_preserves_caller_run_dir(tmp_path, monkeypatch):
+    # axis: wo-INV2 — pre-open engine-config refusal echoes caller run_dir with runOpened false
+    run_dir = str(tmp_path / "engine-config-run")
+    os.makedirs(run_dir, exist_ok=True)
+    monkeypatch.setattr(
+        ED.engine_adapter,
+        "build_argv_result",
+        lambda *a, **k: {"argv": [], "reason": "unregistered-engine-model"},
+    )
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+    )
+    assert "engine-config:" in res["detail"]
+    assert res.get("runOpened") is False
+    assert res["runDir"] == os.path.realpath(run_dir)
+
+
+def test_dispatch_review_open_failure_preserves_caller_run_dir(tmp_path, monkeypatch):
+    # axis: wo-INV2 — not-ok_open branch echoes caller run_dir
+    run_dir = str(tmp_path / "open-fail-run")
+    os.makedirs(run_dir, exist_ok=True)
+    monkeypatch.setattr(ED, "_open_review_run", lambda *a, **k: (False, "journal-append-failed"))
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+    )
+    assert res.get("runOpened") is False
+    assert res["runDir"] == os.path.realpath(run_dir)
+
+
+def test_terminal_record_not_durable_preserves_run_dir(tmp_path):
+    # axis: wo-INV2 — non-entry terminal-record-not-durable echoes run_dir for re-invocation
+    run_dir = str(tmp_path / "not-durable-run")
+    os.makedirs(run_dir, exist_ok=True)
+    state = {"opened": {"argv": []}}
+    result = {"ok": True, "terminal": True, "attempts": 1}
+    res = ED._terminal_record_not_durable(run_dir, state, result)
+    assert res.get("runOpened") is False
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["detail"] == "terminal-record-not-durable"
+    assert res["terminal"] is False
+
+
+def test_main_dropped_flag_attached_run_dir_carries_provenance(capsys, tmp_path):
+    # axis: wo-INV2 — main() argv scan accepts --run-dir=<path> for dropped-flag refusal
+    run_dir = str(tmp_path / "attached-run")
+    _manual_open_review_run(tmp_path, run_dir)
+    argv = [
+        "dispatch-review",
+        "--role", _REVIEW_ROLE,
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--prompt-path", "p",
+        "--repo-root", "/tmp",
+        "--run-dir=" + run_dir,
+    ]
+    assert ED.main(argv) == 1
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res["reason"] == "legacy-seat-args"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+

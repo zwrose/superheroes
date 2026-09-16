@@ -1021,10 +1021,6 @@ def resolve_entry(
     if not parsed.get("ok"):
         return parsed
     role = parsed["role"]
-    if verb == "dispatch-review" and mode == _MODE_BRIEF_CHECK and role != "brief-check":
-        return _mode_role_coherence_refusal(role)
-    elif mode == _MODE_BRIEF_CHECK and role != "brief-check":
-        return _mode_role_coherence_refusal(role)
     if verb in ("dispatch-review", "dispatch-write"):
         verb_refusal = _verb_role_coherence_refusal(role, verb=verb)
         if verb_refusal is not None:
@@ -1040,6 +1036,12 @@ def resolve_entry(
     if verb in ("dispatch-review", "dispatch-write"):
         if vendor not in _dispatch_adapter_vendors():
             return _undispatchable_vendor_refusal(vendor, verb=verb)
+    if verb == "dispatch-review":
+        mode_refusal = _dispatch_review_mode_role_refusal(
+            role, mode=mode, mode_for_role_check=mode_for_role_check,
+        )
+        if mode_refusal is not None:
+            return mode_refusal
     try:
         verdict = dispatch_allowlist.validate(role, vendor, model, effort)
     except Exception:
@@ -1052,12 +1054,6 @@ def resolve_entry(
     )
     if not normalized.get("ok"):
         return normalized
-    if verb == "dispatch-review":
-        mode_refusal = _dispatch_review_mode_role_refusal(
-            role, mode=mode, mode_for_role_check=mode_for_role_check,
-        )
-        if mode_refusal is not None:
-            return mode_refusal
     effort_source = checked.get("effortSource", "caller")
     allowlist_verdict = dict(normalized["allowlistVerdict"])
     allowlist_verdict["effort_source"] = effort_source
