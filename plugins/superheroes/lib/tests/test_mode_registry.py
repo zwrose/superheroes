@@ -692,6 +692,19 @@ def test_calibration_state_registry_path_error_is_indeterminate(monkeypatch, tmp
     assert mr.calibration_state(str(tmp_path)) == "indeterminate"
 
 
+def test_calibration_state_registry_lstat_error_is_indeterminate(monkeypatch, tmp_path):
+    # os.lstat raises (non-FileNotFoundError) on the registry path → indeterminate, not uncalibrated.
+    monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
+    reg = str(tmp_path / "registry.json")
+    monkeypatch.setattr(mr, "registry_path", lambda cwd, root=None: reg)
+
+    def _lstat_raises(path):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(os, "lstat", _lstat_raises)
+    assert mr.calibration_state(str(tmp_path)) == "indeterminate"
+
+
 def test_calibration_state_evidence_error_is_indeterminate(monkeypatch, tmp_path):
     monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
     monkeypatch.setattr(mr, "registry_path",

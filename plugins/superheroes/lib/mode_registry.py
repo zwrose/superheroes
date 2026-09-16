@@ -319,9 +319,8 @@ def calibration_state(cwd):
     ABSENT calibration (a plain non-superheroes project) apart from a corrupt/errored one, so it
     can fail closed (→ ask) on the latter without silencing the floor on the former.
 
-    NEVER calls mode_registry.resolve() — that can backfill-WRITE the registry, and a probe must
-    not mutate project state. The mode_registry import is lazy (inside this function) so a
-    probe-time import error is caught and reported as 'indeterminate'."""
+    NEVER calls resolve() — that can backfill-WRITE the registry, and a probe must not mutate
+    project state."""
     # A returned dict → calibrated. A RAISE (e.g. UnknownSchemaVersion on a newer schema) or any
     # other exception → indeterminate (fail-closed).
     try:
