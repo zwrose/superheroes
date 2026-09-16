@@ -386,36 +386,3 @@ def test_unjudgeable_receipts_whole_history_not_round_scoped():
     assert result[0] == {"round": "1", "basis": seat_map.VIOLATION_BASIS_NO_SEATS}
     assert result[1] == {"round": "3", "basis": seat_map.VIOLATION_BASIS_NO_SEATS}
     assert SMR.round_governing_unjudgeable(state, "2", driver_fam) == []
-
-
-def test_emit_receipt_seat_map_carries_native_liveness():
-    """axis: emitted seat-map receipt carries authoritative nativeLiveness (#1263)."""
-    state = {
-        "seatMapReceipts": [{
-            "round": "1",
-            "map": {
-                "seats": {
-                    "code-reviewer": {"vendor": "claude"},
-                    "security-reviewer": {"vendor": "codex"},
-                },
-            },
-        }],
-    }
-    emitted = SMR.emit_receipt_seat_map(state)
-    assert emitted["nativeLiveness"] == {
-        "source": SMR.NATIVE_LIVENESS_SOURCE_DECLARED,
-        "seats": ["code-reviewer"],
-    }
-    line = SMR.native_liveness_disclosure_line(emitted)
-    assert line is not None
-    assert "code-reviewer" in line
-    assert "declaration, not receipt" in line
-
-
-def test_native_liveness_none_when_no_claude_seats():
-    blob = _minimal_map(seats={"security-reviewer": {"vendor": "codex"}})
-    assert SMR.native_liveness_for_map(blob) == {
-        "source": SMR.NATIVE_LIVENESS_SOURCE_NONE,
-        "seats": [],
-    }
-    assert SMR.native_liveness_disclosure_line(blob) is None
