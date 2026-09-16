@@ -480,7 +480,11 @@ truncated to **16 hex** (`short_hash`).
 
 ## 7. Multi-host harness contract
 
-The superheroes plugin runs on both Claude Code and Codex. The harness has **two layers**:
+Claude Code is the supported host; Codex loads the skills and runs the discipline layer with
+no host guarantees. Doctrine and skills stay host-neutral — the **mechanical floors are
+host-specific**, and a host that cannot carry one gets a disclosed absence, never a parity
+sentence. **"The host model"** means whatever runs the current session, read from the hook payload
+and never assumed. The harness has **two layers**:
 
 ### 7.1 Shared layer (host-neutral)
 
@@ -500,9 +504,10 @@ Each `SKILL.md` carries a host-map pointer line:
 
 The portable root seam `ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` (assigned
 once per bash block) lets skills reference bundled helpers on both hosts. Bare
-`${CLAUDE_PLUGIN_ROOT}` is banned — it fails on Codex. The pointer line above uses
+`${CLAUDE_PLUGIN_ROOT}` is banned — use the seam form above; `validate_hosts.py` enforces
+it. The pointer line above uses
 that same seam so it resolves at the plugin **root** (where `hosts/` lives); a bare
-relative `hosts/` path would resolve against the skill's own folder, which has none. `validate_hosts.py` enforces the seam form.
+relative `hosts/` path would resolve against the skill's own folder, which has none.
 
 ### 7.2 Host-adaptation layer (thin, per-host)
 
@@ -551,11 +556,9 @@ best-effort bootstrap block assembled by `lib/session_context.py`:
   lands on the real `hosts/<host>-tools.md` even when no variable expands;
 - the project `CLAUDE.md` chain, the user `~/.claude/CLAUDE.md`, an env block (date + git
   email), and the auto-memory `MEMORY.md` head (keyed to the **main** repo, shared across
-  worktrees) — parity with a native start.
+  worktrees).
 - the distilled **covenant** (`rubric/covenant.md`) — ONLY when the project is
-  superheroes-calibrated (and, like this whole bootstrap, only on Claude Code — Codex wires
-  no `SessionStart` hook, so on that host the `configure`-written in-repo CLAUDE.md copy is
-  the only carrier) (a storage-mode registry entry or hero calibration evidence; the probe
+  superheroes-calibrated (a storage-mode registry entry or hero calibration evidence; the probe
   is strictly read-only — never `mode_registry.resolve()`, which can backfill-write). The
   covenant is the imperative distillation of PHILOSOPHY.md (the six promises as standing
   orders + the hard lines + the session-charter pointer); it **subsumes** the older
@@ -568,8 +571,11 @@ best-effort bootstrap block assembled by `lib/session_context.py`:
 
 It is **fail-soft**: each source is gathered independently; a missing/erroring one is omitted
 with a one-line stderr breadcrumb (never the file contents) and the hook always exits 0, never
-breaking a session. **Codex** wires no `SessionStart` hook, so it gets no bootstrap (out of
-scope).
+breaking a session.
+
+**Codex disclosed absence.** Codex runs no session-start bootstrap; the covenant therefore
+reaches a Codex session only through a project's own `CLAUDE.md` copy; and in out-of-repo
+storage mode there is no carrier at all.
 
 Scope boundary: this fixes the host-map **Read** (model-resolved, so an injected absolute path
 is the lever). The `lib/` **bash** seam of §7.1 — skills shelling out to `lib/` helpers through
@@ -588,12 +594,12 @@ selected *below* the host, at the dispatch leaf.
 
 Two postures are held strictly separate, mirroring `model_tier`:
 - **Engine *selection* fails open.** An unknown / unavailable / unauthorized / stalled
-  engine silently degrades to Claude — the same posture `model_tier` documents for a bad
+  engine silently degrades to **the host model** — the same posture `model_tier` documents for a bad
   tier ("a wrong/absent tier is a cost concern, never a safety one"). No run hangs or
   hard-fails on engine choice.
 - **A completed external *result* fails closed.** A build or fix that fails or can't run
   verify stops; an unauditable run stops; an unreadable or incomplete review is re-run
-  on Claude, never accepted as green. A review seat that returns a well-formed empty result
+  on the host model, never accepted as green. A review seat that returns a well-formed empty result
   **without a verifiable investigation record** is incomplete, not clean — a named **vacuous**
   forfeit on the same fall-open path (`review-code` reference: `auto-fix-loop.md`, `round-driver.md`).
   Engine telemetry corroborates engagement but never substitutes for that record. This reuses the
@@ -619,7 +625,7 @@ Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol.
 An optional per-role `enginePreferences.codexModels` pin may select one of those
 canonical IDs; a one-run preflight pin wins over the persistent pin, which wins
 over tier mapping. The provider-specific pin is carried separately from the shared
-tier so a failed Codex dispatch falls directly open to Claude with a valid native
+tier so a failed Codex dispatch falls directly open to the host model with a valid native
 model — never automatically downgrading to another GPT model. Effort stays
 orthogonal: existing role defaults remain, and `max` is owner-opt-in only. The
 registry validates a codex `(model, effort)` before dispatch (the CLI does no
@@ -648,7 +654,7 @@ remains a clean create. A gate that treats an unreadable config as "no config"
 **fails open**, which is the failure this closes. The
 GPT-5.6 tier requires a sufficiently
 new Codex CLI; an unavailable model follows the observable fall-open path to
-Claude, never a guessed version gate. Dispatch provenance — the concrete engine,
+the host model, never a guessed version gate. Dispatch provenance — the concrete engine,
 model, and effort actually used — is recorded in the PR body (the Workhorse
 charter's "dispatch provenance" section), not a separate journal.
 
@@ -724,7 +730,7 @@ disabled, and these limits are not owner-configurable through `enginePreferences
 runs only on panel-dispatching entries; a compose within the TTL rides a **short-TTL
 machine-readable liveness receipt** instead of re-probing (the workhorse intake preflight can seed
 it); and only **pin-reachable** models are probed. There is no longer a receipt-only entry to
-select — the `cache-only` probe mode that reused a receipt or fell open to Claude lost its last
+select — the `cache-only` probe mode that reused a receipt or fell open to the host model lost its last
 caller when `--post` was removed (#1121) and was reaped in #1138. The **fail-direction is unchanged**: a probe failure still
 drops **that cell** loudly (disclosed degradation), not the whole vendor; the cache only ever skips
 re-proving recent liveness, and never converts a failure into a pass. The receipt carries two
@@ -739,7 +745,7 @@ provenance is the separate top-level **`liveCellsSource`** field (`probed`, `syn
 `unprobed`), and only `probed` counts as verification evidence. `unprobed` — cells no probe of any kind covered — has
 had **no live producer since #1138** reaped the receipt-only path; it stays in the vocabulary
 because seat maps are persisted and re-read, so a map written by an older plugin version must keep
-reading as unusable evidence rather than falling open. Claude is never probed and is live by construction — a stated exception,
+reading as unusable evidence rather than falling open. Native in-session seats are declared live and never probed — a stated exception,
 not an oversight.
 
 **Confinement + hygiene.** External reviewers run read-only; external implementers run

@@ -223,8 +223,9 @@ An empty stdin body clears the section and returns the project to `none`.
 After the verify command (§3) is set — external implementers are verify-gated, so this must follow it —
 bring **Codex** and/or **Cursor** into the loop per role on the owner's word. The **primary path**
 is the named provisional defaults — **reviewer**, **implementer**, and **pilot** → `claude`;
-**briefCheck** → `codex` (the cross-vendor default — a Claude brief-check is a disclosed
-degradation). NOTIFY: probe availability, record the per-role defaults (or owner overrides from
+**briefCheck** → `codex` (the cross-vendor default — a brief-check on **the host model** is a disclosed degradation).
+NOTIFY:
+probe availability, record the per-role defaults (or owner overrides from
 this turn) into `enginePreferences` and disclose the picks in the set-up output and carry them
 into the hero's `## Setup disclosures` section per the §2 carrier note, and the run continues.
 Follow-up: `/superheroes:configure`.
@@ -243,7 +244,7 @@ Follow-up: `/superheroes:configure`.
    `enginePreferences: {reviewer, implementation, briefCheck, pilot}` via `core_md` (schemaVersion 2).
    Optionally, `enginePreferences.seatPins` holds a per-review-panel-seat pin map (vendor required; model and effort optional per seat).
    An absent block reads as `claude` for every role **except `briefCheck`, which falls open to
-   `codex`** (the cross-vendor default — a Claude brief-check is a disclosed degradation).
+   `codex`** (the cross-vendor default — a brief-check on the host model is a disclosed degradation).
    When Codex is selected and no concrete model pin exists, explain the effective GPT-5.6 defaults.
    Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol.
    `max` effort is owner opt-in only (never a default).
@@ -266,12 +267,12 @@ Follow-up: `/superheroes:configure`.
    python3 -B "$ROOT_DIR/lib/engine_authz.py" test-dispatch --engine <codex|cursor> --cwd .
    # -> {"engine":E,"ok":true}  (ready)
    # -> {"engine":E,"ok":false} (denied or no-response bounded by the UFR-5 limit -> falls open to
-   #    Claude; tell the owner how to enable, leave the engine not-ready with a retry instruction)
+   #    the host model; tell the owner how to enable, leave the engine not-ready with a retry instruction)
    ```
    For Codex, this probes the GPT-5.6 Sol capability explicitly as well as the host write grant, so
    an authenticated CLI that is too old for GPT-5.6 remains not-ready.
    A failed or timed-out test dispatch leaves the engine **not-ready** — builds and mechanical fixes fall
-   open to Claude until it works. Never present a not-working engine as ready.
+   open to the host model until it works. Never present a not-working engine as ready.
 
 **Set-up posture.** Take the strict/provisional posture: probe and record what is detectable, but
 never block and never apply the authorization — leave any external implementation engine not-ready
