@@ -147,7 +147,6 @@ def _p0_policy(ladder_entry, p0_entry):
     names = _ladder_band_names(ladder_entry.get("effective"))
     if not names:
         return None, None, project_config.REASON_MALFORMED_VALUE
-    top = names[0]
     if p0_entry.get("malformed"):
         return None, None, project_config.REASON_MALFORMED_VALUE
     if p0_entry.get("source") != "stamped":

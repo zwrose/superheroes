@@ -1031,33 +1031,33 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 #### S7 — Retired tier-vocabulary census
 
-- **Component.** The retired-tier-vocabulary census
-  `_assert_retired_tier_literals_absent` in `plugins/superheroes/lib/tests/test_disposition_flow.py`,
-  which reads every shipped doctrine surface the module already knows — `_TOUCHED_FILES` plus
-  `skills/showrunner/reference/issue-contract.md` — minus the named not-yet-migrated pair
-  (`skills/showrunner/reference/owner-decisions.md` and
-  `skills/discuss-open-decisions/SKILL.md`, which join the census with issue #1287) — and fails on
-  any of the four retired tier literals (`Tier 1`, `Tier 2`, `Tier-1`, `Tier-2`). It costs one file
-  read per censused surface per suite run. A surface leaves `_TIER_VOCAB_NOT_YET_MIGRATED` in the
-  same change that renames its text, never before.
-- **Condition.** Catch-based, 45 days: real catches — a retired literal reappearing in a shipped
-  surface and being caught here rather than in review. On firing, a proposal to the owner at a
-  gardening pass. A zero count means the retired vocabulary is staying retired, which is the expected
-  steady state, not evidence the census should go.
+- **Component.** The retired-tier-vocabulary census in
+  `plugins/superheroes/lib/tests/test_disposition_flow.py`, with two legs. The first,
+  `_assert_retired_tier_literals_absent`, reads every shipped doctrine surface the module already
+  knows — `_TOUCHED_FILES` plus `skills/showrunner/reference/issue-contract.md` — with
+  `_TIER_VOCAB_NOT_YET_MIGRATED` now empty, and fails on any of the four retired tier literals
+  (`Tier 1`, `Tier 2`, `Tier-1`, `Tier-2`). The second walks every shipped markdown file under
+  `plugins/superheroes/` except `plugins/superheroes/lib/tests/` (fixtures and bite-proof records,
+  which quote retired text on purpose) and `plugins/superheroes/CHANGELOG.md` (generated release
+  history) and fails when the retired gate heading `## The worth-it gate and the venue ladder` or the
+  bare phrase `worth-it gate` appears. It costs one file read per censused surface plus one tree
+  walk per suite run. A surface leaves `_TIER_VOCAB_NOT_YET_MIGRATED` in the same change that renames
+  its text, never before.
+- **Condition.** Catch-based, 45 days: real catches — a retired tier literal or retired gate phrase
+  reappearing in a shipped surface and being caught on either leg rather than in review. On firing, a
+  proposal to the owner at a gardening pass. A zero count means the retired vocabulary is staying
+  retired, which is the expected steady state, not evidence the census should go.
 - **Last demonstrated benefit.** The rename of the routing vocabulary left two shipped copy-holders
   on the retired names with no detector bound to them, and the single-literal census was green on
   exactly the drift it was minted to catch; the extended set is what closes that.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** structural — a doc-to-doc vocabulary census over the module's known surfaces minus a
-  named exception tuple; coverage grows by construction as surfaces migrate. **Tracked exception
-  (2026-09-16):** the authoritative home `skills/showrunner/reference/owner-decisions.md` still
-  carries the retired tier vocabulary (`Tier 1`, `Tier 2`, `Every Tier-2 item is appended…`) while
-  its two copy-holders `skills/showrunner/SKILL.md` and
-  `skills/showrunner/reference/vet-receipt.md` now read craft-call / owner-call — the drift guard
-  that bound copies to the home was retired with the verbatim-clause pins in this child, and no
-  replacement prose pin ships here per register R4; issue #1287 closes the home-side rename and
-  restores copy/home alignment.
+- **Notes.** structural — a doc-to-doc vocabulary census over the module's known surfaces plus a
+  shipped-markdown tree walk with a closed exclusion pair; coverage grows by construction as surfaces
+  migrate. **Tracked exception (2026-09-16) discharged 2026-09-16** when
+  `skills/showrunner/reference/owner-decisions.md` migrated in WO-A (`bf909d23`) and
+  `skills/discuss-open-decisions/SKILL.md` migrated in WO-B (`0ca6f4f1`), emptying
+  `_TIER_VOCAB_NOT_YET_MIGRATED` on the merged head of issue #1287.
 
 
 ## The workaround-marker inventory
