@@ -51,6 +51,7 @@ _VALVE_COPY = (
 )
 
 _SEAT_RESULT_TABLE_MARKER = "**`seat-result/1` envelope fields**"
+_SEAT_RESULT_V2_TABLE_MARKER = "**`seat-result/2` envelope fields**"
 _SEAT_MISSING_TABLE_MARKER = "The **`seat-missing/1`** shape is deliberately different"
 
 SESSION = "s" * 32
@@ -91,10 +92,10 @@ def _documented_seat_result_fields():
             f"{_ROUND_DRIVER} missing seat-result envelope fields marker"
         )
     rest = text[start:]
-    end = rest.find(_SEAT_MISSING_TABLE_MARKER)
+    end = rest.find(_SEAT_RESULT_V2_TABLE_MARKER)
     if end == -1:
         raise AssertionError(
-            f"{_ROUND_DRIVER} missing seat-missing shape boundary after envelope table"
+            f"{_ROUND_DRIVER} missing seat-result/2 envelope fields boundary after v1 table"
         )
     table_text = rest[:end]
     fields = re.findall(r"\| `(\w+)` \|", table_text)
@@ -103,6 +104,29 @@ def _documented_seat_result_fields():
             f"{_ROUND_DRIVER} envelope fields table has no parseable rows"
         )
     return tuple(fields)
+
+
+def _documented_seat_result_v2_fields():
+    text = _read(_ROUND_DRIVER)
+    start = text.find(_SEAT_RESULT_V2_TABLE_MARKER)
+    if start == -1:
+        raise AssertionError(
+            f"{_ROUND_DRIVER} missing seat-result/2 envelope fields marker"
+        )
+    rest = text[start:]
+    end = rest.find(_SEAT_MISSING_TABLE_MARKER)
+    if end == -1:
+        raise AssertionError(
+            f"{_ROUND_DRIVER} missing seat-missing shape boundary after v2 envelope table"
+        )
+    v1_fields = _documented_seat_result_fields()
+    v2_only = re.findall(r"\| `(\w+)` \|", rest[:end])
+    if not v2_only:
+        raise AssertionError(
+            f"{_ROUND_DRIVER} seat-result/2 fields table has no parseable rows"
+        )
+    v2_extra = tuple(f for f in v2_only if f not in v1_fields)
+    return v1_fields + v2_extra
 
 
 def _session(tmp_path, name="session"):
@@ -176,5 +200,34 @@ def test_envelope_built_from_documented_fields_validates_at_ingest(tmp_path):
     RR.atomic_write_json(path, env)
     out = RR.ingest_landing(
         sd, 1, PHASE, SEAT, 1, current_attempt=1, roster=ROSTER, anchor=None)
+    assert out["ok"] is True, out
+    assert out.get("reason") is None
+
+
+def test_documented_seat_result_v2_fields_match_authority():
+    # axis: documented v2 envelope field list matches round_records.SEAT_RESULT_V2_FIELDS
+    documented = _documented_seat_result_v2_fields()
+    assert documented == RR.SEAT_RESULT_V2_FIELDS, (
+        "documented v2 fields %r != SEAT_RESULT_V2_FIELDS %r"
+        % (documented, RR.SEAT_RESULT_V2_FIELDS)
+    )
+
+
+def test_envelope_built_from_documented_v2_fields_validates_at_ingest(tmp_path):
+    # axis: v2 envelope built from the documented field list passes ingest_landing
+    fields = _documented_seat_result_v2_fields()
+    assert fields == RR.SEAT_RESULT_V2_FIELDS
+    payload = {"findings": ["f1"]}
+    sd = _session(tmp_path)
+    env = _build_envelope_from_fields(
+        tuple(f for f in fields if f in RR.SEAT_RESULT_FIELDS), payload=payload)
+    env["schema"] = RR.SEAT_RESULT_SCHEMA_V2
+    env["provenance"] = RR.PROVENANCE_HAND_LANDED
+    env["envelopeSha256"] = RR.envelope_sha256(payload, None)
+    path = RR.landing_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    RR.atomic_write_json(path, env)
+    out = RR.ingest_landing(
+        sd, 1, PHASE, SEAT, 1, current_attempt=1, roster=ROSTER, anchor=None,
+        seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
     assert out["ok"] is True, out
     assert out.get("reason") is None

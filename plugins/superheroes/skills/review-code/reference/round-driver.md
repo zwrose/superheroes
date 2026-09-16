@@ -311,7 +311,7 @@ with the slot label(s) — the records are deliberately ignored, not silently dr
 | --- | --- | --- |
 | Dispatch manifest | `$SESSION_DIR/round-N/landing/P/_dispatch.aK.json` | **Orchestrator** — never written by the driver; read only by `advance` on **seat** phases. Top-level JSON keyed by the **exact roster seat key**; each value requires non-empty `vendor` (`model` / `engine` are optional, descriptive, neither validated nor trusted — `round_adapters._trusted_vendors` reads only `vendor`). **Orchestrator-fulfilled phases** (`run-verify`) emit no manifest — `advance` folds from the host bare payload instead. **Absence on a seat phase:** the manifest key is omitted, the adapter discloses `dispatchManifestUnavailable`, and on `dispatch-audits` a clearing ruling (`discharged` / `discharged-but-new-issue`) is **not authenticated** — fails closed to `not-discharged` + `unauthenticated`, which can drive the audit stall and `advance-stall-park`. Check this file first on an unexplained fix-audit stall. |
 | Canary probe | `$SESSION_DIR/round-N/landing/dispatch-panel/_canary/vendor.aK.json` | **Orchestrator** (`seat_canary.py probe`) — panel phase only. Carries the cross-vendor control-probe result `advance` folds as `canaryResult`. **Absence:** no canary evidence; when every cross-vendor seat that ran returned zero findings, the round records `canaryUnverified` instead of `canaryVerified`. A probe with outcome `plant-undetected` records `canaryPlantUndetected` instead of `canaryVerified`. |
-| Seat store | `$SESSION_DIR/round-N/seats/P/skey.aK.json` | **`record-result`** / **`record-missing`** / `advance`'s sweep — the durable `seat-result/1` or `seat-missing/1` envelope for one roster slot. **Absence:** the slot is incomplete; `advance` refuses **`incomplete-roster`** until every slot has a store record or a missing envelope. |
+| Seat store | `$SESSION_DIR/round-N/seats/P/skey.aK.json` | **`record-result`** / **`record-missing`** / `advance`'s sweep — the durable `seat-result/1` or `seat-result/2` (state v5) or `seat-missing/1` envelope for one roster slot. **Absence:** the slot is incomplete; `advance` refuses **`incomplete-roster`** until every slot has a store record or a missing envelope. |
 | Head-diff store | `$SESSION_DIR/round-N/seats/P/skey.aK.headdiff` | **`record-result`** on the fixer phase — the driver-owned post-fix diff blob referenced by the stored envelope's `headDiffStorePath`. **Absence:** fixer fold treats the changed surface as unknown (full panel on the next round), never a silent scoped skip. |
 
 ## Emitted orders
@@ -319,9 +319,10 @@ with the slot label(s) — the records are deliberately ignored, not silently dr
 Every `next` whose `phase` starts with `dispatch-` emits, atomically in one `orders-emit` commit:
 
 - one **order file** per roster slot (`round_orders.render_order` over `rubric/orders/<phase>.md`);
-- one **envelope stub** per slot (`seat-result/1` header fields knowable at emission — session,
-  round, phase, seat, attempt, vendor, model, `dispatchRef`, `orderSha256`, `manifestSha256` — but
-  not `recordedAt` / `payloadSha256`);
+- one **envelope stub** per slot (the schema follows the session's state version: `seat-result/1`
+  at state v2–v4, `seat-result/2` at state v5 — header fields knowable at emission: session, round,
+  phase, seat, attempt, vendor, model, `dispatchRef`, `orderSha256`, `manifestSha256`, and at v5
+  `provenance`; never `recordedAt`, `payloadSha256`, `executionEvidence`, or `envelopeSha256`);
 - an **orders manifest** listing every slot's `orderPath`, `envelopeStubPath`, and hashes.
 
 Paths (round `N`, phase `P`, attempt `K`, storage key `skey`):
@@ -336,8 +337,8 @@ Paths (round `N`, phase `P`, attempt `K`, storage key `skey`):
 
 | Seat kind | Landing path | What the seat writes |
 | --- | --- | --- |
-| **Engine** (`codex`/`cursor`) | `.../landing/P/skey.aK.json` | **Orchestrator** writes the full `seat-result/1` envelope (stub header + payload) from the folded `dispatch-review` stdout result; the engine seat emits JSON on stdout only |
-| **Host** (`claude` native subagent) | `.../landing/P/skey.aK.payload.json` | Payload only; driver wraps with the stub at ingest |
+| **Engine** (`codex`/`cursor`) | `.../landing/P/skey.aK.json` | **Orchestrator** writes the full seat-result envelope (stub header + payload; schema from state version) from the folded `dispatch-review` stdout result; the engine seat emits JSON on stdout only. At state v5 the stub carries `provenance: dispatch-observed`; `record-result --evidence-run-dir` may stamp `executionEvidence` and compute `envelopeSha256` before ingest. |
+| **Host** (`claude` native subagent) | `.../landing/P/skey.aK.payload.json` | Payload only; driver wraps with the stub at ingest. At state v5 the wrapped envelope is `seat-result/2` with `provenance: dispatch-observed`; when execution evidence is stamped the driver writes the full envelope to `.../skey.aK.json` and removes the bare payload so the slot is not `landing-ambiguous`. |
 
 Both shapes present → `landing-ambiguous`. The order's landing block names the paths; seats copy
 stub header fields verbatim and never recompute hashes.
@@ -396,6 +397,22 @@ below when landing a `dispatch-review` stdout result):
 | `recordedAt` | ISO-8601 timestamp when the envelope was stamped |
 | `payloadSha256` | SHA-256 over the canonical JSON of `payload`; an envelope **without** this field, or with a hash that does not match `payload`, is refused **`landing-torn`** at ingest |
 | `payload` | The seat's artifact (JSON object) |
+
+**`seat-result/2` envelope fields** (state v5 — extends `seat-result/1` with provenance binding and
+optional execution evidence; the orchestrator or driver must supply every field below when landing or
+ingesting):
+
+| Field | Carries |
+| --- | --- |
+| `schema` | Literal `seat-result/2` |
+| `executionEvidence` | Optional runner telemetry block (`source`, `runnerNonce`, `recordDigest`, `observation`) stamped by `record-result --evidence-run-dir` for `dispatch-observed` seats |
+| `provenance` | One of `dispatch-observed`, `hand-landed`, `orchestrator-fulfilled` — required at v2; emission stubs for dispatch phases carry `dispatch-observed` |
+| `envelopeSha256` | SHA-256 over canonical `{"payload": <payload>, "executionEvidence": <evidence-or-null>}`; required at ingest — an absent or mismatched value is refused **`envelope-torn`** |
+
+All other fields match `seat-result/1`. The emission stub never carries `recordedAt`, `payloadSha256`,
+`executionEvidence`, or `envelopeSha256` — the orchestrator stamps `recordedAt` and `payloadSha256`
+when landing, and `record-result` computes `envelopeSha256` (and may add `executionEvidence`) at
+ingest.
 
 The **`seat-missing/1`** shape is deliberately different: it records a seat that produced no artifact
 and carries **no** `payload` or `payloadSha256` — instead `reason` (one of `forfeit`, `timeout`,

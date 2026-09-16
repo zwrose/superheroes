@@ -191,7 +191,7 @@ Per-round dispatch is **driver-owned** — round 1 is the full `reviewer-deep` b
 
 ### 3. Dispatch Specialists in Parallel
 
-On every `next` whose `phase` starts with `dispatch-`, `round_driver.py` **emits** each roster seat's complete order before you dispatch anything: one markdown file per slot, an envelope stub carrying the full known `seat-result/1` header, and a manifest hashed into the session anchor. **Dispatch the emitted order text** — do not hand-compose prompts from templates. Per-seat engine/channel mechanics (stdout vs file, `dispatch-review` runner, canary probes) live in `reference/auto-fix-loop.md`; the prompt bodies live in `rubric/orders/<phase>.md` and are rendered into the session by the driver.
+On every `next` whose `phase` starts with `dispatch-`, `round_driver.py` **emits** each roster seat's complete order before you dispatch anything: one markdown file per slot, an envelope stub carrying the full known header for the session's seat-result schema (`seat-result/1` at state v2–v4; `seat-result/2` at state v5, including `provenance: dispatch-observed`), and a manifest hashed into the session anchor. **Dispatch the emitted order text** — do not hand-compose prompts from templates. Per-seat engine/channel mechanics (stdout vs file, `dispatch-review` runner, canary probes) live in `reference/auto-fix-loop.md`; the prompt bodies live in `rubric/orders/<phase>.md` and are rendered into the session by the driver.
 
 **Where the files are (round `<N>`, phase `<phase>`, attempt `<K>`, storage key `<skey>` — the filename-safe key the manifest uses, not the bare reviewer name):**
 
@@ -200,8 +200,8 @@ On every `next` whose `phase` starts with `dispatch-`, `round_driver.py` **emits
 | Order (dispatch this) | `$SESSION_DIR/round-<N>/orders/<phase>/<skey>.a<K>.md` |
 | Envelope stub (header fields the seat must copy verbatim) | `$SESSION_DIR/round-<N>/orders/<phase>/<skey>.a<K>.envelope.json` |
 | Orders manifest (every slot's `orderPath`, `envelopeStubPath`, hashes) | `$SESSION_DIR/round-<N>/orders/<phase>/manifest.a<K>.json` |
-| Landing — **engine** seat (`codex`/`cursor`) | `$SESSION_DIR/round-<N>/landing/<phase>/<skey>.a<K>.json` — **orchestrator** writes the **full envelope** (stub header + payload) from the folded `dispatch-review` stdout result; the engine seat emits JSON on stdout only (read-only sandbox) |
-| Landing — **host** seat (`claude` native subagent) | `$SESSION_DIR/round-<N>/landing/<phase>/<skey>.a<K>.payload.json` — write **only** the payload; copy every stub header field verbatim into the ingested envelope |
+| Landing — **engine** seat (`codex`/`cursor`) | `$SESSION_DIR/round-<N>/landing/<phase>/<skey>.a<K>.json` — **orchestrator** writes the **full envelope** (stub header + payload; schema from state version) from the folded `dispatch-review` stdout result; the engine seat emits JSON on stdout only (read-only sandbox). At state v5, pass a completed `dispatch-review` run directory to `record-result --evidence-run-dir` so the driver can stamp `executionEvidence` and `envelopeSha256` before ingest. |
+| Landing — **host** seat (`claude` native subagent) | `$SESSION_DIR/round-<N>/landing/<phase>/<skey>.a<K>.payload.json` — write **only** the payload; the driver wraps with the emitted stub at ingest. At state v5 the ingested envelope is `seat-result/2`; when execution evidence is stamped the driver promotes to the full envelope path and clears the bare payload. |
 
 No seat is ever asked to transcribe an `orderSha256`, `manifestSha256`, or storage path — those ride in the stub the driver emitted. After landings exist, either **`record-result` (or `record-missing`) + `advance`**, or a hand **`submit`** — **mutually exclusive, per SESSION** (the first path used is the path the session keeps; see `reference/round-driver.md` § Durable-record path).
 
