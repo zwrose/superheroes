@@ -44,7 +44,7 @@ Read the collector before searching parks — it is authoritative and may alread
 
 Apply `## The filter — what is the owner's, and on what grounds`; present filtered items per that section before batch 1.
 
-For each owner call that will be delivered in batch 1 or batch 2, grade it through `## The front door`, disposition it per `## Folding backlog items in`, and append it to the collector immediately, **before** it is proposed in this session's delivery message. This skill is owner-present by construction; the canonical append-always rule lives in `skills/showrunner/reference/owner-decisions.md`, and this skill applies it at delivery time rather than at vet time.
+For each owner call that will be delivered in batch 1 or batch 2, grade it through `## The front door`, disposition it per `## The venue ladder`, and append it to the collector immediately, **before** it is proposed in this session's delivery message. This skill is owner-present by construction; the canonical append-always rule lives in `skills/showrunner/reference/owner-decisions.md`, and this skill applies it at delivery time rather than at vet time.
 
 ## Step 4 — Deliver batch 1
 
@@ -85,4 +85,4 @@ When a batch-2 ruling closes or declines a collector-backed item, strike it from
 | "The contract is long — I'll work from what I remember" | Step 1 reads the file every invocation. |
 | "I'll deliver batch 2 after execution finishes" | see `## Delivery mechanics` |
 | "The numbers live in the chat — I'll remember" | see Step 4 |
-| "I'll append follow-ups to the collector — the owner can review them later" | see `## The tiers and the P2 carve-out`, showrunner duty 4, and `skills/showrunner/reference/owner-decisions.md` — every owner call is appended **before** it is proposed in this session's delivery message and discussed now. |
+| "I'll append follow-ups to the collector — the owner can review them later" | see `## Craft calls and owner calls`, showrunner duty 4, and `skills/showrunner/reference/owner-decisions.md` — every owner call is appended **before** it is proposed in this session's delivery message and discussed now. |

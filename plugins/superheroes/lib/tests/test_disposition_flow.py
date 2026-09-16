@@ -16,8 +16,6 @@ discuss-open-decisions cites the owner-decisions canonical home path.
 import os
 import re
 
-import pytest
-
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 

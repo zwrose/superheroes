@@ -12,6 +12,7 @@
 - [Folding backlog items in](#folding-backlog-items-in)
 - [The reader clause](#the-reader-clause)
 - [The venue ladder](#the-venue-ladder)
+- [Craft calls and owner calls](#craft-calls-and-owner-calls)
 - [The revisit-trigger registry](#the-revisit-trigger-registry)
 - [The gardening pass](#the-gardening-pass)
 - [The gardening record](#the-gardening-record)
@@ -184,36 +185,6 @@ declined with a trigger by default.
    structures its roadmap. P2 sits roughly where a backlog does. A P0's displacement of other work
    meets wave planning. A project extends this vocabulary rather than minting a second one.
 
-[Craft call](../../../rubric/glossary.md#craft-call) and [owner call](../../../rubric/glossary.md#owner-call) are defined in the glossary, and the line between them, the [material consequence](../../../rubric/glossary.md#material-consequence), has its plugin default in [issue-contract.md](issue-contract.md).
-
-A **craft call** follows from already-ratified intent and no plausible product preference distinguishes the options. The advisor executes it now and records the determination dated and reasoned for cheap owner veto. An **owner call** is taste, trade, or commitment. It is the owner's word, via the collector. Doubt resolves upward.
-
-Venue-1 continuations and craft declines are craft calls. The advisor executes and records for veto.
-Venue-2 scope changes, product declines (any decline that trades away something a product reading
-could want), and gate-uncertain items are owner calls.
-
-**Every owner call is appended to the collector at vet time, unconditionally, so the collector is the complete register by construction; owner attendance governs only when discussion happens — attended, the item is proposed in the vet-delivery message and may be struck minutes after it was appended; absent, it awaits the batch.**
-
-**Each append carries its door grading, which is the band, the evidence tier, and the resulting tier that the front door recorded, and its venue recommendation, so the owner's batch is one word per item.**
-
-An append made outside a vet — `/superheroes:discuss-open-decisions`, a park sitting, any non-vet
-session applying these primitives — is the non-vet complement of the vet-time clause above, not an
-exception to it: append-always still binds at the moment the item arises; only the stamp differs.
-Such an append carries the **latest existing vet ordinal, marked non-vet** beside the stamp — that
-marked ordinal stands in for the proposing vet's ordinal everywhere this contract reads one — so
-age stays a subtraction over ordinals and no phantom vet is minted; before
-appending, the session checks the collector for an existing entry covering the same residual and
-**updates that entry in place** rather than adding a second (owner ruling 2026-08-24, recorded on
-the collector —
-[issue #695 comment](https://github.com/zwrose/superheroes/issues/695#issuecomment-5390859217)).
-On a project with no vet yet, the append carries ordinal 0, marked non-vet — the first real vet is
-ordinal 1 and the age subtraction proceeds unchanged.
-
-Deferring the append is what two independent sessions did on 2026-08-02, and it is the evaporation
-class recorded as we#526 and we#527 — items that lived only in individual receipts while the
-collector read empty. That history is why append-always is unconditional; it is not a live branching
-rule.
-
 ## Every grading keeps its scoring, and the misses log
 
 1. **Every grading records its scoring durably on the item**. The record carries the band cited,
@@ -349,6 +320,38 @@ finding, a follow-up idea, or a hardening proposal.
 **A residual that passes the door's evidence bar descends the venue ladder: continue the PR, then fold into an existing issue by editing its body rather than filing a new ticket, then a new issue, bundled by shared surface before filing.**
 
 **No target disposition mix exists: a walk where everything passes the door's evidence bar, or everything fails it, is a signal to inspect the interrogation itself rather than a success in either direction.** Inspecting the interrogation means re-reading how the items were questioned — not re-scoring them.
+
+## Craft calls and owner calls
+
+[Craft call](../../../rubric/glossary.md#craft-call) and [owner call](../../../rubric/glossary.md#owner-call) are defined in the glossary, and the line between them, the [material consequence](../../../rubric/glossary.md#material-consequence), has its plugin default in [issue-contract.md](issue-contract.md).
+
+A **craft call** follows from already-ratified intent and no plausible product preference distinguishes the options. The advisor executes it now and records the determination dated and reasoned for cheap owner veto. An **owner call** is taste, trade, or commitment. It is the owner's word, via the collector. Doubt resolves upward.
+
+Venue-1 continuations and craft declines are craft calls. The advisor executes and records for veto.
+Venue-2 scope changes, product declines (any decline that trades away something a product reading
+could want), and items whose door grading is uncertain are owner calls.
+
+**Every owner call is appended to the collector at vet time, unconditionally, so the collector is the complete register by construction; owner attendance governs only when discussion happens — attended, the item is proposed in the vet-delivery message and may be struck minutes after it was appended; absent, it awaits the batch.**
+
+**Each append carries its door grading, which is the band, the evidence tier, and the resulting tier that the front door recorded, and its venue recommendation, so the owner's batch is one word per item.**
+
+An append made outside a vet — `/superheroes:discuss-open-decisions`, a park sitting, any non-vet
+session applying these primitives — is the non-vet complement of the vet-time clause above, not an
+exception to it: append-always still binds at the moment the item arises; only the stamp differs.
+Such an append carries the **latest existing vet ordinal, marked non-vet** beside the stamp — that
+marked ordinal stands in for the proposing vet's ordinal everywhere this contract reads one — so
+age stays a subtraction over ordinals and no phantom vet is minted; before
+appending, the session checks the collector for an existing entry covering the same residual and
+**updates that entry in place** rather than adding a second (owner ruling 2026-08-24, recorded on
+the collector —
+[issue #695 comment](https://github.com/zwrose/superheroes/issues/695#issuecomment-5390859217)).
+On a project with no vet yet, the append carries ordinal 0, marked non-vet — the first real vet is
+ordinal 1 and the age subtraction proceeds unchanged.
+
+Deferring the append is what two independent sessions did on 2026-08-02, and it is the evaporation
+class recorded as we#526 and we#527 — items that lived only in individual receipts while the
+collector read empty. That history is why append-always is unconditional; it is not a live branching
+rule.
 
 ## The revisit-trigger registry
 
