@@ -409,10 +409,10 @@ def test_refusal_landing_torn_when_the_file_is_unparseable(tmp_path):
 
 def test_refusal_schema_unknown(tmp_path):
     sd = _session(tmp_path)
-    _land(sd, _env(schema="seat-result/2"))
+    _land(sd, _env(schema="seat-result/3"))
     out = _ingest(sd)
     assert out["reason"] == "schema-unknown"
-    assert out["schema"] == "seat-result/2"
+    assert out["schema"] == "seat-result/3"
 
 
 def test_refusal_schema_unknown_when_schema_key_absent(tmp_path):
@@ -1184,7 +1184,8 @@ def _validate(sd, seat=SEAT, attempt=1, current=1, rnd=1, phase=PHASE, **kw):
     ("session-mismatch", lambda sd: _land(sd, _env(session="a" * 32))),
     ("phase-mismatch", lambda sd: _land(sd, _env(phase="dispatch-audits"))),
     ("round-mismatch", lambda sd: _land(sd, _env(round=2))),
-    ("schema-unknown", lambda sd: _land(sd, _env(schema="seat-result/2"))),
+    ("schema-version-mismatch", lambda sd: _land(sd, _env(schema="seat-result/2"))),
+    ("schema-unknown", lambda sd: _land(sd, _env(schema="seat-result/3"))),
     ("missing-reason", lambda sd: _land(sd, _missing_env(reason="vibes"))),
     ("manifest-anchor-mismatch",
      lambda sd: _land(sd, _env(manifestSha256="m" * 64, orderSha256="o" * 64))),
@@ -1493,6 +1494,172 @@ def test_full_envelope_records_seat_declared_hash_source(tmp_path):
     assert out["ok"] is True
     stored, _ = RR.read_json(out["storePath"])
     assert stored.get("payloadHashSource") == "seat-declared"
+
+
+# --- WO-A: seat-result/2 envelope seam and state-version fence --------------------------------
+
+def _execution_evidence(**over):
+    evidence = {
+        "source": "runner",
+        "runnerNonce": "nonce-1",
+        "recordDigest": "digest-1",
+        "observation": {"ok": True},
+    }
+    evidence.update(over)
+    return evidence
+
+
+def _v2_env(payload=None, execution_evidence=None, **over):
+    payload = {"findings": ["f1"]} if payload is None else payload
+    evidence = execution_evidence if execution_evidence is not None else _execution_evidence()
+    env = _env(payload, schema=RR.SEAT_RESULT_SCHEMA_V2, **over)
+    env["executionEvidence"] = evidence
+    env["provenance"] = over.get("provenance", "dispatch-observed")
+    env["envelopeSha256"] = RR.envelope_sha256(payload, evidence)
+    return env
+
+
+def test_seat_result_schema_for_state_version_maps_known_versions():
+    assert RR.seat_result_schema_for_state_version(2) == RR.SEAT_RESULT_SCHEMA
+    assert RR.seat_result_schema_for_state_version(3) == RR.SEAT_RESULT_SCHEMA
+    assert RR.seat_result_schema_for_state_version(4) == RR.SEAT_RESULT_SCHEMA
+    assert RR.seat_result_schema_for_state_version(5) == RR.SEAT_RESULT_SCHEMA_V2
+    assert RR.seat_result_schema_for_state_version(99) is None
+    assert RR.seat_result_schema_for_state_version(None) is None
+
+
+def test_envelope_cas_token_uses_payload_sha_for_v1_and_envelope_sha_for_v2():
+    v1 = _env()
+    assert RR.envelope_cas_token(v1) == v1["payloadSha256"]
+    v2 = _v2_env()
+    assert RR.envelope_cas_token(v2) == v2["envelopeSha256"]
+
+
+def test_v2_opt_in_none_accepts_v1(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    plan, refusal = _validate(sd)
+    assert refusal is None and plan is not None
+
+
+def test_v2_opt_in_none_refuses_v2_schema_version_mismatch(tmp_path):
+    # axis: schema-version-mismatch fence — wo_a_1271
+    sd = _session(tmp_path)
+    _land(sd, _v2_env())
+    plan, refusal = _validate(sd)
+    assert plan is None and refusal["reason"] == "schema-version-mismatch"
+
+
+def test_v2_opt_in_v1_accepts_v1(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA)
+    assert refusal is None and plan is not None
+
+
+def test_v2_opt_in_v1_refuses_v2_schema_version_mismatch(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _v2_env())
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA)
+    assert plan is None and refusal["reason"] == "schema-version-mismatch"
+
+
+def test_v2_opt_in_v2_refuses_v1_schema_version_mismatch(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "schema-version-mismatch"
+
+
+def test_v2_opt_in_v2_accepts_well_formed_v2(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _v2_env())
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert refusal is None and plan is not None
+
+
+def test_v2_opt_in_v2_refuses_execution_evidence_missing(tmp_path):
+    # axis: execution-evidence-missing — wo_a_1271
+    sd = _session(tmp_path)
+    env = _v2_env()
+    del env["executionEvidence"]
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-missing"
+
+
+def test_v2_opt_in_v2_refuses_execution_evidence_malformed(tmp_path):
+    sd = _session(tmp_path)
+    env = _v2_env(execution_evidence={"source": "runner"})
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+def test_v2_opt_in_v2_refuses_execution_evidence_not_inline(tmp_path):
+    # axis: execution-evidence-not-inline — wo_a_1271
+    sd = _session(tmp_path)
+    env = _v2_env(execution_evidence=_execution_evidence(observation={"path": "/tmp/evidence"}))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-not-inline"
+
+
+def test_v2_opt_in_v2_refuses_provenance_unknown(tmp_path):
+    # axis: provenance-unknown — wo_a_1271
+    sd = _session(tmp_path)
+    _land(sd, _v2_env(provenance="invented"))
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "provenance-unknown"
+
+
+def test_v2_opt_in_v2_refuses_envelope_torn(tmp_path):
+    # axis: envelope-torn — wo_a_1271
+    sd = _session(tmp_path)
+    env = _v2_env()
+    env["envelopeSha256"] = "0" * 64
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "envelope-torn"
+
+
+def test_v2_opt_in_v2_refuses_landing_torn_payload_sha(tmp_path):
+    sd = _session(tmp_path)
+    env = _v2_env()
+    env["payloadSha256"] = "0" * 64
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "landing-torn"
+
+
+def test_v2_envelope_survives_ingest_store_reread(tmp_path):
+    sd = _session(tmp_path)
+    env = _v2_env()
+    _land(sd, env)
+    out = _ingest(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert out["ok"] is True
+    stored, err = RR.read_json(out["storePath"])
+    assert err is None
+    assert stored["executionEvidence"] == env["executionEvidence"]
+    assert stored["provenance"] == env["provenance"]
+    assert stored["envelopeSha256"] == env["envelopeSha256"]
+
+
+def test_v2_session_refuses_second_envelope_after_v1_schema_version_mismatch(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    first = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert first[1]["reason"] == "schema-version-mismatch"
+    _land(sd, _v2_env())
+    second = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert second[0] is not None
+
+
+def test_validate_landing_bad_argument_for_unknown_seat_result_schema(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    plan, refusal = _validate(sd, seat_result_schema="seat-result/9")
+    assert plan is None and refusal["reason"] == "bad-argument"
 
 
 # --- finding 7: phase-name drift guard --------------------------------------------------------

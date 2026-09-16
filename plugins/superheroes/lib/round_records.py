@@ -43,7 +43,19 @@ import round_phases  # noqa: E402
 # =============================================================================================
 
 SEAT_RESULT_SCHEMA = "seat-result/1"
+SEAT_RESULT_SCHEMA_V2 = "seat-result/2"
+SEAT_RESULT_SCHEMAS = (SEAT_RESULT_SCHEMA, SEAT_RESULT_SCHEMA_V2)
 SEAT_MISSING_SCHEMA = "seat-missing/1"
+
+SEAT_RESULT_SCHEMA_BY_STATE_VERSION = {2: SEAT_RESULT_SCHEMA, 3: SEAT_RESULT_SCHEMA,
+                                       4: SEAT_RESULT_SCHEMA, 5: SEAT_RESULT_SCHEMA_V2}
+
+
+def seat_result_schema_for_state_version(version):
+    """The one decode. Returns the schema literal, or None for a version this build does not know."""
+    if isinstance(version, bool) or not isinstance(version, int):
+        return None
+    return SEAT_RESULT_SCHEMA_BY_STATE_VERSION.get(version)
 SIDECAR_SCHEMA = "handback-sidecar/1"
 
 # The seat-result envelope's declared fields. `payload` carries the seat's artifact; the store
@@ -51,6 +63,12 @@ SIDECAR_SCHEMA = "handback-sidecar/1"
 SEAT_RESULT_FIELDS = ("schema", "session", "round", "phase", "seat", "attempt", "vendor",
                       "model", "dispatchRef", "orderSha256", "manifestSha256", "recordedAt",
                       "payloadSha256", "payload")
+SEAT_RESULT_V2_FIELDS = SEAT_RESULT_FIELDS + ("executionEvidence", "provenance",
+                                              "envelopeSha256")
+SEAT_PROVENANCE = ("dispatch-observed", "hand-landed")
+EXECUTION_EVIDENCE_FIELDS = ("source", "runnerNonce", "recordDigest", "observation")
+_EXECUTION_EVIDENCE_POINTER_KEYS = frozenset(
+    ("path", "file", "filePath", "ref", "href", "uri", "url", "evidencePath"))
 # A seat-missing envelope records a seat that produced NO artifact. Same envelope minus the
 # payload pair, plus a `reason` from MISSING_REASONS and an optional free-text `evidence`.
 SEAT_MISSING_FIELDS = ("schema", "session", "round", "phase", "seat", "attempt", "vendor",
@@ -109,13 +127,22 @@ def payload_sha256(payload):
     return sha256_text(canonical(payload))
 
 
+def envelope_sha256(payload, execution_evidence):
+    """Content binding for a seat-result/2 envelope: one hash over the payload and the execution
+    evidence together, so real evidence from one act can never be re-paired with different
+    content."""
+    return sha256_text(canonical({"payload": payload, "executionEvidence": execution_evidence}))
+
+
 def envelope_cas_token(envelope):
     """The compare-and-swap token for a stored envelope — payload hash for results, a fixed schema
     literal for seat-missing (which carries no payloadSha256)."""
     if not isinstance(envelope, dict):
         return None
     schema = envelope.get("schema")
-    if schema == SEAT_RESULT_SCHEMA:
+    if schema in SEAT_RESULT_SCHEMAS:
+        if schema == SEAT_RESULT_SCHEMA_V2:
+            return envelope.get("envelopeSha256")
         return envelope.get("payloadSha256")
     if schema == SEAT_MISSING_SCHEMA:
         return MISSING_CAS_TOKEN
@@ -493,7 +520,54 @@ def _anchor_check(envelope, seat_key, anchor, occurrence=0):
 
 
 def _is_seat_result_envelope(obj):
-    return isinstance(obj, dict) and obj.get("schema") == SEAT_RESULT_SCHEMA
+    return isinstance(obj, dict) and obj.get("schema") in SEAT_RESULT_SCHEMAS
+
+
+def _execution_evidence_has_pointer(value):
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key in _EXECUTION_EVIDENCE_POINTER_KEYS:
+                return True
+            if _execution_evidence_has_pointer(nested):
+                return True
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            if _execution_evidence_has_pointer(item):
+                return True
+    return False
+
+
+def _validate_execution_evidence(evidence):
+    if evidence is None:
+        return "execution-evidence-missing"
+    if not isinstance(evidence, dict):
+        return "execution-evidence-malformed"
+    for field in EXECUTION_EVIDENCE_FIELDS:
+        if field not in evidence:
+            return "execution-evidence-malformed"
+    source = evidence.get("source")
+    runner_nonce = evidence.get("runnerNonce")
+    record_digest = evidence.get("recordDigest")
+    observation = evidence.get("observation")
+    if not isinstance(source, str) or not source:
+        return "execution-evidence-malformed"
+    if not isinstance(runner_nonce, str) or not runner_nonce:
+        return "execution-evidence-malformed"
+    if not isinstance(record_digest, str) or not record_digest:
+        return "execution-evidence-malformed"
+    if not isinstance(observation, dict):
+        return "execution-evidence-malformed"
+    if _execution_evidence_has_pointer(evidence):
+        return "execution-evidence-not-inline"
+    return None
+
+
+def _expected_seat_result_schema(seat_result_schema):
+    if seat_result_schema is None or seat_result_schema == SEAT_RESULT_SCHEMA:
+        return SEAT_RESULT_SCHEMA
+    if seat_result_schema == SEAT_RESULT_SCHEMA_V2:
+        return SEAT_RESULT_SCHEMA_V2
+    return None
 
 
 def _wrap_bare_payload(stub, payload, occurrence):
@@ -583,7 +657,8 @@ def _probe_store_entry(spath):
 
 
 def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
-                     supersede=False, expect_sha256=None, anchor=None, occurrence=0):
+                     supersede=False, expect_sha256=None, anchor=None, occurrence=0,
+                     seat_result_schema=None):
     """Every check `ingest_landing` performs, with NO write.
 
     Returns (plan, refusal). Exactly one is None.
@@ -647,13 +722,35 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
     if envelope.get("seat") != seat_key:
         return None, _refuse("seat-mismatch", addressedSeat=seat_key, envelopeSeat=envelope.get("seat"))
 
+    expected_schema = _expected_seat_result_schema(seat_result_schema)
+    if expected_schema is None:
+        return None, _refuse("bad-argument",
+                             message="seat_result_schema %r is not a supported seat-result schema"
+                                     % (seat_result_schema,))
+
     schema = envelope.get("schema")
     stored_sha = None
-    if schema == SEAT_RESULT_SCHEMA:
+    if schema in SEAT_RESULT_SCHEMAS:
+        if schema != expected_schema:
+            return None, _refuse("schema-version-mismatch", schema=schema,
+                                 expectedSchema=expected_schema)
         stored_sha = payload_sha256(envelope.get("payload"))
         if stored_sha != envelope.get("payloadSha256"):
             return None, _refuse("landing-torn", computed=stored_sha,
                                  declared=envelope.get("payloadSha256"), landingPath=lpath)
+        if schema == SEAT_RESULT_SCHEMA_V2:
+            evidence_reason = _validate_execution_evidence(envelope.get("executionEvidence"))
+            if evidence_reason is not None:
+                return None, _refuse(evidence_reason)
+            provenance = envelope.get("provenance")
+            if provenance not in SEAT_PROVENANCE:
+                return None, _refuse("provenance-unknown", provenance=provenance)
+            computed_envelope_sha = envelope_sha256(envelope.get("payload"),
+                                                    envelope.get("executionEvidence"))
+            declared_envelope_sha = envelope.get("envelopeSha256")
+            if declared_envelope_sha != computed_envelope_sha:
+                return None, _refuse("envelope-torn", computed=computed_envelope_sha,
+                                     declared=declared_envelope_sha, landingPath=lpath)
     elif schema == SEAT_MISSING_SCHEMA:
         if envelope.get("reason") not in MISSING_REASONS:
             return None, _refuse("missing-reason",
@@ -695,7 +792,8 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
 
 
 def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
-                   supersede=False, expect_sha256=None, anchor=None, occurrence=0):
+                   supersede=False, expect_sha256=None, anchor=None, occurrence=0,
+                   seat_result_schema=None):
     """Ingest ONE landed seat envelope into the durable store. Never raises on bad input.
 
     Returns `{"ok": True, "storePath", "payloadSha256", "superseded"}` or a refusal
@@ -728,7 +826,8 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
     plan, refusal = validate_landing(session_dir, rnd, phase, seat_key, attempt,
                                      current_attempt=current_attempt, roster=roster,
                                      supersede=supersede, expect_sha256=expect_sha256,
-                                     anchor=anchor, occurrence=occurrence)
+                                     anchor=anchor, occurrence=occurrence,
+                                     seat_result_schema=seat_result_schema)
     if refusal is not None:
         return refusal
     atomic_write_json(plan["storePath"], plan["envelope"])
@@ -738,7 +837,8 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
             "occurrence": plan["occurrence"]}
 
 
-def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=None):
+def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=None,
+                  seat_result_schema=None):
     """Ingest every unclaimed landing file for `phase` at `current_attempt`.
 
     Idempotent by construction: a seat already in the store is reported `already-stored` with
@@ -798,7 +898,7 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
                 continue
         out = ingest_landing(session_dir, rnd, phase, seat_key, current_attempt,
                              current_attempt=current_attempt, roster=roster, anchor=anchor,
-                             occurrence=occurrence)
+                             occurrence=occurrence, seat_result_schema=seat_result_schema)
         out.setdefault("seatKey", seat_key)
         out.setdefault("storageKey", skey)
         out.setdefault("occurrence", occurrence)

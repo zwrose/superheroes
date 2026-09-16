@@ -146,8 +146,8 @@ RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 # is SHAPE-AMBIGUOUS after #681 — a genuine pre-#681 v3 state and a post-#681 state carrying the v4
 # shape under the old number are indistinguishable on disk — so a migration would have to guess which
 # one it is holding. The residual is disclosed rather than fixed.
-STATE_SCHEMA_VERSION = 4
-SUPPORTED_STATE_VERSIONS = (2, 3, 4)
+STATE_SCHEMA_VERSION = 5
+SUPPORTED_STATE_VERSIONS = (2, 3, 4, 5)
 
 # The receipt VERSION derives from the STATE's version: a v2 state terminates to
 # `receipt-certified/2` (today's shape, byte-for-byte unchanged — no key added), a v3 state to
@@ -744,6 +744,10 @@ def _state_version(state):
     if isinstance(version, bool) or not isinstance(version, int):
         return None
     return version if version in SUPPORTED_STATE_VERSIONS else None
+
+
+def _seat_result_schema(state):
+    return round_records.seat_result_schema_for_state_version(_state_version(state))
 
 
 def _receipt_version(state):
@@ -6678,10 +6682,13 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
 
 
 def _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence, row,
-                          manifest_sha, order_sha):
-    """`seat-result/1` header fields knowable at emission — NOT `recordedAt` / `payloadSha256`."""
+                          manifest_sha, order_sha, state):
+    """Seat-result header fields knowable at emission — NOT `recordedAt` / `payloadSha256`."""
+    schema = _seat_result_schema(state)
+    if schema is None:
+        raise ValueError("unknown-state-version")
     header = {
-        "schema": round_records.SEAT_RESULT_SCHEMA,
+        "schema": schema,
         "session": _meta_session_id(session_dir),
         "round": rnd,
         "phase": phase,
@@ -6827,7 +6834,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             "vendor": row["vendor"],
             "model": row["model"],
             "engine": row["engine"],
-            "resultContract": round_records.SEAT_RESULT_SCHEMA,
+            "resultContract": _seat_result_schema(state),
             "orderSha256": order_sha,
             "orderPath": paths["order_path"],
             "envelopeStubPath": paths["envelope_stub_path"],
@@ -6864,7 +6871,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             c.add_replace_file(order_path, order_bytes)
             # Projection of the anchor, never the authority — ingestion validates the mirrored hash.
             stub = _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence,
-                                         row, manifest_sha, order_sha)
+                                         row, manifest_sha, order_sha, state)
             c.add_replace_file(stub_path, round_records.canonical(stub).encode("utf-8"))
         c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
@@ -7324,9 +7331,14 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     else:
         head_content = None
 
+    seat_schema = _seat_result_schema(state)
+    if seat_schema is None:
+        return _refuse_cmd(session_dir, "record-result", "state-version-unsupported", phase=phase,
+                           rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence))
     plan, landing_refusal = round_records.validate_landing(
         session_dir, rnd, phase, seat, cur_attempt, current_attempt=cur_attempt, roster=roster,
-        supersede=supersede, expect_sha256=expect_sha256, anchor=anchor, occurrence=occurrence)
+        supersede=supersede, expect_sha256=expect_sha256, anchor=anchor, occurrence=occurrence,
+        seat_result_schema=seat_schema)
     if landing_refusal is not None:
         return _refuse_cmd(session_dir, "record-result", landing_refusal.get("reason"), phase=phase,
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
@@ -7412,8 +7424,13 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
         if fault:
             return _refuse_cmd(session_dir, cmd, "payload-fault", phase=phase, rnd=rnd,
                                attempt=attempt, seat=seat_key, detail=fault)
+    seat_schema = _seat_result_schema(state)
+    if seat_schema is None:
+        return _refuse_cmd(session_dir, cmd, "state-version-unsupported", phase=phase, rnd=rnd,
+                           attempt=attempt)
     results = round_records.sweep_landing(session_dir, rnd, phase, current_attempt=attempt,
-                                          roster=roster, anchor=anchor)
+                                          roster=roster, anchor=anchor,
+                                          seat_result_schema=seat_schema)
     recorded = []
     stale_strays = []
     for result in results:
@@ -7545,10 +7562,15 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
         except OSError as exc:
             return _refuse_cmd(session_dir, "record-missing", "evidence-unreadable", phase=phase,
                                rnd=rnd, attempt=cur_attempt, seat=seat, detail=str(exc))
+    seat_schema = _seat_result_schema(state)
+    if seat_schema is None:
+        return _refuse_cmd(session_dir, "record-missing", "state-version-unsupported", phase=phase,
+                           rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence))
     if not isinstance(seat, str) or seat not in roster:
         # Let the ingest layer own the enumerated `unknown-seat` refusal rather than respelling it.
         out = round_records.ingest_landing(session_dir, rnd, phase, seat, cur_attempt,
-                                           current_attempt=cur_attempt, roster=roster)
+                                           current_attempt=cur_attempt, roster=roster,
+                                           seat_result_schema=seat_schema)
         return _refuse_cmd(session_dir, "record-missing", out.get("reason"), phase=phase, rnd=rnd,
                            attempt=cur_attempt, seat=seat, detail=out.get("message"))
     slots = roster.count(seat)
@@ -7591,7 +7613,7 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
     round_records.atomic_write_json(lpath, envelope)
     out = round_records.ingest_landing(session_dir, rnd, phase, seat, cur_attempt,
                                        current_attempt=cur_attempt, roster=roster, anchor=anchor,
-                                       occurrence=occurrence)
+                                       occurrence=occurrence, seat_result_schema=seat_schema)
     if not out.get("ok"):
         return _refuse_cmd(session_dir, "record-missing", out.get("reason"), phase=phase, rnd=rnd,
                            attempt=cur_attempt, seat=_slot_label(seat, occurrence),
@@ -8059,8 +8081,11 @@ def _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt, se
     # One home for the vendor fact. For an orchestrator-fulfilled phase this resolves to None —
     # no seat was dispatched — and None is the honest record; naming a vendor would invent one.
     row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending, repo_root)
+    schema = _seat_result_schema(state)
+    if schema is None:
+        raise ValueError("unknown-state-version")
     return {
-        "schema": round_records.SEAT_RESULT_SCHEMA,
+        "schema": schema,
         "session": session_id,
         "round": rnd,
         "phase": phase,

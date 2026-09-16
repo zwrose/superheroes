@@ -238,7 +238,7 @@ def _index_envelopes(phase, envelopes, roster):
             # the caller must resolve; picking one would silently discard a real result.
             return None, "duplicate-envelope:%s#%d" % (seat, occurrence)
         schema = envelope.get("schema")
-        if schema == round_records.SEAT_RESULT_SCHEMA:
+        if schema in round_records.SEAT_RESULT_SCHEMAS:
             if "payload" not in envelope:
                 return None, "seat-result-missing-payload:%s" % seat
             payload = envelope.get("payload")
