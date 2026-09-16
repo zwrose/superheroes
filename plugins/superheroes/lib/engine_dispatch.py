@@ -253,10 +253,12 @@ def _entry_refusal_terminal(
     run_kind=RUN_KIND_REVIEW,
 ):
     """Single chokepoint for dispatch_review/dispatch_write entry refusals (#1269)."""
-    result = dict(refusal)
-    result.setdefault("attempts", 0)
-    result.setdefault("forfeited", False)
-    result.setdefault("terminal", True)
+    result = {
+        "attempts": 0,
+        "forfeited": False,
+        "terminal": True,
+        **refusal,
+    }
     if mode is not None and "mode" not in result:
         result["mode"] = mode
     run_dir_value = run_dir or ""

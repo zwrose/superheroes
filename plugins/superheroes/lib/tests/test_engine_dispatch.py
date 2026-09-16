@@ -9413,6 +9413,34 @@ def test_continuation_brief_check_mode_on_review_run_refuses_with_provenance(tmp
     assert "resolvedInputs" in res
 
 
+def test_entry_refusal_terminal_defaulting_caller_values_win():
+    # axis: caller's value wins over the default
+    with_defaults = ED._entry_refusal_terminal({"signal": "needs_context"})
+    assert with_defaults["attempts"] == 0
+    assert with_defaults["forfeited"] is False
+    assert with_defaults["terminal"] is True
+
+    with_caller = ED._entry_refusal_terminal({
+        "signal": "needs_context",
+        "attempts": 3,
+        "forfeited": True,
+        "terminal": False,
+    })
+    assert with_caller["attempts"] == 3
+    assert with_caller["forfeited"] is True
+    assert with_caller["terminal"] is False
+
+    with_falsy_caller = ED._entry_refusal_terminal({
+        "signal": "needs_context",
+        "attempts": 0,
+        "forfeited": False,
+        "terminal": False,
+    })
+    assert with_falsy_caller["attempts"] == 0
+    assert with_falsy_caller["forfeited"] is False
+    assert with_falsy_caller["terminal"] is False
+
+
 def test_entry_refusal_fail_closed_no_run_dir_supplied(tmp_path):
     res = ED.dispatch_review(
         seat=_codex_seat(),
