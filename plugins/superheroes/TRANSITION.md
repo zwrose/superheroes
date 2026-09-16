@@ -34,9 +34,11 @@ the accepted `--seat` shape. There is no silent fallback and no alias window for
 
 ### Dispatch result shape
 
-Every dispatch result now carries a `resolvedInputs` snapshot. Each input value is paired with a
-source marker that says whether the run took the value from the caller, a default, a clamp, or the
-registry.
+Every dispatch result carries `runOpened`. When `runOpened` is true the result also carries a
+`resolvedInputs` snapshot (with a `resolvedInputsStatus` of `pre-upgrade` or `journal-corrupt` when
+the snapshot could not be read from the journal). Each snapshot value is paired with a source marker
+that says whether the run took the value from the caller, a default, a clamp, or the registry.
+Refusals raised before the run opened carry `runOpened: false` and no snapshot.
 
 Results no longer carry a `ledger` key. Preflight refusals return to the caller in the result body
 like every other refusal.
