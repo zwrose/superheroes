@@ -166,4 +166,10 @@ Adding a health lens is a PR that meets [the lens contract](reference/lens-contr
 
 ## Cost + cadence
 
-Deterministic collectors run in seconds plus one model pass. The sweep runs on the advisor's nudge (≥10 merges or ≥14 days since the last sweep) — no superheroes-owned scheduler; the nudge/triage loop is a later arc issue.
+Deterministic collectors run in seconds plus one model pass. The sweep's cadence is a
+project configuration item — a guardian staleness setting the project configures
+(defaults: ≥10 merges or ≥14 days since the last sweep). The advisor reads that
+staleness at the recurring pass; when the project is stale, the advisor runs the sweep
+in that pass and triages its report in the same sitting. There is no superheroes-owned
+scheduler, no cron, and no cloud routine — the sweep reads and writes the out-of-repo
+project store, which a cloud session cannot reach.
