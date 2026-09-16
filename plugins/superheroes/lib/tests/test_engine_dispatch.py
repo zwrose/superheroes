@@ -8404,6 +8404,132 @@ def test_run_execution_record_codex_engaged_by_investigated_paths(tmp_path):
     assert record["observation"]["read"] == "engaged"
 
 
+def test_observation_from_attempt_investigated_threading_raise_vs_engaged(tmp_path, monkeypatch):
+    """Distinguish spot_check raise (unknown) from honest investigated paths (engaged)."""
+    run_dir = str(tmp_path / "codex-spot-check-threading")
+    rel = "src/main.py"
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, rel)
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    _execution_record_completed_attempt(
+        tmp_path, run_dir, stdout=json.dumps({"findings": [], "investigated": [rel]}),
+    )
+
+    def _raise_spot_check(*_args, **_kwargs):
+        raise RuntimeError("spot-check failed")
+
+    monkeypatch.setattr(ED.engine_adapter, "spot_check_investigated", _raise_spot_check)
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "unknown"
+
+    monkeypatch.undo()
+    record2, error2 = ED.run_execution_record(run_dir)
+    assert error2 is None
+    assert isinstance(record, dict)
+    assert record2["observation"]["read"] == "engaged"
+
+
+def test_grade_review_attempt_engaged_by_investigated_paths(tmp_path):
+    """Grading path: empty findings with accepted investigated paths stamps engaged."""
+    run_dir = str(tmp_path / "grade-investigated-engaged")
+    repo_root = _repo(tmp_path)
+    rel = "src/main.py"
+    real_file = os.path.join(repo_root, rel)
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    stdout = json.dumps({"findings": [], "investigated": [rel]})
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade["engagement"]["read"] == "engaged"
+    assert grade["investigated"] == [rel]
+
+
+def test_grade_review_attempt_engaged_by_nonempty_payload_without_investigated(tmp_path):
+    """Non-regression: non-empty payload with no accepted paths stays engaged."""
+    run_dir = str(tmp_path / "grade-payload-only")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_VALID_FINDINGS_STDOUT)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(_VALID_FINDINGS_STDOUT), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade["engagement"]["read"] == "engaged"
+    assert "investigated" not in grade
+
+
+def test_grade_review_attempt_vacuous_without_investigated_stamps_unknown(tmp_path):
+    """Non-regression: vacuous empty findings with no accepted paths stays unknown."""
+    run_dir = str(tmp_path / "grade-vacuous-unknown")
+    repo_root = _repo(tmp_path)
+    stdout = json.dumps({"findings": []})
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
+    assert grade["engagement"]["read"] == "unknown"
+
+
 def test_run_execution_record_codex_vacuous_prompt_echo(tmp_path):
     """Round-trip: codex prompt-echo-only stdout stamps unknown."""
     run_dir = str(tmp_path / "codex-vacuous-echo")

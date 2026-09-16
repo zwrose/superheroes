@@ -2717,7 +2717,9 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         }
 
     if has_payload:
-        engagement = _engagement_with_read(engagement, result_kind=kind, items=payload)
+        # axis: engagement read grades payload and accepted investigated paths together
+        engagement = _engagement_with_read(
+            engagement, result_kind=kind, items=payload, investigated=accepted)
         result = {"ok": True, "resultKind": kind, kind: payload, "engagement": engagement}
         if accepted:
             result["investigated"] = accepted
@@ -4180,8 +4182,10 @@ def _observation_from_attempt(run_dir_real, state, attempt):
                         generated = generated + (config_diff_path,)
                 _, accepted, _spot_rejected = engine_adapter.spot_check_investigated(
                     res.get("investigated"), cwd, generated_artifacts=generated)
+                # axis: engagement read grades payload and accepted investigated paths together
                 if has_payload:
-                    return _engagement_with_read(engagement, result_kind=kind, items=payload)
+                    return _engagement_with_read(
+                        engagement, result_kind=kind, items=payload, investigated=accepted)
                 if accepted:
                     return _engagement_with_read(
                         engagement, result_kind=kind, items=[], investigated=accepted)
