@@ -7219,9 +7219,9 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
 
 def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
     """Bind runner telemetry to the driver's order hash. Returns (envelope, refusal_reason, extra)."""
-    import engine_dispatch
     if not evidence_run_dir:
-        return None, "evidence-run-dir-required", {}
+        return envelope, None, {}
+    import engine_dispatch
     record, err = engine_dispatch.run_execution_record(evidence_run_dir)
     if err is not None:
         return None, "evidence-run-dir-unreadable", {"detail": err}
@@ -7341,6 +7341,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence))
 
     # Validate BEFORE storing: a refusal must leave nothing behind.
+    lpath = None
+    assembled = None
     if isinstance(seat, str) and seat in roster:
         envelope, _lerr = _read_landing_envelope(session_dir, rnd, phase, seat, cur_attempt,
                                                  occurrence)
@@ -7362,7 +7364,6 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                 return _refuse_cmd(session_dir, "record-result", "bad-argument", phase=phase,
                                    rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                                    detail=str(exc))
-            round_records.atomic_write_json(lpath, assembled)
         fault = _preflight_payload_fault(phase, envelope, seat)
         if fault:
             return _refuse_cmd(session_dir, "record-result", "payload-fault", phase=phase,
@@ -7381,7 +7382,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     plan, landing_refusal = round_records.validate_landing(
         session_dir, rnd, phase, seat, cur_attempt, current_attempt=cur_attempt, roster=roster,
         supersede=supersede, expect_sha256=expect_sha256, anchor=anchor, occurrence=occurrence,
-        seat_result_schema=seat_schema)
+        seat_result_schema=seat_schema,
+        envelope_override=assembled)
     if landing_refusal is not None:
         return _refuse_cmd(session_dir, "record-result", landing_refusal.get("reason"), phase=phase,
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
@@ -7397,10 +7399,16 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         session_dir, "record-result", "recorded", phase=phase, round=rnd, attempt=cur_attempt,
         seat=seat, occurrence=occurrence, payloadSha256=payload_sha,
         superseded=bool(plan["superseded"]), headDiffStorePath=head_store_path,
+        provenance=envelope.get("provenance") if isinstance(envelope, dict) else None,
+        envelopeSha256=envelope.get("envelopeSha256") if isinstance(envelope, dict) else None,
+        executionEvidencePresent=(isinstance(envelope, dict)
+                                  and "executionEvidence" in envelope),
         **_journal_addressing_fields(expect_round, expect_phase),
         **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     try:
         c = round_commit.begin(session_dir, "record-ingest")
+        if lpath is not None and assembled is not None:
+            c.add_replace_file(lpath, round_records.canonical(assembled).encode("utf-8"))
         c.add_replace_file(plan["storePath"], round_records.canonical(envelope).encode("utf-8"))
         if head_store_path is not None:
             c.add_replace_file(head_store_path, head_diff_bytes)
