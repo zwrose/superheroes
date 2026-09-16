@@ -20,6 +20,11 @@ if _LIB_DIR not in sys.path:
 import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
+# WORKAROUND: the profile schema stays at 2 while it carries the projectConfiguration keys an
+# older build does not know, so an older build re-calibrating from scratch can drop them.
+# delete-when: the keep list is stamped and a release carrying the configuration items has
+# shipped; then raise this version, pinning the new literal in the tests rather than referencing
+# this constant, so an older build refuses the profile instead of rewriting it.
 SCHEMA_VERSION = 2
 
 CONFIG_ABSENT = "absent"
