@@ -1,6 +1,6 @@
 ---
 name: checkpoint
-description: "Use before compaction in a showrunner, workhorse, or detective charter session — freshen live state and emit a ready-to-paste `/compact` command. `/compact` has no programmatic trigger; one paste is the floor. Not configure, review, or discovery."
+description: "Use before compaction in a showrunner, workhorse, or detective charter session — freshen live state and emit a ready-to-paste `/compact` command. `/compact` is not reachable from a skill; one paste is the floor. Not configure, review, or discovery."
 user-invocable: true
 ---
 
@@ -10,7 +10,7 @@ This skill speaks in host-neutral actions. Resolve them to your runtime's tools 
 
 Prepare a **long-lived charter session** (Showrunner advisor, Workhorse builder, or
 Detective diagnostician) for context compaction. This skill does **not** compact by itself
-— `/compact` has no programmatic trigger on any host, so the floor is: **run checkpoint,
+— `/compact` is not reachable from a skill, so the floor is: **run checkpoint,
 paste the emitted command once.** After compaction, the SessionStart recovery hook
 re-injects a pointer to re-read the charter skill from disk, so the owner does **not** need
 to re-invoke `/superheroes:showrunner`, `/superheroes:workhorse`, or
@@ -28,7 +28,8 @@ Resolve the session's **transcript path** first — the absolute path to this se
 JSONL transcript. On Claude Code, hook payloads name it in the common field
 `transcript_path` (see the host hooks reference); if this session pinned that path earlier,
 use the pin — never re-discover by newest file (`rubric/launch-doctrine.md` § Pin the
-transcript). On Codex, follow `codex-tools.md` for the equivalent session record path.
+transcript). Resolving a session transcript path is a Claude-host mechanical floor; on a
+host that does not name one, this step has no equivalent.
 
 Then call `charter_detect.detect_charter(transcript_path)` from the plugin lib. The
 function scans the transcript forward from the start (up to 200 MB), matches user records
