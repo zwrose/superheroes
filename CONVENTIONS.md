@@ -1139,7 +1139,7 @@ the two real homes disagreed. A drift test that reads one copy and asserts again
 a hand-typed literal of the same fact is the same tautology; the assertion's right-hand side
 must trace back to the authoritative home (directly, or via the fixture the home also feeds).
 
-### 11.4 Pattern 3 — pointable step-body (the dispatched consumer cites, never copies)
+### 11.4 Pointable step-body (the dispatched consumer cites, never copies)
 
 The fact is a **step-body** — an ordered procedure that produces an artifact — and one of its
 consumers is a **dispatched subagent or external engine, which has no Skill tool and cannot reach

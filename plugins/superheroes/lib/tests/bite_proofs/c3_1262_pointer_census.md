@@ -65,6 +65,11 @@ FAILED plugins/superheroes/lib/tests/test_bite_proof_doctrine.py::test_consumer_
 1 passed in 0.06s
 ```
 
+**Restore receipt:** the inverse edit restored the pointer literal inside
+`## Machinery, homes, and what a review may ask for` to `` `rubric/bite-proof.md` `` — the single
+misspelled token put back, with no other line in the section touched. The green run above is on that
+restored text; the record's shared tree-state block below confirms the worktree was clean after it.
+
 ## BP-C3-2 — the completeness walker
 
 **Guarded element:** `_walk_plugin_pointer_sections` together with `_check_pointer_roster_complete`.
