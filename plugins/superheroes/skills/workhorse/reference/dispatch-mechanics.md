@@ -154,6 +154,9 @@ readers.
 
 ## Launch slice vs continuation slice
 
+<!-- WORKAROUND: 540 s continuation and short launch slice recipes for turn-end survival
+     delete-when: the background-session trial receipt marks turn-end slice recipes not needed -->
+
 Every `dispatch-review` / `dispatch-write` call names a `--max-wait` **slice** on that `--run-dir`.
 The slice you choose depends on whether the run is a **launch** or a **continuation**:
 

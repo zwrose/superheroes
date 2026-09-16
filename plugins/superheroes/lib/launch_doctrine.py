@@ -4,6 +4,8 @@
 Parses ``rubric/launch-doctrine.md`` and ``skills/showrunner/reference/dispatch-preflight.md``.
 Every refusal is fail-closed: a caller that cannot parse the doctrine must never proceed as if
 it had. None of these functions raise out of themselves."""
+# WORKAROUND: machine parser for launch doctrine prose the host does not supply natively
+# delete-when: the host injects launch rulings and preflight checks without a parsed artifact
 from __future__ import annotations
 
 import hashlib
