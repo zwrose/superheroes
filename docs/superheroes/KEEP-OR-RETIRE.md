@@ -1030,13 +1030,13 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 - **Component.** The retired-tier-vocabulary census
   `_assert_retired_tier_literals_absent` in `plugins/superheroes/lib/tests/test_disposition_flow.py`,
-  which reads a **closed in-module enumeration of three shipped surfaces** —
-  `skills/showrunner/reference/issue-contract.md`, `skills/showrunner/SKILL.md`, and
-  `skills/showrunner/reference/vet-receipt.md` — and fails on any of the four retired tier literals
-  (`Tier 1`, `Tier 2`, `Tier-1`, `Tier-2`). It costs three file reads per suite run. A surface joins
-  the enumeration in the same change that renames its text, never before; the two shipped surfaces
-  that still carry the retired names (`skills/showrunner/reference/owner-decisions.md` and
-  `skills/discuss-open-decisions/SKILL.md`) join it with issue #1287.
+  which reads every shipped doctrine surface the module already knows — `_TOUCHED_FILES` plus
+  `skills/showrunner/reference/issue-contract.md` — minus the named not-yet-migrated pair
+  (`skills/showrunner/reference/owner-decisions.md` and
+  `skills/discuss-open-decisions/SKILL.md`, which join the census with issue #1287) — and fails on
+  any of the four retired tier literals (`Tier 1`, `Tier 2`, `Tier-1`, `Tier-2`). It costs one file
+  read per censused surface per suite run. A surface leaves `_TIER_VOCAB_NOT_YET_MIGRATED` in the
+  same change that renames its text, never before.
 - **Condition.** Catch-based, 45 days: real catches — a retired literal reappearing in a shipped
   surface and being caught here rather than in review. On firing, a proposal to the owner at a
   gardening pass. A zero count means the retired vocabulary is staying retired, which is the expected
@@ -1046,9 +1046,15 @@ The list's units are the census rows, and each entry is keyed to its census id.
   exactly the drift it was minted to catch; the extended set is what closes that.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** structural — a doc-to-doc vocabulary census over a closed file enumeration;
-  the enumeration is the part a person keeps current, and it grows only when a surface's text
-  migrates to the new vocabulary.
+- **Notes.** structural — a doc-to-doc vocabulary census over the module's known surfaces minus a
+  named exception tuple; coverage grows by construction as surfaces migrate. **Tracked exception
+  (2026-09-16):** the authoritative home `skills/showrunner/reference/owner-decisions.md` still
+  carries the retired tier vocabulary (`Tier 1`, `Tier 2`, `Every Tier-2 item is appended…`) while
+  its two copy-holders `skills/showrunner/SKILL.md` and
+  `skills/showrunner/reference/vet-receipt.md` now read craft-call / owner-call — the drift guard
+  that bound copies to the home was retired with the verbatim-clause pins in this child, and no
+  replacement prose pin ships here per register R4; issue #1287 closes the home-side rename and
+  restores copy/home alignment.
 
 
 ## The workaround-marker inventory

@@ -1,7 +1,7 @@
 """Cross-doc disposition-flow structural guards (issue #1113).
 
 Enforces: pinned section headings; retired vocabulary and owner-rejected terms absent;
-retired tier vocabulary absent from a closed three-file enumeration of shipped doctrine surfaces;
+retired tier vocabulary absent from shipped doctrine surfaces minus a named not-yet-migrated set;
 registry marker home;
 discuss-open-decisions cites the owner-decisions canonical home path.
 """
@@ -14,7 +14,8 @@ discuss-open-decisions cites the owner-decisions canonical home path.
 # Prose MEANING, Contents parity, table shape, and ordering beyond presence are
 # guarded by review, not by CI. No negation heuristics, no paragraph heuristics,
 # no structural parsers beyond heading-line membership checks.
-# The retired tier vocabulary census uses a closed three-file enumeration — no tree walk.
+# The retired tier vocabulary census walks _TOUCHED_FILES plus issue-contract, minus
+# _TIER_VOCAB_NOT_YET_MIGRATED — no tree walk.
 import os
 import re
 
@@ -56,15 +57,21 @@ _RETIRED_VOCAB_FILES = (
     _VET_RECEIPT,
 )
 
-# The shipped surfaces whose routing vocabulary this change migrates. Closed by construction:
-# a surface joins this tuple in the same change that renames its text, never before.
-_RETIRED_TIER_VOCAB_FILES = (
-    _ISSUE_CONTRACT,
-    _SHOWRUNNER_CHARTER,
-    _VET_RECEIPT,
+# Surfaces the module already reads for disposition-flow guards, plus issue-contract.
+_TIER_VOCAB_CENSUS_SURFACES = _TOUCHED_FILES + (_ISSUE_CONTRACT,)
+
+# Surfaces still on the retired tier names; they leave this tuple when their text migrates.
+_TIER_VOCAB_NOT_YET_MIGRATED = (
+    _OWNER_DECISIONS,
+    _DISCUSS_OPEN,
+)
+
+_DISCUSS_OPEN_APPEND_BEFORE_PROPOSE = (
+    "**before** it is proposed in this session's delivery message"
 )
 
 _PINNED_OWNER_DECISIONS_HEADINGS = (
+    "## The worth-it gate and the venue ladder",
     "## The revisit-trigger registry",
 )
 
@@ -133,11 +140,13 @@ def _assert_retired_vocabulary_absent(texts=None):
 
 
 def _assert_retired_tier_literals_absent(texts=None):
-    # axis: presence of a retired tier literal in an enumerated shipped surface — never absence
-    # elsewhere; the enumeration is closed and a surface joins it only when its text migrates.
+    # axis: presence of a retired tier literal in a census surface — never absence elsewhere;
+    # coverage grows by construction as surfaces leave _TIER_VOCAB_NOT_YET_MIGRATED.
     if texts is None:
-        texts = {rel: _read_plugin(rel) for rel in _RETIRED_TIER_VOCAB_FILES}
-    for rel in _RETIRED_TIER_VOCAB_FILES:
+        texts = {rel: _read_plugin(rel) for rel in _TIER_VOCAB_CENSUS_SURFACES}
+    for rel in _TIER_VOCAB_CENSUS_SURFACES:
+        if rel in _TIER_VOCAB_NOT_YET_MIGRATED:
+            continue
         text = texts[rel]
         for literal in _RETIRED_TIER_LITERALS:
             if literal in text:
@@ -148,11 +157,28 @@ def _assert_retired_tier_literals_absent(texts=None):
 
 def _assert_discuss_open_holder_pins(texts=None):
     if texts is None:
-        texts = {_DISCUSS_OPEN: _read_plugin(_DISCUSS_OPEN)}
+        texts = {
+            _DISCUSS_OPEN: _read_plugin(_DISCUSS_OPEN),
+            _OWNER_DECISIONS: _read_plugin(_OWNER_DECISIONS),
+        }
+    # §11.3 anti-tautology: assert the authoritative home FIRST, then the holder's pins
+    # (owner-ruled fold 2026-08-24, collector item 72 — the prior order checked the copy
+    # before the home).
+    owner_lines = set(texts[_OWNER_DECISIONS].splitlines())
+    for heading in _PINNED_OWNER_DECISIONS_HEADINGS:
+        if heading not in owner_lines:
+            raise AssertionError(
+                "%s: pinned heading missing: %r" % (_OWNER_DECISIONS, heading)
+            )
     text = texts[_DISCUSS_OPEN]
     if _OWNER_DECISIONS not in text:
         raise AssertionError(
             "%s: canonical home %r not cited" % (_DISCUSS_OPEN, _OWNER_DECISIONS)
+        )
+    if _DISCUSS_OPEN_APPEND_BEFORE_PROPOSE not in text:
+        raise AssertionError(
+            "%s: append-before-propose pin %r missing"
+            % (_DISCUSS_OPEN, _DISCUSS_OPEN_APPEND_BEFORE_PROPOSE)
         )
 
 
@@ -225,7 +251,12 @@ def test_registry_marker_has_exactly_one_home():
 
 
 def test_negative_pinned_heading_renamed():
-    synthetic = "## The revisit-trigger registry (old)"
+    synthetic = "\n".join(
+        (
+            "## The worth-it gate and the venue ladder",
+            "## The revisit-trigger registry (old)",
+        )
+    )
     review_disc = "\n".join(_PINNED_REVIEW_DISCIPLINE_HEADINGS)
     texts = {_OWNER_DECISIONS: synthetic, _REVIEW_DISCIPLINE: review_disc}
     _expect_assertion_error(
@@ -244,7 +275,7 @@ def test_negative_retired_vocabulary_inserted():
 
 
 def test_negative_retired_tier_literal_inserted():
-    texts = {rel: "" for rel in _RETIRED_TIER_VOCAB_FILES}
+    texts = {rel: "" for rel in _TIER_VOCAB_CENSUS_SURFACES}
     texts[_VET_RECEIPT] = "Every Tier 2 item is appended to the collector."
     _expect_assertion_error(
         lambda: _assert_retired_tier_literals_absent(texts),
@@ -264,10 +295,24 @@ def test_negative_owner_rejected_literal_inserted():
 def test_negative_discuss_open_missing_home():
     texts = {
         _DISCUSS_OPEN: "See skills/showrunner/SKILL.md instead.",
+        _OWNER_DECISIONS: "\n".join(_PINNED_OWNER_DECISIONS_HEADINGS),
     }
     _expect_assertion_error(
         lambda: _assert_discuss_open_holder_pins(texts),
         match="canonical home .* not cited",
+    )
+
+
+def test_negative_discuss_open_missing_append_before_propose():
+    texts = {
+        _DISCUSS_OPEN: (
+            "See %s for the worth-it gate." % _OWNER_DECISIONS
+        ),
+        _OWNER_DECISIONS: "\n".join(_PINNED_OWNER_DECISIONS_HEADINGS),
+    }
+    _expect_assertion_error(
+        lambda: _assert_discuss_open_holder_pins(texts),
+        match="append-before-propose pin",
     )
 
 

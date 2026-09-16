@@ -159,6 +159,19 @@ section carries what each tier **commits to**. How a tier is graded — the evid
 of severity ladder and evidence tier, and the carve-out that lets a P2 file — belongs to the intake
 contract, whose one home is [`owner-decisions.md`](owner-decisions.md).
 
+**Intake grading.** Pipe the tier claim as JSON on stdin to `front_door grade` in
+[`../../../lib/front_door.py`](../../../lib/front_door.py) — from a plugin-cache install,
+`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+echo '<claim-json>' | python3 -B "$ROOT_DIR/lib/front_door.py" grade --cwd <repo> [--root <store>]
+```
+
+reading the JSON result from stdout. **Only an outcome of `graded` may proceed to filing**; every
+other outcome **queues or refuses** — including the named refusal tokens `ladder-unstamped`,
+`band-unknown`, `evidence-argued`, `p0-band-excluded`, and `profile-absent`.
+
 - **P0, next wave.** Requires the ladder's top band **by citation** together with field evidence,
   or the **owner's explicit override**. The override is the owner's own act and **nobody else may
   invoke it**. **Every P0 names what it displaces.** The displaced item returns to the head of its
@@ -170,7 +183,8 @@ contract, whose one home is [`owner-decisions.md`](owner-decisions.md).
   P1 is proposed for promotion, demotion, or decline. **None are immortal.**
 - **P2, should eventually happen.** The one carve-out from *no filing without the owner's word*,
   granted by the intake contract and exercised only where that contract grants it: the item files on
-  the advisor's authority with its grading recorded, and the evidence bar is what earned that.
+  the advisor's authority **only after intake grading returns `graded`**, with its grading recorded,
+  and the evidence bar is what earned that.
   Lives in the backlog, out of default views, and drains mostly through folding in.
 - **Declined, below the bar.** A line in the
   [declined registry](../../../rubric/glossary.md#declined-registry) with a named
