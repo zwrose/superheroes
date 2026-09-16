@@ -697,7 +697,7 @@ def test_engine_dispatch_timeout_expiry_contract_is_stated_in_dispatch_reference
     # #202: a wedged engine dispatch is not fail-open (a hang, not a bounded cost). The timeout
     # itself is structural (#204's PreToolUse Bash floor), so this reference does NOT prescribe a
     # prompted watchdog — what it owns is the EXPIRY contract: a killed/timed-out dispatch parses
-    # `unreadable` → the reviewer takes UFR-7, the fixer falls open to Claude. Structural pin so
+    # `unreadable` → the reviewer takes UFR-7, the fixer falls open to the host model. Structural pin so
     # that contract (and the "structural, not prompted" framing) can't silently vanish.
     ref = os.path.join(_HERE, "..", "..", "skills", "review-code", "reference", "auto-fix-loop.md")
     with open(ref, encoding="utf-8") as fh:
