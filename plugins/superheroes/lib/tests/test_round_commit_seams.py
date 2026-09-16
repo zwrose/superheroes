@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -26,6 +27,7 @@ def _load(name):
 
 RD = _load("round_driver")
 RR = _load("round_records")
+ED = _load("engine_dispatch")
 RC = RD.round_commit
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
@@ -493,14 +495,103 @@ def _assert_sweep_repair_agree(session_dir, head_text):
 
 # --- Group A: record ingest -------------------------------------------------------------------
 
-@pytest.mark.parametrize("stop_at", ["staged", "sealed", "applied", "done"])
+RECORD_INGEST_STOP_ATS = ["staged", "sealed", "applied", "done"]
+
+
+def _landing_path(session_dir, seat, pend=None, occurrence=0):
+  pend = pend or _pending(session_dir)
+  return RR.landing_path(session_dir, pend["round"], pend["phase"],
+                         RR.storage_key(seat, occurrence), pend["attempt"])
+
+
+def _dispatch_observed_land(session_dir, seat, payload=None, pend=None, **over):
+  pend = pend or _pending(session_dir)
+  payload = ({"findings": [], "confidence": "high", "seat": seat,
+              "verificationReceipt": {"ran": True}} if payload is None else payload)
+  manifest_sha, order_sha = _anchor_hashes(session_dir, pend["round"], pend["phase"],
+                                           pend["attempt"], seat)
+  schema = RR.seat_result_schema_for_state_version(_state(session_dir).get("schemaVersion"))
+  env = {
+    "schema": schema,
+    "session": _session_id(session_dir),
+    "round": pend["round"],
+    "phase": pend["phase"],
+    "seat": seat,
+    "attempt": pend["attempt"],
+    "vendor": "claude",
+    "model": "sonnet-5",
+    "dispatchRef": manifest_sha,
+    "orderSha256": order_sha,
+    "manifestSha256": manifest_sha,
+    "recordedAt": "2026-08-07T00:00:00",
+    "payloadSha256": RR.payload_sha256(payload),
+    "payload": payload,
+    "provenance": RR.PROVENANCE_DISPATCH_OBSERVED,
+    "envelopeSha256": RR.envelope_sha256(payload, None),
+  }
+  env.update(over)
+  if "executionEvidence" in over:
+    env["envelopeSha256"] = RR.envelope_sha256(payload, over["executionEvidence"])
+  path = _landing_path(session_dir, seat, pend=pend)
+  RR.atomic_write_json(path, env)
+  return path, env, _read_bytes(path)
+
+
+def _execution_run_dir(tmp_path, prompt_bytes, echo_nonce="nonce-1", name="run"):
+  run_dir = str(tmp_path / name)
+  os.makedirs(run_dir, exist_ok=True)
+  journal_root = str(tmp_path / "dispatch-journal-root")
+  os.makedirs(journal_root, exist_ok=True)
+  os.environ[ED.JOURNAL_ROOT_ENV] = journal_root
+  with open(os.path.join(run_dir, "journal-root.txt"), "w", encoding="utf-8") as fh:
+    fh.write(journal_root + "\n")
+  prompt_path = os.path.join(run_dir, ED.PROMPT_NAME)
+  with open(prompt_path, "wb") as fh:
+    fh.write(prompt_bytes)
+  opened = {
+    "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
+    "roleKind": ED.RUN_KIND_REVIEW, "orderId": "test-order",
+    "argv": [sys.executable, "-c", "pass"], "cwd": run_dir,
+    "timeout": 30, "retryTimeout": 30, "promptPath": prompt_path,
+    "echoNonce": echo_nonce, "at": time.time(),
+  }
+  ED._journal_append(run_dir, opened)
+  ED._journal_append(run_dir, {
+    "kind": "attempt-ended", "attempt": 1,
+    "ended": {"wallSeconds": 0.1, "stdoutBytes": 0, "exitCode": 0},
+    "at": time.time(),
+  })
+  open(os.path.join(run_dir, "attempt-1.stdout"), "wb").write(b"")
+  open(os.path.join(run_dir, "attempt-1.stderr"), "wb").write(b"")
+  return run_dir
+
+
+def _force_commit_refused_on_kind(monkeypatch, kind, reason="commit-id-collision",
+                                  detail="synthetic"):
+  real_begin = RD.round_commit.begin
+
+  def wrapper(session_dir, commit_kind, **kw):
+    c = real_begin(session_dir, commit_kind, **kw)
+    if commit_kind == kind:
+      def refusing_run():
+        raise RC.CommitRefused(reason, detail)
+      c.run = refusing_run
+    return c
+
+  monkeypatch.setattr(RD.round_commit, "begin", wrapper)
+
+
+@pytest.mark.parametrize("stop_at", RECORD_INGEST_STOP_ATS)
 def test_seam_a_record_ingest_crash_matrix(tmp_path, adapters, monkeypatch, stop_at):
   d, _head_path, head_text = _record_ingest_setup(tmp_path, adapters)
   before = _snapshot_record_ingest(d)
+  lpath = _landing_path(d, "dispatch-fixer")
+  before_landing = _read_bytes(lpath)
   _stop_at_kind(monkeypatch, "record-ingest", stop_at)
   with pytest.raises(RC.StopPoint):
     RD.cmd_record_result(d, "dispatch-fixer")
   RC.recover(d)
+  assert _read_bytes(lpath) == before_landing
   if stop_at == "staged":
     after = _snapshot_record_ingest(d)
     assert after == before
@@ -561,6 +652,122 @@ def test_seam_a_record_ingest_recovers_via_driver_command(tmp_path, adapters, mo
   RD.cmd_record_result(d, "dispatch-fixer")
   _assert_record_ingest_agree(d, head_text)
   assert _commits_empty(d)
+
+
+def test_seam_a_record_ingest_replaces_landing_when_evidence_stamped(tmp_path, adapters):
+  d = _session(tmp_path, name="ev-stamp")
+  pend = _pending(d)
+  path, _env, before = _dispatch_observed_land(d, "code-reviewer")
+  order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
+                                     RR.storage_key("code-reviewer"), pend["attempt"])
+  with open(order_path, "rb") as fh:
+    prompt_bytes = fh.read()
+  run_dir = _execution_run_dir(tmp_path, prompt_bytes, name="ev-stamp-run")
+  out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
+  assert out["ok"], out
+  after = _read_bytes(path)
+  assert after != before
+  stored, err = RR.read_json(out["storePath"])
+  assert err is None
+  assert "executionEvidence" in stored
+  assert after == RR.canonical(stored).encode("utf-8")
+
+
+def test_seam_a_dispatch_observed_without_evidence_leaves_landing_bytes(tmp_path, adapters):
+  d = _session(tmp_path, name="no-evidence")
+  path, _env, before = _dispatch_observed_land(d, "code-reviewer")
+  out = RD.cmd_record_result(d, "code-reviewer")
+  assert out["ok"], out
+  assert _read_bytes(path) == before
+
+
+def test_seam_a_record_result_refusal_store_exists_leaves_landing_bytes(tmp_path, adapters):
+  d = _session(tmp_path, name="store-exists")
+  path, _env, _before = _dispatch_observed_land(d, "code-reviewer")
+  out1 = RD.cmd_record_result(d, "code-reviewer")
+  assert out1["ok"], out1
+  _dispatch_observed_land(d, "code-reviewer")
+  before_second = _read_bytes(path)
+  out2 = RD.cmd_record_result(d, "code-reviewer")
+  assert out2["ok"] is False
+  assert out2["reason"] == "store-exists"
+  assert _read_bytes(path) == before_second
+
+
+def test_seam_a_record_result_refusal_evidence_run_dir_unreadable_leaves_landing_bytes(
+    tmp_path, adapters):
+  d = _session(tmp_path, name="ev-unread")
+  path, _env, before = _dispatch_observed_land(d, "code-reviewer")
+  bad = str(tmp_path / "not-a-run")
+  with open(bad, "w", encoding="utf-8") as fh:
+    fh.write("x")
+  out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=bad)
+  assert out["ok"] is False
+  assert out["reason"] == "evidence-run-dir-unreadable"
+  assert _read_bytes(path) == before
+
+
+def test_seam_a_record_result_refusal_evidence_order_mismatch_leaves_landing_bytes(
+    tmp_path, adapters):
+  d = _session(tmp_path, name="ev-mismatch")
+  path, env, before = _dispatch_observed_land(d, "code-reviewer")
+  run_dir = _execution_run_dir(tmp_path, b"wrong-order-prompt\n", name="ev-mismatch-run")
+  assert hashlib.sha256(b"wrong-order-prompt\n").hexdigest() != env["orderSha256"]
+  out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
+  assert out["ok"] is False
+  assert out["reason"] == "evidence-order-mismatch"
+  assert _read_bytes(path) == before
+
+
+def test_seam_a_record_result_refusal_commit_refused_leaves_landing_bytes(tmp_path, adapters,
+                                                                          monkeypatch):
+  d = _session(tmp_path, name="commit-refused")
+  path, _env, before = _dispatch_observed_land(d, "code-reviewer")
+  _force_commit_refused_on_kind(monkeypatch, "record-ingest")
+  out = RD.cmd_record_result(d, "code-reviewer")
+  assert out["ok"] is False
+  assert out["reason"] == "commit-id-collision"
+  assert _read_bytes(path) == before
+
+
+def test_seam_a_recorded_journal_agrees_with_store(tmp_path, adapters):
+  d = _session(tmp_path, name="journal-agree")
+  pend = _pending(d)
+  _dispatch_observed_land(d, "code-reviewer")
+  order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
+                                     RR.storage_key("code-reviewer"), pend["attempt"])
+  with open(order_path, "rb") as fh:
+    prompt_bytes = fh.read()
+  run_dir = _execution_run_dir(tmp_path, prompt_bytes, name="journal-agree-run")
+  out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
+  assert out["ok"], out
+  recorded = [e for e in _outcomes(d, "recorded") if e.get("seat") == "code-reviewer"]
+  assert recorded
+  row = recorded[-1]
+  stored, err = RR.read_json(out["storePath"])
+  assert err is None
+  assert row["provenance"] == stored.get("provenance")
+  assert row["envelopeSha256"] == stored.get("envelopeSha256")
+  assert row["executionEvidencePresent"] == ("executionEvidence" in stored)
+  assert row["executionEvidencePresent"] is True
+
+
+def test_seam_a_recorded_journal_agrees_with_store_seat_result_v1(tmp_path, adapters):
+  d = _session(tmp_path, name="journal-v1")
+  state = _state(d)
+  state["schemaVersion"] = 4
+  RD.save_state(d, state)
+  _land(d, "code-reviewer", schema=RR.SEAT_RESULT_SCHEMA)
+  out = RD.cmd_record_result(d, "code-reviewer")
+  assert out["ok"], out
+  recorded = [e for e in _outcomes(d, "recorded") if e.get("seat") == "code-reviewer"]
+  assert recorded
+  row = recorded[-1]
+  stored, err = RR.read_json(out["storePath"])
+  assert err is None
+  assert row.get("provenance") is None
+  assert row.get("envelopeSha256") is None
+  assert row.get("executionEvidencePresent") is False
 
 
 # --- Group B: orders manifest -----------------------------------------------------------------
