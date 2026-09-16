@@ -15,21 +15,26 @@ headings.
 - the guard proves nothing about whether the doctrine is correct, obeyed, or actually recorded for
   any change.
 
-**Birth duties.** This detector is rung-4 machinery under the rule in
-``rubric/review-discipline.md``, section ``Prefer shapes that cannot fail``, and it carries all
-three:
+**Birth duties, for the pointer-count roster and its walk.** Under the rule in
+``rubric/review-discipline.md``, section ``Prefer shapes that cannot fail``, this roster and walk
+owe three duties:
 
 - **Bite-proof** — recorded at ``lib/tests/bite_proofs/c3_1262_pointer_census.md``. The pointer
   count assertion and the roster completeness walker were each driven red on a planted defect and
   returned to green.
 - **Retirement condition and tag** — entry **S7** on the project's keep-or-retire record, which
   lives with the project's definition-docs.
-- **By-construction coverage, for the pointer half only** — ``_walk_plugin_pointer_sections`` walks
-  every markdown file under the plugin root and ``_check_pointer_roster_complete`` refuses any
-  pointer-carrying section the roster does not name, so a new consumer cannot be missed silently.
-  ``_census_excluded`` is the walk's one exclusion chokepoint. The **heading and clause rosters have
-  no such walker**; they are hand-maintained, which is the residual recorded above and is not
-  covered by this duty.
+- **By-construction coverage, for the pointer half only** — ``_sections_with_pointer`` records a
+  pointer only when it sits inside a level-2 section, because of the ``if _heading_level(line) != 2:
+  continue`` guard, so a pointer before the first ``##`` heading, or in a file whose headings are only
+  ``#`` or ``###``, is invisible to the walk and ``test_pointer_roster_is_complete`` stays green.
+  Over the plugin root, ``_walk_plugin_pointer_sections`` enumerates every markdown file there
+  through the single ``_census_excluded`` chokepoint, and ``_check_pointer_roster_complete`` refuses
+  any pointer-carrying section the roster does not name. The reach outside the plugin root is one
+  hand-named file, ``CONVENTIONS.md``, spelled inline in ``_walk_pointer_carrying_sections`` and not
+  behind that chokepoint — a hand-maintained enumeration rather than by-construction coverage. The
+  **heading and clause rosters have no such walker**; they are hand-maintained, which is the residual
+  recorded above and is not covered by this duty.
 """
 import os
 import re

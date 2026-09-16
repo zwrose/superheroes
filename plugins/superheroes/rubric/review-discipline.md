@@ -637,7 +637,8 @@ the cost recur rather than end.
 
 **The pin rule.** A test on a [doctrine surface](rubric/glossary.md#doctrine-surface) pins **structure**,
 never **sentences**. It may assert that a check id, a heading, or a column exists where code and
-doc both need it. It never asserts a doctrine sentence. This rule keeps the mirror class from
+doc both need it. It never asserts a doctrine sentence, with one exception — a pin whose subject is
+a hard line, governed by the hard-line bullet below. This rule keeps the mirror class from
 growing back inside the test suite.
 
 **What happens to a sentence pin that already exists.**
