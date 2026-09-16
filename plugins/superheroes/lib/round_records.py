@@ -72,6 +72,9 @@ SEAT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED,
                    PROVENANCE_ORCHESTRATOR_FULFILLED)
 EVIDENCE_BEARING_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
 EXECUTION_EVIDENCE_FIELDS = ("source", "runnerNonce", "recordDigest", "observation")
+EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
+    ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry"))
+EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
 _EXECUTION_EVIDENCE_POINTER_KEYS = frozenset(
     ("path", "file", "filePath", "ref", "href", "uri", "url", "evidencePath"))
 # A seat-missing envelope records a seat that produced NO artifact. Same envelope minus the
@@ -544,24 +547,41 @@ def _execution_evidence_has_pointer(value):
 
 def _validate_execution_evidence(evidence):
     if not isinstance(evidence, dict):
-        return "execution-evidence-malformed"
+        return ("execution-evidence-malformed", {})
+    extra_top = set(evidence.keys()) - set(EXECUTION_EVIDENCE_FIELDS)
+    if extra_top:
+        return ("execution-evidence-unknown-field", {
+            "field": sorted(extra_top)[0],
+            "location": "executionEvidence",
+        })
     for field in EXECUTION_EVIDENCE_FIELDS:
         if field not in evidence:
-            return "execution-evidence-malformed"
+            return ("execution-evidence-malformed", {})
     source = evidence.get("source")
     runner_nonce = evidence.get("runnerNonce")
     record_digest = evidence.get("recordDigest")
     observation = evidence.get("observation")
     if not isinstance(source, str) or not source:
-        return "execution-evidence-malformed"
+        return ("execution-evidence-malformed", {})
     if not isinstance(runner_nonce, str) or not runner_nonce:
-        return "execution-evidence-malformed"
+        return ("execution-evidence-malformed", {})
     if not isinstance(record_digest, str) or not record_digest:
-        return "execution-evidence-malformed"
+        return ("execution-evidence-malformed", {})
     if not isinstance(observation, dict):
-        return "execution-evidence-malformed"
+        return ("execution-evidence-malformed", {})
     if _execution_evidence_has_pointer(evidence):
-        return "execution-evidence-not-inline"
+        return ("execution-evidence-not-inline", {})
+    extra_obs = set(observation.keys()) - EXECUTION_EVIDENCE_OBSERVATION_FIELDS
+    if extra_obs:
+        return ("execution-evidence-unknown-field", {
+            "field": sorted(extra_obs)[0],
+            "location": "observation",
+        })
+    telemetry = observation.get("telemetry")
+    if telemetry not in EXECUTION_EVIDENCE_TELEMETRY_VALUES:
+        return ("execution-evidence-malformed", {})
+    if set(observation.keys()) != EXECUTION_EVIDENCE_OBSERVATION_FIELDS:
+        return ("execution-evidence-malformed", {})
     return None
 
 
@@ -762,9 +782,10 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
             if evidence_present:
                 if provenance == PROVENANCE_ORCHESTRATOR_FULFILLED:
                     return None, _refuse("execution-evidence-unexpected")
-                evidence_reason = _validate_execution_evidence(envelope["executionEvidence"])
-                if evidence_reason is not None:
-                    return None, _refuse(evidence_reason)
+                evidence_result = _validate_execution_evidence(envelope["executionEvidence"])
+                if evidence_result is not None:
+                    reason, extra = evidence_result
+                    return None, _refuse(reason, **extra)
                 evidence = envelope["executionEvidence"]
             else:
                 evidence = None

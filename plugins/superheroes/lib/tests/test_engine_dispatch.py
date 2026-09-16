@@ -8386,9 +8386,9 @@ def test_run_execution_record_codex_engaged_by_payload(tmp_path):
     assert record["observation"]["read"] == "engaged"
 
 
-def test_run_execution_record_codex_engaged_by_investigated_paths(tmp_path):
-    """Round-trip: codex empty payload with accepted investigated paths stamps engaged."""
-    run_dir = str(tmp_path / "codex-engaged-investigated")
+def test_run_execution_record_codex_investigated_disclosure_stamps_unknown_read(tmp_path):
+    """Round-trip: codex empty payload with accepted investigated paths stamps unknown read."""
+    run_dir = str(tmp_path / "codex-investigated-disclosure")
     rel = "src/main.py"
     repo_root = _repo(tmp_path)
     real_file = os.path.join(repo_root, rel)
@@ -8401,11 +8401,11 @@ def test_run_execution_record_codex_engaged_by_investigated_paths(tmp_path):
     record, error = ED.run_execution_record(run_dir)
     assert error is None
     assert isinstance(record, dict)
-    assert record["observation"]["read"] == "engaged"
+    assert record["observation"]["read"] == "unknown"
 
 
-def test_observation_from_attempt_investigated_threading_raise_vs_engaged(tmp_path, monkeypatch):
-    """Distinguish spot_check raise (unknown) from honest investigated paths (engaged)."""
+def test_observation_from_attempt_investigated_threading_raise_vs_unknown(tmp_path, monkeypatch):
+    """Distinguish spot_check raise (unknown) from honest investigated paths (still unknown)."""
     run_dir = str(tmp_path / "codex-spot-check-threading")
     rel = "src/main.py"
     repo_root = _repo(tmp_path)
@@ -8429,13 +8429,13 @@ def test_observation_from_attempt_investigated_threading_raise_vs_engaged(tmp_pa
     monkeypatch.undo()
     record2, error2 = ED.run_execution_record(run_dir)
     assert error2 is None
-    assert isinstance(record, dict)
-    assert record2["observation"]["read"] == "engaged"
+    assert isinstance(record2, dict)
+    assert record2["observation"]["read"] == "unknown"
 
 
-def test_grade_review_attempt_engaged_by_investigated_paths(tmp_path):
-    """Grading path: empty findings with accepted investigated paths stamps engaged."""
-    run_dir = str(tmp_path / "grade-investigated-engaged")
+def test_grade_review_attempt_investigated_disclosure_stamps_unknown_read(tmp_path):
+    """Grading path: empty findings with accepted investigated paths stamps unknown read."""
+    run_dir = str(tmp_path / "grade-investigated-unknown-read")
     repo_root = _repo(tmp_path)
     rel = "src/main.py"
     real_file = os.path.join(repo_root, rel)
@@ -8465,7 +8465,7 @@ def test_grade_review_attempt_engaged_by_investigated_paths(tmp_path):
     }
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
-    assert grade["engagement"]["read"] == "engaged"
+    assert grade["engagement"]["read"] == "unknown"
     assert grade["investigated"] == [rel]
 
 
@@ -8475,7 +8475,7 @@ def test_grade_and_observation_agree_on_engagement(tmp_path):
         grade = ED._grade_review_attempt(run_dir, state, 1)
         observation = ED._observation_from_attempt(run_dir, state, 1)
         grade_eng = grade["engagement"]
-        for key in ("read", "source", "tokens", "toolCalls"):
+        for key in ("read", "source", "tokens", "toolCalls", "telemetry"):
             assert grade_eng[key] == observation[key]
 
     repo_root = _repo(tmp_path)
@@ -8554,6 +8554,118 @@ def test_grade_and_observation_agree_on_engagement(tmp_path):
         },
     }
     _assert_agree(run_dir_unparseable, state_unparseable)
+
+
+def test_engagement_with_read_signature_has_no_investigated_parameter():
+    path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_engagement_with_read":
+            names = [a.arg for a in node.args.args] + [a.arg for a in node.args.kwonlyargs]
+            assert "investigated" not in names
+            return
+    raise AssertionError("_engagement_with_read not found")
+
+
+def test_engagement_with_read_call_sites_pass_no_investigated_keyword():
+    path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    call_sites = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "_engagement_with_read":
+            call_sites.append(node)
+        elif isinstance(func, ast.Attribute) and func.attr == "_engagement_with_read":
+            call_sites.append(node)
+    assert len(call_sites) >= 9
+    for call in call_sites:
+        for kw in call.keywords:
+            assert kw.arg != "investigated", "investigated= at line %d" % call.lineno
+
+
+def test_graded_review_attempt_spot_check_lists_unchanged(tmp_path):
+    repo_root = _repo(tmp_path)
+    good = "good.py"
+    with open(os.path.join(repo_root, good), "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    stdout = json.dumps({"findings": [], "investigated": [good, "missing.py", "/abs/path"]})
+    run_dir = str(tmp_path / "spot-check-lists")
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade["investigated"] == [good]
+    assert "missing" in grade["investigatedRejected"]
+    assert "absolute" in grade["investigatedRejected"]
+
+
+def test_codex_engagement_construction_carries_telemetry_none():
+    engagement = ED._review_attempt_engagement("codex", "", "", 1.0, 100)
+    assert engagement["telemetry"] == "none"
+
+
+def test_cursor_engagement_construction_carries_telemetry_tool_calls():
+    stream = '{"type":"tool_call","call_id":"c1","subtype":"started"}\n'
+    engagement = ED._review_attempt_engagement("cursor", stream, "", 1.0, len(stream))
+    assert engagement["telemetry"] == "tool-calls"
+
+
+def test_payloadless_accepted_investigated_still_lands_engagement_read_unknown(tmp_path):
+    """Known I1 boundary: accepted investigated still gates vacuity, not engagement.read."""
+    run_dir = str(tmp_path / "i1-boundary-accepted-investigated")
+    repo_root = _repo(tmp_path)
+    rel = "src/main.py"
+    real_file = os.path.join(repo_root, rel)
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    stdout = json.dumps({"findings": [], "investigated": [rel]})
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("forfeit") is not True
+    assert grade.get("reason") != ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
+    assert grade["engagement"]["read"] == "unknown"
+    assert grade["investigated"] == [rel]
 
 
 def test_grade_review_attempt_engaged_by_nonempty_payload_without_investigated(tmp_path):
@@ -8668,6 +8780,7 @@ def test_run_execution_record_cursor_tool_calls_engaged(tmp_path):
     assert isinstance(record, dict)
     assert record["observation"]["read"] == "engaged"
     assert record["observation"]["toolCalls"] == 1
+    assert record["observation"]["telemetry"] == "tool-calls"
 
 
 def test_run_execution_record_codex_tokens_alone_never_engaged(tmp_path):

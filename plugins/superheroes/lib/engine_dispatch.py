@@ -2449,12 +2449,25 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
     return True, ""
 
 
-def _engagement_with_read(engagement, *, result_kind=None, items=None, investigated=None):
-    """Attach engagement.read from observed attempt evidence. Never raises."""
-    read_input = {"investigated": investigated, "engagement": engagement}
+def _engagement_telemetry(tool_calls):
+    """Derive engagement.telemetry from runner-observed toolCalls only. Never raises."""
+    try:
+        if isinstance(tool_calls, bool):
+            return "none"
+        if isinstance(tool_calls, (int, float)):
+            return "tool-calls"
+    except Exception:
+        pass
+    return "none"
+
+
+def _engagement_with_read(engagement, *, result_kind=None, items=None):
+    """Attach engagement.read and telemetry from observed attempt evidence. Never raises."""
+    read_input = {"engagement": engagement}
     if items is not None and result_kind in REVIEW_RESULT_KINDS:
         read_input[result_kind] = items
     out = dict(engagement)
+    out["telemetry"] = _engagement_telemetry(engagement.get("toolCalls"))
     out["read"] = engine_adapter.engagement_read(read_input)
     return out
 
@@ -2564,6 +2577,7 @@ def _review_attempt_engagement(
             "stdoutBytes": stdout_bytes,
             "wallSeconds": elapsed,
             "source": source,
+            "telemetry": _engagement_telemetry(tool_calls),
         }
 
     if res is not None:
@@ -2572,14 +2586,11 @@ def _review_attempt_engagement(
         _, accepted, spot_rejected = engine_adapter.spot_check_investigated(
             res.get("investigated"), cwd,
             generated_artifacts=_generated_artifacts_from_view_meta(view_meta))
-        # axis: engagement read grades payload and accepted investigated paths together
+        # axis: engagement read grades registered payload and runner toolCalls only
         stamped = None
         if has_payload:
             stamped = _engagement_with_read(
-                engagement, result_kind=kind, items=payload, investigated=accepted)
-        elif accepted:
-            stamped = _engagement_with_read(
-                engagement, result_kind=kind, items=[], investigated=accepted)
+                engagement, result_kind=kind, items=payload)
         return stamped, accepted, spot_rejected, has_payload, payload, kind
 
     if role_kind is not None:
@@ -2753,7 +2764,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     findings_rejected_reasons = list(res.get("findingsRejected") or [])
 
     if not _parse_review_has_payload(res) and not accepted:
-        engagement = _engagement_with_read(engagement, result_kind=kind, items=[], investigated=None)
+        engagement = _engagement_with_read(engagement, result_kind=kind, items=[])
         return {
             "forfeit": True,
             "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
@@ -2801,7 +2812,12 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         )
 
     if accepted:
-        result = {"ok": True, "resultKind": kind, kind: [], "investigated": accepted, "engagement": stamped}
+        engagement_stamped = stamped if stamped is not None else _engagement_with_read(
+            engagement, result_kind=kind, items=[])
+        result = {
+            "ok": True, "resultKind": kind, kind: [], "investigated": accepted,
+            "engagement": engagement_stamped,
+        }
         return _attach_review_rejection_fields(
             result,
             rejected_records=rejected_records,

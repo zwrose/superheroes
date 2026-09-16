@@ -1703,14 +1703,16 @@ def engagement_read(result):
     """The single home for "did this seat demonstrably act?".
 
     ACTION-BASED ONLY. Never tokens, never wall time, never stdout size.
-    `result` is a dispatch-result-shaped mapping (it may carry "findings", "investigated",
+    `result` is a dispatch-result-shaped mapping (it may carry a registered review payload
     and an "engagement" mapping with "toolCalls").
 
     Returns "engaged" when there is POSITIVE evidence of action:
       - a non-empty payload of any registered review result kind, OR
-      - at least one accepted `investigated` path, OR
       - engagement.toolCalls is not None and >= 1
     Otherwise returns "unknown".
+
+    A seat's `investigated` list is disclosure, not engagement evidence (register R7); the
+    runner still spot-checks it, but it never grades `engagement.read`.
 
     NEVER returns "inert". Absence of positive evidence is NOT proof of inaction — a correct
     payload the transport could not read (the #687 verdict-shape specimen) looks identical to a
@@ -1723,9 +1725,6 @@ def engagement_read(result):
         for kind in REVIEW_RESULT_KINDS:
             if review_payload_engaged(result, kind):
                 return "engaged"
-        investigated = result.get("investigated")
-        if isinstance(investigated, list) and investigated:
-            return "engaged"
         eng = result.get("engagement")
         if not isinstance(eng, dict):
             eng = {}
@@ -1734,7 +1733,9 @@ def engagement_read(result):
         # repo files spent 2,460 tokens, while the field's vacuous seat (issue #666) spent ~23,000 — ten
         # times more — because prompt ingestion dominates. Engaged runs here ranged 2,460 → 34,857 tokens.
         # Wall time is equally unusable: an engaged dispatch returned a Critical finding in 8 seconds.
-        # Only *actions* count — findings produced, files provably read, tools invoked.
+        # Measured 2026-09-16: a codex seat ordered to read nothing returned 8,825 tokens over 8.9 s and
+        # would clear any floor this repository's records could justify.
+        # Only *actions* count — findings produced, tools invoked.
         tool_calls = eng.get("toolCalls")
         if tool_calls is not None:
             try:

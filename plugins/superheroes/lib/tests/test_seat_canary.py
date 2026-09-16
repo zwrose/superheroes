@@ -314,7 +314,7 @@ def test_tool_calls_without_investigated_not_engaged():
     )["engaged"] is False
 
 
-def test_investigated_without_findings_engaged():
+def test_investigated_without_findings_not_engaged_after_r7():
     def dispatch(engine, **kwargs):
         return _base_dispatch_result(
             investigated=["lib/a.py"],
@@ -324,7 +324,7 @@ def test_investigated_without_findings_engaged():
     out = SC.run_canary(
         "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
     )
-    assert out["engaged"] is True
+    assert out["engaged"] is False
     assert out["evidence"]["investigated"] == 1
 
 
@@ -583,30 +583,32 @@ def test_engaged_from_dispatch_investigation_evidence_table():
         "engagement": {"toolCalls": 1},
     }
     cases = [
-        ("investigated absent", {}, False),
-        ("investigated None", {"investigated": None}, False),
-        ("investigated bare string", {"investigated": "lib/a.py"}, False),
-        ("investigated dict", {"investigated": {"path": "lib/a.py"}}, False),
-        ("investigated number", {"investigated": 1}, False),
-        ("investigated empty list", {"investigated": []}, False),
-        ("investigated non-string entries", {"investigated": [1, None]}, False),
-        ("investigated whitespace-only strings", {"investigated": ["", "  "]}, False),
+        ("investigated absent", {}, "engaged", False),
+        ("investigated None", {"investigated": None}, "engaged", False),
+        ("investigated bare string", {"investigated": "lib/a.py"}, "engaged", False),
+        ("investigated dict", {"investigated": {"path": "lib/a.py"}}, "engaged", False),
+        ("investigated number", {"investigated": 1}, "engaged", False),
+        ("investigated empty list", {"investigated": []}, "engaged", False),
+        ("investigated non-string entries", {"investigated": [1, None]}, "engaged", False),
+        ("investigated whitespace-only strings", {"investigated": ["", "  "]}, "engaged", False),
         (
             "toolCalls with no qualifying investigated",
             {"investigated": [], "engagement": {"toolCalls": 5}},
+            "engaged",
             False,
         ),
         (
             "one non-empty investigated path",
             {"investigated": ["lib/a.py"], "engagement": {"toolCalls": None}},
-            True,
+            "unknown",
+            False,
         ),
     ]
-    for label, overrides, expected in cases:
+    for label, overrides, read_expected, engaged_expected in cases:
         res = dict(engaged_base)
         res.update(overrides)
-        assert EA.engagement_read(res) == "engaged", label
-        assert SC._engaged_from_dispatch(res) is expected, label
+        assert EA.engagement_read(res) == read_expected, label
+        assert SC._engaged_from_dispatch(res) is engaged_expected, label
 
 
 def test_engaged_from_dispatch_diverges_from_engagement_read():
@@ -623,8 +625,8 @@ def test_engaged_from_dispatch_diverges_from_engagement_read():
         "investigated": ["lib/a.py"],
         "engagement": {"toolCalls": None},
     }
-    assert SC._engaged_from_dispatch(investigated_case) is True
-    assert EA.engagement_read(investigated_case) == "engaged"
+    assert EA.engagement_read(investigated_case) == "unknown"
+    assert SC._engaged_from_dispatch(investigated_case) is False
 
     tool_calls_case = {
         "findings": [],

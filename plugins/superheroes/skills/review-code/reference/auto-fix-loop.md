@@ -293,8 +293,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **`engagement.read` (#687).** When the result carries an **`engagement`** block with a non-`null`
 > value (present only when the attempt produced stdout that was graded), `engagement.read` is
 > `"engaged"` when the seat demonstrably acted: at least
-> one finding returned, at least one accepted `investigated` path, or `engagement.toolCalls` is not
-> `None` and `>= 1`. Otherwise it is `"unknown"`. On a timeout, refusal, nonzero-exit, or
+> one finding returned, or `engagement.toolCalls` is not
+> `None` and `>= 1`. Otherwise it is `"unknown"`. A seat's `investigated` list is **disclosure**,
+> not engagement evidence (register R7); the runner still spot-checks it. On a timeout, refusal, nonzero-exit, or
 > missing-stdout forfeit the `engagement` key is **present with the value `null`** (there was no graded
 > stdout to measure), so `engagement.read` is unavailable — `result.get("engagement", {})` is
 > **unsafe** because the key may carry `null`, not merely be missing; consumers must handle a `null`

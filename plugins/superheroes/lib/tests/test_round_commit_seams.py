@@ -150,7 +150,8 @@ def _execution_evidence(**over):
     "runnerNonce": "test-nonce",
     "recordDigest": "test-digest",
     "observation": {"tokens": None, "toolCalls": None, "stdoutBytes": 0,
-                    "wallSeconds": 0.0, "source": "none", "read": "engaged"},
+                    "wallSeconds": 0.0, "source": "none", "read": "engaged",
+                    "telemetry": "none"},
   }
   evidence.update(over)
   return evidence

@@ -257,8 +257,9 @@ names `resultKind` and its payload when that attempt graded `ok`. Re-invoke **`d
 
 When the result carries an **`engagement`** block with a non-`null` value (present only when the
 attempt produced stdout that was graded), `engagement.read` is `"engaged"` when the seat
-demonstrably acted (a finding, an accepted `investigated` path, or `engagement.toolCalls >= 1`);
-otherwise `"unknown"`. On a timeout, refusal, nonzero-exit, or missing-stdout forfeit the
+demonstrably acted (a finding or `engagement.toolCalls >= 1`); a seat's `investigated` list is
+**disclosure**, not engagement evidence (register R7); the runner still spot-checks it. Otherwise
+`"unknown"`. On a timeout, refusal, nonzero-exit, or missing-stdout forfeit the
 `engagement` key is **present with the value `null`** (there was no graded stdout to measure), so
 `engagement.read` is unavailable — `result.get("engagement", {})` is **unsafe** because the key may
 carry `null`, not merely be missing; consumers must handle a `null` value. The runner **never**

@@ -2746,8 +2746,10 @@ def test_engagement_read_findings_engaged():
     assert EA.engagement_read({"findings": [{"id": "f"}]}) == "engaged"
 
 
-def test_engagement_read_investigated_engaged():
-    assert EA.engagement_read({"investigated": ["a.py"]}) == "engaged"
+def test_engagement_read_investigated_disclosure_not_engaged():
+    assert EA.engagement_read({"investigated": ["a.py"]}) == "unknown"
+    assert EA.engagement_read({"findings": [{"id": "f"}]}) == "engaged"
+    assert EA.engagement_read({"engagement": {"toolCalls": 1}}) == "engaged"
 
 
 def test_engagement_read_tool_calls_engaged():

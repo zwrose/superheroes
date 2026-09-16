@@ -1575,12 +1575,26 @@ def test_full_envelope_records_seat_declared_hash_source(tmp_path):
 
 # --- WO-A: seat-result/2 envelope seam and state-version fence --------------------------------
 
+def _well_formed_observation(**over):
+    obs = {
+        "tokens": None,
+        "toolCalls": None,
+        "stdoutBytes": 0,
+        "wallSeconds": 0.0,
+        "source": "none",
+        "read": "unknown",
+        "telemetry": "none",
+    }
+    obs.update(over)
+    return obs
+
+
 def _execution_evidence(**over):
     evidence = {
         "source": "runner",
         "runnerNonce": "nonce-1",
         "recordDigest": "digest-1",
-        "observation": {"ok": True},
+        "observation": _well_formed_observation(),
     }
     evidence.update(over)
     return evidence
@@ -1765,7 +1779,8 @@ def test_v2_execution_evidence_pointer_key_refuses_not_inline(tmp_path, provenan
     # axis: execution-evidence-not-inline — wo_l1_e case 7
     sd = _session(tmp_path)
     env = _v2_env(provenance=provenance,
-                  execution_evidence=_execution_evidence(observation={pointer_key: "/tmp/evidence"}))
+                  execution_evidence=_execution_evidence(
+                      observation=_well_formed_observation(**{pointer_key: "/tmp/evidence"})))
     _land(sd, env)
     plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
     assert plan is None and refusal["reason"] == "execution-evidence-not-inline"
@@ -1777,7 +1792,7 @@ def test_v2_execution_evidence_pointer_key_nested_two_levels_refuses_not_inline(
     sd = _session(tmp_path)
     env = _v2_env(provenance=provenance,
                   execution_evidence=_execution_evidence(
-                      observation={"outer": {"path": "/tmp/evidence"}}))
+                      observation=_well_formed_observation(outer={"path": "/tmp/evidence"})))
     _land(sd, env)
     plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
     assert plan is None and refusal["reason"] == "execution-evidence-not-inline"
@@ -1789,7 +1804,7 @@ def test_v2_execution_evidence_pointer_key_inside_list_refuses_not_inline(tmp_pa
     sd = _session(tmp_path)
     env = _v2_env(provenance=provenance,
                   execution_evidence=_execution_evidence(
-                      observation={"items": [{"file": "/tmp/evidence"}]}))
+                      observation=_well_formed_observation(items=[{"file": "/tmp/evidence"}])))
     _land(sd, env)
     plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
     assert plan is None and refusal["reason"] == "execution-evidence-not-inline"
@@ -1900,10 +1915,62 @@ def test_v2_opt_in_v2_refuses_execution_evidence_malformed(tmp_path):
 def test_v2_opt_in_v2_refuses_execution_evidence_not_inline(tmp_path):
     # axis: execution-evidence-not-inline — wo_a_1271
     sd = _session(tmp_path)
-    env = _v2_env(execution_evidence=_execution_evidence(observation={"path": "/tmp/evidence"}))
+    env = _v2_env(execution_evidence=_execution_evidence(
+        observation=_well_formed_observation(path="/tmp/evidence")))
     _land(sd, env)
     plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
     assert plan is None and refusal["reason"] == "execution-evidence-not-inline"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_observation_missing_telemetry_refuses_malformed(tmp_path, provenance):
+    # axis: execution-evidence-malformed — wo_r2_1271 telemetry requirement
+    sd = _session(tmp_path)
+    obs = _well_formed_observation()
+    del obs["telemetry"]
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(observation=obs))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_observation_extra_key_refuses_unknown_field(tmp_path, provenance):
+    # axis: execution-evidence-unknown-field — wo_r2_1271 observation enumeration
+    sd = _session(tmp_path)
+    env = _v2_env(
+        provenance=provenance,
+        execution_evidence=_execution_evidence(
+            observation=_well_formed_observation(investigated=["a.py"])),
+    )
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-unknown-field"
+    assert refusal["field"] == "investigated"
+    assert refusal["location"] == "observation"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_extra_sibling_key_refuses_unknown_field(tmp_path, provenance):
+    # axis: execution-evidence-unknown-field — wo_r2_1271 evidence key set
+    sd = _session(tmp_path)
+    evidence = _execution_evidence()
+    evidence["investigated"] = ["a.py"]
+    env = _v2_env(provenance=provenance, execution_evidence=evidence)
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-unknown-field"
+    assert refusal["field"] == "investigated"
+    assert refusal["location"] == "executionEvidence"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_well_formed_observation_lands(tmp_path, provenance):
+    sd = _session(tmp_path)
+    env = _v2_env(provenance=provenance)
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert refusal is None and plan is not None
 
 
 def test_v2_opt_in_v2_refuses_provenance_unknown(tmp_path):

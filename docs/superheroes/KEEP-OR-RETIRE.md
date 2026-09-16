@@ -597,10 +597,11 @@ The list's units are the census rows, and each entry is keyed to its census id.
 #### D11 — The `seat-result/2` envelope authentication
 
 - **Component.** The v2 envelope's authentication block in `round_records.validate_landing`; it
-  costs a contract every producer of a landed envelope must satisfy, and one chokepoint governs five
+  costs a contract every producer of a landed envelope must satisfy, and one chokepoint governs six
   refusals: `provenance-unknown`, `execution-evidence-malformed`,
-  `execution-evidence-not-inline`, `execution-evidence-unexpected`, and `envelope-torn`.
-- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing one of the five
+  `execution-evidence-not-inline`, `execution-evidence-unknown-field`,
+  `execution-evidence-unexpected`, and `envelope-torn`.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing one of the six
   tokens as the thing that caught a defect or blocked a landing. On firing, a proposal to the owner
   at a gardening pass.
 - **Last demonstrated benefit.** unknown.
@@ -628,8 +629,8 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 - **Component.** The `--evidence-run-dir` stamping path in `round_driver._assemble_dispatch_evidence`
   and its two refusals, `evidence-run-dir-unreadable` and `evidence-order-mismatch` — the binding
-  that a stamped runner record belongs to *this* order, by comparing the record's `promptSha256`
-  against the envelope's `orderSha256`. It costs a run-directory read per stamped landing.
+  that a stamped runner record belongs to *this* order, by comparing the record's
+  `orderPromptSha256` against the envelope's `orderSha256`. It costs a run-directory read per stamped landing.
 - **Condition.** Usage-based, 60 days: landings recorded **with** `--evidence-run-dir` against
   landings recorded at all — the channel is optional, so a zero-usage window is the real question
   about it. On firing when the channel is used on none of the window's landings, a proposal to the
@@ -642,8 +643,10 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** capability-gap — it exists because a dispatched seat cannot presently be trusted to
   report its own engagement, and a host that recorded tool calls natively and verifiably would
-  remove the need. No engine family is named for the binding itself; the reason it exists is
-  engine-general.
+  remove the need. Whether a dispatched seat with no runner-side telemetry is refused is decided by
+  the certification receipt writer's unrun-review check in layer 2 (Spec B FR-D8), not here; **C11
+  (#1270)** is the child that gives codex a runner-side record and therefore closes the gap. No
+  engine family is named for the binding itself; the reason it exists is engine-general.
 
 #### D14 — The record-identity CAS-token agreement
 
