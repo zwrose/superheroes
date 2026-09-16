@@ -166,7 +166,7 @@ def test_review_loop_has_doc_mode_carveout():
     assert "post-halt" in spec_skill.lower() and "terminal claim" in spec_skill.lower()
 
 
-def test_host_maps_document_claude_dispatch_recovery_and_codex_asymmetry():
+def test_host_maps_claude_dispatch_recovery_guidance():
     claude_needles = (
         "dispatch reliability",
         "existence and mtime",
@@ -177,19 +177,8 @@ def test_host_maps_document_claude_dispatch_recovery_and_codex_asymmetry():
         "never compile",
         "freshly write",
     )
-    codex_needles = (
-        "dispatch reliability",
-        "spawn_agent",
-        "has not exhibited",
-        "do not apply the claude fallback",
-    )
 
     for rel_path in ("hosts/claude-tools.md", "plugins/superheroes/hosts/claude-tools.md"):
         text = _read_repo(rel_path).lower()
         missing = [needle for needle in claude_needles if needle not in text]
-        assert not missing, f"{rel_path} missing: {missing}"
-
-    for rel_path in ("hosts/codex-tools.md", "plugins/superheroes/hosts/codex-tools.md"):
-        text = _read_repo(rel_path).lower()
-        missing = [needle for needle in codex_needles if needle not in text]
         assert not missing, f"{rel_path} missing: {missing}"

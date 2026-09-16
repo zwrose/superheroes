@@ -1,6 +1,7 @@
 """Band-wide engine-preference policy: which ENGINE runs a role (claude|codex|cursor)
 and at what effort — the axis ORTHOGONAL to model_tier's model choice. Pure +
-deterministic. Fail-OPEN to claude — a wrong/absent/unavailable engine is a cost concern,
+deterministic. Fail-OPEN to the `claude` engine, the native in-session seat on the host model — a
+wrong/absent/unavailable engine is a cost concern,
 never a safety one (exactly model_tier.py's posture). load_engine_prefs (Task 3) reads
 core.md's enginePreferences; these resolvers never touch disk."""
 import json
@@ -71,7 +72,8 @@ CODEX_WRITE_PIN_ROLES = model_registry.codex_write_pin_roles()
 _ROLE_KEY = {"review": "reviewer", "build": "implementation", "fix": "implementation",
              "brief-check": "briefCheck", "pilot": "pilot"}
 
-# Most roles fail open to claude; the brief-check reviewer defaults to codex (the ratified
+# Most roles fail open to the `claude` engine, the native in-session seat on the host model; the
+# brief-check reviewer defaults to codex (the ratified
 # cross-vendor pre-code check). An unavailable codex is handled at dispatch time (disclosed
 # claude+opus fallback), never here — this resolver is pure and never probes.
 _ROLE_DEFAULT_ENGINE = {"brief-check": "codex"}
