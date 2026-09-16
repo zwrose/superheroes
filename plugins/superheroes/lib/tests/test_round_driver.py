@@ -42,7 +42,6 @@ RD = _load("round_driver")
 LPC = _load("loop_plan_common")
 FI = _load("finding_identity")
 LC = _load("liveness_cache")
-version_skew = _load("version_skew")
 model_registry = _load("model_registry")
 SC_CANARY = _load("seat_canary")
 _canary_probes_for = SC_CANARY.canary_probes_for
@@ -2879,13 +2878,6 @@ _ALL_CHANNELS = {
     "orderVendorProvenanceGaps": [{"seat": "architecture-reviewer",
                                    "storeKey": "architecture-reviewer", "occurrence": 0}],
     "priorCommentsUnavailable": True,
-    "pluginVersionSkew": [{
-        "constraint": version_skew.CONSTRAINT,
-        "status": version_skew.STATUS_CHECKED_DEGRADED,
-        "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
-        "reason": "plugin-version-skew: seeded resume fixture skew",
-        "inspectedRoot": "/tmp/repo",
-    }],
     "verifyPasses": [{"CONFIRMED": 1, "PLAUSIBLE": 0, "REFUTED": 0, "drops": 0,
                       "downgrades": 0, "unverified": 0, "ambiguous": 0}],
     "seatMapUnjudgeable": [_load("seat_map").VIOLATION_BASIS_NO_AUTHOR_FAMILY],
@@ -2955,7 +2947,6 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
         "order-vendor-provenance-gap (round 1): seat(s) architecture-reviewer"
         in "\n".join(_round_disclosures(receipt, 1))
     )
-    assert "plugin-version-skew: seeded resume fixture skew" in "\n".join(receipt["degraded"])
     # adapter-provenance names the phase as `(round N, phase)` — outside the `(round 1)` filter.
     degraded_all = "\n".join(receipt["degraded"])
     assert ("adapter-provenance (round 1, unknown-phase): vendor echo mismatch"
@@ -6984,244 +6975,6 @@ def test_canary_failed_record_stable_two_failing_probe_orders():
         })
         records.append(st["rounds"]["1"]["canaryFailed"])
     assert records[0] == records[1]
-
-
-def _panel_seat_map_with_skew(
-        detail=version_skew.DETAIL_SEMANTICS_DIVERGENT,
-        reason="plugin-version-skew: plugin semantics differ from repo",
-        plugin_version_skew_status=version_skew.STATUS_CHECKED_DEGRADED,
-        inspected_root="/tmp/repo"):
-    seat_map = _assertable_seat_map(["codex", "cursor"])
-    seat_map["degradations"] = [{
-        "constraint": version_skew.CONSTRAINT,
-        "detail": detail,
-        "reason": reason,
-    }]
-    if plugin_version_skew_status is not None:
-        seat_map["pluginVersionSkew"] = {
-            "status": plugin_version_skew_status,
-            "detail": detail,
-            "inspectedRoot": inspected_root,
-        }
-    else:
-        # ``to_receipt`` emits ``pluginVersionSkew`` unconditionally — pop for absent case.
-        seat_map.pop("pluginVersionSkew", None)
-    return seat_map
-
-
-def test_skew_alone_degrades_certification_three_projections():
-    reason = (
-        "plugin-version-skew: running plugin 0.30.0 semantics differ from repository 0.31.0")
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    state = RD.new_state(cfg)
-    _set_seat_map(state, _panel_seat_map_with_skew(reason=reason))
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    assert state["certification"]["shape"].endswith("-degraded")
-    assert "plugin-version-skew" in state["certification"]["shapeDrivers"]
-    assert state["certification"]["pluginVersionSkew"] == version_skew.STATUS_CHECKED_DEGRADED
-    receipt = RD.build_receipt(state)
-    skew_lines = [d for d in receipt["degraded"] if d.startswith("plugin-version-skew:")]
-    assert len(skew_lines) == 1
-    assert reason in skew_lines[0]
-    assert "plugin-version-skew: plugin-version-skew:" not in skew_lines[0]
-
-
-def test_skew_with_unexcused_violation_constraint_violated_shape_driver_persists():
-    reason = "plugin-version-skew: skew alongside maker-family breach"
-    seat_map = _seat_map_receipt_with_unexcused_maker_family()
-    seat_map["degradations"] = [{
-        "constraint": version_skew.CONSTRAINT,
-        "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
-        "reason": reason,
-    }]
-    seat_map["pluginVersionSkew"] = {
-        "status": version_skew.STATUS_CHECKED_DEGRADED,
-        "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
-        "inspectedRoot": "/tmp/repo",
-    }
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    state = RD.new_state(cfg)
-    _set_seat_map(state, seat_map)
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    assert state["certification"]["shape"].endswith("-constraint-violated")
-    assert "-degraded" not in state["certification"]["shape"]
-    assert "plugin-version-skew" in state["certification"]["shapeDrivers"]
-    assert "seat-map-violation" in state["certification"]["shapeDrivers"]
-
-
-def test_skew_evidence_unreadable_degrades_identically():
-    reason = "plugin-version-skew: skew evidence unreadable"
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    state = RD.new_state(cfg)
-    _set_seat_map(state, _panel_seat_map_with_skew(
-        detail=version_skew.DETAIL_EVIDENCE_UNREADABLE, reason=reason))
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    assert state["certification"]["shape"].endswith("-degraded")
-    assert "plugin-version-skew" in state["certification"]["shapeDrivers"]
-    receipt = RD.build_receipt(state)
-    skew_lines = [d for d in receipt["degraded"] if d.startswith("plugin-version-skew:")]
-    assert len(skew_lines) == 1
-    assert reason in skew_lines[0]
-
-
-def test_skew_malformed_seat_map_is_safe():
-    for sm in (None, {}, {"degradations": "not-a-list"},
-               {"degradations": [None, 42, {"constraint": "other"}]}):
-        state = {"seatMap": sm}
-        assert RD._skew_degraded(state) is False
-        assert RD._skew_records(state) == []
-
-
-def test_no_skew_record_absent_from_shape_drivers_and_degraded():
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    state = RD.new_state(cfg)
-    _set_seat_map(state, _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS}))
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    assert "plugin-version-skew" not in state["certification"]["shapeDrivers"]
-    assert state["certification"]["pluginVersionSkew"] == "absent"
-    receipt = RD.build_receipt(state)
-    skew_lines = [d for d in receipt["degraded"] if "plugin-version-skew" in d]
-    assert skew_lines == []
-
-
-def test_skew_classification_uses_shared_constant():
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    state = RD.new_state(cfg)
-    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
-    seat_map["degradations"] = [
-        {"constraint": version_skew.CONSTRAINT, "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
-         "reason": "plugin-version-skew: matched"},
-        {"constraint": "plugin-version-skew-typo", "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
-         "reason": "plugin-version-skew: near-miss ignored"},
-    ]
-    _set_seat_map(state, seat_map)
-    records = RD._skew_records(state)
-    assert len(records) == 1
-    assert records[0]["reason"] == "plugin-version-skew: matched"
-    assert RD._skew_degraded(state) is True
-
-
-def test_skew_disclosure_prose_single_prefix():
-    reason = (
-        "plugin-version-skew: installed 0.30.0, this repository's version at 0.31.0 — "
-        "family/registry semantics may differ")
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    state = RD.new_state(cfg)
-    _set_seat_map(state, _panel_seat_map_with_skew(reason=reason))
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    receipt = RD.build_receipt(state)
-    skew_lines = [d for d in receipt["degraded"] if "plugin-version-skew" in d]
-    assert len(skew_lines) == 1
-    assert skew_lines[0].count("plugin-version-skew:") == 1
-    assert reason in skew_lines[0]
-    assert "disclosed by the seat map and named in the certification shape" in skew_lines[0]
-
-
-def test_skew_disclosure_prose_no_usable_reason():
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    state = RD.new_state(cfg)
-    seat_map = _panel_seat_map_with_skew(reason="")
-    seat_map["degradations"][0]["reason"] = ""
-    _set_seat_map(state, seat_map)
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    receipt = RD.build_receipt(state)
-    skew_lines = [d for d in receipt["degraded"] if "plugin-version-skew" in d]
-    assert len(skew_lines) == 1
-    assert "()" not in skew_lines[0]
-    assert "no usable reason text was recorded" in skew_lines[0]
-    assert "disclosed by the seat map and named in the certification shape" in skew_lines[0]
-
-
-@pytest.mark.parametrize("status", sorted(version_skew.STATUSES))
-def test_certification_plugin_version_skew_status_from_seat_map(status):
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    state = RD.new_state(cfg)
-    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
-    seat_map["pluginVersionSkew"] = {
-        "status": status,
-        "detail": (
-            version_skew.DETAIL_NO_DIVERGENCE
-            if status == version_skew.STATUS_CHECKED_CLEAN
-            else version_skew.DETAIL_SEMANTICS_DIVERGENT
-        ),
-        "inspectedRoot": (
-            "" if status == version_skew.STATUS_NOT_CHECKED else "/tmp/repo"
-        ),
-    }
-    if status == version_skew.STATUS_CHECKED_DEGRADED:
-        seat_map["degradations"] = [{
-            "constraint": version_skew.CONSTRAINT,
-            "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
-            "reason": "plugin-version-skew: degraded for status test",
-        }]
-    _set_seat_map(state, seat_map)
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    assert state["certification"]["pluginVersionSkew"] == status
-
-
-def test_certification_plugin_version_skew_status_absent_without_tri_state():
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    state = RD.new_state(cfg)
-    _set_seat_map(state, _panel_seat_map_with_skew(plugin_version_skew_status=None))
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    assert state["certification"]["pluginVersionSkew"] == "absent"
-
-
-def test_certification_plugin_version_skew_status_absent_when_seat_map_missing():
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    state = RD.new_state(cfg)
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    assert state["certification"]["pluginVersionSkew"] == "absent"
-
-
-def test_certification_plugin_version_skew_status_absent_when_tri_state_malformed():
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    state = RD.new_state(cfg)
-    _set_seat_map(state, {"pluginVersionSkew": "not-a-dict"})
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    assert state["certification"]["pluginVersionSkew"] == "absent"
-
-
-def test_certification_plugin_version_skew_status_absent_when_status_invalid():
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    state = RD.new_state(cfg)
-    _set_seat_map(state, {
-        "pluginVersionSkew": {
-            "status": "bogus",
-            "detail": "x",
-            "inspectedRoot": "/tmp/repo",
-        },
-    })
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    assert state["certification"]["pluginVersionSkew"] == "unknown"
-
-
-def test_certification_plugin_version_skew_unknown_status_agrees_with_degradation():
-    # axis: unrecognized skew receipt status must not certify as absent — degradation agrees
-    reason = "plugin-version-skew: future build persisted unrecognized status"
-    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
-    state = RD.new_state(cfg)
-    _set_seat_map(state, {
-        "pluginVersionSkew": {
-            "status": "future-status",
-            "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
-            "inspectedRoot": "/tmp/repo",
-        },
-        "degradations": [{
-            "constraint": version_skew.CONSTRAINT,
-            "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
-            "reason": reason,
-        }],
-    })
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    cert = state["certification"]
-    assert cert["pluginVersionSkew"] != "absent"
-    assert cert["pluginVersionSkew"] == "unknown"
-    assert "plugin-version-skew" in cert["shapeDrivers"]
-    receipt = RD.build_receipt(state)
-    skew_lines = [d for d in receipt["degraded"] if "plugin-version-skew" in d]
-    assert len(skew_lines) == 1
-    assert reason in skew_lines[0]
 
 
 _RETIRED_RUN_CONFIG_KEYS = ("docMode", "fixerModel", "fixerEffort")
