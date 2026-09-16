@@ -461,15 +461,14 @@ above).
      continuations, craft declines with revisit trigger, an owner-owed or relay memory entry — happen
      **immediately**; **Owner calls** — board decisions — new issues, product folds, scope changes,
      product declines — are the owner's word. Venue-3 filings are always owner calls — a new issue
-     spends board attention, a commitment call by definition, even when its content is craft, except a
-     machinery filing that clears the evidence bar and grades P2 is the advisor's to file. The
+     spends board attention, a commitment call by definition, even when its content is craft. The
      project's **standing proposals collector** is one open issue per project (auto-filing per
      proposal was rejected as overcorrection). Every owner call is appended to the
      collector at vet time, unconditionally, so the collector is the complete register by
      construction; owner attendance governs only when discussion happens — attended, the item is
      proposed in the vet-delivery message and may be struck minutes after it was appended; absent,
      it awaits the batch. This replaces the previous availability-branching rule. Each append
-     carries its door grading and its venue recommendation, so the owner's batch is one word per
+     carries its gate verdict and its venue recommendation, so the owner's batch is one word per
      item. Read attendance from whether the owner is actually reachable here, never inferred from who
      launched the advisor (duty 9's three states are independent axes, not a proxy for absence) —
      attendance governs **discussion**, not appending:

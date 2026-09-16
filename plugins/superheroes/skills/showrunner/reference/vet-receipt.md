@@ -84,10 +84,10 @@ shape is wrong and the thinking wins.
    therefore records an **append that already happened**, never a promise to append — **except where
    the collector pointer could not be resolved**: then the receipt carries the item **and** the
    disclosed degradation, and the item keeps **this vet's ordinal as its proposing ordinal** for the
-   later deferred append. Every disposition names its door grading and its venue. Each append carries
-   its door grading and its venue recommendation, so the owner's batch is one word per item.
+   later deferred append. Every disposition names its gate verdict and its venue. Each append carries
+   its gate verdict and its venue recommendation, so the owner's batch is one word per item.
    **Known limit, carried knowingly:** this contract is prose-bound — nothing mechanical checks that
-   a disposition names a door grading and a venue, and a reader who wants to know can only read the
+   a disposition names a gate verdict and a venue, and a reader who wants to know can only read the
    receipt. Each pending item carries
    **what it is**, **your recommendation** (so the owner's batch pass is one word rather than a
    re-derivation), and **the vet ordinal it was proposed at** — a monotonic integer, one per vet,
