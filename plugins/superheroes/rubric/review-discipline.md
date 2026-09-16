@@ -635,11 +635,11 @@ A drift pin on a mirror is a **delete signal**, meaning delete the mirror, and n
 obligation. Maintaining two copies costs more than the duplication ever saved, and the pin makes
 the cost recur rather than end.
 
-**The pin rule.** On a [doctrine surface](rubric/glossary.md#doctrine-surface), a test pins
-**structure**, not **sentences**, except when the pin's subject is a **hard line** — governed by the
-hard-line bullet below. It may assert that a check id, a heading, or a column exists where code and
-doc both need it. An ordinary pin never asserts a doctrine sentence. This rule keeps the mirror
-class from growing back inside the test suite.
+**The pin rule.** A test on a [doctrine surface](rubric/glossary.md#doctrine-surface) pins **structure**,
+never **sentences**. It may assert that a check id, a heading, or a column exists where code and
+doc both need it. It never asserts a doctrine sentence, with one exception — a pin whose subject is
+a hard line, governed by the hard-line bullet below. This rule keeps the mirror class from
+growing back inside the test suite.
 
 **What happens to a sentence pin that already exists.**
 

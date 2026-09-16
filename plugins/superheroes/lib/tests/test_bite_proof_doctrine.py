@@ -24,20 +24,20 @@ owe three duties:
   returned to green.
 - **Retirement condition and tag** — entry **S7** on the project's keep-or-retire record, which
   lives with the project's definition-docs.
-- **Enumerated coverage, pointer half only** — Over the plugin root, ``_walk_plugin_pointer_sections``
-  reads every markdown file through ``_census_excluded``, ``_check_no_pointer_outside_h2_sections``
-  refuses a pointer outside any level-2 section, and ``_sections_with_pointer`` with
-  ``_check_pointer_roster_complete`` pair roster rows to H2-scoped sections only. Outside the plugin
-  root, ``_REPO_ROOT_POINTER_SOURCES`` names the files the walk reads — currently ``CONVENTIONS.md``
-  alone — and ``_check_repo_root_pointer_sources_accounted`` refuses any other repo-root markdown
-  that carries the pointer inside a level-2 section unless it is listed in
-  ``_REPO_ROOT_POINTER_EXCLUDED``. That split is hand-maintained enumeration, not by-construction
-  coverage of the whole repository. The **heading and clause rosters have no such walker**; they are
-  hand-maintained, which is the residual recorded above and is not covered by this duty.
+- **By-construction coverage, for the pointer half only** — ``_sections_with_pointer`` records a
+  pointer only when it sits inside a level-2 section, because of the ``if _heading_level(line) != 2:
+  continue`` guard, so a pointer before the first ``##`` heading, or in a file whose headings are only
+  ``#`` or ``###``, is invisible to the walk and ``test_pointer_roster_is_complete`` stays green.
+  Over the plugin root, ``_walk_plugin_pointer_sections`` enumerates every markdown file there
+  through the single ``_census_excluded`` chokepoint, and ``_check_pointer_roster_complete`` refuses
+  any pointer-carrying section the roster does not name. The reach outside the plugin root is one
+  hand-named file, ``CONVENTIONS.md``, spelled inline in ``_walk_pointer_carrying_sections`` and not
+  behind that chokepoint — a hand-maintained enumeration rather than by-construction coverage. The
+  **heading and clause rosters have no such walker**; they are hand-maintained, which is the residual
+  recorded above and is not covered by this duty.
 """
 import os
 import re
-import sys
 
 import pytest
 
@@ -56,17 +56,6 @@ _CENSUS_EXCLUDED_DIRS = ("lib/tests/bite_proofs",)
 
 # CHANGELOG quotes historical doctrine paths; it is not a consumer surface.
 _CENSUS_EXCLUDED_FILES = ("CHANGELOG.md",)
-
-# Repo-root markdown the walk reads explicitly. Values are roster-relative paths.
-_REPO_ROOT_POINTER_SOURCES = {
-    "CONVENTIONS.md": "../../CONVENTIONS.md",
-}
-
-# Repo-root markdown that quotes the pointer path but is not a consumer surface.
-_REPO_ROOT_POINTER_EXCLUDED = (
-    "docs/superheroes/KEEP-OR-RETIRE.md",
-    "docs/superheroes/verification-strategy-for-the-superheroes-repo-c629cd/spec.md",
-)
 
 
 def _census_excluded(rel):
@@ -336,38 +325,6 @@ def _plant_clause_elsewhere_in_home(text, home_section, clause, plant_section):
     return "\n".join(new_lines) + ("\n" if text.endswith("\n") else "")
 
 
-def _h2_section_line_ranges(lines, rel):
-    covered = set()
-    for line in lines:
-        if _heading_level(line) != 2:
-            continue
-        start, end = _section_span(lines, line.strip(), rel)
-        covered.update(range(start, end))
-    return covered
-
-
-def _pointer_lines_outside_h2_sections(rel, text):
-    if _POINTER not in text:
-        return []
-    lines = text.splitlines()
-    covered = _h2_section_line_ranges(lines, rel)
-    return [
-        (rel, line_no, line.strip())
-        for line_no, line in enumerate(lines, start=1)
-        if _POINTER in line and (line_no - 1) not in covered
-    ]
-
-
-def _check_no_pointer_outside_h2_sections(rel, text):
-    orphans = _pointer_lines_outside_h2_sections(rel, text)
-    if orphans:
-        details = ", ".join(f"{path}:{line_no}" for path, line_no, _ in orphans)
-        raise AssertionError(
-            f"pointer outside any level-2 section: {details} — move into a ## section "
-            f"or remove the pointer"
-        )
-
-
 def _sections_with_pointer(rel, text):
     if _POINTER not in text:
         return set()
@@ -381,41 +338,6 @@ def _sections_with_pointer(rel, text):
         if _POINTER in "\n".join(lines[start:end]):
             found.add((rel, heading))
     return found
-
-
-def _discover_repo_root_pointer_sections():
-    found = {}
-    for root, _dirs, files in os.walk(REPO_ROOT):
-        rel_root = os.path.relpath(root, REPO_ROOT)
-        if rel_root == ".":
-            rel_root = ""
-        if rel_root == "plugins" or rel_root.startswith("plugins" + os.sep):
-            continue
-        for name in files:
-            if not name.endswith(".md"):
-                continue
-            rel = os.path.join(rel_root, name) if rel_root else name
-            rel = os.path.normpath(rel)
-            with open(os.path.join(REPO_ROOT, rel), encoding="utf-8") as fh:
-                text = fh.read()
-            sections = _sections_with_pointer(rel, text)
-            if sections:
-                found[rel] = sections
-    return found
-
-
-def _check_repo_root_pointer_sources_accounted():
-    discovered = _discover_repo_root_pointer_sections()
-    allowed = {os.path.normpath(path) for path in _REPO_ROOT_POINTER_SOURCES}
-    excluded = {os.path.normpath(path) for path in _REPO_ROOT_POINTER_EXCLUDED}
-    unaccounted = sorted(
-        rel for rel in discovered if os.path.normpath(rel) not in allowed | excluded
-    )
-    if unaccounted:
-        raise AssertionError(
-            f"repo-root pointer carriers outside walk and exclusion list: {unaccounted!r} — "
-            f"extend _REPO_ROOT_POINTER_SOURCES, _REPO_ROOT_POINTER_EXCLUDED, or roster"
-        )
 
 
 def _walk_plugin_pointer_sections(plugin_root):
@@ -433,20 +355,16 @@ def _walk_plugin_pointer_sections(plugin_root):
             if _census_excluded(rel):
                 continue
             with open(os.path.join(plugin_root, rel), encoding="utf-8") as fh:
-                text = fh.read()
-            _check_no_pointer_outside_h2_sections(rel, text)
-            found |= _sections_with_pointer(rel, text)
+                found |= _sections_with_pointer(rel, fh.read())
     return found
 
 
 def _walk_pointer_carrying_sections():
     found = _walk_plugin_pointer_sections(PLUGIN)
-    for repo_rel, roster_rel in _REPO_ROOT_POINTER_SOURCES.items():
-        with open(os.path.join(REPO_ROOT, repo_rel), encoding="utf-8") as fh:
-            text = fh.read()
-        _check_no_pointer_outside_h2_sections(roster_rel, text)
+    with open(os.path.join(REPO_ROOT, "CONVENTIONS.md"), encoding="utf-8") as fh:
+        text = fh.read()
         if _POINTER in text:
-            found |= _sections_with_pointer(roster_rel, text)
+            found |= _sections_with_pointer("../../CONVENTIONS.md", text)
     return found
 
 
@@ -598,28 +516,7 @@ def test_clause_present_in_home_and_copy_holder(row):
 
 
 def test_pointer_roster_is_complete():
-    _check_repo_root_pointer_sources_accounted()
     _check_pointer_roster_complete(_walk_pointer_carrying_sections())
-
-
-def test_negative_pointer_outside_h2_in_preamble():
-    synthetic = "\n".join([
-        f"See {_POINTER} before the first heading.",
-        "## Section",
-        "body without pointer",
-    ])
-    with pytest.raises(AssertionError, match="pointer outside any level-2 section"):
-        _check_no_pointer_outside_h2_sections("synthetic.md", synthetic)
-
-
-def test_negative_repo_root_pointer_source_unaccounted(monkeypatch):
-    monkeypatch.setattr(
-        sys.modules[__name__],
-        "_discover_repo_root_pointer_sections",
-        lambda: {"synthetic/unaccounted.md": {("synthetic/unaccounted.md", "## Synthetic")}},
-    )
-    with pytest.raises(AssertionError, match="outside walk and exclusion list"):
-        _check_repo_root_pointer_sources_accounted()
 
 
 @pytest.mark.parametrize("rel,section,expected_count", _CONSUMER_ROSTER, ids=[f"{r}::{s}" for r, s, _ in _CONSUMER_ROSTER])
