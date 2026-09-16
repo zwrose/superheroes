@@ -3,7 +3,14 @@
 Detectors added or changed in this build, all in
 `plugins/superheroes/lib/tests/test_disposition_flow.py`. Every probe below ran with the detector
 **unedited**, as a targeted reversible edit applied through the host's edit action, on a committed
-and otherwise clean tree at `1a4493d8`.
+and otherwise clean tree.
+
+**Two rounds, and which receipts are which.** BP-1 through BP-4 were first run at `1a4493d8`, and
+their raw captures below are that round. The census's scope was then narrowed (the test tree
+excluded), which changed the detector, so **all four were re-run on the final head** and BP-5 was
+added there. The final-head captures are in the last section, and they are the ones that certify
+the shipped detectors. The line numbers differ between the two rounds because the file grew; the
+messages and the verdicts are identical.
 
 **Guarded-element set.** The dispatching order (1261-wo-d) named a bite-proof for the new census
 but did not enumerate the set, which is an order gap the orchestrator records here. The
@@ -17,6 +24,8 @@ enumeration used is every independently neutralizable element these three detect
    `owner-decisions.md`.
 4. `_assert_discuss_open_holder_pins` — `discuss-open-decisions/SKILL.md` cites the canonical home
    path `skills/showrunner/reference/owner-decisions.md`.
+5. `_walk_shipped_markdown`'s exclusion of the test tree, read by
+   `test_walk_shipped_markdown_excludes_test_tree`.
 
 The file's other detectors (`_assert_retired_vocabulary_absent`, `_assert_owner_rejected_terms_absent`,
 `_assert_registry_marker_home`) are **unchanged** by this build and carry their existing proofs.
@@ -178,6 +187,99 @@ FAILED plugins/superheroes/lib/tests/test_disposition_flow.py::test_discuss_open
 ............                                                             [100%]
 12 passed in 0.33s
 ```
+
+---
+
+## BP-5 — the census excludes the test tree
+
+**Guarded element:** the `lib/tests/` exclusion in `_walk_shipped_markdown`,
+`test_disposition_flow.py:77-79`, read by `test_walk_shipped_markdown_excludes_test_tree`.
+**Axis:** scope. The census must cover shipped doctrine surfaces and must not reach the test tree,
+where a bite-proof record legitimately quotes the literal it proved.
+
+**Neutralization** — the exclusion narrowed to a prefix nothing matches, which leaves the walk
+running and the rule inert:
+
+```
+-            if rel.startswith("lib/tests/"):
++            if rel.startswith("lib/tests/bite_proofs/nonexistent/"):
+```
+
+**Raw red:**
+
+```
+E       AssertionError: census must not include paths under lib/tests/: ['lib/tests/fixtures/light_spec_sample.md', 'lib/tests/bite_proofs/wo_b_1122.md', 'lib/tests/bite_proofs/wo_c_1221_c4.md', 'lib/tests/bite_proofs/wo_f_1151.md', 'lib/tests/bite_proofs/wo_f_1124.md']
+
+plugins/superheroes/lib/tests/test_disposition_flow.py:213: AssertionError
+1 failed in 0.24s
+```
+
+The red is on the scope axis: the walk still ran and still yielded shipped documents, and what
+changed is which paths it let through.
+
+**Restore:** the inverse edit, the prefix back to `lib/tests/`.
+
+**Restore receipt:** `git status --porcelain` over the whole worktree returned no output.
+
+**Raw green** — the whole file:
+
+```
+.............                                                            [100%]
+13 passed in 0.20s
+```
+
+---
+
+## Final-head re-runs
+
+Run at the final head, after the census narrowed, each with the same neutralize, restore, and
+`git status --porcelain` restore-receipt sequence as its section above. Each restore receipt came
+back empty.
+
+**BP-1** — the retired-term census, same neutralization in `owner-decisions.md` § The venue ladder:
+
+```
+plugins/superheroes/lib/tests/test_disposition_flow.py:140: AssertionError
+FAILED plugins/superheroes/lib/tests/test_disposition_flow.py::test_retired_door_literals_absent
+1 failed in 0.33s
+```
+
+**BP-2** — `## The front door` renamed:
+
+```
+E               AssertionError: skills/showrunner/reference/owner-decisions.md: pinned heading missing: '## The front door'
+plugins/superheroes/lib/tests/test_disposition_flow.py:115: AssertionError
+1 failed in 0.37s
+```
+
+**BP-3** — `## The revisit-trigger registry` renamed:
+
+```
+E               AssertionError: skills/showrunner/reference/owner-decisions.md: pinned heading missing: '## The revisit-trigger registry'
+plugins/superheroes/lib/tests/test_disposition_flow.py:115: AssertionError
+1 failed in 0.42s
+```
+
+**BP-4** — the canonical-home citation rewritten in all three places:
+
+```
+E           AssertionError: skills/discuss-open-decisions/SKILL.md: canonical home 'skills/showrunner/reference/owner-decisions.md' not cited
+plugins/superheroes/lib/tests/test_disposition_flow.py:150: AssertionError
+1 failed in 0.28s
+```
+
+**BP-5** is above and was run only on the final head, where its guarded element first existed.
+
+**Final green, whole file, tree clean:**
+
+```
+.............                                                            [100%]
+13 passed in 0.20s
+```
+
+For BP-1's final-head red the capture was taken with `tail -5`, so the assertion's own message line
+is not in the quote above. The failing test, the file, the line, and the verdict are, and the
+earlier-round capture in BP-1 carries the message text.
 
 ---
 
