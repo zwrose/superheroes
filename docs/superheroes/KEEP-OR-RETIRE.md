@@ -152,17 +152,22 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 #### A1 — Owner-authority gate
 
-- **Component.** PreToolUse(Bash) gate and classifier that ask before enumerated owner-authority
-  actions on calibrated projects; it costs a stdin parse and command inspection on every Bash call.
+- **Component.** PreToolUse(Bash) gate and classifier that asked before enumerated owner-authority
+  actions on calibrated projects; it cost a stdin parse and command inspection on every Bash call.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing an
   owner-authority gate `ask` that blocked an unauthorized merge, release, force-push, default-branch
-  push, or workflow dispatch. On firing, a proposal to the owner at a gardening pass.
+  push, or workflow dispatch. On firing, a proposal to the owner at a gardening pass. **Retired —
+  condition moot.**
 - **Last demonstrated benefit.** Re-derived tool-to-subcommand matching to close a silent
-  classification bypass in workflow dispatch (#989).
+  classification bypass in workflow dispatch (#989). **False-positive specimen (issue #1264
+  retirement build, 2026-09-16):** during this build the gate refused a plain read-only `grep` census
+  command, classifying it as `run-workflow` because the pattern list it read contained those words.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural — implements the never-merge-on-agent-authority hard line; a zero citation
-  count means the floor is holding, not that the bypass class is gone.
+- **Decision.** retired — issue #1264 (C5 merge-gate retirement).
+- **Notes.** structural — implemented the never-merge-on-agent-authority hard line as a mechanical
+  tripwire; retired because merge approval now rests on the owner's scoped word plus advisor
+  discipline (`PHILOSOPHY.md` promise 1, showrunner charter merge duty) and the gate's
+  false-positive cost outweighed its remaining tripwire value.
 
 #### A2 — Worktree guard
 
