@@ -31,42 +31,6 @@ _LIVE_CELLS_SOURCE_TRUST = {
 }
 _UNRECOGNIZED_LIVE_CELLS_SOURCE_TRUST = 0
 
-NATIVE_LIVENESS_CONSTRAINT = "native-liveness"
-NATIVE_LIVENESS_SOURCE_DECLARED = "declared"
-NATIVE_LIVENESS_SOURCE_NONE = "none"
-
-
-def native_liveness_for_map(seat_map_blob):
-    """Authoritative native-liveness projection for a seat-map receipt (#1263 / C14).
-
-    Native in-session seats use vendor ``claude`` and are declared live, never probed
-    (CONVENTIONS §6; LEDGERS §3)."""
-    seats = seat_map_blob.get("seats") if isinstance(seat_map_blob, dict) else None
-    if not isinstance(seats, dict):
-        return {"source": NATIVE_LIVENESS_SOURCE_NONE, "seats": []}
-    native_seats = sorted(
-        seat for seat, cfg in seats.items()
-        if isinstance(cfg, dict) and cfg.get("vendor") == "claude"
-    )
-    if not native_seats:
-        return {"source": NATIVE_LIVENESS_SOURCE_NONE, "seats": []}
-    return {"source": NATIVE_LIVENESS_SOURCE_DECLARED, "seats": native_seats}
-
-
-def native_liveness_disclosure_line(seat_map_blob):
-    """Terminal-receipt degraded prose when certification rests on unprobed native seats."""
-    nl = native_liveness_for_map(seat_map_blob)
-    if nl.get("source") != NATIVE_LIVENESS_SOURCE_DECLARED:
-        return None
-    seats = nl.get("seats") or []
-    if not seats:
-        return None
-    return (
-        "native-liveness: certification rests on native in-session seat(s) %s declared live "
-        "and never probed — declaration, not receipt; disclosed on the seat map"
-        % ", ".join(seats)
-    )
-
 
 def receipts(state):
     """Ordered receipt list — legacy ``state["seatMap"]`` dict prepended when present, then receipts."""
@@ -396,22 +360,10 @@ def emit_receipt_seat_map(state, driver_author_family=None):
         base["authorFamily"] = author_families[0]
     else:
         base.pop("authorFamily", None)
-    base["nativeLiveness"] = native_liveness_for_map(base)
-    disclosure = native_liveness_disclosure_line(base)
-    if disclosure:
-        native_deg = {
-            "constraint": NATIVE_LIVENESS_CONSTRAINT,
-            "seats": list(base["nativeLiveness"].get("seats") or []),
-            "reason": disclosure,
-        }
-        key = json.dumps(native_deg, sort_keys=True)
-        if key not in seen:
-            merged_degs.append(native_deg)
-            base["degradations"] = merged_degs
     for entry in receipt_list:
         map_ = entry["map"]
         for k, v in map_.items():
-            if k in ("seats", "degradations", "nativeLiveness") or k in _EVIDENCE_MAP_KEYS:
+            if k in ("seats", "degradations") or k in _EVIDENCE_MAP_KEYS:
                 continue
             base[k] = v
     return base
