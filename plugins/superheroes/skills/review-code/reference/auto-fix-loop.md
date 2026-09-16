@@ -400,7 +400,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > # Keep $SEAT_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
 > # LAUNCH — first call on each --run-dir: short positive slice (see dispatch-mechanics.md)
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
->   --seat '{"vendor":"'"$REVIEWER_ENGINE"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":"'"$SEAT_EFFORT"'"}' --role reviewer \
+>   --seat '{"vendor":"'"$REVIEWER_ENGINE"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":"'"$SEAT_EFFORT"'"}' --role "$SEAT_TIER" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
 >   --expected-result-kind findings \
@@ -408,7 +408,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
->   --seat '{"vendor":"'"$REVIEWER_ENGINE"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":"'"$SEAT_EFFORT"'"}' --role reviewer \
+>   --seat '{"vendor":"'"$REVIEWER_ENGINE"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":"'"$SEAT_EFFORT"'"}' --role "$SEAT_TIER" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
 >   --expected-result-kind findings \

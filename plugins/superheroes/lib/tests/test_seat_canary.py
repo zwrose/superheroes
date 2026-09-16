@@ -144,7 +144,7 @@ def _base_dispatch_result(**overrides):
 def test_findings_with_plant_engaged_and_detected():
     captured = {}
 
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         captured.update(kwargs)
         return _base_dispatch_result(
             findings=[{
@@ -169,7 +169,7 @@ def test_findings_with_plant_engaged_and_detected():
 
 
 def test_vacuous_no_telemetry_not_engaged():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "vacuous",
@@ -193,7 +193,7 @@ def test_vacuous_no_telemetry_not_engaged():
 
 
 def test_high_token_spend_alone_not_engaged():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             investigated=[],
             engagement={
@@ -212,7 +212,7 @@ def test_high_token_spend_alone_not_engaged():
 
 
 def test_wall_time_alone_not_engaged():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             engagement={
                 "tokens": None,
@@ -230,7 +230,7 @@ def test_wall_time_alone_not_engaged():
 
 
 def test_vacuous_with_investigation_still_engaged_path_alive():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "vacuous",
@@ -256,7 +256,7 @@ def test_vacuous_with_investigation_still_engaged_path_alive():
 
 
 def test_vacuous_with_tool_calls_only_not_engaged():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "vacuous",
@@ -281,7 +281,7 @@ def test_vacuous_with_tool_calls_only_not_engaged():
 
 
 def test_finding_with_fast_wall_engaged():
-    def dispatch_finding(engine, **kwargs):
+    def dispatch_finding(**kwargs):
         return _base_dispatch_result(
             findings=[{"id": "f", "file": "a.py", "title": "t", "body": "b"}],
             investigated=["a.py"],
@@ -300,7 +300,7 @@ def test_finding_with_fast_wall_engaged():
 
 
 def test_tool_calls_without_investigated_not_engaged():
-    def dispatch_one(engine, **kwargs):
+    def dispatch_one(**kwargs):
         return _base_dispatch_result(
             engagement={"tokens": None, "toolCalls": 1, "stdoutBytes": 0, "wallSeconds": 0.0},
         )
@@ -309,7 +309,7 @@ def test_tool_calls_without_investigated_not_engaged():
         "cursor", engine_model="c", effort="high", repo_root="/r", dispatch=dispatch_one,
     )["engaged"] is False
 
-    def dispatch_zero(engine, **kwargs):
+    def dispatch_zero(**kwargs):
         return _base_dispatch_result(
             engagement={"tokens": None, "toolCalls": 0, "stdoutBytes": 0, "wallSeconds": 0.0},
         )
@@ -320,7 +320,7 @@ def test_tool_calls_without_investigated_not_engaged():
 
 
 def test_investigated_without_findings_engaged():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             investigated=["lib/a.py"],
             engagement={"tokens": None, "toolCalls": None, "stdoutBytes": 0, "wallSeconds": 0.0},
@@ -334,7 +334,7 @@ def test_investigated_without_findings_engaged():
 
 
 def test_non_terminal_running_maps_to_non_terminal_slice():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "terminal": False,
@@ -349,7 +349,7 @@ def test_non_terminal_running_maps_to_non_terminal_slice():
 
 
 def test_unrunnable_attempts_zero_not_engaged_despite_telemetry():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "unrunnable",
@@ -368,7 +368,7 @@ def test_unrunnable_attempts_zero_not_engaged_despite_telemetry():
 
 
 def test_dispatch_raises_becomes_unrunnable_no_escape():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         raise RuntimeError("boom")
 
     out = SC.run_canary(
@@ -384,7 +384,7 @@ def test_no_residue_and_repo_untouched(tmp_path):
     marker = tmp_path / "repo" / "marker.txt"
     paths_seen = []
 
-    def dispatch(engine, *, prompt_path, repo_root, **kwargs):
+    def dispatch(*, prompt_path, repo_root, **kwargs):
         paths_seen.append(prompt_path)
         assert os.path.isfile(prompt_path)
         return _base_dispatch_result()
@@ -401,7 +401,7 @@ def test_dispatch_receives_fixture_prompt_and_repo_root(tmp_path):
     repo = _repo(tmp_path)
     seen = {}
 
-    def dispatch(engine, *, prompt_path, repo_root, **kwargs):
+    def dispatch(*, prompt_path, repo_root, **kwargs):
         seen["prompt_path"] = prompt_path
         seen["repo_root"] = repo_root
         seen["kwargs"] = kwargs
@@ -426,7 +426,7 @@ def test_run_canary_pins_findings_expected_result_kind(tmp_path):
     repo = _repo(tmp_path)
     seen = {}
 
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         seen.update(kwargs)
         return _base_dispatch_result()
 
@@ -434,6 +434,23 @@ def test_run_canary_pins_findings_expected_result_kind(tmp_path):
         "codex", engine_model="m", effort="high", repo_root=repo, dispatch=dispatch,
     )
     assert seen.get("expected_result_kind") == "findings"
+
+
+def test_run_canary_default_dispatch_uses_seat_and_role(tmp_path):
+    repo = _repo(tmp_path)
+    seen = {}
+
+    def dispatch(**kwargs):
+        seen.update(kwargs)
+        return _base_dispatch_result()
+
+    SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root=repo, dispatch=dispatch,
+    )
+    assert seen["seat"] == {"vendor": "codex", "model": "m", "effort": "high"}
+    assert seen["role"] == SC.CANARY_ROLE
+    assert "engine" not in seen
+    assert "engine_model" not in seen
 
 
 def _engagement_decision_source(src):
@@ -475,7 +492,7 @@ def _assert_engaged_not_branched_on_plant_detection(engagement_src, full_src):
 def test_detected_plant_does_not_drive_engaged():
     # detectedPlant True requires a finding carrying PLANT_MARKER, which also satisfies the
     # engagement OR-ladder — combination unconstructible at the behavioural layer.
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             findings=[],
             engagement={"tokens": None, "toolCalls": None, "stdoutBytes": 0, "wallSeconds": 0.0},
@@ -507,7 +524,7 @@ def test_probe_passes_sanitized_view_from_dispatch(tmp_path):
         "fileCount": 5,
     }
 
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(sanitizedView=block)
 
     out = SC.run_canary(
@@ -529,7 +546,7 @@ def test_probe_passes_sanitized_view_on_vacuous_dispatch(tmp_path):
         "fileCount": 5,
     }
 
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "vacuous",
@@ -552,7 +569,7 @@ def test_probe_passes_sanitized_view_on_vacuous_dispatch(tmp_path):
 
 
 def test_probe_sanitized_view_absent_when_dispatch_unrunnable(tmp_path):
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "unrunnable",
@@ -571,7 +588,7 @@ def test_dispatch_exception_still_cleans_temp_file(tmp_path):
     repo = _repo(tmp_path)
     created = []
 
-    def dispatch(engine, *, prompt_path, **kwargs):
+    def dispatch(*, prompt_path, **kwargs):
         created.append(prompt_path)
         raise ValueError("nope")
 
@@ -649,7 +666,7 @@ def test_engaged_from_dispatch_diverges_from_engagement_read():
 
 
 def test_dod_row1_field_recurrence_specimen_not_engaged():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             findings=[{"id": "f", "file": "x.py", "title": "t", "body": "b"}],
             investigated=[],
@@ -670,7 +687,7 @@ def test_dod_row1_field_recurrence_specimen_not_engaged():
 
 
 def test_dod_row2_engaged_dispatch_plant_undetected_when_marker_missing():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             findings=[{"id": "f", "file": "lib/gate.py", "title": "other", "body": "b"}],
             investigated=["lib/gate.py"],
@@ -758,7 +775,7 @@ def test_plant_marker_literal_pinned():
 
 
 def test_detected_plant_names_verify_submission_naturally():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             findings=[{
                 "id": "p1",
@@ -779,7 +796,7 @@ def test_detected_plant_names_verify_submission_naturally():
 
 
 def test_check_receipt_echo_no_longer_scores_detection():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             findings=[{
                 "id": "p1",
@@ -911,7 +928,7 @@ def test_map_outcome_engaged_artifact_not_unrunnable():
 
 
 def test_run_canary_engaged_artifact_not_engaged():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "forfeit-with-engaged-artifact",

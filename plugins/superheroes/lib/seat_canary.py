@@ -19,6 +19,7 @@ import engine_dispatch  # noqa: E402
 import review_findings_schema  # noqa: E402
 
 PLANT_MARKER = "verify_submission"
+CANARY_ROLE = "reviewer"
 
 CANARY_FIXTURE_PROMPT = """\
 You are the security reviewer seat for a one-shot dispatched review.
@@ -147,10 +148,8 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
 
         try:
             res = dispatch(
-                engine,
-                model=None,
-                effort=effort,
-                engine_model=engine_model,
+                seat={"vendor": engine, "model": engine_model, "effort": effort},
+                role=CANARY_ROLE,
                 prompt_path=prompt_path,
                 repo_root=repo_root,
                 timeout=timeout,

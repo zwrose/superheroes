@@ -2444,7 +2444,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         wt = _linked_worktree(tmp_path)
         fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
         res = ED.dispatch_write(
-            seat=_codex_seat(), role=_REVIEW_ROLE,
+            seat=_codex_seat(), role=_WRITE_ROLE,
             prompt_path=_valid_prompt(tmp_path), cwd=wt,
             run_dir=str(tmp_path / "run-write"), order_id="inv-1", run_engine=fake,
         )
@@ -2453,7 +2453,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         wt = _linked_worktree(tmp_path)
         fake = FakeRunner([(_honest_refusal_stdout(), False, 0, "")])
         res = ED.dispatch_write(
-            seat=_codex_seat(), role=_REVIEW_ROLE,
+            seat=_codex_seat(), role=_WRITE_ROLE,
             prompt_path=_valid_prompt(tmp_path), cwd=wt,
             run_dir=str(tmp_path / "run-refusal"), order_id="inv-2", run_engine=fake,
         )
@@ -2468,7 +2468,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
                 return "", True, 0, ""
 
         res = ED.dispatch_write(
-            seat=_codex_seat(), role=_REVIEW_ROLE,
+            seat=_codex_seat(), role=_WRITE_ROLE,
             prompt_path=_valid_prompt(tmp_path), cwd=wt,
             run_dir=str(tmp_path / "run-dirty"), order_id="inv-3",
             run_engine=DirtyTimeoutRunner(), max_wait=120,
@@ -3950,7 +3950,7 @@ def test_write_preflight_prompt_missing_returns_refusal_without_ledger(tmp_path)
     wt = _linked_worktree(tmp_path)
     missing_prompt = str(tmp_path / "missing-write-prompt.txt")
     res = ED.dispatch_write(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(), role=_WRITE_ROLE,
         prompt_path=missing_prompt, cwd=wt,
         run_dir=str(tmp_path / "run-write-preflight"), order_id="inv-write",
         run_engine=_never_call,
@@ -3963,7 +3963,7 @@ def test_write_preflight_prompt_missing_returns_refusal_without_ledger(tmp_path)
 def test_write_preflight_primary_checkout_returns_refusal_without_ledger(tmp_path):
     main = _git_init(str(tmp_path / "main-primary"))
     res = ED.dispatch_write(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(), role=_WRITE_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=main,
         run_dir=str(tmp_path / "run-write-primary"), order_id="inv-primary",
         run_engine=_never_call,
@@ -3977,7 +3977,7 @@ def test_write_preflight_non_repo_returns_refusal_without_ledger(tmp_path):
     non_repo = str(tmp_path / "not-a-repo")
     os.makedirs(non_repo)
     res = ED.dispatch_write(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(), role=_WRITE_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=non_repo,
         run_dir=str(tmp_path / "run-write-nonrepo"), order_id="inv-nonrepo",
         run_engine=_never_call,
@@ -4601,7 +4601,7 @@ def test_write_fold_carries_observed_sibling_worktrees(tmp_path):
     subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt1], check=True)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res = ED.dispatch_write(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(), role=_WRITE_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt0,
         run_dir=str(tmp_path / "run-observed"), order_id="sib-1", run_engine=fake,
     )
@@ -4620,7 +4620,7 @@ def test_write_forfeit_fold_carries_sibling_worktrees(tmp_path):
             return "", True, 0, ""
 
     res = ED.dispatch_write(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(), role=_WRITE_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-forfeit-sib"), order_id="sib-2",
         run_engine=DirtyTimeoutRunner(), max_wait=120,
@@ -4633,7 +4633,7 @@ def test_write_terminal_refusal_fold_carries_sibling_worktrees(tmp_path):
     wt = _linked_worktree(tmp_path)
     fake = FakeRunner([(_honest_refusal_stdout(), False, 0, "")])
     res = ED.dispatch_write(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(), role=_WRITE_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-refusal-sib"), order_id="sib-3", run_engine=fake,
     )
@@ -4646,7 +4646,7 @@ def test_write_preflight_terminal_omits_sibling_worktrees(tmp_path):
     wt = _linked_worktree(tmp_path)
     missing_prompt = str(tmp_path / "missing.txt")
     res = ED.dispatch_write(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(), role=_WRITE_ROLE,
         prompt_path=missing_prompt, cwd=wt,
         run_dir=str(tmp_path / "run-preflight-sib"), order_id="sib-4",
         run_engine=_never_call,
@@ -4685,7 +4685,7 @@ def test_sibling_probe_failure_does_not_change_dispatch_outcome(tmp_path, monkey
 
     fake_ok = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_observed = ED.dispatch_write(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(), role=_WRITE_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-probe-ok"), order_id="sib-5", run_engine=fake_ok,
     )
@@ -4698,7 +4698,7 @@ def test_sibling_probe_failure_does_not_change_dispatch_outcome(tmp_path, monkey
     monkeypatch.setattr(ED.sibling_worktree_probe, "snapshot", _snap_indeterminate)
     fake_fail = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_indeterminate = ED.dispatch_write(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(), role=_WRITE_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-probe-boom"), order_id="sib-6", run_engine=fake_fail,
     )
@@ -4714,7 +4714,7 @@ def test_sibling_probe_timeout_does_not_change_dispatch_outcome(tmp_path, monkey
 
     fake_ok = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_observed = ED.dispatch_write(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(), role=_WRITE_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-probe-timeout-ok"), order_id="sib-8", run_engine=fake_ok,
     )
@@ -4726,7 +4726,7 @@ def test_sibling_probe_timeout_does_not_change_dispatch_outcome(tmp_path, monkey
     monkeypatch.setattr(ED.sibling_worktree_probe, "snapshot", _snap_timeout)
     fake_fail = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_indeterminate = ED.dispatch_write(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(), role=_WRITE_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-probe-timeout"), order_id="sib-9", run_engine=fake_fail,
     )
@@ -4780,7 +4780,7 @@ def test_legitimate_concurrent_sibling_change_observed_unattributed(tmp_path):
             return _build_ok_stdout(), False, 0, ""
 
     res = ED.dispatch_write(
-        seat=_codex_seat(), role=_REVIEW_ROLE,
+        seat=_codex_seat(), role=_WRITE_ROLE,
         prompt_path=_valid_prompt(tmp_path), cwd=wt0,
         run_dir=str(tmp_path / "run-concurrent"), order_id="sib-7",
         run_engine=SiblingMutator(),
