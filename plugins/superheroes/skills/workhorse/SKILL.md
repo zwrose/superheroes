@@ -406,8 +406,9 @@ anti-opportunities ledger (`LEDGERS.md` §2).
 after it names *how*.
 
 Dispatch **one fresh-context reviewer** over the brief. Because you (the orchestrator) are already
-high-tier, the default is a **cross-vendor reviewer at comparable tier**; a Claude fresh-context
-reviewer is the fallback **only with disclosed degradation** (never a silent downgrade). One pass:
+high-tier, the default is a **cross-vendor reviewer at comparable tier**; a fresh-context reviewer on
+**the host model** — whatever runs the current session, read from the hook payload, never assumed — is
+the fallback **only with disclosed degradation** (never a silent downgrade). One pass:
 fold its findings in, or dispute each with a reason. Post the dispositions.
 
 **How it is dispatched.** Sanctioned channel: `dispatch-review --mode brief-check` — mechanics and
@@ -415,7 +416,7 @@ recipe in `reference/dispatch-mechanics.md` (gate, `--order-id`, continuation).
 A hand-rolled `codex exec` is permitted **only when the runner itself is unavailable** — disclosed
 degradation in the PR body, never the normal path.
 
-**Only a terminal forfeit licenses that Claude fallback.** The substitution is earned when the
+**Only a terminal forfeit licenses fallback to the host model.** The substitution is earned when the
 cross-vendor dispatch **terminally forfeits** — per `rubric/review-discipline.md`'s definition, which
 includes `forfeit-with-engaged-artifact` (final output *did* arrive; our transport could not carry
 it) — and **not before**: a *risk* of forfeit (a tight step budget, an engine you expect to
@@ -424,7 +425,7 @@ ladder** (the #563 sequence), never a pre-emptive swap — a quiet substitute-on
 cross-vendor guarantee if sessions learn it (#520 was exactly that swap, disclosed but forbidden).
 This is distinct from the engine-*unavailability* fallback of CONVENTIONS `§7.5` (an engine not
 configured or available at all — a selection event recorded there); here a *configured* reviewer must
-actually forfeit before Claude stands in.
+actually forfeit before the host model stands in.
 
 **Never kill a configured reviewer dispatch before its structural timeout** — the timeout is the
 tripwire, not your read of intermediate signals. A memory recalls context; it is never a standing
