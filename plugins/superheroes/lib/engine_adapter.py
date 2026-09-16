@@ -2227,7 +2227,7 @@ def build_parser():
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build-argv")
     b.add_argument("--seat", required=True,
-                   help="JSON seat bundle or vendor:token composed dispatch token")
+                   help="JSON seat bundle with vendor, model, effort, and role")
     b.add_argument(
         "--run-kind",
         required=True,
