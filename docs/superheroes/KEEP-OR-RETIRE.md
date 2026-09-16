@@ -1026,6 +1026,75 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** capability-gap — a person could create two labels by hand; the helper exists so the
   routing vocabulary is present before the first issue is routed.
 
+#### S8 — Seat-bundle entry chokepoint
+
+- **Component.** Not a census row. `seat_bundle.resolve_entry` in `plugins/superheroes/lib/seat_bundle.py`:
+  the one resolver every dispatch entry path routes through (`dispatch-review`, `dispatch-write`,
+  brief-check mode, `dispatch_guard check`, and the command-builder CLI). It validates a caller's
+  seat bundle in a fixed leg order — the role is real, the role agrees with the mode, the role
+  agrees with the verb, the model and effort are valid for that vendor, and only then the
+  allowlist — and refuses with text naming what would have been accepted. Its cost is that every
+  new entry path must route through it rather than reading seat fields itself. Open PR #1286 takes
+  S7; whichever of the two PRs lands second renumbers.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  chokepoint refusal (`legacy-seat-args`, `seat-token-dropped`, `unknown-role`, `mode-role-mismatch`,
+  `verb-role-mismatch`, `invalid-model-effort`, `allowlist-refused`) that stopped a dispatch from
+  running a seat it was not entitled to. On firing, a proposal to the owner at a gardening pass. A
+  zero citation count means no dispatch tried an unauthorized seat past the chokepoint, not that the
+  gate can go.
+- **Last demonstrated benefit.** Before the chokepoint, the seat's registry role was a separate
+  argument every caller decided independently and four of them decided wrong; the chokepoint made
+  one function the only place that decides (this child's build record on PR #1283 and the bite-proof
+  record `plugins/superheroes/lib/tests/bite_proofs/wo_1269_chokepoint.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a single entry resolver guards how dispatch seats are authorized; a zero
+  citation count means callers are not attempting unauthorized seats, not that bypass paths vanished.
+
+#### S9 — Spawn-time allowlist gate
+
+- **Component.** Not a census row. The spawn-time allowlist re-validation in
+  `plugins/superheroes/lib/engine_dispatch.py`: `_spawn_allowlist_verdict` re-validates the seat
+  from the journal's stored `resolvedInputs` snapshot before any engine process starts, and the
+  argv that runs is derived from that validated snapshot rather than stored separately alongside
+  it. A safety refusal at this gate folds as a terminal refusal returned to the caller, not as an
+  engine forfeit. Its cost is that a journal written before the snapshot existed refuses rather
+  than spawning.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  spawn-gate refusal (`run seat cannot be established`, `spawn argv does not match resolvedInputs
+  snapshot`, or an allowlist refusal replayed from the journal seat snapshot) or an argv/snapshot
+  divergence caught at spawn. On firing, a proposal to the owner at a gardening pass. A zero
+  citation count means no continuation, retry, or run-child re-entry slipped the entry gate, not
+  that the spawn gate can go.
+- **Last demonstrated benefit.** It closed the paths that had slipped the entry gate — the
+  continuation spawn, the retry attempt, and the run-child re-entry all re-read the journal seat
+  instead of trusting caller argv (this child's build record on PR #1283 and
+  `plugins/superheroes/lib/tests/bite_proofs/wo_10_1269_spawn_gate.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — spawn-time re-validation guards argv coherence independent of which
+  engine family runs the seat.
+
+#### S10 — Entry-doc determinism guard
+
+- **Component.** Not a census row. `plugins/superheroes/lib/dispatch_entry_doc.py --check`, which
+  regenerates the entry doc from the dispatch shell's own argparse declarations and refuses when
+  the committed `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md` differs from a
+  fresh generation, plus the cross-process determinism test that guards it. Its cost is that any
+  change to a dispatch flag's declaration requires regenerating the doc in the same change.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing the
+  `--check` refusal (`is stale` or `is missing`) catching a doc that had drifted from the
+  declarations. On firing, a proposal to the owner at a gardening pass. A zero citation count
+  means the doc and the declarations have stayed together, not that the guard can go.
+- **Last demonstrated benefit.** The generated doc had embedded a Python object address, so it
+  could not be regenerated identically; the sentinel now renders in the doc's own vocabulary and a
+  cross-process determinism test guards it (this child's build record on PR #1283 and
+  `plugins/superheroes/lib/tests/bite_proofs/wo_9_1269_doc_determinism.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — doc generated from argparse declarations guards declaration drift by
+  construction; a zero citation count means no drift reached commit, not that drift is impossible.
+
 
 ## The workaround-marker inventory
 

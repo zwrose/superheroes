@@ -178,3 +178,12 @@ def test_cli_check_absent_file_refuses(tmp_path, monkeypatch):
     monkeypatch.setattr(DED, "_DEFAULT_OUT", str(missing))
     rc = DED.main(["--check"])
     assert rc == 1
+
+
+def test_format_default_param_unset_distinct_from_none():
+    class _Action:
+        def __init__(self, default):
+            self.default = default
+
+    assert DED._format_default(_Action(None)) == "none"
+    assert DED._format_default(_Action(DED.engine_dispatch._PARAM_UNSET)) == "runtime (see Variance envelope)"

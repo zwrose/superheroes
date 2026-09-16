@@ -1472,7 +1472,7 @@ def test_pre_view_repo_root_refusals_have_no_sanitized_view(tmp_path, repo_root,
         build_view=_never_build_view,
     )
     assert res["attempts"] == 0
-    assert res["detail"] == detail or detail in res["detail"]
+    assert res["detail"] == detail
     assert "sanitizedView" not in res
     assert len(fake.calls) == 0
 

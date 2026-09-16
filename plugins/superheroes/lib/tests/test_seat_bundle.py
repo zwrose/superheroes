@@ -45,7 +45,7 @@ _BRIEF_ROLE = "brief-check"
         (DG, "check", _REVIEW_ROLE),
     ],
 )
-def test_four_key_seat_json_accepted(cli_module, subcmd, role, tmp_path, monkeypatch):
+def test_entry_clis_route_through_chokepoint_and_expose_seat_flag(cli_module, subcmd, role, tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".git").mkdir()
@@ -91,6 +91,26 @@ def test_four_key_seat_json_accepted(cli_module, subcmd, role, tmp_path, monkeyp
         actions = parser._subparsers._actions[-1].choices["check"]._actions  # noqa: SLF001
     assert any(a.dest == "seat" for a in actions)
     assert not any(a.dest == "role" for a in actions)
+
+
+@pytest.mark.parametrize(
+    "verb,role",
+    [
+        ("dispatch-review", _REVIEW_ROLE),
+        ("dispatch-write", _WRITE_ROLE),
+        ("guard-check", _REVIEW_ROLE),
+    ],
+)
+def test_four_key_seat_json_accepted(verb, role):
+    resolved = SB.resolve_entry(
+        _seat_json("codex", "gpt-5.6-sol", "high", role),
+        verb=verb,
+    )
+    assert resolved["ok"] is True
+    assert resolved["vendor"] == "codex"
+    assert resolved["model"] == "gpt-5.6-sol"
+    assert resolved["effort"] == "high"
+    assert resolved["role"] == role
 
 
 _DROPPED = ("--engine", "--model", "--effort", "--engine-model", "--vendor", "--role")
@@ -318,7 +338,8 @@ def test_unknown_role_refused():
     )
     assert resolved["ok"] is False
     assert resolved["reason"] == "unknown-role"
-    assert "implementer" in resolved["detail"] or "reviewer" in resolved["detail"]
+    valid = ", ".join(MR.roles())
+    assert f"valid roles: {valid}" in resolved["detail"]
 
 
 def test_bare_token_seat_refused():
@@ -519,7 +540,11 @@ def test_edge5_off_allowlist_model_null_effort_refused_at_allowlist(verb):
     )
     assert resolved["ok"] is False
     assert resolved["reason"] == "allowlist-refused"
-    assert "composer-2.5" in resolved["detail"] or "allowlist" in resolved["detail"]
+    pairs = ", ".join(
+        "(%s, %s)" % (m, e)
+        for m, e in MR.allowlist(_WRITE_ROLE, "cursor")
+    )
+    assert f"implementer/cursor allowlist [{pairs}]" in resolved["detail"]
 
 
 def test_edge6_brief_check_mode_reviewer_refused_before_allowlist(monkeypatch):

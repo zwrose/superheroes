@@ -422,6 +422,27 @@ def test_edge2_null_effort_codex_reviewer_resolves_via_cli():
     assert payload["resolved_model"]
 
 
+def test_cli_effort_source_matches_seat_snapshot_not_registry_given():
+    seat = {"vendor": "codex", "model": "gpt-5.6-sol", "effort": None, "role": "reviewer"}
+    spec = importlib.util.spec_from_file_location(
+        "seat_bundle_cli_test", os.path.join(_HERE, "..", "seat_bundle.py"),
+    )
+    sb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sb)
+    snapshot = sb.resolve_entry(json.dumps(seat), verb="guard-check")
+    proc = subprocess.run(
+        [sys.executable, _MOD, "check", "--seat", json.dumps(seat)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert payload["effort_source"] == snapshot["effortSource"]
+    assert payload["effort_source"] == "resolved"
+    assert payload["effort_source"] != "given"
+
+
 def test_edge3_null_model_ambiguous_effort_refuses_via_cli():
     proc = subprocess.run(
         [

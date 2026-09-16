@@ -57,7 +57,8 @@ def _cli_check(args: argparse.Namespace) -> int:
         print(json.dumps(payload))
         print(resolved.get("detail") or resolved.get("reason"), file=sys.stderr)
         return 1
-    result = resolved["allowlistVerdict"]
+    result = dict(resolved["allowlistVerdict"])
+    result["effort_source"] = resolved["effortSource"]
     print(json.dumps(result))
     if not result["ok"]:
         print(result["reason"], file=sys.stderr)

@@ -309,7 +309,9 @@ def test_engine_dispatch_calls_dispatch_guard_validate():
     assert "_spawn_allowlist_verdict" in source
     assert "_run_engine_files" in source
     g2_idx = source.index("def _run_engine_files")
-    g2_block = source[g2_idx:g2_idx + 2500]
+    next_def_match = re.search(r"\ndef ", source[g2_idx + 1:])
+    g2_block = source[g2_idx:g2_idx + 1 + next_def_match.start()] if next_def_match else source[g2_idx:]
+    assert sum(1 for line in g2_block.splitlines() if line.startswith("def ")) == 1
     assert "_spawn_allowlist_verdict" in g2_block
     assert "subprocess.Popen" in g2_block
     popen_idx = g2_block.index("subprocess.Popen")

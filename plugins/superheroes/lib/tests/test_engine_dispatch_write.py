@@ -959,8 +959,14 @@ def test_dispatch_write_cli_effort_key_absent_refuses(tmp_path, capsys):
     res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert res["ok"] is False
     assert res["terminal"] is True
-    assert res["detail"] == "effort-key-absent" or "effort" in res["detail"]
-    assert "effort" in (res.get("seatDetail") or res["detail"])
+    # Terminal envelope reason is unrunnable; the seat chokepoint token is in detail, not reason.
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == (
+        'JSON seat must include the "effort" key (value may be null); accepted: '
+        'JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, '
+        '"role": "<role>"} (the effort key is required; its value may be null; role is '
+        "required and must not be null)"
+    )
 
 
 # --- process-group liveness + abandon confirmation -----------------------------
@@ -2525,9 +2531,8 @@ def _assert_allowlist_refusal(res, *, run_opened=False):
     assert res["terminal"] is True
     assert res.get("runOpened") is run_opened
     guard = res.get("allowlistGuard") or {}
-    reason = guard.get("reason") or res.get("detail") or ""
-    assert reason
-    assert guard.get("allowlist") or "allowlist" in reason
+    assert guard.get("reason")
+    assert guard.get("allowlist")
 
 
 def test_entry_allowlist_refuses_off_allowlist_write_library(tmp_path):
