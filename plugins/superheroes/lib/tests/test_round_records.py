@@ -961,6 +961,77 @@ def test_reconcile_reappends_when_the_store_revision_is_newer_than_the_journal(t
     assert out["reappend"][0]["payloadSha256"] == stored["payloadSha256"]
 
 
+def test_reconcile_reappends_when_identical_payload_differs_in_execution_evidence(tmp_path):
+    """Comparing payloadSha256 on both sides would report clean here — only envelopeSha256
+    separates the two revisions."""
+    sd = _session(tmp_path)
+    payload = {"findings": ["f1"]}
+    e1 = _execution_evidence(runnerNonce="nonce-1")
+    e2 = _execution_evidence(runnerNonce="nonce-2")
+    first = _v2_env(payload=payload, execution_evidence=e1)
+    _land(sd, first)
+    assert _ingest(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)["ok"] is True
+    second = _v2_env(payload=payload, execution_evidence=e2)
+    _land(sd, second)
+    out = _ingest(sd, supersede=True, expect_sha256=first["envelopeSha256"],
+                  seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert out["ok"] is True
+    stored, _err = RR.read_json(out["storePath"])
+    assert _err is None
+    journal = [RR.record_identity(PHASE, SEAT, 0, 1)]
+    journal[0]["casToken"] = first["envelopeSha256"]
+    journal[0]["payloadSha256"] = first["payloadSha256"]
+    rec = RR.reconcile(sd, 1, PHASE, journal)
+    assert len(rec["reappend"]) == 1
+    assert rec["reappend"][0]["casToken"] == stored["envelopeSha256"]
+    journal_current = [RR.record_identity(PHASE, SEAT, 0, 1)]
+    journal_current[0]["casToken"] = stored["envelopeSha256"]
+    journal_current[0]["payloadSha256"] = stored["payloadSha256"]
+    assert RR.reconcile(sd, 1, PHASE, journal_current)["reappend"] == []
+
+
+def test_reconcile_bounded_two_pass_transition_for_v2_without_journal_cas_token(tmp_path):
+    # The transition is bounded at two passes by construction: pass 1 journals casToken; pass 2
+    # compares token to token and stops.
+    sd = _session(tmp_path)
+    env = _v2_env()
+    _land(sd, env)
+    assert _ingest(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)["ok"] is True
+    spath = RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    stored, _err = RR.read_json(spath)
+    assert _err is None
+    store_token = RR.envelope_cas_token(stored)
+    journal = [RR.record_identity(PHASE, SEAT, 0, 1)]
+    journal[0]["payloadSha256"] = stored["payloadSha256"]
+    rec = RR.reconcile(sd, 1, PHASE, journal)
+    assert len(rec["reappend"]) == 1
+    journal[0]["casToken"] = store_token
+    assert RR.reconcile(sd, 1, PHASE, journal)["reappend"] == []
+
+
+def test_reconcile_v1_without_cas_token_matching_payload_is_clean(tmp_path):
+    sd = _session(tmp_path)
+    env = _env()
+    _land(sd, env)
+    assert _ingest(sd)["ok"] is True
+    stored, _err = RR.read_json(RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1))
+    assert _err is None
+    journal = [RR.record_identity(PHASE, SEAT, 0, 1)]
+    journal[0]["payloadSha256"] = stored["payloadSha256"]
+    assert RR.reconcile(sd, 1, PHASE, journal)["reappend"] == []
+
+
+def test_reconcile_v1_without_cas_token_differing_payload_reappends(tmp_path):
+    sd = _session(tmp_path)
+    env = _env()
+    _land(sd, env)
+    assert _ingest(sd)["ok"] is True
+    journal = [RR.record_identity(PHASE, SEAT, 0, 1)]
+    journal[0]["payloadSha256"] = "0" * 64
+    rec = RR.reconcile(sd, 1, PHASE, journal)
+    assert len(rec["reappend"]) == 1
+
+
 def test_head_diff_store_path_valid_requires_exact_session_store_path(tmp_path):
     sd = _session(tmp_path)
     expected = RR.head_diff_store_path(sd, 1, PHASE, SEAT, 1)

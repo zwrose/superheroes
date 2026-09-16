@@ -983,6 +983,98 @@ def test_fixer_head_diff_refuses_at_record_time(tmp_path, adapters, head_path, l
     assert not os.path.exists(spath)
 
 
+def test_every_recorded_row_carries_the_stored_envelopes_cas_token(tmp_path, adapters):
+    """Enumerate the emitted journal — not source call sites — so late subscript assignment inside
+    `_store_head_diff` cannot hide a missing casToken."""
+    d = _session(tmp_path)
+    assert _state(d).get("schemaVersion") == RD.STATE_SCHEMA_VERSION
+    seats = list(RD.DIMENSIONS)
+    for seat in seats[:-1]:
+        _land_and_record(d, seat)
+    _land(d, seats[-1])
+    assert RD.cmd_record_result(d, sweep=True)["ok"] is True
+    assert _advance(d, tmp_path)["ok"] is True
+    state = _state(d)
+    state["step"] = RD.P_FIXER
+    state["pending"] = {"action": RD.P_FIXER, "round": 1, "phase": RD.P_FIXER, "attempt": 0,
+                        "payload": {}}
+    RD.save_state(d, state)
+    head_path = str(tmp_path / "head.diff")
+    with open(head_path, "w", encoding="utf-8") as fh:
+        fh.write("diff --git a/f.py b/f.py\n+fixed\n")
+    _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path})
+    assert RD.cmd_record_result(d, "dispatch-fixer")["ok"] is True
+    recorded = _outcomes(d, "recorded")
+    assert len(recorded) >= len(seats)
+    checked = 0
+    for event in recorded:
+        if "payloadSha256" not in event or event["payloadSha256"] is None:
+            continue
+        checked += 1
+        assert "casToken" in event
+        rnd = event.get("round", 1)
+        phase = event["phase"]
+        seat = event["seat"]
+        occurrence = event.get("occurrence", 0)
+        attempt = event["attempt"]
+        spath = RR.store_path(d, rnd, phase, RR.storage_key(seat, occurrence), attempt)
+        stored, err = RR.read_json(spath)
+        assert err is None
+        assert event["casToken"] == RR.envelope_cas_token(stored)
+    assert checked >= len(seats)
+
+
+def test_head_diff_rewrite_keeps_v2_envelope_self_consistent(tmp_path, adapters):
+    d = _fixer_session(tmp_path, adapters)
+    head_path = str(tmp_path / "head.diff")
+    diff_content = "diff --git a/f.py b/f.py\n+fixed\n"
+    with open(head_path, "w", encoding="utf-8") as fh:
+        fh.write(diff_content)
+    env = _result_envelope(d, "dispatch-fixer",
+                           payload={"fixes": [], "headDiffPath": head_path})
+    pend = _pending(d)
+    _path, _content, final, _sha = RD._envelope_with_head_diff(
+        d, env, diff_content, pend["round"], pend["phase"], "dispatch-fixer",
+        pend["attempt"], 0)
+    assert final["schema"] == RR.SEAT_RESULT_SCHEMA_V2
+    assert final["envelopeSha256"] == RR.envelope_sha256(
+        final["payload"], final.get("executionEvidence"))
+    plan, refusal = RR.validate_landing(
+        d, pend["round"], pend["phase"], "dispatch-fixer", pend["attempt"],
+        current_attempt=pend["attempt"], roster=["dispatch-fixer"],
+        seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2, envelope_override=final)
+    assert refusal is None and plan is not None
+    tampered = dict(final)
+    tampered["envelopeSha256"] = "0" * 64
+    plan, refusal = RR.validate_landing(
+        d, pend["round"], pend["phase"], "dispatch-fixer", pend["attempt"],
+        current_attempt=pend["attempt"], roster=["dispatch-fixer"],
+        seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2, envelope_override=tampered)
+    assert plan is None and refusal["reason"] == "envelope-torn"
+    _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path})
+    out = RD.cmd_record_result(d, "dispatch-fixer")
+    assert out["ok"] is True
+    stored, err = RR.read_json(out["storePath"])
+    assert err is None
+    assert stored["envelopeSha256"] == RR.envelope_sha256(
+        stored["payload"], stored.get("executionEvidence"))
+
+
+def test_head_diff_rewrite_does_not_add_envelope_sha256_to_v1_envelope(tmp_path, adapters):
+    d = _session(tmp_path)
+    pend = _pending(d)
+    payload = {"fixes": [], "headDiffPath": str(tmp_path / "head.diff")}
+    env = _result_envelope(d, "dispatch-fixer", payload=payload, schema=RR.SEAT_RESULT_SCHEMA)
+    env.pop("executionEvidence", None)
+    env.pop("provenance", None)
+    env.pop("envelopeSha256", None)
+    _path, _content, final, _sha = RD._envelope_with_head_diff(
+        d, env, "diff --git a/f.py b/f.py\n+fixed\n",
+        pend["round"], pend["phase"], "dispatch-fixer", pend["attempt"], 0)
+    assert final.get("schema") == RR.SEAT_RESULT_SCHEMA
+    assert "envelopeSha256" not in final
+
+
 def test_record_result_without_a_seat_refuses_unless_sweeping(tmp_path, adapters):
     d = _session(tmp_path)
     _land(d, "code-reviewer")
