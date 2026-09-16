@@ -52,6 +52,15 @@ _RETIRED_GATE_LITERALS = (
     _RETIRED_GATE_PHRASE,
 )
 
+_RETIRED_DOOR_GRADING_LITERALS = (
+    "gate verdict",
+)
+
+_APPEND_BEFORE_PROPOSE_PINNED_CLAUSES = (
+    "append it to the collector immediately",
+    "every owner call is appended",
+)
+
 # Closed exclusion set for the retired-gate markdown walk — nothing else.
 _RETIRED_GATE_WALK_EXCLUSIONS = (
     os.path.join("lib", "tests"),  # test fixtures and bite-proof records
@@ -114,14 +123,44 @@ def _normalize_prose(text):
 
 
 def _assert_append_before_propose_ordering(text):
+    # axis: each pinned ordering clause — not a document-wide single match.
     normalized = _normalize_prose(text)
-    if not re.search(
-        r"append(?:ed)?\b[^.]*?before\b[^.]*?proposed",
-        normalized,
-    ):
+    matched = 0
+    for marker in _APPEND_BEFORE_PROPOSE_PINNED_CLAUSES:
+        idx = normalized.find(marker)
+        if idx == -1:
+            continue
+        proposed = "proposed in this session's delivery message"
+        end = normalized.find(proposed, idx)
+        if end == -1:
+            continue
+        end += len(proposed)
+        clause = normalized[idx:end]
+        if re.search(
+            r"append(?:ed)?\b[^.]*?after\b[^.]*?proposed",
+            clause,
+        ):
+            raise AssertionError(
+                "%s: append-after-propose in pinned ordering clause"
+                % _DISCUSS_OPEN
+            )
+        if not re.search(
+            r"append(?:ed)?\b[^.]*?before\b[^.]*?proposed",
+            clause,
+        ):
+            raise AssertionError(
+                "%s: append-before-propose ordering missing in pinned clause"
+                % _DISCUSS_OPEN
+            )
+        matched += 1
+    if matched < len(_APPEND_BEFORE_PROPOSE_PINNED_CLAUSES):
         raise AssertionError(
-            "%s: append-before-propose ordering missing"
-            % _DISCUSS_OPEN
+            "%s: expected %d pinned append-before-propose clauses, found %d"
+            % (
+                _DISCUSS_OPEN,
+                len(_APPEND_BEFORE_PROPOSE_PINNED_CLAUSES),
+                matched,
+            )
         )
 
 
@@ -228,6 +267,18 @@ def _assert_retired_gate_literals_absent(texts=None):
                 )
 
 
+def _assert_retired_door_grading_literals_absent(texts=None):
+    if texts is None:
+        texts = {rel: _read_plugin(rel) for rel in _TOUCHED_FILES}
+    for rel in _TOUCHED_FILES:
+        text = texts[rel]
+        for literal in _RETIRED_DOOR_GRADING_LITERALS:
+            if literal in text:
+                raise AssertionError(
+                    "%s: retired door-grading literal %r present" % (rel, literal)
+                )
+
+
 def _assert_discuss_open_holder_pins(texts=None):
     if texts is None:
         texts = {
@@ -306,6 +357,10 @@ def test_retired_tier_literals_absent():
 
 def test_retired_gate_literals_absent():
     _assert_retired_gate_literals_absent()
+
+
+def test_retired_door_grading_literals_absent():
+    _assert_retired_door_grading_literals_absent()
 
 
 def test_discuss_open_holder_pins():
@@ -393,14 +448,35 @@ def test_negative_discuss_open_missing_append_before_propose():
     }
     _expect_assertion_error(
         lambda: _assert_discuss_open_holder_pins(texts),
-        match="append-before-propose ordering missing",
+        match="pinned append-before-propose",
+    )
+
+
+def test_negative_discuss_open_inverted_append_before_propose_one_clause():
+    base = _read_plugin(_DISCUSS_OPEN)
+    lines = base.splitlines()
+    inverted = []
+    for i, line in enumerate(lines, 1):
+        if i == 47:
+            inverted.append(line.replace("**before**", "**after**"))
+        else:
+            inverted.append(line)
+    texts = {
+        _DISCUSS_OPEN: "\n".join(inverted),
+        _OWNER_DECISIONS: "\n".join(_PINNED_OWNER_DECISIONS_HEADINGS),
+    }
+    _expect_assertion_error(
+        lambda: _assert_discuss_open_holder_pins(texts),
+        match="append-after-propose in pinned ordering clause",
     )
 
 
 def test_negative_discuss_open_append_before_propose_reflowed_passes():
     texts = {
         _DISCUSS_OPEN: (
-            "See %s. Every owner call is appended to the collector\n"
+            "See %s. For each owner call, append it to the collector immediately, "
+            "before it is proposed in this session's delivery message. Every owner call is "
+            "appended to the collector\n"
             "before it is proposed in this session's delivery message."
             % _OWNER_DECISIONS
         ),
@@ -420,7 +496,16 @@ def test_negative_discuss_open_inverted_append_before_propose():
     }
     _expect_assertion_error(
         lambda: _assert_discuss_open_holder_pins(texts),
-        match="append-before-propose ordering missing",
+        match="append-after-propose in pinned ordering clause",
+    )
+
+
+def test_negative_retired_door_grading_literal_inserted():
+    texts = {rel: "" for rel in _TOUCHED_FILES}
+    texts[_VET_RECEIPT] = "Each append carries its gate verdict and its venue."
+    _expect_assertion_error(
+        lambda: _assert_retired_door_grading_literals_absent(texts),
+        match=r"retired door-grading literal 'gate verdict' present",
     )
 
 

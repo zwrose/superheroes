@@ -380,7 +380,7 @@ rule.
 
 ## The revisit-trigger registry
 
-**The revisit-trigger registry is one pinned, always-current comment on the project's collector issue, one line per declined item — what was declined, how it failed the evidence bar, the revisit trigger, and the date with a pointer to the full record — archiving declines from craft calls and owner calls alike.**
+**The revisit-trigger registry is one pinned, always-current comment on the project's collector issue, one line per declined item — what was declined; for machinery, how it failed the evidence bar; for product, its classification, ratification, and decline rationale (product work never took the bar); the revisit trigger; and the date with a pointer to the full record — archiving declines from craft calls and owner calls alike.**
 
 **The collector is the pre-ruling queue and the registry is the post-ruling archive.**
 
@@ -390,8 +390,10 @@ own first line. An advisor updating it **reads that comment, edits it in place, 
 comment on the collector carries the marker, the advisor **creates one and pins it**; when more than
 one does, that is a defect to repair by consolidating into the oldest rather than by adding a third.
 
-Each registry row is one line per declined item carrying what was declined, how it failed the
-evidence bar, the revisit trigger, and the date with a pointer to the full record. This row shape follows the ledger
+Each registry row is one line per declined item carrying what was declined; for machinery, how it
+failed the evidence bar (band, evidence tier, and resulting tier); for product, the classification,
+the ratification it rides, and the decline rationale; the revisit trigger; and the date with a
+pointer to the full record. This row shape follows the ledger
 family — cite-instead-of-re-arguing, and a named condition that reopens the decision — and it
 assumes no `LEDGERS.md` file in a consuming project; a project that keeps a strategic ledger may
 graduate rows into it, and that is optional.
@@ -515,6 +517,10 @@ advisor run together to keep calibration honest.
 - the [pending-words line](../../../rubric/glossary.md#pending-words-line);
 - **the figures block**: the forward share read against the dial, the **decisions-asked count**, and
   the escape rate;
+- **the CI classification**: own broken test, real catch, infrastructure, flake, and escape, with
+  each real catch credited to the test file that caught it;
+- **the latest mutation results**: survivors and kills per test file the run covered (unmeasured
+  where no run covered the file);
 - **the lists**: the folded-in items, and the declines with their triggers;
 - the workaround-marker state;
 - the guardian staleness read and any pending triage;
@@ -626,8 +632,8 @@ the cost named — Recommendation: b — …. Empty sections stated empty, never
 
 **Residual disposition:** machinery: front door evidence bar (executed evidence on a live surface; dark and future surfaces fail; in-envelope variance is not defect evidence) → venue ladder once past the bar; product: owner ratification, same venue ladder (continue → fold → file, bundled by surface); decline with a revisit trigger when every venue fails the bar.
 **Call:** at a craft call the advisor executes and records for veto; at an owner call the owner's word via the collector; a filing whose item clears the evidence bar and grades P2 is the advisor's, and every other filing is an owner call; doubt upward.
-**Append-always at vet:** every owner call to the collector with door grading and venue on each
-append.
+**Append-always at vet:** every owner call to the collector with door grading (machinery: band,
+evidence tier, resulting tier; product: classification and ratification) and venue on each append.
 **Registry:** `<!-- superheroes:revisit-registry -->` — one pinned comment, one line per declined
 item.
 

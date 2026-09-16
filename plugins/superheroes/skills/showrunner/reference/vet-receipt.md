@@ -74,7 +74,12 @@ shape is wrong and the thinking wins.
    agreeable verifier and a genuinely sound batch produce the same number, and only reading a
    sample tells them apart. Record what the rate was and what you did about it. The field flag
    that named this was **12 of 12 CONFIRMED on a ~10,000-line diff**.
-7. **Dispositions — completed, and pending.** **Completed first**, because that is the primary path:
+7. **Misses-log appends.** Every vet states the misses-log entries this vet appended, or `None` —
+   the same filled-or-`None` convention as the rest of the spine.
+8. **Lane.** Every vet names the lane the work ran in — full, light, or micro — so the receipt
+   corpus can be read by lane. The grading record does not carry it; the lane exists only once
+   routing has chosen one.
+9. **Dispositions — completed, and pending.** **Completed first**, because that is the primary path:
    this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Then the
    **pending** set under `<!-- superheroes:pending-proposals -->` — only what genuinely could not
    close in this session. Every owner call is appended to the collector at vet time,
@@ -86,7 +91,9 @@ shape is wrong and the thinking wins.
    disclosed degradation, and the item keeps **this vet's ordinal as its proposing ordinal** for the
    later deferred append. Every disposition names its door grading and its venue. Each append carries
    its door grading for a machinery item — the band, the evidence tier, and the resulting tier the
-   front door recorded — and its venue recommendation, so the owner's batch is one word per item.
+   front door recorded — and for a product item the classification and the ratification it rides,
+   since no evidence bar applied to it; each append also carries its venue recommendation, so the
+   owner's batch is one word per item.
    **Known limit, carried knowingly:** this contract is prose-bound — nothing mechanical checks that
    a disposition names a door grading and a venue, and a reader who wants to know can only read the
    receipt. Each pending item carries
@@ -99,7 +106,7 @@ shape is wrong and the thinking wins.
    is carried forward: age is `this vet's ordinal − the item's ordinal`, a subtraction over written
    numbers rather than a count of artifacts, which is what makes it immune to receipts being edited in
    place. **Never the future tense** — "I'll file X" is not a disposition.
-8. **Open owner calls at merge.** What the owner must decide before or at the click, each stated as a
+10. **Open owner calls at merge.** What the owner must decide before or at the click, each stated as a
    consequence rather than a craft question.
 
 ## Triggered fields — the artifacts raise them, not your memory
@@ -240,6 +247,8 @@ all the age of a carried item, and the loss of an advisor write.
 **Accounting.** orders <n>, reworks <n>, attribution <…>; parks/refusals <…, each correct?>;
 receipt-integrity catches <…>; panel confirmation rate <rate or `not derivable from the receipt`>,
 inspection <what you did>; window: <…>
+**Misses-log appends.** <entry — why> | `None`
+**Lane.** <full | light | micro>
 **Dispositions — completed.** <…> | `None`
 <!-- superheroes:pending-proposals -->
 **Pending.** this vet's ordinal: <n> · <item — recommendation — proposed at ordinal <n>> | `None`
