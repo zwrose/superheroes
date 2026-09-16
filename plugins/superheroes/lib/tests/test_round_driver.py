@@ -5976,8 +5976,6 @@ _SEAT_MAP_RECEIPTS_CALLERS = frozenset({
     "pin_excused_records",
     "unjudgeable_receipts",
     "round_governing_unjudgeable",
-    "skew_records",
-    "plugin_version_skew_status",
     "emit_receipt_seat_map",
 })
 

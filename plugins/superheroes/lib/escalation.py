@@ -115,7 +115,6 @@ SAFETY_MACHINERY = (
     "hooks.json",             # workhorse PreToolUse hook registration (F3)
     "session_start.py",       # workhorse resume hooks (resilience)
     "session_mode.py",        # #1151: session-mode fail direction (UNRESOLVED_MODE -> PR); a fixer editing it could flip conservative PR default to branch and drop PR-only context
-    "version_skew.py",        # #1151: append-to-degradations rule (APPENDS_DEGRADATION); a fixer editing it could widen which skew statuses ride degradations
     "escalation-base.md",
     "review-base.md",
     # shared review-and-fix loop (#104): the loop's deciders, its durable record, and its

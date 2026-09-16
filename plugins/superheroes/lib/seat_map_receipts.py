@@ -7,7 +7,6 @@ import json
 
 import liveness_cache
 import seat_map
-import version_skew
 
 # Evidence / breach / provenance keys — union or most-conservative merge, never last-wins (#681).
 _EVIDENCE_MAP_KEYS = frozenset({
@@ -231,48 +230,6 @@ def round_governing_unjudgeable(state, round_id, driver_author_family=None):
     return [{"round": selected_round_label, "basis": basis}]
 
 
-def skew_records(state):
-    """Skew projection — per-receipt skew degradations, deduped by ``_skew_record_identity``."""
-    seen: set[tuple] = set()
-    merged: list[dict] = []
-    for entry in receipts(state):
-        for row in _skew_records_from_seat_map(entry["map"]):
-            key = _skew_record_identity(row)
-            if key is None or key in seen:
-                continue
-            seen.add(key)
-            merged.append(row)
-    merged.sort(
-        key=lambda item: (
-            str(item.get("constraint", "")),
-            str(item.get("status", "")),
-            str(item.get("detail", "")),
-            str(item.get("inspectedRoot", "")),
-        ),
-    )
-    return merged
-
-
-def plugin_version_skew_status(state):
-    """Skew-status projection — tri-state ``pluginVersionSkew`` across receipts."""
-    last_recognized = None
-    for entry in receipts(state):
-        pvs = entry["map"].get("pluginVersionSkew")
-        if not isinstance(pvs, dict):
-            continue
-        status = pvs.get("status")
-        try:
-            if status in version_skew.STATUSES:
-                last_recognized = status
-            else:
-                return "unknown"
-        except TypeError:
-            return "unknown"
-    if last_recognized is None:
-        return "absent"
-    return last_recognized
-
-
 def canary_map(state, round_map):
     """Canary projection — round map when it carries seats, else latest-with-seats."""
     if isinstance(round_map, dict):
@@ -379,77 +336,3 @@ def _merge_live_cells_source(sources: list) -> object:
             best_rank = rank
             worst_value = source
     return worst_value
-
-
-def _skew_record_identity(rec):
-    """Union key for plugin-version-skew disclosures — (constraint, status, detail, inspectedRoot).
-    All skew records share one constraint and carry no seat, so the breach channel's (constraint,
-    seat) key would collapse distinct disclosures (#1107)."""
-    if not isinstance(rec, dict):
-        return None
-    if rec.get("constraint") != version_skew.CONSTRAINT:
-        return None
-    return (
-        str(rec.get("constraint", "")),
-        str(rec.get("status", "")),
-        str(rec.get("detail", "")),
-        str(rec.get("inspectedRoot", "")),
-    )
-
-
-def _enrich_skew_degradation(deg, seat_map_blob):
-    """One seat-map skew degradation row, with tri-state fields filled from ``pluginVersionSkew``."""
-    if not isinstance(deg, dict) or deg.get("constraint") != version_skew.CONSTRAINT:
-        return None
-    rec = dict(deg)
-    pvs = seat_map_blob.get("pluginVersionSkew") if isinstance(seat_map_blob, dict) else None
-    if not isinstance(pvs, dict):
-        pvs = {}
-    for field, pvs_key in (("status", "status"), ("detail", "detail"),
-                           ("inspectedRoot", "inspectedRoot")):
-        if rec.get(field) in (None, ""):
-            val = pvs.get(pvs_key)
-            if val not in (None, ""):
-                rec[field] = val
-    status = rec.get("status")
-    if status in (None, ""):
-        rec["status"] = version_skew.default_missing_status()
-        status = rec["status"]
-    if not version_skew.appends_degradation(status):
-        return None
-    return rec
-
-
-def _skew_records_from_seat_map(seat_map_blob):
-    """Plugin-version-skew degradations from one seat map's degradations list."""
-    degradations = seat_map_blob.get("degradations") if isinstance(seat_map_blob, dict) else None
-    if not isinstance(degradations, list):
-        degradations = []
-    records = []
-    for deg in degradations:
-        rec = _enrich_skew_degradation(deg, seat_map_blob)
-        if rec is None:
-            continue
-        records.append(rec)
-    pvs = seat_map_blob.get("pluginVersionSkew") if isinstance(seat_map_blob, dict) else None
-    if isinstance(pvs, dict) and not records:
-        status = pvs.get("status")
-        try:
-            unknown_status = status not in version_skew.STATUSES
-        except TypeError:
-            unknown_status = True
-        if unknown_status:
-            offending = status
-            synthetic_status = (
-                offending
-                if offending not in (None, "") and version_skew.appends_degradation(offending)
-                else version_skew.default_missing_status()
-            )
-            records.append({
-                "constraint": version_skew.CONSTRAINT,
-                "status": synthetic_status,
-                "detail": pvs.get("detail") or version_skew.DETAIL_SEMANTICS_DIVERGENT,
-                "reason": "unrecognized pluginVersionSkew.status: %r" % offending,
-                "inspectedRoot": pvs.get("inspectedRoot") or "",
-            })
-    return records
