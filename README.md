@@ -228,8 +228,8 @@ codex plugin add superheroes@superheroes
 ```
 
 Skills speak in host-neutral actions and resolve them per host via a thin tool-map
-(`hosts/claude-tools.md` / `hosts/codex-tools.md` inside the plugin). No behavior
-changes — the same methodology runs on both.
+(`hosts/claude-tools.md` / `hosts/codex-tools.md` inside the plugin). Claude Code is the
+supported host; Codex loads the skills and runs the discipline layer with no host guarantees.
 
 ---
 

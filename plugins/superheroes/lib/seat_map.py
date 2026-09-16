@@ -48,7 +48,7 @@ UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
     # version can still carry the constraint. Dropping the member would make that stale map
     # read as PROVEN liveness — a fall-open, not a cleanup.
     "preflight-cache-only",   # legacy receipt: vendors were never probed
-    "compose-failed",         # compose blew up and every seat fell open to Claude
+    "compose-failed",         # compose blew up and every seat fell open to the host model
     "liveness-read-error",    # liveness read crashed — an unknown subset of cells were examined
 })
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
