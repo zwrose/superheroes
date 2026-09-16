@@ -1682,7 +1682,8 @@ def test_v2_execution_evidence_key_present_missing_required_field(tmp_path, prov
 
 
 @pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
-@pytest.mark.parametrize("pointer_key", RR._EXECUTION_EVIDENCE_POINTER_KEYS)
+# frozenset iteration order is undefined; pytest-xdist requires identical collection order on every worker
+@pytest.mark.parametrize("pointer_key", sorted(RR._EXECUTION_EVIDENCE_POINTER_KEYS))
 def test_v2_execution_evidence_pointer_key_refuses_not_inline(tmp_path, provenance, pointer_key):
     # axis: execution-evidence-not-inline — wo_l1_e case 7
     sd = _session(tmp_path)
