@@ -169,7 +169,8 @@ Adding a health lens is a PR that meets [the lens contract](reference/lens-contr
 Deterministic collectors run in seconds plus one model pass. The sweep's cadence is a
 project configuration item — a guardian staleness setting the project configures
 (defaults: ≥10 merges or ≥14 days since the last sweep). The advisor reads that
-staleness at the recurring pass; when the project is stale, the advisor runs the sweep
+staleness at the [gardening pass](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/glossary.md#gardening-pass); when the project is stale, the advisor runs the sweep
 in that pass and triages its report in the same sitting. There is no superheroes-owned
-scheduler, no cron, and no cloud routine — the sweep reads and writes the out-of-repo
-project store, which a cloud session cannot reach.
+scheduler, no cron, and no cloud routine — the sweep's artifact paths follow the
+configured storage mode (in-repo with the repo; in global mode the out-of-repo project
+store a cloud session cannot reach), and no mode has a hosted trigger.
