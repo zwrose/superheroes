@@ -271,7 +271,7 @@ def test_composer_null_effort_accepted_via_resolve_entry():
     )
     assert resolved["ok"] is True
     assert resolved["effort"] is None
-    assert resolved["effortSource"] == "declared-none"
+    assert resolved["effortSource"] == "caller"
 
 
 def test_composer_high_effort_refused_names_empty_set():
@@ -361,6 +361,94 @@ def test_brief_check_mode_reviewer_seat_refused():
     assert resolved["ok"] is False
     assert resolved["reason"] == "mode-role-mismatch"
     assert "brief-check" in resolved["detail"]
+
+
+def test_brief_check_role_normal_review_mode_refused():
+    resolved = SB.resolve_entry(
+        _seat_json("codex", "gpt-5.6-sol", "xhigh", _BRIEF_ROLE),
+        verb="dispatch-review",
+        mode="review",
+    )
+    assert resolved["ok"] is False
+    assert resolved["reason"] == "mode-role-mismatch"
+    assert "brief-check" in resolved["detail"]
+
+
+def test_brief_check_role_omitted_mode_refused_on_dispatch_review():
+    resolved = SB.resolve_entry(
+        _seat_json("codex", "gpt-5.6-sol", "xhigh", _BRIEF_ROLE),
+        verb="dispatch-review",
+    )
+    assert resolved["ok"] is False
+    assert resolved["reason"] == "mode-role-mismatch"
+
+
+def test_brief_check_role_guard_check_omitted_mode_accepted():
+    resolved = SB.resolve_entry(
+        _seat_json("codex", "gpt-5.6-sol", "xhigh", _BRIEF_ROLE),
+        verb="guard-check",
+    )
+    assert resolved["ok"] is True
+    assert resolved["role"] == _BRIEF_ROLE
+
+
+@pytest.mark.parametrize("role", ["mechanical", "synthesis", "pilot"])
+@pytest.mark.parametrize("verb", ["dispatch-review", "dispatch-write"])
+def test_unclassified_role_refused_for_dispatch_verbs(role, verb):
+    resolved = SB.resolve_entry(
+        _seat_json("claude", "haiku-4.5", "medium", role),
+        verb=verb,
+    )
+    assert resolved["ok"] is False
+    assert resolved["reason"] == "verb-role-mismatch"
+    assert "read_write" in resolved["detail"]
+
+
+@pytest.mark.parametrize("verb", ["guard-check", "dispatch-review"])
+def test_null_model_unique_effort_match_review_role(verb):
+    resolved = SB.resolve_entry(
+        _seat_json("codex", None, "xhigh", _REVIEW_ROLE),
+        verb=verb,
+    )
+    assert resolved["ok"] is True
+    assert resolved["model"] == "gpt-5.6-sol"
+    assert resolved["effort"] == "xhigh"
+
+
+@pytest.mark.parametrize("verb", ["guard-check", "dispatch-write"])
+def test_null_model_unique_effort_match_write_role(verb):
+    resolved = SB.resolve_entry(
+        _seat_json("codex", None, "xhigh", _WRITE_ROLE),
+        verb=verb,
+    )
+    assert resolved["ok"] is True
+    assert resolved["model"] == "gpt-5.6-sol"
+    assert resolved["effort"] == "xhigh"
+
+
+def test_null_model_effort_without_allowlist_pair_refused():
+    resolved = SB.resolve_entry(
+        _seat_json("codex", None, "low", _REVIEW_ROLE),
+        verb="guard-check",
+    )
+    assert resolved["ok"] is False
+    assert resolved["reason"] == "allowlist-refused"
+    assert "low" in resolved["detail"]
+
+
+def test_effort_source_matches_allowlist_verdict():
+    resolved = SB.resolve_entry(
+        _seat_json("codex", "gpt-5.6-sol", None, _REVIEW_ROLE),
+        verb="guard-check",
+    )
+    assert resolved["ok"] is True
+    assert resolved["effortSource"] in SB._EFFORT_SOURCE_CANONICAL
+    assert resolved["allowlistVerdict"]["effort_source"] == resolved["effortSource"]
+
+
+def test_effort_source_map_is_closed_canonical_vocabulary():
+    mapped = set(SB._EFFORT_SOURCE_MAP.values())
+    assert mapped <= SB._EFFORT_SOURCE_CANONICAL
 
 
 def test_semantic_allowlist_verdict_empty_pairs_refused(monkeypatch):
@@ -513,7 +601,7 @@ def test_edge1_cursor_implementer_null_model_resolves(verb):
     assert resolved["ok"] is True
     assert resolved["model"] == "composer-2.5"
     assert resolved["modelSource"] == "seat-default"
-    assert resolved["effortSource"] == "seat-default"
+    assert resolved["effortSource"] == "default"
 
 
 @pytest.mark.parametrize("verb", ["guard-check", "dispatch-review"])

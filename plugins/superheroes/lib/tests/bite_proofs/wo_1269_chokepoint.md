@@ -17,9 +17,13 @@
 
 - **axis:** `--mode brief-check` with a `reviewer` seat refuses before allowlist
 
-**neutralization** (removed mode/role leg in `resolve_entry`):
+**neutralization** (removed mode/role legs in `resolve_entry`):
 ```python
-    if mode == _MODE_BRIEF_CHECK and role != "brief-check":
+    if verb == "dispatch-review":
+        mode_refusal = _dispatch_review_mode_role_refusal(role, mode)
+        if mode_refusal is not None:
+            return mode_refusal
+    elif mode == _MODE_BRIEF_CHECK and role != "brief-check":
         return _mode_role_coherence_refusal(role)
 ```
 
@@ -43,24 +47,28 @@ _________________ test_brief_check_mode_reviewer_seat_refused __________________
 >       assert resolved["ok"] is False
 E       assert True is False
 
-plugins/superheroes/lib/tests/test_seat_bundle.py:324: AssertionError
+plugins/superheroes/lib/tests/test_seat_bundle.py:361: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_brief_check_mode_reviewer_seat_refused
-1 failed in 0.11s
+1 failed in 1.19s
 ```
 
-**restore:** reinstated the mode/role coherence block in `resolve_entry`.
+**restore:** reinstated the bidirectional mode/role coherence block in `resolve_entry`.
 
 **restore receipt:**
 ```python
-    if mode == _MODE_BRIEF_CHECK and role != "brief-check":
+    if verb == "dispatch-review":
+        mode_refusal = _dispatch_review_mode_role_refusal(role, mode)
+        if mode_refusal is not None:
+            return mode_refusal
+    elif mode == _MODE_BRIEF_CHECK and role != "brief-check":
         return _mode_role_coherence_refusal(role)
 ```
 
 **raw green** (exit 0):
 ```
 .                                                                        [100%]
-1 passed in 0.10s
+1 passed in 0.99s
 ```
 
 ---
@@ -90,7 +98,7 @@ _____________ test_semantic_allowlist_verdict_empty_pairs_refused ______________
         def _fake_validate(role, vendor, model, effort):
             return {"ok": True, "reason": None, "allowlist": [], "allowlist_pairs": []}
 
-        monkeypatch.setattr(DG, "validate", _fake_validate)
+        monkeypatch.setattr(SB.dispatch_allowlist, "validate", _fake_validate)
         resolved = SB.resolve_entry(
             _seat_json("codex", "gpt-5.6-sol", "high"),
             verb="guard-check",
@@ -98,10 +106,10 @@ _____________ test_semantic_allowlist_verdict_empty_pairs_refused ______________
 >       assert resolved["ok"] is False
 E       assert True is False
 
-plugins/superheroes/lib/tests/test_seat_bundle.py:338: AssertionError
+plugins/superheroes/lib/tests/test_seat_bundle.py:463: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_semantic_allowlist_verdict_empty_pairs_refused
-1 failed in 0.11s
+1 failed in 0.73s
 ```
 
 **restore:** removed the early `ok: True` accept; semantic field checks restored.
@@ -111,7 +119,7 @@ FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_semantic_allowlis
 **raw green** (exit 0):
 ```
 .                                                                        [100%]
-1 passed in 0.10s
+1 passed in 0.91s
 ```
 
 ---
@@ -145,10 +153,10 @@ _________________________ test_role_key_absent_refused _________________________
 >       assert resolved["reason"] == "role-key-absent"
 E       AssertionError: assert 'allowlist-refused' == 'role-key-absent'
 
-plugins/superheroes/lib/tests/test_seat_bundle.py:289: AssertionError
+plugins/superheroes/lib/tests/test_seat_bundle.py:325: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_role_key_absent_refused
-1 failed in 0.11s
+1 failed in 0.64s
 ```
 
 **restore:** reinstated the `role-key-absent` refusal block in `_parse_entry_dict`.
@@ -168,7 +176,7 @@ FAILED plugins/superheroes/lib/tests/test_seat_bundle.py::test_role_key_absent_r
 **raw green** (exit 0):
 ```
 .                                                                        [100%]
-1 passed in 0.10s
+1 passed in 1.03s
 ```
 
 ---
@@ -212,5 +220,5 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_run_child_spa
 **raw green** (exit 0):
 ```
 .                                                                        [100%]
-1 passed in 0.43s
+1 passed in 2.27s
 ```

@@ -346,8 +346,10 @@ def parse(raw, *, vendor_hint=None) -> dict:
     return _parse_token(text, vendor_hint=vendor_hint)
 
 
+_EFFORT_SOURCE_CANONICAL = frozenset({"caller", "default", "resolved"})
+
 _EFFORT_SOURCE_MAP = {
-    "seat-default": "seat-default",
+    "seat-default": "default",
     "given": "caller",
     "token-encoded": "resolved",
     "resolved-unique": "resolved",
@@ -442,6 +444,19 @@ def _resolve_entry_model_effort(parsed: dict, role: str) -> dict:
         distinct = sorted({pair[0] for pair in matching})
         if len(distinct) > 1:
             return _ambiguous_null_model_refusal(role, vendor, effort, tuple(distinct))
+        if len(distinct) == 0:
+            return _resolve_dispatch_refusal(
+                {
+                    "ok": False,
+                    "reason": (
+                        f"effort {effort!r} is not on the {role}/{vendor} allowlist"
+                    ),
+                    "candidates": list(pairs),
+                },
+                role=role,
+                vendor=vendor,
+            )
+        model = distinct[0]
 
     resolved = model_registry.resolve_dispatch(role, vendor, model, effort)
     if not resolved.get("ok"):
@@ -491,7 +506,7 @@ def _resolve_entry_model_effort(parsed: dict, role: str) -> dict:
         and reg_effort_source != "seat-default"
         and model is not None
     ):
-        effort_source = "declared-none"
+        effort_source = "caller"
 
     out = dict(parsed)
     out.update({
@@ -570,7 +585,7 @@ def _validate_model_effort(bundle: dict) -> dict:
                     f"is accepted; got {effort!r}; accepted efforts for this model: (none)"
                 ),
             }
-        effort_source = "declared-none"
+        effort_source = "caller"
     else:
         matched = _match_effort(effort, allowed)
         if matched is None:
@@ -770,6 +785,27 @@ def _mode_role_coherence_refusal(role: str) -> dict:
     )
 
 
+def _brief_check_role_mode_refusal(effective_mode: str) -> dict:
+    return _entry_refusal(
+        "mode-role-mismatch",
+        (
+            f"seat role 'brief-check' requires --mode {_MODE_BRIEF_CHECK}; "
+            f"got mode {effective_mode!r}; accepted: {_ACCEPTED_SEAT}; "
+            f'{accepted_role_detail()}'
+        ),
+    )
+
+
+def _dispatch_review_mode_role_refusal(role: str, mode: str | None) -> dict | None:
+    """Bidirectional brief-check mode/role coherence for dispatch-review."""
+    effective = mode if mode is not None else "review"
+    if effective == _MODE_BRIEF_CHECK and role != "brief-check":
+        return _mode_role_coherence_refusal(role)
+    if role == "brief-check" and effective != _MODE_BRIEF_CHECK:
+        return _brief_check_role_mode_refusal(effective)
+    return None
+
+
 def run_kind_for_role(role: str) -> str | None:
     """Derive build-argv sandbox run kind from a registry role's read_write classification."""
     rw = model_registry.role_read_write(role)
@@ -808,8 +844,17 @@ def build_argv_run_kind_mismatch_refusal(
     )
 
 
-def _verb_role_coherence_refusal(role: str, *, verb: str) -> dict:
+def _verb_role_coherence_refusal(role: str, *, verb: str) -> dict | None:
     rw = model_registry.role_read_write(role)
+    if verb in ("dispatch-review", "dispatch-write") and rw is None:
+        return _entry_refusal(
+            "verb-role-mismatch",
+            (
+                f"role {role!r} has no read_write classification; "
+                f"{verb} requires a classified read or write role; "
+                f"accepted: {_ACCEPTED_SEAT}; {accepted_role_detail()}"
+            ),
+        )
     if verb == "dispatch-write" and rw == "read":
         detail = (
             f"role {role!r} is read-only (read_write=read); "
@@ -886,7 +931,11 @@ def resolve_entry(seat_raw, *, verb, mode=None) -> dict:
     if not parsed.get("ok"):
         return parsed
     role = parsed["role"]
-    if mode == _MODE_BRIEF_CHECK and role != "brief-check":
+    if verb == "dispatch-review":
+        mode_refusal = _dispatch_review_mode_role_refusal(role, mode)
+        if mode_refusal is not None:
+            return mode_refusal
+    elif mode == _MODE_BRIEF_CHECK and role != "brief-check":
         return _mode_role_coherence_refusal(role)
     if verb in ("dispatch-review", "dispatch-write"):
         verb_refusal = _verb_role_coherence_refusal(role, verb=verb)
@@ -912,6 +961,9 @@ def resolve_entry(seat_raw, *, verb, mode=None) -> dict:
     )
     if not normalized.get("ok"):
         return normalized
+    effort_source = checked.get("effortSource", "caller")
+    allowlist_verdict = dict(normalized["allowlistVerdict"])
+    allowlist_verdict["effort_source"] = effort_source
     return {
         "ok": True,
         "vendor": vendor,
@@ -919,7 +971,7 @@ def resolve_entry(seat_raw, *, verb, mode=None) -> dict:
         "effort": effort,
         "role": role,
         "modelSource": checked.get("modelSource", "caller"),
-        "effortSource": checked.get("effortSource", "caller"),
+        "effortSource": effort_source,
         "roleSource": "seat",
-        "allowlistVerdict": normalized["allowlistVerdict"],
+        "allowlistVerdict": allowlist_verdict,
     }
