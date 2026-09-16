@@ -104,6 +104,7 @@ def _expect_assertion_error(fn, *, match):
 
 
 def _assert_pinned_headings_present(texts=None):
+    # axis: presence of each pinned heading line in its own file — structure, never prose.
     if texts is None:
         texts = {
             _OWNER_DECISIONS: _read_plugin(_OWNER_DECISIONS),
@@ -132,6 +133,8 @@ def _assert_retired_vocabulary_absent(texts=None):
 
 
 def _assert_retired_tier_literals_absent(texts=None):
+    # axis: presence of a retired tier literal in an enumerated shipped surface — never absence
+    # elsewhere; the enumeration is closed and a surface joins it only when its text migrates.
     if texts is None:
         texts = {rel: _read_plugin(rel) for rel in _RETIRED_TIER_VOCAB_FILES}
     for rel in _RETIRED_TIER_VOCAB_FILES:
