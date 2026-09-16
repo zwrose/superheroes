@@ -2933,12 +2933,127 @@ def test_critical_diversity_pinned_with_family_still_excused_by_pin():
     ]
 
 
+def _collect_backfill_tier_literals_from_source():
+    """AST walk of nested ``_backfill`` collecting tier literals from its rotation iterables."""
+    import ast
+
+    with open(_MOD, encoding="utf-8") as fh:
+        source = fh.read()
+    tree = ast.parse(source, filename=_MOD)
+
+    module_string_constants: dict[str, str] = {}
+
+    def _string_constant(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.Name) and node.id in module_string_constants:
+            return module_string_constants[node.id]
+        return None
+
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                val = _string_constant(node.value)
+                if val is not None:
+                    module_string_constants[target.id] = val
+
+    def _strings_from_iterable(node, *, site):
+        if isinstance(node, (ast.Tuple, ast.List)):
+            out = []
+            for idx, elt in enumerate(node.elts):
+                val = _string_constant(elt)
+                if val is None:
+                    return None, "%s[%d]" % (site, idx)
+                out.append(val)
+            return out, None
+        if isinstance(node, ast.Name):
+            if node.id == "_BACKFILL_CLAUDE_ROTATION":
+                out = []
+                for name in ("STRONG_TIER_REQUIRED", "_BACKFILL_DOWNGRADE_TO"):
+                    val = module_string_constants.get(name)
+                    if val is None:
+                        return None, "%s (missing %s)" % (site, name)
+                    out.append(val)
+                return out, None
+            val = _string_constant(node)
+            if val is not None:
+                return [val], None
+            return None, "%s (name %r)" % (site, node.id)
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == "_backfill_rotation_tiers":
+                downgrade = module_string_constants.get("_BACKFILL_DOWNGRADE_TO")
+                if downgrade is None:
+                    return None, "%s (_BACKFILL_DOWNGRADE_TO unresolved)" % site
+                return [downgrade], None
+        seg = ast.get_source_segment(source, node) or type(node).__name__
+        return None, "%s (%s)" % (site, seg)
+
+    build_fn = next(
+        n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "build"
+    )
+    backfill_fn = next(
+        n for n in ast.walk(build_fn)
+        if isinstance(n, ast.FunctionDef) and n.name == "_backfill"
+    )
+
+    collected: set[str] = set()
+    undecidable: list[str] = []
+    for node in ast.walk(backfill_fn):
+        if (
+            isinstance(node, ast.For)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "try_tier"
+        ):
+            tiers, bad = _strings_from_iterable(node.iter, site="for try_tier in")
+            if bad is not None:
+                undecidable.append(bad)
+            else:
+                collected.update(tiers)
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+            for key, val in zip(node.value.keys, node.value.values):
+                if isinstance(key, ast.Constant) and key.value == "tier":
+                    if isinstance(val, ast.Name) and val.id == "tier":
+                        # Parametric: ``tier`` is ``_tier_for(seat)``; covered via DEFAULT_TIER_BY_SEAT.
+                        pass
+                    else:
+                        lit = _string_constant(val)
+                        if lit is None:
+                            seg = ast.get_source_segment(source, val) or type(val).__name__
+                            undecidable.append("return tier (%s)" % seg)
+                        else:
+                            collected.add(lit)
+
+    collected.update(SM.DEFAULT_TIER_BY_SEAT.values())
+    return collected, undecidable
+
+
+def test_sm4_1269_backfill_tier_census_matches_accepted_tiers():
+    """AST census: accepted tiers equal tiers ``_backfill`` can assign — no hand-maintained list.
+
+    If a third rotation is added to ``_backfill`` tomorrow, this test fails without updating it.
+    """
+    walk_tiers, undecidable = _collect_backfill_tier_literals_from_source()
+    assert not undecidable, "undecidable tier constructs in _backfill: %s" % undecidable
+    for seat in SM.PANEL_ROSTER:
+        accepted = SM.accepted_tiers_for_seat(seat)
+        assert accepted == walk_tiers, (
+            "accepted_tiers_for_seat(%r)=%s != AST walk %s"
+            % (seat, sorted(accepted), sorted(walk_tiers))
+        )
+        assert not accepted - walk_tiers
+        assert not walk_tiers - accepted
+
+
 def test_accepted_tiers_for_seat_matches_default_override_and_backfill():
     # axis: accepted tier set derives from default, override channel, and backfill rotation
     assert SM.accepted_tiers_for_seat("security-reviewer") == frozenset(
         {"reviewer-deep", "reviewer"},
     )
-    assert SM.accepted_tiers_for_seat("grounding-seat") == frozenset({"reviewer"})
+    assert SM.accepted_tiers_for_seat("grounding-seat") == frozenset(
+        {"reviewer-deep", "reviewer"},
+    )
     assert SM.accepted_tiers_for_seat(
         "code-reviewer", tier_by_seat={"code-reviewer": "reviewer"},
-    ) == frozenset({"reviewer"})
+    ) == frozenset({"reviewer-deep", "reviewer"})

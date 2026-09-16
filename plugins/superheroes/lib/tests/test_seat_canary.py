@@ -38,6 +38,14 @@ def _load_dispatch_outcome():
     return mod
 
 
+def _load_seat_map():
+    spec = importlib.util.spec_from_file_location(
+        "seat_map", os.path.join(_HERE, "..", "seat_map.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 SC = _load()
 EA = _load_engine_adapter()
 CO = _load_canary_outcome()
@@ -1104,6 +1112,26 @@ def test_sm2_1269_refuses_tier_outside_seat_map_emission():
     assert out["outcome"] == "unrunnable"
     assert "accepted tiers:" in out["detail"]
     assert "implementer" in out["detail"]
+
+
+def test_sm4_1269_grounding_backfill_reviewer_deep_probes():
+    # axis: tier seat_map.build backfills via claude fallback probes, not seat-tier-mismatch
+    SM = _load_seat_map()
+    built = SM.build(
+        roster=["grounding-seat"],
+        live_vendors=["codex"],
+        author_family="xai",
+        narrative_family="anthropic",
+        live_cells=[["codex", "gpt-5.6-sol", "xhigh"]],
+        live_cells_source="probed",
+        seed=0,
+    )
+    seat_cfg = built["seats"]["grounding-seat"]
+    assert seat_cfg["tier"] == "reviewer-deep"
+    assert seat_cfg["source"] == "backfill"
+    resolved = SC._resolve_canary_identity("grounding-seat", seat_cfg)
+    assert resolved.get("reason") != "seat-tier-mismatch"
+    assert seat_cfg["tier"] in SM.accepted_tiers_for_seat("grounding-seat")
 
 
 def test_sm2_1269_grounding_refuses_reviewer_deep():

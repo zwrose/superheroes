@@ -56,11 +56,18 @@ DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
 
 # Tiers _backfill's primary rotation tries after the seat's configured tier (#1269).
 _BACKFILL_DOWNGRADE_TO = "reviewer"
+# Tiers _backfill's claude-only fallback rotation tries (#1269).
+_BACKFILL_CLAUDE_ROTATION = (STRONG_TIER_REQUIRED, _BACKFILL_DOWNGRADE_TO)
 
 
 def _backfill_rotation_tiers(primary_tier: str) -> tuple[str, ...]:
     """Tiers ``_backfill`` tries in order: configured tier, then reviewer."""
     return (primary_tier, _BACKFILL_DOWNGRADE_TO)
+
+
+def _backfill_emittable_tiers(primary_tier: str) -> frozenset[str]:
+    """Every tier ``_backfill`` may record — primary rotation, claude fallback, terminal."""
+    return frozenset(_backfill_rotation_tiers(primary_tier)) | frozenset(_BACKFILL_CLAUDE_ROTATION)
 
 
 def accepted_tiers_for_seat(seat: str, tier_by_seat: dict[str, str] | None = None) -> frozenset[str]:
@@ -69,7 +76,7 @@ def accepted_tiers_for_seat(seat: str, tier_by_seat: dict[str, str] | None = Non
     if tier_by_seat:
         tiers_map.update(tier_by_seat)
     primary = tiers_map.get(seat, "reviewer")
-    return frozenset(_backfill_rotation_tiers(primary))
+    return _backfill_emittable_tiers(primary)
 
 ALT_LIVE = "alternative-live"
 ALT_NONE = "no-alternative-live"
@@ -515,7 +522,7 @@ def build(
                     if try_tier != tier:
                         cfg["tier"] = try_tier
                     return cfg
-        for try_tier in ("reviewer-deep", "reviewer"):
+        for try_tier in _BACKFILL_CLAUDE_ROTATION:
             cfg = _resolve_at_tier(seat, "claude", try_tier)
             if cfg is not None:
                 cfg = dict(cfg)
