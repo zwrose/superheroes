@@ -343,11 +343,25 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-> # Per external seat — read vendor, model, effort, and tier (registry role) from the seat map
-> SEAT_VENDOR=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$SEAT_KEY\"].vendor")
-> SEAT_ENGINE_MODEL=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$SEAT_KEY\"].model")
-> SEAT_TIER=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$SEAT_KEY\"].tier")
-> SEAT_EFFORT=$(printf '%s' "$SEAT_MAP" | jq -r ".seats[\"$SEAT_KEY\"].effort")
+> # Per external seat — the orchestrator sets these before this recipe runs:
+> #   $SEAT_KEY       roster seat key (e.g. code-reviewer) — indexes $SEAT_MAP.seats
+> #   $SEAT_PROMPT    emitted order path for this seat
+> #   $RUN_DIR        fresh run directory (created by first dispatch-review)
+> #   $SEAT_PROGRESS  progress file outside $RUN_DIR
+> case "$SEAT_KEY" in ""|null)
+>   echo "dispatch-review: SEAT_KEY unset — cannot resolve seat map entry (fail closed)." >&2; exit 1;; esac
+> SEAT_CELL=$(printf '%s' "$SEAT_MAP" | jq -c ".seats[\"$SEAT_KEY\"] // empty")
+> case "$SEAT_CELL" in ""|null)
+>   echo "dispatch-review: seat map has no entry for SEAT_KEY=$SEAT_KEY (fail closed)." >&2; exit 1;; esac
+> SEAT_VENDOR=$(printf '%s' "$SEAT_CELL" | jq -r '.vendor // empty')
+> SEAT_ENGINE_MODEL=$(printf '%s' "$SEAT_CELL" | jq -r '.model // empty')
+> SEAT_TIER=$(printf '%s' "$SEAT_CELL" | jq -r '.tier // empty')
+> SEAT_EFFORT=$(printf '%s' "$SEAT_CELL" | jq -r '.effort // empty')
+> if [ -z "$SEAT_VENDOR" ] || [ "$SEAT_VENDOR" = "null" ] || \
+>    [ -z "$SEAT_ENGINE_MODEL" ] || [ "$SEAT_ENGINE_MODEL" = "null" ] || \
+>    [ -z "$SEAT_TIER" ] || [ "$SEAT_TIER" = "null" ]; then
+>   echo "dispatch-review: seat map entry for SEAT_KEY=$SEAT_KEY is malformed (fail closed)." >&2; exit 1
+> fi
 > if [ "$SEAT_EFFORT" = "null" ]; then SEAT_EFFORT_JSON=null; else SEAT_EFFORT_JSON="\"$SEAT_EFFORT\""; fi
 > SEAT_JSON='{"vendor":"'"$SEAT_VENDOR"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":'"$SEAT_EFFORT_JSON"',"role":"'"$SEAT_TIER"'"}'
 > # Keep $SEAT_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
