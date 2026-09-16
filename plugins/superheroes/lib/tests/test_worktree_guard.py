@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-import owner_authority
+import mode_registry
 import store_core
 import worktree_guard as wg
 
@@ -40,7 +40,7 @@ def _commit_file(repo, name, content, msg="init"):
 
 
 def _calibrated(monkeypatch):
-    monkeypatch.setattr(owner_authority, "calibration_state", lambda cwd: "calibrated")
+    monkeypatch.setattr(mode_registry, "calibration_state", lambda cwd: "calibrated")
 
 
 # --- 1. Red-then-green: the checkout-revert wipe (#682) -----------------------
@@ -195,7 +195,7 @@ def test_classify_non_matching_command_allows(monkeypatch):
         calls.append(cwd)
         return "calibrated"
 
-    monkeypatch.setattr(owner_authority, "calibration_state", _record)
+    monkeypatch.setattr(mode_registry, "calibration_state", _record)
     assert wg.classify("echo hello", "/any/path") == ("allow", "")
 
 
@@ -209,7 +209,7 @@ def test_classify_probes_calibration_even_for_non_matching_command(monkeypatch):
         calls.append(cwd)
         return "calibrated"
 
-    monkeypatch.setattr(owner_authority, "calibration_state", _record)
+    monkeypatch.setattr(mode_registry, "calibration_state", _record)
     wg.classify("echo hello", "/any/path")
     assert len(calls) == 1
 
@@ -375,7 +375,7 @@ def test_edge_14_calibration_state_raises_denies(tmp_path, monkeypatch):
     def _boom(cwd):
         raise RuntimeError("probe failed")
 
-    monkeypatch.setattr(owner_authority, "calibration_state", _boom)
+    monkeypatch.setattr(mode_registry, "calibration_state", _boom)
     decision, reason = wg.classify("git checkout -- f.txt", repo)
     assert decision == "deny"
 
@@ -385,7 +385,7 @@ def test_edge_15_uncalibrated_allows(tmp_path, monkeypatch):
     _commit_file(repo, "f.txt", "x\n")
     with open(os.path.join(repo, "f.txt"), "w") as f:
         f.write("dirty")
-    monkeypatch.setattr(owner_authority, "calibration_state", lambda cwd: "uncalibrated")
+    monkeypatch.setattr(mode_registry, "calibration_state", lambda cwd: "uncalibrated")
     assert wg.classify("git checkout -- f.txt", repo) == ("allow", "")
 
 
@@ -850,7 +850,7 @@ def test_census_allow_cases(command, tree_state, tmp_path, monkeypatch):
         _commit_file(repo, "tracked.txt", "x\n")
         with open(os.path.join(repo, "tracked.txt"), "w") as f:
             f.write("dirty")
-        monkeypatch.setattr(owner_authority, "calibration_state",
+        monkeypatch.setattr(mode_registry, "calibration_state",
                             lambda cwd: "uncalibrated")
     decision, reason = wg.classify(command, repo)
     assert decision == "allow", (command, tree_state, reason)

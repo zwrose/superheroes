@@ -609,3 +609,129 @@ def test_persist_backfill_false_does_not_write_and_default_still_does(tmp_path, 
     assert r2["mode"] == mr.IN_REPO and r2["authoritative"] is True and r2["source"] == "backfilled"
     assert os.path.isdir(store_dir)
     assert mr.read_registry(str(tmp_path), root=root)["storageMode"] == mr.IN_REPO
+
+
+# --- calibration_state: tri-state ----------------------------------------------
+
+def test_calibration_state_registry_present_is_calibrated(monkeypatch, tmp_path):
+    monkeypatch.setattr(mr, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo"})
+    assert mr.calibration_state(str(tmp_path)) == "calibrated"
+
+
+def test_calibration_state_hero_evidence_present_is_calibrated(monkeypatch, tmp_path):
+    monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
+    monkeypatch.setattr(mr, "registry_path",
+                        lambda cwd, root=None: str(tmp_path / "no-such-registry.json"))
+    monkeypatch.setattr(mr, "hero_evidence",
+                        lambda cwd, root=None, hero_roots=None: {"review-crew": "global"})
+    assert mr.calibration_state(str(tmp_path)) == "calibrated"
+
+
+def test_calibration_state_no_registry_no_evidence_is_uncalibrated(monkeypatch, tmp_path):
+    monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
+    monkeypatch.setattr(mr, "registry_path",
+                        lambda cwd, root=None: str(tmp_path / "no-such-registry.json"))
+    monkeypatch.setattr(mr, "hero_evidence",
+                        lambda cwd, root=None, hero_roots=None: {"review-crew": "none"})
+    assert mr.calibration_state(str(tmp_path)) == "uncalibrated"
+
+
+def test_calibration_state_registry_file_present_but_corrupt_is_indeterminate(monkeypatch, tmp_path):
+    # read_registry returns None (corrupt), but the registry FILE exists → indeterminate,
+    # distinct from a plain absence (uncalibrated).
+    reg = tmp_path / "registry.json"
+    reg.write_text("{ this is not valid json")
+    monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
+    monkeypatch.setattr(mr, "registry_path", lambda cwd, root=None: str(reg))
+    # hero_evidence must NOT be consulted once a corrupt file is detected.
+    monkeypatch.setattr(mr, "hero_evidence",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("hero_evidence must not run when file exists")))
+    assert mr.calibration_state(str(tmp_path)) == "indeterminate"
+
+
+def test_calibration_state_dangling_symlink_is_indeterminate(monkeypatch, tmp_path):
+    # A DANGLING symlink at the registry path: os.path.exists would follow it, find nothing, and
+    # report "absent" → falling through to hero-evidence and possibly dropping the floor to
+    # uncalibrated. os.lstat succeeds on the link itself → present → indeterminate (fail-closed).
+    link_path = tmp_path / "registry.json"
+    os.symlink(tmp_path / "nonexistent-target", link_path)
+    monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
+    monkeypatch.setattr(mr, "registry_path", lambda cwd, root=None: str(link_path))
+    # hero_evidence must NOT be consulted once the (dangling) file link is detected.
+    monkeypatch.setattr(mr, "hero_evidence",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("hero_evidence must not run when link is present")))
+    assert mr.calibration_state(str(tmp_path)) == "indeterminate"
+
+
+def test_calibration_state_read_registry_raises_is_indeterminate(monkeypatch, tmp_path):
+    def _raise(cwd, root=None):
+        raise mr.UnknownSchemaVersion("newer schema")
+
+    monkeypatch.setattr(mr, "read_registry", _raise)
+    assert mr.calibration_state(str(tmp_path)) == "indeterminate"
+
+
+def test_calibration_state_read_registry_generic_error_is_indeterminate(monkeypatch, tmp_path):
+    def _raise(cwd, root=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(mr, "read_registry", _raise)
+    assert mr.calibration_state(str(tmp_path)) == "indeterminate"
+
+
+def test_calibration_state_registry_path_error_is_indeterminate(monkeypatch, tmp_path):
+    monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
+
+    def _raise(cwd, root=None):
+        raise RuntimeError("path boom")
+
+    monkeypatch.setattr(mr, "registry_path", _raise)
+    assert mr.calibration_state(str(tmp_path)) == "indeterminate"
+
+
+def test_calibration_state_evidence_error_is_indeterminate(monkeypatch, tmp_path):
+    monkeypatch.setattr(mr, "read_registry", lambda cwd, root=None: None)
+    monkeypatch.setattr(mr, "registry_path",
+                        lambda cwd, root=None: str(tmp_path / "no-such-registry.json"))
+
+    def _raise(*a, **k):
+        raise RuntimeError("evidence boom")
+
+    monkeypatch.setattr(mr, "hero_evidence", _raise)
+    assert mr.calibration_state(str(tmp_path)) == "indeterminate"
+
+
+def test_calibration_state_never_calls_resolve(monkeypatch, tmp_path):
+    # A probe must be strictly read-only: resolve() and write_registry() can backfill-WRITE the
+    # registry and must never be reached from calibration_state.
+    def _tripwire(*a, **k):
+        raise AssertionError("write-capable registry path must not be called from the probe")
+
+    monkeypatch.setattr(mr, "resolve", _tripwire)
+    monkeypatch.setattr(mr, "write_registry", _tripwire)
+    monkeypatch.setattr(mr, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo"})
+    assert mr.calibration_state(str(tmp_path)) == "calibrated"
+
+
+# --- calibrated-path integration: a real on-disk registry (no subprocess) ------
+
+def test_calibration_state_reads_a_real_registry(tmp_path, monkeypatch):
+    # Pin the store root to tmp (the autouse conftest fixture already env-pins it, but be
+    # explicit), write a valid registry via the real write_registry, then probe it read-only.
+    root = str(tmp_path / "store")
+    cwd = str(tmp_path)
+    rec = mr.write_registry(cwd, mr.IN_REPO, None, root=root)
+    assert rec is not None, "precondition: registry write landed"
+    # calibration_state calls read_registry(cwd) with no root, so route reads through the same
+    # pinned store root the write used.
+    orig_read = mr.read_registry
+    orig_path = mr.registry_path
+    monkeypatch.setattr(mr, "read_registry",
+                        lambda c, r=None: orig_read(c, root=root))
+    monkeypatch.setattr(mr, "registry_path",
+                        lambda c, r=None: orig_path(c, root=root))
+    assert mr.calibration_state(cwd) == "calibrated"
