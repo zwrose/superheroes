@@ -6345,6 +6345,38 @@ def test_review_findings_renderer_and_grader_census_share_home_objects():
     assert ea._FINDING_SUBSTANCE_KEYS_TOLERATED is rfs.SUBSTANCE_KEYS_LEGACY
 
 
+# --- Cluster: native-seat liveness disclosure (#1263 / C14) ---------------------
+
+
+_NATIVE_LIVENESS_HOME_REFS = (
+    "native_liveness_for_map",
+    "native_liveness_disclosure_line",
+    "NATIVE_LIVENESS_SOURCE_DECLARED",
+)
+
+
+def test_native_liveness_projection_home_in_seat_map_receipts():
+    """§11: nativeLiveness field and disclosure prose home in seat_map_receipts."""
+    text = _read("lib/seat_map_receipts.py")
+    for ref in _NATIVE_LIVENESS_HOME_REFS:
+        assert ref in text, "seat_map_receipts missing native-liveness home %r" % ref
+    region = _definition_source("lib/seat_map_receipts.py", "emit_receipt_seat_map")
+    assert 'base["nativeLiveness"] = native_liveness_for_map(base)' in region
+
+
+def test_lens_acceptance_accepted_exposure_fixture_registered():
+    """C4: accepted-exposure fixture and dry-run stub are present."""
+    import lens_acceptance as la
+
+    root = la.fixture_dir(la.ACCEPTED_EXPOSURE_FIXTURE)
+    for name in ("profile.md", "diff.txt", "expected.json", "CLAUDE.md"):
+        assert os.path.isfile(os.path.join(root, name)), "missing fixture file %s" % name
+    profile, diff = la.load_accepted_exposure_fixture()
+    agent = _read("agents/security-reviewer.md")
+    out = la.dry_run_security_reviewer_stub(agent, profile, diff)
+    assert out.get("ok") is True and out.get("findings") == []
+
+
 # --- Cluster: session-mode vocabulary (#1151) -----------------------------------
 
 
