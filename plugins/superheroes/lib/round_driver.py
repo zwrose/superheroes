@@ -7043,13 +7043,12 @@ def _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt, occurrenc
     if refusal is not None:
         return None, refusal.get("reason"), None
     landing_replace_path = None
-    try:
-        env_path = round_records.landing_path(session_dir, rnd, phase, skey, attempt)
-        # Full-envelope slot: replace that file; bare-payload slot: env absent, leave path None.
-        if os.path.lexists(env_path):
-            landing_replace_path = env_path
-    except ValueError:
-        pass
+    # landing_replace_path follows the resolver's shape marker, not a second filesystem probe.
+    if envelope.get("payloadHashSource") != "driver-computed":
+        try:
+            landing_replace_path = round_records.landing_path(session_dir, rnd, phase, skey, attempt)
+        except ValueError:
+            pass
     return envelope, None, landing_replace_path
 
 

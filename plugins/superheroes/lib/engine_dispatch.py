@@ -3428,7 +3428,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                      prompt_path, view_path, view_meta, fed_prompt, order_id,
                      progress_path, repo_root=None, mode="review",
                      expected_result_kind=None, pr_body_source_path=None,
-                     echo_nonce=None):
+                     echo_nonce=None, base_prompt=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -3436,11 +3436,13 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         with open(os.path.join(run_dir_real, "journal-root.txt"), "w", encoding="utf-8") as fh:
             fh.write(journal_root + "\n")
         dest_prompt = os.path.join(run_dir_real, PROMPT_NAME)
-        with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
-            base = src.read()
-        base_prompt_sha256 = hashlib.sha256(base.encode("utf-8")).hexdigest()
+        # One read per run: hash the bytes the caller already read, or read once here.
+        if base_prompt is None:
+            with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
+                base_prompt = src.read()
+        base_prompt_sha256 = hashlib.sha256(base_prompt.encode("utf-8")).hexdigest()
         with open(dest_prompt, "w", encoding="utf-8") as dst:
-            dst.write(fed_prompt if fed_prompt else base)
+            dst.write(fed_prompt if fed_prompt else base_prompt)
         if progress_path:
             try:
                 open(progress_path, "a").close()
@@ -3747,7 +3749,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 repo_root=repo_detail, mode=resolved_mode["mode"],
                 expected_result_kind=expected_result_kind,
                 pr_body_source_path=os.path.realpath(pr_body_path) if pr_body_set else None,
-                echo_nonce=echo_nonce,
+                echo_nonce=echo_nonce, base_prompt=base_prompt,
             )
             if not ok_open:
                 err = _attach_sanitized_view(_with_run_fields(
