@@ -8469,6 +8469,93 @@ def test_grade_review_attempt_engaged_by_investigated_paths(tmp_path):
     assert grade["investigated"] == [rel]
 
 
+def test_grade_and_observation_agree_on_engagement(tmp_path):
+    # axis: dispatch grading and execution-record observation grade one attempt identically
+    def _assert_agree(run_dir, state):
+        grade = ED._grade_review_attempt(run_dir, state, 1)
+        observation = ED._observation_from_attempt(run_dir, state, 1)
+        grade_eng = grade["engagement"]
+        for key in ("read", "source", "tokens", "toolCalls"):
+            assert grade_eng[key] == observation[key]
+
+    repo_root = _repo(tmp_path)
+    rel = "src/main.py"
+    real_file = os.path.join(repo_root, rel)
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+
+    investigated_stdout = json.dumps({"findings": [], "investigated": [rel]})
+    run_dir_investigated = str(tmp_path / "agree-investigated")
+    os.makedirs(run_dir_investigated, exist_ok=True)
+    with open(os.path.join(run_dir_investigated, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(investigated_stdout)
+    state_investigated = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(investigated_stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    _assert_agree(run_dir_investigated, state_investigated)
+
+    cursor_stream = "\n".join([
+        '{"type":"tool_call","call_id":"c1","subtype":"started"}',
+    ])
+    run_dir_cursor = str(tmp_path / "agree-cursor")
+    os.makedirs(run_dir_cursor, exist_ok=True)
+    with open(os.path.join(run_dir_cursor, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(cursor_stream)
+    state_cursor = {
+        "opened": {
+            "engine": "cursor",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(cursor_stream), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    _assert_agree(run_dir_cursor, state_cursor)
+
+    run_dir_unparseable = str(tmp_path / "agree-unparseable")
+    os.makedirs(run_dir_unparseable, exist_ok=True)
+    with open(os.path.join(run_dir_unparseable, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write("not json at all\n")
+    state_unparseable = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": 15, "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    _assert_agree(run_dir_unparseable, state_unparseable)
+
+
 def test_grade_review_attempt_engaged_by_nonempty_payload_without_investigated(tmp_path):
     """Non-regression: non-empty payload with no accepted paths stays engaged."""
     run_dir = str(tmp_path / "grade-payload-only")

@@ -2510,6 +2510,107 @@ def _review_parse_kind_invalid(res):
     return res.get("ok") and res.get("resultKind") not in REVIEW_RESULT_KINDS
 
 
+def _generated_artifacts_from_view_meta(view_meta):
+    """Collect generated artifact paths from view metadata. Never raises."""
+    generated = ()
+    if isinstance(view_meta, dict):
+        diff_path = view_meta.get("diffPath")
+        if isinstance(diff_path, str) and diff_path:
+            generated = (diff_path,)
+        pr_body_path = view_meta.get("prBodyPath")
+        if isinstance(pr_body_path, str) and pr_body_path:
+            generated = generated + (pr_body_path,)
+        config_diff_path = view_meta.get("configDiffPath")
+        if isinstance(config_diff_path, str) and config_diff_path:
+            generated = generated + (config_diff_path,)
+    return generated
+
+
+def _review_attempt_engagement(
+    engine, stdout, stderr_tail, elapsed, stdout_bytes,
+    *,
+    engagement=None,
+    res=None,
+    cwd="",
+    view_meta=None,
+    role_kind=None,
+    fed_prompt="",
+    echo_nonce=None,
+):
+    """Shared engine signals and engagement.read grading decision. Never raises.
+
+    Stream-only: pass only stream args; returns the five-key engagement dict.
+    Grade path: pass ``engagement`` and ``res``; returns
+    ``(stamped_or_none, accepted, spot_rejected, has_payload, payload, kind)``.
+    Observation path: pass stream args plus ``role_kind``, ``fed_prompt``, ``echo_nonce``,
+    ``cwd``, and ``view_meta``; returns completed engagement including ``read``.
+    """
+    if engagement is None:
+        if engine == "codex":
+            tokens = engine_adapter.codex_tokens_used(stderr_tail)
+            tool_calls = None
+            source = "codex-stderr" if tokens is not None else "none"
+        elif engine == "cursor":
+            tokens = None
+            tool_calls = engine_adapter.cursor_tool_calls(stdout)
+            source = "cursor-stream" if tool_calls is not None else "none"
+        else:
+            tokens = None
+            tool_calls = None
+            source = "none"
+        engagement = {
+            "tokens": tokens,
+            "toolCalls": tool_calls,
+            "stdoutBytes": stdout_bytes,
+            "wallSeconds": elapsed,
+            "source": source,
+        }
+
+    if res is not None:
+        kind = res["resultKind"]
+        has_payload, payload = _review_result_payload(res, kind)
+        _, accepted, spot_rejected = engine_adapter.spot_check_investigated(
+            res.get("investigated"), cwd,
+            generated_artifacts=_generated_artifacts_from_view_meta(view_meta))
+        # axis: engagement read grades payload and accepted investigated paths together
+        stamped = None
+        if has_payload:
+            stamped = _engagement_with_read(
+                engagement, result_kind=kind, items=payload, investigated=accepted)
+        elif accepted:
+            stamped = _engagement_with_read(
+                engagement, result_kind=kind, items=[], investigated=accepted)
+        return stamped, accepted, spot_rejected, has_payload, payload, kind
+
+    if role_kind is not None:
+        try:
+            norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+            if not norm_strip.get("echoOnly"):
+                envelope_error = norm_strip["rawEnvelopeError"]
+                parse_res = engine_adapter.parse_result(
+                    engine, role_kind, stdout, raw_envelope_error=envelope_error,
+                    echo_nonce=echo_nonce)
+                if not _parse_review_has_payload(parse_res):
+                    stripped_text = norm_strip["text"]
+                    if stripped_text and stripped_text.strip():
+                        parse_res = engine_adapter.parse_result(
+                            engine, role_kind, stripped_text,
+                            raw_envelope_error=envelope_error, echo_nonce=echo_nonce)
+                if parse_res.get("ok") and not _review_parse_kind_invalid(parse_res):
+                    stamped, _accepted, _spot_rejected, _has_payload, _payload, _kind = (
+                        _review_attempt_engagement(
+                            engine, stdout, stderr_tail, elapsed, stdout_bytes,
+                            engagement=engagement, res=parse_res, cwd=cwd,
+                            view_meta=view_meta))
+                    if stamped is not None:
+                        return stamped
+        except Exception:
+            pass
+        return _engagement_with_read(engagement)
+
+    return engagement
+
+
 def _build_running_graded(run_dir_real, state):
     """Grade every ended attempt for a non-terminal running projection. Never raises."""
     graded = []
@@ -2585,25 +2686,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
 
     elapsed = ended.get("wallSeconds", 0)
     stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
-    if engine == "codex":
-        tokens = engine_adapter.codex_tokens_used(stderr_tail)
-        tool_calls = None
-        source = "codex-stderr" if tokens is not None else "none"
-    elif engine == "cursor":
-        tokens = None
-        tool_calls = engine_adapter.cursor_tool_calls(stdout)
-        source = "cursor-stream" if tool_calls is not None else "none"
-    else:
-        tokens = None
-        tool_calls = None
-        source = "none"
-    engagement = {
-        "tokens": tokens,
-        "toolCalls": tool_calls,
-        "stdoutBytes": stdout_bytes,
-        "wallSeconds": elapsed,
-        "source": source,
-    }
+    engagement = _review_attempt_engagement(
+        engine, stdout, stderr_tail, elapsed, stdout_bytes)
 
     norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
     prompt_echo_only = norm_strip["echoOnly"]
@@ -2659,23 +2743,11 @@ def _grade_review_attempt(run_dir_real, state, attempt):
             result["payloadShape"] = shape
         return result
 
-    kind = res["resultKind"]
-    has_payload, payload = _review_result_payload(res, kind)
-
     view_meta = opened.get("viewMeta")
-    generated = ()
-    if isinstance(view_meta, dict):
-        diff_path = view_meta.get("diffPath")
-        if isinstance(diff_path, str) and diff_path:
-            generated = (diff_path,)
-        pr_body_path = view_meta.get("prBodyPath")
-        if isinstance(pr_body_path, str) and pr_body_path:
-            generated = generated + (pr_body_path,)
-        config_diff_path = view_meta.get("configDiffPath")
-        if isinstance(config_diff_path, str) and config_diff_path:
-            generated = generated + (config_diff_path,)
-    _, accepted, spot_rejected = engine_adapter.spot_check_investigated(
-        res.get("investigated"), cwd, generated_artifacts=generated)
+    stamped, accepted, spot_rejected, has_payload, payload, kind = (
+        _review_attempt_engagement(
+            engine, stdout, stderr_tail, elapsed, stdout_bytes,
+            engagement=engagement, res=res, cwd=cwd, view_meta=view_meta))
     rejected_records, rejected_reasons = _merge_investigated_rejections(res, spot_rejected)
     findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
     findings_rejected_reasons = list(res.get("findingsRejected") or [])
@@ -2717,10 +2789,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         }
 
     if has_payload:
-        # axis: engagement read grades payload and accepted investigated paths together
-        engagement = _engagement_with_read(
-            engagement, result_kind=kind, items=payload, investigated=accepted)
-        result = {"ok": True, "resultKind": kind, kind: payload, "engagement": engagement}
+        result = {"ok": True, "resultKind": kind, kind: payload, "engagement": stamped}
         if accepted:
             result["investigated"] = accepted
         return _attach_review_rejection_fields(
@@ -2732,9 +2801,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         )
 
     if accepted:
-        engagement = _engagement_with_read(
-            engagement, result_kind=kind, items=[], investigated=accepted)
-        result = {"ok": True, "resultKind": kind, kind: [], "investigated": accepted, "engagement": engagement}
+        result = {"ok": True, "resultKind": kind, kind: [], "investigated": accepted, "engagement": stamped}
         return _attach_review_rejection_fields(
             result,
             rejected_records=rejected_records,
@@ -4133,69 +4200,14 @@ def _observation_from_attempt(run_dir_real, state, attempt):
     stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
     elapsed = ended.get("wallSeconds", 0)
     stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
-    if engine == "codex":
-        tokens = engine_adapter.codex_tokens_used(stderr_tail)
-        tool_calls = None
-        source = "codex-stderr" if tokens is not None else "none"
-    elif engine == "cursor":
-        tokens = None
-        tool_calls = engine_adapter.cursor_tool_calls(stdout)
-        source = "cursor-stream" if tool_calls is not None else "none"
-    else:
-        tokens = None
-        tool_calls = None
-        source = "none"
-    engagement = {
-        "tokens": tokens,
-        "toolCalls": tool_calls,
-        "stdoutBytes": stdout_bytes,
-        "wallSeconds": elapsed,
-        "source": source,
-    }
-    try:
-        role_kind = opened.get("roleKind", RUN_KIND_REVIEW)
-        fed_prompt = opened.get("fedPrompt", "")
-        echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
-        cwd = opened.get("cwd", "")
-        norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
-        if not norm_strip.get("echoOnly"):
-            envelope_error = norm_strip["rawEnvelopeError"]
-            res = engine_adapter.parse_result(
-                engine, role_kind, stdout, raw_envelope_error=envelope_error,
-                echo_nonce=echo_nonce)
-            if not _parse_review_has_payload(res):
-                stripped_text = norm_strip["text"]
-                if stripped_text and stripped_text.strip():
-                    res = engine_adapter.parse_result(
-                        engine, role_kind, stripped_text, raw_envelope_error=envelope_error,
-                        echo_nonce=echo_nonce)
-            if res.get("ok") and not _review_parse_kind_invalid(res):
-                kind = res["resultKind"]
-                has_payload, payload = _review_result_payload(res, kind)
-                view_meta = opened.get("viewMeta")
-                generated = ()
-                if isinstance(view_meta, dict):
-                    diff_path = view_meta.get("diffPath")
-                    if isinstance(diff_path, str) and diff_path:
-                        generated = (diff_path,)
-                    pr_body_path = view_meta.get("prBodyPath")
-                    if isinstance(pr_body_path, str) and pr_body_path:
-                        generated = generated + (pr_body_path,)
-                    config_diff_path = view_meta.get("configDiffPath")
-                    if isinstance(config_diff_path, str) and config_diff_path:
-                        generated = generated + (config_diff_path,)
-                _, accepted, _spot_rejected = engine_adapter.spot_check_investigated(
-                    res.get("investigated"), cwd, generated_artifacts=generated)
-                # axis: engagement read grades payload and accepted investigated paths together
-                if has_payload:
-                    return _engagement_with_read(
-                        engagement, result_kind=kind, items=payload, investigated=accepted)
-                if accepted:
-                    return _engagement_with_read(
-                        engagement, result_kind=kind, items=[], investigated=accepted)
-    except Exception:
-        pass
-    return _engagement_with_read(engagement)
+    return _review_attempt_engagement(
+        engine, stdout, stderr_tail, elapsed, stdout_bytes,
+        role_kind=opened.get("roleKind", RUN_KIND_REVIEW),
+        fed_prompt=opened.get("fedPrompt", ""),
+        echo_nonce=review_findings_schema.effective_nonce(opened.get("echoNonce")),
+        cwd=opened.get("cwd", ""),
+        view_meta=opened.get("viewMeta"),
+    )
 
 
 def run_execution_record(run_dir):
