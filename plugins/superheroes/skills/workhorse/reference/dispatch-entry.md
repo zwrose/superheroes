@@ -52,9 +52,9 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--order-id` | no | `free-text` | none |  |
 | `--base-sha` | no | `free-text` | none |  |
 | `--run-dir` | yes | `creatable-path` | none |  |
-| `--timeout` | no | `integer` | 900 |  |
-| `--retry-timeout` | no | `integer` | 900 |  |
-| `--max-wait` | no | `integer` | none |  |
+| `--timeout` | no | `integer` | <object object at 0x100cfcb20> |  |
+| `--retry-timeout` | no | `integer` | <object object at 0x100cfcb20> |  |
+| `--max-wait` | no | `integer` | <object object at 0x100cfcb20> |  |
 | `--progress-file` | no | `free-text` | none |  |
 | `--expect-item` | no | `free-text` | none |  |
 | `--expect-items-file` | no | `free-text` | none |  |
@@ -65,12 +65,12 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | --- | --- | --- | --- | --- |
 | `--seat` | yes | `free-text` | none | JSON seat bundle with vendor, model, effort, and role |
 | `--prompt-path` | yes | `free-text` | none |  |
-| `--timeout` | no | `integer` | 900 |  |
-| `--retry-timeout` | no | `integer` | 900 |  |
+| `--timeout` | no | `integer` | <object object at 0x100cfcb20> |  |
+| `--retry-timeout` | no | `integer` | <object object at 0x100cfcb20> |  |
 | `--progress-file` | no | `free-text` | none |  |
 | `--repo-root` | yes | `repo-root` | none |  |
-| `--run-dir` | no | `creatable-path` | none |  |
-| `--max-wait` | no | `integer` | none |  |
+| `--run-dir` | no | `creatable-path` | <object object at 0x100cfcb20> |  |
+| `--max-wait` | no | `integer` | <object object at 0x100cfcb20> |  |
 | `--order-id` | no | `free-text` | none |  |
 | `--diff-base` | no | `free-text` | none | pinned commit object id (40 hex, or 64 in a SHA-256 repository) to stage the merge-base->head review patch against; a revision expression, branch name or tag is refused |
 | `--mode` | no | `choices:review,brief-check` | none |  |
