@@ -55,8 +55,11 @@ def decide(payload):
 
 
 def _record_file_path():
-    # Precedence matches control_plane.store_root() env override order
-    # (plugins/superheroes/lib/control_plane.py); hook stays import-free.
+    # The record is config-dir-scoped. The env override order below matches
+    # control_plane.store_root() (plugins/superheroes/lib/control_plane.py); the legacy
+    # projects/-presence fallback that function also carries is deliberately not
+    # replicated, because the hook stays import-free and a second copy of that
+    # branch would be one more thing nothing keeps honest.
     store_env = os.environ.get(_STORE_ROOT_ENV_NEW) or os.environ.get(_STORE_ROOT_ENV_LEGACY)
     if store_env:
         base = os.path.expanduser(store_env)

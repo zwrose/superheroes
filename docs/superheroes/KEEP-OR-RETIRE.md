@@ -2,18 +2,20 @@
 
 ## Framing
 
-You read this file at a [gardening pass](plugins/superheroes/rubric/glossary.md#gardening-pass).
+You read this file at a [gardening pass](../../plugins/superheroes/rubric/glossary.md#gardening-pass).
 Nothing checks it mechanically and it gets no guard. Its vocabulary is the shipped glossary at
-[plugins/superheroes/rubric/glossary.md](plugins/superheroes/rubric/glossary.md); this file defines
-no term of its own and points there once. This file is this repository's own record, the same class
-of document as `LEDGERS.md`, and the rules it applies ship in the glossary and the rubric.
+[plugins/superheroes/rubric/glossary.md](../../plugins/superheroes/rubric/glossary.md); this file defines
+no term of its own and points there once. This file is the project's own record, the same class
+of document as `LEDGERS.md`, and it lives with the project's definition-docs wherever the project's
+doc-policy keeps them: `docs/superheroes/` in this repository, and the out-of-repo store in a project
+whose doc-policy keeps its docs there. The rules it applies ship in the glossary and the rubric.
 
 Strategic-assessment evidence cited as `the assessment record` lives in a record kept beside this
 repository, outside the repository; entries cite it by name rather than by path.
 
 ## How an entry is built
 
-A [keep-or-retire entry](plugins/superheroes/rubric/glossary.md#keep-or-retire-entry) has six
+A [keep-or-retire entry](../../plugins/superheroes/rubric/glossary.md#keep-or-retire-entry) has six
 fields, in this fixed order:
 
 1. **Component** — the census row, by its stable id and name, and the cost or annoyance that makes
@@ -30,9 +32,9 @@ fields, in this fixed order:
    engine family the evidence was observed on.
 
 **Condition shapes and default windows.** The three shapes are
-[catch-based](plugins/superheroes/rubric/glossary.md#catch-based) (45 days),
-[citation-based](plugins/superheroes/rubric/glossary.md#citation-based) (45 days), and
-[usage-based](plugins/superheroes/rubric/glossary.md#usage-based) (60 days). You choose one shape
+[catch-based](../../plugins/superheroes/rubric/glossary.md#catch-based) (45 days),
+[citation-based](../../plugins/superheroes/rubric/glossary.md#citation-based) (45 days), and
+[usage-based](../../plugins/superheroes/rubric/glossary.md#usage-based) (60 days). You choose one shape
 per component. When you use a window other than the default, state it with its reason.
 
 **What a condition must name.** A well-formed condition names its signal, its window, and its
@@ -44,15 +46,15 @@ take citation-based or usage-based conditions, never catch counts. A fail-closed
 may mean it is working. Write every entry against this rule.
 
 **Unmeasured is not zero.** A component with no signal of any shape is
-[unmeasured](plugins/superheroes/rubric/glossary.md#unmeasured); a consumer that has not reported on
+[unmeasured](../../plugins/superheroes/rubric/glossary.md#unmeasured); a consumer that has not reported on
 a component is unmeasured for it. An absent, unreadable, or short-of-window record reads unmeasured.
 Silence never counts as a clean window.
 
 **Tags and the decision rubric.** The tag is one of the glossary's four:
-[structural](plugins/superheroes/rubric/glossary.md#tag-structural),
-[capability-gap](plugins/superheroes/rubric/glossary.md#tag-capability-gap),
-[harness-limit](plugins/superheroes/rubric/glossary.md#tag-harness-limit), or
-[mixed](plugins/superheroes/rubric/glossary.md#tag-mixed). A zero count means keep for structural,
+[structural](../../plugins/superheroes/rubric/glossary.md#tag-structural),
+[capability-gap](../../plugins/superheroes/rubric/glossary.md#tag-capability-gap),
+[harness-limit](../../plugins/superheroes/rubric/glossary.md#tag-harness-limit), or
+[mixed](../../plugins/superheroes/rubric/glossary.md#tag-mixed). A zero count means keep for structural,
 probably outgrown for capability-gap, wait for the host to change for harness-limit, or split the
 line for mixed. Apply this rubric: **structural** where the component guards a property of how this
 system is built and no change of host or model would remove the need; **capability-gap** where it
@@ -67,10 +69,12 @@ non-foundational entry is keep-until-condition-fires from the moment it lands.
 
 ## The foundational set
 
-A [foundational component](plugins/superheroes/rubric/glossary.md#foundational-component) has no
+A [foundational component](../../plugins/superheroes/rubric/glossary.md#foundational-component) has no
 condition and is never queued. Changing one is a spec amendment. The foundational set as it stands
 at landing is the covenant's hard lines, read from
-[plugins/superheroes/rubric/covenant.md](plugins/superheroes/rubric/covenant.md), and nothing else:
+[plugins/superheroes/rubric/covenant.md](../../plugins/superheroes/rubric/covenant.md), plus the
+two authority surfaces the owner set to foundational at the landing look, the worktree guard (A2)
+and model governance (F2). The hard lines:
 
 - **Never merge, release, or publish on your own authority.**
 - **Review before handback.**
@@ -82,21 +86,21 @@ Every foundational component is structural, and most structural components are n
 
 ### The authority surfaces
 
-Five [authority surfaces](plugins/superheroes/rubric/glossary.md#authority-surface) implement owner
+Five [authority surfaces](../../plugins/superheroes/rubric/glossary.md#authority-surface) implement owner
 hard lines: the worktree guard, the circuit breaker and its escalation, model governance, the verify
 gate, and the vet-receipt spine with its owner half. The owner sets each to a condition or to
 foundational. A condition on a component implementing an owner hard line is never a standing licence
 on that surface.
 
-**Worktree guard.** Owner's look: pending at landing.
+**Worktree guard.** Owner's look at landing: foundational. Its success is silence, and a citation window over a silent deterrent produces a firing that means nothing.
 
-**Circuit breaker and its escalation.** Owner's look: pending at landing.
+**Circuit breaker and its escalation.** Owner's look at landing: a condition, catch-based over 45 days as drafted. Its catches are recorded, so a quiet window is real evidence.
 
-**Model governance.** Owner's look: pending at landing.
+**Model governance.** Owner's look at landing: foundational. Which model runs which role is an owner hard line, and a usage count over every dispatch could never fire.
 
-**Verify gate.** Owner's look: pending at landing.
+**Verify gate.** Owner's look at landing: a condition, citation-based over 45 days as amended by the review. It carries a real per-run cost worth weighing periodically.
 
-**Vet-receipt spine with its owner half.** Owner's look: pending at landing.
+**Vet-receipt spine with its owner half.** Owner's look at landing: a condition, usage-based over 60 days as drafted, counting vets that post a complete receipt with distinct probes.
 
 ## The consumer-report lifecycle
 
@@ -164,15 +168,15 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 - **Component.** PreToolUse(Bash) gate and classifier that deny destructive git discard on dirty
   calibrated worktrees; it costs a git status probe on matching commands.
-- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
-  worktree-guard `deny` that prevented the checkout-revert wipe class. On firing, a proposal to the
-  owner at a gardening pass.
+- **Condition.** None. Foundational by the owner's look at landing; it is never queued, and
+  changing it is a spec amendment.
 - **Last demonstrated benefit.** Refuses destructive `git` discard when uncommitted work would be
-  lost, guarding the checkout-revert wipe class (#682).
+  lost, guarding the checkout-revert wipe class (#682); fired twice during the build that landed
+  this document.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** foundational.
 - **Notes.** structural — guards unrecoverable worktree loss; a zero citation count means agents are
-  not attempting the wipe, not that the defect class vanished.
+  not attempting the wipe, not that the defect class vanished, which is why no window sits on it.
 
 #### A3 — Handback receipt gate (hook)
 
@@ -409,18 +413,25 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 #### C6 — Sanitized view
 
-- **Component.** The disposable git export that strips agent/IDE config before external review reads
-  (`sanitized_view.py`); it costs export time and temp disk on every sanitized review dispatch, and
-  blocks config-path exfiltration from untrusted repos.
-- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
-  sanitized-export refusals or withheld-path receipts that blocked a config leak or export
-  failure. On firing, a proposal to the owner at a gardening pass.
-- **Last demonstrated benefit.** Reproduced and blocked a config-path exfiltration attempt during
-  sanitized review export (the assessment record, keeps receipts).
+- **Component.** The disposable git export review seats run in (`sanitized_view.py`), shrunk to
+  the trusted-repository posture: the neutral-cwd export, the exclusion of the twelve configuration
+  files and six directories, the containment family (outward-symlink refusal, repo-root validation,
+  PR-body session pairing, run-dir symlink refusal), and the review-only file that carries stripped
+  configuration hunks as data under review. Two correctness guards stay with it that are not
+  defenses: the argv budget against the host's argument limit, and the shallow-clone refusal. The
+  hostile-repository defense set is retired. It costs export time and temp disk on every sanitized
+  review dispatch.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  containment refusal, a withheld-path receipt, or a review that read the review-only configuration
+  file as its subject. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** The ten containment fixtures still fire after the shrink, and a
+  live review seat read a stripped `CLAUDE.md` change from the review-only file and cited it by
+  name (the sanitized-view shrink's build record).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** structural — stripping untrusted-repo config is a host-trust boundary, not a model
-  behaviour.
+- **Notes.** structural — keeping one project's agent configuration from becoming another session's
+  instructions is a boundary no model strength removes; the retired defenses assumed an untrusted
+  repository, which the plugin no longer reviews.
 
 ### D. Certified review loop
 
@@ -763,13 +774,11 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 - **Component.** Model governance: the tier registry, override resolution, and skill-facing
   resolver. It costs table maintenance whenever a dispatch role or host model set changes.
-- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
-  model-tier misresolution (wrong band, stale override, fail-open masking a safety tier). On firing,
-  a proposal to the owner at a gardening pass; zero citations means the guard is working, not that
-  tiers are unnecessary.
+- **Condition.** None. Foundational by the owner's look at landing; it is never queued, and
+  changing it is a spec amendment. Its table-maintenance cost is weighed at a walk, not by a window.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** foundational.
 - **Notes.** structural — owner authority over which model runs which role; the fail-open degrade
   path is deliberate cost control.
 
@@ -965,12 +974,64 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** harness-limit — the host offers no native worktree-liveness signal; the observation is
   advisory only and never changes `ok`.
 
+#### S4 — Project configuration registry and view
+
+- **Component.** Not a census row. The closed registry of the thirteen configuration items, their
+  plugin defaults and fail directions, the four declared dependencies, and the configure view's
+  project-configuration block (`project_config.py`, `configure_view.py`, the two surgical writers in
+  `core_md.py`). It costs registry maintenance whenever an item, a default, or a dependency changes.
+- **Condition.** Usage-based, 60 days: configure-view runs and item writes that reach the registry,
+  read from the profile's edit history and the configure receipts. On firing, a proposal to the
+  owner at a gardening pass. The detectors this component carries keep their recorded bite-proofs
+  (`lib/tests/bite_proofs/wo_*_1276_*.md`), which are their birth receipts.
+- **Last demonstrated benefit.** Every item written to its one home with every sibling field
+  byte-identical, and the exactly-five-defaults count held by a test proved red (the
+  configuration-items child's build record).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — one home per item is what stops a second copy of a default drifting; the
+  registry's closed enumeration is the coverage.
+
+#### S5 — Front-door helper
+
+- **Component.** Not a census row. The grading helper that refuses a P0 or P1 claim, and queues a
+  cleared P2 instead of filing, when the project has no stamped severity ladder
+  (`front_door.py`). It costs one profile read per graded claim.
+- **Condition.** Citation-based, 45 days: vet, walk, or incident receipts citing a door refusal
+  (`ladder-unstamped`, `band-unknown`, `evidence-argued`, `p0-band-excluded`) that stopped a filing
+  from expanding its own authority. On firing, a proposal to the owner at a gardening pass. A zero
+  citation count means no filing tried to claim a band it could not cite, not that the door can go.
+- **Last demonstrated benefit.** Recorded refusals on a throwaway profile with no ladder, and the
+  advisor's own probe at vet reproducing every refusal (the configuration-items child's build
+  record and its vet receipt).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a door that falls open is the quiet class; the fail direction is a
+  property of how the front door is built, not of any model.
+
+#### S6 — Kind labels at calibration
+
+- **Component.** Not a census row. Idempotent creation of the two `kind:` labels on a repository
+  that lacks them (`kind_labels.py`). It costs one label list and at most two label creates per
+  calibration.
+- **Condition.** Usage-based, 60 days: calibrations on repositories that lacked a label, read from
+  the configure receipts. On firing, a proposal to the owner at a gardening pass. Once every
+  calibrated repository carries both labels, a zero count is expected and reads as done, not as
+  retire.
+- **Last demonstrated benefit.** Both labels created on this repository through the helper's own
+  argv, with an existing label's colour and description never reconciled away (the
+  configuration-items child's build record).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — a person could create two labels by hand; the helper exists so the
+  routing vocabulary is present before the first issue is routed.
+
 
 ## The workaround-marker inventory
 
 A platform workaround in this tree carries the marker `WORKAROUND:` in a comment, immediately
 followed by a `delete-when:` line naming the [delete-when
-condition](plugins/superheroes/rubric/glossary.md#delete-when-condition) that makes it removable.
+condition](../../plugins/superheroes/rubric/glossary.md#delete-when-condition) that makes it removable.
 When the condition comes true, the workaround is promoted into a real fix or removed, never left as
 unmarked ritual. A gardening pass reports the markers whose condition has come true. The inventory
 below lists every marked site in the tree, and a grep for the tag over the tree, excluding this

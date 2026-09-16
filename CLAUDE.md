@@ -11,7 +11,7 @@ a catalog (`.claude-plugin/marketplace.json`) listing plugins under `plugins/`.
 - `pytest.ini` — pins pytest's rootdir to the repo root so `conftest.py` and `source_guard.py` load for every invocation shape.
 - `conftest.py` — repo-root pytest config; loads `source_guard` via `pytest_plugins` for every test tree.
 - `source_guard.py` — pytest plugin that blocks writes to shipped (non-test) Python source during test runs.
-- `KEEP-OR-RETIRE.md` — the keep-or-retire list and workaround-marker inventory for plugin components.
+- `docs/superheroes/KEEP-OR-RETIRE.md` — the keep-or-retire list and workaround-marker inventory for plugin components, kept at the project's superheroes root.
 - `.github/workflows/ci.yml` — validation (manifest checks + pytest).
 - `.github/scripts/validate_marketplace.py` — catalog/manifest validator.
 - `docs/` — internal design docs and plans. **Gitignored**, kept local only — **except
