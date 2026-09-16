@@ -248,12 +248,13 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** Plugin-version skew detector appended to seat-map degradations; K2 retires it with
   trigger to rebuild at the front door when a real skew incident recurs.
 - **Condition.** Citation-based, 45 days: real skew-incident receipts (the K2 rebuild trigger). On
-  firing, a rebuild proposal to the owner at a gardening pass.
+  firing, a rebuild proposal to the owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — issue #1264 (C5 merge-gate retirement).
 - **Notes.** capability-gap — detection-only record with zero recorded firings; the motivating
-  incident (#675) predates the module and was fixed by other means.
+  incident (#675) predates the module and was fixed by other means. The K2 rebuild trigger survives
+  the retirement as a revisit-registry row on the standing collector.
 
 ### B. Launch & wave machinery
 
