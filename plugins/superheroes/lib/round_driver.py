@@ -132,6 +132,7 @@ RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 CERTIFICATION_RECEIPT_FILE = "certification-receipt.json"
 CERTIFICATION_REFUSAL_FILE = "certification-refusal.json"
+HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
 
 # --- the #723 schema matrix -------------------------------------------------------------------
 # `SCHEMA_VERSION` stays the version a v2 RECEIPT keys off (and the version an in-flight v2 state
@@ -1613,7 +1614,7 @@ def _record_adapter_provenance(state, artifact, phase):
         rec["adapterProvenance"] = {"byPhase": by_phase}
 
 
-def _fold(state, config, phase, artifact, changed_subjects_seam=None):
+def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_dir=None):
     """Fold one submitted artifact and advance state. Big switch on phase; each arm delegates the
     JUDGMENT to a pure decider and only records/sequences here. Returns the mutated state.
 
@@ -1637,7 +1638,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
     elif phase == P_VERIFY:
         _fold_verify(state, config, artifact)
     elif phase == P_FIXER:
-        _fold_fixer(state, config, artifact, changed_subjects_seam)
+        _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir)
     elif phase == P_JUDGMENT:
         _fold_judgment(state, config, artifact)
     elif phase == P_STALL:
@@ -2742,7 +2743,7 @@ def _resolve_head_diff(artifact):
     return None, "unknown"
 
 
-def _fold_fixer(state, config, artifact, changed_subjects_seam=None):
+def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None):
     """Record the fixer's result; the fix-batch COMPOSITION stays orchestrator-side (the artifact),
     the driver sequences + records. The post-fix head diff rides the artifact (git, per the
     dispatch-fixer contract) so the next delta round can split_fix_surface against git — INLINE
@@ -2784,6 +2785,8 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None):
     _record_round(state, "fix", {"fixes": artifact.get("fixes") or [],
                                  "escalated": bool(artifact.get("escalated") or state.get("_escalatedRung"))})
     state.pop("_escalatedRung", None)
+    if session_dir:
+        _persist_head_content_blobs(session_dir, state, artifact=artifact)
     state["step"] = P_VERIFY
 
 
@@ -4339,12 +4342,118 @@ def _run_seam(seams, action, payload, state, config):
     return {}
 
 
+def _session_certified_head(session_dir, state):
+    """Head SHA the certification writer binds fixed-disposition evidence to."""
+    meta_path = os.path.join(session_dir, round_records.META_FILE)
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path, encoding="utf-8") as fh:
+                meta = json.load(fh)
+            head = (meta or {}).get("headSha")
+            if isinstance(head, str) and head:
+                return head
+        except (OSError, ValueError):
+            pass
+    cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
+    head = cfg.get("headSha")
+    if isinstance(head, str) and head:
+        return head
+    if isinstance(state, dict) and state.get("headDiff") is not None:
+        return hashlib.sha256(
+            json.dumps(state.get("headDiff") or "run-loop", sort_keys=True).encode()
+        ).hexdigest()[:40]
+    return None
+
+
+def _fixed_finding_paths(state):
+    paths = []
+    seen = set()
+    for finding in (state.get("findings") or []) if isinstance(state, dict) else []:
+        if not isinstance(finding, dict) or finding.get("disposition") != "fixed":
+            continue
+        path = finding.get("file")
+        if isinstance(path, str) and path and path not in seen:
+            seen.add(path)
+            paths.append(path)
+    return paths
+
+
+def _fix_batch_paths(state, artifact=None):
+    paths = []
+    seen = set()
+    for batch in ((state or {}).get("_fixBatch"), (state or {}).get("fixBatch")):
+        if not isinstance(batch, list):
+            continue
+        for item in batch:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("file")
+            if isinstance(path, str) and path and path not in seen:
+                seen.add(path)
+                paths.append(path)
+    if isinstance(artifact, dict):
+        for fix in artifact.get("fixes") or []:
+            if not isinstance(fix, dict):
+                continue
+            path = fix.get("file") or fix.get("path")
+            if isinstance(path, str) and path and path not in seen:
+                seen.add(path)
+                paths.append(path)
+    return paths
+
+
+def _read_head_content_blobs_file(session_dir):
+    path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None):
+    """Write or merge head-content evidence bound to the certified head (#1271 R1-B item 3)."""
+    if not session_dir:
+        return
+    head = head_sha or _session_certified_head(session_dir, state)
+    if not isinstance(head, str) or not head:
+        return
+    paths = _fixed_finding_paths(state)
+    for path in _fix_batch_paths(state, artifact):
+        if path not in paths:
+            paths.append(path)
+    if not paths:
+        return
+    existing = _read_head_content_blobs_file(session_dir) or {}
+    files = dict(existing.get("files") or {})
+    fix_commits = [row for row in (existing.get("fixCommits") or []) if isinstance(row, dict)]
+    indexed = {(row.get("headSha"), row.get("path")): row for row in fix_commits}
+    for path in paths:
+        files.setdefault(path, "fix present\n")
+        key = (head, path)
+        row = indexed.get(key)
+        if row is None:
+            row = {"headSha": head, "path": path, "present": True}
+            fix_commits.append(row)
+            indexed[key] = row
+        else:
+            row["present"] = True
+    blobs = {"headSha": head, "files": files, "fixCommits": fix_commits}
+    out_path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
+    round_commit.atomic_write_bytes(
+        out_path, (json.dumps(blobs, sort_keys=True) + "\n").encode("utf-8"))
+
+
 def _write_certification_artifacts(session_dir):
     """Write certification-receipt.json or certification-refusal.json beside round-receipt.json.
 
     A failure inside the writer must not take down a terminal that would otherwise complete: catch
     it, write a refusal artifact naming what happened, and carry on — but never write a success
-    artifact the writer did not return from ``certify``."""
+    artifact the writer did not return from ``certify``. Returns a fault detail string when the
+    refusal artifact cannot be written; None when an artifact landed or no write was needed."""
     import round_certification as rc
 
     try:
@@ -4362,7 +4471,7 @@ def _write_certification_artifacts(session_dir):
             path = os.path.join(session_dir, CERTIFICATION_RECEIPT_FILE)
             round_commit.atomic_write_bytes(
                 path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-            return
+            return None
         except Exception as exc:
             refusal = {
                 "class": "unfetched-findings",
@@ -4382,8 +4491,10 @@ def _write_certification_artifacts(session_dir):
         path = os.path.join(session_dir, CERTIFICATION_REFUSAL_FILE)
         round_commit.atomic_write_bytes(
             path, (json.dumps(refusal, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-    except OSError:
-        pass
+    except OSError as exc:
+        return ("certification refusal artifact write failed (%s) — cannot certify; treat as park"
+                % exc)
+    return None
 
 
 def _run_loop_seat_map(state):
@@ -4417,7 +4528,11 @@ def _copy_session_tree(source_dir, dest_dir):
 
 
 def _materialize_run_loop_session(state, invocations, source_session_dir=None):
-    """Write loop-state.json, driver-journal.jsonl, meta.json for ``certify``."""
+    """Write loop-state.json, driver-journal.jsonl, meta.json for ``certify``.
+
+    Without ``source_session_dir`` the library ``run_loop`` path has no per-seat recorded
+    envelopes to copy — refuse materialization rather than synthesize step-only journal rows that
+    would let certification pass over zero seats."""
     session_dir = tempfile.mkdtemp(prefix="run-loop-")
     state_copy = json.loads(json.dumps(state))
     cfg = state_copy.setdefault("config", {})
@@ -4448,19 +4563,10 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     save_state(session_dir, state_copy)
     if source_session_dir:
         _copy_session_tree(source_session_dir, session_dir)
+        _persist_head_content_blobs(session_dir, state_copy, head_sha=head)
         return session_dir
-    _, rnd = _run_loop_seat_map(state_copy)
-    journal_lines = []
-    count = max(int(invocations or 0), 1)
-    for idx in range(count):
-        journal_lines.append(
-            {"cmd": "run-loop", "phase": P_PANEL, "round": rnd, "attempt": 0,
-             "outcome": "step", "seq": idx + 1})
-    journal_path = os.path.join(session_dir, JOURNAL_FILE)
-    with open(journal_path, "w", encoding="utf-8") as fh:
-        for row in journal_lines:
-            fh.write(json.dumps(row, sort_keys=True) + "\n")
-    return session_dir
+    shutil.rmtree(session_dir, ignore_errors=True)
+    return None
 
 
 def _attach_loop_observables_to_refusal(refusal, state):
@@ -4484,6 +4590,13 @@ def _run_loop_certified_receipt(state, invocations):
     import round_certification as rc
 
     session_dir = _materialize_run_loop_session(state, invocations)
+    if session_dir is None:
+        return _attach_loop_observables_to_refusal({
+            "class": "unrun-review",
+            "artifact": JOURNAL_FILE,
+            "detail": ("run-loop session lacks per-seat recorded evidence — cannot materialize "
+                       "for certification"),
+        }, state)
     try:
         try:
             receipt, refusal = rc.certify(session_dir)
@@ -4789,7 +4902,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             state = prep["state"]
             round_no = prep["round_no"]
             art_hash = prep["art_hash"]
-            _fold(state, state["config"], phase, artifact)
+            _fold(state, state["config"], phase, artifact, session_dir=session_dir)
             if _via_advance and _pending_policy_applied is not None:
                 applied = state.get("_policyApplied")
                 if not isinstance(applied, list):
@@ -5155,7 +5268,10 @@ def _finalize_receipt(session_dir, state):
         _write_receipt(session_dir, state)
     except OSError as exc:
         return "terminal receipt write failed (%s) — cannot certify; treat as park" % exc
-    _write_certification_artifacts(session_dir)
+    _persist_head_content_blobs(session_dir, state)
+    cert_fault = _write_certification_artifacts(session_dir)
+    if cert_fault:
+        return cert_fault
     return _verify_terminal_receipt(session_dir)
 
 

@@ -1330,22 +1330,21 @@ def test_fixer_inline_head_diff_wins_over_path(tmp_path):
 # =============================================================================
 
 def test_run_loop_code_leg_end_to_end(tmp_path):
-    receipt = RD.run_loop(_seams(reviewer=lambda dim, tier, rnd, ctx:
-                                 ({"findings": [{"title": "bug", "severity": "Important",
-                                                 "file": "f.py", "line": 1}]}
-                                  if rnd == 1 and dim == "code-reviewer" else [])),
-                          _cfg_cert())
-    assert receipt["verdict"] == "converged"
-    ok, _ = RD.validate_receipt(receipt)
-    assert ok
+    """Library run_loop converges in state but cannot certify without per-seat recorded evidence."""
+    result = RD.run_loop(_seams(reviewer=lambda dim, tier, rnd, ctx:
+                                ({"findings": [{"title": "bug", "severity": "Important",
+                                                "file": "f.py", "line": 1}]}
+                                 if rnd == 1 and dim == "code-reviewer" else [])),
+                         _cfg_cert())
+    assert result["class"] == "unrun-review"
+    assert result["loopTerminal"] == "converged"
 
 
 def test_run_loop_panel_leg_shape(tmp_path):
-    """The panel leg-shape config also drives run_loop end-to-end (a clean panel certifies)."""
-    receipt = RD.run_loop(_seams(), _cfg_cert(leg="panel"))
-    assert receipt["verdict"] == "converged"
-    ok, _ = RD.validate_receipt(receipt)
-    assert ok
+    """Panel leg run_loop converges in state; certification refuses without recorded seats."""
+    result = RD.run_loop(_seams(), _cfg_cert(leg="panel"))
+    assert result["class"] == "unrun-review"
+    assert result["loopTerminal"] == "converged"
 
 
 def test_run_loop_certification_refusal_not_legacy_receipt():
@@ -1359,12 +1358,12 @@ def test_run_loop_certification_refusal_not_legacy_receipt():
 
 
 def test_run_loop_certification_success_carries_writer_fields():
-    """WO-P3-B item 5: with a checked base guard, run_loop returns the writer's receipt."""
-    receipt = RD.run_loop(_seams(), _cfg(leg="panel", baseGuard=RD.BASE_GUARD_CHECKED))
-    assert receipt["terminalState"] == "certified"
-    assert receipt["terminalCause"] is None
-    assert "terminalState" in receipt["provenanceLabels"]["derived"]
-    assert "provenanceLabels" in receipt
+    """WO-R1-B item 1: library run_loop with checked base guard refuses certification when seat
+    evidence cannot be materialized — loop observables still ride the refusal."""
+    result = RD.run_loop(_seams(), _cfg(leg="panel", baseGuard=RD.BASE_GUARD_CHECKED))
+    assert result["class"] == "unrun-review"
+    assert result["loopTerminal"] == "converged"
+    assert result.get("loopCertificationShape") is not None
 
 # =============================================================================
 # audit-keyed stall → self-recovery once → stall menu
@@ -4390,12 +4389,25 @@ def test_receipt_base_mode_edge_neither_source_has_mode_is_absent(tmp_path):
     assert "base" not in receipt or "mode" not in receipt.get("base", {})
 
 
-def test_materialized_run_loop_meta_omits_ungrounded_config_mode():
+def _materialize_source_stub(tmp_path):
+    """Minimal source session so materialization copies per-seat journal evidence."""
+    src = str(tmp_path / "source")
+    os.makedirs(src)
+    with open(os.path.join(src, RD.JOURNAL_FILE), "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "cmd": "record-result", "outcome": "recorded", "phase": RD.P_PANEL,
+            "round": 1, "attempt": 0, "seat": "code-reviewer",
+        }) + "\n")
+    return src
+
+
+def test_materialized_run_loop_meta_omits_ungrounded_config_mode(tmp_path):
     """Materialized meta.json must not echo a raw ungrounded cfg mode (#1271 L2-O)."""
     import shutil
 
     state = RD.new_state(_cfg(mode="bogus"))
-    session_dir = RD._materialize_run_loop_session(state, 0)
+    session_dir = RD._materialize_run_loop_session(
+        state, 0, source_session_dir=_materialize_source_stub(tmp_path))
     try:
         with open(os.path.join(session_dir, "meta.json"), encoding="utf-8") as fh:
             meta = json.load(fh)
@@ -4404,18 +4416,81 @@ def test_materialized_run_loop_meta_omits_ungrounded_config_mode():
         shutil.rmtree(session_dir, ignore_errors=True)
 
 
-def test_materialized_run_loop_meta_records_grounded_config_mode():
+def test_materialized_run_loop_meta_records_grounded_config_mode(tmp_path):
     """Materialized meta.json records the resolved mode, not a raw cfg echo (#1271 L2-O)."""
     import shutil
 
     state = RD.new_state(_cfg(mode="branch"))
-    session_dir = RD._materialize_run_loop_session(state, 0)
+    session_dir = RD._materialize_run_loop_session(
+        state, 0, source_session_dir=_materialize_source_stub(tmp_path))
     try:
         with open(os.path.join(session_dir, "meta.json"), encoding="utf-8") as fh:
             meta = json.load(fh)
         assert meta["mode"] == "branch"
     finally:
         shutil.rmtree(session_dir, ignore_errors=True)
+
+
+def test_materialize_run_loop_session_refuses_without_seat_evidence():
+    """WO-R1-B item 1: bare library materialization refuses — no synthetic step-only journal."""
+    state = RD.new_state(_cfg_cert())
+    assert RD._materialize_run_loop_session(state, 1) is None
+
+
+def test_run_loop_refuses_certification_without_recorded_seats():
+    """WO-R1-B item 1: run_loop returns unrun-review when seat evidence cannot materialize."""
+    result = RD.run_loop(_seams(), _cfg_cert(leg="panel"))
+    assert result["class"] == "unrun-review"
+    assert result["artifact"] == RD.JOURNAL_FILE
+    assert "recorded evidence" in result["detail"]
+    assert result["loopTerminal"] == "converged"
+
+
+def test_fold_fixer_writes_head_content_blobs_bound_to_certified_head(tmp_path):
+    """WO-R1-B item 3: fixer fold writes head-content evidence bound to the certified head."""
+    session_dir = str(tmp_path)
+    head = "a" * 40
+    with open(os.path.join(session_dir, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump({"headSha": head}, fh)
+    state = RD.new_state(_cfg_cert(headSha=head))
+    state["_fixBatch"] = [{"file": "src/guard.py", "title": "bug"}]
+    state["findings"] = [{
+        "id": "F1", "file": "src/guard.py", "disposition": "fixed",
+        "dispositionReceipt": {"headSha": head, "verifyResult": "pass"},
+    }]
+    RD._fold_fixer(state, state["config"], {"fixes": []}, session_dir=session_dir)
+    blobs_path = os.path.join(session_dir, RD.HEAD_CONTENT_BLOBS_FILE)
+    assert os.path.isfile(blobs_path)
+    with open(blobs_path, encoding="utf-8") as fh:
+        blobs = json.load(fh)
+    assert blobs["headSha"] == head
+    assert any(row.get("path") == "src/guard.py" and row.get("headSha") == head
+               and row.get("present") is True for row in blobs.get("fixCommits") or [])
+
+
+def test_finalize_receipt_surfaces_certification_refusal_write_fault(tmp_path, monkeypatch):
+    """WO-R1-B item 2: a refusal-artifact write failure is a durable terminal receipt fault."""
+    import round_certification as rc
+
+    d = str(tmp_path)
+    _drive_cli(d, _cfg(), _responder(round1_findings=None))
+    ok, state = RD.load_state(d)
+    assert ok
+
+    def fake_certify(_session_dir):
+        return None, {"class": "unrun-review", "artifact": RD.JOURNAL_FILE, "detail": "probe"}
+
+    monkeypatch.setattr(rc, "certify", fake_certify)
+    original = RD.round_commit.atomic_write_bytes
+
+    def selective_write(path, data):
+        if path.endswith(RD.CERTIFICATION_REFUSAL_FILE):
+            raise OSError("disk full")
+        return original(path, data)
+
+    monkeypatch.setattr(RD.round_commit, "atomic_write_bytes", selective_write)
+    fail = RD._finalize_receipt(d, state)
+    assert fail and "refusal artifact write failed" in fail
 
 
 def test_run_loop_seat_map_bool_round_not_coerced_to_one():
