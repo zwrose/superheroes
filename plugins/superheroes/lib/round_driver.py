@@ -72,6 +72,8 @@ import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import review_gate_policy  # noqa: E402
 import review_round_policy  # noqa: E402
+import record_paths  # noqa: E402
+import receipt_disclosures  # noqa: E402
 import round_commit  # noqa: E402
 import round_orders  # noqa: E402
 import round_records  # noqa: E402
@@ -236,47 +238,62 @@ def _receipt_forbidden_keys(form):
 # Each gated key maps to:
 #   min_certified_version — certified receipts at this state version or later carry the key
 #   non_certified_schemas — attested/interim receipt schemas that also carry the key
-ROUND_ENTRY_KEY_FORMS = {
-    "verifyPasses": {
-        "min_certified_version": 3,
-        "non_certified_schemas": (RECEIPT_ATTESTED_SCHEMA, RECEIPT_INTERIM_SCHEMA),
-    },
-}
-
-
-def _round_entry_form_schema(form, state):
-    if form == RECEIPT_FORM_CERTIFIED:
-        return RECEIPT_CERTIFIED_SCHEMA % _receipt_version(state)
-    if form == RECEIPT_FORM_ATTESTED:
-        return RECEIPT_ATTESTED_SCHEMA
-    if form == RECEIPT_FORM_INTERIM:
-        return RECEIPT_INTERIM_SCHEMA
-    raise ValueError("unknown receipt form %r" % form)
-
-
-def _round_entry_key_declared(key, schema, certified_version):
-    """The ONE decode of ``ROUND_ENTRY_KEY_FORMS``: does ``key`` apply to a receipt of ``schema``?
-
-    ``certified_version`` is the integer version when the receipt is the certified form, else
-    ``None`` (then ``schema`` is matched against the declaration's non-certified set). Both
-    readers — the live-state form gate and the persisted-receipt validator — route through this
-    so the declaration cannot grow a second, divergent decoding (#1194 FU8)."""
-    decl = ROUND_ENTRY_KEY_FORMS.get(key)
-    if decl is None:
-        return True
-    if certified_version is not None:
-        return certified_version >= decl["min_certified_version"]
-    return schema in decl["non_certified_schemas"]
-
-
-def _round_entry_key_allowed(key, form, state):
-    if key not in ROUND_ENTRY_KEY_FORMS:
-        # Preserve the pre-refactor short-circuit: an undeclared key is allowed everywhere,
-        # BEFORE the form is resolved — an unknown form must not raise for undeclared keys.
-        return True
-    if form == RECEIPT_FORM_CERTIFIED:
-        return _round_entry_key_declared(key, None, _receipt_version(state))
-    return _round_entry_key_declared(key, _round_entry_form_schema(form, state), None)
+ROUND_ENTRY_KEY_FORMS = receipt_disclosures.ROUND_ENTRY_KEY_FORMS
+_round_entry_key_declared = receipt_disclosures.round_entry_key_declared
+_round_entry_key_allowed = receipt_disclosures.round_entry_key_allowed
+_declared_disclosures = receipt_disclosures.declared_disclosures
+_receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
+_normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
+RESUMABLE_DISCLOSURE_CHANNELS = receipt_disclosures.RESUMABLE_DISCLOSURE_CHANNELS
+_DISCLOSE_ON_PRESENCE = receipt_disclosures.DISCLOSE_ON_PRESENCE
+_str_list = receipt_disclosures.str_list
+_dict_list = receipt_disclosures.dict_list
+_bool_value = receipt_disclosures.bool_value
+_canary_failed_shape = receipt_disclosures.canary_failed_shape
+_canary_verified_shape = receipt_disclosures.canary_verified_shape
+_adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
+_order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
+_plugin_version_skew_shape = receipt_disclosures.plugin_version_skew_shape
+build_degraded_prose = receipt_disclosures.build_degraded_prose
+degraded = receipt_disclosures.degraded
+base_degraded = receipt_disclosures.base_degraded
+author_family = receipt_disclosures.author_family
+maker_author_family = receipt_disclosures.maker_author_family
+same_family_seats = receipt_disclosures.same_family_seats
+same_family_seats_for_receipt = receipt_disclosures.same_family_seats_for_receipt
+same_family_degraded = receipt_disclosures.same_family_degraded
+skew_record_identity = receipt_disclosures.skew_record_identity
+skew_records = receipt_disclosures.skew_records
+skew_degraded = receipt_disclosures.skew_degraded
+seat_map_violations = receipt_disclosures.seat_map_violations
+seat_map_violated = receipt_disclosures.seat_map_violated
+seat_map_violation_breach_prose = receipt_disclosures.seat_map_violation_breach_prose
+seat_pin_excused_seats = receipt_disclosures.seat_pin_excused_seats
+seat_map_unjudgeable = receipt_disclosures.seat_map_unjudgeable
+declared_disclosures = receipt_disclosures.declared_disclosures
+round_entry_key_declared = receipt_disclosures.round_entry_key_declared
+round_entry_key_allowed = receipt_disclosures.round_entry_key_allowed
+receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
+normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
+str_list = receipt_disclosures.str_list
+dict_list = receipt_disclosures.dict_list
+bool_value = receipt_disclosures.bool_value
+canary_failed_shape = receipt_disclosures.canary_failed_shape
+canary_verified_shape = receipt_disclosures.canary_verified_shape
+adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
+order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
+plugin_version_skew_shape = receipt_disclosures.plugin_version_skew_shape
+DISCLOSE_ON_PRESENCE = receipt_disclosures.DISCLOSE_ON_PRESENCE
+_degraded = degraded
+_base_degraded = base_degraded
+_driver_author_family = author_family
+_same_family_seats = same_family_seats
+_same_family_degraded = same_family_degraded
+_skew_degraded = skew_degraded
+_seat_map_violated = seat_map_violated
+_seat_map_violation_breach_prose = seat_map_violation_breach_prose
+_seat_pin_excused_seats = seat_pin_excused_seats
+_seat_map_unjudgeable = seat_map_unjudgeable
 
 
 ATTESTED_VERDICT = "uncertified-manual"
@@ -360,115 +377,6 @@ ROUND_PHASE_NOT_PENDING_REFUSAL = "round-phase-not-pending"
 OWNER_GATE_PHASES = (P_JUDGMENT, P_STALL)
 
 
-# --- the per-round disclosure channels (#720) -------------------------------------------------
-# Shape predicates for a channel value coming off a DURABLE record. A record is external input: a
-# channel whose value has the wrong shape is DROPPED on resume rather than restored, because a
-# truthy-but-wrong value would either crash the receipt's prose or emit a false disclosure.
-
-def _str_list(value):
-    return isinstance(value, list) and all(isinstance(x, str) for x in value)
-
-
-def _dict_list(value):
-    return isinstance(value, list) and all(isinstance(x, dict) for x in value)
-
-
-def _bool_value(value):
-    return isinstance(value, bool)
-
-
-def _canary_failed_shape(value):
-    # build_receipt joins cf["seats"] into prose, so the seat names must be strings.
-    return isinstance(value, dict) and _str_list(value.get("seats") or [])
-
-
-def _canary_verified_shape(value):
-    # build_receipt sorts the vendor keys, so mixed key types would raise.
-    return isinstance(value, dict) and all(isinstance(k, str) for k in value)
-
-
-def _adapter_provenance_shape(value):
-    if not isinstance(value, dict):
-        return False
-    if "byPhase" in value:
-        return isinstance(value.get("byPhase"), dict)
-    return True
-
-
-def _order_vendor_provenance_gaps_shape(value):
-    # build_receipt joins gap seat names into prose, so each row's seat must be a non-empty string.
-    if not isinstance(value, list):
-        return False
-    for row in value:
-        if not isinstance(row, dict):
-            return False
-        seat = row.get("seat")
-        if not isinstance(seat, str) or not seat:
-            return False
-        if "occurrence" in row:
-            occ = row.get("occurrence")
-            if not isinstance(occ, int) or occ < 0:
-                return False
-    return True
-
-
-def _plugin_version_skew_shape(value):
-    # build_receipt reads constraint/status/detail/inspectedRoot/reason off each skew row.
-    if not _dict_list(value):
-        return False
-    for row in value:
-        if row.get("constraint") != version_skew.CONSTRAINT:
-            return False
-        if not isinstance(row.get("status"), str):
-            return False
-    return True
-
-
-def _normalize_adapter_provenance(prov):
-    """Return {phase: disclosures} for either the per-phase `byPhase` shape or the legacy flat
-    value (keyed as `unknown-phase`). Non-dict / corrupt `byPhase` → empty."""
-    if not isinstance(prov, dict):
-        return {}
-    if "byPhase" in prov:
-        by_phase = prov.get("byPhase")
-        if not isinstance(by_phase, dict):
-            return {}
-        return dict(by_phase)
-    if prov:
-        return {"unknown-phase": dict(prov)}
-    return {}
-
-
-# The ONE home for the per-round disclosure channels. `build_receipt` emits exactly these onto each
-# round entry, and a `recordsPath` resume restores exactly these out of a durable record's
-# `disclosures` block (#720 — before that, `_seed_resume` restored findings/coverage but no
-# disclosure state, so a resumed run's terminal receipt silently UNDER-DISCLOSED every pre-resume
-# round). Each value is the shape the restore requires. The census test
-# (`test_panel_round_channels_are_all_accounted_for`) closes the set by construction against
-# `_fold_panel`'s recorded keys, so a new channel cannot ship without a resume path.
-RESUMABLE_DISCLOSURE_CHANNELS = {
-    "fellOpen": _dict_list,
-    "fellOpenProvenanceMissing": _str_list,
-    "seatMapUnavailable": _str_list,
-    "seatMapUnjudgeable": _str_list,
-    "seatMapViolations": _dict_list,
-    "pluginVersionSkew": _plugin_version_skew_shape,
-    "vacuousSeats": _str_list,
-    "engagedArtifactSeats": _str_list,
-    "canaryUnverified": _str_list,
-    "canaryFailed": _canary_failed_shape,
-    "canaryOutcomeFailed": _canary_failed_shape,
-    "canaryPlantUndetected": _canary_failed_shape,
-    "canaryVerified": _canary_verified_shape,
-    "adapterProvenance": _adapter_provenance_shape,
-    "recordOrphansIgnored": _str_list,
-    "orderVendorProvenanceGaps": _order_vendor_provenance_gaps_shape,
-    "priorCommentsUnavailable": _bool_value,
-    "verifyPasses": _dict_list,
-    "judgmentDispositions": _dict_list,
-    "gateGuidanceRowCarried": _dict_list,
-}
-
 # Per-round disclosure channels recorded during hand `submit` (not `_fold_panel`). Each name here
 # must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same
 # one home.
@@ -507,12 +415,6 @@ JUDGMENT_FOLD_DISCLOSURE_CHANNELS = ("judgmentDispositions",)
 UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "unverified", "missingSeats",
                                "verify")
 
-# `canaryVerified` is the one channel whose EMPTY value still belongs in the receipt (a control probe
-# that ran and carried an empty evidence object is still a probe that ran), so it emits on PRESENCE.
-# Every other channel emits on truthiness — an empty channel is not a disclosure.
-_DISCLOSE_ON_PRESENCE = ("canaryVerified",)
-
-
 def _round_disclosure_key(value):
     """The rounds-map key for a durable record's round value — one home for producer and restorer.
 
@@ -523,38 +425,6 @@ def _round_disclosure_key(value):
     if n is None:
         return None
     return str(n)
-
-
-def _declared_disclosures(entry):
-    """The per-round disclosure channels the emission rule selects from a round entry (or a durable
-    record's `disclosures` block — same channel keys, same presence/truthiness/shape rule)."""
-    if not isinstance(entry, dict):
-        entry = {}
-    out = {}
-    for chan, shape_ok in RESUMABLE_DISCLOSURE_CHANNELS.items():
-        if chan in _DISCLOSE_ON_PRESENCE:
-            if chan not in entry:
-                continue
-            value = entry.get(chan)
-        else:
-            value = entry.get(chan)
-            if not value:
-                continue
-        if not shape_ok(value):
-            continue
-        out[chan] = value
-    return out
-
-
-def _receipt_round_disclosures(entry, form, state):
-    """The ONE per-round disclosure view `build_receipt` reads: the shared selection rule
-    (`_declared_disclosures` — presence/truthiness plus the registered SHAPE predicate) narrowed by
-    the receipt form gate. Composes two existing rules; invents neither. A channel that fails its
-    shape predicate is absent here exactly as it is absent from what the producer persists and what
-    a `recordsPath` resume restores."""
-    return {chan: value
-            for chan, value in _declared_disclosures(entry).items()
-            if _round_entry_key_allowed(chan, form, state)}
 
 
 # =============================================================================================
@@ -988,14 +858,6 @@ def _auditor_vendor(config, fixer_vendor):
     return (live[0] if live else fixer_vendor), "degraded"
 
 
-def _degraded(state):
-    return bool(state.get("independenceDegraded"))
-
-
-def _base_degraded(state):
-    return bool((state.get("config") or {}).get("baseDegraded"))
-
-
 # Seat-map receipt projections (#681) — leaf module ``seat_map_receipts``; thin aliases for in-module
 # call sites and existing tests.
 _seat_map_receipts = seat_map_receipts.receipts
@@ -1011,36 +873,24 @@ _emit_receipt_seat_map = seat_map_receipts.emit_receipt_seat_map
 _sm_unjudgeable_receipts = seat_map_receipts.unjudgeable_receipts
 _sm_unjudgeable_run_level_disclosure = seat_map_receipts.unjudgeable_run_level_disclosure
 _sm_round_governing_unjudgeable = seat_map_receipts.round_governing_unjudgeable
-_skew_record_identity = seat_map_receipts._skew_record_identity
 _skew_records_from_seat_map = seat_map_receipts._skew_records_from_seat_map
 
 
-def _driver_author_family(state):
-    """The author family the DRIVER owns — never the submitted map's self-assertion."""
-    cfg = state.get("config") or {}
-    return model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+def _skew_records(state):
+    return skew_records(state)
 
 
-def _same_family_seats(state):
-    """Seats the #510 seat map had to fill with the MAKER's own model family because no alternative
-    family was live (#670, owner-ratified 2026-07-26). A disclosed degradation, never a violation —
-    but a panel that reviewed itself must never certify as plainly clean, so it joins independence
-    and base provenance in the certification shape. Read off the seat map's own receipt; never
-    recomputed here."""
-    return _sm_same_family_seats(state, _driver_author_family(state))
-
-
-def _same_family_degraded(state):
-    return bool(_same_family_seats(state))
+def _seat_map_violations(state):
+    return seat_map_violations(state)
 
 
 def _union_skew_disclosures(existing, new):
-    """Deduped union of skew disclosure lists, keyed on ``_skew_record_identity``."""
+    """Deduped union of skew disclosure lists, keyed on ``skew_record_identity``."""
     seen: set[tuple] = set()
     merged: list[dict] = []
     for source in (existing or []), (new or []):
         for rec in source:
-            key = _skew_record_identity(rec)
+            key = skew_record_identity(rec)
             if key is None:
                 continue
             status = rec.get("status")
@@ -1061,50 +911,6 @@ def _union_skew_disclosures(existing, new):
     return merged
 
 
-def _skew_records(state):
-    """Plugin-version-skew degradations — the UNION of what each round recorded and what the live
-    receipt projections carry, so neither channel alone is load-bearing: ``state["rounds"]`` is lost
-    across a ``recordsPath`` resume. Deduped by (constraint, status, detail, inspectedRoot), sorted."""
-    seen: set[tuple] = set()
-    merged: list[dict] = []
-    for rec in (state.get("rounds") or {}).values():
-        if not isinstance(rec, dict):
-            continue
-        skew = rec.get("pluginVersionSkew")
-        if not isinstance(skew, list):
-            continue
-        for row in skew:
-            key = _skew_record_identity(row)
-            if key is None:
-                continue
-            status = row.get("status")
-            if not version_skew.appends_degradation(status):
-                continue
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(row)
-    for row in _sm_skew_records(state):
-        key = _skew_record_identity(row)
-        if key is None or key in seen:
-            continue
-        seen.add(key)
-        merged.append(row)
-    merged.sort(
-        key=lambda item: (
-            str(item.get("constraint", "")),
-            str(item.get("status", "")),
-            str(item.get("detail", "")),
-            str(item.get("inspectedRoot", "")),
-        ),
-    )
-    return merged
-
-
-def _skew_degraded(state):
-    return bool(_skew_records(state))
-
-
 def _plugin_version_skew_status(state):
     """Seat-map tri-state status for certification disclosure (#677). ``absent`` when no receipt
     carries ``pluginVersionSkew`` — an older map or one built without the field — so the
@@ -1114,74 +920,8 @@ def _plugin_version_skew_status(state):
     return _sm_plugin_version_skew_status(state)
 
 
-def _seat_map_violations(state):
-    """Unexcused seat-map constraint violations — a BREACH channel, distinct from the disclosed
-    degradations (#680). The UNION of what each round recorded and what the receipt projections
-    carry, so neither channel alone is load-bearing: `state["rounds"]` is lost across a
-    `recordsPath` resume. Deduped by (constraint, seat), sorted."""
-    seen: set[tuple] = set()
-    merged: list[dict] = []
-    for rec in (state.get("rounds") or {}).values():
-        if not isinstance(rec, dict):
-            continue
-        violations = rec.get("seatMapViolations")
-        if not isinstance(violations, list):
-            continue
-        for v in violations:
-            if not isinstance(v, dict):
-                continue
-            key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(v)
-    for v in _sm_unexcused_violations(state, _driver_author_family(state)):
-        key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(v)
-    merged.sort(
-        key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")),
-    )
-    return merged
-
-
-def _seat_map_violated(state):
-    return bool(_seat_map_violations(state))
-
-
-def _seat_map_violation_breach_prose(v: dict) -> str:
-    """One-line breach prose for build_receipt — constraint, seat, and evidence class (#680 R3)."""
-    c = str(v.get("constraint") or "unknown")
-    s = v.get("seat")
-    ev = v.get("evidence")
-    if ev == "unproven-liveness":
-        ev_phrase = "excusal unprovable — liveness evidence unusable"
-    elif ev == "alternative-live":
-        ev_phrase = "an alternative was available"
-    else:
-        ev_phrase = None
-    if isinstance(s, str) and s and ev_phrase:
-        return "%s (seat %s; %s)" % (c, s, ev_phrase)
-    if ev_phrase:
-        return "%s (%s)" % (c, ev_phrase)
-    if isinstance(s, str) and s:
-        return "%s (seat %s)" % (c, s)
-    return c
-
-
 def _seat_pin_excused(state):
     return bool(_sm_pin_excused_records(state, _driver_author_family(state)))
-
-
-def _seat_pin_excused_seats(state):
-    seats: set[str] = set()
-    for rec in _sm_pin_excused_records(state, _driver_author_family(state)):
-        for s in rec.get("excusedSeats") or []:
-            if isinstance(s, str) and s:
-                seats.add(s)
-    return sorted(seats)
 
 
 def _seat_map_unproven_liveness(state):
@@ -1205,19 +945,6 @@ def _seat_map_unavailable(state):
         if rec.get("seatMapUnavailable"):
             return True
     return not _sm_any_seats(state)
-
-
-def _seat_map_unjudgeable(state):
-    """Whether any submitted seat map's violation basis is incomplete — rounds ∪ receipts union.
-
-    The per-round ``seatMapUnjudgeable`` record is round-scoped (#1204); this predicate keeps the
-    whole-history union."""
-    for rec in (state.get("rounds") or {}).values():
-        if not isinstance(rec, dict):
-            continue
-        if rec.get("seatMapUnjudgeable"):
-            return True
-    return bool(_sm_unjudgeable_receipts(state, _driver_author_family(state)))
 
 
 def _certification_base(state):
@@ -4161,291 +3888,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                  "unverified": f.get("unverified")}
                 for f in (state.get("findings") or []) if isinstance(f, dict)]
     cfg = state.get("config") or {}
-    degraded = []
-    if _degraded(state):
-        degraded.append("independence: a single live vendor — the fix's auditor is the fixer's "
-                        "vendor; independence degraded and named in the certification shape")
-    if _base_degraded(state):
-        degraded.append(
-            "base: reviewed against a base whose fetch degraded (%s) — the pin may be stale; "
-            "named in the certification shape"
-            % (cfg.get("baseFetch") or "baseFetch absent"))
-    if _same_family_degraded(state):
-        degraded.append(
-            "panel independence: seat(s) %s were filled with the MAKER's own model family — no "
-            "alternative family was live; disclosed by the seat map and named in the certification "
-            "shape" % ", ".join(_same_family_seats(state)))
-    # bite-axis: skewed review never reads unqualified-clean — projection 3 of 3 independent skew
-    # guards (degraded prose here; _cert_shape and shapeDrivers are the other two, #677).
-    if _skew_degraded(state):
-        _skew_reasons = []
-        for rec in _skew_records(state):
-            reason = rec.get("reason")
-            if isinstance(reason, str) and reason:
-                _skew_reasons.append(reason)
-        if _skew_reasons:
-            degraded.append(
-                "%s; disclosed by the seat map and named in the certification shape"
-                % "; ".join(_skew_reasons))
-        else:
-            degraded.append(
-                "plugin-version-skew: the review ran under a plugin/repository semantics skew "
-                "but no usable reason text was recorded; disclosed by the seat map and named in "
-                "the certification shape")
-    _pin_seats = _seat_pin_excused_seats(state)
-    if _pin_seats:
-        degraded.append(
-            "seat-map pin excusal: seat(s) %s authorized a disclosed constraint relaxation via pin; "
-            "named in the certification shape" % ", ".join(_pin_seats))
-    if _seat_map_violated(state):
-        _viol_parts = []
-        for v in _seat_map_violations(state):
-            _viol_parts.append(_seat_map_violation_breach_prose(v))
-        _shape = (state.get("certification") or {}).get("shape")
-        if isinstance(_shape, str) and _shape.endswith("-constraint-violated"):
-            degraded.append(
-                "seat-map constraint breach: %s — certification shape marked -constraint-violated"
-                % ", ".join(_viol_parts))
-        else:
-            degraded.append(
-                "seat-map constraint breach: %s — breach recorded; certification withheld"
-                % ", ".join(_viol_parts))
-    # The skipped-blocking channel (#507 R2a): an owner-skipped judgment blocker rides the exit
-    # disclosure — a product-choice tradeoff shipped un-fixed, cited by its owner reason. It appears
-    # BOTH in the degraded disclosure prose AND as the dedicated top-level `skippedBlockers` list
-    # (required by validate_receipt, possibly empty) so the channel can never be omitted.
-    skipped_blockers = []
-    for s in state.get("_skippedBlockers") or []:
-        if not isinstance(s, dict):
-            continue
-        skipped_blockers.append({"id": s.get("id"), "title": s.get("title"),
-                                 "severity": s.get("severity"), "reason": s.get("reason")})
-        degraded.append("skipped-blocker: %r (%s:%s) owner-skipped as a product-choice tradeoff — "
-                        "reason: %s" % (s.get("title"), s.get("file"), s.get("line"), s.get("reason")))
-    _emitted_seat_map_unjudgeable = False
-    for rkey in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
-        rrec = state["rounds"][rkey]
-        declared = _receipt_round_disclosures(rrec, form, state)
-        for row in (declared.get("fellOpen") or []):
-            degraded.append(
-                "reviewer-fell-open (round %s): seat %s configured %s forfeited (%s) → re-ran on %s; "
-                "that seat's cross-vendor mix degraded" % (
-                    rkey, row.get("seat"), row.get("configured"), row.get("reason"), row.get("ran")))
-        miss = declared.get("fellOpenProvenanceMissing")
-        if miss:
-            degraded.append(
-                "reviewer-fell-open-provenance-unavailable (round %s): cross-vendor seat(s) %s ran "
-                "without a trusted ranManifest entry — fall-open provenance unverified" % (
-                    rkey, ", ".join(miss)))
-        smu = declared.get("seatMapUnavailable")
-        if smu:
-            # bite-axis: honest whether pool is cross-vendor, claude-only, or unknown — projection 3 of 3 (#681).
-            degraded.append(
-                "reviewer-fell-open-seatmap-unavailable (round %s): live panel vendor(s) %s "
-                "but no seat map submitted — fall-open provenance unverified for the panel" % (
-                    rkey, ", ".join(smu)))
-        smuj = declared.get("seatMapUnjudgeable")
-        if smuj:
-            _emitted_seat_map_unjudgeable = True
-            degraded.append(
-                "seat-map-unjudgeable (round %s): a seat map was submitted and is readable, but "
-                "its violation basis is incomplete (%s) — \"no breach\" is unproven rather than clean"
-                % (rkey, ", ".join(smuj)))
-        vac = declared.get("vacuousSeats")
-        if vac:
-            degraded.append(
-                "vacuous-seat (round %s): seat(s) %s returned no findings and no verifiable "
-                "investigation record — classed as never-ran" % (rkey, ", ".join(vac)))
-        eng_art = declared.get("engagedArtifactSeats")
-        if eng_art:
-            degraded.append(
-                "engaged-artifact-seat (round %s): seat(s) %s produced a review our transport "
-                "could not carry — they do not count toward certification; salvaged artifacts "
-                "are available for independent verification" % (rkey, ", ".join(eng_art)))
-        cuv = declared.get("canaryUnverified")
-        if cuv:
-            cv = declared.get("canaryVerified")
-            verified_vendors = []
-            if isinstance(cv, dict):
-                if cv and all(isinstance(v, dict) for v in cv.values()):
-                    verified_vendors = sorted(cv)
-                elif cv:
-                    verified_vendors = ["(probe submitted)"]
-            probe_note = ""
-            if verified_vendors:
-                probe_note = " (engaged probe recorded for vendor(s) %s)" % ", ".join(verified_vendors)
-            degraded.append(
-                "canary-unverified (round %s): cross-vendor seat(s) %s returned zero findings "
-                "with no engaged control probe for their vendor%s — external-seat liveness unverified"
-                % (rkey, ", ".join(cuv), probe_note))
-        cf = declared.get("canaryFailed")
-        if cf:
-            seats_down = cf.get("seats") if isinstance(cf, dict) else []
-            detail = cf.get("detail") if isinstance(cf, dict) else None
-            evidence = cf.get("evidence") if isinstance(cf, dict) else None
-            engaged_failure = isinstance(cf, dict) and cf.get("engagedFailure") is True
-            if isinstance(cf, dict) and isinstance(cf.get("vendors"), dict):
-                parts = []
-                for vendor, vinfo in sorted(cf["vendors"].items()):
-                    if not isinstance(vinfo, dict):
-                        continue
-                    ev = vinfo.get("evidence")
-                    ev_note = ""
-                    if isinstance(ev, dict) and ev:
-                        ev_note = "; evidence=%s" % ev
-                    default_detail = "outcome failure" if engaged_failure else "engaged not true"
-                    parts.append(
-                        "vendor %s (%s%s)" % (
-                            vendor, vinfo.get("detail") or default_detail, ev_note))
-                default_detail = "outcome failure" if engaged_failure else "engaged not true"
-                detail_str = "; ".join(parts) if parts else (detail or default_detail)
-            else:
-                default_detail = "outcome failure" if engaged_failure else "engaged not true"
-                detail_str = detail or default_detail
-                if evidence and isinstance(evidence, dict):
-                    detail_str = "%s; evidence=%s" % (detail_str, evidence)
-            if engaged_failure:
-                degraded.append(
-                    "canary-outcome-failed (round %s): the control probe was engaged but "
-                    "reported outcome failure (%s) — cross-vendor seat(s) %s remain run; panel "
-                    "certification withheld" % (
-                        rkey, detail_str, ", ".join(seats_down or [])))
-            else:
-                degraded.append(
-                    "canary-failed (round %s): the control probe showed no engagement (%s) — "
-                    "cross-vendor seat(s) %s downgraded to never-ran" % (
-                        rkey, detail_str, ", ".join(seats_down or [])))
-        cof = declared.get("canaryOutcomeFailed")
-        if cof:
-            seats_outcome_failed = cof.get("seats") if isinstance(cof, dict) else []
-            detail = cof.get("detail") if isinstance(cof, dict) else None
-            evidence = cof.get("evidence") if isinstance(cof, dict) else None
-            if isinstance(cof, dict) and isinstance(cof.get("vendors"), dict):
-                parts = []
-                for vendor, vinfo in sorted(cof["vendors"].items()):
-                    if not isinstance(vinfo, dict):
-                        continue
-                    ev = vinfo.get("evidence")
-                    ev_note = ""
-                    if isinstance(ev, dict) and ev:
-                        ev_note = "; evidence=%s" % ev
-                    parts.append(
-                        "vendor %s (%s%s)" % (
-                            vendor, vinfo.get("detail") or "outcome failure", ev_note))
-                detail_str = "; ".join(parts) if parts else (detail or "outcome failure")
-            else:
-                detail_str = detail or "outcome failure"
-                if evidence and isinstance(evidence, dict):
-                    detail_str = "%s; evidence=%s" % (detail_str, evidence)
-            degraded.append(
-                "canary-outcome-failed (round %s): the control probe was engaged but "
-                "reported outcome failure (%s) — cross-vendor seat(s) %s remain run; panel "
-                "certification withheld" % (
-                    rkey, detail_str, ", ".join(seats_outcome_failed or [])))
-        cpu = declared.get("canaryPlantUndetected")
-        if cpu:
-            seats_undetected = cpu.get("seats") if isinstance(cpu, dict) else []
-            detail = cpu.get("detail") if isinstance(cpu, dict) else None
-            evidence = cpu.get("evidence") if isinstance(cpu, dict) else None
-            if isinstance(cpu, dict) and isinstance(cpu.get("vendors"), dict):
-                parts = []
-                for vendor, vinfo in sorted(cpu["vendors"].items()):
-                    if not isinstance(vinfo, dict):
-                        continue
-                    ev = vinfo.get("evidence")
-                    ev_note = ""
-                    if isinstance(ev, dict) and ev:
-                        ev_note = "; evidence=%s" % ev
-                    parts.append(
-                        "vendor %s (%s%s)" % (
-                            vendor, vinfo.get("detail") or "plant not detected", ev_note))
-                detail_str = "; ".join(parts) if parts else (detail or "plant not detected")
-            else:
-                detail_str = detail or "plant not detected"
-                if evidence and isinstance(evidence, dict):
-                    detail_str = "%s; evidence=%s" % (detail_str, evidence)
-            degraded.append(
-                "canary-plant-undetected (round %s): the control probe was engaged but missed "
-                "the planted defect (%s) — cross-vendor seat(s) %s remain run; panel "
-                "certification withheld" % (
-                    rkey, detail_str, ", ".join(seats_undetected or [])))
-        roi = declared.get("recordOrphansIgnored")
-        if roi:
-            degraded.append(
-                "record-orphans-ignored (round %s): hand submit folded with durable seat record(s) "
-                "%s still at this slot — records ignored (session already on hand-submit path)"
-                % (rkey, ", ".join(roi)))
-        pcu = declared.get("priorCommentsUnavailable")
-        if pcu:
-            degraded.append(
-                "prior-comments-unavailable (round %s): orchestrator did not supply "
-                "prior-comments.json in PR mode — panel ran without prior PR comments; any claim "
-                "that prior comments were considered is not supported for this round"
-                % rkey)
-        jd = declared.get("judgmentDispositions")
-        if isinstance(jd, list) and jd:
-            fail_closed = [e for e in jd if isinstance(e, dict) and e.get("failClosed")]
-            if fail_closed:
-                degraded.append(
-                    "judgment-fail-closed (round %s): %d judgment blocker(s) had no valid owner "
-                    "disposition — owner ruling not recorded; loop defaulted to fix-as-suggested"
-                    % (rkey, len(fail_closed)))
-        ggc = declared.get("gateGuidanceRowCarried")
-        if ggc:
-            degraded.append(
-                "gate-guidance-row-carried (round %s): %d fix-batch row(s) carried the guidance "
-                "key while the fold recorded none for them — row-carried text is never rendered "
-                "as owner guidance" % (rkey, len(ggc)))
-        ovg = declared.get("orderVendorProvenanceGaps")
-        if ovg:
-            # Provenance-NEUTRAL wording: since the collector spans every read-only phase, a gap
-            # can come from an absent seat-map entry OR from a DEFAULTED engine-preference read,
-            # and those have different recoveries. Naming the seat map for both would send an
-            # operator to the wrong file, so each row says which it was.
-            seats = []
-            for row in ovg:
-                if not isinstance(row, dict):
-                    continue
-                seat = row.get("seat")
-                if not (isinstance(seat, str) and seat):
-                    continue
-                label = seat
-                phase_name = row.get("phase")
-                if isinstance(phase_name, str) and phase_name:
-                    label = "%s@%s" % (label, phase_name)
-                if row.get("vendorSource") == VENDOR_SOURCE_DEFAULTED:
-                    label = "%s (vendor defaulted — engine preferences unreadable)" % label
-                seats.append(label)
-            if seats:
-                degraded.append(
-                    "order-vendor-provenance-gap (round %s): seat(s) %s emitted without a resolved "
-                    "vendor" % (rkey, ", ".join(seats)))
-        prov_by_phase = _normalize_adapter_provenance(declared.get("adapterProvenance"))
-        for phase_name, prov in prov_by_phase.items():
-            if not isinstance(prov, dict):
-                continue
-            if prov.get("dispatchManifestUnavailable"):
-                degraded.append(
-                    "adapter-provenance (round %s, %s): dispatch manifest unavailable — trusted "
-                    "ranManifest/collectionManifest omitted" % (rkey, phase_name))
-            mismatch = prov.get("vendorEchoMismatch")
-            if isinstance(mismatch, list) and mismatch:
-                parts = ["%s echo=%r manifest=%r" % (row.get("seat"), row.get("echo"),
-                                                     row.get("manifest"))
-                         for row in mismatch if isinstance(row, dict)]
-                degraded.append(
-                    "adapter-provenance (round %s, %s): vendor echo mismatch on seat(s): %s"
-                    % (rkey, phase_name, "; ".join(parts)))
-    # #714 NR-C / #1204: predicate armed via whole-history receipts but per-round record cleared
-    # (same-round re-fold bad→good) — run-level fallback so disclosure never goes silent.
-    _run_unj = _sm_unjudgeable_run_level_disclosure(
-        state,
-        _driver_author_family(state),
-        per_round_emitted=_emitted_seat_map_unjudgeable,
-        no_seat_map_submitted=not _sm_any_seats(state),
-    )
-    if _run_unj and _seat_map_unjudgeable(state):
-        degraded.append(_run_unj)
+    degraded, skipped_blockers = build_degraded_prose(state, form)
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
     base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "baseRepo",
@@ -5043,9 +4486,8 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
                     },
                 }
             )
-            skey = rc._storage_key(seat, 0)
-            env_path = os.path.join(
-                session_dir, "round-%s" % rnd, "seats", rc.PANEL_PHASE, "%s.a0.json" % skey)
+            skey = record_paths.storage_key(seat, 0)
+            env_path = record_paths.store_path(session_dir, rnd, rc.PANEL_PHASE, skey, 0)
             os.makedirs(os.path.dirname(env_path), exist_ok=True)
             envelope = {
                 "schema": round_records.SEAT_RESULT_SCHEMA_V2,

@@ -3,6 +3,7 @@ import inspect
 import json
 import os
 
+import record_paths
 import round_certification as RC
 import round_records as RR
 
@@ -263,14 +264,8 @@ def _write_envelope(session_dir, spec, binding_by_slot=None):
     binding = (binding_by_slot or {}).get(slot)
     if binding is None:
         binding = _binding_fields(_slot_nonce(seat, phase, attempt, occurrence))
-    skey = RC._storage_key(seat, occurrence)
-    path = os.path.join(
-        session_dir,
-        "round-%d" % rnd,
-        "seats",
-        phase,
-        "%s.a%d.json" % (skey, attempt),
-    )
+    skey = record_paths.storage_key(seat, occurrence)
+    path = record_paths.store_path(session_dir, rnd, phase, skey, attempt)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     provenance = spec.get("provenance", RC.PROVENANCE_DISPATCH_OBSERVED)
     if spec.get("envelope") is not None:

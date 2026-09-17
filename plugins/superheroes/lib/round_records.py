@@ -36,6 +36,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import model_registry  # noqa: E402
+import record_paths  # noqa: E402
 import round_phases  # noqa: E402
 
 # =============================================================================================
@@ -99,7 +100,7 @@ META_FILE = "meta.json"
 LOCK_FILE = "session.lock"
 # Orchestrator-written files live in the `_` namespace inside the landing area; a seat key may
 # therefore never begin with `_` (`storage_key` refuses one).
-RESERVED_PREFIX = "_"
+RESERVED_PREFIX = record_paths.RESERVED_PREFIX
 DISPATCH_MANIFEST_STEM = "_dispatch"
 CANARY_DIRNAME = "_canary"
 # The panel phase directory name — imported from the shared phase constants module.
@@ -113,10 +114,15 @@ MISSING_CAS_TOKEN = SEAT_MISSING_SCHEMA
 # errnos are swallowed. Anything else propagates — a durability failure must not go quiet.
 _FSYNC_DIR_TOLERATED = (errno.EINVAL, errno.ENOTSUP, errno.EPERM)
 
-_SLUG_MAX = 40
-_SHA_PREFIX = 16
-_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-_NON_SLUG = re.compile(r"[^a-z0-9]+")
+storage_key = record_paths.storage_key
+store_path = record_paths.store_path
+store_dir = record_paths.store_dir
+round_dir = record_paths.round_dir
+_guard_within = record_paths._guard_within
+_require_token = record_paths._require_token
+_require_index = record_paths._require_index
+_seat_filename = record_paths._seat_filename
+_KEY_RE = record_paths._KEY_RE
 
 
 # =============================================================================================
@@ -211,47 +217,6 @@ def _now_iso():
     return datetime.datetime.now().replace(microsecond=0).isoformat()
 
 
-# =============================================================================================
-# storage keys — roster keys are NOT safe filenames
-# =============================================================================================
-
-def storage_key(seat_key, occurrence=0):
-    """Map a roster seat key onto a filename-safe, collision-resistant storage key.
-
-    Roster keys are not filenames: a verifier cluster key is `src/a/b.py:3` and an audit target
-    id is `src/a/b.py::some-title@L5` (or `...#1` when occurrence-suffixed) — both carry `/` and
-    `:`, and two DISTINCT audit targets can legitimately share one roster seat key (hence
-    `occurrence`). The key is `<slug>-<sha16>`: the slug is for
-    a human reading `ls`, the sha16 is what actually carries identity, so two seat keys that
-    collapse onto the same truncated slug still get different keys.
-
-    Fail-closed: a non-`str`/empty `seat_key` and a `_`-prefixed one (the reserved orchestrator
-    namespace) raise `ValueError`; a `seat_key` whose slug normalizes away entirely falls back
-    to `seat-<sha16>` rather than an empty or `-`-only name; a non-int / negative `occurrence`
-    raises `ValueError`. The result always matches `^[a-z0-9][a-z0-9-]*$`, so it can carry
-    neither a path separator nor `..` nor a leading `_`.
-    """
-    if not isinstance(seat_key, str) or not seat_key:
-        raise ValueError("seat_key must be a non-empty str, got %r" % (seat_key,))
-    if seat_key.startswith(RESERVED_PREFIX):
-        raise ValueError("seat_key may not start with %r (reserved namespace): %r"
-                         % (RESERVED_PREFIX, seat_key))
-    if isinstance(occurrence, bool) or not isinstance(occurrence, int) or occurrence < 0:
-        raise ValueError("occurrence must be a non-negative int, got %r" % (occurrence,))
-    digest = sha256_text(seat_key)[:_SHA_PREFIX]
-    slug = _NON_SLUG.sub("-", seat_key.lower()).strip("-")[:_SLUG_MAX].strip("-")
-    key = ("%s-%s" % (slug, digest)) if slug else ("seat-%s" % digest)
-    if occurrence:
-        key = "%s-o%d" % (key, occurrence)
-    if not _KEY_RE.match(key):
-        # Belt-and-braces: the slug path above cannot produce this, but a key that failed the
-        # shape is never returned — fall back to the hash-only form.
-        key = "seat-%s" % digest
-        if occurrence:
-            key = "%s-o%d" % (key, occurrence)
-    return key
-
-
 def roster_slots(roster):
     """[(seat_key, occurrence)] — a roster expanded so a REPEATED key stays addressable.
 
@@ -278,107 +243,58 @@ def roster_slots(roster):
 # paths — every builder is fenced inside the session dir
 # =============================================================================================
 
-def _require_token(name, value):
-    """A path component supplied by a caller: non-empty str, no separator, no `..`, no NUL."""
-    if not isinstance(value, str) or not value:
-        raise ValueError("%s must be a non-empty str, got %r" % (name, value))
-    if value in (".", "..") or "/" in value or "\\" in value or "\x00" in value:
-        raise ValueError("%s is not a safe path component: %r" % (name, value))
-    return value
-
-
-def _require_index(name, value):
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError("%s must be a non-negative int, got %r" % (name, value))
-    return value
-
-
-def _guard_within(session_dir, path):
-    """Refuse a built path that escapes the session dir.
-
-    Containment is decided on `realpath` of the candidate — a symlink component that resolves
-    outside the session dir must refuse even when the unresolved `abspath` sits lexically under the
-    session root. The session root itself is `realpath(session_dir)` so a caller's spelling of the
-    session prefix (macOS `/tmp` vs `/private/tmp`) does not false-refuse legitimate joins. The
-    RETURNED path is the un-resolved join, so a caller's paths stay in the spelling it handed in."""
-    if not isinstance(session_dir, str) or not session_dir:
-        raise ValueError("session_dir must be a non-empty str, got %r" % (session_dir,))
-    root = os.path.realpath(session_dir)
-    candidate = os.path.abspath(path)
-    resolved = os.path.realpath(candidate)
-    try:
-        common = os.path.commonpath([root, resolved])
-    except ValueError:  # different drives / mixed absolute-relative
-        raise ValueError("path escapes the session dir: %r" % (path,))
-    if common != root or resolved == root:
-        raise ValueError("path escapes the session dir: %r" % (path,))
-    return path
-
-
-def round_dir(session_dir, rnd):
-    _require_index("rnd", rnd)
-    return _guard_within(session_dir, os.path.join(session_dir, "round-%d" % rnd))
-
-
 def landing_dir(session_dir, rnd, phase):
-    _require_token("phase", phase)
-    return _guard_within(session_dir,
-                         os.path.join(round_dir(session_dir, rnd), "landing", phase))
-
-
-def store_dir(session_dir, rnd, phase):
-    _require_token("phase", phase)
-    return _guard_within(session_dir,
-                         os.path.join(round_dir(session_dir, rnd), "seats", phase))
-
-
-def _seat_filename(skey, attempt):
-    _require_token("skey", skey)
-    _require_index("attempt", attempt)
-    return "%s.a%d.json" % (skey, attempt)
+    record_paths._require_token("phase", phase)
+    return record_paths._guard_within(session_dir,
+                                      os.path.join(record_paths.round_dir(session_dir, rnd),
+                                                   "landing", phase))
 
 
 def landing_path(session_dir, rnd, phase, skey, attempt):
-    return _guard_within(session_dir, os.path.join(landing_dir(session_dir, rnd, phase),
-                                                   _seat_filename(skey, attempt)))
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(landing_dir(session_dir, rnd, phase),
+                     record_paths._seat_filename(skey, attempt)))
 
 
 def bare_payload_path(session_dir, rnd, phase, skey, attempt):
     """Host-seat payload-only landing slot — sibling to the full-envelope `landing_path`."""
-    _require_token("skey", skey)
-    _require_index("attempt", attempt)
-    return _guard_within(session_dir, os.path.join(landing_dir(session_dir, rnd, phase),
-                                                   "%s.a%d.payload.json" % (skey, attempt)))
+    record_paths._require_token("skey", skey)
+    record_paths._require_index("attempt", attempt)
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(landing_dir(session_dir, rnd, phase),
+                     "%s.a%d.payload.json" % (skey, attempt)))
 
 
 def order_prompt_path(session_dir, rnd, phase, skey, attempt):
     """`<session>/round-<N>/orders/<phase>/<skey>.a<K>.md` — fenced inside the session dir."""
-    _require_token("phase", phase)
-    _require_index("attempt", attempt)
-    return _guard_within(session_dir, os.path.join(round_dir(session_dir, rnd), "orders", phase,
-                                                   "%s.a%d.md" % (skey, attempt)))
+    record_paths._require_token("phase", phase)
+    record_paths._require_index("attempt", attempt)
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(record_paths.round_dir(session_dir, rnd), "orders", phase,
+                     "%s.a%d.md" % (skey, attempt)))
 
 
 def envelope_stub_path(session_dir, rnd, phase, skey, attempt):
     """Per-slot `seat-result/1` header stub emitted at order time — a projection of the anchor."""
-    _require_token("phase", phase)
-    _require_index("attempt", attempt)
-    return _guard_within(session_dir, os.path.join(round_dir(session_dir, rnd), "orders", phase,
-                                                   "%s.a%d.envelope.json" % (skey, attempt)))
-
-
-def store_path(session_dir, rnd, phase, skey, attempt):
-    return _guard_within(session_dir, os.path.join(store_dir(session_dir, rnd, phase),
-                                                   _seat_filename(skey, attempt)))
+    record_paths._require_token("phase", phase)
+    record_paths._require_index("attempt", attempt)
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(record_paths.round_dir(session_dir, rnd), "orders", phase,
+                     "%s.a%d.envelope.json" % (skey, attempt)))
 
 
 def dispatch_manifest_path(session_dir, rnd, phase, attempt):
     """The ORCHESTRATOR-written per-attempt dispatch manifest: `{seatKey: {vendor, model,
     engine}}`. It lives in the reserved `_` namespace so no seat key can ever address it."""
-    _require_index("attempt", attempt)
+    record_paths._require_index("attempt", attempt)
     name = "%s.a%d.json" % (DISPATCH_MANIFEST_STEM, attempt)
-    return _guard_within(session_dir,
-                         os.path.join(landing_dir(session_dir, rnd, phase), name))
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(landing_dir(session_dir, rnd, phase), name))
 
 
 def canary_path(session_dir, rnd, vendor, attempt):
@@ -386,18 +302,20 @@ def canary_path(session_dir, rnd, vendor, attempt):
     if vendor not in model_registry.VENDORS:
         raise ValueError("unknown vendor %r (expected one of %s)"
                          % (vendor, ", ".join(sorted(model_registry.VENDORS))))
-    _require_index("attempt", attempt)
-    return _guard_within(session_dir, os.path.join(
-        landing_dir(session_dir, rnd, _PANEL_PHASE_DIRNAME), CANARY_DIRNAME,
-        "%s.a%d.json" % (vendor, attempt)))
+    record_paths._require_index("attempt", attempt)
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(
+            landing_dir(session_dir, rnd, _PANEL_PHASE_DIRNAME), CANARY_DIRNAME,
+            "%s.a%d.json" % (vendor, attempt)))
 
 
 def session_lock_path(session_dir):
-    return _guard_within(session_dir, os.path.join(session_dir, LOCK_FILE))
+    return record_paths._guard_within(session_dir, os.path.join(session_dir, LOCK_FILE))
 
 
 def meta_path(session_dir):
-    return _guard_within(session_dir, os.path.join(session_dir, META_FILE))
+    return record_paths._guard_within(session_dir, os.path.join(session_dir, META_FILE))
 
 
 # =============================================================================================
