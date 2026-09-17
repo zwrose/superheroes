@@ -699,6 +699,13 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   full-panel-confirmed.
 - **Property condition.** Usage-based, 60 days: a hand-landed seat gains an independent record of its
   landing that the journal can cross-check. On firing, a proposal to the owner at a gardening pass.
+- **Property.** A hand-landed envelope carries no cited head at all — neither
+  `round_records.SEAT_RESULT_V2_FIELDS` nor `EXECUTION_EVIDENCE_FIELDS` contains `headSha` — so a
+  hand-landed seat's evidence is bound by the envelope's payload/evidence binding and is never
+  head-bound; the writer's dead read of that absent field has been removed rather than left as a
+  guard that cannot be one.
+- **Property condition.** Usage-based, 60 days: a landed envelope carries a cited head the writer
+  can check. On firing, a proposal to the owner at a gardening pass.
 
 #### D19 — `check_unrun_review`
 
@@ -839,6 +846,20 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   coverage. **Residual:** the check refuses a blob whose recorded content does not hash to its
   recorded digest, but a journal-only writer that may not read git **cannot** verify that a read
   ever happened, so a fully self-consistent forgery passes. No engine family applies.
+
+#### D28 — `check_evidence_head_bound`
+
+- **Component.** `round_certification.check_evidence_head_bound` — refuses when the session's
+  certified head cannot be resolved or when a dispatch-observed seat row cites no head; it costs one
+  `_certified_head_sha` resolution plus one collected-seat walk at certification time.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `execution-evidence-head-unbound` or `certified-head-unresolvable`. On firing, a proposal to the
+  owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — binding evidence to a head is a property of how evidence is bound, not of
+  model strength. No engine family applies.
 
 #### D13 — The order-bound evidence channel
 

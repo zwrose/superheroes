@@ -1292,8 +1292,17 @@ def check_disposition_without_receipt(ctx):
 
 
 def check_evidence_head_bound(ctx):
+    """Last check certify() runs — after check_disposition_without_receipt.
+
+    Disposition, follow-up, and base-guard refusals keep their own classes rather than
+    being preempted by a head refusal.
+    """
     certified_head = _certified_head_sha(ctx)
     if not certified_head:
+        # A session whose certified head cannot be resolved does not certify — there is
+        # no head for any seat's evidence to be bound to, so nothing can be shown fresh.
+        # review-code's SKILL writes meta.json and halts without it, but that halt lives in
+        # a caller; another session-directory producer reaches this path.
         return _refusal(
             "unrun-review",
             META_FILE,
@@ -1306,6 +1315,9 @@ def check_evidence_head_bound(ctx):
         cited_head = seat_entry.get("citedHead")
         if cited_head:
             continue
+        # A dispatch-observed seat row that cites no head is not a qualifying result — the
+        # staleness comparison in _observation_qualifies can only compare a head that is
+        # present, so an absent one is no check at all rather than a fresh one.
         return _refusal(
             "unrun-review",
             seat_entry["seat"],

@@ -42,10 +42,11 @@ At a terminal, the driver now writes a **certification artifact** beside `round-
 same handback gate vocabulary. The certification artifact is separate machinery produced by
 `round_certification.certify`.
 
-Until the loop records a finding's disposition, the writer certifies only reviews that raised no
-findings; a review that raised a finding terminates in the `disposition-without-receipt` refusal.
-This is fail-closed — nothing certifies on absent evidence — and certification of reviews with
-findings arrives with the loop's disposition recording.
+Until the loop records both a finding's disposition and the cited head on a seat's journal row, the
+writer certifies nothing a real review loop produces: a review that raised findings terminates in
+the `disposition-without-receipt` refusal, and one that raised no findings terminates in
+`unrun-review` with `execution-evidence-head-unbound`. This is fail-closed — nothing certifies on
+absent evidence — and certification arrives when the loop records those two facts.
 
 **`certificationShape` rule (writer receipt only).** Any hand-landed seat forces
 `audited-chain`, never `full-panel-confirmed` (and any `full-panel*` shape in loop state is
