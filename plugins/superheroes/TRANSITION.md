@@ -11,7 +11,8 @@ belongs to and lists every change with its replacement.
 
 ### Dispatch CLI arguments
 
-On `engine_dispatch dispatch-review`, `engine_dispatch dispatch-write`, and `dispatch_guard check`:
+On `engine_dispatch dispatch-review`, `engine_dispatch dispatch-write`, `dispatch_guard check`,
+and `engine_adapter build-argv`:
 
 **Dropped (no alias window).** Pass a seat bundle and role instead.
 
@@ -35,10 +36,14 @@ the accepted `--seat` shape. There is no silent fallback and no alias window for
 ### Dispatch result shape
 
 Every dispatch result carries `runOpened`. When `runOpened` is true the result also carries a
-`resolvedInputs` snapshot (with a `resolvedInputsStatus` of `pre-upgrade` or `journal-corrupt` when
-the snapshot could not be read from the journal). Each snapshot value is paired with a source marker
-that says whether the run took the value from the caller, a default, a clamp, or the registry.
-Refusals raised before the run opened carry `runOpened: false` and no snapshot.
+`resolvedInputs` snapshot; `resolvedInputsStatus` is `pre-upgrade` when the journal predates the
+seat bundle, or `journal-corrupt` when the journal could not be read cleanly (the snapshot is still
+present but synthesized or partial). Each snapshot value is paired with a source marker that says
+whether the run took the value from the caller, a default, a clamp, or the registry. Refusals raised
+before the run opened carry `runOpened: false` and no snapshot. When the shell could not establish
+whether a run had opened — an unreadable journal, corruption without an opened record, or an internal
+error while reading the run directory — the result carries `runOpened: false` and
+`resolvedInputsStatus: "unverifiable"` rather than claiming either opened-or-not.
 
 Results no longer carry a `ledger` key. Preflight refusals return to the caller in the result body
 like every other refusal.

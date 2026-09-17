@@ -104,7 +104,7 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--run-kind` | yes | `choices:review,build,fix` | none | read vs write sandbox shaping (not the registry role — that rides in --seat) |
 | `--cwd` | no | `undeclared` | none |  |
 | `--verify` | no | `undeclared` | none | PATH:SHA256 staged-input check; any mismatch/unreadable file fails build-argv closed |
-| `--prompt-path` | no | `undeclared` | none | if set, fail build-argv closed unless PATH is a readable regular file with non-whitespace content (prevents dispatching an empty prompt that would hang codex on stdin — #563) |
+| `--prompt-path` | no | `undeclared` | none | if set, fail build-argv closed unless PATH is a readable regular file with non-whitespace content (prevents dispatching an empty prompt that would hang codex on stdin) |
 
 ### `dispatch_guard.py`
 

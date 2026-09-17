@@ -2240,7 +2240,7 @@ def build_parser():
     b.add_argument("--prompt-path", default=None,
                    help="if set, fail build-argv closed unless PATH is a readable regular file with "
                         "non-whitespace content (prevents dispatching an empty prompt that would hang "
-                        "codex on stdin — #563)")
+                        "codex on stdin)")
     _PARSE_RESULT_HELP = (
         "Parse engine stdout. This path never sees the dispatched prompt, so it cannot strip an "
         "echoed prompt; an empty-findings result here is unverified — apply the investigation floor "

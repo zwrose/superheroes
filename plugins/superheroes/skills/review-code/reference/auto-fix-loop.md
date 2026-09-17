@@ -824,11 +824,12 @@ carries `{vendor, model, effort, tier, family, source}`:
 
 - **Read the seat's assignment** from `$SEAT_MAP.seats[<reviewer-name>]`. Dispatch a `claude`
   seat as the named subagent with `model: <seat>.model`; dispatch a `codex`/`cursor` seat through
-  `engine_adapter.py` (read-only sandbox), threading the seat's **registry id** as `engine_model`
-  and its **effort** as `--effort` — never the hard-coded composer default. `build-argv` also
-  accepts the **composed dispatch token** that joins registry id and effort, and resolves it
-  identically, but an effort that **contradicts** a composed token is refused rather than
-  silently resolved either way. A `--model` value that is not a native Claude tier short name
+  `engine_adapter.py` (read-only sandbox), passing the seat map entry as `--seat` JSON (`vendor`,
+  `model`, `effort`, `role`) — never the hard-coded composer default. The seat's **registry id**
+  rides in `model`; its **effort** in `effort`. `build-argv` also accepts the **composed dispatch
+  token** in `model`, and resolves it identically, but an `effort` that **contradicts** a composed
+  token is refused rather than silently resolved either way. A `model` value that is not a native
+  Claude tier short name
   (`haiku`/`sonnet`/`opus`/`fable`) is **refused by name** (`unknown-claude-tier`) instead of
   silently falling back to composer. A refused dispatch surfaces
   `detail: "engine-config:<reason>"` with one of `unknown-engine`, `unknown-claude-tier`,

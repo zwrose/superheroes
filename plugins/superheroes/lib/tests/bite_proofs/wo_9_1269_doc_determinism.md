@@ -24,7 +24,7 @@ _PARAM_UNSET = object()  # bite-proof neutralization
 ```python
     if isinstance(action.default, str):
 ```
-(removed `if action.default is engine_dispatch._PARAM_UNSET: return "none"` guard)
+(removed `if action.default is engine_dispatch._PARAM_UNSET: return "runtime (see Variance envelope)"` guard)
 
 **command:**
 ```
@@ -45,18 +45,18 @@ ________________ test_generator_deterministic_across_processes _________________
 E       AssertionError: assert '<!-- generat...0 seconds |\n' == '<!-- generat...0 seconds |\n'
 E         
 E         Skipping 2115 identical leading characters in diff, use -v to show
-E         Skipping 3524 identical trailing characters in diff, use -v to show
-E         - ct at 0x100620e00> |  |
-E         ?           ^^ ^
-E         + ct at 0x10512ce00> |  |
-E         ?           ^^ ^...
+E         Skipping 3514 identical trailing characters in diff, use -v to show
+E         - ct at 0x10412ce10> |  |
+E         ?            ---
+E         + ct at 0x105aa4e10> |  |
+E         ?           +++...
 E         
 E         ...Full output truncated (36 lines hidden), use '-vv' to show
 
 plugins/superheroes/lib/tests/test_dispatch_entry_doc.py:113: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_dispatch_entry_doc.py::test_generator_deterministic_across_processes
-1 failed in 0.78s
+1 failed in 0.31s
 ```
 
 **restore** (`plugins/superheroes/lib/engine_dispatch.py`):
@@ -76,11 +76,13 @@ _PARAM_UNSET = _ParamUnsetType()
 **restore** (`plugins/superheroes/lib/dispatch_entry_doc.py`, `_format_default`):
 ```python
     if action.default is engine_dispatch._PARAM_UNSET:
-        return "none"
+        return "runtime (see Variance envelope)"
 ```
 
 **raw green:**
 ```
 .                                                                        [100%]
-1 passed in 0.94s
+1 passed in 0.30s
 ```
+
+**restore receipt:** `git status --porcelain` after restore showed only the order's intended deliverable edits (no residue on `engine_dispatch.py` or `dispatch_entry_doc.py`).
