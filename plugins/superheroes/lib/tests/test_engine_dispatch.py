@@ -396,6 +396,29 @@ def test_dispatch_review_codex_argv_has_c_repo_no_skip_git(tmp_path):
     assert "--skip-git-repo-check" not in argv
 
 
+def test_argv_for_attempt_injects_codex_json_flags(tmp_path):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    base = ["codex", "exec", "-m", "gpt-5.6-sol", "-"]
+    argv = ED._argv_for_attempt(base, run_dir, 2, "codex")
+    assert "--json" in argv
+    idx = argv.index("--output-last-message")
+    assert argv[idx + 1] == ED._attempt_last_message_path(run_dir, 2)
+    assert argv[-1] == "-"
+
+
+def test_argv_for_attempt_leaves_non_codex_argv_unchanged(tmp_path):
+    run_dir = str(tmp_path / "run")
+    base = ["cursor-agent", "-p", "-"]
+    assert ED._argv_for_attempt(base, run_dir, 1, "cursor") == base
+
+
+def test_codex_json_argv_flags_helper():
+    path = "/tmp/run/attempt-1.last-message"
+    assert EA.codex_json_argv_flags(path) == ["--json", "--output-last-message", path]
+    assert EA.codex_json_argv_flags("") == []
+
+
 def test_dispatch_review_prompt_has_new_preamble(tmp_path):
     # axis: unpinned review dispatch must not append any findings example block (any nonce)
     repo_root = _repo(tmp_path)

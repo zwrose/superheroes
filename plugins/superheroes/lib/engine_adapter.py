@@ -258,9 +258,6 @@ def build_argv_result(engine, role_kind, effort, opts):
             argv += ["-C", cwd]           # write: confine writes to the managed worktree.
                                           # read (#665): pin the seat to the repo so it can trace
                                           # into files instead of inheriting the dispatcher's cwd.
-        last_message_path = opts.get("last_message_path")
-        if isinstance(last_message_path, str) and last_message_path:
-            argv += ["--json", "--output-last-message", last_message_path]
         # trailing `-`: read the prompt from stdin. The dispatch runner redirects the staged
         # prompt file into stdin (`<argv> < promptPath`) — the prompt is ALWAYS fed here.
         argv += ["-"]
@@ -516,6 +513,26 @@ def _iter_codex_event_lines(stdout):
             yield obj
 
 
+def is_codex_event_stream(stdout):
+    """True when stdout is recognizable codex JSONL telemetry. Never raises."""
+    try:
+        if not isinstance(stdout, str) or not stdout:
+            return False
+        for obj in _iter_codex_event_lines(stdout):
+            if _is_codex_event_object(obj):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def codex_json_argv_flags(last_message_path):
+    """Codex review argv flags for JSONL telemetry and last-message extraction."""
+    if isinstance(last_message_path, str) and last_message_path:
+        return ["--json", "--output-last-message", last_message_path]
+    return []
+
+
 def codex_tool_calls(stdout):
     """Count completed codex action items in JSONL stdout; int or None. Never raises."""
     try:
@@ -558,7 +575,7 @@ def codex_event_tokens(stdout):
             if isinstance(usage, dict):
                 last_usage = usage
         if last_usage is None:
-            return None if not parsed_any else None
+            return 0 if parsed_any else None
         total = 0
         for part in _CODEX_TOKEN_PARTS:
             val = last_usage.get(part, 0)
@@ -596,29 +613,6 @@ def codex_review_payload_text(stdout, last_message_path=None):
             if isinstance(text, str) and text:
                 last_text = text
         return last_text
-    except Exception:
-        return None
-
-
-def codex_tokens_used(stderr_tail):
-    """Parse codex stderr tail for the last 'tokens used' block; return int or None. Never raises.
-
-    Pre-``--json`` read-back only: stderr carries this block; ``--json`` removes it. Retained for
-    records stamped before C12's event-stream telemetry."""
-    try:
-        if not isinstance(stderr_tail, str) or not stderr_tail:
-            return None
-        lines = stderr_tail.splitlines()
-        last_idx = None
-        for i, line in enumerate(lines):
-            if line.strip() == "tokens used":
-                last_idx = i
-        if last_idx is None or last_idx + 1 >= len(lines):
-            return None
-        count_line = lines[last_idx + 1].strip()
-        if not count_line:
-            return None
-        return int(count_line.replace(",", "").strip())
     except Exception:
         return None
 

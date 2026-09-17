@@ -834,12 +834,12 @@ def test_write_argv_shape_codex(tmp_path, monkeypatch):
     res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, engine="codex", effort="high", model="sonnet")
     assert res["ok"] is True
     argv = fake.calls[0]["argv"]
-    last_message_path = ED._attempt_last_message_path(run_dir, 1)
     built = EA.build_argv_result(
         "codex", "build", "high",
-        {"model": "sonnet", "cwd": cwd_real, "last_message_path": last_message_path},
+        {"model": "sonnet", "cwd": cwd_real},
     )
-    assert argv == built["argv"]
+    expected = ED._argv_for_attempt(built["argv"], run_dir, 1, "codex")
+    assert argv == expected
     last_msg_idx = argv.index("--output-last-message")
     assert argv == [
         "codex", "exec", "--sandbox", "workspace-write", "-m", argv[5],

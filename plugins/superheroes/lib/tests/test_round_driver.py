@@ -1343,6 +1343,24 @@ def test_run_loop_panel_leg_shape(tmp_path):
     assert ok
 
 
+def test_run_loop_certification_refusal_not_legacy_receipt():
+    """WO-P3-B item 5: without a checked base guard, certify refuses — never a legacy receipt."""
+    result = RD.run_loop(_seams(), _cfg(leg="panel"))
+    assert isinstance(result, dict)
+    assert "class" in result
+    assert result["class"] == "disposition-without-receipt"
+    assert "terminalState" not in result
+    assert result.get("verdict") != "converged"
+
+
+def test_run_loop_certification_success_carries_writer_fields():
+    """WO-P3-B item 5: with a checked base guard, run_loop returns the writer's receipt."""
+    receipt = RD.run_loop(_seams(), _cfg(leg="panel", baseGuard=RD.BASE_GUARD_CHECKED))
+    assert receipt["terminalState"] == "certified"
+    assert receipt["terminalCause"] is None
+    assert "terminalState" in receipt["provenanceLabels"]["derived"]
+    assert "provenanceLabels" in receipt
+
 # =============================================================================
 # audit-keyed stall → self-recovery once → stall menu
 # =============================================================================
