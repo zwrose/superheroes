@@ -78,6 +78,7 @@ RUN_LOCK_NAME = "run.lock"
 WORKTREE_LEASE_PREFIX = "superheroes-worktree-lease-"
 PROMPT_NAME = "prompt.txt"
 PROGRESS_NAME = "progress.jsonl"
+_LAST_MESSAGE_BASENAME = "attempt-%d.last-message"
 RUN_KIND_REVIEW = "review"
 # Consumers import engine_adapter.REVIEW_RESULT_KINDS — never restate the tuple (CONVENTIONS §11).
 REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
@@ -1394,6 +1395,7 @@ def _scan_review_engaged_candidates(run_dir_real, state):
     axis: which outcome is minted — all attempts, not only the graded last attempt.
     """
     opened = state.get("opened") or {}
+    engine = opened.get("engine")
     fed_prompt = opened.get("fedPrompt", "")
     echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
     candidates = []
@@ -1405,6 +1407,8 @@ def _scan_review_engaged_candidates(run_dir_real, state):
         stdout = _read_stdout_for_artifact_scan(stdout_path)
         if stdout is None:
             continue
+        if engine == "codex":
+            stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, att) or stdout
         shape = engine_adapter.review_artifact_shape(stdout, fed_prompt)
         if not shape.get("engaged"):
             continue
@@ -2333,7 +2337,8 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     This path does NOT exercise the real run-child spawn — production uses subprocess.Popen in
     _spawn_attempt and _run_engine_files instead."""
     opened = state["opened"]
-    argv = opened["argv"]
+    argv = _argv_for_attempt(
+        opened["argv"], run_dir_real, attempt, opened.get("engine"))
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, attempt)
     prompt_path = opened["promptPath"]
@@ -2449,6 +2454,36 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
     return True, ""
 
 
+def _attempt_last_message_path(run_dir_real, attempt):
+    return os.path.join(run_dir_real, _LAST_MESSAGE_BASENAME % attempt)
+
+
+def _argv_for_attempt(argv, run_dir_real, attempt, engine):
+    """Per-attempt argv: codex last-message path tracks the attempt number. Never raises."""
+    argv = list(argv)
+    if engine == "codex" and "--output-last-message" in argv:
+        idx = argv.index("--output-last-message")
+        if idx + 1 < len(argv):
+            argv[idx + 1] = _attempt_last_message_path(run_dir_real, attempt)
+    return argv
+
+
+def _review_stdout_for_parse(engine, stdout, run_dir_real, attempt):
+    """Stdout text passed to review parse/normalize. Codex reads payload off the event stream."""
+    if engine != "codex":
+        return stdout
+    payload = engine_adapter.codex_review_payload_text(
+        stdout, _attempt_last_message_path(run_dir_real, attempt))
+    if payload is not None:
+        return payload
+    if isinstance(stdout, str):
+        for obj in engine_adapter._iter_codex_event_lines(stdout):
+            if engine_adapter._is_codex_event_object(obj):
+                return ""
+        return stdout
+    return ""
+
+
 def _engagement_telemetry(tool_calls):
     """Derive engagement.telemetry from runner-observed toolCalls only. Never raises."""
     try:
@@ -2549,6 +2584,7 @@ def _review_attempt_engagement(
     role_kind=None,
     fed_prompt="",
     echo_nonce=None,
+    last_message_path=None,
 ):
     """Shared engine signals and engagement.read grading decision. Never raises.
 
@@ -2560,9 +2596,9 @@ def _review_attempt_engagement(
     """
     if engagement is None:
         if engine == "codex":
-            tokens = engine_adapter.codex_tokens_used(stderr_tail)
-            tool_calls = None
-            source = "codex-stderr" if tokens is not None else "none"
+            tokens = engine_adapter.codex_event_tokens(stdout)
+            tool_calls = engine_adapter.codex_tool_calls(stdout)
+            source = "codex-events" if tool_calls is not None else "none"
         elif engine == "cursor":
             tokens = None
             tool_calls = engine_adapter.cursor_tool_calls(stdout)
@@ -2595,11 +2631,15 @@ def _review_attempt_engagement(
 
     if role_kind is not None:
         try:
-            norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+            parse_stdout = stdout
+            if engine == "codex" and last_message_path is not None:
+                payload = engine_adapter.codex_review_payload_text(stdout, last_message_path)
+                parse_stdout = payload if payload is not None else ""
+            norm_strip = engine_adapter.normalize_review_stdout(parse_stdout, fed_prompt)
             if not norm_strip.get("echoOnly"):
                 envelope_error = norm_strip["rawEnvelopeError"]
                 parse_res = engine_adapter.parse_result(
-                    engine, role_kind, stdout, raw_envelope_error=envelope_error,
+                    engine, role_kind, parse_stdout, raw_envelope_error=envelope_error,
                     echo_nonce=echo_nonce)
                 if not _parse_review_has_payload(parse_res):
                     stripped_text = norm_strip["text"]
@@ -2700,7 +2740,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     engagement = _review_attempt_engagement(
         engine, stdout, stderr_tail, elapsed, stdout_bytes)
 
-    norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+    parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt)
+    norm_strip = engine_adapter.normalize_review_stdout(parse_stdout, fed_prompt)
     prompt_echo_only = norm_strip["echoOnly"]
     diagnose_stdout = norm_strip["text"]
     envelope_error = norm_strip["rawEnvelopeError"]
@@ -2720,7 +2761,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         }
 
     res = engine_adapter.parse_result(
-        engine, role_kind, stdout, raw_envelope_error=envelope_error,
+        engine, role_kind, parse_stdout, raw_envelope_error=envelope_error,
         echo_nonce=echo_nonce)
     if not _parse_review_has_payload(res):
         stripped_text = norm_strip["text"]
@@ -2843,7 +2884,8 @@ def _grade_write_attempt(run_dir_real, state, attempt):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
     fed_prompt = opened.get("fedPrompt", "")
-    res = engine_adapter.grade_write_report(engine, role_kind, stdout, fed_prompt)
+    parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt)
+    res = engine_adapter.grade_write_report(engine, role_kind, parse_stdout, fed_prompt)
     if res.get("ok") is True:
         return {
             "ok": True,
@@ -3368,7 +3410,8 @@ def _run_child_main(run_dir_real):
         })
         return 0
 
-    argv = opened["argv"]
+    argv = _argv_for_attempt(
+        opened["argv"], run_dir_real, pending_att, opened.get("engine"))
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, pending_att)
     prompt_path = opened["promptPath"]
@@ -3723,7 +3766,11 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
             view_path = view["path"]
             cwd = os.path.realpath(view_path)
+            if run_dir_real is None:
+                run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
             opts = {"model": model, "engine_model": engine_model, "cwd": cwd}
+            if engine == "codex":
+                opts["last_message_path"] = _attempt_last_message_path(run_dir_real, 1)
             built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
             if built["reason"] is not None:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -3754,8 +3801,6 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 fed_prompt += _prompt_section_sep + review_findings_schema.example_prompt_block(echo_nonce)
             fed_prompt += _prompt_section_sep + engine_adapter.REVIEW_RESULT_CONTRACT(expected_result_kind)
 
-            if run_dir_real is None:
-                run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
             ok_open, open_detail = _open_review_run(
                 run_dir_real, engine=engine, argv=argv, cwd=cwd,
                 timeout=timeout, retry_timeout=retry_timeout,
@@ -3968,21 +4013,10 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
              "attempts": 0, "forfeited": False, "terminal": True},
         )
 
-    opts = {"model": model, "engine_model": engine_model, "cwd": cwd_real}
-    built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
-    if built["reason"] is not None:
-        return _write_preflight_terminal(
-            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-             "detail": "engine-config:%s" % built["reason"],
-             "attempts": 0, "forfeited": False, "terminal": True},
-        )
-    argv = built["argv"]
-
     if run_dir is None:
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-absent",
              "attempts": 0, "forfeited": False, "terminal": True},
-            argv=argv,
         )
 
     ok_rd, rd_detail = _validate_run_dir(run_dir, create=True)
@@ -3990,9 +4024,22 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": rd_detail,
              "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir=run_dir or "", argv=argv,
+            run_dir=run_dir or "", argv=[],
         )
     run_dir_real = rd_detail
+
+    opts = {"model": model, "engine_model": engine_model, "cwd": cwd_real}
+    if engine == "codex":
+        opts["last_message_path"] = _attempt_last_message_path(run_dir_real, 1)
+    built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
+    if built["reason"] is not None:
+        return _write_preflight_terminal(
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+             "detail": "engine-config:%s" % built["reason"],
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir=run_dir_real, argv=[],
+        )
+    argv = built["argv"]
 
     caller_omitted_expected = expected_items is None and expected_items_file is None
 
@@ -4227,12 +4274,13 @@ def _parse_review_attempt(run_dir_real, state, attempt):
         stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
         if not stdout and not os.path.exists(stdout_path):
             return None
-        norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+        parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt)
+        norm_strip = engine_adapter.normalize_review_stdout(parse_stdout, fed_prompt)
         if norm_strip["echoOnly"]:
             return None
         envelope_error = norm_strip["rawEnvelopeError"]
         res = engine_adapter.parse_result(
-            engine, role_kind, stdout, raw_envelope_error=envelope_error,
+            engine, role_kind, parse_stdout, raw_envelope_error=envelope_error,
             echo_nonce=echo_nonce)
         if not _parse_review_has_payload(res):
             stripped_text = norm_strip["text"]
@@ -4256,7 +4304,8 @@ def _parse_write_attempt(run_dir_real, state, attempt):
         if not stdout and not os.path.exists(stdout_path):
             return None
         fed_prompt = opened.get("fedPrompt", "")
-        return engine_adapter.grade_write_report(engine, role_kind, stdout, fed_prompt)
+        parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt)
+        return engine_adapter.grade_write_report(engine, role_kind, parse_stdout, fed_prompt)
     except Exception:
         return None
 
@@ -4308,6 +4357,7 @@ def _observation_from_attempt(run_dir_real, state, attempt):
         echo_nonce=review_findings_schema.effective_nonce(opened.get("echoNonce")),
         cwd=opened.get("cwd", ""),
         view_meta=opened.get("viewMeta"),
+        last_message_path=_attempt_last_message_path(run_dir_real, attempt),
     )
 
 

@@ -227,8 +227,8 @@ Children: C1 founding texts · C2 front-door references (issue-contract.md, the 
 | B | FR-S1 | 3 | Acceptance (rule, the boundary parks own | a row inside the ruled parse/scrub/forfeit boundary that the derivation proposes to MOVE parks to th… | **C10** |
 | B | FR-S1 | 4 | Acceptance (rule, entry-surface changes  | a dropped, renamed, or newly required argument ships without an alias window. The refusal a stale ca… | **C10** |
 | B | FR-S1 | 5 | Acceptance (record, what was cut and why | the draft carried a one-window deprecation alias with a loud echo, a default-with-echo window for ne… | **C10** |
-| B | FR-S1 | 6 | Acceptance (rule, the transport contract | the record behind this rule: the forfeit ledger holds zero rows (the attribution instrument was neve… | **C11** |
-| B | FR-S1 | 7 | Acceptance (rule, the benefit is priced, | the native move retires the marker parser and the salvage tiers, the code behind the ten transport-c… | **C11** |
+| B | FR-S1 | 6 | Acceptance (rule, the transport contract | the record behind this rule: the forfeit ledger holds zero rows (the attribution instrument was neve… | **C11** — 2026-09-16: C12 landed codex's event stream for runner-side telemetry; C11 inherits it for the typed result channel. |
+| B | FR-S1 | 7 | Acceptance (rule, the benefit is priced, | the native move retires the marker parser and the salvage tiers, the code behind the ten transport-c… | **C11** — 2026-09-16: C12 landed codex's event stream for runner-side telemetry; C11 inherits it for the typed result channel. |
 | B | FR-S1 | 8 | Acceptance (rule, supervision stays; cap | the journal, the run lock, and max-wait stay as hard shell. The stdout cap, the salvage paths, and t… | **C10** |
 | B | FR-S1 | 9 | Acceptance (rule, the tripwire on either | after the dispatch-shell child lands, a second grader or salvage fix (a `fix` commit touching the ma… | **C11** |
 | B | FR-S1 | 10 | Acceptance (record, what the owner decli | two seats per lens as redundancy (prohibitively expensive, and it treats the engines as the problem… | **C11** |
