@@ -103,3 +103,12 @@ def test_live_wf17_round6_replays_synthesis_as_three_blockers_python_twin():
     out = LS.consume(merged, _verdicts(raw_findings))
 
     _assert_replay_output(out)
+
+
+def test_panel_loop_session_certifies_through_writer(tmp_path):
+    """Part 4 entry point — delegates to the real-path integration certify proof."""
+    integ_path = Path(__file__).parent / "test_round_driver_integration.py"
+    spec = importlib.util.spec_from_file_location("round_driver_integration", integ_path)
+    integ = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(integ)
+    integ.test_real_loop_certifies_dispatch_observed_through_writer(tmp_path)

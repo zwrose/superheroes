@@ -55,6 +55,24 @@ def _assert_receipt_parity(session_dir):
 
 def parity_hand_landed_shape(tmp_path):
     """Hand-landed seat forces audited-chain certificationShape on the writer receipt."""
+    payload = {"findings": []}
+    payload_sha = "abc123"
+    evidence = {
+        "source": "runner",
+        "runnerNonce": "nonce-code-reviewer-dispatch-panel-a0-o0",
+        "recordDigest": "d" * 64,
+        "resultDigest": "e" * 64,
+        "resultKind": "findings",
+        "observation": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+            "tokens": None,
+            "toolCalls": None,
+        },
+    }
     return write_session(
         tmp_path,
         name="hand-landed",
@@ -81,14 +99,15 @@ def parity_hand_landed_shape(tmp_path):
             {
                 "cmd": "record-result",
                 "outcome": "recorded",
-                "phase": "dispatch-panel",
+                "phase": RC.PANEL_PHASE,
                 "round": 1,
                 "attempt": 0,
                 "seat": "code-reviewer",
                 "provenance": RC.PROVENANCE_HAND_LANDED,
-                "payloadSha256": "abc123",
+                "payloadSha256": payload_sha,
+                "executionEvidence": evidence,
                 "recordIdentity": {
-                    "phase": "dispatch-panel",
+                    "phase": RC.PANEL_PHASE,
                     "seat": "code-reviewer",
                     "occurrence": 0,
                     "attempt": 0,
@@ -98,8 +117,10 @@ def parity_hand_landed_shape(tmp_path):
         envelopes=[
             {
                 "seat": "code-reviewer",
-                "payloadSha256": "abc123",
+                "payloadSha256": payload_sha,
                 "provenance": RC.PROVENANCE_HAND_LANDED,
+                "executionEvidence": evidence,
+                "payload": payload,
             }
         ],
     )

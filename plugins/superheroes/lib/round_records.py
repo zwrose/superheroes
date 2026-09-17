@@ -80,6 +80,14 @@ EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
 EXECUTION_EVIDENCE_READ_VALUES = frozenset(("engaged", "unknown"))
 _EXECUTION_EVIDENCE_POINTER_KEYS = frozenset(
     ("path", "file", "filePath", "ref", "href", "uri", "url", "evidencePath"))
+_EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK = {
+    "source": lambda value: isinstance(value, str) and value,
+    "runnerNonce": lambda value: isinstance(value, str) and value,
+    "recordDigest": lambda value: isinstance(value, str) and value,
+    "resultDigest": lambda value: isinstance(value, str) and value,
+    "resultKind": lambda value: isinstance(value, str) and value,
+    "observation": lambda value: isinstance(value, dict),
+}
 # A seat-missing envelope records a seat that produced NO artifact. Same envelope minus the
 # payload pair, plus a `reason` from MISSING_REASONS and an optional free-text `evidence`.
 SEAT_MISSING_FIELDS = ("schema", "session", "round", "phase", "seat", "attempt", "vendor",
@@ -474,24 +482,15 @@ def _validate_execution_evidence(evidence):
             "field": sorted(extra_top)[0],
             "location": "executionEvidence",
         })
-    source = evidence.get("source")
-    runner_nonce = evidence.get("runnerNonce")
-    record_digest = evidence.get("recordDigest")
-    result_digest = evidence.get("resultDigest")
-    result_kind = evidence.get("resultKind")
-    observation = evidence.get("observation")
-    if not isinstance(source, str) or not source:
-        return ("execution-evidence-malformed", {})
-    if not isinstance(runner_nonce, str) or not runner_nonce:
-        return ("execution-evidence-malformed", {})
-    if not isinstance(record_digest, str) or not record_digest:
-        return ("execution-evidence-malformed", {})
-    if not isinstance(result_digest, str) or not result_digest:
-        return ("execution-evidence-malformed", {})
-    if not isinstance(result_kind, str) or not result_kind:
-        return ("execution-evidence-malformed", {})
-    if not isinstance(observation, dict):
-        return ("execution-evidence-malformed", {})
+    for field in EXECUTION_EVIDENCE_FIELDS:
+        if field not in evidence:
+            return ("execution-evidence-malformed", {})
+    for field in EXECUTION_EVIDENCE_FIELDS:
+        if field not in _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK:
+            return ("execution-evidence-malformed", {})
+        if not _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK[field](evidence[field]):
+            return ("execution-evidence-malformed", {})
+    observation = evidence["observation"]
     if _execution_evidence_has_pointer(evidence):
         return ("execution-evidence-not-inline", {})
     extra_obs = set(observation.keys()) - EXECUTION_EVIDENCE_OBSERVATION_FIELDS

@@ -636,10 +636,19 @@ def _execution_binding_matches_journal(evidence, journal_binding, recorded_nonce
     return True, None
 
 
+def _execution_evidence_read_value(evidence):
+    if not isinstance(evidence, dict):
+        return None
+    observation = evidence.get("observation")
+    if isinstance(observation, dict):
+        return observation.get("read")
+    return evidence.get("read")
+
+
 def _observation_qualifies(obs, certified_head, cited_head, journal_binding=None, recorded_nonces=None):
     if not isinstance(obs, dict):
         return False, "execution-evidence-absent"
-    read = obs.get("read")
+    read = _execution_evidence_read_value(obs)
     if read not in EXECUTION_EVIDENCE_READ_VALUES:
         return False, "execution-evidence-read-invalid"
     if read != "engaged":
