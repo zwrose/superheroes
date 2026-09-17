@@ -4986,6 +4986,10 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
             json.dumps(state_copy.get("headDiff") or "run-loop", sort_keys=True).encode()
         ).hexdigest()[:40]
         cfg["headSha"] = head
+    source_guard = (state.get("config") or {}).get("baseGuard")
+    cfg.pop("baseGuard", None)
+    if source_guard == BASE_GUARD_CHECKED:
+        cfg["baseGuard"] = BASE_GUARD_CHECKED
     for finding in state_copy.get("findings") or []:
         if not isinstance(finding, dict):
             continue
@@ -5077,21 +5081,6 @@ def _run_loop_certified_receipt(state, invocations):
         shutil.rmtree(session_dir, ignore_errors=True)
     if receipt is not None:
         return receipt
-    if isinstance(refusal, dict):
-        return {
-            "schemaVersion": state.get("schemaVersion") or STATE_SCHEMA_VERSION,
-            "verdict": state.get("terminal"),
-            "certificationShape": (state.get("certification") or {}).get("shape"),
-            "certification": state.get("certification"),
-            "certificationRefusal": refusal,
-            "rounds": [],
-            "findings": [],
-            "decisions": list(state.get("decisions") or []),
-            "seatMap": {},
-            "scriptRan": {"invocations": int(invocations or 0), "byPhase": {}},
-            "degraded": [],
-            "skippedBlockers": [],
-        }
     return build_receipt(state)
 
 

@@ -434,17 +434,15 @@ def certify(session_dir):
     ctx, refusal = _load_context(session_dir)
     if refusal is not None:
         return None, refusal
-    meta = ctx.get("meta") or {}
-    if meta.get("producer") != "run-loop":
-        for check in (
-            check_unfetched_findings,
-            check_unrun_review,
-            check_same_family_seat,
-            check_disposition_without_receipt,
-        ):
-            refusal = check(ctx)
-            if refusal is not None:
-                return None, refusal
+    for check in (
+        check_unfetched_findings,
+        check_unrun_review,
+        check_same_family_seat,
+        check_disposition_without_receipt,
+    ):
+        refusal = check(ctx)
+        if refusal is not None:
+            return None, refusal
     verdict = ctx["state"].get("terminal")
     terminal_state, terminal_cause, refusal = _resolve_terminal(verdict, ctx["state"])
     if refusal is not None:
