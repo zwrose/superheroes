@@ -4472,7 +4472,7 @@ def _run_loop_certified_receipt(state, invocations):
             receipt, refusal = rc.certify(session_dir)
         except Exception as exc:
             refusal = {
-                "class": "unfetched-findings",
+                "class": "writer-fault",
                 "artifact": CERTIFICATION_RECEIPT_FILE,
                 "detail": "certify raised %s: %s" % (type(exc).__name__, exc),
                 "bindingFailure": "writer-exception",
@@ -4482,7 +4482,7 @@ def _run_loop_certified_receipt(state, invocations):
             return receipt
         if refusal is None:
             refusal = {
-                "class": "unfetched-findings",
+                "class": "writer-fault",
                 "artifact": CERTIFICATION_RECEIPT_FILE,
                 "detail": "certify returned neither receipt nor refusal",
                 "bindingFailure": "writer-empty",
