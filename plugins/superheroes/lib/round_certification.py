@@ -7,8 +7,11 @@ import json
 import os
 import re
 
+import model_registry
+
 STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"
+JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
 META_FILE = "meta.json"
 
 BASE_GUARD_CHECKED = "checked-stat-bound"
@@ -39,6 +42,7 @@ SEAT_PROVENANCE = (
 RECEIPT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
 
 EXECUTION_EVIDENCE_READ_VALUES = frozenset(("engaged", "unknown"))
+EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry")
 )
@@ -48,12 +52,6 @@ REFUSAL_CLASSES = frozenset(
 )
 
 PANEL_PHASE = "dispatch-panel"
-
-_VENDOR_FAMILY = {
-    "claude": "anthropic",
-    "codex": "openai",
-    "cursor": "xai",
-}
 
 _DECISION_KEYS = (
     "audit-echo-mismatch",
@@ -195,7 +193,21 @@ def _load_context(session_dir):
             STATE_FILE,
             "loop-state.json root is not an object",
         )
-    journal = _read_journal(session_dir)
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    if not os.path.exists(journal_path):
+        return None, _refusal(
+            "unfetched-findings",
+            JOURNAL_FILE,
+            "driver-journal.jsonl missing",
+        )
+    journal, refusal = _read_jsonl(journal_path, JOURNAL_FILE)
+    if refusal is not None:
+        return None, refusal
+    fault_path = os.path.join(session_dir, JOURNAL_FAULT_FILE)
+    if os.path.exists(fault_path):
+        _, fault_refusal = _read_jsonl(fault_path, JOURNAL_FAULT_FILE)
+        if fault_refusal is not None:
+            return None, fault_refusal
     meta = _read_json(os.path.join(session_dir, META_FILE)) or {}
     return {
         "session_dir": session_dir,
@@ -205,24 +217,36 @@ def _load_context(session_dir):
     }, None
 
 
-def _read_journal(session_dir):
+def _read_jsonl(path, artifact):
     out = []
-    path = os.path.join(session_dir, JOURNAL_FILE)
     try:
         with open(path, encoding="utf-8") as fh:
-            for line in fh:
+            for line_number, line in enumerate(fh, start=1):
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     row = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(row, dict):
-                    out.append(row)
-    except OSError:
-        pass
-    return out
+                except ValueError as exc:
+                    return None, _refusal(
+                        "unfetched-findings",
+                        artifact,
+                        "line %d is not valid JSON: %s" % (line_number, exc),
+                    )
+                if not isinstance(row, dict):
+                    return None, _refusal(
+                        "unfetched-findings",
+                        artifact,
+                        "line %d is not a JSON object" % line_number,
+                    )
+                out.append(row)
+    except OSError as exc:
+        return None, _refusal(
+            "unfetched-findings",
+            artifact,
+            "%s unreadable: %s" % (artifact, exc),
+        )
+    return out, None
 
 
 def _read_json(path):
@@ -249,7 +273,22 @@ def _receipt_version(state):
 def _author_family(state):
     cfg = state.get("config") or {}
     vendor = cfg.get("fixerVendor") or "claude"
-    return _VENDOR_FAMILY.get(vendor, vendor)
+    return model_registry.family_for("code-fixer", vendor)
+
+
+def _seat_family(seat, cfg):
+    if not isinstance(cfg, dict):
+        return None
+    vendor = cfg.get("vendor")
+    if not isinstance(vendor, str) or not vendor:
+        return None
+    tier = cfg.get("tier")
+    if not isinstance(tier, str) or not tier:
+        tier = "reviewer"
+    fam = model_registry.family_for(tier, vendor)
+    if fam is not None:
+        return fam
+    return model_registry.family_for("reviewer", vendor)
 
 
 def _seat_map_receipts(state):
@@ -278,9 +317,16 @@ def _effective_seat_map(state):
 
 def _same_family_seats(state):
     author = _author_family(state)
+    if not author:
+        return []
     seats = []
+    seat_configs = {}
     for entry in _seat_map_receipts(state):
-        degradations = entry["map"].get("degradations")
+        smap = entry["map"]
+        raw_seats = smap.get("seats")
+        if isinstance(raw_seats, dict):
+            seat_configs.update(raw_seats)
+        degradations = smap.get("degradations")
         if not isinstance(degradations, list):
             continue
         for deg in degradations:
@@ -289,13 +335,13 @@ def _same_family_seats(state):
             if deg.get("constraint") != "same-family":
                 continue
             seat = deg.get("seat")
-            if isinstance(seat, str) and seat:
-                seats.append(seat)
-            else:
-                configured = deg.get("configured")
-                if isinstance(configured, str) and configured:
-                    seats.append(configured)
-    seats.sort()
+            if not isinstance(seat, str) or not seat:
+                seat = deg.get("configured")
+            if not isinstance(seat, str) or not seat:
+                continue
+            if _seat_family(seat, seat_configs.get(seat)) != author:
+                continue
+            seats.append(seat)
     return sorted(set(seats))
 
 
@@ -791,8 +837,6 @@ def _resolve_terminal(verdict, state):
         )
     decision_key = _terminal_decision_key(state)
     if terminal_state == "certified":
-        if verdict != "converged":
-            pass
         if decision_key is None and verdict == "converged":
             decision_key = "converged"
         cause_entry = _TERMINAL_CAUSE_TABLE.get((verdict, decision_key))
@@ -852,7 +896,8 @@ def _emit_receipt_seat_map(state):
 def _certification_shape(state, seats):
     cert = state.get("certification") or {}
     shape = cert.get("shape")
-    if any(s.get("provenance") == PROVENANCE_HAND_LANDED for s in seats):
+    hand_landed = any(s.get("provenance") == PROVENANCE_HAND_LANDED for s in seats)
+    if hand_landed:
         if shape == "full-panel-confirmed":
             return "audited-chain"
         if isinstance(shape, str) and shape.startswith("full-panel"):
@@ -861,8 +906,6 @@ def _certification_shape(state, seats):
             return "audited-chain"
     if isinstance(shape, str) and shape:
         return shape
-    if any(s.get("provenance") == PROVENANCE_HAND_LANDED for s in seats):
-        return "audited-chain"
     return cert.get("shape")
 
 
