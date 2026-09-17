@@ -1,0 +1,1032 @@
+#!/usr/bin/env python3
+"""Certification receipt writer — journal on disk as sole input, no driver imports (#1271 C12)."""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+
+STATE_FILE = "loop-state.json"
+JOURNAL_FILE = "driver-journal.jsonl"
+META_FILE = "meta.json"
+
+BASE_GUARD_CHECKED = "checked-stat-bound"
+SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 5
+SUPPORTED_STATE_VERSIONS = (2, 3, 4, 5)
+
+CERTIFIED_VERDICTS = (
+    "converged",
+    "halted",
+    "held",
+    "stalled",
+    "cannot-certify",
+    "capped-with-open-critical",
+    "capped-with-open-blocker",
+)
+ATTESTED_VERDICT = "uncertified-manual"
+ALL_VERDICTS = CERTIFIED_VERDICTS + (ATTESTED_VERDICT,)
+
+PROVENANCE_DISPATCH_OBSERVED = "dispatch-observed"
+PROVENANCE_HAND_LANDED = "hand-landed"
+PROVENANCE_ORCHESTRATOR_FULFILLED = "orchestrator-fulfilled"
+SEAT_PROVENANCE = (
+    PROVENANCE_DISPATCH_OBSERVED,
+    PROVENANCE_HAND_LANDED,
+    PROVENANCE_ORCHESTRATOR_FULFILLED,
+)
+RECEIPT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
+
+EXECUTION_EVIDENCE_READ_VALUES = frozenset(("engaged", "unknown"))
+EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
+    ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry")
+)
+
+REFUSAL_CLASSES = frozenset(
+    ("unrun-review", "same-family-seat", "unfetched-findings", "disposition-without-receipt")
+)
+
+PANEL_PHASE = "dispatch-panel"
+
+_VENDOR_FAMILY = {
+    "claude": "anthropic",
+    "codex": "openai",
+    "cursor": "xai",
+}
+
+_DECISION_KEYS = (
+    "audit-echo-mismatch",
+    "audit-provenance-fail",
+    "author-justified-drop",
+    "canary-failed",
+    "canary-outcome-failed",
+    "canary-plant-undetected",
+    "canary-unverified",
+    "cannot-certify",
+    "capped-with-open-blocker",
+    "capped-with-open-critical",
+    "confirmation-rearm",
+    "converged",
+    "judgment-fail-closed",
+    "judgment-gate",
+    "judgment-skip",
+    "not-discharged",
+    "panel-incomplete-canary-gap",
+    "panel-seat-missing",
+    "receipt-missing-seat",
+    "resume-confirmation",
+    "round-ceiling",
+    "scoped-finder-skipped",
+    "seat-engaged-artifact",
+    "seat-map-constraint-violated",
+    "seat-vacuous",
+    "self-recovery",
+    "stall-choice",
+    "stall-menu",
+    "unknown-surface",
+    "verifier-refuted",
+    "verify-fail",
+    "verify-skip-but-configured",
+    "verify-skipped",
+    "verify-unresolved",
+)
+
+VERDICT_TO_TERMINAL_STATE = {
+    "converged": "certified",
+    "capped-with-open-critical": "cap",
+    "capped-with-open-blocker": "cap",
+    "cannot-certify": "cannot-certify",
+    "halted": "cannot-certify",
+    "held": "cannot-certify",
+    "stalled": "cannot-certify",
+    ATTESTED_VERDICT: "cannot-certify",
+}
+
+_TERMINAL_CAUSE_TABLE = {
+    ("converged", "converged"): None,
+    ("capped-with-open-critical", "capped-with-open-critical"): {
+        "kind": "non-loop",
+        "reason": "open-findings",
+    },
+    ("capped-with-open-blocker", "capped-with-open-blocker"): {
+        "kind": "non-loop",
+        "reason": "open-findings",
+    },
+    ("cannot-certify", "cannot-certify"): {"kind": "loop", "reason": "detector"},
+    ("halted", "verify-fail"): {"kind": "loop", "reason": "detector"},
+    ("halted", "verify-skip-but-configured"): {"kind": "loop", "reason": "detector"},
+    ("halted", "verify-unresolved"): {"kind": "loop", "reason": "detector"},
+    ("halted", "round-ceiling"): {"kind": "non-loop", "reason": "budget"},
+    ("held", "stall-choice"): {"kind": "loop", "reason": "latch"},
+    ("stalled", "stall-choice"): {"kind": "loop", "reason": "latch"},
+    ("stalled", "stall-menu"): {"kind": "loop", "reason": "latch"},
+    (ATTESTED_VERDICT, "cannot-certify"): {"kind": "loop", "reason": "detector"},
+    ("cannot-certify", "resume-confirmation"): {"kind": "loop", "reason": "resume"},
+    ("cannot-certify", "self-recovery"): {"kind": "loop", "reason": "fixer-cycle"},
+}
+
+
+def certify(session_dir):
+    """Return (receipt, refusal) — exactly one non-None."""
+    ctx, refusal = _load_context(session_dir)
+    if refusal is not None:
+        return None, refusal
+    for check in (
+        check_unfetched_findings,
+        check_unrun_review,
+        check_same_family_seat,
+        check_disposition_without_receipt,
+    ):
+        refusal = check(ctx)
+        if refusal is not None:
+            return None, refusal
+    verdict = ctx["state"].get("terminal")
+    terminal_state, terminal_cause, refusal = _resolve_terminal(verdict, ctx["state"])
+    if refusal is not None:
+        return None, refusal
+    receipt = _build_receipt(ctx, terminal_state, terminal_cause)
+    return receipt, None
+
+
+def _refusal(class_name, artifact, detail, binding_failure=None):
+    if class_name not in REFUSAL_CLASSES:
+        raise ValueError("invalid refusal class %r" % (class_name,))
+    return {
+        "class": class_name,
+        "artifact": artifact,
+        "detail": detail,
+        "bindingFailure": binding_failure,
+    }
+
+
+def _load_context(session_dir):
+    if not isinstance(session_dir, str) or not session_dir:
+        return None, _refusal(
+            "unfetched-findings",
+            session_dir or "(missing)",
+            "session directory path missing or empty",
+        )
+    if not os.path.isdir(session_dir):
+        return None, _refusal(
+            "unfetched-findings",
+            session_dir,
+            "session directory absent or not a directory",
+        )
+    state_path = os.path.join(session_dir, STATE_FILE)
+    if not os.path.exists(state_path):
+        return None, _refusal(
+            "unfetched-findings",
+            STATE_FILE,
+            "loop-state.json missing",
+        )
+    try:
+        with open(state_path, encoding="utf-8") as fh:
+            state = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return None, _refusal(
+            "unfetched-findings",
+            STATE_FILE,
+            "loop-state.json unreadable or malformed: %s" % exc,
+        )
+    if not isinstance(state, dict):
+        return None, _refusal(
+            "unfetched-findings",
+            STATE_FILE,
+            "loop-state.json root is not an object",
+        )
+    journal = _read_journal(session_dir)
+    meta = _read_json(os.path.join(session_dir, META_FILE)) or {}
+    return {
+        "session_dir": session_dir,
+        "state": state,
+        "journal": journal,
+        "meta": meta if isinstance(meta, dict) else {},
+    }, None
+
+
+def _read_journal(session_dir):
+    out = []
+    path = os.path.join(session_dir, JOURNAL_FILE)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict):
+                    out.append(row)
+    except OSError:
+        pass
+    return out
+
+
+def _read_json(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _canonical(obj):
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _receipt_version(state):
+    version = state.get("schemaVersion")
+    if isinstance(version, bool) or not isinstance(version, int):
+        return SCHEMA_VERSION
+    if version in SUPPORTED_STATE_VERSIONS:
+        return version
+    return SCHEMA_VERSION
+
+
+def _author_family(state):
+    cfg = state.get("config") or {}
+    vendor = cfg.get("fixerVendor") or "claude"
+    return _VENDOR_FAMILY.get(vendor, vendor)
+
+
+def _seat_map_receipts(state):
+    receipts = []
+    legacy = state.get("seatMap")
+    if isinstance(legacy, dict) and legacy:
+        receipts.append({"round": "legacy", "map": legacy})
+    raw = state.get("seatMapReceipts")
+    if isinstance(raw, list):
+        for entry in raw:
+            if isinstance(entry, dict) and isinstance(entry.get("map"), dict):
+                receipts.append(entry)
+    return receipts
+
+
+def _effective_seat_map(state):
+    for entry in reversed(_seat_map_receipts(state)):
+        seats = entry["map"].get("seats")
+        if isinstance(seats, dict) and seats:
+            return entry["map"]
+    cfg_sm = (state.get("config") or {}).get("seatMap")
+    if isinstance(cfg_sm, dict):
+        return cfg_sm
+    return {}
+
+
+def _same_family_seats(state):
+    author = _author_family(state)
+    seats = []
+    for entry in _seat_map_receipts(state):
+        degradations = entry["map"].get("degradations")
+        if not isinstance(degradations, list):
+            continue
+        for deg in degradations:
+            if not isinstance(deg, dict):
+                continue
+            if deg.get("constraint") != "same-family":
+                continue
+            seat = deg.get("seat")
+            if isinstance(seat, str) and seat:
+                seats.append(seat)
+            else:
+                configured = deg.get("configured")
+                if isinstance(configured, str) and configured:
+                    seats.append(configured)
+    seats.sort()
+    return sorted(set(seats))
+
+
+def _journal_recorded_identities(journal):
+    latest = {}
+    for event in journal:
+        if event.get("outcome") != "recorded":
+            continue
+        ident = event.get("recordIdentity")
+        if not isinstance(ident, dict):
+            seat = event.get("seat")
+            if not isinstance(seat, str) or not seat:
+                continue
+            ident = {
+                "phase": event.get("phase"),
+                "seat": seat,
+                "occurrence": event.get("occurrence", 0),
+                "attempt": event.get("attempt"),
+            }
+        key = (
+            ident.get("phase"),
+            ident.get("seat"),
+            ident.get("occurrence", 0),
+            ident.get("attempt"),
+        )
+        if key[0] is None or key[1] is None or key[3] is None:
+            continue
+        latest[key] = {
+            "event": event,
+            "ident": ident,
+            "payloadSha256": event.get("payloadSha256"),
+            "provenance": event.get("provenance"),
+            "executionEvidence": event.get("executionEvidence"),
+        }
+    return latest
+
+
+def _journal_open_seats(journal):
+    """Seats opened by advance/next for a dispatch phase but never recorded — incomplete journal."""
+    opened = {}
+    closed = set()
+    for event in journal:
+        cmd = event.get("cmd")
+        outcome = event.get("outcome")
+        phase = event.get("phase")
+        rnd = event.get("round")
+        attempt = event.get("attempt")
+        seat = event.get("seat")
+        if cmd in ("next", "advance") and outcome in ("emitted", "pending", "opened"):
+            roster = event.get("roster") or event.get("seats")
+            if isinstance(roster, list):
+                for item in roster:
+                    if isinstance(item, dict):
+                        sk = item.get("seat") or item.get("seatKey")
+                        occ = item.get("occurrence", 0)
+                    else:
+                        sk, occ = item, 0
+                    if isinstance(sk, str) and sk:
+                        opened[(phase, rnd, attempt, sk, occ)] = event
+            elif isinstance(seat, str) and seat:
+                opened[(phase, rnd, attempt, seat, event.get("occurrence", 0))] = event
+        if outcome == "recorded" and isinstance(seat, str):
+            closed.add((phase, rnd, attempt, seat, event.get("occurrence", 0)))
+        ident = event.get("recordIdentity")
+        if outcome == "recorded" and isinstance(ident, dict):
+            closed.add(
+                (
+                    ident.get("phase"),
+                    event.get("round"),
+                    ident.get("attempt"),
+                    ident.get("seat"),
+                    ident.get("occurrence", 0),
+                )
+            )
+    unclosed = []
+    for key, event in opened.items():
+        if key not in closed:
+            unclosed.append((key, event))
+    return unclosed
+
+
+def _certified_head_sha(ctx):
+    meta = ctx.get("meta") or {}
+    head = meta.get("headSha")
+    if isinstance(head, str) and head:
+        return head
+    cfg = (ctx.get("state") or {}).get("config") or {}
+    head = cfg.get("headSha")
+    if isinstance(head, str) and head:
+        return head
+    return None
+
+
+def _envelope_path(session_dir, rnd, phase, seat_key, attempt, occurrence=0):
+    skey = _storage_key(seat_key, occurrence)
+    return os.path.join(
+        session_dir,
+        "round-%d" % rnd,
+        "seats",
+        phase,
+        "%s.a%d.json" % (skey, attempt),
+    )
+
+
+def _storage_key(seat_key, occurrence=0):
+    slug = re.sub(r"[^a-z0-9]+", "-", seat_key.lower()).strip("-")
+    if len(slug) > 40:
+        slug = slug[:40].rstrip("-")
+    if not slug:
+        slug = "seat"
+    digest = hashlib.sha256(seat_key.encode("utf-8")).hexdigest()[:16]
+    base = "%s-%s" % (slug, digest)
+    if occurrence:
+        return "%s-o%d" % (base, occurrence)
+    return base
+
+
+def _load_envelope(session_dir, rnd, phase, seat, attempt, occurrence=0):
+    path = _envelope_path(session_dir, rnd, phase, seat, attempt, occurrence)
+    if not os.path.exists(path):
+        return None, path
+    obj = _read_json(path)
+    if not isinstance(obj, dict):
+        return None, path
+    return obj, path
+
+
+def _journal_observation_for_seat(journal, seat, phase=None):
+    for event in reversed(journal):
+        if event.get("outcome") != "recorded":
+            continue
+        if event.get("seat") != seat and (
+            not isinstance(event.get("recordIdentity"), dict)
+            or event["recordIdentity"].get("seat") != seat
+        ):
+            continue
+        if phase is not None and event.get("phase") != phase:
+            continue
+        obs = event.get("executionEvidence")
+        if isinstance(obs, dict):
+            return obs
+    return None
+
+
+def _observation_qualifies(obs, certified_head, cited_head):
+    if not isinstance(obs, dict):
+        return False, "execution-evidence-absent"
+    read = obs.get("read")
+    if read not in EXECUTION_EVIDENCE_READ_VALUES:
+        return False, "execution-evidence-read-invalid"
+    if read != "engaged":
+        return False, "execution-evidence-not-engaged"
+    if cited_head and certified_head and cited_head != certified_head:
+        return False, "execution-evidence-stale-head"
+    return True, None
+
+
+def _hand_landed_evidence_qualifies(envelope, certified_head):
+    evidence = envelope.get("executionEvidence") if isinstance(envelope, dict) else None
+    if not isinstance(evidence, dict):
+        return False, "execution-evidence-absent"
+    for field in ("source", "runnerNonce", "recordDigest", "resultDigest", "resultKind"):
+        val = evidence.get(field)
+        if not isinstance(val, str) or not val:
+            return False, "execution-evidence-binding-incomplete"
+    cited = envelope.get("headSha") or evidence.get("headSha")
+    if cited and certified_head and cited != certified_head:
+        return False, "execution-evidence-stale-head"
+    return True, None
+
+
+def check_unrun_review(ctx):
+    state = ctx["state"]
+    journal = ctx["journal"]
+    session_dir = ctx["session_dir"]
+    certified_head = _certified_head_sha(ctx)
+    seats = _collect_seats(ctx)
+    for seat_entry in seats:
+        seat = seat_entry["seat"]
+        provenance = seat_entry.get("provenance")
+        if provenance not in RECEIPT_PROVENANCE:
+            if provenance == PROVENANCE_ORCHESTRATOR_FULFILLED:
+                return _refusal(
+                    "unfetched-findings",
+                    seat,
+                    "seat provenance orchestrator-fulfilled is not mappable on the receipt",
+                )
+            return _refusal(
+                "unfetched-findings",
+                seat,
+                "seat provenance %r is not mappable" % (provenance,),
+            )
+        if provenance == PROVENANCE_DISPATCH_OBSERVED:
+            obs = _journal_observation_for_seat(journal, seat, seat_entry.get("phase"))
+            ok, binding = _observation_qualifies(
+                obs, certified_head, seat_entry.get("citedHead")
+            )
+            if not ok:
+                return _refusal(
+                    "unrun-review",
+                    seat,
+                    "dispatch-observed seat lacks qualifying execution telemetry",
+                    binding_failure=binding,
+                )
+        elif provenance == PROVENANCE_HAND_LANDED:
+            env, path = _load_envelope(
+                session_dir,
+                seat_entry["round"],
+                seat_entry["phase"],
+                seat,
+                seat_entry["attempt"],
+                seat_entry.get("occurrence", 0),
+            )
+            if env is None:
+                return _refusal(
+                    "unfetched-findings",
+                    path,
+                    "hand-landed envelope missing or unreadable",
+                )
+            ok, binding = _hand_landed_evidence_qualifies(env, certified_head)
+            if not ok:
+                return _refusal(
+                    "unrun-review",
+                    path,
+                    "hand-landed seat lacks qualifying execution-evidence binding",
+                    binding_failure=binding,
+                )
+    return None
+
+
+def check_same_family_seat(ctx):
+    seats = _same_family_seats(ctx["state"])
+    if seats:
+        return _refusal(
+            "same-family-seat",
+            seats[0],
+            "seat(s) %s filled with the maker model family"
+            % ", ".join(seats),
+        )
+    return None
+
+
+def check_unfetched_findings(ctx):
+    session_dir = ctx["session_dir"]
+    journal = ctx["journal"]
+    unclosed = _journal_open_seats(journal)
+    if unclosed:
+        key, event = unclosed[0]
+        seat = key[3]
+        return _refusal(
+            "unfetched-findings",
+            seat,
+            "seat opened in journal but never closed with a recorded result",
+        )
+    recorded = _journal_recorded_identities(journal)
+    for seat_entry in _collect_seats(ctx):
+        key = (
+            seat_entry["phase"],
+            seat_entry["seat"],
+            seat_entry.get("occurrence", 0),
+            seat_entry["attempt"],
+        )
+        ident = recorded.get(key)
+        env, path = _load_envelope(
+            session_dir,
+            seat_entry["round"],
+            seat_entry["phase"],
+            seat_entry["seat"],
+            seat_entry["attempt"],
+            seat_entry.get("occurrence", 0),
+        )
+        if env is None:
+            return _refusal(
+                "unfetched-findings",
+                path,
+                "seat result never landed on disk",
+            )
+        if ident is None:
+            return _refusal(
+                "unfetched-findings",
+                path,
+                "seat result on disk is not reconciled with the journal",
+            )
+        payload_sha = env.get("payloadSha256")
+        if payload_sha and ident.get("payloadSha256") and payload_sha != ident["payloadSha256"]:
+            return _refusal(
+                "unfetched-findings",
+                path,
+                "journal payload hash disagrees with landed envelope",
+                binding_failure="journal-envelope-mismatch",
+            )
+    return None
+
+
+def check_disposition_without_receipt(ctx):
+    state = ctx["state"]
+    cfg = state.get("config") or {}
+    base_guard = cfg.get("baseGuard")
+    if base_guard != BASE_GUARD_CHECKED:
+        return _refusal(
+            "disposition-without-receipt",
+            STATE_FILE,
+            "base guard did not run (baseGuard=%r)" % (base_guard,),
+            binding_failure="base-guard-not-checked",
+        )
+    certified_head = _certified_head_sha(ctx)
+    disclosures = []
+    for finding in state.get("findings") or []:
+        if not isinstance(finding, dict):
+            continue
+        fid = finding.get("id") or finding.get("title") or "finding"
+        severity = finding.get("severity")
+        disposition = finding.get("disposition")
+        if disposition is None:
+            return _refusal(
+                "disposition-without-receipt",
+                fid,
+                "finding has no disposition recorded",
+            )
+        if disposition == "fixed":
+            receipt = finding.get("dispositionReceipt")
+            if not isinstance(receipt, dict):
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "fixed disposition lacks verification receipt on certified head",
+                )
+            head = receipt.get("headSha")
+            if certified_head and head != certified_head:
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "fixed disposition verification receipt is not on the certified head",
+                    binding_failure="verify-not-on-head",
+                )
+        elif disposition == "refuted":
+            reason = finding.get("dispositionReceipt") or finding.get("refutedReason")
+            if not isinstance(reason, (str, dict)) or (
+                isinstance(reason, str) and not reason.strip()
+            ):
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "refuted disposition lacks recorded reason",
+                )
+        elif disposition == "out-of-scope":
+            if _severity_rank(severity) == _severity_rank("Critical"):
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "Critical finding may not take out-of-scope disposition",
+                )
+            follow_up = finding.get("followUp") or finding.get("dispositionReceipt")
+            if not isinstance(follow_up, dict):
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "out-of-scope disposition lacks named follow-up item",
+                )
+            trigger = follow_up.get("revisitTrigger")
+            if not isinstance(trigger, str) or not trigger.strip():
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "out-of-scope follow-up lacks revisit trigger",
+                    binding_failure="missing-revisit-trigger",
+                )
+            if "documented" in trigger.lower():
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "revisit trigger must not be the word documented",
+                )
+            closure = follow_up.get("classClosure")
+            if not isinstance(closure, str) or not closure.strip():
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "out-of-scope follow-up lacks class-closure line",
+                    binding_failure="missing-class-closure",
+                )
+            if severity == "Important":
+                disclosures.append(
+                    {
+                        "id": finding.get("id"),
+                        "title": finding.get("title"),
+                        "severity": severity,
+                        "reason": finding.get("outOfScopeReason"),
+                    }
+                )
+        else:
+            return _refusal(
+                "disposition-without-receipt",
+                fid,
+                "unknown disposition %r" % (disposition,),
+            )
+    ctx["important_disclosures"] = disclosures
+    return None
+
+
+def _severity_rank(severity):
+    order = {"Critical": 0, "Important": 1, "Minor": 2, "Nit": 3}
+    if isinstance(severity, str):
+        for key, rank in order.items():
+            if severity.lower() == key.lower():
+                return rank
+    return 99
+
+
+def _collect_seats(ctx):
+    state = ctx["state"]
+    journal = ctx["journal"]
+    seats = []
+    seen = set()
+    for event in journal:
+        if event.get("outcome") != "recorded":
+            continue
+        seat = event.get("seat")
+        phase = event.get("phase")
+        rnd = event.get("round")
+        attempt = event.get("attempt")
+        provenance = event.get("provenance")
+        if not isinstance(seat, str) or not seat:
+            ident = event.get("recordIdentity")
+            if isinstance(ident, dict):
+                seat = ident.get("seat")
+                phase = ident.get("phase", phase)
+                attempt = ident.get("attempt", attempt)
+                provenance = provenance or event.get("provenance")
+        if not isinstance(seat, str) or not seat:
+            continue
+        occurrence = event.get("occurrence", 0)
+        key = (phase, rnd, attempt, seat, occurrence)
+        if key in seen:
+            continue
+        seen.add(key)
+        cited_head = event.get("headSha") or event.get("citedHead")
+        seats.append(
+            {
+                "seat": seat,
+                "phase": phase,
+                "round": rnd,
+                "attempt": attempt,
+                "occurrence": occurrence,
+                "provenance": provenance,
+                "citedHead": cited_head,
+            }
+        )
+    if seats:
+        return seats
+    smap = _effective_seat_map(state)
+    seat_names = smap.get("seats") if isinstance(smap, dict) else None
+    if isinstance(seat_names, dict):
+        rnd = state.get("round") or 1
+        for seat in sorted(seat_names):
+            seats.append(
+                {
+                    "seat": seat,
+                    "phase": PANEL_PHASE,
+                    "round": rnd,
+                    "attempt": 0,
+                    "occurrence": 0,
+                    "provenance": PROVENANCE_DISPATCH_OBSERVED,
+                    "citedHead": _certified_head_sha(ctx),
+                }
+            )
+    return seats
+
+
+def _terminal_decision_key(state):
+    decisions = state.get("decisions") or []
+    for entry in reversed(decisions):
+        if isinstance(entry, dict):
+            kind = entry.get("kind")
+            if isinstance(kind, str) and kind in _DECISION_KEYS:
+                return kind
+    return None
+
+
+def _resolve_terminal(verdict, state):
+    if verdict not in ALL_VERDICTS:
+        return None, None, _refusal(
+            "unfetched-findings",
+            STATE_FILE,
+            "terminal verdict %r is not recognized" % (verdict,),
+        )
+    terminal_state = VERDICT_TO_TERMINAL_STATE.get(verdict)
+    if terminal_state is None:
+        return None, None, _refusal(
+            "unfetched-findings",
+            STATE_FILE,
+            "verdict %r has no terminal-state mapping" % (verdict,),
+        )
+    decision_key = _terminal_decision_key(state)
+    if terminal_state == "certified":
+        if verdict != "converged":
+            pass
+        if decision_key is None and verdict == "converged":
+            decision_key = "converged"
+        cause_entry = _TERMINAL_CAUSE_TABLE.get((verdict, decision_key))
+        if cause_entry is not None:
+            return None, None, _refusal(
+                "unfetched-findings",
+                STATE_FILE,
+                "certified terminal has unexpected decision key %r" % (decision_key,),
+            )
+        return terminal_state, None, None
+    if decision_key is None:
+        return None, None, _refusal(
+            "unfetched-findings",
+            STATE_FILE,
+            "non-certified terminal lacks a terminal decision key",
+        )
+    cause_entry = _TERMINAL_CAUSE_TABLE.get((verdict, decision_key))
+    if cause_entry is None:
+        return None, None, _refusal(
+            "unfetched-findings",
+            STATE_FILE,
+            "unlisted terminal cause for verdict=%r decision=%r"
+            % (verdict, decision_key),
+        )
+    return terminal_state, dict(cause_entry), None
+
+
+def _scriptran_summary(journal):
+    counts = {}
+    invocations = 0
+    for event in journal:
+        invocations += 1
+        key = "%s:%s" % (event.get("cmd"), event.get("phase"))
+        counts[key] = counts.get(key, 0) + 1
+    return {"invocations": invocations, "byPhase": counts}
+
+
+def _emit_receipt_seat_map(state):
+    base = dict(_effective_seat_map(state))
+    merged_degs = []
+    seen = set()
+    for entry in _seat_map_receipts(state):
+        degs = entry["map"].get("degradations")
+        if not isinstance(degs, list):
+            continue
+        for row in degs:
+            key = _canonical(row) if isinstance(row, dict) else str(row)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged_degs.append(row)
+    if merged_degs:
+        base["degradations"] = merged_degs
+    return base
+
+
+def _certification_shape(state, seats):
+    cert = state.get("certification") or {}
+    shape = cert.get("shape")
+    if any(s.get("provenance") == PROVENANCE_HAND_LANDED for s in seats):
+        if shape == "full-panel-confirmed":
+            return "audited-chain"
+        if isinstance(shape, str) and shape.startswith("full-panel"):
+            return "audited-chain"
+        if shape is None:
+            return "audited-chain"
+    if isinstance(shape, str) and shape:
+        return shape
+    if any(s.get("provenance") == PROVENANCE_HAND_LANDED for s in seats):
+        return "audited-chain"
+    return cert.get("shape")
+
+
+def _build_receipt(ctx, terminal_state, terminal_cause):
+    state = ctx["state"]
+    journal = ctx["journal"]
+    cfg = state.get("config") or {}
+    seats_info = _collect_seats(ctx)
+    seat_rows = [
+        {
+            "seat": s["seat"],
+            "phase": s["phase"],
+            "round": s["round"],
+            "attempt": s["attempt"],
+            "provenance": s.get("provenance"),
+        }
+        for s in seats_info
+    ]
+    findings = []
+    for f in state.get("findings") or []:
+        if not isinstance(f, dict):
+            continue
+        findings.append(
+            {
+                "id": f.get("id"),
+                "file": f.get("file"),
+                "line": f.get("line"),
+                "title": f.get("title"),
+                "severity": f.get("severity"),
+                "verdict": f.get("verdict"),
+                "challenge": f.get("challenge"),
+                "unverified": f.get("unverified"),
+                "disposition": f.get("disposition"),
+                "dispositionReceipt": f.get("dispositionReceipt"),
+            }
+        )
+    rounds = []
+    for key in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
+        rec = state["rounds"][key]
+        if not isinstance(rec, dict):
+            continue
+        rounds.append(
+            {
+                "round": int(key) if str(key).isdigit() else key,
+                "kind": rec.get("roundKind"),
+                "seatStatus": rec.get("seatStatus"),
+                "blockingCount": rec.get("blockingCount"),
+                "verifyResult": rec.get("verifyResult"),
+                "audits": rec.get("audits"),
+                "auditProvenance": rec.get("auditProvenance"),
+                "scopedFinder": rec.get("scopedFinder"),
+                "headDiffSource": rec.get("headDiffSource"),
+                "unverified": rec.get("unverified"),
+                "authorJustifiedDrops": rec.get("authorJustifiedDrops"),
+                "compileDrops": rec.get("compileDrops"),
+                "selfRecovery": rec.get("selfRecovery"),
+                "stallChoice": rec.get("stallChoice"),
+            }
+        )
+    skipped_blockers = []
+    degraded = []
+    for s in state.get("_skippedBlockers") or []:
+        if isinstance(s, dict):
+            skipped_blockers.append(
+                {
+                    "id": s.get("id"),
+                    "title": s.get("title"),
+                    "severity": s.get("severity"),
+                    "reason": s.get("reason"),
+                }
+            )
+    base = {
+        k: cfg.get(k)
+        for k in (
+            "baseRef",
+            "baseBranch",
+            "baseFetch",
+            "baseRepo",
+            "baseRepoCheck",
+            "repoRoot",
+            "diffBinding",
+        )
+        if cfg.get(k) is not None
+    }
+    cert = state.get("certification")
+    receipt = {
+        "schemaVersion": _receipt_version(state),
+        "verdict": state.get("terminal"),
+        "certificationShape": _certification_shape(state, seats_info),
+        "certification": cert,
+        "rounds": rounds,
+        "findings": findings,
+        "decisions": list(state.get("decisions") or []),
+        "seatMap": _emit_receipt_seat_map(state),
+        "scriptRan": _scriptran_summary(journal),
+        "degraded": degraded,
+        "skippedBlockers": skipped_blockers,
+        "baseGuard": cfg.get("baseGuard")
+        if cfg.get("baseGuard") == BASE_GUARD_CHECKED
+        else "not-checked",
+        "terminalState": terminal_state,
+        "terminalCause": terminal_cause,
+        "seats": seat_rows,
+        "disclosures": {"importantOutOfScope": list(ctx.get("important_disclosures") or [])},
+        "provenanceLabels": {
+            "derived": [
+                "schemaVersion",
+                "scriptRan",
+                "terminalState",
+                "terminalCause",
+                "seats",
+                "disclosures",
+                "certificationShape",
+            ],
+            "makerAuthored": [
+                "verdict",
+                "certification",
+                "findings",
+                "decisions",
+                "seatMap",
+                "rounds",
+                "degraded",
+                "skippedBlockers",
+                "baseGuard",
+                "base",
+                "policyApplied",
+            ],
+        },
+    }
+    if base:
+        receipt["base"] = base
+    policy_applied = state.get("_policyApplied")
+    if isinstance(policy_applied, list) and policy_applied:
+        receipt["policyApplied"] = list(policy_applied)
+    return receipt
+
+
+def map_verdict_to_terminal_state(verdict):
+    """Totality table 1 — refuse unknown verdicts."""
+    if verdict not in ALL_VERDICTS:
+        return None
+    return VERDICT_TO_TERMINAL_STATE.get(verdict)
+
+
+def map_terminal_cause(verdict, decision_key):
+    """Totality table 2 — refuse unlisted combinations."""
+    if verdict not in ALL_VERDICTS:
+        return None
+    if decision_key not in _DECISION_KEYS:
+        return None
+    terminal_state = VERDICT_TO_TERMINAL_STATE.get(verdict)
+    if terminal_state == "certified":
+        if (verdict, decision_key) in _TERMINAL_CAUSE_TABLE:
+            return None
+        if verdict == "converged" and decision_key == "converged":
+            return None
+        return None
+    return _TERMINAL_CAUSE_TABLE.get((verdict, decision_key))
+
+
+def map_seat_provenance(provenance):
+    """Totality table 3 — refuse unmapped provenance."""
+    if provenance in RECEIPT_PROVENANCE:
+        return provenance
+    if provenance in SEAT_PROVENANCE:
+        return None
+    return None
