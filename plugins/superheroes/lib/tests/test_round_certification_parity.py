@@ -20,7 +20,9 @@ CERTIFICATION_EXTRA_KEYS = frozenset(
 
 # The writer's receipt is a superset of the driver's except certificationShape when any
 # seat is hand-landed — the writer labels audited-chain, never full-panel-confirmed (#1271).
-PARITY_FIELD_EXCEPTIONS = frozenset({"certificationShape"})
+# Findings carry disposition proof on the writer receipt (register R5/R6) that the driver
+# projection omits — compare via _assert_findings_parity instead of strict equality.
+PARITY_FIELD_EXCEPTIONS = frozenset({"certificationShape", "findings"})
 
 
 def _load_state(session_dir):
@@ -28,8 +30,20 @@ def _load_state(session_dir):
         return json.load(fh)
 
 
+def _assert_findings_parity(session_dir, driver_findings, cert_findings):
+    state = _load_state(session_dir)
+    state_rows = [f for f in (state.get("findings") or []) if isinstance(f, dict)]
+    assert len(driver_findings) == len(cert_findings) == len(state_rows)
+    for drv, cert, src in zip(driver_findings, cert_findings, state_rows):
+        for key, val in drv.items():
+            assert cert.get(key) == val
+        projected = RC._project_finding(src)
+        assert cert.get("disposition") == projected.get("disposition")
+        assert cert.get("dispositionReceipt") == projected.get("dispositionReceipt")
+
+
 def _assert_receipt_parity(session_dir):
-    assert len(PARITY_FIELD_EXCEPTIONS) == 1
+    assert len(PARITY_FIELD_EXCEPTIONS) == 2
     state = _load_state(session_dir)
     driver_receipt = RD.build_receipt(state, session_dir)
     cert_receipt, refusal = RC.certify(session_dir)
@@ -40,6 +54,9 @@ def _assert_receipt_parity(session_dir):
         if key in PARITY_FIELD_EXCEPTIONS:
             continue
         assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
+    _assert_findings_parity(
+        session_dir, driver_receipt["findings"], cert_receipt["findings"]
+    )
     hand_landed = any(
         s.get("provenance") == RC.PROVENANCE_HAND_LANDED for s in cert_receipt.get("seats") or []
     )
@@ -165,6 +182,9 @@ def test_materialized_state_round_trip_matches_driver_receipt(tmp_path, label, b
             if key in PARITY_FIELD_EXCEPTIONS:
                 continue
             assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
+        _assert_findings_parity(
+            materialized, driver_receipt["findings"], cert_receipt["findings"]
+        )
         hand_landed = any(
             s.get("provenance") == RC.PROVENANCE_HAND_LANDED
             for s in cert_receipt.get("seats") or []

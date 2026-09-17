@@ -404,12 +404,12 @@ def test_check_same_family_seat_refuses(tmp_path):
     assert refusal["artifact"] == "code-reviewer"
 
 
-def test_author_family_matches_registry_for_each_vendor(tmp_path):
+def test_maker_author_family_matches_registry_for_each_vendor(tmp_path):
     session_dir = write_session(tmp_path)
     for vendor in model_registry.VENDORS:
         ctx, _ = RC._load_context(session_dir)
         ctx["state"]["config"]["fixerVendor"] = vendor
-        assert RC._author_family(ctx["state"]) == model_registry.family_for(
+        assert RC.maker_author_family(ctx["state"]) == model_registry.family_for(
             "code-fixer", vendor
         )
 
@@ -473,6 +473,31 @@ def test_same_family_declared_degradation_refuses_malformed_vendor(tmp_path, ven
     refusal = RC.check_same_family_seat(ctx)
     assert refusal["class"] == "same-family-seat"
     assert refusal["artifact"] == "code-reviewer"
+
+
+def test_same_family_unresolvable_without_degradations_refuses(tmp_path):
+    unknown_vendor = "not-a-registered-vendor"
+    session_dir = write_session(
+        tmp_path,
+        state={
+            "config": {"fixerVendor": unknown_vendor},
+            "seatMapReceipts": [
+                {
+                    "round": "1",
+                    "map": {
+                        "seats": {
+                            "code-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"},
+                        },
+                    },
+                }
+            ],
+        },
+        envelopes=[],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_same_family_seat(ctx)
+    assert refusal["class"] == "unfetched-findings"
+    assert unknown_vendor in refusal["detail"]
 
 
 def test_same_family_unresolvable_maker_family_refuses(tmp_path):
@@ -706,6 +731,184 @@ def test_terminal_cause_known_converged_is_none():
 def test_terminal_cause_unknown_combination_refuses():
     assert RC.map_terminal_cause("converged", "verify-fail") is None
     assert RC.map_terminal_cause("halted", "converged") is None
+
+
+def test_resolve_terminal_certified_rejects_unlisted_decision_key(tmp_path):
+    session_dir = write_certifiable_session(
+        tmp_path,
+        state={
+            "terminal": "converged",
+            "decisions": [{"round": 1, "kind": "verify-fail", "detail": "verify failed"}],
+        },
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unfetched-findings"
+    assert "verify-fail" in refusal["detail"]
+
+
+def test_certified_receipt_projects_disposition_and_proof(tmp_path):
+    session_dir = write_certifiable_session(
+        tmp_path,
+        state={
+            "findings": [
+                {
+                    "id": "F1",
+                    "file": "a.py",
+                    "line": 1,
+                    "title": "issue",
+                    "severity": "Minor",
+                    "disposition": "refuted",
+                    "dispositionReceipt": {"headSha": HEAD, "verifyResult": "pass"},
+                }
+            ]
+        },
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert refusal is None
+    finding = receipt["findings"][0]
+    assert finding["disposition"] == "refuted"
+    assert finding["dispositionReceipt"] == {
+        "headSha": HEAD,
+        "verifyResult": "pass",
+    }
+
+
+def test_journal_evidence_scoped_by_round_refuses_cross_round_substitution(tmp_path):
+    round1_sha = "round1-sha"
+    round2_sha = "round2-sha"
+    session_dir = write_session(
+        tmp_path,
+        state={
+            "round": 2,
+            "terminal": "converged",
+            "decisions": [{"round": 2, "kind": "converged", "detail": "certified"}],
+            "findings": [
+                {
+                    "id": "F1",
+                    "file": "a.py",
+                    "severity": "Minor",
+                    "disposition": "refuted",
+                    "dispositionReceipt": {"headSha": HEAD, "verifyResult": "pass"},
+                }
+            ],
+        },
+        journal_lines=[
+            {
+                "cmd": "record-result",
+                "outcome": "recorded",
+                "phase": RC.PANEL_PHASE,
+                "round": 2,
+                "attempt": 0,
+                "seat": "code-reviewer",
+                "occurrence": 0,
+                "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+                "payloadSha256": round2_sha,
+                "executionEvidence": _dispatch_journal_with_binding(
+                    payload_sha=round2_sha, nonce="round2-nonce"
+                )["executionEvidence"],
+                "recordIdentity": {
+                    "phase": RC.PANEL_PHASE,
+                    "seat": "code-reviewer",
+                    "occurrence": 0,
+                    "attempt": 0,
+                },
+            },
+            _dispatch_journal_with_binding(payload_sha=round1_sha, nonce="round1-nonce"),
+        ],
+        envelopes=[
+            {"round": 2, "seat": "code-reviewer", "payloadSha256": round1_sha},
+        ],
+    )
+    _write_head_content_blobs(session_dir, {"headSha": HEAD, "files": {}, "fixCommits": []})
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unfetched-findings"
+    assert "journal payload hash disagrees" in refusal["detail"]
+
+
+def test_important_out_of_scope_disclosure_is_case_insensitive(tmp_path):
+    session_dir = write_certifiable_session(
+        tmp_path,
+        state={
+            "findings": [
+                {
+                    "id": "I1",
+                    "severity": "important",
+                    "disposition": "out-of-scope",
+                    "outOfScopeReason": "follow-on work",
+                    "followUp": {
+                        "revisitTrigger": "next release",
+                        "classClosure": "deferred to platform team",
+                    },
+                }
+            ]
+        },
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert refusal is None
+    assert receipt["disclosures"]["importantOutOfScope"] == [
+        {
+            "id": "I1",
+            "title": None,
+            "severity": "important",
+            "reason": "follow-on work",
+        }
+    ]
+
+
+def test_fixed_disposition_missing_fix_commit_row_uses_missing_token(tmp_path):
+    session_dir = write_certifiable_session(
+        tmp_path,
+        state={
+            "findings": [
+                {
+                    "id": "F-missing",
+                    "file": "src/absent.py",
+                    "severity": "Important",
+                    "disposition": "fixed",
+                    "dispositionReceipt": {"headSha": HEAD, "verifyResult": "pass"},
+                }
+            ]
+        },
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+    )
+    _write_head_content_blobs(
+        session_dir,
+        {"headSha": HEAD, "files": {}, "fixCommits": []},
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["bindingFailure"] == "fix-content-missing"
+
+
+def test_bite_same_family_unresolvable_refuses(tmp_path):
+    unknown_vendor = "not-a-registered-vendor"
+    session_dir = write_certifiable_session(
+        tmp_path,
+        state={
+            "config": {"fixerVendor": unknown_vendor},
+            "seatMapReceipts": [
+                {
+                    "round": "1",
+                    "map": {
+                        "seats": {
+                            "code-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"},
+                        },
+                    },
+                }
+            ],
+        },
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_same_family_seat(ctx)
+    assert refusal is not None
+    assert refusal["class"] == "unfetched-findings"
 
 
 def test_seat_provenance_totality_maps_receipt_values():

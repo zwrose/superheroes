@@ -52,3 +52,10 @@ def test_execution_evidence_binding_fields_match_records():
 
 def test_head_content_blobs_file_name():
     assert RC.HEAD_CONTENT_BLOBS_FILE == "head-content-blobs.json"
+
+
+def test_execution_evidence_observation_fields_match_records():
+    assert (
+        RC.EXECUTION_EVIDENCE_OBSERVATION_FIELDS
+        == RR.EXECUTION_EVIDENCE_OBSERVATION_FIELDS
+    )
