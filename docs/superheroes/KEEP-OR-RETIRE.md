@@ -1242,7 +1242,11 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   envelopes existed on disk.
 - **Condition.** Usage-based: the retirement condition that **reopens** it is *"a consumer needs a
   certified receipt from a library run"*, at which point the path is **rebuilt on real persisted
-  per-seat envelopes as its own child, never patched back.*
+  per-seat envelopes as its own child, never patched back.* That rebuild child also routes both
+  hand-built `writer-fault` envelopes in `round_driver._run_loop_certified_receipt`
+  (`plugins/superheroes/lib/round_driver.py:4817–4822`, `4827–4832`) through
+  `round_certification.writer_fault()` — review finding v19, carried open and inert rather than
+  patched on a surface the third-rework tripwire has closed.
 - **Last demonstrated benefit.** none — the path certified over synthesized evidence; that is why it
   retired. The receipt for the retirement is this PR.
 - **Consumer evidence.** unmeasured.

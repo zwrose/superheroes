@@ -792,31 +792,31 @@ def test_resolve_terminal_certified_rejects_unlisted_decision_key(tmp_path):
 
 
 def test_certified_receipt_projects_disposition_and_proof(tmp_path):
+    """Refuted disposition proof is the recorded reason, not a fix-content dict."""
+    fix_content_receipt = {"headSha": HEAD, "verifyResult": "pass"}
+    expected_reason = "Intentional behavior confirmed during review."
+    refuted_finding = {
+        "id": "F1",
+        "file": "a.py",
+        "line": 1,
+        "title": "issue",
+        "severity": "Minor",
+        "disposition": "refuted",
+        "refutedReason": expected_reason,
+        "dispositionReceipt": fix_content_receipt,
+    }
     session_dir = write_certifiable_session(
         tmp_path,
-        state={
-            "findings": [
-                {
-                    "id": "F1",
-                    "file": "a.py",
-                    "line": 1,
-                    "title": "issue",
-                    "severity": "Minor",
-                    "disposition": "refuted",
-                    "dispositionReceipt": {"headSha": HEAD, "verifyResult": "pass"},
-                }
-            ]
-        },
+        state={"findings": [refuted_finding]},
         envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert refusal is None
     finding = receipt["findings"][0]
     assert finding["disposition"] == "refuted"
-    assert finding["dispositionReceipt"] == {
-        "headSha": HEAD,
-        "verifyResult": "pass",
-    }
+    assert finding["dispositionReceipt"] == expected_reason
+    assert finding["dispositionReceipt"] != fix_content_receipt
+    assert not isinstance(finding["dispositionReceipt"], dict)
 
 
 def test_journal_evidence_scoped_by_round_refuses_cross_round_substitution(tmp_path):
