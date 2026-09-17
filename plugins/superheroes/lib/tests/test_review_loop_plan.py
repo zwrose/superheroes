@@ -1116,13 +1116,14 @@ def test_latest_coverage_ids_well_formed_unchanged(well_formed):
 _ROUND_RESUME_CENSUS_MODULES = (
     "review_loop_plan.py",
     "round_driver.py",
+    "receipt_disclosures.py",
 )
 
 # Closed allowlist: (enclosing function name, normalized int() call source). Each entry must
 # match a live guarded conversion; stale entries fail the census (fail-open on shrink).
 _ROUND_INT_ALLOWLIST = (
     ("build_receipt", "int(k)"),
-    ("build_receipt", "int(k)"),
+    ("build_degraded_prose", "int(k)"),
     ("build_receipt", "int(key)"),
     ("_round_num", "int(r)"),
 )

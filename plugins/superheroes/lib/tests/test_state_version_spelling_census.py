@@ -1,11 +1,13 @@
-"""Census: state/receipt schema version must be spelled only from round_driver's pinned block (#1185)."""
+"""Census: state/receipt schema version must be spelled only from its pinned home (#1185)."""
 import ast
+import inspect
 import os
 import re
 import sys
 from collections import namedtuple
 
 import pytest
+import receipt_disclosures
 import round_driver as RD
 
 _TESTS = os.path.dirname(os.path.abspath(__file__))
@@ -204,6 +206,14 @@ def _module_references_pinned_symbols(tree):
         if _is_pinned_name(node):
             return True
     return False
+
+
+def _pinned_symbol_home_relpaths():
+    """Derive lib-relative paths of modules that authoritatively define pinned symbols."""
+    path = inspect.getsourcefile(receipt_disclosures)
+    if path is None:
+        raise RuntimeError("cannot resolve pinned-symbol home module")
+    return frozenset({_relpath(path)})
 
 
 def _pinned_block_line_range(source):
@@ -450,7 +460,10 @@ def _scan_bindings(tree, source, relpath):
                     )
 
 
-def _scan_constant_assignments(tree, source, relpath, pinned_begin, pinned_end):
+def _scan_constant_assignments(tree, source, relpath, pinned_begin, pinned_end,
+                               pinned_homes=()):
+    if relpath in pinned_homes:
+        return
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             if _line_in_pinned_block(node.lineno, pinned_begin, pinned_end):
@@ -520,6 +533,7 @@ def census_module(path, source, *, pinned_range=None):
     if refs_pinned:
         findings.extend(_scan_constant_assignments(
             tree, source, relpath, pinned_begin, pinned_end,
+            _pinned_symbol_home_relpaths(),
         ))
 
     findings.extend(_scan_string_literals(tree, source, relpath))
@@ -706,13 +720,17 @@ def test_state_version_spelling_prose_census():
 
 
 def test_synthetic_injection_mod_format():
-    path = os.path.join(_LIB, "round_driver.py")
+    path = inspect.getsourcefile(receipt_disclosures)
+    assert path is not None, "cannot resolve source file for receipt_disclosures"
     with open(path, encoding="utf-8") as fh:
         source = fh.read()
     injected = source.replace(
         "return RECEIPT_CERTIFIED_SCHEMA % _receipt_version(state)",
         "return RECEIPT_CERTIFIED_SCHEMA % 99",
         1,
+    )
+    assert injected != source, (
+        "injection must change source; fixture anchor may be stale"
     )
     findings = census_module(path, injected)
     hits = [f for f in findings if f.leg == "mod-format" and " % 99" in f.segment]
