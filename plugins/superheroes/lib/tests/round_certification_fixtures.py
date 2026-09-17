@@ -3,6 +3,7 @@ import json
 import os
 
 import round_certification as RC
+import round_records as RR
 
 META_FILE = "meta.json"
 STATE_FILE = "loop-state.json"
@@ -442,3 +443,512 @@ PARITY_FIXTURES = (
     ("capped-terminal", parity_capped_terminal),
     ("halted-terminal", parity_halted_terminal),
 )
+
+# --- WO-L2-K six-case and FR-D2 specimen fixtures --------------------------------
+
+AUDIT_PHASE = "dispatch-audits"
+PANEL_PHASE = RC.PANEL_PHASE
+HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
+SIXTEEN_AUDIT_SEATS = tuple("audit-target-%02d" % i for i in range(16))
+ANCHOR_SHA = "feb91032a2cb2106f089a25063b8178527ae4359f5412ccf549e9d2f98f28ce9"
+
+_HAND_LANDED_EXECUTION_EVIDENCE = {
+    "source": "runner",
+    "runnerNonce": "nonce-six-cases",
+    "recordDigest": "d" * 64,
+    "resultDigest": "e" * 64,
+    "resultKind": "findings",
+    "observation": {
+        "read": "engaged",
+        "source": "runner",
+        "telemetry": "tool-calls",
+        "stdoutBytes": 10,
+        "wallSeconds": 1.0,
+    },
+}
+
+
+def _dispatch_observed_journal_row(seat, payload_sha, *, attempt=0, head_sha=None):
+    row = {
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "phase": PANEL_PHASE,
+        "round": 1,
+        "attempt": attempt,
+        "seat": seat,
+        "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+        "payloadSha256": payload_sha,
+        "executionEvidence": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+        },
+        "recordIdentity": {
+            "phase": PANEL_PHASE,
+            "seat": seat,
+            "occurrence": 0,
+            "attempt": attempt,
+        },
+    }
+    if head_sha is not None:
+        row["headSha"] = head_sha
+    return row
+
+
+def _hand_landed_journal_row(seat, payload_sha, *, phase=PANEL_PHASE, attempt=0):
+    return {
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "phase": phase,
+        "round": 1,
+        "attempt": attempt,
+        "seat": seat,
+        "provenance": RC.PROVENANCE_HAND_LANDED,
+        "payloadSha256": payload_sha,
+        "recordIdentity": {
+            "phase": phase,
+            "seat": seat,
+            "occurrence": 0,
+            "attempt": attempt,
+        },
+    }
+
+
+def _hand_landed_envelope(seat, payload, *, phase=PANEL_PHASE, attempt=0, evidence=None):
+    evidence_obj = evidence if evidence is not None else _HAND_LANDED_EXECUTION_EVIDENCE
+    envelope = {
+        "schema": "seat-result/2",
+        "session": "test-session-001",
+        "round": 1,
+        "phase": phase,
+        "seat": seat,
+        "attempt": attempt,
+        "vendor": "codex",
+        "model": "gpt-5.6-sol",
+        "payload": payload,
+        "payloadSha256": RR.payload_sha256(payload),
+        "provenance": RC.PROVENANCE_HAND_LANDED,
+        "manifestSha256": ANCHOR_SHA,
+        "orderSha256": ANCHOR_SHA,
+        "executionEvidence": evidence_obj,
+        "envelopeSha256": RR.envelope_sha256(payload, evidence_obj),
+    }
+    return envelope
+
+
+def _write_head_content_blobs(session_dir, blobs):
+    path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(blobs, fh, sort_keys=True)
+
+
+def case01_recovered_seat(tmp_path):
+    """Required seat failed once then recovered by a later qualifying result."""
+    return write_session(
+        tmp_path,
+        name="case-01-recovered-seat",
+        journal_lines=[
+            {
+                "cmd": "record-result",
+                "outcome": "failed",
+                "phase": PANEL_PHASE,
+                "round": 1,
+                "attempt": 0,
+                "seat": "code-reviewer",
+                "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+                "payloadSha256": "failed-attempt-sha",
+                "recordIdentity": {
+                    "phase": PANEL_PHASE,
+                    "seat": "code-reviewer",
+                    "occurrence": 0,
+                    "attempt": 0,
+                },
+            },
+            _dispatch_observed_journal_row("code-reviewer", "recovered-sha", attempt=1),
+        ],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "recovered-sha", "attempt": 1}],
+    )
+
+
+def case02_unrecovered_seat(tmp_path):
+    """Required seat failed and was never recovered — no landed envelope."""
+    return write_session(
+        tmp_path,
+        name="case-02-unrecovered-seat",
+        journal_lines=[
+            {
+                "cmd": "record-result",
+                "outcome": "failed",
+                "phase": PANEL_PHASE,
+                "round": 1,
+                "attempt": 0,
+                "seat": "code-reviewer",
+                "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+                "recordIdentity": {
+                    "phase": PANEL_PHASE,
+                    "seat": "code-reviewer",
+                    "occurrence": 0,
+                    "attempt": 0,
+                },
+            }
+        ],
+        envelopes=[],
+    )
+
+
+def case03_reverted_fix(tmp_path):
+    """Fixed disposition whose on-head content was reverted by a later commit on the same head."""
+    session_dir = write_session(
+        tmp_path,
+        name="case-03-reverted-fix",
+        state={
+            "findings": [
+                {
+                    "id": "F-fix",
+                    "file": "src/guard.py",
+                    "line": 12,
+                    "title": "missing bounds guard",
+                    "severity": "Important",
+                    "disposition": "fixed",
+                    "dispositionReceipt": {
+                        "headSha": HEAD_SHA,
+                        "verifyResult": "pass",
+                    },
+                }
+            ]
+        },
+        journal_lines=[_dispatch_observed_journal_row("code-reviewer", "verify-sha")],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "verify-sha"}],
+    )
+    _write_head_content_blobs(
+        session_dir,
+        {
+            "headSha": HEAD_SHA,
+            "files": {
+                "src/guard.py": "# fix landed then reverted on the same head\npass\n",
+            },
+            "fixCommits": [
+                {"headSha": HEAD_SHA, "path": "src/guard.py", "present": True},
+                {"headSha": HEAD_SHA, "path": "src/guard.py", "present": False},
+            ],
+        },
+    )
+    return session_dir
+
+
+def case04_stale_cited_head(tmp_path):
+    """Seat result whose cited head is older than the certified head."""
+    stale = "b" * 40
+    return write_session(
+        tmp_path,
+        name="case-04-stale-head",
+        meta={"headSha": HEAD_SHA},
+        journal_lines=[
+            _dispatch_observed_journal_row("code-reviewer", "stale-sha", head_sha=stale)
+        ],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "stale-sha"}],
+    )
+
+
+def case05_critical_out_of_scope(tmp_path):
+    """Critical finding carried out of scope despite an otherwise-valid follow-up."""
+    return write_session(
+        tmp_path,
+        name="case-05-critical-oos",
+        state={
+            "findings": [
+                {
+                    "id": "C-oos",
+                    "severity": "Critical",
+                    "disposition": "out-of-scope",
+                    "followUp": {
+                        "revisitTrigger": "milestone M2",
+                        "classClosure": "none",
+                    },
+                }
+            ]
+        },
+        journal_lines=[_dispatch_observed_journal_row("code-reviewer", "panel-sha")],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
+    )
+
+
+def case05_critical_skipped(tmp_path):
+    """Critical finding skipped — must refuse disposition-without-receipt."""
+    return write_session(
+        tmp_path,
+        name="case-05-critical-skipped",
+        state={
+            "findings": [
+                {
+                    "id": "C-skip",
+                    "severity": "Critical",
+                    "disposition": "skipped",
+                }
+            ]
+        },
+        journal_lines=[_dispatch_observed_journal_row("code-reviewer", "panel-sha")],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
+    )
+
+
+def case06_mixed_panel(tmp_path):
+    """Panel mixing hand-landed and dispatch-observed seats."""
+    dispatch_sha = "dispatch-sha"
+    hand_payload = {"findings": []}
+    hand_sha = RR.payload_sha256(hand_payload)
+    return write_session(
+        tmp_path,
+        name="case-06-mixed-panel",
+        state={
+            "certification": {
+                "shape": "full-panel-confirmed",
+                "fullPanel": True,
+                "independence": "independent",
+                "base": "fetched",
+                "pluginVersionSkew": "not-checked",
+                "shapeDrivers": [],
+            }
+        },
+        journal_lines=[
+            _dispatch_observed_journal_row("code-reviewer", dispatch_sha),
+            _hand_landed_journal_row("security-reviewer", hand_sha),
+        ],
+        envelopes=[
+            {
+                "seat": "code-reviewer",
+                "payloadSha256": dispatch_sha,
+                "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+            },
+            {
+                "seat": "security-reviewer",
+                "payloadSha256": hand_sha,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "envelope": _hand_landed_envelope(
+                    "security-reviewer",
+                    hand_payload,
+                ),
+            },
+        ],
+    )
+
+
+def specimen_must_certify_sixteen_seat_audit(tmp_path):
+    """FR-D2 must-certify: sixteen-seat out-of-manifest hand-landed audit panel."""
+    journal_lines = []
+    envelope_specs = []
+    for seat in SIXTEEN_AUDIT_SEATS:
+        payload = {"findings": [{"id": seat, "severity": "Minor", "title": "audit ok"}]}
+        payload_sha = RR.payload_sha256(payload)
+        journal_lines.append(
+            _hand_landed_journal_row(seat, payload_sha, phase=AUDIT_PHASE)
+        )
+        envelope_specs.append(
+            {
+                "seat": seat,
+                "phase": AUDIT_PHASE,
+                "payloadSha256": payload_sha,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "envelope": _hand_landed_envelope(seat, payload, phase=AUDIT_PHASE),
+            }
+        )
+    return write_session(
+        tmp_path,
+        name="specimen-must-certify-audit",
+        state={
+            "certification": {
+                "shape": "full-panel-confirmed",
+                "fullPanel": True,
+                "independence": "independent",
+                "base": "fetched",
+                "pluginVersionSkew": "not-checked",
+                "shapeDrivers": [],
+            }
+        },
+        journal_lines=journal_lines,
+        envelopes=envelope_specs,
+    )
+
+
+def specimen_refuse_bare_fabricated_findings(tmp_path):
+    """FR-D2 (a): bare fabricated findings on disk with no envelope."""
+    session_dir = write_session(
+        tmp_path,
+        name="specimen-refuse-bare-findings",
+        journal_lines=[
+            _hand_landed_journal_row("code-reviewer", "fabricated-sha")
+        ],
+        envelopes=[],
+    )
+    findings_path = os.path.join(session_dir, "findings-code.json")
+    with open(findings_path, "w", encoding="utf-8") as fh:
+        json.dump(
+            {
+                "findings": [
+                    {
+                        "id": "fabricated-001",
+                        "severity": "Important",
+                        "title": "never executed",
+                    }
+                ]
+            },
+            fh,
+            sort_keys=True,
+        )
+    return session_dir
+
+
+def specimen_refuse_fabricated_envelope_audited_chain(tmp_path):
+    """FR-D2 (b): well-formed hand-landed envelope over fabricated findings."""
+    payload = {
+        "findings": [
+            {
+                "id": "fabricated-002",
+                "severity": "Important",
+                "title": "authored but never executed",
+            }
+        ]
+    }
+    payload_sha = RR.payload_sha256(payload)
+    envelope = _hand_landed_envelope("code-reviewer", payload)
+    return write_session(
+        tmp_path,
+        name="specimen-refuse-fabricated-envelope",
+        state={
+            "certification": {
+                "shape": "full-panel-confirmed",
+                "fullPanel": True,
+            }
+        },
+        journal_lines=[_hand_landed_journal_row("code-reviewer", payload_sha)],
+        envelopes=[
+            {
+                "seat": "code-reviewer",
+                "payloadSha256": payload_sha,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "envelope": envelope,
+            }
+        ],
+    )
+
+
+def specimen_refuse_caller_supplied_execution_evidence(tmp_path):
+    """FR-D2 (c): caller-supplied file placed in the execution-evidence slot."""
+    payload = {"findings": []}
+    payload_sha = RR.payload_sha256(payload)
+    evidence = dict(_HAND_LANDED_EXECUTION_EVIDENCE)
+    evidence["source"] = "/tmp/caller-minted-evidence.json"
+    envelope = _hand_landed_envelope("code-reviewer", payload, evidence=evidence)
+    return write_session(
+        tmp_path,
+        name="specimen-refuse-caller-evidence",
+        journal_lines=[_hand_landed_journal_row("code-reviewer", payload_sha)],
+        envelopes=[
+            {
+                "seat": "code-reviewer",
+                "payloadSha256": payload_sha,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "envelope": envelope,
+            }
+        ],
+    )
+
+
+def base_guard_not_checked_session(tmp_path):
+    return write_session(
+        tmp_path,
+        name="base-guard-not-checked",
+        state={
+            "config": {
+                "fixerVendor": "claude",
+                "baseGuard": "not-checked",
+                "headSha": HEAD_SHA,
+            }
+        },
+        journal_lines=[_dispatch_observed_journal_row("code-reviewer", "panel-sha")],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
+    )
+
+
+def followup_missing_class_closure(tmp_path):
+    return write_session(
+        tmp_path,
+        name="followup-missing-class-closure",
+        state={
+            "findings": [
+                {
+                    "id": "I-missing-closure",
+                    "severity": "Important",
+                    "disposition": "out-of-scope",
+                    "followUp": {"revisitTrigger": "2026-12-01"},
+                }
+            ]
+        },
+        journal_lines=[_dispatch_observed_journal_row("code-reviewer", "panel-sha")],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
+    )
+
+
+def followup_class_closure_none(tmp_path):
+    return write_session(
+        tmp_path,
+        name="followup-class-closure-none",
+        state={
+            "findings": [
+                {
+                    "id": "I-none-closure",
+                    "severity": "Important",
+                    "disposition": "out-of-scope",
+                    "followUp": {
+                        "revisitTrigger": "2026-12-01",
+                        "classClosure": "none",
+                    },
+                }
+            ]
+        },
+        journal_lines=[_dispatch_observed_journal_row("code-reviewer", "panel-sha")],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
+    )
+
+
+def followup_no_revisit_trigger(tmp_path):
+    return write_session(
+        tmp_path,
+        name="followup-no-revisit-trigger",
+        state={
+            "findings": [
+                {
+                    "id": "I-no-trigger",
+                    "severity": "Important",
+                    "disposition": "out-of-scope",
+                    "followUp": {"classClosure": "tracked in issue-42"},
+                }
+            ]
+        },
+        journal_lines=[_dispatch_observed_journal_row("code-reviewer", "panel-sha")],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
+    )
+
+
+def followup_documented_trigger(tmp_path):
+    return write_session(
+        tmp_path,
+        name="followup-documented-trigger",
+        state={
+            "findings": [
+                {
+                    "id": "I-documented",
+                    "severity": "Important",
+                    "disposition": "out-of-scope",
+                    "followUp": {
+                        "revisitTrigger": "documented",
+                        "classClosure": "none",
+                    },
+                }
+            ]
+        },
+        journal_lines=[_dispatch_observed_journal_row("code-reviewer", "panel-sha")],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
+    )
