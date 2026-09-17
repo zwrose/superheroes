@@ -39,8 +39,10 @@ Every dispatch result carries `runOpened`. When `runOpened` is true the result a
 `resolvedInputs` snapshot; `resolvedInputsStatus` is `pre-upgrade` when the journal predates the
 seat bundle (the snapshot is synthesized from the legacy run-opened record), or `journal-corrupt`
 when the journal could not be read cleanly (the snapshot is the real opened record — what was
-corrupt is elsewhere in the journal). Each snapshot value is paired with a source marker that says
-whether the run took the value from the caller, a default, a clamp, or the registry. Refusals raised
+corrupt is elsewhere in the journal). Each snapshot field has a paired `<field>Source` marker. The
+shell writes `caller`, `default`, `clamped`, `resolved`, `declared-none`, `seat`, `legacy-journal`
+(on `pre-upgrade` journals), `run-dir-pointer`, `environment-variable`, or `temp-directory` — there
+is no `registry` marker. Refusals raised
 before the run opened carry `runOpened: false` and no snapshot. When the shell could not establish
 whether a run had opened — an unreadable journal, corruption without an opened record, or an internal
 error while reading the run directory — the result carries `runOpened: false` and

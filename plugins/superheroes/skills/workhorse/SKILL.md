@@ -575,14 +575,14 @@ allowlist, and you **park before any work runs** — never treat a model-within-
 preference," and this governs **a dispatch you are going to make**: declining to dispatch and doing the
 work yourself instead is a different act, not what this park rule forbids. On exit 0 the gate
 returns a structured triple — thread `model_id` into the seat's `model` key and `effort` into
-`effort`; the composed `dispatch_token` is also accepted in `model` and resolves identically, but
-the registry id is what you write. Putting the composed token where the registry id belongs, or an
-`effort` that contradicts a composed token, is the trap that seats a cursor role on Claude and loses
-the model family. A null `effort` field **resolves** when the allowlist makes the
-model unambiguous (and picks the lowest ladder rung when it does not), reporting the choice in
-`effort_source` — never a silent guess. **Record the resolved `model_id` and `effort`** (or the
-`dispatch_token`, which encodes both where the vendor supports it) in the dispatch-provenance
-table — not a bare model string that drops the effort. **Running the gate is your discipline, not
+`effort`; prefer the registry id in `model` and the effort in `effort`. A composed
+`dispatch_token` in `model` is also accepted and resolves to the same pair. An `effort` that
+**contradicts** a composed token is refused rather than silently resolved either way. A null
+`effort` field **resolves** when the allowlist makes the model unambiguous (and picks the lowest
+ladder rung when it does not), reporting the choice in `effort_source` — never a silent guess.
+**Record the resolved `model_id` and `effort`** in the dispatch-provenance table — recording the
+bare composed token instead of the resolved pair drops the effort, which is why both fields matter;
+not a bare model string that drops the effort either. **Running the gate is your discipline, not
 an automatic trigger** — a skipped gate leaves the dispatch's provenance row without a validated
 model, which is how the advisor spots it. The registry, not a session's judgment, decides what may
 run (WE#511 — a codex-family model dispatched through `cursor-agent` — is exactly the escape this

@@ -825,8 +825,8 @@ carries `{vendor, model, effort, tier, family, source}`:
 - **Read the seat's assignment** from `$SEAT_MAP.seats[<reviewer-name>]`. Dispatch a `claude`
   seat as the named subagent with `model: <seat>.model`; dispatch a `codex`/`cursor` seat through
   `engine_adapter.py` (read-only sandbox), building a four-key `--seat` JSON from the entry —
-  `vendor`, `model`, and `effort` carry over, and `role` is the reviewer name the seat is assigned
-  to (`tier`, `family`, and `source` are driver bookkeeping and never travel in the seat) — never
+  `vendor`, `model`, and `effort` carry over, and `role` is the entry's `tier` — leaving `family`
+  and `source` as the driver bookkeeping that never travels in the seat — never
   the hard-coded composer default. The seat's **registry id** rides in `model`; its **effort** in
   `effort`. `build-argv` also accepts the **composed dispatch token** in `model`, and resolves it
   identically, but an `effort` that **contradicts** a composed token is refused rather than

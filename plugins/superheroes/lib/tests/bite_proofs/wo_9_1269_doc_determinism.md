@@ -85,12 +85,8 @@ _PARAM_UNSET = _ParamUnsetType()
 1 passed in 0.30s
 ```
 
-**restore receipt:**
+**restore receipt** (`git status --porcelain` in the detached probe worktree after the inverse
+edit, re-run by the orchestrator on the final head):
 ```
- M docs/superheroes/KEEP-OR-RETIRE.md
- M plugins/superheroes/TRANSITION.md
- M plugins/superheroes/lib/tests/bite_proofs/wo_9_1269_doc_determinism.md
- M plugins/superheroes/skills/review-code/reference/auto-fix-loop.md
- M plugins/superheroes/skills/workhorse/SKILL.md
+(empty — no residue)
 ```
-
