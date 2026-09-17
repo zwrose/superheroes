@@ -200,7 +200,7 @@ _ARTIFACT_TRACEBACK_FIRST_LINE_RE = re.compile(
 
 # Named refusal tokens from build_argv_result (issue #636). The dispatch runner surfaces them as
 # detail=engine-config:<token>; the build-argv CLI prints detail=<token> directly.
-_BUILD_ARGV_REFUSAL_TOKENS = frozenset({
+BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     "unknown-engine",
     "unknown-claude-tier",
     "fable-unrunnable",
@@ -212,7 +212,7 @@ _BUILD_ARGV_REFUSAL_TOKENS = frozenset({
 
 
 def _refuse(reason, *, detail=None):
-    assert reason in _BUILD_ARGV_REFUSAL_TOKENS
+    assert reason in BUILD_ARGV_REFUSAL_TOKENS
     out = {"argv": [], "reason": reason}
     if detail is not None:
         out["detail"] = detail

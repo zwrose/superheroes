@@ -24,8 +24,8 @@ import seat_map  # noqa: E402
 
 _EXTERNAL_ENGINES = ("codex", "cursor")
 _ROLE_KINDS = ("review", "build", "fix")
-# Roster home: engine_adapter._BUILD_ARGV_REFUSAL_TOKENS (issue #636).
-_NAMED_REFUSALS = engine_adapter._BUILD_ARGV_REFUSAL_TOKENS
+# Roster home: engine_adapter.BUILD_ARGV_REFUSAL_TOKENS (issue #636).
+_NAMED_REFUSALS = engine_adapter.BUILD_ARGV_REFUSAL_TOKENS
 _DETAIL_CAP = 5
 
 
