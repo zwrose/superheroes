@@ -81,7 +81,12 @@ def main(argv: list[str] | None = None) -> int:
     dropped = seat_bundle.scan_dropped_flags(argv)
     if dropped:
         refusal = seat_bundle.legacy_refusal(dropped_flags=tuple(dropped))
-        print(json.dumps(refusal))
+        payload = {
+            "ok": refusal["ok"],
+            "reason": refusal["entryReason"],
+            "detail": refusal["detail"],
+        }
+        print(json.dumps(payload))
         print(refusal["detail"], file=sys.stderr)
         return 1
     args = build_parser().parse_args(argv)

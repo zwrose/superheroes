@@ -189,7 +189,7 @@ def test_dropped_flags_refuse_and_name_seat_guard_check(flag, spelling, capsys):
         argv = ["check", "--seat", seat, flag + "=codex"]
     assert DG.main(argv) == 1
     result = json.loads(capsys.readouterr().out.strip())
-    assert result["entryReason"] == "legacy-seat-args"
+    assert result["reason"] == "legacy-seat-args"
     assert flag in result["detail"]
     assert "--seat" in result["detail"]
     if flag == "--role":

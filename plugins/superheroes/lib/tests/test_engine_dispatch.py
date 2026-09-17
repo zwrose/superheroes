@@ -9105,9 +9105,7 @@ def _assert_dispatch_result_entry_refusal(result, producer, expected_entry_reaso
 
 def _assert_cli_payload_entry_refusal(payload, producer, expected):
     assert payload.get("ok") is False, (producer, payload)
-    token = payload.get("reason")
-    if token is None:
-        token = payload.get("entryReason")
+    token = payload["reason"]
     assert isinstance(token, str), (producer, payload)
     assert token == expected, (producer, expected, token, payload)
 

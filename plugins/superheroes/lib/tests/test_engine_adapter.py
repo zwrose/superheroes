@@ -689,7 +689,7 @@ def test_build_argv_cli_off_allowlist_refused(capsys):
         "review",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert rc == 0
+    assert rc == 1
     assert out["ok"] is False
     assert out["reason"] == "engine-config"
     assert out["detail"] == "allowlist-refused"
@@ -705,7 +705,7 @@ def test_build_argv_cli_reviewer_run_kind_build_refused(capsys):
         "build",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert rc == 0
+    assert rc == 1
     assert out["ok"] is False
     assert out["argv"] == []
     assert "accepted run kind for this role: 'review'" in out["seat_detail"]
@@ -721,7 +721,7 @@ def test_build_argv_cli_implementer_run_kind_review_refused(capsys):
         "review",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert rc == 0
+    assert rc == 1
     assert out["ok"] is False
     assert out["argv"] == []
     assert "accepted run kind for this role: 'build'" in out["seat_detail"]
@@ -736,7 +736,7 @@ def test_build_argv_cli_unclassified_role_refused(capsys):
         "review",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert rc == 0
+    assert rc == 1
     assert out["ok"] is False
     assert out["argv"] == []
     assert "no read_write classification" in out["seat_detail"]
@@ -766,7 +766,7 @@ def test_build_argv_cli_bare_composed_token_refused(capsys):
         "review",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert rc == 0
+    assert rc == 1
     assert out["ok"] is False
     assert out["detail"] == "seat-token-dropped"
     assert "role" in out["seat_detail"]
@@ -776,7 +776,7 @@ def test_build_argv_cli_missing_role_key_refused(capsys):
     seat = json.dumps({"vendor": "codex", "model": "gpt-5.6-sol", "effort": "high"})
     rc = EA.main(["build-argv", "--seat", seat, "--run-kind", "review"])
     out = json.loads(capsys.readouterr().out)
-    assert rc == 0
+    assert rc == 1
     assert out["ok"] is False
     assert out["detail"] == "role-key-absent"
 
@@ -1550,20 +1550,20 @@ def test_build_argv_prompt_path_whitespace_only_fails_closed(tmp_path, capsys):
     p = tmp_path / "empty.prompt"
     p.write_text("   \n\t  ", encoding="utf-8")
     rc, out = _build_argv_with_prompt(tmp_path, capsys, p)
-    assert rc == 0
+    assert rc == 1
     assert out == {"ok": False, "reason": "empty-prompt", "detail": "empty", "path": str(p)}
 
 
 def test_build_argv_prompt_path_missing_fails_closed(tmp_path, capsys):
     p = tmp_path / "no_such.prompt"
     rc, out = _build_argv_with_prompt(tmp_path, capsys, p)
-    assert rc == 0
+    assert rc == 1
     assert out == {"ok": False, "reason": "empty-prompt", "detail": "missing", "path": str(p)}
 
 
 def test_build_argv_prompt_path_directory_fails_closed(tmp_path, capsys):
     rc, out = _build_argv_with_prompt(tmp_path, capsys, tmp_path)
-    assert rc == 0
+    assert rc == 1
     assert out == {"ok": False, "reason": "empty-prompt", "detail": "not-regular-file",
                   "path": str(tmp_path)}
 

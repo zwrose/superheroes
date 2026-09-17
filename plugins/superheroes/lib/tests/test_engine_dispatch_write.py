@@ -1518,7 +1518,8 @@ def test_edge4_dropped_role_flag_carries_terminal_envelope_write(capsys):
     ]
     assert ED.main(argv) == 1
     res = json.loads(capsys.readouterr().out.strip())
-    assert res["reason"] == "legacy-seat-args"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "legacy-seat-args"
     assert res["terminal"] is True
     assert res.get("runOpened") is False
     assert res["attempts"] == 0
