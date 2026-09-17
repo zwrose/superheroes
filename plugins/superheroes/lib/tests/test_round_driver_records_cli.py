@@ -62,6 +62,7 @@ def _execution_evidence(**over):
         "source": "runner",
         "runnerNonce": "nonce-1",
         "recordDigest": "digest-1",
+        "resultDigest": "result-digest-1",
         "observation": {
             "tokens": None,
             "toolCalls": None,

@@ -149,6 +149,7 @@ def _execution_evidence(**over):
     "source": "test-runner",
     "runnerNonce": "test-nonce",
     "recordDigest": "test-digest",
+    "resultDigest": "result-digest-1",
     "observation": {"tokens": None, "toolCalls": None, "stdoutBytes": 0,
                     "wallSeconds": 0.0, "source": "none", "read": "engaged",
                     "telemetry": "none"},
@@ -512,8 +513,7 @@ def _landing_path(session_dir, seat, pend=None, occurrence=0):
 
 def _dispatch_observed_land(session_dir, seat, payload=None, pend=None, **over):
   pend = pend or _pending(session_dir)
-  payload = ({"findings": [], "confidence": "high", "seat": seat,
-              "verificationReceipt": {"ran": True}} if payload is None else payload)
+  payload = ({"findings": []} if payload is None else payload)
   manifest_sha, order_sha = _anchor_hashes(session_dir, pend["round"], pend["phase"],
                                            pend["attempt"], seat)
   schema = RR.seat_result_schema_for_state_version(_state(session_dir).get("schemaVersion"))
@@ -580,12 +580,14 @@ def _execution_run_dir(tmp_path, order_path, echo_nonce="nonce-1", name="run",
     echo_nonce=echo_nonce, base_prompt=base_prompt,
   )
   assert ok, detail
+  stdout = json.dumps({"findings": []})
   ED._journal_append(run_dir, {
     "kind": "attempt-ended", "attempt": 1,
-    "ended": {"wallSeconds": 0.1, "stdoutBytes": 0, "exitCode": 0},
+    "exit": 0, "timedOut": False, "refusal": None,
+    "wallSeconds": 0.1, "stdoutBytes": len(stdout),
     "at": time.time(),
   })
-  open(os.path.join(run_dir, "attempt-1.stdout"), "wb").write(b"")
+  open(os.path.join(run_dir, "attempt-1.stdout"), "wb").write(stdout.encode("utf-8"))
   open(os.path.join(run_dir, "attempt-1.stderr"), "wb").write(b"")
   return run_dir
 

@@ -4202,6 +4202,56 @@ def _poll_projection(state):
     return dict(base, terminal=False, state="running" if alive else "idle")
 
 
+def _attempt_ended_successfully(ended):
+    """True when the journal's attempt-ended record is a clean completion. Never raises."""
+    if not isinstance(ended, dict):
+        return False
+    if ended.get("refusal"):
+        return False
+    if ended.get("timedOut"):
+        return False
+    if ended.get("exit") not in (0, None):
+        return False
+    return True
+
+
+def _parsed_result_payload_from_grade(grade, opened):
+    """The payload object whose digest binds a stamped envelope to its run. Never raises."""
+    if not isinstance(grade, dict) or not isinstance(opened, dict):
+        return None
+    run_kind = opened.get("runKind")
+    if run_kind == RUN_KIND_WRITE:
+        if not grade.get("ok"):
+            return None
+        signal = grade.get("signal")
+        if not isinstance(signal, str) or not signal:
+            return None
+        evidence = grade.get("evidence")
+        if not isinstance(evidence, dict):
+            evidence = {}
+        return {"ok": True, "signal": signal, "evidence": evidence}
+    if grade.get("forfeit") or not grade.get("ok"):
+        return None
+    kind = grade.get("resultKind")
+    if kind not in REVIEW_RESULT_KINDS:
+        return None
+    has_payload, payload = _review_result_payload(grade, kind)
+    if has_payload:
+        return {kind: payload}
+    if kind in grade:
+        return {kind: grade[kind]}
+    return {kind: []}
+
+
+def _result_digest_from_grade(grade, opened):
+    """SHA-256 over the parsed result the grading path produced. Never raises."""
+    payload = _parsed_result_payload_from_grade(grade, opened)
+    if payload is None:
+        return None
+    import round_records
+    return round_records.payload_sha256(payload)
+
+
 def _observation_from_attempt(run_dir_real, state, attempt):
     """Engagement summary for one completed attempt. Never raises."""
     opened = state.get("opened") or {}
@@ -4248,12 +4298,23 @@ def run_execution_record(run_dir):
         if not completed:
             return None, "no-completed-attempt"
         attempt = completed[-1]
+        ended = (attempts.get(attempt) or {}).get("ended")
+        if not _attempt_ended_successfully(ended):
+            return None, "attempt-not-completed"
         engine = opened.get("engine")
         if not isinstance(engine, str) or not engine:
             return None, "engine-missing"
         echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
         if not echo_nonce:
             return None, "runner-nonce-missing"
+        run_kind = opened.get("runKind")
+        if run_kind == RUN_KIND_WRITE:
+            grade = _grade_write_attempt(run_dir_real, state, attempt)
+        else:
+            grade = _grade_review_attempt(run_dir_real, state, attempt)
+        result_digest = _result_digest_from_grade(grade, opened)
+        if not isinstance(result_digest, str) or not result_digest:
+            return None, "attempt-not-completed"
         journal_path = _journal_path(run_dir_real)
         try:
             with open(journal_path, "rb") as fh:
@@ -4275,6 +4336,7 @@ def run_execution_record(run_dir):
             "source": engine,
             "runnerNonce": echo_nonce,
             "recordDigest": record_digest,
+            "resultDigest": result_digest,
             "observation": observation,
             "promptSha256": prompt_sha256,
             "orderPromptSha256": opened.get("basePromptSha256"),

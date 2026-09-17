@@ -6982,9 +6982,17 @@ def _journal_revision_fields(envelope):
     is the defect this helper exists to make impossible. Takes an ENVELOPE — a reconcile entry is
     not an envelope and must not be passed here."""
     if not isinstance(envelope, dict):
-        return {"payloadSha256": None, "casToken": None}
+        return {"payloadSha256": None, "casToken": None, "executionEvidence": None}
+    evidence = envelope.get("executionEvidence")
+    observation = None
+    if isinstance(evidence, dict):
+        obs = evidence.get("observation")
+        if isinstance(obs, dict):
+            observation = {key: obs.get(key)
+                           for key in round_records.EXECUTION_EVIDENCE_OBSERVATION_FIELDS}
     return {"payloadSha256": envelope.get("payloadSha256"),
-            "casToken": round_records.envelope_cas_token(envelope)}
+            "casToken": round_records.envelope_cas_token(envelope),
+            "executionEvidence": observation}
 
 
 def _journal_record_identities(session_dir, rnd, phase):
@@ -7259,6 +7267,12 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
     if not isinstance(prompt_sha, str) or not prompt_sha or prompt_sha != order_sha:
         return None, "evidence-order-mismatch", {"orderPromptSha256": prompt_sha,
                                                  "orderSha256": order_sha}
+    result_digest = record.get("resultDigest")
+    payload_digest = round_records.payload_sha256(envelope.get("payload"))
+    if (not isinstance(result_digest, str) or not result_digest
+            or result_digest != payload_digest):
+        return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                   "payloadSha256": payload_digest}
     evidence = {key: record[key] for key in round_records.EXECUTION_EVIDENCE_FIELDS}
     out = dict(envelope)
     out["executionEvidence"] = evidence
