@@ -29,7 +29,7 @@ def test_session_contract_exports_match_driver_records_and_writer():
         "HEAD_CONTENT_BLOBS_FILE",
         "FIX_FOLD_HEAD_KEY",
     }
-    records_names = {"META_FILE", "SEAT_MISSING_SCHEMA"}
+    records_names = {"META_FILE", "SEAT_MISSING_SCHEMA", "canonical", "payload_sha256"}
     writer_names = set(session_contract.__all__)
     for name in session_contract.__all__:
         home = getattr(session_contract, name)

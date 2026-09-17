@@ -135,21 +135,12 @@ _KEY_RE = record_paths._KEY_RE
 
 
 # =============================================================================================
-# canonical json + hashing (same shape as round_driver._canonical/_sha256 — see module docstring)
+# canonical json + hashing (one home in session_contract — see module docstring)
 # =============================================================================================
 
-def canonical(obj):
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-
-
-def sha256_text(text):
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def payload_sha256(payload):
-    """The hash the torn-write detector compares against: sha256 over the payload's canonical
-    JSON, so a re-serialization with different key order or spacing still matches."""
-    return sha256_text(canonical(payload))
+canonical = session_contract.canonical
+sha256_text = session_contract.sha256_text
+payload_sha256 = session_contract.payload_sha256
 
 
 def envelope_sha256(payload, execution_evidence):

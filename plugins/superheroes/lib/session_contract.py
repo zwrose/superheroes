@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Session-contract path and phase constants — leaf module with no round_* imports."""
+import hashlib
+import json
+
 __all__ = (
     "STATE_FILE",
     "JOURNAL_FILE",
@@ -9,6 +12,8 @@ __all__ = (
     "HEAD_CONTENT_BLOBS_FILE",
     "SEAT_MISSING_SCHEMA",
     "FIX_FOLD_HEAD_KEY",
+    "canonical",
+    "payload_sha256",
     "finding_identity_key",
 )
 
@@ -20,6 +25,20 @@ PANEL_PHASE = "dispatch-panel"
 HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
 SEAT_MISSING_SCHEMA = "seat-missing/1"
 FIX_FOLD_HEAD_KEY = "fixFoldHeadSha"
+
+
+def canonical(obj):
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def sha256_text(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def payload_sha256(payload):
+    """The hash the torn-write detector compares against: sha256 over the payload's canonical
+    JSON, so a re-serialization with different key order or spacing still matches."""
+    return sha256_text(canonical(payload))
 
 
 def finding_identity_key(finding):

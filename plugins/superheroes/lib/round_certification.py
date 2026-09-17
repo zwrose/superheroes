@@ -13,7 +13,6 @@ import subprocess
 import model_registry
 import record_paths
 import receipt_disclosures
-import round_records
 import seat_map_receipts
 import session_contract
 import session_mode
@@ -832,7 +831,7 @@ def _hand_landed_evidence_qualifies(
         return False, "execution-evidence-binding-incomplete"
     if not isinstance(payload, dict) or result_kind not in payload:
         return False, "execution-evidence-result-mismatch"
-    computed = round_records.payload_sha256(payload[result_kind])
+    computed = session_contract.payload_sha256(payload[result_kind])
     if result_digest != computed:
         return False, "execution-evidence-result-mismatch"
     cited = envelope.get("headSha") or evidence.get("headSha")
@@ -1142,7 +1141,7 @@ def check_unfetched_findings(ctx):
                 "journal record lacks payloadSha256 integrity field",
             )
         try:
-            computed = round_records.payload_sha256(env.get("payload"))
+            computed = session_contract.payload_sha256(env.get("payload"))
         except (TypeError, ValueError):
             return _refusal(
                 "unfetched-findings",
