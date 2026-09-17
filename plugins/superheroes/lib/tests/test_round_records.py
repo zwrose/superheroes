@@ -2039,6 +2039,15 @@ def test_v2_execution_evidence_result_kind_missing_refuses_malformed(tmp_path, p
 
 
 @pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_result_kind_wrong_type_refuses_malformed(tmp_path, provenance):
+    sd = _session(tmp_path)
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(resultKind=123))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
 def test_v2_execution_evidence_observation_missing_required_key_refuses_malformed(tmp_path, provenance):
     # axis: execution-evidence-malformed — wo_r3_1271 observation key-set check
     sd = _session(tmp_path)

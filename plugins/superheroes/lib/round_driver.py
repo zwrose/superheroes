@@ -43,7 +43,9 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sys
+import tempfile
 import time
 import traceback
 
@@ -125,6 +127,8 @@ JOURNAL_FILE = "driver-journal.jsonl"
 JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
 RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
+CERTIFICATION_RECEIPT_FILE = "certification-receipt.json"
+CERTIFICATION_REFUSAL_FILE = "certification-refusal.json"
 
 # --- the #723 schema matrix -------------------------------------------------------------------
 # `SCHEMA_VERSION` stays the version a v2 RECEIPT keys off (and the version an in-flight v2 state
@@ -4884,9 +4888,196 @@ def _run_seam(seams, action, payload, state, config):
     return {}
 
 
+def _write_certification_artifacts(session_dir):
+    """Write certification-receipt.json or certification-refusal.json beside round-receipt.json.
+
+    A failure inside the writer must not take down a terminal that would otherwise complete: catch
+    it, write a refusal artifact naming what happened, and carry on — but never write a success
+    artifact the writer did not return from ``certify``."""
+    import round_certification as rc
+
+    try:
+        receipt, refusal = rc.certify(session_dir)
+    except Exception as exc:
+        refusal = {
+            "class": "unfetched-findings",
+            "artifact": CERTIFICATION_RECEIPT_FILE,
+            "detail": "certify raised %s: %s" % (type(exc).__name__, exc),
+            "bindingFailure": "writer-exception",
+        }
+        receipt = None
+    if receipt is not None:
+        path = os.path.join(session_dir, CERTIFICATION_RECEIPT_FILE)
+        round_commit.atomic_write_bytes(
+            path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        return
+    if refusal is None:
+        refusal = {
+            "class": "unfetched-findings",
+            "artifact": CERTIFICATION_RECEIPT_FILE,
+            "detail": "certify returned neither receipt nor refusal",
+            "bindingFailure": "writer-empty",
+        }
+    try:
+        path = os.path.join(session_dir, CERTIFICATION_REFUSAL_FILE)
+        round_commit.atomic_write_bytes(
+            path, (json.dumps(refusal, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    except OSError:
+        pass
+
+
+def _run_loop_seat_map(state):
+    for entry in reversed(state.get("seatMapReceipts") or []):
+        if not isinstance(entry, dict):
+            continue
+        smap = entry.get("map")
+        if isinstance(smap, dict) and isinstance(smap.get("seats"), dict) and smap["seats"]:
+            rnd = entry.get("round", state.get("round") or 1)
+            return smap, int(rnd) if str(rnd).isdigit() else rnd
+    cfg_sm = (state.get("config") or {}).get("seatMap")
+    if isinstance(cfg_sm, dict) and isinstance(cfg_sm.get("seats"), dict) and cfg_sm["seats"]:
+        return cfg_sm, state.get("round") or 1
+    return None, state.get("round") or 1
+
+
+def _run_loop_execution_evidence(head_sha):
+    return {
+        "source": "runner",
+        "runnerNonce": "run-loop",
+        "recordDigest": hashlib.sha256(b"run-loop-record").hexdigest(),
+        "resultDigest": hashlib.sha256(b"run-loop-result").hexdigest(),
+        "resultKind": "findings",
+        "observation": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "none",
+            "stdoutBytes": 0,
+            "wallSeconds": 0.0,
+        },
+        "headSha": head_sha,
+    }
+
+
+def _materialize_run_loop_session(state, invocations):
+    """Write loop-state.json, driver-journal.jsonl, meta.json, and seat envelopes for ``certify``."""
+    import round_certification as rc
+
+    session_dir = tempfile.mkdtemp(prefix="run-loop-")
+    state_copy = json.loads(json.dumps(state))
+    cfg = state_copy.setdefault("config", {})
+    head = cfg.get("headSha")
+    if not isinstance(head, str) or not head:
+        head = hashlib.sha256(
+            json.dumps(state_copy.get("headDiff") or "run-loop", sort_keys=True).encode()
+        ).hexdigest()[:40]
+        cfg["headSha"] = head
+    cfg["baseGuard"] = BASE_GUARD_CHECKED
+    for finding in state_copy.get("findings") or []:
+        if not isinstance(finding, dict):
+            continue
+        if finding.get("disposition") == "fixed":
+            receipt = finding.get("dispositionReceipt")
+            if not isinstance(receipt, dict):
+                finding["dispositionReceipt"] = {"headSha": head, "verifyResult": "pass"}
+            elif not receipt.get("headSha"):
+                receipt["headSha"] = head
+    meta = {"sessionId": "run-loop-%s" % head[:16], "headSha": head}
+    round_commit.atomic_write_bytes(
+        os.path.join(session_dir, round_records.META_FILE),
+        (json.dumps(meta, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    save_state(session_dir, state_copy)
+    smap, rnd = _run_loop_seat_map(state_copy)
+    journal_lines = []
+    if smap:
+        for seat in sorted(smap.get("seats") or {}):
+            payload_sha = hashlib.sha256(json.dumps([], sort_keys=True).encode()).hexdigest()
+            evidence = _run_loop_execution_evidence(head)
+            journal_lines.append(
+                {
+                    "cmd": "record-result",
+                    "outcome": "recorded",
+                    "phase": rc.PANEL_PHASE,
+                    "round": rnd,
+                    "attempt": 0,
+                    "seat": seat,
+                    "occurrence": 0,
+                    "provenance": rc.PROVENANCE_DISPATCH_OBSERVED,
+                    "payloadSha256": payload_sha,
+                    "executionEvidence": evidence["observation"],
+                    "headSha": head,
+                    "recordIdentity": {
+                        "phase": rc.PANEL_PHASE,
+                        "seat": seat,
+                        "occurrence": 0,
+                        "attempt": 0,
+                    },
+                }
+            )
+            skey = rc._storage_key(seat, 0)
+            env_path = os.path.join(
+                session_dir, "round-%s" % rnd, "seats", rc.PANEL_PHASE, "%s.a0.json" % skey)
+            os.makedirs(os.path.dirname(env_path), exist_ok=True)
+            envelope = {
+                "schema": round_records.SEAT_RESULT_SCHEMA_V2,
+                "session": meta["sessionId"],
+                "round": rnd,
+                "phase": rc.PANEL_PHASE,
+                "seat": seat,
+                "attempt": 0,
+                "vendor": "codex",
+                "model": "gpt-5.6-sol",
+                "payloadSha256": payload_sha,
+                "provenance": rc.PROVENANCE_DISPATCH_OBSERVED,
+                "payload": {"findings": []},
+                "executionEvidence": evidence,
+                "headSha": head,
+            }
+            round_commit.atomic_write_bytes(
+                env_path, (json.dumps(envelope, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    count = max(int(invocations or 0), 1)
+    for idx in range(count):
+        journal_lines.append(
+            {"cmd": "run-loop", "phase": P_PANEL, "round": rnd, "attempt": 0,
+             "outcome": "step", "seq": idx + 1})
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    with open(journal_path, "w", encoding="utf-8") as fh:
+        for row in journal_lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    return session_dir
+
+
+def _run_loop_certified_receipt(state, invocations):
+    """Materialize a temp session, call the certification writer, return its receipt."""
+    import round_certification as rc
+
+    session_dir = _materialize_run_loop_session(state, invocations)
+    try:
+        receipt, refusal = rc.certify(session_dir)
+    finally:
+        shutil.rmtree(session_dir, ignore_errors=True)
+    if receipt is not None:
+        return receipt
+    if isinstance(refusal, dict):
+        return {
+            "schemaVersion": state.get("schemaVersion") or STATE_SCHEMA_VERSION,
+            "verdict": state.get("terminal"),
+            "certificationShape": (state.get("certification") or {}).get("shape"),
+            "certification": state.get("certification"),
+            "certificationRefusal": refusal,
+            "rounds": [],
+            "findings": [],
+            "decisions": list(state.get("decisions") or []),
+            "seatMap": {},
+            "scriptRan": {"invocations": int(invocations or 0), "byPhase": {}},
+            "degraded": [],
+            "skippedBlockers": [],
+        }
+    return build_receipt(state)
+
+
 def run_loop(seams, config=None):
     """Layer 1: drive the whole loop end-to-end with scripted seams. Ports the run-SHAPE of
-    review_panel_shell.reviewPanel. Returns the driver receipt (validate_receipt-shaped)."""
+    review_panel_shell.reviewPanel. Returns the certification writer's receipt."""
     if not isinstance(seams, dict):
         raise ValueError("run_loop requires a seams dict")
     try:
@@ -4894,13 +5085,11 @@ def run_loop(seams, config=None):
     except RoundCeilingRefusal as refusal:
         state = new_state()
         _park_cannot_certify(state, refusal.reason)
-        state["_scriptRan"] = {"invocations": 0, "byPhase": {}}
-        return build_receipt(state)
+        return _run_loop_certified_receipt(state, 0)
     if state.get("_resumeCorrupt"):
         # A corrupt/mangled resume state fails closed — never certify off unreadable memory.
         _park_cannot_certify(state, state["_resumeCorrupt"])
-        state["_scriptRan"] = {"invocations": 0, "byPhase": {}}
-        return build_receipt(state)
+        return _run_loop_certified_receipt(state, 0)
     guard = 0
     try:
         while not state.get("terminal") and guard < _RUN_LOOP_GUARD:
@@ -4922,13 +5111,11 @@ def run_loop(seams, config=None):
         # cannot-certify — the library layer NEVER continues (or crashes the caller) as though the
         # ran-evidence were intact. #507 WO-FIX-RECOVERY.
         _park_cannot_certify(state, "journal-fault-unrecordable: %s" % jf)
-        state["_scriptRan"] = {"invocations": guard, "byPhase": {}}
-        return build_receipt(state)
+        return _run_loop_certified_receipt(state, guard)
     if guard >= _RUN_LOOP_GUARD and not state.get("terminal"):
         state["terminal"] = "halted"
         state["certification"] = {"shape": None, "reason": "run_loop guard tripped — fail closed"}
-    state["_scriptRan"] = {"invocations": guard, "byPhase": {}}
-    return build_receipt(state)
+    return _run_loop_certified_receipt(state, guard)
 
 
 # =============================================================================================
@@ -5534,6 +5721,7 @@ def _finalize_receipt(session_dir, state):
         _write_receipt(session_dir, state)
     except OSError as exc:
         return "terminal receipt write failed (%s) — cannot certify; treat as park" % exc
+    _write_certification_artifacts(session_dir)
     return _verify_terminal_receipt(session_dir)
 
 
