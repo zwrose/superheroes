@@ -32,6 +32,8 @@ ED = _load("engine_dispatch", "engine_dispatch.py")
 DG = _load("dispatch_guard", "dispatch_guard.py")
 EA = _load("engine_adapter", "engine_adapter.py")
 LC = _load("liveness_cache", "liveness_cache.py")
+RIV = _load("resolved_inputs_vocab", "resolved_inputs_vocab.py")
+SB = _load("seat_bundle", "seat_bundle.py")
 
 
 def _iter_leaf_subcommands(parser: argparse.ArgumentParser):
@@ -190,6 +192,36 @@ def test_cli_check_stale_file_refuses(tmp_path, monkeypatch, capsys):
     assert rc == 1
     err = capsys.readouterr().err
     assert "is stale — run the generator" in err
+
+
+def _vocabularies_section(text: str) -> str:
+    start = text.index("## Declared vocabularies")
+    end = text.index("## Dispatch CLIs")
+    return text[start:end]
+
+
+def test_declared_vocabularies_section_headings():
+    text = DED.generate()
+    assert "## Declared vocabularies" in text
+    assert "### resolvedInputs source markers" in text
+    assert "### Entry-refusal reasons" in text
+    assert "### Engine-config refusal tokens" in text
+
+
+def test_declared_vocabularies_include_all_members():
+    text = DED.generate()
+    for marker in RIV.SOURCE_MARKERS:
+        assert "`%s`" % marker in text
+    for reason in SB.ENTRY_REFUSAL_REASONS:
+        assert "`%s`" % reason in text
+    for token in EA.BUILD_ARGV_REFUSAL_TOKENS:
+        assert "`%s`" % token in text
+
+
+def test_vocabularies_rendering_deterministic():
+    first = _vocabularies_section(DED.generate())
+    second = _vocabularies_section(DED.generate())
+    assert first == second
 
 
 def test_format_default_param_unset_distinct_from_none():
