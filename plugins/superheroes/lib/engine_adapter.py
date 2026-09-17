@@ -258,6 +258,9 @@ def build_argv_result(engine, role_kind, effort, opts):
             argv += ["-C", cwd]           # write: confine writes to the managed worktree.
                                           # read (#665): pin the seat to the repo so it can trace
                                           # into files instead of inheriting the dispatcher's cwd.
+        last_message_path = opts.get("last_message_path")
+        if isinstance(last_message_path, str) and last_message_path:
+            argv += ["--json", "--output-last-message", last_message_path]
         # trailing `-`: read the prompt from stdin. The dispatch runner redirects the staged
         # prompt file into stdin (`<argv> < promptPath`) — the prompt is ALWAYS fed here.
         argv += ["-"]
@@ -482,8 +485,126 @@ def strip_echoed_prompt(stdout, prompt_text):
     return out
 
 
+_CODEX_ACTION_ITEM_TYPES = frozenset({
+    "command_execution", "file_change", "mcp_tool_call", "web_search",
+})
+_CODEX_TOKEN_PARTS = (
+    "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens",
+)
+_CODEX_EVENT_TYPES = frozenset({
+    "thread.started", "turn.started", "turn.completed", "item.started", "item.completed",
+})
+
+
+def _is_codex_event_object(obj):
+    return isinstance(obj, dict) and obj.get("type") in _CODEX_EVENT_TYPES
+
+
+def _iter_codex_event_lines(stdout):
+    """Yield parsed JSON objects from codex JSONL stdout. Never raises."""
+    if not isinstance(stdout, str) or not stdout:
+        return
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            yield obj
+
+
+def codex_tool_calls(stdout):
+    """Count completed codex action items in JSONL stdout; int or None. Never raises."""
+    try:
+        if not isinstance(stdout, str) or not stdout:
+            return None
+        count = 0
+        parsed_any = False
+        for obj in _iter_codex_event_lines(stdout):
+            if not _is_codex_event_object(obj):
+                continue
+            parsed_any = True
+            if obj.get("type") != "item.completed":
+                continue
+            item = obj.get("item")
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") in _CODEX_ACTION_ITEM_TYPES:
+                count += 1
+        if not parsed_any:
+            return None
+        return count
+    except Exception:
+        return None
+
+
+def codex_event_tokens(stdout):
+    """Sum token parts from the last turn.completed usage in JSONL stdout; int or None. Never raises."""
+    try:
+        if not isinstance(stdout, str) or not stdout:
+            return None
+        parsed_any = False
+        last_usage = None
+        for obj in _iter_codex_event_lines(stdout):
+            if not _is_codex_event_object(obj):
+                continue
+            parsed_any = True
+            if obj.get("type") != "turn.completed":
+                continue
+            usage = obj.get("usage")
+            if isinstance(usage, dict):
+                last_usage = usage
+        if last_usage is None:
+            return None if not parsed_any else None
+        total = 0
+        for part in _CODEX_TOKEN_PARTS:
+            val = last_usage.get(part, 0)
+            if val is None:
+                val = 0
+            if not isinstance(val, int):
+                return None
+            total += val
+        return total
+    except Exception:
+        return None
+
+
+def codex_review_payload_text(stdout, last_message_path=None):
+    """Review payload text for marker parsing: last-message file, else last agent_message. Never raises."""
+    try:
+        if isinstance(last_message_path, str) and last_message_path:
+            try:
+                with open(last_message_path, encoding="utf-8", errors="ignore") as fh:
+                    text = fh.read()
+                if isinstance(text, str) and text.strip():
+                    return text
+            except OSError:
+                pass
+        if not isinstance(stdout, str) or not stdout:
+            return None
+        last_text = None
+        for obj in _iter_codex_event_lines(stdout):
+            if not _is_codex_event_object(obj) or obj.get("type") != "item.completed":
+                continue
+            item = obj.get("item")
+            if not isinstance(item, dict) or item.get("type") != "agent_message":
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text:
+                last_text = text
+        return last_text
+    except Exception:
+        return None
+
+
 def codex_tokens_used(stderr_tail):
-    """Parse codex stderr tail for the last 'tokens used' block; return int or None. Never raises."""
+    """Parse codex stderr tail for the last 'tokens used' block; return int or None. Never raises.
+
+    Pre-``--json`` read-back only: stderr carries this block; ``--json`` removes it. Retained for
+    records stamped before C12's event-stream telemetry."""
     try:
         if not isinstance(stderr_tail, str) or not stderr_tail:
             return None

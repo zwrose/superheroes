@@ -1515,6 +1515,110 @@ def test_strip_echoed_prompt_empty_or_non_string_inputs_unchanged_no_raise():
         assert EA.strip_echoed_prompt("keep", bad_prompt) == "keep"
 
 
+def _codex_item_completed(item_type, item_id="item_0"):
+    return json.dumps({
+        "type": "item.completed",
+        "item": {"id": item_id, "type": item_type},
+    })
+
+
+def test_codex_tool_calls_counts_each_action_kind():
+    stream = "\n".join([
+        _codex_item_completed("command_execution", "ce"),
+        _codex_item_completed("file_change", "fc"),
+        _codex_item_completed("mcp_tool_call", "mcp"),
+        _codex_item_completed("web_search", "ws"),
+    ])
+    assert EA.codex_tool_calls(stream) == 4
+
+
+def test_codex_tool_calls_ignores_other_item_types():
+    stream = "\n".join([
+        _codex_item_completed("agent_message", "am"),
+        _codex_item_completed("error", "err"),
+        '{"type":"item.started","item":{"type":"command_execution"}}',
+        _codex_item_completed("command_execution", "ce"),
+    ])
+    assert EA.codex_tool_calls(stream) == 1
+
+
+def test_codex_tool_calls_zero_action_items_returns_zero():
+    stream = "\n".join([
+        _codex_item_completed("agent_message", "am"),
+        '{"type":"turn.completed","usage":{"input_tokens":1}}',
+    ])
+    assert EA.codex_tool_calls(stream) == 0
+
+
+def test_codex_tool_calls_unparseable_and_empty_return_none():
+    assert EA.codex_tool_calls("") is None
+    assert EA.codex_tool_calls(None) is None
+    assert EA.codex_tool_calls("not json\nstill not") is None
+
+
+def test_codex_tool_calls_malformed_line_mid_stream_no_raise():
+    stream = "not json\n" + _codex_item_completed("command_execution") + "\n{broken"
+    assert EA.codex_tool_calls(stream) == 1
+
+
+def test_codex_event_tokens_sums_four_parts():
+    stream = json.dumps({
+        "type": "turn.completed",
+        "usage": {
+            "input_tokens": 10, "cached_input_tokens": 5,
+            "output_tokens": 3, "reasoning_output_tokens": 2,
+        },
+    })
+    assert EA.codex_event_tokens(stream) == 20
+
+
+def test_codex_event_tokens_missing_parts_count_zero():
+    stream = json.dumps({"type": "turn.completed", "usage": {"input_tokens": 7}})
+    assert EA.codex_event_tokens(stream) == 7
+
+
+def test_codex_event_tokens_non_integer_part_returns_none():
+    stream = json.dumps({
+        "type": "turn.completed",
+        "usage": {"input_tokens": "x", "output_tokens": 1},
+    })
+    assert EA.codex_event_tokens(stream) is None
+
+
+def test_codex_event_tokens_last_turn_completed_wins():
+    stream = "\n".join([
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1}}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 9}}),
+    ])
+    assert EA.codex_event_tokens(stream) == 9
+
+
+def test_build_argv_result_codex_json_flags_with_last_message_path():
+    path = "/tmp/run/attempt-1.last-message"
+    r = EA.build_argv_result("codex", "review", "high", {"last_message_path": path})
+    assert r["reason"] is None
+    argv = r["argv"]
+    assert "--json" in argv
+    idx = argv.index("--output-last-message")
+    assert argv[idx + 1] == path
+    assert argv[-1] == "-"
+
+
+def test_build_argv_result_codex_omits_json_without_last_message_path():
+    for opts in (None, {}, {"last_message_path": ""}, {"last_message_path": None}, {"last_message_path": 1}):
+        r = EA.build_argv_result("codex", "review", "high", opts)
+        assert r["reason"] is None
+        assert "--json" not in r["argv"]
+        assert "--output-last-message" not in r["argv"]
+
+
+def test_build_argv_result_cursor_argv_unchanged_with_last_message_path():
+    base = EA.build_argv_result("cursor", "review", "high", {})
+    with_path = EA.build_argv_result(
+        "cursor", "review", "high", {"last_message_path": "/tmp/x"})
+    assert base == with_path
+
+
 def test_codex_tokens_used_parses_trailing_block():
     assert EA.codex_tokens_used("noise\ntokens used\n17,417\n") == 17417
 

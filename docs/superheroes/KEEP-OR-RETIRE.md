@@ -682,9 +682,24 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** capability-gap — it exists because a dispatched seat cannot presently be trusted to
   report its own engagement, and a host that recorded tool calls natively and verifiably would
   remove the need. Whether a dispatched seat with no runner-side telemetry is refused is decided by
-  the certification receipt writer's unrun-review check in layer 2 (Spec B FR-D8), not here; **C11
-  (#1270)** is the child that gives codex a runner-side record and therefore closes the gap. No
-  engine family is named for the binding itself; the reason it exists is engine-general.
+  the certification receipt writer's unrun-review check in layer 2 (Spec B FR-D8), not here; **C12
+  (#1271)** is the child that gives codex a runner-side record from its own event stream and
+  therefore closes the gap. No engine family is named for the binding itself; the reason it exists
+  is engine-general.
+
+#### D13b — `engine_adapter.codex_tokens_used` (pre-`--json` stderr read-back)
+
+- **Component.** `engine_adapter.codex_tokens_used` — parses the codex stderr `"tokens used"` block
+  that `--json` removes; it costs a stderr-tail scan on every pre-C12 record read-back.
+- **Condition.** Usage-based, 60 days: stamped dispatch records whose `observation.source` is still
+  `codex-stderr` against all codex stamped records. On firing when none of the window's codex
+  records still cite `codex-stderr`, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — it exists only to read engagement tokens off pre-C12 records stamped
+  before codex dispatch carried `--json`; C12's event-stream telemetry (`codex-events`) supersedes it
+  for new runs. Observed on codex 0.153.4.
 
 #### D14 — The record-identity CAS-token agreement
 

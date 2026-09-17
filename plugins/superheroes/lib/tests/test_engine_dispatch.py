@@ -140,6 +140,77 @@ def _fed_prompt(base_prompt, view_meta=None, mode="review"):
 
 
 _VALID_FINDINGS_STDOUT = json.dumps({"findings": [{"id": "f1", "message": "issue found"}]})
+
+
+def _codex_event_stream(payload_text, *, action_items=0, tokens_usage=None):
+    lines = []
+    for i in range(action_items):
+        lines.append(json.dumps({
+            "type": "item.completed",
+            "item": {"id": "action_%d" % i, "type": "command_execution"},
+        }))
+    lines.append(json.dumps({
+        "type": "item.completed",
+        "item": {"id": "agent_msg", "type": "agent_message", "text": payload_text},
+    }))
+    usage = tokens_usage or {
+        "input_tokens": 100, "cached_input_tokens": 0,
+        "output_tokens": 10, "reasoning_output_tokens": 0,
+    }
+    lines.append(json.dumps({"type": "turn.completed", "usage": usage}))
+    return "\n".join(lines)
+
+
+_CODEX_FINDINGS_STDOUT = _codex_event_stream(_VALID_FINDINGS_STDOUT)
+
+
+def _is_codex_event_stream(stdout):
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        typ = obj.get("type")
+        if typ in (
+            "thread.started", "turn.started", "turn.completed",
+            "item.started", "item.completed",
+        ):
+            return True
+    return False
+
+
+def _wrap_codex_fake_stdout(argv, stdout):
+    if not isinstance(stdout, str) or not stdout.strip():
+        return stdout
+    if not argv or "codex" not in str(argv[0]):
+        return stdout
+    if "--json" not in argv:
+        return stdout
+    if _is_codex_event_stream(stdout):
+        return stdout
+    return _codex_event_stream(stdout)
+
+
+def _write_codex_last_message(argv, payload_text):
+    if "--output-last-message" not in argv:
+        return
+    idx = argv.index("--output-last-message")
+    if idx + 1 >= len(argv):
+        return
+    path = argv[idx + 1]
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(payload_text)
+    except OSError:
+        pass
 _VALID_VERDICTS_STDOUT = json.dumps({
     "verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test"}],
 })
@@ -182,8 +253,14 @@ class FakeRunner:
             raise AssertionError("fake called too many times")
         resp = self.responses[idx]
         if callable(resp):
-            return resp(argv, prompt_bytes, timeout, progress_cb, cwd)
-        return resp
+            stdout, timed_out, rc, stderr_tail = resp(
+                argv, prompt_bytes, timeout, progress_cb, cwd)
+        else:
+            stdout, timed_out, rc, stderr_tail = resp
+        wrapped = _wrap_codex_fake_stdout(argv, stdout)
+        if wrapped is not stdout and "--output-last-message" in argv:
+            _write_codex_last_message(argv, stdout)
+        return wrapped, timed_out, rc, stderr_tail
 
 
 def _expect_view_cwd(fake, build_view, expected_repo_realpath):
@@ -832,13 +909,19 @@ def test_dispatch_success_includes_engagement_fields(tmp_path):
     )
     eng = res["engagement"]
     assert "stdoutBytes" in eng and "wallSeconds" in eng and "source" in eng
-    assert eng["stdoutBytes"] == len(_VALID_FINDINGS_STDOUT)
+    assert eng["stdoutBytes"] > 0
 
 
-def test_dispatch_codex_engagement_tokens_from_stderr(tmp_path):
+def test_dispatch_codex_engagement_tokens_from_event_stream(tmp_path):
     repo_root = _repo(tmp_path)
-    stderr_tail = "log line\ntokens used\n1,234\n"
-    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, stderr_tail)])
+    stream = _codex_event_stream(
+        _VALID_FINDINGS_STDOUT,
+        tokens_usage={
+            "input_tokens": 1000, "cached_input_tokens": 200,
+            "output_tokens": 30, "reasoning_output_tokens": 4,
+        },
+    )
+    fake = FakeRunner([(stream, False, 0, "")])
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
@@ -846,7 +929,7 @@ def test_dispatch_codex_engagement_tokens_from_stderr(tmp_path):
     )
     assert res["ok"] is True
     assert res["engagement"]["tokens"] == 1234
-    assert res["engagement"]["source"] == "codex-stderr"
+    assert res["engagement"]["source"] == "codex-events"
 
 
 def test_dispatch_cursor_engagement_tool_calls(tmp_path):
@@ -1405,15 +1488,18 @@ def _manual_open_review_run(tmp_path, run_dir):
     build_view = _fake_build_view(tmp_path)
     view = build_view(os.path.realpath(repo_root))
     cwd = os.path.realpath(view["path"])
-    built = __import__("engine_adapter").build_argv_result(
-        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+    os.makedirs(run_dir, exist_ok=True)
+    built = EA.build_argv_result(
+        "codex", "review", "high", {
+            "model": "sonnet", "cwd": cwd,
+            "last_message_path": ED._attempt_last_message_path(run_dir, 1),
+        },
     )
     argv = built["argv"]
     prompt_path = _valid_prompt(tmp_path)
     with open(prompt_path, encoding="utf-8") as fh:
         base = fh.read()
     fed = _fed_prompt(base, view_meta=view)
-    os.makedirs(run_dir, exist_ok=True)
     ok, detail = ED._open_review_run(
         run_dir, engine="codex", argv=argv, cwd=cwd,
         timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
@@ -1423,6 +1509,24 @@ def _manual_open_review_run(tmp_path, run_dir):
     )
     assert ok, detail
     return repo_root, view
+
+
+def _write_codex_review_attempt_stdout(run_dir, attempt, stdout):
+    """Materialize codex JSONL stdout + last-message companion for grade fixtures."""
+    if not _is_codex_event_stream(stdout):
+        last_msg_path = ED._attempt_last_message_path(run_dir, attempt)
+        with open(last_msg_path, "w", encoding="utf-8") as fh:
+            fh.write(stdout)
+        stdout = _codex_event_stream(stdout)
+    else:
+        payload = EA.codex_review_payload_text(stdout, None)
+        if payload:
+            with open(ED._attempt_last_message_path(run_dir, attempt), "w", encoding="utf-8") as fh:
+                fh.write(payload)
+    stdout_path = os.path.join(run_dir, "attempt-%d.stdout" % attempt)
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    return stdout_path
 
 
 def test_run_lock_serializes_concurrent_spawn(tmp_path, monkeypatch):
@@ -8357,6 +8461,17 @@ def _execution_record_completed_attempt(
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     if write_stdout:
+        if engine == "codex":
+            if not _is_codex_event_stream(stdout):
+                last_msg_path = ED._attempt_last_message_path(run_dir, 1)
+                with open(last_msg_path, "w", encoding="utf-8") as fh:
+                    fh.write(stdout)
+                stdout = _codex_event_stream(stdout)
+            else:
+                payload = EA.codex_review_payload_text(stdout, None)
+                if payload:
+                    with open(ED._attempt_last_message_path(run_dir, 1), "w", encoding="utf-8") as fh:
+                        fh.write(payload)
         with open(stdout_path, "w", encoding="utf-8") as fh:
             fh.write(stdout)
     with open(stderr_path, "w", encoding="utf-8") as fh:
@@ -8623,6 +8738,63 @@ def test_graded_review_attempt_spot_check_lists_unchanged(tmp_path):
 def test_codex_engagement_construction_carries_telemetry_none():
     engagement = ED._review_attempt_engagement("codex", "", "", 1.0, 100)
     assert engagement["telemetry"] == "none"
+    assert engagement["source"] == "none"
+
+
+def test_review_attempt_engagement_codex_fail_closed_edges():
+    # (a) stdout that does not parse as events
+    eng_a = ED._review_attempt_engagement("codex", "not jsonl", "", 1.0, 10)
+    assert eng_a["toolCalls"] is None
+    assert eng_a["source"] == "none"
+    assert eng_a["telemetry"] == "none"
+
+    # (b) runner with no events at all
+    eng_b = ED._review_attempt_engagement("codex", "\n\n", "", 1.0, 3)
+    assert eng_b["toolCalls"] is None
+    assert eng_b["source"] == "none"
+    assert eng_b["telemetry"] == "none"
+
+    # (c) stream parses with zero action items
+    stream_c = _codex_event_stream('{"findings":[]}', action_items=0)
+    eng_c = ED._review_attempt_engagement("codex", stream_c, "", 1.0, len(stream_c))
+    assert eng_c["toolCalls"] == 0
+    assert eng_c["source"] == "codex-events"
+    # _engagement_telemetry maps any int toolCalls (including 0) to "tool-calls".
+    assert eng_c["telemetry"] == "tool-calls"
+
+    # (d) tokens unreadable while tool calls readable
+    lines_d = [
+        json.dumps({
+            "type": "item.completed",
+            "item": {"id": "a0", "type": "command_execution"},
+        }),
+        json.dumps({
+            "type": "turn.completed",
+            "usage": {"input_tokens": "bad", "output_tokens": 1},
+        }),
+    ]
+    stream_d = "\n".join(lines_d)
+    eng_d = ED._review_attempt_engagement("codex", stream_d, "", 1.0, len(stream_d))
+    assert eng_d["toolCalls"] == 1
+    assert eng_d["tokens"] is None
+    assert eng_d["source"] == "codex-events"
+
+
+def test_codex_review_payload_last_message_wins(tmp_path):
+    stream = _codex_event_stream('{"findings":[{"id":"stream"}]}')
+    last_msg = tmp_path / "last.txt"
+    last_msg.write_text(json.dumps({"findings": [{"id": "file"}]}), encoding="utf-8")
+    assert EA.codex_review_payload_text(stream, str(last_msg)) == last_msg.read_text()
+
+
+def test_codex_review_payload_agent_message_fallback():
+    stream = _codex_event_stream('{"findings":[{"id":"from-stream"}]}')
+    assert EA.codex_review_payload_text(stream, None) == '{"findings":[{"id":"from-stream"}]}'
+
+
+def test_codex_review_payload_both_absent_fail_closed():
+    assert EA.codex_review_payload_text("", None) is None
+    assert EA.codex_review_payload_text('{"type":"turn.completed"}', None) is None
 
 
 def test_cursor_engagement_construction_carries_telemetry_tool_calls():
@@ -8786,11 +8958,18 @@ def test_run_execution_record_cursor_tool_calls_engaged(tmp_path):
 def test_run_execution_record_codex_tokens_alone_never_engaged(tmp_path):
     """Round-trip: codex high tokens/wall/stdout without action evidence stamps unknown."""
     run_dir = str(tmp_path / "codex-tokens-alone")
-    stderr_tail = "log line\ntokens used\n23,000\n"
+    stream = _codex_event_stream(
+        json.dumps({"findings": []}),
+        action_items=0,
+        tokens_usage={
+            "input_tokens": 22000, "cached_input_tokens": 1000,
+            "output_tokens": 0, "reasoning_output_tokens": 0,
+        },
+    )
     _execution_record_completed_attempt(
         tmp_path, run_dir,
-        stdout=json.dumps({"findings": []}),
-        stderr=stderr_tail,
+        stdout=stream,
+        stderr="",
         ended_overrides={"wallSeconds": 99999.0, "stdoutBytes": 999999},
     )
     record, error = ED.run_execution_record(run_dir)
@@ -8798,6 +8977,8 @@ def test_run_execution_record_codex_tokens_alone_never_engaged(tmp_path):
     assert isinstance(record, dict)
     assert record["observation"]["read"] == "unknown"
     assert record["observation"]["tokens"] == 23000
+    assert record["observation"]["source"] == "codex-events"
+    assert record["observation"]["toolCalls"] == 0
     assert record["observation"]["wallSeconds"] == 99999.0
     assert record["observation"]["stdoutBytes"] == 999999
 
