@@ -1639,7 +1639,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
     receipt = {
         "schemaVersion": _receipt_version(state),
         "verdict": state.get("terminal"),
-        "certificationShape": (state.get("certification") or {}).get("shape"),
+        "certificationShape": _certification_shape(state, seat_rows),
         "certification": cert,
         "rounds": rounds,
         "findings": findings,

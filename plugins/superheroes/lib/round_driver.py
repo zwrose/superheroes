@@ -4958,7 +4958,22 @@ def _run_loop_execution_evidence(head_sha):
     }
 
 
-def _materialize_run_loop_session(state, invocations):
+def _copy_session_tree(source_dir, dest_dir):
+    """Copy journal, envelopes, and other round artifacts from a source session directory."""
+    journal_src = os.path.join(source_dir, JOURNAL_FILE)
+    journal_dst = os.path.join(dest_dir, JOURNAL_FILE)
+    if os.path.isfile(journal_src):
+        shutil.copy2(journal_src, journal_dst)
+    for name in os.listdir(source_dir):
+        if not name.startswith("round-"):
+            continue
+        src_path = os.path.join(source_dir, name)
+        dst_path = os.path.join(dest_dir, name)
+        if os.path.isdir(src_path):
+            shutil.copytree(src_path, dst_path)
+
+
+def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     """Write loop-state.json, driver-journal.jsonl, meta.json, and seat envelopes for ``certify``."""
     import round_certification as rc
 
@@ -4971,7 +4986,10 @@ def _materialize_run_loop_session(state, invocations):
             json.dumps(state_copy.get("headDiff") or "run-loop", sort_keys=True).encode()
         ).hexdigest()[:40]
         cfg["headSha"] = head
-    cfg["baseGuard"] = BASE_GUARD_CHECKED
+    source_guard = (state.get("config") or {}).get("baseGuard")
+    cfg.pop("baseGuard", None)
+    if source_guard == BASE_GUARD_CHECKED:
+        cfg["baseGuard"] = BASE_GUARD_CHECKED
     for finding in state_copy.get("findings") or []:
         if not isinstance(finding, dict):
             continue
@@ -4981,11 +4999,17 @@ def _materialize_run_loop_session(state, invocations):
                 finding["dispositionReceipt"] = {"headSha": head, "verifyResult": "pass"}
             elif not receipt.get("headSha"):
                 receipt["headSha"] = head
-    meta = {"sessionId": "run-loop-%s" % head[:16], "headSha": head}
+    meta = {"sessionId": "run-loop-%s" % head[:16], "headSha": head, "producer": "run-loop"}
+    mode = cfg.get("mode")
+    if isinstance(mode, str) and mode:
+        meta["mode"] = mode
     round_commit.atomic_write_bytes(
         os.path.join(session_dir, round_records.META_FILE),
         (json.dumps(meta, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     save_state(session_dir, state_copy)
+    if source_session_dir:
+        _copy_session_tree(source_session_dir, session_dir)
+        return session_dir
     smap, rnd = _run_loop_seat_map(state_copy)
     journal_lines = []
     if smap:
@@ -5057,21 +5081,6 @@ def _run_loop_certified_receipt(state, invocations):
         shutil.rmtree(session_dir, ignore_errors=True)
     if receipt is not None:
         return receipt
-    if isinstance(refusal, dict):
-        return {
-            "schemaVersion": state.get("schemaVersion") or STATE_SCHEMA_VERSION,
-            "verdict": state.get("terminal"),
-            "certificationShape": (state.get("certification") or {}).get("shape"),
-            "certification": state.get("certification"),
-            "certificationRefusal": refusal,
-            "rounds": [],
-            "findings": [],
-            "decisions": list(state.get("decisions") or []),
-            "seatMap": {},
-            "scriptRan": {"invocations": int(invocations or 0), "byPhase": {}},
-            "degraded": [],
-            "skippedBlockers": [],
-        }
     return build_receipt(state)
 
 

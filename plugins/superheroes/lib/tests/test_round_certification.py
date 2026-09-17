@@ -750,3 +750,150 @@ def test_bite_disposition_without_receipt_base_guard_refuses(tmp_path):
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
     assert refusal["class"] == "disposition-without-receipt"
+
+
+# --- producer meta cannot bypass escape-class checks (#1271 WO-L2-I) ------------
+
+def _meta_bypass_session(tmp_path, *, state=None, journal_lines=None, envelopes=None, meta=None):
+    return write_session(
+        tmp_path,
+        name="meta-bypass",
+        state=state,
+        journal_lines=journal_lines,
+        envelopes=envelopes,
+        meta=dict(meta or {}, producer="run-loop"),
+    )
+
+
+def test_meta_producer_cannot_bypass_unrun_review(tmp_path):
+    session_dir = _meta_bypass_session(
+        tmp_path,
+        journal_lines=[
+            {
+                "cmd": "record-result",
+                "outcome": "recorded",
+                "phase": "dispatch-panel",
+                "round": 1,
+                "attempt": 0,
+                "seat": "code-reviewer",
+                "provenance": "dispatch-observed",
+                "payloadSha256": "abc123",
+                "recordIdentity": {
+                    "phase": "dispatch-panel",
+                    "seat": "code-reviewer",
+                    "occurrence": 0,
+                    "attempt": 0,
+                },
+            }
+        ],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unrun-review"
+
+
+def test_meta_producer_cannot_bypass_same_family_seat(tmp_path):
+    session_dir = _meta_bypass_session(
+        tmp_path,
+        state={
+            "seatMapReceipts": [
+                {
+                    "round": "1",
+                    "map": {
+                        "seats": {"code-reviewer": {"vendor": "claude"}},
+                        "degradations": [{"constraint": "same-family", "seat": "code-reviewer"}],
+                    },
+                }
+            ]
+        },
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "same-family-seat"
+
+
+def test_meta_producer_cannot_bypass_unfetched_findings(tmp_path):
+    session_dir = _meta_bypass_session(
+        tmp_path,
+        journal_lines=[
+            {
+                "cmd": "next",
+                "outcome": "opened",
+                "phase": "dispatch-panel",
+                "round": 1,
+                "attempt": 0,
+                "seat": "security-reviewer",
+            }
+        ],
+        envelopes=[],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unfetched-findings"
+
+
+def test_meta_producer_cannot_bypass_disposition_without_receipt(tmp_path):
+    session_dir = _meta_bypass_session(
+        tmp_path,
+        state={"config": {"fixerVendor": "claude", "baseGuard": "not-checked", "headSha": HEAD}},
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "disposition-without-receipt"
+
+
+def test_meta_producer_arbitrary_key_cannot_bypass_unrun_review(tmp_path):
+    session_dir = _meta_bypass_session(
+        tmp_path,
+        meta={"producer": "run-loop", "mode": "pr", "bypassToken": "anything"},
+        journal_lines=[
+            {
+                "cmd": "record-result",
+                "outcome": "recorded",
+                "phase": "dispatch-panel",
+                "round": 1,
+                "attempt": 0,
+                "seat": "code-reviewer",
+                "provenance": "dispatch-observed",
+                "payloadSha256": "abc123",
+                "recordIdentity": {
+                    "phase": "dispatch-panel",
+                    "seat": "code-reviewer",
+                    "occurrence": 0,
+                    "attempt": 0,
+                },
+            }
+        ],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unrun-review"
+
+
+def test_materialized_session_preserves_checked_base_guard(tmp_path):
+    session_dir = write_session(
+        tmp_path,
+        name="checked-guard",
+        state={"config": {"fixerVendor": "claude", "baseGuard": RC.BASE_GUARD_CHECKED, "headSha": HEAD}},
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+    )
+    with open(os.path.join(session_dir, RC.STATE_FILE), encoding="utf-8") as fh:
+        state = json.load(fh)
+    import round_driver as RD
+
+    materialized = RD._materialize_run_loop_session(state, 1, source_session_dir=session_dir)
+    try:
+        with open(os.path.join(materialized, RC.STATE_FILE), encoding="utf-8") as fh:
+            materialized_state = json.load(fh)
+        assert materialized_state["config"]["baseGuard"] == RC.BASE_GUARD_CHECKED
+        receipt, refusal = RC.certify(materialized)
+        assert refusal is None, refusal
+        assert receipt["baseGuard"] == RC.BASE_GUARD_CHECKED
+    finally:
+        import shutil
+
+        shutil.rmtree(materialized, ignore_errors=True)
