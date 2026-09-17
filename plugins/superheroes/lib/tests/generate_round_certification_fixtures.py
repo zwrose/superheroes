@@ -287,9 +287,9 @@ def _default_dispatch_row(seat, payload_sha, **kw):
 
 
 def build_converged_single_round():
-    payload_sha = "abc123"
-    envelope = production_dispatch_observed_envelope(
-        "code-reviewer", {"findings": []}, payload_sha=payload_sha)
+    payload = {"findings": []}
+    envelope = production_dispatch_observed_envelope("code-reviewer", payload)
+    payload_sha = envelope["payloadSha256"]
     return {
         "state": {
             "rounds": {
@@ -312,9 +312,9 @@ def build_converged_single_round():
 
 
 def build_multi_round_fix():
-    payload_sha = "abc123"
-    envelope = production_dispatch_observed_envelope(
-        "code-reviewer", {"findings": []}, payload_sha=payload_sha)
+    payload = {"findings": []}
+    envelope = production_dispatch_observed_envelope("code-reviewer", payload)
+    payload_sha = envelope["payloadSha256"]
     row = production_recorded_journal_row(
         envelope, seat="code-reviewer", provenance=RC.PROVENANCE_DISPATCH_OBSERVED,
         payload_sha=payload_sha)
@@ -444,9 +444,9 @@ def build_policy_and_base():
 
 
 def build_capped_terminal():
-    payload_sha = "abc123"
-    envelope = production_dispatch_observed_envelope(
-        "code-reviewer", {"findings": []}, payload_sha=payload_sha)
+    payload = {"findings": []}
+    envelope = production_dispatch_observed_envelope("code-reviewer", payload)
+    payload_sha = envelope["payloadSha256"]
     return {
         "state": {
             "terminal": "capped-with-open-critical",
@@ -492,9 +492,9 @@ def build_capped_terminal():
 
 
 def build_halted_terminal():
-    payload_sha = "abc123"
-    envelope = production_dispatch_observed_envelope(
-        "code-reviewer", {"findings": []}, payload_sha=payload_sha)
+    payload = {"findings": []}
+    envelope = production_dispatch_observed_envelope("code-reviewer", payload)
+    payload_sha = envelope["payloadSha256"]
     return {
         "state": {
             "terminal": "halted",
@@ -527,8 +527,8 @@ def build_halted_terminal():
 
 
 def build_case01_recovered_seat():
-    recovered_sha = "recovered-sha"
     payload = {"findings": []}
+    recovered_sha = RR.payload_sha256(payload)
     envelope = production_dispatch_observed_envelope(
         "code-reviewer", payload, attempt=1, payload_sha=recovered_sha)
     return {
@@ -581,8 +581,8 @@ def build_case02_unrecovered_seat():
 
 
 def build_case03_reverted_fix():
-    verify_sha = "verify-sha"
     payload = {"findings": []}
+    verify_sha = RR.payload_sha256(payload)
     envelope = production_dispatch_observed_envelope(
         "code-reviewer", payload, payload_sha=verify_sha)
     return {
@@ -618,26 +618,24 @@ def build_case03_reverted_fix():
 
 def build_case04_stale_cited_head():
     stale = "b" * 40
-    stale_sha = "stale-sha"
     payload = {"findings": []}
-    envelope = production_dispatch_observed_envelope(
-        "code-reviewer", payload, payload_sha=stale_sha)
+    envelope = production_dispatch_observed_envelope("code-reviewer", payload)
+    panel_sha = envelope["payloadSha256"]
     return {
         "meta": {"headSha": HEAD_SHA},
         "journal_lines": [
             production_recorded_journal_row(
                 envelope, seat="code-reviewer", provenance=RC.PROVENANCE_DISPATCH_OBSERVED,
-                payload_sha=stale_sha, head_sha=stale),
+                payload_sha=panel_sha, head_sha=stale),
         ],
         "envelopes": [{"seat": "code-reviewer", "envelope": envelope}],
     }
 
 
 def build_case05_critical_out_of_scope():
-    panel_sha = "panel-sha"
     payload = {"findings": []}
-    envelope = production_dispatch_observed_envelope(
-        "code-reviewer", payload, payload_sha=panel_sha)
+    envelope = production_dispatch_observed_envelope("code-reviewer", payload)
+    panel_sha = envelope["payloadSha256"]
     return {
         "state": {
             "findings": [
@@ -659,10 +657,9 @@ def build_case05_critical_out_of_scope():
 
 
 def build_case05_critical_skipped():
-    panel_sha = "panel-sha"
     payload = {"findings": []}
-    envelope = production_dispatch_observed_envelope(
-        "code-reviewer", payload, payload_sha=panel_sha)
+    envelope = production_dispatch_observed_envelope("code-reviewer", payload)
+    panel_sha = envelope["payloadSha256"]
     return {
         "state": {
             "findings": [
@@ -679,8 +676,8 @@ def build_case05_critical_skipped():
 
 
 def build_case06_mixed_panel():
-    dispatch_sha = "dispatch-sha"
     dispatch_payload = {"findings": []}
+    dispatch_sha = RR.payload_sha256(dispatch_payload)
     dispatch_envelope = production_dispatch_observed_envelope(
         "code-reviewer", dispatch_payload, payload_sha=dispatch_sha)
     hand_payload = {"findings": []}
@@ -812,10 +809,9 @@ def build_specimen_refuse_caller_supplied_execution_evidence():
 
 
 def build_base_guard_not_checked():
-    panel_sha = "panel-sha"
     payload = {"findings": []}
-    envelope = production_dispatch_observed_envelope(
-        "code-reviewer", payload, payload_sha=panel_sha)
+    envelope = production_dispatch_observed_envelope("code-reviewer", payload)
+    panel_sha = envelope["payloadSha256"]
     return {
         "state": {
             "config": {
@@ -834,10 +830,9 @@ def build_base_guard_not_checked():
 
 
 def build_followup_missing_class_closure():
-    panel_sha = "panel-sha"
     payload = {"findings": []}
-    envelope = production_dispatch_observed_envelope(
-        "code-reviewer", payload, payload_sha=panel_sha)
+    envelope = production_dispatch_observed_envelope("code-reviewer", payload)
+    panel_sha = envelope["payloadSha256"]
     return {
         "state": {
             "findings": [
@@ -859,10 +854,9 @@ def build_followup_missing_class_closure():
 
 
 def build_followup_class_closure_none():
-    panel_sha = "panel-sha"
     payload = {"findings": []}
-    envelope = production_dispatch_observed_envelope(
-        "code-reviewer", payload, payload_sha=panel_sha)
+    envelope = production_dispatch_observed_envelope("code-reviewer", payload)
+    panel_sha = envelope["payloadSha256"]
     return {
         "state": {
             "findings": [
@@ -887,10 +881,9 @@ def build_followup_class_closure_none():
 
 
 def build_followup_no_revisit_trigger():
-    panel_sha = "panel-sha"
     payload = {"findings": []}
-    envelope = production_dispatch_observed_envelope(
-        "code-reviewer", payload, payload_sha=panel_sha)
+    envelope = production_dispatch_observed_envelope("code-reviewer", payload)
+    panel_sha = envelope["payloadSha256"]
     return {
         "state": {
             "findings": [
@@ -912,10 +905,9 @@ def build_followup_no_revisit_trigger():
 
 
 def build_followup_documented_trigger():
-    panel_sha = "panel-sha"
     payload = {"findings": []}
-    envelope = production_dispatch_observed_envelope(
-        "code-reviewer", payload, payload_sha=panel_sha)
+    envelope = production_dispatch_observed_envelope("code-reviewer", payload)
+    panel_sha = envelope["payloadSha256"]
     return {
         "state": {
             "findings": [

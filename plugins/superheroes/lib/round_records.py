@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import model_registry  # noqa: E402
 import record_paths  # noqa: E402
 import round_phases  # noqa: E402
+import session_contract  # noqa: E402
 
 # =============================================================================================
 # schema constants
@@ -104,7 +105,7 @@ SIDECAR_FIELDS = ("schema", "repoId", "branch", "headSha", "baseRef", "baseSha",
 # against; an envelope claiming REAL hashes with no anchor is `manifest-anchor-unanchored`.
 NOT_EMITTED = "not-emitted"
 
-META_FILE = "meta.json"
+META_FILE = session_contract.META_FILE
 LOCK_FILE = "session.lock"
 # Orchestrator-written files live in the `_` namespace inside the landing area; a seat key may
 # therefore never begin with `_` (`storage_key` refuses one).

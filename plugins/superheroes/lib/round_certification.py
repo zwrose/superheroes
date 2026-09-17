@@ -11,13 +11,14 @@ import model_registry
 import record_paths
 import receipt_disclosures
 import seat_map_receipts
+import session_contract
 import session_mode
 import version_skew
 
-STATE_FILE = "loop-state.json"
-JOURNAL_FILE = "driver-journal.jsonl"
-JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
-META_FILE = "meta.json"
+STATE_FILE = session_contract.STATE_FILE
+JOURNAL_FILE = session_contract.JOURNAL_FILE
+JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
+META_FILE = session_contract.META_FILE
 
 BASE_GUARD_CHECKED = "checked-stat-bound"
 SCHEMA_VERSION = 2
@@ -64,7 +65,9 @@ REFUSAL_CLASSES = frozenset(
     ("unrun-review", "same-family-seat", "unfetched-findings", "disposition-without-receipt")
 )
 
-PANEL_PHASE = "dispatch-panel"
+PANEL_PHASE = session_contract.PANEL_PHASE
+
+SEAT_MISSING_SCHEMA = "seat-missing/1"
 
 RECEIPT_FORM_CERTIFIED = "certified"
 VENDOR_SOURCE_DEFAULTED = "defaulted"
@@ -177,6 +180,7 @@ def certify(session_dir):
     if refusal is not None:
         return None, refusal
     for check in (
+        check_empty_seat_set,
         check_unfetched_findings,
         check_unrun_review,
         check_same_family_seat,
@@ -257,6 +261,11 @@ def _load_context(session_dir):
         _, fault_refusal = _read_jsonl(fault_path, JOURNAL_FAULT_FILE)
         if fault_refusal is not None:
             return None, fault_refusal
+        return None, _refusal(
+            "unfetched-findings",
+            JOURNAL_FAULT_FILE,
+            "journal fault marker present — incomplete journal evidence",
+        )
     meta = _read_json(os.path.join(session_dir, META_FILE)) or {}
     return {
         "session_dir": session_dir,
@@ -304,6 +313,39 @@ def _read_json(path):
             return json.load(fh)
     except (OSError, ValueError):
         return None
+
+
+def _canonical_json(obj):
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _payload_sha256(payload):
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def _journal_event_slot(event):
+    ident = event.get("recordIdentity")
+    if not isinstance(ident, dict):
+        ident = {}
+    ev_seat = event.get("seat") or ident.get("seat")
+    ev_phase = event.get("phase") if event.get("phase") is not None else ident.get("phase")
+    ev_attempt = event.get("attempt")
+    if ev_attempt is None:
+        ev_attempt = ident.get("attempt")
+    ev_occ = event.get("occurrence", ident.get("occurrence", 0))
+    ev_round = event.get("round")
+    return ev_seat, ev_phase, ev_attempt, ev_occ, ev_round
+
+
+def _journal_slot_matches(event, seat, phase, attempt, occurrence=0, rnd=None):
+    ev_seat, ev_phase, ev_attempt, ev_occ, ev_round = _journal_event_slot(event)
+    return (
+        ev_seat == seat
+        and ev_phase == phase
+        and ev_attempt == attempt
+        and ev_occ == occurrence
+        and (rnd is None or ev_round == rnd)
+    )
 
 
 def _receipt_version(state):
@@ -520,18 +562,15 @@ def _load_envelope(session_dir, rnd, phase, seat, attempt, occurrence=0):
     return obj, path
 
 
-def _journal_observation_for_seat(journal, seat, phase=None, rnd=None):
+def _journal_observation_for_seat(
+    journal, seat, phase=None, attempt=None, occurrence=0, rnd=None
+):
     for event in reversed(journal):
         if event.get("outcome") != "recorded":
             continue
-        if event.get("seat") != seat and (
-            not isinstance(event.get("recordIdentity"), dict)
-            or event["recordIdentity"].get("seat") != seat
-        ):
+        if attempt is None:
             continue
-        if phase is not None and event.get("phase") != phase:
-            continue
-        if rnd is not None and event.get("round") != rnd:
+        if not _journal_slot_matches(event, seat, phase, attempt, occurrence, rnd):
             continue
         obs = event.get("executionEvidence")
         if isinstance(obs, dict):
@@ -561,23 +600,7 @@ def _journal_recorded_runner_nonces_for_slot(
             continue
         if event.get("outcome") != "recorded":
             continue
-        ident = event.get("recordIdentity")
-        if not isinstance(ident, dict):
-            ident = {}
-        ev_seat = event.get("seat") or ident.get("seat")
-        ev_phase = event.get("phase") if event.get("phase") is not None else ident.get("phase")
-        ev_attempt = event.get("attempt")
-        if ev_attempt is None:
-            ev_attempt = ident.get("attempt")
-        ev_occ = event.get("occurrence", ident.get("occurrence", 0))
-        ev_round = event.get("round")
-        if (
-            ev_seat != seat
-            or ev_phase != phase
-            or ev_attempt != attempt
-            or ev_occ != occurrence
-            or (rnd is not None and ev_round != rnd)
-        ):
+        if not _journal_slot_matches(event, seat, phase, attempt, occurrence, rnd):
             continue
         evidence = event.get("executionEvidence")
         if isinstance(evidence, dict):
@@ -594,23 +617,7 @@ def _journal_execution_binding(journal, seat, phase, attempt, occurrence=0, rnd=
     for event in reversed(journal):
         if event.get("outcome") != "recorded":
             continue
-        ident = event.get("recordIdentity")
-        if not isinstance(ident, dict):
-            ident = {}
-        ev_seat = event.get("seat") or ident.get("seat")
-        ev_phase = event.get("phase") if event.get("phase") is not None else ident.get("phase")
-        ev_attempt = event.get("attempt")
-        if ev_attempt is None:
-            ev_attempt = ident.get("attempt")
-        ev_occ = event.get("occurrence", ident.get("occurrence", 0))
-        ev_round = event.get("round")
-        if (
-            ev_seat != seat
-            or ev_phase != phase
-            or ev_attempt != attempt
-            or ev_occ != occurrence
-            or (rnd is not None and ev_round != rnd)
-        ):
+        if not _journal_slot_matches(event, seat, phase, attempt, occurrence, rnd):
             continue
         binding = {}
         evidence = event.get("executionEvidence")
@@ -808,7 +815,9 @@ def check_unrun_review(ctx):
                 "seat provenance %r is not mappable" % (provenance,),
             )
         if provenance == PROVENANCE_DISPATCH_OBSERVED:
-            obs = _journal_observation_for_seat(journal, seat, phase, rnd)
+            obs = _journal_observation_for_seat(
+                journal, seat, phase, attempt, occurrence, rnd
+            )
             journal_binding = _journal_execution_binding(
                 journal,
                 seat,
@@ -937,14 +946,54 @@ def check_unfetched_findings(ctx):
                 path,
                 "seat result on disk is not reconciled with the journal",
             )
-        payload_sha = env.get("payloadSha256")
-        if payload_sha and ident.get("payloadSha256") and payload_sha != ident["payloadSha256"]:
+        if env.get("schema") == SEAT_MISSING_SCHEMA:
+            continue
+        declared_env = env.get("payloadSha256")
+        declared_journal = ident.get("payloadSha256")
+        if not isinstance(declared_env, str) or not declared_env:
             return _refusal(
                 "unfetched-findings",
                 path,
-                "journal payload hash disagrees with landed envelope",
+                "landed envelope lacks payloadSha256 integrity field",
+            )
+        if not isinstance(declared_journal, str) or not declared_journal:
+            return _refusal(
+                "unfetched-findings",
+                path,
+                "journal record lacks payloadSha256 integrity field",
+            )
+        try:
+            computed = _payload_sha256(env.get("payload"))
+        except (TypeError, ValueError):
+            return _refusal(
+                "unfetched-findings",
+                path,
+                "landed envelope payload is not hashable for integrity reconciliation",
+            )
+        if computed != declared_env:
+            return _refusal(
+                "unfetched-findings",
+                path,
+                "landed envelope payloadSha256 does not match envelope content",
                 binding_failure="journal-envelope-mismatch",
             )
+        if computed != declared_journal:
+            return _refusal(
+                "unfetched-findings",
+                path,
+                "journal payload hash disagrees with landed envelope content",
+                binding_failure="journal-envelope-mismatch",
+            )
+    return None
+
+
+def check_empty_seat_set(ctx):
+    if not _collect_seats(ctx):
+        return _refusal(
+            "unrun-review",
+            JOURNAL_FILE,
+            "no recorded seat results — certification over zero seats is not a certification",
+        )
     return None
 
 
@@ -1105,24 +1154,6 @@ def _collect_seats(ctx):
                 "citedHead": cited_head,
             }
         )
-    if seats:
-        return seats
-    smap = _effective_seat_map(state)
-    seat_names = smap.get("seats") if isinstance(smap, dict) else None
-    if isinstance(seat_names, dict):
-        rnd = state.get("round") or 1
-        for seat in sorted(seat_names):
-            seats.append(
-                {
-                    "seat": seat,
-                    "phase": PANEL_PHASE,
-                    "round": rnd,
-                    "attempt": 0,
-                    "occurrence": 0,
-                    "provenance": PROVENANCE_DISPATCH_OBSERVED,
-                    "citedHead": _certified_head_sha(ctx),
-                }
-            )
     return seats
 
 

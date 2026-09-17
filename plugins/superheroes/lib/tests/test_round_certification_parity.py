@@ -8,6 +8,7 @@ import round_certification as RC
 import round_driver as RD
 
 from round_certification_fixtures import (
+    DEFAULT_PANEL_PAYLOAD_SHA,
     PARITY_FIXTURES,
     STATE_FILE,
     parity_multi_round_fix,
@@ -73,7 +74,7 @@ def _assert_receipt_parity(session_dir):
 def parity_hand_landed_shape(tmp_path):
     """Hand-landed seat forces audited-chain certificationShape on the writer receipt."""
     payload = {"findings": []}
-    payload_sha = "abc123"
+    payload_sha = DEFAULT_PANEL_PAYLOAD_SHA
     evidence = {
         "source": "runner",
         "runnerNonce": "nonce-code-reviewer-dispatch-panel-a0-o0",

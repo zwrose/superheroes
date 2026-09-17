@@ -80,6 +80,7 @@ import round_records  # noqa: E402
 import round_phases  # noqa: E402
 import seat_map  # noqa: E402
 import seat_map_receipts  # noqa: E402
+import session_contract  # noqa: E402
 import session_mode  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
@@ -124,9 +125,9 @@ GATE_GUIDANCE_UNUSABLE_REFUSAL = "gate-guidance-unusable"
 
 # --- version spelling: pinned declaration block (BEGIN) ---
 SCHEMA_VERSION = 2
-STATE_FILE = "loop-state.json"
-JOURNAL_FILE = "driver-journal.jsonl"
-JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
+STATE_FILE = session_contract.STATE_FILE
+JOURNAL_FILE = session_contract.JOURNAL_FILE
+JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
 RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 CERTIFICATION_RECEIPT_FILE = "certification-receipt.json"
