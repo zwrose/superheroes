@@ -146,7 +146,7 @@ def _head_content_blobs_for_findings(findings, head=HEAD):
     if not reads:
         return None
     return {
-        "schema": "head-content-blobs/2",
+        "schema": session_contract.HEAD_CONTENT_BLOBS_SCHEMA,
         "headSha": head,
         "files": files,
         "reads": reads,
@@ -725,6 +725,37 @@ def test_check_disposition_without_receipt_fixed_missing_receipt_refuses(tmp_pat
     assert refusal["artifact"] == "F1"
 
 
+@pytest.mark.parametrize(
+    "verify_result",
+    [None, "fail", "timeout", "unknown"],
+)
+def test_check_disposition_without_receipt_fixed_non_pass_verify_refuses(
+    tmp_path, verify_result
+):
+    session_dir = write_certifiable_session(
+        tmp_path,
+        state={
+            "findings": [
+                {
+                    "id": "F1",
+                    "file": "a.py",
+                    "severity": "Important",
+                    "disposition": "fixed",
+                    "dispositionReceipt": _fix_content_disposition_receipt(
+                        verifyResult=verify_result,
+                    ),
+                }
+            ]
+        },
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["bindingFailure"] == "verify-not-pass"
+    assert refusal["artifact"] == "F1"
+
+
 def test_check_disposition_without_receipt_critical_out_of_scope_refuses(tmp_path):
     session_dir = write_session(
         tmp_path,
@@ -1129,6 +1160,7 @@ def test_bite_unfetched_findings_open_seat_refuses(tmp_path):
     session_dir = write_session(
         tmp_path,
         journal_lines=[
+            _dispatch_journal_with_binding(seat="code-reviewer"),
             {
                 "cmd": "next",
                 "outcome": "opened",
@@ -1136,13 +1168,14 @@ def test_bite_unfetched_findings_open_seat_refuses(tmp_path):
                 "round": 1,
                 "attempt": 0,
                 "seat": "security-reviewer",
-            }
+            },
         ],
-        envelopes=[],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
-    assert refusal["class"] == "unrun-review"
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == "security-reviewer"
 
 
 def test_bite_disposition_without_receipt_base_guard_refuses(tmp_path):

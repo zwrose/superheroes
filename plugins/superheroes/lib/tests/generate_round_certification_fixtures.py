@@ -19,6 +19,7 @@ import record_paths
 import round_certification as RC
 import round_driver as RD
 import round_records as RR
+import session_contract
 
 GENERATED_ROOT = os.path.join(_HERE, "fixtures", "round_certification_generated")
 META_FILE = "meta.json"
@@ -254,7 +255,7 @@ def _head_content_blobs_for_findings(findings, head=HEAD_SHA):
     if not reads:
         return None
     return {
-        "schema": "head-content-blobs/2",
+        "schema": session_contract.HEAD_CONTENT_BLOBS_SCHEMA,
         "headSha": head,
         "files": files,
         "reads": reads,
@@ -668,7 +669,7 @@ def build_case03_reverted_fix():
         ],
         "envelopes": [{"seat": "code-reviewer", "envelope": envelope}],
         "head_content_blobs": {
-            "schema": "head-content-blobs/2",
+            "schema": session_contract.HEAD_CONTENT_BLOBS_SCHEMA,
             "headSha": HEAD_SHA,
             "files": {"src/guard.py": base64.b64encode(head_bytes).decode("ascii")},
             "reads": [read_row],

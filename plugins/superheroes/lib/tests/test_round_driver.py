@@ -8245,3 +8245,137 @@ def test_owner_provenance_every_declared_shape_has_a_predicate():
     assert not missing, "declared shapes with no predicate (owner-supplied unreachable): %s" % missing
     for shape, predicate in predicates.items():
         assert callable(predicate), "predicate for %r is not callable" % shape
+
+
+# --- certification artifact materialization (#1271) ---------------------------
+
+def _certification_artifact_session(tmp_path, *, name="cert-artifacts"):
+    fixtures_dir = _HERE
+    if fixtures_dir not in sys.path:
+        sys.path.insert(0, fixtures_dir)
+    from round_certification_fixtures import parity_converged_single_round
+
+    return parity_converged_single_round(tmp_path)
+
+
+def _certification_refusal_session(tmp_path):
+    fixtures_dir = _HERE
+    if fixtures_dir not in sys.path:
+        sys.path.insert(0, fixtures_dir)
+    from round_certification_fixtures import DEFAULT_PANEL_PAYLOAD_SHA, write_session
+
+    return write_session(
+        tmp_path,
+        name="cert-refusal",
+        state={
+            "config": {
+                "baseGuard": "not-checked",
+                "fixerVendor": "claude",
+                "headSha": "a" * 40,
+            }
+        },
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
+    )
+
+
+def test_write_certification_artifacts_success_writes_receipt_json(tmp_path):
+    session_dir = _certification_artifact_session(tmp_path)
+    RC = _load("round_certification")
+    expected_receipt, expected_refusal = RC.certify(session_dir)
+    assert expected_receipt is not None
+    assert expected_refusal is None
+
+    fault = RD._write_certification_artifacts(session_dir)
+    assert fault is None
+
+    receipt_path = os.path.join(session_dir, RD.CERTIFICATION_RECEIPT_FILE)
+    refusal_path = os.path.join(session_dir, RD.CERTIFICATION_REFUSAL_FILE)
+    assert os.path.isfile(receipt_path)
+    assert not os.path.exists(refusal_path)
+    with open(receipt_path, encoding="utf-8") as fh:
+        written = json.load(fh)
+    assert written == expected_receipt
+
+
+def test_write_certification_artifacts_refusal_writes_refusal_json(tmp_path):
+    session_dir = _certification_refusal_session(tmp_path)
+    RC = _load("round_certification")
+    expected_receipt, expected_refusal = RC.certify(session_dir)
+    assert expected_receipt is None
+    assert expected_refusal is not None
+
+    fault = RD._write_certification_artifacts(session_dir)
+    assert fault is None
+
+    receipt_path = os.path.join(session_dir, RD.CERTIFICATION_RECEIPT_FILE)
+    refusal_path = os.path.join(session_dir, RD.CERTIFICATION_REFUSAL_FILE)
+    assert not os.path.exists(receipt_path)
+    assert os.path.isfile(refusal_path)
+    with open(refusal_path, encoding="utf-8") as fh:
+        written = json.load(fh)
+    assert written == expected_refusal
+
+
+def test_write_certification_artifacts_certify_raise_writes_refusal(tmp_path, monkeypatch):
+    session_dir = _certification_artifact_session(tmp_path)
+    if _LIB not in sys.path:
+        sys.path.insert(0, _LIB)
+    import round_certification
+
+    def _boom(_session_dir):
+        raise RuntimeError("certify exploded")
+
+    monkeypatch.setattr(round_certification, "certify", _boom)
+
+    fault = RD._write_certification_artifacts(session_dir)
+    assert fault is None
+    refusal_path = os.path.join(session_dir, RD.CERTIFICATION_REFUSAL_FILE)
+    with open(refusal_path, encoding="utf-8") as fh:
+        refusal = json.load(fh)
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["bindingFailure"] == "writer-exception"
+    assert "certify exploded" in refusal["detail"]
+
+
+def test_write_certification_artifacts_empty_return_writes_refusal(tmp_path, monkeypatch):
+    session_dir = _certification_artifact_session(tmp_path)
+    if _LIB not in sys.path:
+        sys.path.insert(0, _LIB)
+    import round_certification
+
+    monkeypatch.setattr(round_certification, "certify", lambda _session_dir: (None, None))
+
+    fault = RD._write_certification_artifacts(session_dir)
+    assert fault is None
+    refusal_path = os.path.join(session_dir, RD.CERTIFICATION_REFUSAL_FILE)
+    with open(refusal_path, encoding="utf-8") as fh:
+        refusal = json.load(fh)
+    assert refusal["bindingFailure"] == "writer-empty"
+    assert "neither receipt nor refusal" in refusal["detail"]
+
+
+def test_write_certification_artifacts_receipt_write_failure_writes_refusal(tmp_path, monkeypatch):
+    session_dir = _certification_artifact_session(tmp_path)
+    RC = _load("round_certification")
+    receipt, _ = RC.certify(session_dir)
+    assert receipt is not None
+    os.makedirs(os.path.join(session_dir, RD.CERTIFICATION_RECEIPT_FILE))
+
+    fault = RD._write_certification_artifacts(session_dir)
+    assert fault is None
+    refusal_path = os.path.join(session_dir, RD.CERTIFICATION_REFUSAL_FILE)
+    with open(refusal_path, encoding="utf-8") as fh:
+        refusal = json.load(fh)
+    assert refusal["artifact"] == RD.CERTIFICATION_RECEIPT_FILE
+    assert refusal["bindingFailure"] == "writer-exception"
+    assert "certification receipt write failed" in refusal["detail"]
+
+
+def test_write_certification_artifacts_refusal_write_failure_returns_fault(tmp_path):
+    session_dir = _certification_refusal_session(tmp_path)
+    os.makedirs(os.path.join(session_dir, RD.CERTIFICATION_REFUSAL_FILE))
+
+    fault = RD._write_certification_artifacts(session_dir)
+    assert fault is not None
+    assert "certification refusal artifact write failed" in fault
+    assert "park" in fault

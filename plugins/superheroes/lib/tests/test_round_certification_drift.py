@@ -1,9 +1,11 @@
 import os
 import re
 
+import receipt_disclosures
 import round_certification as RC
 import round_driver as RD
 import round_records as RR
+import session_contract
 
 _LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -32,6 +34,14 @@ def test_supported_state_versions_match_driver():
     assert RC.SUPPORTED_STATE_VERSIONS == RD.SUPPORTED_STATE_VERSIONS
 
 
+def test_receipt_disclosures_supported_state_versions_match_driver():
+    assert receipt_disclosures.SUPPORTED_STATE_VERSIONS == RD.SUPPORTED_STATE_VERSIONS
+
+
+def test_receipt_disclosures_schema_version_matches_driver():
+    assert receipt_disclosures.SCHEMA_VERSION == RD.SCHEMA_VERSION
+
+
 def test_decision_keys_match_driver_census():
     driver_path = os.path.join(_LIB, "round_driver.py")
     with open(driver_path, encoding="utf-8") as fh:
@@ -52,6 +62,11 @@ def test_execution_evidence_binding_fields_match_records():
 
 def test_head_content_blobs_file_name():
     assert RC.HEAD_CONTENT_BLOBS_FILE == RD.HEAD_CONTENT_BLOBS_FILE
+
+
+def test_head_content_blobs_schema_matches_session_contract():
+    assert RC.HEAD_CONTENT_BLOBS_SCHEMA == session_contract.HEAD_CONTENT_BLOBS_SCHEMA
+    assert RD.HEAD_CONTENT_BLOBS_FILE == session_contract.HEAD_CONTENT_BLOBS_FILE
 
 
 def test_seat_missing_schema_matches_records():

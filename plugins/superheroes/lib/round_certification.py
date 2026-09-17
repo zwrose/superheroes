@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 
+import circuit_breaker
 import model_registry
 import record_paths
 import receipt_disclosures
@@ -62,6 +63,7 @@ EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry")
 )
 HEAD_CONTENT_BLOBS_FILE = session_contract.HEAD_CONTENT_BLOBS_FILE
+HEAD_CONTENT_BLOBS_SCHEMA = session_contract.HEAD_CONTENT_BLOBS_SCHEMA
 
 REFUSAL_CLASSES = frozenset(
     ("unrun-review", "same-family-seat", "unfetched-findings", "disposition-without-receipt")
@@ -74,7 +76,7 @@ SEAT_MISSING_SCHEMA = session_contract.SEAT_MISSING_SCHEMA
 BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND = "execution-evidence-head-unbound"
 BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE = "certified-head-unresolvable"
 
-RECEIPT_FORM_CERTIFIED = "certified"
+RECEIPT_FORM_CERTIFIED = receipt_disclosures.RECEIPT_FORM_CERTIFIED
 VENDOR_SOURCE_DEFAULTED = "defaulted"
 ROUND_ENTRY_KEY_FORMS = receipt_disclosures.ROUND_ENTRY_KEY_FORMS
 RESUMABLE_DISCLOSURE_CHANNELS = receipt_disclosures.RESUMABLE_DISCLOSURE_CHANNELS
@@ -891,7 +893,7 @@ def _fix_still_present_at_head(ctx, finding, receipt):
             "fixed disposition lacks head-content evidence on certified head",
             binding_failure="fix-content-missing",
         )
-    if blobs.get("schema") != "head-content-blobs/2":
+    if blobs.get("schema") != HEAD_CONTENT_BLOBS_SCHEMA:
         return _refusal(
             "disposition-without-receipt",
             fid,
@@ -1226,6 +1228,13 @@ def check_disposition_without_receipt(ctx):
                     "fixed disposition verification receipt is not on the certified head",
                     binding_failure="verify-not-on-head",
                 )
+            if receipt.get("verifyResult") != "pass":
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "fixed disposition verification receipt did not pass",
+                    binding_failure="verify-not-pass",
+                )
             refusal = _fix_still_present_at_head(ctx, finding, receipt)
             if refusal is not None:
                 return refusal
@@ -1328,12 +1337,10 @@ def check_evidence_head_bound(ctx):
 
 
 def _severity_rank(severity):
-    order = {"Critical": 0, "Important": 1, "Minor": 2, "Nit": 3}
-    if isinstance(severity, str):
-        for key, rank in order.items():
-            if severity.lower() == key.lower():
-                return rank
-    return 99
+    tier = circuit_breaker.canonical_severity(severity)
+    if tier is None:
+        return 99
+    return circuit_breaker.SEVERITY_TIERS.index(tier)
 
 
 def _collect_seats(ctx):

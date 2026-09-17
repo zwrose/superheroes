@@ -603,6 +603,7 @@ def build_degraded_prose(state, form):
 
 
 __all__ = (
+    "RECEIPT_FORM_CERTIFIED",
     "ROUND_ENTRY_KEY_FORMS",
     "DISCLOSE_ON_PRESENCE",
     "RESUMABLE_DISCLOSURE_CHANNELS",
