@@ -607,9 +607,11 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** structural — the envelope binds a payload to the evidence of the act that produced it,
-  and no change of host or model removes the need to know that a landed artifact was not re-paired
-  with different content. No engine family applies: it guards a data shape, not a model behaviour.
+- **Notes.** structural — the envelope binds the recorded run to this order, by comparing the
+  record's `orderPromptSha256` against the envelope's `orderSha256`. That does not prove the landed
+  payload came out of that run; the strong evidence binding closes that gap. No change of host or
+  model removes the need to know that a landed artifact was not re-paired with different content. No
+  engine family applies: it guards a data shape, not a model behaviour.
 
 #### D12 — The state-version schema fence
 
