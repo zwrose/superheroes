@@ -66,6 +66,7 @@ def test_head_content_blobs_file_name():
 
 def test_head_content_blobs_schema_matches_session_contract():
     assert RC.HEAD_CONTENT_BLOBS_SCHEMA == session_contract.HEAD_CONTENT_BLOBS_SCHEMA
+    assert RD.HEAD_CONTENT_BLOBS_SCHEMA == session_contract.HEAD_CONTENT_BLOBS_SCHEMA
     assert RD.HEAD_CONTENT_BLOBS_FILE == session_contract.HEAD_CONTENT_BLOBS_FILE
 
 

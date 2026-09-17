@@ -135,6 +135,7 @@ RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 CERTIFICATION_RECEIPT_FILE = "certification-receipt.json"
 CERTIFICATION_REFUSAL_FILE = "certification-refusal.json"
 HEAD_CONTENT_BLOBS_FILE = session_contract.HEAD_CONTENT_BLOBS_FILE
+HEAD_CONTENT_BLOBS_SCHEMA = session_contract.HEAD_CONTENT_BLOBS_SCHEMA
 
 # --- the #723 schema matrix -------------------------------------------------------------------
 # `SCHEMA_VERSION` stays the version a v2 RECEIPT keys off (and the version an in-flight v2 state
@@ -4671,7 +4672,7 @@ def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None
             else:
                 files.pop(path, None)
         blobs = {
-            "schema": "head-content-blobs/2",
+            "schema": HEAD_CONTENT_BLOBS_SCHEMA,
             "headSha": head,
             "files": files,
             "reads": reads,
