@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 import os
 import sys
@@ -96,8 +98,35 @@ def _hand_landed_binding_journal_row(seat, payload_sha, evidence, *, attempt=0):
     }
 
 
+_FIX_PRESENT_BYTES = b"fix present\n"
+_FIX_PRESENT_DIGEST = hashlib.sha256(_FIX_PRESENT_BYTES).hexdigest()
+
+
+def _fix_content_disposition_receipt(**overrides):
+    receipt = {
+        "headSha": HEAD,
+        "verifyResult": "pass",
+        "fixContentDigest": _FIX_PRESENT_DIGEST,
+    }
+    receipt.update(overrides)
+    return receipt
+
+
+def _head_content_read_row(path, content_bytes, head=HEAD):
+    digest = hashlib.sha256(content_bytes).hexdigest()
+    return {
+        "headSha": head,
+        "path": path,
+        "contentDigest": digest,
+        "bytes": len(content_bytes),
+        "readAt": "2026-01-01T00:00:00Z",
+        "source": "git-show",
+        "readError": None,
+    }, digest
+
+
 def _head_content_blobs_for_findings(findings, head=HEAD):
-    fix_commits = []
+    reads = []
     files = {}
     for finding in findings:
         if not isinstance(finding, dict):
@@ -107,11 +136,17 @@ def _head_content_blobs_for_findings(findings, head=HEAD):
         path = finding.get("file")
         if not isinstance(path, str) or not path:
             continue
-        fix_commits.append({"headSha": head, "path": path, "present": True})
-        files[path] = "fix present\n"
-    if not fix_commits:
+        row, digest = _head_content_read_row(path, _FIX_PRESENT_BYTES, head)
+        reads.append(row)
+        files[path] = base64.b64encode(_FIX_PRESENT_BYTES).decode("ascii")
+    if not reads:
         return None
-    return {"headSha": head, "files": files, "fixCommits": fix_commits}
+    return {
+        "schema": "head-content-blobs/2",
+        "headSha": head,
+        "files": files,
+        "reads": reads,
+    }
 
 
 def _write_head_content_blobs(session_dir, blobs):
@@ -836,7 +871,10 @@ def test_journal_evidence_scoped_by_round_refuses_cross_round_substitution(tmp_p
             },
         ],
     )
-    _write_head_content_blobs(session_dir, {"headSha": HEAD, "files": {}, "fixCommits": []})
+    _write_head_content_blobs(
+        session_dir,
+        {"schema": "head-content-blobs/2", "headSha": HEAD, "files": {}, "reads": []},
+    )
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
     assert refusal["class"] == "unfetched-findings"
@@ -884,7 +922,7 @@ def test_fixed_disposition_missing_fix_commit_row_uses_missing_token(tmp_path):
                     "file": "src/absent.py",
                     "severity": "Important",
                     "disposition": "fixed",
-                    "dispositionReceipt": {"headSha": HEAD, "verifyResult": "pass"},
+                    "dispositionReceipt": _fix_content_disposition_receipt(),
                 }
             ]
         },
@@ -892,7 +930,7 @@ def test_fixed_disposition_missing_fix_commit_row_uses_missing_token(tmp_path):
     )
     _write_head_content_blobs(
         session_dir,
-        {"headSha": HEAD, "files": {}, "fixCommits": []},
+        {"schema": "head-content-blobs/2", "headSha": HEAD, "files": {}, "reads": []},
     )
     ctx, _ = RC._load_context(session_dir)
     refusal = RC.check_disposition_without_receipt(ctx)
@@ -980,7 +1018,10 @@ def test_hand_landed_forces_audited_chain_shape(tmp_path):
             }
         ],
     )
-    _write_head_content_blobs(session_dir, {"headSha": HEAD, "files": {}, "fixCommits": []})
+    _write_head_content_blobs(
+        session_dir,
+        {"schema": "head-content-blobs/2", "headSha": HEAD, "files": {}, "reads": []},
+    )
     receipt, refusal = RC.certify(session_dir)
     assert refusal is None
     assert receipt["certificationShape"] == "audited-chain"
@@ -1226,6 +1267,8 @@ def test_materialized_session_preserves_checked_base_guard(tmp_path):
 
 
 def test_fixed_disposition_fix_still_present_at_head_certifies(tmp_path):
+    content = b"fix still present\n"
+    row, digest = _head_content_read_row("src/guard.py", content)
     session_dir = write_session(
         tmp_path,
         state={
@@ -1235,7 +1278,9 @@ def test_fixed_disposition_fix_still_present_at_head_certifies(tmp_path):
                     "file": "src/guard.py",
                     "severity": "Important",
                     "disposition": "fixed",
-                    "dispositionReceipt": {"headSha": HEAD, "verifyResult": "pass"},
+                    "dispositionReceipt": _fix_content_disposition_receipt(
+                        fixContentDigest=digest,
+                    ),
                 }
             ]
         },
@@ -1245,11 +1290,10 @@ def test_fixed_disposition_fix_still_present_at_head_certifies(tmp_path):
     _write_head_content_blobs(
         session_dir,
         {
+            "schema": "head-content-blobs/2",
             "headSha": HEAD,
-            "files": {"src/guard.py": "fix still present\n"},
-            "fixCommits": [
-                {"headSha": HEAD, "path": "src/guard.py", "present": True},
-            ],
+            "files": {"src/guard.py": base64.b64encode(content).decode("ascii")},
+            "reads": [row],
         },
     )
     ctx, _ = RC._load_context(session_dir)
@@ -1289,7 +1333,7 @@ def test_fixed_disposition_fix_content_unreadable_refuses(tmp_path):
                     "file": "src/guard.py",
                     "severity": "Important",
                     "disposition": "fixed",
-                    "dispositionReceipt": {"headSha": HEAD, "verifyResult": "pass"},
+                    "dispositionReceipt": _fix_content_disposition_receipt(),
                 }
             ]
         },
@@ -1302,6 +1346,169 @@ def test_fixed_disposition_fix_content_unreadable_refuses(tmp_path):
     ctx, _ = RC._load_context(session_dir)
     refusal = RC.check_disposition_without_receipt(ctx)
     assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["bindingFailure"] == "fix-content-unreadable"
+
+
+def test_fixed_disposition_legacy_head_content_blob_refuses_schema_unsupported(tmp_path):
+    session_dir = write_session(
+        tmp_path,
+        state={
+            "findings": [
+                {
+                    "id": "F-legacy",
+                    "file": "src/guard.py",
+                    "severity": "Important",
+                    "disposition": "fixed",
+                    "dispositionReceipt": _fix_content_disposition_receipt(),
+                }
+            ]
+        },
+        journal_lines=[_dispatch_journal_with_binding(payload_sha="panel-sha", nonce="panel-nonce")],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
+    )
+    _write_head_content_blobs(
+        session_dir,
+        {
+            "headSha": HEAD,
+            "files": {"src/guard.py": "fix present\n"},
+            "fixCommits": [
+                {"headSha": HEAD, "path": "src/guard.py", "present": True},
+            ],
+        },
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["bindingFailure"] == "fix-content-schema-unsupported"
+
+
+def test_fixed_disposition_missing_fix_content_digest_refuses(tmp_path):
+    session_dir = write_certifiable_session(
+        tmp_path,
+        state={
+            "findings": [
+                {
+                    "id": "F-no-digest",
+                    "file": "a.py",
+                    "severity": "Important",
+                    "disposition": "fixed",
+                    "dispositionReceipt": {"headSha": HEAD, "verifyResult": "pass"},
+                }
+            ]
+        },
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["bindingFailure"] == "fix-content-reverted"
+
+
+def test_fixed_disposition_fix_content_digest_mismatch_refuses(tmp_path):
+    session_dir = write_certifiable_session(
+        tmp_path,
+        state={
+            "findings": [
+                {
+                    "id": "F-digest-mismatch",
+                    "file": "a.py",
+                    "severity": "Important",
+                    "disposition": "fixed",
+                    "dispositionReceipt": _fix_content_disposition_receipt(
+                        fixContentDigest="0" * 64,
+                    ),
+                }
+            ]
+        },
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["bindingFailure"] == "fix-content-reverted"
+
+
+def test_fixed_disposition_malformed_base64_in_blob_refuses(tmp_path):
+    row, digest = _head_content_read_row("src/guard.py", b"claimed bytes\n")
+    session_dir = write_session(
+        tmp_path,
+        state={
+            "findings": [
+                {
+                    "id": "F-bad-b64",
+                    "file": "src/guard.py",
+                    "severity": "Important",
+                    "disposition": "fixed",
+                    "dispositionReceipt": _fix_content_disposition_receipt(
+                        fixContentDigest=digest,
+                    ),
+                }
+            ]
+        },
+        journal_lines=[_dispatch_journal_with_binding(payload_sha="panel-sha", nonce="panel-nonce")],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
+    )
+    _write_head_content_blobs(
+        session_dir,
+        {
+            "schema": "head-content-blobs/2",
+            "headSha": HEAD,
+            "files": {"src/guard.py": "!!!not-base64!!!"},
+            "reads": [row],
+        },
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["bindingFailure"] == "fix-content-unreadable"
+
+
+def test_bite_fix_content_bytes_digest_mismatch_refuses(tmp_path):
+    """Fabricated blob: reads row digest does not match files[path] bytes (WO-A3 step 8)."""
+    claimed_digest = hashlib.sha256(b"claimed content\n").hexdigest()
+    planted_bytes = b"different planted bytes\n"
+    session_dir = write_session(
+        tmp_path,
+        state={
+            "findings": [
+                {
+                    "id": "F-fabricated",
+                    "file": "src/guard.py",
+                    "severity": "Important",
+                    "disposition": "fixed",
+                    "dispositionReceipt": _fix_content_disposition_receipt(
+                        fixContentDigest=claimed_digest,
+                    ),
+                }
+            ]
+        },
+        journal_lines=[_dispatch_journal_with_binding(payload_sha="panel-sha", nonce="panel-nonce")],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
+    )
+    _write_head_content_blobs(
+        session_dir,
+        {
+            "schema": "head-content-blobs/2",
+            "headSha": HEAD,
+            "files": {
+                "src/guard.py": base64.b64encode(planted_bytes).decode("ascii"),
+            },
+            "reads": [
+                {
+                    "headSha": HEAD,
+                    "path": "src/guard.py",
+                    "contentDigest": claimed_digest,
+                    "bytes": len(planted_bytes),
+                    "readAt": "2026-01-01T00:00:00Z",
+                    "source": "git-show",
+                    "readError": None,
+                }
+            ],
+        },
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is not None
     assert refusal["bindingFailure"] == "fix-content-unreadable"
 
 

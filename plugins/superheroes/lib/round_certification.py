@@ -2,6 +2,8 @@
 """Certification receipt writer — journal on disk as sole input, no driver imports (#1271 C12)."""
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -754,17 +756,19 @@ def _fix_still_present_at_head(ctx, finding, receipt):
             "fixed disposition lacks head-content evidence on certified head",
             binding_failure="fix-content-missing",
         )
-    commits = blobs.get("fixCommits")
-    if not isinstance(commits, list):
+    if blobs.get("schema") != "head-content-blobs/2":
         return _refusal(
             "disposition-without-receipt",
-            finding.get("id") or finding.get("title") or "finding",
-            "fixed disposition fix-content read failed on certified head",
-            binding_failure="fix-content-unreadable",
+            fid,
+            "fixed disposition head-content schema is not supported",
+            binding_failure="fix-content-schema-unsupported",
         )
+    reads = blobs.get("reads")
+    if not isinstance(reads, list):
+        reads = []
     matching = [
         row
-        for row in commits
+        for row in reads
         if isinstance(row, dict)
         and row.get("headSha") == head
         and row.get("path") == path
@@ -772,14 +776,56 @@ def _fix_still_present_at_head(ctx, finding, receipt):
     if not matching:
         return _refusal(
             "disposition-without-receipt",
-            finding.get("id") or finding.get("title") or "finding",
+            fid,
             "fixed disposition fix is not present in content at the certified head",
             binding_failure="fix-content-missing",
         )
-    if matching[-1].get("present") is not True:
+    row = matching[-1]
+    if row.get("readError") is not None or not row.get("contentDigest"):
         return _refusal(
             "disposition-without-receipt",
-            finding.get("id") or finding.get("title") or "finding",
+            fid,
+            "fixed disposition fix-content read failed on certified head",
+            binding_failure="fix-content-unreadable",
+        )
+    content_digest = row["contentDigest"]
+    files = blobs.get("files")
+    file_b64 = files.get(path) if isinstance(files, dict) else None
+    if file_b64 is None:
+        return _refusal(
+            "disposition-without-receipt",
+            fid,
+            "fixed disposition fix-content read failed on certified head",
+            binding_failure="fix-content-unreadable",
+        )
+    try:
+        raw = base64.b64decode(file_b64, validate=True)
+    except (binascii.Error, ValueError):
+        return _refusal(
+            "disposition-without-receipt",
+            fid,
+            "fixed disposition fix-content read failed on certified head",
+            binding_failure="fix-content-unreadable",
+        )
+    if hashlib.sha256(raw).hexdigest() != content_digest:
+        return _refusal(
+            "disposition-without-receipt",
+            fid,
+            "fixed disposition fix-content read failed on certified head",
+            binding_failure="fix-content-unreadable",
+        )
+    fix_content_digest = receipt.get("fixContentDigest")
+    if not isinstance(fix_content_digest, str) or not fix_content_digest:
+        return _refusal(
+            "disposition-without-receipt",
+            fid,
+            "fixed disposition fix is not present in content at the certified head",
+            binding_failure="fix-content-reverted",
+        )
+    if content_digest != fix_content_digest:
+        return _refusal(
+            "disposition-without-receipt",
+            fid,
             "fixed disposition fix is not present in content at the certified head",
             binding_failure="fix-content-reverted",
         )
