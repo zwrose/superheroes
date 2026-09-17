@@ -4331,9 +4331,28 @@ def _result_kind_and_content_from_parse(res):
     return kind, []
 
 
+def _result_kind_and_content_from_write_parse(res):
+    """The write-report evidence whose digest binds a stamped envelope to its run. Never raises."""
+    if not isinstance(res, dict) or not res.get("ok"):
+        return None, None
+    evidence = res.get("evidence")
+    if not isinstance(evidence, dict) or not evidence:
+        return None, None
+    return "evidence", evidence
+
+
 def _result_digest_and_kind_from_parse(res):
     """SHA-256 over the parsed result-kind content. Never raises."""
     kind, content = _result_kind_and_content_from_parse(res)
+    if kind is None:
+        return None, None
+    import round_records
+    return round_records.payload_sha256(content), kind
+
+
+def _result_digest_and_kind_from_write_parse(res):
+    """SHA-256 over the parsed write-report evidence. Never raises."""
+    kind, content = _result_kind_and_content_from_write_parse(res)
     if kind is None:
         return None, None
     import round_records
@@ -4399,9 +4418,10 @@ def run_execution_record(run_dir):
         run_kind = opened.get("runKind")
         if run_kind == RUN_KIND_WRITE:
             res = _parse_write_attempt(run_dir_real, state, attempt)
+            result_digest, result_kind = _result_digest_and_kind_from_write_parse(res)
         else:
             res = _parse_review_attempt(run_dir_real, state, attempt)
-        result_digest, result_kind = _result_digest_and_kind_from_parse(res)
+            result_digest, result_kind = _result_digest_and_kind_from_parse(res)
         journal_path = _journal_path(run_dir_real)
         try:
             with open(journal_path, "rb") as fh:

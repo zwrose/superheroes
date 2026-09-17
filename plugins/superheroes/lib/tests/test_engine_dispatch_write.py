@@ -30,6 +30,11 @@ _EA = importlib.util.spec_from_file_location(
 EA = importlib.util.module_from_spec(_EA)
 _EA.loader.exec_module(EA)
 
+_RR = importlib.util.spec_from_file_location(
+    "round_records", os.path.join(_HERE, "..", "round_records.py"))
+RR = importlib.util.module_from_spec(_RR)
+_RR.loader.exec_module(RR)
+
 
 @pytest.fixture(autouse=True)
 def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
@@ -2408,3 +2413,67 @@ def test_write_legacy_uncontracted_resume_grades_like_parse_result(tmp_path):
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade["ok"] is True
     assert grade["signal"] == "ok"
+
+
+def _execution_record_completed_write_attempt(
+    tmp_path, run_dir, *, stdout, echo_nonce="execution-record-nonce",
+):
+    """One completed write attempt on disk for run_execution_record round-trips."""
+    wt, _main = _linked_worktree(tmp_path)
+    wt_real = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(wt_real)
+    ED._acquire_worktree_lease(wt_real, run_dir)
+    ok, detail = ED._open_write_run(
+        run_dir, engine="codex", argv=["codex"], cwd=wt_real,
+        timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=_prompt(tmp_path), order_id="execution-record-1", base_sha="abc",
+        worktree_baseline=baseline, progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert ok, detail
+    records, _ = ED._journal_read(run_dir)
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            if rec.get("kind") == "run-opened":
+                rec["echoNonce"] = echo_nonce
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "wallSeconds": 1.0, "stdoutBytes": len(stdout),
+        "at": time.time(),
+    })
+
+
+def test_run_execution_record_write_stamps_evidence_binding(tmp_path):
+    run_dir = str(tmp_path / "write-ev-binding")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout = _build_ok_stdout()
+    _execution_record_completed_write_attempt(tmp_path, run_dir, stdout=stdout)
+    records, _ = ED._journal_read(run_dir)
+    fed_prompt = next(rec["fedPrompt"] for rec in records if rec.get("kind") == "run-opened")
+    parsed = EA.grade_write_report("codex", "build", stdout, fed_prompt)
+    assert parsed["ok"] is True
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["resultKind"] == "evidence"
+    assert record["resultDigest"] == RR.payload_sha256(parsed["evidence"])
+
+
+def test_run_execution_record_write_omits_binding_when_parse_yields_nothing(tmp_path):
+    run_dir = str(tmp_path / "write-no-parse-binding")
+    os.makedirs(run_dir, exist_ok=True)
+    _execution_record_completed_write_attempt(tmp_path, run_dir, stdout="not a write report\n")
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert "resultDigest" not in record
+    assert "resultKind" not in record
