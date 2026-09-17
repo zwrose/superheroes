@@ -2,6 +2,7 @@ import json
 import os
 import sys
 
+import model_registry
 import pytest
 
 import round_certification as RC
@@ -48,6 +49,49 @@ def test_missing_loop_state_refuses(tmp_path):
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
     assert refusal["artifact"] == RC.STATE_FILE
+
+
+def test_absent_journal_refuses(tmp_path):
+    session_dir = write_session(tmp_path)
+    os.remove(os.path.join(session_dir, RC.JOURNAL_FILE))
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == RC.JOURNAL_FILE
+
+
+def test_unreadable_journal_refuses(tmp_path):
+    session_dir = write_session(tmp_path)
+    path = os.path.join(session_dir, RC.JOURNAL_FILE)
+    os.remove(path)
+    os.mkdir(path)
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == RC.JOURNAL_FILE
+
+
+def test_journal_corrupt_line_refuses(tmp_path):
+    session_dir = write_session(tmp_path)
+    path = os.path.join(session_dir, RC.JOURNAL_FILE)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write('{"cmd":"ok"}\n')
+        fh.write("not-json\n")
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == RC.JOURNAL_FILE
+    assert "line 2" in refusal["detail"]
+
+
+def test_journal_blank_lines_only_does_not_certify_claimed_seats(tmp_path):
+    session_dir = write_session(tmp_path, envelopes=[])
+    path = os.path.join(session_dir, RC.JOURNAL_FILE)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n\n")
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal is not None
 
 
 def test_unknown_verdict_refuses(tmp_path):
@@ -257,6 +301,41 @@ def test_check_same_family_seat_refuses(tmp_path):
     assert refusal["artifact"] == "code-reviewer"
 
 
+def test_author_family_matches_registry_for_each_vendor(tmp_path):
+    session_dir = write_session(tmp_path)
+    for vendor in model_registry.VENDORS:
+        ctx, _ = RC._load_context(session_dir)
+        ctx["state"]["config"]["fixerVendor"] = vendor
+        assert RC._author_family(ctx["state"]) == model_registry.family_for(
+            "code-fixer", vendor
+        )
+
+
+def test_same_family_seat_non_matching_family_does_not_refuse(tmp_path):
+    session_dir = write_session(
+        tmp_path,
+        state={
+            "seatMapReceipts": [
+                {
+                    "round": "1",
+                    "map": {
+                        "seats": {"code-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"}},
+                        "degradations": [
+                            {
+                                "constraint": "same-family",
+                                "seat": "code-reviewer",
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+        envelopes=[],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    assert RC.check_same_family_seat(ctx) is None
+
+
 # --- check_unfetched_findings -------------------------------------------------
 
 def test_check_unfetched_findings_clean_passes(tmp_path):
@@ -445,6 +524,22 @@ def test_seat_provenance_totality_maps_receipt_values():
 
 def test_seat_provenance_orchestrator_fulfilled_refuses():
     assert RC.map_seat_provenance("orchestrator-fulfilled") is None
+
+
+def test_certification_shape_matrix():
+    state = {"certification": {"shape": "custom-shape"}}
+    seats_dispatch = [{"provenance": "dispatch-observed"}]
+    assert RC._certification_shape(state, seats_dispatch) == "custom-shape"
+
+    state_full = {"certification": {"shape": "full-panel-confirmed"}}
+    seats_hand = [{"provenance": "hand-landed"}]
+    assert RC._certification_shape(state_full, seats_hand) == "audited-chain"
+
+    state_none = {"certification": {"shape": None}}
+    assert RC._certification_shape(state_none, seats_hand) == "audited-chain"
+
+    state_other = {"certification": {"shape": "custom-shape"}}
+    assert RC._certification_shape(state_other, seats_hand) == "custom-shape"
 
 
 def test_hand_landed_forces_audited_chain_shape(tmp_path):
