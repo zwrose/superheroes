@@ -2461,11 +2461,18 @@ def _attempt_last_message_path(run_dir_real, attempt):
 def _argv_for_attempt(argv, run_dir_real, attempt, engine):
     """Per-attempt argv: codex last-message path tracks the attempt number. Never raises."""
     argv = list(argv)
-    if engine == "codex" and "--output-last-message" in argv:
+    if engine != "codex":
+        return argv
+    path = _attempt_last_message_path(run_dir_real, attempt)
+    if "--output-last-message" in argv:
         idx = argv.index("--output-last-message")
         if idx + 1 < len(argv):
-            argv[idx + 1] = _attempt_last_message_path(run_dir_real, attempt)
-    return argv
+            argv[idx + 1] = path
+        return argv
+    # Preflight builds argv before run_dir resolves; inject codex json flags here.
+    if argv and argv[-1] == "-":
+        return argv[:-1] + ["--json", "--output-last-message", path, "-"]
+    return argv + ["--json", "--output-last-message", path]
 
 
 def _review_stdout_for_parse(engine, stdout, run_dir_real, attempt):
@@ -2596,6 +2603,7 @@ def _review_attempt_engagement(
     """
     if engagement is None:
         if engine == "codex":
+            # telemetry tracks presence of the tool-call channel, not the count; read is the gate.
             tokens = engine_adapter.codex_event_tokens(stdout)
             tool_calls = engine_adapter.codex_tool_calls(stdout)
             source = "codex-events" if tool_calls is not None else "none"
@@ -3766,11 +3774,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
             view_path = view["path"]
             cwd = os.path.realpath(view_path)
-            if run_dir_real is None:
-                run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
             opts = {"model": model, "engine_model": engine_model, "cwd": cwd}
-            if engine == "codex":
-                opts["last_message_path"] = _attempt_last_message_path(run_dir_real, 1)
             built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
             if built["reason"] is not None:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -3779,19 +3783,17 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real or "", argv=[],
                 ), view)
-                if run_dir_real is None:
-                    run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
-                return _terminate_run(
-                    run_dir_real, {"opened": {
-                        "viewPath": view_path,
-                        "repoRoot": repo_detail,
-                        "engine": engine,
-                        "runKind": RUN_KIND_REVIEW,
-                    }},
-                    record_kind="run-folded", result=err,
-                )
+                try:
+                    sanitized_view.destroy_sanitized_view(view_path)
+                except Exception:
+                    pass
+                return _finish_preflight_terminal(repo_detail, err, engine=engine)
 
             argv = built["argv"]
+            if run_dir_real is None:
+                run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
+            if engine == "codex":
+                argv = _argv_for_attempt(argv, run_dir_real, 1, engine)
             notice = sanitized_view.sanitized_view_notice(view, mode=resolved_mode["mode"])
             fed_prompt = ANTIHIJACK_PREAMBLE + notice + base_prompt
             echo_nonce = secrets.token_hex(16)
@@ -4013,10 +4015,21 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
              "attempts": 0, "forfeited": False, "terminal": True},
         )
 
+    opts = {"model": model, "engine_model": engine_model, "cwd": cwd_real}
+    built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
+    if built["reason"] is not None:
+        return _write_preflight_terminal(
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+             "detail": "engine-config:%s" % built["reason"],
+             "attempts": 0, "forfeited": False, "terminal": True},
+        )
+    argv = built["argv"]
+
     if run_dir is None:
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-absent",
              "attempts": 0, "forfeited": False, "terminal": True},
+            argv=argv,
         )
 
     ok_rd, rd_detail = _validate_run_dir(run_dir, create=True)
@@ -4024,22 +4037,12 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": rd_detail,
              "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir=run_dir or "", argv=[],
+            run_dir=run_dir or "", argv=argv,
         )
     run_dir_real = rd_detail
 
-    opts = {"model": model, "engine_model": engine_model, "cwd": cwd_real}
     if engine == "codex":
-        opts["last_message_path"] = _attempt_last_message_path(run_dir_real, 1)
-    built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
-    if built["reason"] is not None:
-        return _write_preflight_terminal(
-            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-             "detail": "engine-config:%s" % built["reason"],
-             "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir=run_dir_real, argv=[],
-        )
-    argv = built["argv"]
+        argv = _argv_for_attempt(argv, run_dir_real, 1, engine)
 
     caller_omitted_expected = expected_items is None and expected_items_file is None
 
