@@ -624,7 +624,8 @@ def test_legacy_model_keyword_refuses_before_spawn(tmp_path):
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=build_view,
     )
-    assert res["reason"] == "legacy-seat-args"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "legacy-seat-args"
     assert res["attempts"] == 0
     assert res["forfeited"] is False
     assert "sanitizedView" not in res
@@ -1103,7 +1104,8 @@ def test_edge4_dropped_role_flag_carries_terminal_envelope_review(capsys):
     ]
     assert ED.main(argv) == 1
     res = json.loads(capsys.readouterr().out.strip())
-    assert res["reason"] == "legacy-seat-args"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "legacy-seat-args"
     assert res["terminal"] is True
     assert res.get("runOpened") is False
     assert res["attempts"] == 0
@@ -9087,12 +9089,27 @@ DG = importlib.util.module_from_spec(_DG)
 _DG.loader.exec_module(DG)
 
 
-def _assert_entry_refusal_reason(result, producer, expected):
+def _assert_dispatch_result_entry_refusal(result, producer, expected_entry_reason):
     assert result.get("ok") is False, (producer, result)
     reason = result.get("reason")
-    assert isinstance(reason, str), (producer, result)
-    assert reason == expected, (producer, expected, reason, result)
-    assert reason in ED.seat_bundle.ENTRY_REFUSAL_REASONS, (producer, reason, result)
+    assert reason == ED.dispatch_outcome.REASON_UNRUNNABLE, (producer, reason, result)
+    entry_reason = result.get("entryReason")
+    assert isinstance(entry_reason, str), (producer, result)
+    assert entry_reason == expected_entry_reason, (
+        producer, expected_entry_reason, entry_reason, result,
+    )
+    assert entry_reason in ED.seat_bundle.ENTRY_REFUSAL_REASONS, (
+        producer, entry_reason, result,
+    )
+
+
+def _assert_cli_payload_entry_refusal(payload, producer, expected):
+    assert payload.get("ok") is False, (producer, payload)
+    token = payload.get("reason")
+    if token is None:
+        token = payload.get("entryReason")
+    assert isinstance(token, str), (producer, payload)
+    assert token == expected, (producer, expected, token, payload)
 
 
 def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, capsys):
@@ -9105,34 +9122,34 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
     seat = _seat_json("codex", "gpt-5.6-sol", "high")
     write_seat = _seat_json("codex", "gpt-5.6-sol", "high", _WRITE_ROLE)
 
-    _assert_entry_refusal_reason(
+    _assert_dispatch_result_entry_refusal(
         ED.dispatch_review("codex", prompt_path=prompt, repo_root=repo_root),
         "dispatch-review-library-legacy",
         "legacy-seat-args",
     )
-    _assert_entry_refusal_reason(
+    _assert_dispatch_result_entry_refusal(
         ED.dispatch_review(
             seat=_codex_seat(), prompt_path=prompt, repo_root=repo_root, prompt_pat="typo",
         ),
         "dispatch-review-library-unknown-kwargs",
         "unknown-dispatch-kwargs",
     )
-    _assert_entry_refusal_reason(
+    _assert_dispatch_result_entry_refusal(
         ED.dispatch_review(
             seat=_codex_seat(), prompt_path=prompt, repo_root=repo_root, mode="not-a-mode",
             run_engine=_never_call, build_view=_never_build_view,
         ),
         "dispatch-review-library-mode-invalid",
-        ED.dispatch_outcome.REASON_UNRUNNABLE,
+        "mode-invalid",
     )
-    _assert_entry_refusal_reason(
+    _assert_dispatch_result_entry_refusal(
         ED.dispatch_review(
             seat={"vendor": "codex", "model": "gpt-5.6-sol", "effort": "high"},
             prompt_path=prompt, repo_root=repo_root,
             run_engine=_never_call, build_view=_never_build_view,
         ),
         "dispatch-review-library-seat-invalid",
-        ED.dispatch_outcome.REASON_UNRUNNABLE,
+        "role-key-absent",
     )
 
     assert ED.main([
@@ -9140,34 +9157,33 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
         "--prompt-path", prompt, "--repo-root", repo_root, "--run-dir", run_dir,
         "--engine", "codex",
     ]) == 1
-    _assert_entry_refusal_reason(
+    _assert_dispatch_result_entry_refusal(
         json.loads(capsys.readouterr().out.strip()),
         "dispatch-review-cli-legacy",
         "legacy-seat-args",
     )
 
-    _assert_entry_refusal_reason(
+    _assert_dispatch_result_entry_refusal(
         ED.dispatch_write(prompt_path=prompt, cwd=wt, engine="cursor"),
         "dispatch-write-library-legacy",
         "legacy-seat-args",
     )
-    _assert_entry_refusal_reason(
-        ED.dispatch_write(
-            seat=_codex_seat(role=_WRITE_ROLE),
-            prompt_path=str(tmp_path / "missing-write-prompt.txt"),
-            cwd=wt, run_dir=str(tmp_path / "write-run"), order_id="census",
-            run_engine=_never_call,
-        ),
-        "dispatch-write-library-prompt-missing",
-        ED.dispatch_outcome.REASON_UNRUNNABLE,
+    prompt_missing = ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=str(tmp_path / "missing-write-prompt.txt"),
+        cwd=wt, run_dir=str(tmp_path / "write-run"), order_id="census",
+        run_engine=_never_call,
     )
+    assert prompt_missing.get("ok") is False
+    assert prompt_missing["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert "entryReason" not in prompt_missing
 
     assert ED.main([
         "dispatch-write", "--seat", write_seat,
         "--prompt-path", prompt, "--cwd", wt, "--run-dir", run_dir,
         "--model", "gpt-5.6-sol",
     ]) == 1
-    _assert_entry_refusal_reason(
+    _assert_dispatch_result_entry_refusal(
         json.loads(capsys.readouterr().out.strip()),
         "dispatch-write-cli-legacy",
         "legacy-seat-args",
@@ -9175,39 +9191,23 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
 
     assert DG.main(["check", "--seat", '{"vendor":"codex","model":"gpt-5.6-sol","effort":"high"}']) == 1
     guard_out = json.loads(capsys.readouterr().out.splitlines()[0])
-    _assert_entry_refusal_reason(guard_out, "guard-check-cli-seat-invalid", "role-key-absent")
+    _assert_cli_payload_entry_refusal(guard_out, "guard-check-cli-seat-invalid", "role-key-absent")
 
     assert DG.main(["check", "--seat", seat, "--role", _REVIEW_ROLE]) == 1
     guard_legacy = json.loads(capsys.readouterr().out.strip())
-    _assert_entry_refusal_reason(guard_legacy, "guard-check-cli-legacy", "legacy-seat-args")
+    _assert_cli_payload_entry_refusal(guard_legacy, "guard-check-cli-legacy", "legacy-seat-args")
 
     assert EA.main([
         "build-argv", "--seat", '{"vendor":"codex","model":"gpt-5.6-sol","effort":"high"}',
         "--run-kind", "review",
-    ]) == 0
+    ]) == 1
     build_out = json.loads(capsys.readouterr().out.strip())
     assert build_out["reason"] == "engine-config"
-    assert build_out["detail"] in ED.seat_bundle.ENTRY_REFUSAL_REASONS
+    assert build_out["detail"] == "role-key-absent"
 
     assert EA.main(["build-argv", "--seat", seat, "--run-kind", "review", "--role", "reviewer"]) == 1
     build_legacy = json.loads(capsys.readouterr().out.strip())
-    _assert_entry_refusal_reason(build_legacy, "build-argv-cli-legacy", "legacy-seat-args")
-
-
-def test_entry_refusal_producer_undeclared_reason_becomes_entry_reason_undeclared(
-    tmp_path, monkeypatch,
-):
-    sentinel = {"ok": False, "reason": "chokepoint-sentinel", "detail": "sentinel"}
-    monkeypatch.setattr(ED.seat_bundle, "resolve_entry", lambda *a, **k: sentinel)
-    res = ED.dispatch_review(
-        seat=_codex_seat(),
-        prompt_path=_valid_prompt(tmp_path),
-        repo_root=_repo(tmp_path),
-        run_engine=_never_call,
-        build_view=_never_build_view,
-    )
-    assert res["reason"] == ED.seat_bundle.ENTRY_REASON_UNDECLARED
-    assert res["detail"] == "sentinel"
+    _assert_cli_payload_entry_refusal(build_legacy, "build-argv-cli-legacy", "legacy-seat-args")
 
 
 def test_early_review_prompt_missing_preserves_opened_run_provenance(tmp_path):
@@ -9296,7 +9296,6 @@ def test_early_write_prompt_missing_preserves_opened_run_provenance(tmp_path):
 
 def test_entry_refusal_reason_census_provenance_by_declared_set(tmp_path):
     """Every declared entry-refusal reason carries run provenance at the chokepoint."""
-    assert ED.dispatch_outcome.REASON_UNRUNNABLE in ED.seat_bundle.ENTRY_REFUSAL_REASONS
     assert ED.seat_bundle.ENTRY_REASON_UNDECLARED in ED.seat_bundle.ENTRY_REFUSAL_REASONS
 
     run_dir = str(tmp_path / "census-run")
@@ -9305,17 +9304,19 @@ def test_entry_refusal_reason_census_provenance_by_declared_set(tmp_path):
     snapshot = _opened_resolved_inputs(run_dir)
 
     for reason in sorted(ED.seat_bundle.ENTRY_REFUSAL_REASONS):
-        refusal = {"ok": False, "reason": reason, "detail": "census-probe"}
+        refusal = {"ok": False, "entryReason": reason, "detail": "census-probe"}
 
         no_run = ED._entry_refusal_terminal(refusal, run_dir=None)
-        assert no_run["reason"] == reason
+        assert no_run["entryReason"] == reason
+        assert no_run["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
         assert no_run.get("runOpened") is False
         assert no_run["runDir"] == ""
         assert no_run.get("resolvedInputsStatus") is None
         assert "resolvedInputs" not in no_run
 
         with_run = ED._entry_refusal_terminal(refusal, run_dir=run_dir)
-        assert with_run["reason"] == reason
+        assert with_run["entryReason"] == reason
+        assert with_run["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
         assert with_run.get("runOpened") is True
         assert with_run["runDir"] == run_dir_real
         assert with_run.get("resolvedInputsStatus") is None
@@ -9325,18 +9326,24 @@ def test_entry_refusal_reason_census_provenance_by_declared_set(tmp_path):
 def test_entry_refusal_chokepoint_rejects_undeclared_reason(tmp_path):
     """Undeclared entry-refusal reasons fail closed at both chokepoints."""
     planted_reason = "planted-not-in-vocabulary"
-    refusal = {"ok": False, "reason": planted_reason, "detail": "census-probe"}
+    refusal = {"ok": False, "entryReason": planted_reason, "detail": "census-probe"}
 
     terminal = ED._entry_refusal_terminal(refusal, run_dir=None)
-    assert terminal["reason"] == ED.seat_bundle.ENTRY_REASON_UNDECLARED
+    assert terminal["entryReason"] == ED.seat_bundle.ENTRY_REASON_UNDECLARED
+    assert terminal["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
     assert planted_reason in terminal["detail"]
     assert "declared vocabulary" in terminal["detail"]
     assert terminal.get("runOpened") is False
     assert terminal["runDir"] == ""
 
     bundle = ED.seat_bundle._entry_refusal(planted_reason, "census-probe")
-    assert bundle["reason"] == ED.seat_bundle.ENTRY_REASON_UNDECLARED
+    assert bundle["entryReason"] == ED.seat_bundle.ENTRY_REASON_UNDECLARED
+    assert "reason" not in bundle
     assert planted_reason in bundle["detail"]
+
+    missing = ED._entry_refusal_terminal({"ok": False, "detail": "census-probe"}, run_dir=None)
+    assert missing["entryReason"] == ED.seat_bundle.ENTRY_REASON_UNDECLARED
+    assert missing["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
 
 
 def test_entry_unknown_kwargs_refusal_preserves_existing_review_run_provenance(tmp_path):
@@ -9363,7 +9370,8 @@ def test_entry_unknown_kwargs_refusal_preserves_existing_review_run_provenance(t
         run_dir=run_dir,
         prompt_pat="typo",
     )
-    assert res["reason"] == "unknown-dispatch-kwargs"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "unknown-dispatch-kwargs"
     assert res.get("runOpened") is True
     assert res["runDir"] == os.path.realpath(run_dir)
     assert res["resolvedInputs"] == snapshot_before
@@ -9392,7 +9400,8 @@ def test_entry_unknown_kwargs_refusal_preserves_existing_write_run_provenance(tm
         prompt_pat="typo",
         run_engine=FakeRunner([]),
     )
-    assert res["reason"] == "unknown-dispatch-kwargs"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "unknown-dispatch-kwargs"
     assert res.get("runOpened") is True
     assert res["runDir"] == os.path.realpath(run_dir)
     assert res["resolvedInputs"] == snapshot_before
@@ -9642,7 +9651,8 @@ def test_main_dropped_flag_attached_run_dir_carries_provenance(capsys, tmp_path)
     ]
     assert ED.main(argv) == 1
     res = json.loads(capsys.readouterr().out.strip())
-    assert res["reason"] == "legacy-seat-args"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "legacy-seat-args"
     assert res.get("runOpened") is True
     assert res["runDir"] == os.path.realpath(run_dir)
 

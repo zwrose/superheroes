@@ -163,14 +163,14 @@ def _coerce_rejected_mode(mode):
 
 
 def _mode_invalid_refusal(rejected_mode):
-    return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+    return {"ok": False, "entryReason": "mode-invalid",
             "detail": MODE_REFUSAL_INVALID,
             "mode": sanitized_view.MODE_REVIEW,
             "rejectedMode": _coerce_rejected_mode(rejected_mode)}
 
 
 def _expected_result_kind_invalid_refusal(rejected_kind, effective_mode):
-    return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+    return {"ok": False, "entryReason": "expected-result-kind-invalid",
             "detail": RESULT_KIND_REFUSAL_INVALID,
             "mode": effective_mode,
             "rejectedResultKind": _coerce_rejected_mode(rejected_kind)}
@@ -188,7 +188,7 @@ def _unknown_kwargs_refusal(unknown_keys, *, accepted_params):
     )
     return {
         "ok": False,
-        "reason": refusal["reason"],
+        "entryReason": refusal["entryReason"],
         "detail": refusal["detail"],
     }
 
@@ -222,7 +222,7 @@ def _legacy_dispatch_refusal(*, mode=None):
 def _terminal_pre_open_refusal(refusal: dict, *, mode=None) -> dict:
     base = {
         "ok": False,
-        "reason": refusal["reason"],
+        "entryReason": refusal["entryReason"],
         "detail": refusal["detail"],
     }
     if mode is not None:
@@ -231,15 +231,11 @@ def _terminal_pre_open_refusal(refusal: dict, *, mode=None) -> dict:
 
 
 def _seat_dispatch_refusal(seat_result, *, mode=None):
-    seat_reason = seat_result.get("reason", "seat-invalid")
-    detail = seat_result.get("detail") or seat_reason
-    if not isinstance(seat_reason, str) or seat_reason not in seat_bundle.ENTRY_REFUSAL_REASONS:
-        outward_reason = seat_bundle.ENTRY_REASON_UNDECLARED
-    else:
-        outward_reason = dispatch_outcome.REASON_UNRUNNABLE
+    entry_reason = seat_result.get("entryReason", "seat-invalid")
+    detail = seat_result.get("detail") or entry_reason
     base = {
         "ok": False,
-        "reason": outward_reason,
+        "entryReason": entry_reason,
         "detail": detail,
         "seatDetail": seat_result.get("detail"),
     }
@@ -259,14 +255,14 @@ def _entry_refusal_terminal(
     run_kind=RUN_KIND_REVIEW,
 ):
     """Single chokepoint for dispatch_review/dispatch_write entry refusals (#1269)."""
-    reason = refusal.get("reason")
-    if not isinstance(reason, str) or reason not in seat_bundle.ENTRY_REFUSAL_REASONS:
-        undeclared = reason if isinstance(reason, str) else repr(reason)
+    entry_reason = refusal.get("entryReason")
+    if not isinstance(entry_reason, str) or entry_reason not in seat_bundle.ENTRY_REFUSAL_REASONS:
+        undeclared = entry_reason if isinstance(entry_reason, str) else repr(entry_reason)
         vocabulary = ", ".join(sorted(seat_bundle.ENTRY_REFUSAL_REASONS))
         refusal = {
             **refusal,
             "ok": False,
-            "reason": seat_bundle.ENTRY_REASON_UNDECLARED,
+            "entryReason": seat_bundle.ENTRY_REASON_UNDECLARED,
             "detail": (
                 f"entry refusal reason {undeclared!r} is not in the declared vocabulary "
                 f"({vocabulary})"
@@ -279,6 +275,7 @@ def _entry_refusal_terminal(
         "attempts": 0,
         "forfeited": False,
     }
+    result["reason"] = dispatch_outcome.REASON_UNRUNNABLE
     if mode is not None and "mode" not in result:
         result["mode"] = mode
     run_dir_value = run_dir or ""
@@ -350,7 +347,7 @@ def _dispatch_allowlist_validate(role, vendor, model, effort):
         return _normalize_allowlist_verdict(verdict, role=role, vendor=vendor)
     return {
         "ok": False,
-        "reason": resolved.get("detail") or resolved.get("reason"),
+        "reason": resolved.get("detail") or resolved.get("entryReason"),
         "allowlist": [],
         "allowlist_pairs": [],
     }
@@ -374,7 +371,7 @@ def _entry_allowlist_refusal(
         return None
     result = {
         "ok": False,
-        "reason": dispatch_outcome.REASON_UNRUNNABLE,
+        "entryReason": "allowlist-refused",
         "detail": verdict["reason"],
         "allowlistGuard": _allowlist_guard_payload(verdict),
         "attempts": 0,
@@ -547,7 +544,7 @@ def _spawn_allowlist_verdict(opened, *, journal_corrupt=False):
         return _normalize_allowlist_verdict(verdict, role=role, vendor=vendor)
     return {
         "ok": False,
-        "reason": resolved.get("detail") or resolved.get("reason"),
+        "reason": resolved.get("detail") or resolved.get("entryReason"),
         "allowlist": list((verdict or {}).get("allowlist") or []),
         "allowlist_pairs": list((verdict or {}).get("allowlist_pairs") or []),
     }
@@ -1837,7 +1834,7 @@ def _max_wait_refusal(
     run_kind=RUN_KIND_REVIEW,
 ):
     refusal = {
-        "ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": detail,
+        "ok": False, "entryReason": "max-wait-out-of-range", "detail": detail,
         "attempts": 0, "forfeited": False, "terminal": True,
     }
     return _entry_refusal_terminal(
@@ -3903,6 +3900,9 @@ def dispatch_review(*args, seat=None, prompt_path=None,
                 )
         entry = seat_bundle.resolve_entry(
             seat, verb="dispatch-review", mode=mode,
+            mode_for_role_check=seat_bundle.dispatch_review_mode_for_role_check(
+                mode, run_dir,
+            ),
         )
         if not entry.get("ok"):
             allowlist_verdict = entry.get("allowlistVerdict")
@@ -3939,7 +3939,7 @@ def dispatch_review(*args, seat=None, prompt_path=None,
         return stamped
     except Exception as exc:
         return _entry_refusal_terminal(
-            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+            {"ok": False, "entryReason": "internal-error",
              "detail": "internal-%s" % type(exc).__name__},
             run_dir=run_dir,
             mode=resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW),
@@ -4420,7 +4420,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
         )
     except Exception as exc:
         return _entry_refusal_terminal(
-            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+            {"ok": False, "entryReason": "internal-error",
              "detail": "internal-%s" % type(exc).__name__},
             run_dir=run_dir,
         )

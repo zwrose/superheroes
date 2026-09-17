@@ -11,7 +11,6 @@ import json
 import os
 
 import dispatch_allowlist
-import dispatch_outcome
 import model_registry
 
 _BUILD_ARGV_RUN_KINDS = frozenset({"review", "build", "fix"})
@@ -59,12 +58,12 @@ _ENTRY_VERBS = frozenset({
     "dispatch-review", "dispatch-write", "build-argv", "guard-check",
 })
 
-ENTRY_REASON_UNDECLARED = dispatch_outcome.REASON_ENTRY_UNDECLARED
+ENTRY_REASON_UNDECLARED = "entry-reason-undeclared"
 
-"""Closed vocabulary of outward entry-refusal reason tokens (#1269).
+"""Closed vocabulary of outward entry-refusal entryReason tokens (#1269).
 
 Every refusal the dispatch shell emits at entry must use a member of this set.
-The entry chokepoints refuse any reason outside it with ENTRY_REASON_UNDECLARED.
+The entry chokepoints refuse any entryReason outside it with ENTRY_REASON_UNDECLARED.
 """
 ENTRY_REFUSAL_REASONS = frozenset({
     "allowlist-malformed",
@@ -73,9 +72,13 @@ ENTRY_REFUSAL_REASONS = frozenset({
     "effort-invalid",
     "effort-key-absent",
     "effort-token-conflict",
+    "expected-result-kind-invalid",
     ENTRY_REASON_UNDECLARED,
+    "internal-error",
     "invalid-model-effort",
     "legacy-seat-args",
+    "max-wait-out-of-range",
+    "mode-invalid",
     "mode-role-mismatch",
     "model-ambiguous",
     "model-invalid",
@@ -95,7 +98,6 @@ ENTRY_REFUSAL_REASONS = frozenset({
     "unknown-role",
     "unknown-vendor",
     "unknown-verb",
-    dispatch_outcome.REASON_UNRUNNABLE,
     "vendor-hint-mismatch",
     "vendor-invalid",
     "verb-role-mismatch",
@@ -134,7 +136,7 @@ def legacy_refusal(*, dropped_flags: tuple[str, ...] | None = None) -> dict:
         )
     return {
         "ok": False,
-        "reason": "legacy-seat-args",
+        "entryReason": "legacy-seat-args",
         "detail": " ".join(parts),
     }
 
@@ -180,7 +182,7 @@ def unknown_kwargs_refusal(unknown_keys: tuple[str, ...], *, accepted_params: st
     keys = ", ".join(unknown_keys)
     return {
         "ok": False,
-        "reason": "unknown-dispatch-kwargs",
+        "entryReason": "unknown-dispatch-kwargs",
         "detail": (
             f"unknown keyword argument(s) {keys}; "
             f"accepted parameters: {accepted_params}; "
@@ -392,24 +394,16 @@ def parse(raw, *, vendor_hint=None) -> dict:
 
 _EFFORT_SOURCE_CANONICAL = frozenset({"caller", "default", "resolved"})
 
-# Producer vocabulary from model_registry.resolve_dispatch — keys must cover every token.
-_REGISTRY_EFFORT_SOURCES = frozenset({
-    "seat-default",
-    "given",
-    "token-encoded",
-    "resolved-unique",
-    "resolved-lowest-rung",
-})
-
 _EFFORT_SOURCE_MAP = {
-    "seat-default": "default",
-    "given": "caller",
-    "token-encoded": "resolved",
-    "resolved-unique": "resolved",
-    "resolved-lowest-rung": "resolved",
+    model_registry.EFFORT_SOURCE_SEAT_DEFAULT: "default",
+    model_registry.EFFORT_SOURCE_GIVEN: "caller",
+    model_registry.EFFORT_SOURCE_TOKEN_ENCODED: "resolved",
+    model_registry.EFFORT_SOURCE_RESOLVED_UNIQUE: "resolved",
+    model_registry.EFFORT_SOURCE_RESOLVED_LOWEST_RUNG: "resolved",
 }
 
-_MODE_ROLE_CHECK_UNSET = object()
+assert set(_EFFORT_SOURCE_MAP.keys()) == model_registry.EFFORT_SOURCES
+
 _MODE_ROLE_CHECK_SKIP = object()
 
 
@@ -714,18 +708,18 @@ def validate_effort_only(bundle: dict) -> dict:
     return _validate_model_effort(bundle)
 
 
-def _entry_refusal(reason: str, detail: str) -> dict:
-    if reason not in ENTRY_REFUSAL_REASONS:
+def _entry_refusal(entry_reason: str, detail: str) -> dict:
+    if entry_reason not in ENTRY_REFUSAL_REASONS:
         vocabulary = ", ".join(sorted(ENTRY_REFUSAL_REASONS))
         return {
             "ok": False,
-            "reason": ENTRY_REASON_UNDECLARED,
+            "entryReason": ENTRY_REASON_UNDECLARED,
             "detail": (
-                f"entry refusal reason {reason!r} is not in the declared vocabulary "
+                f"entry refusal reason {entry_reason!r} is not in the declared vocabulary "
                 f"({vocabulary})"
             ),
         }
-    return {"ok": False, "reason": reason, "detail": detail}
+    return {"ok": False, "entryReason": entry_reason, "detail": detail}
 
 
 def _parse_entry_dict(obj: dict) -> dict:
@@ -863,7 +857,7 @@ def _brief_check_role_mode_refusal(effective_mode: str) -> dict:
     )
 
 
-def _dispatch_review_mode_for_role_check(mode: str | None, run_dir) -> object | str | None:
+def dispatch_review_mode_for_role_check(mode: str | None, run_dir) -> object | str | None:
     """Continuation-aware effective mode for post-allowlist role coherence."""
     if run_dir is None:
         return None
@@ -883,28 +877,6 @@ def _dispatch_review_mode_for_role_check(mode: str | None, run_dir) -> object | 
     if mode != journal_mode:
         return _MODE_ROLE_CHECK_SKIP
     return mode
-
-
-def _infer_dispatch_review_mode_for_role_check(mode: str | None):
-    """Read dispatch_review run_dir from the caller when resolve_entry omits mode_for_role_check."""
-    frame = inspect.currentframe()
-    try:
-        caller = frame.f_back if frame is not None else None
-        while caller is not None:
-            if (
-                caller.f_code.co_name == "dispatch_review"
-                and os.path.basename(caller.f_code.co_filename) == "engine_dispatch.py"
-            ):
-                import engine_dispatch as ed  # noqa: WPS433 — lazy: sentinel + journal peek
-
-                run_dir = caller.f_locals.get("run_dir")
-                if run_dir is ed._PARAM_UNSET:
-                    run_dir = None
-                return _dispatch_review_mode_for_role_check(mode, run_dir)
-            caller = caller.f_back
-    finally:
-        del frame
-    return None
 
 
 def _dispatch_review_mode_role_refusal(
@@ -1015,7 +987,7 @@ def _normalize_allowlist_verdict(verdict, *, role: str, vendor: str, model: str,
             return _entry_refusal("allowlist-malformed", malformed)
         return {
             "ok": False,
-            "reason": "allowlist-refused",
+            "entryReason": "allowlist-refused",
             "detail": reason,
             "allowlistVerdict": verdict,
         }
@@ -1059,7 +1031,7 @@ def _undispatchable_vendor_refusal(vendor: str, *, verb: str) -> dict:
 
 
 def resolve_entry(
-    seat_raw, *, verb, mode=None, mode_for_role_check=_MODE_ROLE_CHECK_UNSET,
+    seat_raw, *, verb, mode=None, mode_for_role_check=None,
 ) -> dict:
     """Single chokepoint for dispatch entry seat resolution (#1269 WO-1)."""
     if verb not in _ENTRY_VERBS:
@@ -1068,8 +1040,6 @@ def resolve_entry(
             f"unknown resolve_entry verb {verb!r}; accepted verbs: "
             f"{_format_valid(tuple(sorted(_ENTRY_VERBS)))}",
         )
-    if mode_for_role_check is _MODE_ROLE_CHECK_UNSET and verb == "dispatch-review":
-        mode_for_role_check = _infer_dispatch_review_mode_for_role_check(mode)
     parsed = _parse_entry_raw(seat_raw)
     if not parsed.get("ok"):
         return parsed

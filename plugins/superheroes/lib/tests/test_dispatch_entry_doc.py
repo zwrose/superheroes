@@ -173,11 +173,23 @@ def test_cli_writes_file(tmp_path, monkeypatch):
     assert on_disk == DED.generate()
 
 
-def test_cli_check_absent_file_refuses(tmp_path, monkeypatch):
+def test_cli_check_absent_file_refuses(tmp_path, monkeypatch, capsys):
     missing = tmp_path / "dispatch-entry.md"
     monkeypatch.setattr(DED, "_DEFAULT_OUT", str(missing))
     rc = DED.main(["--check"])
     assert rc == 1
+    err = capsys.readouterr().err
+    assert "is missing — run the generator" in err
+
+
+def test_cli_check_stale_file_refuses(tmp_path, monkeypatch, capsys):
+    stale = tmp_path / "dispatch-entry.md"
+    stale.write_text("stale content\n", encoding="utf-8")
+    monkeypatch.setattr(DED, "_DEFAULT_OUT", str(stale))
+    rc = DED.main(["--check"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "is stale — run the generator" in err
 
 
 def test_format_default_param_unset_distinct_from_none():

@@ -43,12 +43,16 @@ Refusals raised before the run opened carry `runOpened: false` and no snapshot.
 Results no longer carry a `ledger` key. Preflight refusals return to the caller in the result body
 like every other refusal.
 
-A dispatch refused at entry may now return `reason: "entry-reason-undeclared"`. This is a terminal,
-not-run outcome: the dispatch never ran, and the result is final. It means the dispatch shell's
-entry chokepoint caught a refusal reason outside its declared entry vocabulary; the producer's own
-reason is preserved in `detail`. Consumers that interpret dispatch results by comparing `reason`
-against a hard-coded set of tokens must add this member; consumers that ask the shell's own helpers
-(`counts_as_run`, `is_terminal`) get the right answer with no change.
+Entry refusals now carry an additive `entryReason` key naming which entry check refused, from the
+dispatch shell's closed entry vocabulary, with `entry-reason-undeclared` as its fall-back when a
+refusal's own token was outside that vocabulary. **`reason` is unchanged for entry refusals** — it
+stays `unrunnable`, and the outcome vocabulary gains no member, so no consumer comparing `reason`
+against a hard-coded set needs to change. The presence of `entryReason` marks a refusal raised at
+the entry surface; a later preflight refusal carries `reason: unrunnable` and no `entryReason`.
+
+An `engine_adapter build-argv` invocation that refuses now **exits non-zero**; it previously wrote
+its refusal payload and exited 0. A caller that read the exit code as success must now read it as
+the refusal it always was.
 
 ### Composition-liveness cache
 

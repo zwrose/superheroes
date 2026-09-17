@@ -51,11 +51,11 @@ def _cli_check(args: argparse.Namespace) -> int:
             "resolved_model": None,
             "allowlist": [],
             "allowlist_pairs": [],
-            "reason": resolved.get("reason"),
+            "reason": resolved.get("entryReason"),
             "seat_detail": resolved.get("detail"),
         }
         print(json.dumps(payload))
-        print(resolved.get("detail") or resolved.get("reason"), file=sys.stderr)
+        print(resolved.get("detail") or resolved.get("entryReason"), file=sys.stderr)
         return 1
     result = dict(resolved["allowlistVerdict"])
     result["effort_source"] = resolved["effortSource"]

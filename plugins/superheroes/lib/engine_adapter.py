@@ -2182,7 +2182,7 @@ def _cmd_build_argv(args):
         if got != want:
             sys.stdout.write(json.dumps(
                 {"ok": False, "reason": "staged-input-mismatch", "path": path}) + "\n")
-            return 0
+            return 1
 
     if args.prompt_path is not None:
         ok, why = prompt_path_ok(args.prompt_path)
@@ -2190,16 +2190,16 @@ def _cmd_build_argv(args):
             sys.stdout.write(json.dumps(
                 {"ok": False, "reason": "empty-prompt", "detail": why,
                  "path": args.prompt_path}) + "\n")
-            return 0
+            return 1
 
     resolved = seat_bundle.resolve_entry(args.seat, verb="build-argv")
     if not resolved.get("ok"):
-        token = resolved.get("reason", "seat-refused")
+        token = resolved.get("entryReason", "seat-refused")
         detail = resolved.get("detail", token)
         sys.stdout.write(json.dumps(
             {"ok": False, "reason": "engine-config", "detail": token,
              "argv": [], "seat_detail": detail}) + "\n")
-        return 0
+        return 1
     role = resolved["role"]
     derived_run_kind = seat_bundle.run_kind_for_role(role)
     if args.run_kind != derived_run_kind:
@@ -2207,9 +2207,9 @@ def _cmd_build_argv(args):
             role, supplied=args.run_kind, accepted=derived_run_kind,
         )
         sys.stdout.write(json.dumps(
-            {"ok": False, "reason": "engine-config", "detail": mismatch["reason"],
+            {"ok": False, "reason": "engine-config", "detail": mismatch["entryReason"],
              "argv": [], "seat_detail": mismatch["detail"]}) + "\n")
-        return 0
+        return 1
     opts = {"cwd": args.cwd}
     res = build_argv_result(resolved, derived_run_kind, opts)
     if res["reason"] is not None:
@@ -2217,8 +2217,8 @@ def _cmd_build_argv(args):
         sys.stdout.write(json.dumps(
             {"ok": False, "reason": "engine-config", "detail": res["reason"],
              "argv": [], "seat_detail": detail}) + "\n")
-    else:
-        sys.stdout.write(json.dumps(res["argv"]) + "\n")
+        return 1
+    sys.stdout.write(json.dumps(res["argv"]) + "\n")
     return 0
 
 

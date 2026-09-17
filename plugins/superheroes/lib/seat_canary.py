@@ -129,7 +129,7 @@ def _resolve_canary_identity(seat_key, seat_config):
     entry = seat_bundle.resolve_entry(seat, verb="dispatch-review")
     if not entry.get("ok"):
         return _identity_refusal(
-            entry.get("reason") or "seat-unresolved",
+            entry.get("entryReason") or "seat-unresolved",
             entry.get("detail") or "seat resolution refused",
         )
     return {
@@ -146,7 +146,7 @@ def _resolve_canary_identity(seat_key, seat_config):
 
 
 def _unrunnable_identity_result(resolved, *, vendor=None, model=None):
-    detail = resolved.get("detail") or resolved.get("reason") or "seat-identity-refused"
+    detail = resolved.get("detail") or resolved.get("entryReason") or "seat-identity-refused"
     return {
         "engine": vendor,
         "model": model,

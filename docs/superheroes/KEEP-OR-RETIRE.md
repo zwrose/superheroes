@@ -1068,7 +1068,8 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** Not a census row. `plugins/superheroes/lib/dispatch_entry_doc.py --check`, which
   regenerates the entry doc from the dispatch shell's own argparse declarations and refuses when
   the committed `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md` differs from a
-  fresh generation, plus the cross-process determinism test that guards it. Its cost is that any
+  fresh generation, plus the cross-process determinism test that guards it, plus the `--check`
+  branch's stale-doc refusal test and its distinct missing-doc refusal test. Its cost is that any
   change to a dispatch flag's declaration requires regenerating the doc in the same change.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing the
   `--check` refusal (`is stale` or `is missing`) catching a doc that had drifted from the
@@ -1077,7 +1078,8 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Last demonstrated benefit.** The generated doc had embedded a Python object address, so it
   could not be regenerated identically; the sentinel now renders in the doc's own vocabulary and a
   cross-process determinism test guards it (this child's build record on PR #1283 and
-  `plugins/superheroes/lib/tests/bite_proofs/wo_9_1269_doc_determinism.md`).
+  `plugins/superheroes/lib/tests/bite_proofs/wo_9_1269_doc_determinism.md` and
+  `plugins/superheroes/lib/tests/bite_proofs/wo_o7_1269_entry_channel.md`).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — doc generated from argparse declarations guards declaration drift by
@@ -1091,14 +1093,14 @@ The list's units are the census rows, and each entry is keyed to its census id.
   (`test_entry_refusal_producer_census_declared_reasons`), the chokepoint provenance census against
   `_entry_refusal_terminal` with and without an opened run
   (`test_entry_refusal_reason_census_provenance_by_declared_set`), plus the chokepoint refusal for
-  undeclared reasons (`test_entry_refusal_chokepoint_rejects_undeclared_reason` and
-  `test_entry_refusal_producer_undeclared_reason_becomes_entry_reason_undeclared`). Its cost is that
+  undeclared reasons (`test_entry_refusal_chokepoint_rejects_undeclared_reason`). Its cost is that
   every new outward entry-refusal reason must be added to the declared set before it can pass the
-  chokepoint.
-- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing an
-  `entry-reason-undeclared` refusal that caught a reason outside the declared vocabulary before
-  dispatch ran. On firing, a proposal to the owner at a gardening pass. A zero citation count
-  means no undeclared reason reached the chokepoint, not that the census can go.
+  chokepoint; the outcome channel is written unconditionally by the chokepoint and the declared
+  vocabulary governs the additive `entryReason` key.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  receipt carrying `entryReason: entry-reason-undeclared` that caught a reason outside the declared
+  vocabulary before dispatch ran. On firing, a proposal to the owner at a gardening pass. A zero
+  citation count means no undeclared reason reached the chokepoint, not that the census can go.
 - **Last demonstrated benefit.** The hand-maintained audited-functions list in the syntactic census
   could not see a new refusal path; the declared set plus chokepoint refusal closed that gap (this
   child's build record and `plugins/superheroes/lib/tests/bite_proofs/wo_census_1269.md`).
@@ -1107,7 +1109,9 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** structural — a closed reason vocabulary with chokepoint enforcement and a producer-side
   behavioural census guards declared outward reasons on real entry paths; a zero citation count means
   callers are not hitting undeclared reasons, not that new paths cannot forget to declare. Retired
-  the syntactic AST call-graph census
+  `test_entry_refusal_producer_undeclared_reason_becomes_entry_reason_undeclared` because it proved
+  the path by monkeypatching the resolver — a synthetic path, replaced by a bite-proof that plants
+  the drift in a real producer. Retired the syntactic AST call-graph census
   (`test_entry_refusal_chokepoint_invariant_returns_trace_to_approved_producers` and helpers) and the
   inline-stamp census
   (`test_entry_refusal_chokepoint_invariant_no_inline_run_dir_or_run_opened_stamp`) because

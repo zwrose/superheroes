@@ -72,7 +72,8 @@ def test_entry_clis_route_through_chokepoint_and_expose_seat_flag(cli_module, su
         argv = ["check", "--seat", json_seat]
 
     def _sentinel(*_a, **_k):
-        return {"ok": False, "reason": "chokepoint-sentinel", "detail": "sentinel"}
+        token = "chokepoint-sentinel" if cli_module is DG else "role-key-absent"
+        return {"ok": False, "entryReason": token, "detail": "sentinel"}
 
     patch_target = SB if cli_module is DG else cli_module.seat_bundle
     monkeypatch.setattr(patch_target, "resolve_entry", _sentinel)
@@ -149,7 +150,8 @@ def test_dropped_flags_refuse_and_name_seat_dispatch_review(flag, spelling, tmp_
         argv = base[:1] + [flag + "=codex"] + base[1:]
     assert ED.main(argv) == 1
     result = json.loads(capsys.readouterr().out.strip())
-    assert result["reason"] == "legacy-seat-args"
+    assert result["entryReason"] == "legacy-seat-args"
+    assert result["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
     assert flag in result["detail"]
     assert "--seat" in result["detail"]
 
@@ -170,7 +172,8 @@ def test_dropped_flags_refuse_and_name_seat_dispatch_write(flag, spelling, tmp_p
         argv = base[:1] + [flag + "=codex"] + base[1:]
     assert ED.main(argv) == 1
     result = json.loads(capsys.readouterr().out.strip())
-    assert result["reason"] == "legacy-seat-args"
+    assert result["entryReason"] == "legacy-seat-args"
+    assert result["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
     assert flag in result["detail"]
     assert "--seat" in result["detail"]
 
@@ -186,7 +189,7 @@ def test_dropped_flags_refuse_and_name_seat_guard_check(flag, spelling, capsys):
         argv = ["check", "--seat", seat, flag + "=codex"]
     assert DG.main(argv) == 1
     result = json.loads(capsys.readouterr().out.strip())
-    assert result["reason"] == "legacy-seat-args"
+    assert result["entryReason"] == "legacy-seat-args"
     assert flag in result["detail"]
     assert "--seat" in result["detail"]
     if flag == "--role":
@@ -209,7 +212,8 @@ def test_dropped_flags_refuse_and_name_seat_guard_check(flag, spelling, capsys):
 def test_dispatch_review_legacy_library_refusal(kwargs):
     res = ED.dispatch_review("codex", prompt_path="p", **kwargs)
     assert res["ok"] is False
-    assert res["reason"] == "legacy-seat-args"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "legacy-seat-args"
     assert "--seat" in res["detail"]
 
 
@@ -217,13 +221,15 @@ def test_dispatch_review_legacy_library_refusal(kwargs):
 def test_dispatch_write_legacy_library_refusal(kwargs):
     res = ED.dispatch_write(prompt_path="p", cwd="/tmp", **kwargs)
     assert res["ok"] is False
-    assert res["reason"] == "legacy-seat-args"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "legacy-seat-args"
 
 
 def test_dispatch_write_legacy_library_refusal_full_terminal_envelope():
     res = ED.dispatch_write(prompt_path="p", cwd="/tmp", engine="cursor")
     assert res["ok"] is False
-    assert res["reason"] == "legacy-seat-args"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "legacy-seat-args"
     assert res["terminal"] is True
     assert res["runDir"] == ""
     assert res["argv"] == []
@@ -240,7 +246,8 @@ def test_dispatch_review_unknown_keyword_refused():
         prompt_pat="typo",
     )
     assert res["ok"] is False
-    assert res["reason"] == "unknown-dispatch-kwargs"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "unknown-dispatch-kwargs"
     assert "prompt_pat" in res["detail"]
     assert "prompt_path" in res["detail"]
 
@@ -253,7 +260,8 @@ def test_dispatch_write_unknown_keyword_refused():
         prompt_pat="typo",
     )
     assert res["ok"] is False
-    assert res["reason"] == "unknown-dispatch-kwargs"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "unknown-dispatch-kwargs"
     assert "prompt_pat" in res["detail"]
     assert "prompt_path" in res["detail"]
 
@@ -266,7 +274,8 @@ def test_dispatch_write_refuses_read_only_role():
         run_dir="/tmp/r",
     )
     assert res["ok"] is False
-    assert res["reason"] == "unrunnable"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "verb-role-mismatch"
     assert "read-only" in res["detail"]
     assert res["attempts"] == 0
     assert res.get("runOpened") is False
@@ -279,7 +288,8 @@ def test_dispatch_review_refuses_write_only_role():
         repo_root="/tmp",
     )
     assert res["ok"] is False
-    assert res["reason"] == "unrunnable"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "verb-role-mismatch"
     assert "write-only" in res["detail"]
     assert res["attempts"] == 0
     assert res.get("runOpened") is False
@@ -329,7 +339,7 @@ def test_composer_high_effort_refused_names_empty_set():
         verb="guard-check",
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "invalid-model-effort"
+    assert resolved["entryReason"] == "invalid-model-effort"
     assert "(none)" in resolved["detail"]
 
 
@@ -363,7 +373,7 @@ def test_effort_key_absent_refused():
     raw = json.dumps({"vendor": "cursor", "model": "composer-2.5", "role": "implementer"})
     resolved = SB.resolve_entry(raw, verb="guard-check")
     assert resolved["ok"] is False
-    assert resolved["reason"] == "effort-key-absent"
+    assert resolved["entryReason"] == "effort-key-absent"
     assert "effort" in resolved["detail"]
 
 
@@ -371,7 +381,7 @@ def test_role_key_absent_refused():
     raw = json.dumps({"vendor": "cursor", "model": "composer-2.5", "effort": None})
     resolved = SB.resolve_entry(raw, verb="guard-check")
     assert resolved["ok"] is False
-    assert resolved["reason"] == "role-key-absent"
+    assert resolved["entryReason"] == "role-key-absent"
     assert "role" in resolved["detail"]
 
 
@@ -379,7 +389,7 @@ def test_role_null_refused():
     raw = json.dumps({"vendor": "cursor", "model": "composer-2.5", "effort": None, "role": None})
     resolved = SB.resolve_entry(raw, verb="guard-check")
     assert resolved["ok"] is False
-    assert resolved["reason"] == "role-null"
+    assert resolved["entryReason"] == "role-null"
     assert "role" in resolved["detail"]
 
 
@@ -389,7 +399,7 @@ def test_unknown_role_refused():
         verb="guard-check",
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "unknown-role"
+    assert resolved["entryReason"] == "unknown-role"
     valid = ", ".join(MR.roles())
     assert f"valid roles: {valid}" in resolved["detail"]
 
@@ -397,7 +407,7 @@ def test_unknown_role_refused():
 def test_bare_token_seat_refused():
     resolved = SB.resolve_entry("cursor:composer-2.5", verb="guard-check")
     assert resolved["ok"] is False
-    assert resolved["reason"] == "seat-token-dropped"
+    assert resolved["entryReason"] == "seat-token-dropped"
     assert "role" in resolved["detail"]
 
 
@@ -408,7 +418,7 @@ def test_brief_check_mode_reviewer_seat_refused():
         mode="brief-check",
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "mode-role-mismatch"
+    assert resolved["entryReason"] == "mode-role-mismatch"
     assert "brief-check" in resolved["detail"]
 
 
@@ -419,7 +429,7 @@ def test_brief_check_role_normal_review_mode_refused():
         mode="review",
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "mode-role-mismatch"
+    assert resolved["entryReason"] == "mode-role-mismatch"
     assert "brief-check" in resolved["detail"]
 
 
@@ -429,7 +439,7 @@ def test_brief_check_role_omitted_mode_refused_on_dispatch_review():
         verb="dispatch-review",
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "mode-role-mismatch"
+    assert resolved["entryReason"] == "mode-role-mismatch"
 
 
 def test_brief_check_role_guard_check_omitted_mode_accepted():
@@ -450,7 +460,7 @@ def test_claude_vendor_refused_at_dispatch_chokepoint(verb):
         verb=verb,
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "undispatchable-vendor"
+    assert resolved["entryReason"] == "undispatchable-vendor"
     assert "claude" in resolved["detail"]
     assert "codex" in resolved["detail"]
     assert "cursor" in resolved["detail"]
@@ -464,7 +474,7 @@ def test_unclassified_role_refused_for_dispatch_verbs(role, verb):
         verb=verb,
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "verb-role-mismatch"
+    assert resolved["entryReason"] == "verb-role-mismatch"
     assert "read_write" in resolved["detail"]
 
 
@@ -498,7 +508,7 @@ def test_null_model_effort_without_allowlist_pair_refused():
         verb="guard-check",
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "allowlist-refused"
+    assert resolved["entryReason"] == "allowlist-refused"
     assert "low" in resolved["detail"]
 
 
@@ -513,9 +523,19 @@ def test_effort_source_matches_allowlist_verdict():
 
 
 def test_effort_source_map_is_closed_canonical_vocabulary():
-    assert set(SB._EFFORT_SOURCE_MAP.keys()) == SB._REGISTRY_EFFORT_SOURCES
+    assert set(SB._EFFORT_SOURCE_MAP.keys()) == MR.EFFORT_SOURCES
     mapped = set(SB._EFFORT_SOURCE_MAP.values())
     assert mapped <= SB._EFFORT_SOURCE_CANONICAL
+
+
+def test_resolve_entry_refusal_has_no_reason_key():
+    resolved = SB.resolve_entry(
+        '{"vendor": "codex", "model": "gpt-5.6-sol", "effort": "high"}',
+        verb="guard-check",
+    )
+    assert resolved["ok"] is False
+    assert resolved["entryReason"] == "role-key-absent"
+    assert "reason" not in resolved
 
 
 def test_semantic_allowlist_verdict_empty_pairs_refused(monkeypatch):
@@ -528,7 +548,7 @@ def test_semantic_allowlist_verdict_empty_pairs_refused(monkeypatch):
         verb="guard-check",
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "allowlist-malformed"
+    assert resolved["entryReason"] == "allowlist-malformed"
     assert "allowlist_pairs" in resolved["detail"]
 
 
@@ -542,7 +562,7 @@ def test_semantic_allowlist_verdict_role_vendor_mismatch_refused(monkeypatch):
         verb="guard-check",
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "allowlist-malformed"
+    assert resolved["entryReason"] == "allowlist-malformed"
 
 
 def test_semantic_allowlist_verdict_pair_absent_refused(monkeypatch):
@@ -555,7 +575,7 @@ def test_semantic_allowlist_verdict_pair_absent_refused(monkeypatch):
         verb="guard-check",
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "allowlist-malformed"
+    assert resolved["entryReason"] == "allowlist-malformed"
 
 
 def test_allowlist_guard_raise_refused(monkeypatch):
@@ -568,7 +588,7 @@ def test_allowlist_guard_raise_refused(monkeypatch):
         verb="guard-check",
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "allowlist-raised"
+    assert resolved["entryReason"] == "allowlist-raised"
 
 
 def test_dict_seat_without_ok_promotion_refused():
@@ -577,7 +597,7 @@ def test_dict_seat_without_ok_promotion_refused():
         verb="guard-check",
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "role-key-absent"
+    assert resolved["entryReason"] == "role-key-absent"
 
 
 def test_match_effort_empty_allowed_always_none():
@@ -635,7 +655,7 @@ def test_edge3_null_model_ambiguous_effort_refuses_naming_models(verb):
         verb=verb,
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "model-ambiguous"
+    assert resolved["entryReason"] == "model-ambiguous"
     assert "gpt-5.6-terra" in resolved["detail"]
     assert "gpt-5.6-sol" in resolved["detail"]
 
@@ -647,7 +667,7 @@ def test_edge5_off_allowlist_model_null_effort_refused_at_allowlist(verb):
         verb=verb,
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "allowlist-refused"
+    assert resolved["entryReason"] == "allowlist-refused"
     pairs = ", ".join(
         "(%s, %s)" % (m, e)
         for m, e in MR.allowlist(_WRITE_ROLE, "cursor")
@@ -666,7 +686,7 @@ def test_edge6_brief_check_mode_reviewer_refused_before_allowlist(monkeypatch):
         mode="brief-check",
     )
     assert resolved["ok"] is False
-    assert resolved["reason"] == "mode-role-mismatch"
+    assert resolved["entryReason"] == "mode-role-mismatch"
 
 
 def test_wo8_edge8_brief_check_reviewer_refused_before_allowlist(monkeypatch):
