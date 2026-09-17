@@ -4328,6 +4328,52 @@ def test_receipt_base_mode_edge_neither_source_has_mode_is_absent(tmp_path):
     assert "base" not in receipt or "mode" not in receipt.get("base", {})
 
 
+def test_materialized_run_loop_meta_omits_ungrounded_config_mode():
+    """Materialized meta.json must not echo a raw ungrounded cfg mode (#1271 L2-O)."""
+    import shutil
+
+    state = RD.new_state(_cfg(mode="bogus"))
+    session_dir = RD._materialize_run_loop_session(state, 0)
+    try:
+        with open(os.path.join(session_dir, "meta.json"), encoding="utf-8") as fh:
+            meta = json.load(fh)
+        assert "mode" not in meta
+    finally:
+        shutil.rmtree(session_dir, ignore_errors=True)
+
+
+def test_materialized_run_loop_meta_records_grounded_config_mode():
+    """Materialized meta.json records the resolved mode, not a raw cfg echo (#1271 L2-O)."""
+    import shutil
+
+    state = RD.new_state(_cfg(mode="branch"))
+    session_dir = RD._materialize_run_loop_session(state, 0)
+    try:
+        with open(os.path.join(session_dir, "meta.json"), encoding="utf-8") as fh:
+            meta = json.load(fh)
+        assert meta["mode"] == "branch"
+    finally:
+        shutil.rmtree(session_dir, ignore_errors=True)
+
+
+def test_run_loop_seat_map_bool_round_not_coerced_to_one():
+    """_run_loop_seat_map routes round through _round_number — bools are junk, not int 1."""
+    state = {
+        "seatMapReceipts": [{"round": True, "map": {"seats": {"code-reviewer": {}}}}],
+    }
+    _, rnd = RD._run_loop_seat_map(state)
+    assert rnd is True
+
+
+def test_run_loop_seat_map_normalizes_digit_string_round():
+    """_run_loop_seat_map routes round through _round_number for well-formed values."""
+    state = {
+        "seatMapReceipts": [{"round": "2", "map": {"seats": {"code-reviewer": {}}}}],
+    }
+    _, rnd = RD._run_loop_seat_map(state)
+    assert rnd == 2
+
+
 def test_seat_map_violations_round_field_and_degraded_disclosure():
     seat_map = _seat_map_receipt_with_unexcused_maker_family()
     cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
