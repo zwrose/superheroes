@@ -1,5 +1,4 @@
 """Drift guard: generated certification fixtures must match the producer."""
-import filecmp
 import os
 import shutil
 import tempfile
@@ -9,12 +8,24 @@ from generate_round_certification_fixtures import FIXTURE_BUILDERS, GENERATED_RO
 _TESTS = os.path.dirname(os.path.abspath(__file__))
 
 
+def _relative_file_map(root):
+    rel_paths = {}
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for filename in filenames:
+            abs_path = os.path.join(dirpath, filename)
+            rel = os.path.relpath(abs_path, root)
+            with open(abs_path, "rb") as fh:
+                rel_paths[rel] = fh.read()
+    return rel_paths
+
+
 def _compare_trees(left, right):
-    diff = filecmp.dircmp(left, right)
-    if diff.left_only or diff.right_only or diff.diff_files or diff.funny_files:
+    left_files = _relative_file_map(left)
+    right_files = _relative_file_map(right)
+    if set(left_files.keys()) != set(right_files.keys()):
         return False
-    for sub in diff.subdirs.values():
-        if sub.left_only or sub.right_only or sub.diff_files or sub.funny_files:
+    for rel in left_files:
+        if left_files[rel] != right_files[rel]:
             return False
     return True
 

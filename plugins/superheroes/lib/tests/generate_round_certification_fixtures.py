@@ -3,6 +3,7 @@
 Every checked-in fixture journal row is built through ``round_driver._journal_revision_fields``
 and every envelope through the production envelope writer helpers in this module.
 """
+import base64
 import hashlib
 import json
 import os
@@ -37,12 +38,15 @@ def _slot_nonce(seat, phase, attempt, occurrence=0):
     return "nonce-%s-%s-a%d-o%d" % (seat, phase, attempt, occurrence)
 
 
-def _binding_fields(nonce):
+def _binding_fields(nonce, payload=None):
+    if payload is None:
+        payload = {"findings": []}
+    findings = payload.get("findings", [])
     return {
         "source": "runner",
         "runnerNonce": nonce,
-        "recordDigest": "d" * 64,
-        "resultDigest": "e" * 64,
+        "recordDigest": RR.payload_sha256(payload),
+        "resultDigest": RR.payload_sha256(findings),
         "resultKind": "findings",
     }
 
@@ -59,15 +63,15 @@ def _observation_fields(*, read="engaged"):
     }
 
 
-def _execution_evidence(binding, *, read="engaged"):
-    return {**binding, "observation": _observation_fields(read=read)}
+def _execution_evidence(nonce, *, payload=None, read="engaged"):
+    return {**_binding_fields(nonce, payload=payload), "observation": _observation_fields(read=read)}
 
 
 def production_hand_landed_envelope(seat, payload, *, phase=PANEL_PHASE, attempt=0,
                                     occurrence=0, evidence=None):
     if evidence is None:
         evidence = _execution_evidence(
-            _binding_fields(_slot_nonce(seat, phase, attempt, occurrence)))
+            _slot_nonce(seat, phase, attempt, occurrence), payload=payload)
     envelope = {
         "schema": RR.SEAT_RESULT_SCHEMA_V2,
         "session": SESSION_ID,
@@ -95,10 +99,14 @@ def production_dispatch_observed_envelope(seat, payload, *, phase=PANEL_PHASE, a
                                             occurrence=0, payload_sha=None, read="engaged",
                                             binding=None):
     if binding is None:
-        binding = _binding_fields(_slot_nonce(seat, phase, attempt, occurrence))
+        evidence = _execution_evidence(
+            _slot_nonce(seat, phase, attempt, occurrence), payload=payload, read=read)
+    elif "observation" in binding:
+        evidence = binding
+    else:
+        evidence = {**binding, "observation": _observation_fields(read=read)}
     if payload_sha is None:
         payload_sha = RR.payload_sha256(payload)
-    evidence = _execution_evidence(binding, read=read)
     envelope = {
         "schema": RR.SEAT_RESULT_SCHEMA_V2,
         "session": SESSION_ID,
@@ -198,8 +206,21 @@ def _minimal_terminal_state():
     }
 
 
+def _head_content_read_row(path, content_bytes, head=HEAD_SHA):
+    digest = hashlib.sha256(content_bytes).hexdigest()
+    return {
+        "headSha": head,
+        "path": path,
+        "contentDigest": digest,
+        "bytes": len(content_bytes),
+        "readAt": "2026-01-01T00:00:00Z",
+        "source": "git-show",
+        "readError": None,
+    }
+
+
 def _head_content_blobs_for_findings(findings, head=HEAD_SHA):
-    fix_commits = []
+    reads = []
     files = {}
     for finding in findings:
         if not isinstance(finding, dict):
@@ -209,11 +230,25 @@ def _head_content_blobs_for_findings(findings, head=HEAD_SHA):
         path = finding.get("file")
         if not isinstance(path, str) or not path:
             continue
-        fix_commits.append({"headSha": head, "path": path, "present": True})
-        files[path] = "fix present\n"
-    if not fix_commits:
+        content = b"fix present\n"
+        row = _head_content_read_row(path, content, head)
+        reads.append(row)
+        files[path] = base64.b64encode(content).decode("ascii")
+        receipt = finding.get("dispositionReceipt")
+        if not isinstance(receipt, dict):
+            receipt = {}
+            finding["dispositionReceipt"] = receipt
+        receipt["fixContentHeadSha"] = head
+        receipt["fixContentDigest"] = row["contentDigest"]
+        receipt["fixContentBytes"] = row["bytes"]
+    if not reads:
         return None
-    return {"headSha": head, "files": files, "fixCommits": fix_commits}
+    return {
+        "schema": "head-content-blobs/2",
+        "headSha": head,
+        "files": files,
+        "reads": reads,
+    }
 
 
 def _write_json(path, obj):
@@ -585,6 +620,10 @@ def build_case03_reverted_fix():
     verify_sha = RR.payload_sha256(payload)
     envelope = production_dispatch_observed_envelope(
         "code-reviewer", payload, payload_sha=verify_sha)
+    fix_time_bytes = b"fix present at fix time\n"
+    head_bytes = b"# fix landed then reverted on the same head\npass\n"
+    fix_content_digest = hashlib.sha256(fix_time_bytes).hexdigest()
+    read_row = _head_content_read_row("src/guard.py", head_bytes, HEAD_SHA)
     return {
         "state": {
             "findings": [
@@ -595,7 +634,13 @@ def build_case03_reverted_fix():
                     "title": "missing bounds guard",
                     "severity": "Important",
                     "disposition": "fixed",
-                    "dispositionReceipt": {"headSha": HEAD_SHA, "verifyResult": "pass"},
+                    "dispositionReceipt": {
+                        "headSha": HEAD_SHA,
+                        "verifyResult": "pass",
+                        "fixContentHeadSha": HEAD_SHA,
+                        "fixContentDigest": fix_content_digest,
+                        "fixContentBytes": len(fix_time_bytes),
+                    },
                 }
             ]
         },
@@ -606,12 +651,10 @@ def build_case03_reverted_fix():
         ],
         "envelopes": [{"seat": "code-reviewer", "envelope": envelope}],
         "head_content_blobs": {
+            "schema": "head-content-blobs/2",
             "headSha": HEAD_SHA,
-            "files": {"src/guard.py": "# fix landed then reverted on the same head\npass\n"},
-            "fixCommits": [
-                {"headSha": HEAD_SHA, "path": "src/guard.py", "present": True},
-                {"headSha": HEAD_SHA, "path": "src/guard.py", "present": False},
-            ],
+            "files": {"src/guard.py": base64.b64encode(head_bytes).decode("ascii")},
+            "reads": [read_row],
         },
     }
 
@@ -682,7 +725,7 @@ def build_case06_mixed_panel():
         "code-reviewer", dispatch_payload, payload_sha=dispatch_sha)
     hand_payload = {"findings": []}
     hand_evidence = _execution_evidence(
-        _binding_fields(_slot_nonce("security-reviewer", PANEL_PHASE, 0)))
+        _slot_nonce("security-reviewer", PANEL_PHASE, 0), payload=hand_payload)
     hand_envelope = production_hand_landed_envelope(
         "security-reviewer", hand_payload, evidence=hand_evidence)
     hand_sha = hand_envelope["payloadSha256"]
@@ -717,7 +760,7 @@ def build_specimen_must_certify_sixteen_seat_audit():
     envelope_specs = []
     for seat in SIXTEEN_AUDIT_SEATS:
         payload = {"findings": [{"id": seat, "severity": "Minor", "title": "audit ok"}]}
-        evidence = _execution_evidence(_binding_fields(_slot_nonce(seat, AUDIT_PHASE, 0)))
+        evidence = _execution_evidence(_slot_nonce(seat, AUDIT_PHASE, 0), payload=payload)
         envelope = production_hand_landed_envelope(
             seat, payload, phase=AUDIT_PHASE, evidence=evidence)
         journal_lines.append(
@@ -779,7 +822,7 @@ def build_specimen_refuse_fabricated_envelope_audited_chain():
             }
         ]
     }
-    evidence = _execution_evidence(_binding_fields(_slot_nonce("code-reviewer", PANEL_PHASE, 0)))
+    evidence = _execution_evidence(_slot_nonce("code-reviewer", PANEL_PHASE, 0), payload=payload)
     envelope = production_hand_landed_envelope("code-reviewer", payload, evidence=evidence)
     return {
         "state": {"certification": {"shape": "full-panel-confirmed", "fullPanel": True}},
@@ -794,7 +837,7 @@ def build_specimen_refuse_fabricated_envelope_audited_chain():
 
 def build_specimen_refuse_caller_supplied_execution_evidence():
     payload = {"findings": []}
-    evidence = _execution_evidence(_binding_fields(_slot_nonce("code-reviewer", PANEL_PHASE, 0)))
+    evidence = _execution_evidence(_slot_nonce("code-reviewer", PANEL_PHASE, 0), payload=payload)
     evidence = dict(evidence)
     evidence["source"] = "/tmp/caller-minted-evidence.json"
     envelope = production_hand_landed_envelope("code-reviewer", payload, evidence=evidence)
