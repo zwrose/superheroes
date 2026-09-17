@@ -130,7 +130,8 @@ def _execution_evidence(**over):
         "source": "runner",
         "runnerNonce": "nonce-1",
         "recordDigest": "digest-1",
-        "resultDigest": "result-digest-1",
+        "resultKind": "findings",
+        "resultDigest": round_records.payload_sha256([]),
         "observation": {
             "tokens": None,
             "toolCalls": None,

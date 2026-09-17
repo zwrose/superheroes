@@ -600,7 +600,9 @@ The list's units are the census rows, and each entry is keyed to its census id.
   costs a contract every producer of a landed envelope must satisfy, and one chokepoint governs six
   refusals: `provenance-unknown`, `execution-evidence-malformed`,
   `execution-evidence-not-inline`, `execution-evidence-unknown-field`,
-  `execution-evidence-unexpected`, and `envelope-torn`.
+  `execution-evidence-unexpected`, and `envelope-torn`. The validator checks observation values as
+  well as the closed field set — each telemetry literal, read literal, and numeric observation
+  field is type-checked, not merely present.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing one of the six
   tokens as the thing that caught a defect or blocked a landing. On firing, a proposal to the owner
   at a gardening pass.
@@ -626,6 +628,39 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — a stored-state version boundary is a property of how the loop is built.
+
+#### D16 — The result-content evidence binding
+
+- **Component.** The strong evidence binding in `round_driver._assemble_dispatch_evidence` and
+  `engine_dispatch.run_execution_record`: the runner stamps `resultDigest` and `resultKind` from the
+  parse (not the grade), and the driver compares that digest to the landed envelope's
+  `payload[resultKind]` via `round_records.payload_sha256`. It costs one parse per stamped landing
+  and one refusal token: `evidence-result-mismatch`.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `evidence-result-mismatch` or a digest/kind binding refusal as the thing that caught a re-paired
+  payload or blocked a forged landing. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — digesting the parse rather than the grade keeps the vacuity forfeit
+  decision from becoming load-bearing for evidence stamping; digesting result-kind content rather
+  than the whole payload object keeps orchestrator-added envelope keys from inverting the binding.
+  No engine family applies: it guards a data shape, not a model behaviour.
+
+#### D17 — The completed-attempt gate on execution records
+
+- **Component.** `engine_dispatch._attempt_ended_successfully` and its refusal token
+  `attempt-not-completed` in `run_execution_record` — the disjunction over `refusal`, `timedOut`,
+  and non-zero `exit` that refuses to stamp evidence from an attempt that never completed cleanly.
+  It costs one journal read per execution-record call.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `attempt-not-completed` as the thing that refused to certify an incomplete dispatch. On firing, a
+  proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — whether an attempt ended cleanly is a property of the dispatch journal,
+  not of how a grader judged the stdout. No engine family applies.
 
 #### D13 — The order-bound evidence channel
 

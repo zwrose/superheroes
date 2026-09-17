@@ -4215,41 +4215,74 @@ def _attempt_ended_successfully(ended):
     return True
 
 
-def _parsed_result_payload_from_grade(grade, opened):
-    """The payload object whose digest binds a stamped envelope to its run. Never raises."""
-    if not isinstance(grade, dict) or not isinstance(opened, dict):
-        return None
-    run_kind = opened.get("runKind")
-    if run_kind == RUN_KIND_WRITE:
-        if not grade.get("ok"):
+def _parse_review_attempt(run_dir_real, state, attempt):
+    """Parse a completed review attempt's stdout, independent of grading. Never raises."""
+    try:
+        opened = state["opened"]
+        engine = opened["engine"]
+        role_kind = opened.get("roleKind", RUN_KIND_REVIEW)
+        fed_prompt = opened.get("fedPrompt", "")
+        echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
+        stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+        if not stdout and not os.path.exists(stdout_path):
             return None
-        signal = grade.get("signal")
-        if not isinstance(signal, str) or not signal:
+        norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+        if norm_strip["echoOnly"]:
             return None
-        evidence = grade.get("evidence")
-        if not isinstance(evidence, dict):
-            evidence = {}
-        return {"ok": True, "signal": signal, "evidence": evidence}
-    if grade.get("forfeit") or not grade.get("ok"):
+        envelope_error = norm_strip["rawEnvelopeError"]
+        res = engine_adapter.parse_result(
+            engine, role_kind, stdout, raw_envelope_error=envelope_error,
+            echo_nonce=echo_nonce)
+        if not _parse_review_has_payload(res):
+            stripped_text = norm_strip["text"]
+            if stripped_text and stripped_text.strip():
+                res = engine_adapter.parse_result(
+                    engine, role_kind, stripped_text, raw_envelope_error=envelope_error,
+                    echo_nonce=echo_nonce)
+        return res
+    except Exception:
         return None
-    kind = grade.get("resultKind")
+
+
+def _parse_write_attempt(run_dir_real, state, attempt):
+    """Parse a completed write attempt's stdout, independent of grading. Never raises."""
+    try:
+        opened = state["opened"]
+        engine = opened["engine"]
+        role_kind = opened.get("roleKind", "build")
+        stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+        if not stdout and not os.path.exists(stdout_path):
+            return None
+        fed_prompt = opened.get("fedPrompt", "")
+        return engine_adapter.grade_write_report(engine, role_kind, stdout, fed_prompt)
+    except Exception:
+        return None
+
+
+def _result_kind_and_content_from_parse(res):
+    """The result-kind content whose digest binds a stamped envelope to its run. Never raises."""
+    if not isinstance(res, dict) or not res.get("ok"):
+        return None, None
+    kind = res.get("resultKind")
     if kind not in REVIEW_RESULT_KINDS:
-        return None
-    has_payload, payload = _review_result_payload(grade, kind)
+        return None, None
+    has_payload, payload = _review_result_payload(res, kind)
     if has_payload:
-        return {kind: payload}
-    if kind in grade:
-        return {kind: grade[kind]}
-    return {kind: []}
+        return kind, payload
+    if kind in res:
+        return kind, res[kind]
+    return kind, []
 
 
-def _result_digest_from_grade(grade, opened):
-    """SHA-256 over the parsed result the grading path produced. Never raises."""
-    payload = _parsed_result_payload_from_grade(grade, opened)
-    if payload is None:
-        return None
+def _result_digest_and_kind_from_parse(res):
+    """SHA-256 over the parsed result-kind content. Never raises."""
+    kind, content = _result_kind_and_content_from_parse(res)
+    if kind is None:
+        return None, None
     import round_records
-    return round_records.payload_sha256(payload)
+    return round_records.payload_sha256(content), kind
 
 
 def _observation_from_attempt(run_dir_real, state, attempt):
@@ -4309,12 +4342,10 @@ def run_execution_record(run_dir):
             return None, "runner-nonce-missing"
         run_kind = opened.get("runKind")
         if run_kind == RUN_KIND_WRITE:
-            grade = _grade_write_attempt(run_dir_real, state, attempt)
+            res = _parse_write_attempt(run_dir_real, state, attempt)
         else:
-            grade = _grade_review_attempt(run_dir_real, state, attempt)
-        result_digest = _result_digest_from_grade(grade, opened)
-        if not isinstance(result_digest, str) or not result_digest:
-            return None, "attempt-not-completed"
+            res = _parse_review_attempt(run_dir_real, state, attempt)
+        result_digest, result_kind = _result_digest_and_kind_from_parse(res)
         journal_path = _journal_path(run_dir_real)
         try:
             with open(journal_path, "rb") as fh:
@@ -4332,15 +4363,18 @@ def run_execution_record(run_dir):
         observation = _observation_from_attempt(run_dir_real, state, attempt)
         if not isinstance(observation, dict):
             return None, "observation-unavailable"
-        return {
+        record = {
             "source": engine,
             "runnerNonce": echo_nonce,
             "recordDigest": record_digest,
-            "resultDigest": result_digest,
             "observation": observation,
             "promptSha256": prompt_sha256,
             "orderPromptSha256": opened.get("basePromptSha256"),
-        }, None
+        }
+        if isinstance(result_digest, str) and result_digest and isinstance(result_kind, str) and result_kind:
+            record["resultDigest"] = result_digest
+            record["resultKind"] = result_kind
+        return record, None
     except Exception:
         return None, "internal-error"
 

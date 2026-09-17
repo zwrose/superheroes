@@ -71,7 +71,8 @@ PROVENANCE_ORCHESTRATOR_FULFILLED = "orchestrator-fulfilled"
 SEAT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED,
                    PROVENANCE_ORCHESTRATOR_FULFILLED)
 EVIDENCE_BEARING_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
-EXECUTION_EVIDENCE_FIELDS = ("source", "runnerNonce", "recordDigest", "resultDigest", "observation")
+EXECUTION_EVIDENCE_FIELDS = ("source", "runnerNonce", "recordDigest", "resultDigest", "resultKind",
+                             "observation")
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry"))
 EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
@@ -562,6 +563,7 @@ def _validate_execution_evidence(evidence):
     runner_nonce = evidence.get("runnerNonce")
     record_digest = evidence.get("recordDigest")
     result_digest = evidence.get("resultDigest")
+    result_kind = evidence.get("resultKind")
     observation = evidence.get("observation")
     if not isinstance(source, str) or not source:
         return ("execution-evidence-malformed", {})
@@ -570,6 +572,8 @@ def _validate_execution_evidence(evidence):
     if not isinstance(record_digest, str) or not record_digest:
         return ("execution-evidence-malformed", {})
     if not isinstance(result_digest, str) or not result_digest:
+        return ("execution-evidence-malformed", {})
+    if not isinstance(result_kind, str) or not result_kind:
         return ("execution-evidence-malformed", {})
     if not isinstance(observation, dict):
         return ("execution-evidence-malformed", {})
@@ -587,16 +591,18 @@ def _validate_execution_evidence(evidence):
     if set(observation.keys()) != EXECUTION_EVIDENCE_OBSERVATION_FIELDS:
         return ("execution-evidence-malformed", {})
     tokens = observation.get("tokens")
-    if tokens is not None and (not isinstance(tokens, int) or tokens < 0):
+    if tokens is not None and (not isinstance(tokens, int) or isinstance(tokens, bool) or tokens < 0):
         return ("execution-evidence-malformed", {})
     tool_calls = observation.get("toolCalls")
-    if tool_calls is not None and (not isinstance(tool_calls, int) or tool_calls < 0):
+    if (tool_calls is not None
+            and (not isinstance(tool_calls, int) or isinstance(tool_calls, bool) or tool_calls < 0)):
         return ("execution-evidence-malformed", {})
     stdout_bytes = observation.get("stdoutBytes")
-    if not isinstance(stdout_bytes, int) or stdout_bytes < 0:
+    if (not isinstance(stdout_bytes, int) or isinstance(stdout_bytes, bool) or stdout_bytes < 0):
         return ("execution-evidence-malformed", {})
     wall_seconds = observation.get("wallSeconds")
-    if not isinstance(wall_seconds, (int, float)) or wall_seconds < 0:
+    if (not isinstance(wall_seconds, (int, float)) or isinstance(wall_seconds, bool)
+            or wall_seconds < 0):
         return ("execution-evidence-malformed", {})
     obs_source = observation.get("source")
     if not isinstance(obs_source, str) or not obs_source:

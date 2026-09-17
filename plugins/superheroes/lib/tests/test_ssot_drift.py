@@ -1056,6 +1056,14 @@ def test_review_result_kind_enum_in_dispatch_mechanics_doc():
         "skills/workhorse/reference/dispatch-mechanics.md")
 
 
+def test_execution_evidence_read_values_match_engagement_read():
+    """axis: execution-evidence read literals stay bound to engine_adapter.engagement_read."""
+    import engine_adapter
+    import round_records
+
+    assert round_records.EXECUTION_EVIDENCE_READ_VALUES == engine_adapter.ENGAGEMENT_READ_VALUES
+
+
 # --- Cluster: investigation floor (engine_adapter.spot_check_investigated → prose copies) ---
 
 _DISPATCH_MECHANICS_DOC = "skills/workhorse/reference/dispatch-mechanics.md"

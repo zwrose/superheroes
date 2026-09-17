@@ -1699,6 +1699,9 @@ def salvage_from_artifact(stdout, fed_prompt, *, echo_nonce=None):
         }
 
 
+ENGAGEMENT_READ_VALUES = frozenset(("engaged", "unknown"))
+
+
 def engagement_read(result):
     """The single home for "did this seat demonstrably act?".
 
