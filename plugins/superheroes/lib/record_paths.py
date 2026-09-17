@@ -11,7 +11,18 @@ _SHA_PREFIX = 16
 _KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _NON_SLUG = re.compile(r"[^a-z0-9]+")
 
-__all__ = ("storage_key", "store_path", "RESERVED_PREFIX")
+__all__ = (
+    "storage_key",
+    "store_path",
+    "store_dir",
+    "round_dir",
+    "RESERVED_PREFIX",
+    "_guard_within",
+    "_require_token",
+    "_require_index",
+    "_seat_filename",
+    "_KEY_RE",
+)
 
 
 def _sha256_text(text):

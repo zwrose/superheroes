@@ -13,10 +13,10 @@ import subprocess
 import model_registry
 import record_paths
 import receipt_disclosures
+import round_records
 import seat_map_receipts
 import session_contract
 import session_mode
-import version_skew
 
 STATE_FILE = session_contract.STATE_FILE
 JOURNAL_FILE = session_contract.JOURNAL_FILE
@@ -62,7 +62,7 @@ EXECUTION_EVIDENCE_BINDING_FIELDS = (
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry")
 )
-HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
+HEAD_CONTENT_BLOBS_FILE = session_contract.HEAD_CONTENT_BLOBS_FILE
 
 REFUSAL_CLASSES = frozenset(
     ("unrun-review", "same-family-seat", "unfetched-findings", "disposition-without-receipt")
@@ -70,7 +70,7 @@ REFUSAL_CLASSES = frozenset(
 
 PANEL_PHASE = session_contract.PANEL_PHASE
 
-SEAT_MISSING_SCHEMA = "seat-missing/1"
+SEAT_MISSING_SCHEMA = session_contract.SEAT_MISSING_SCHEMA
 
 RECEIPT_FORM_CERTIFIED = "certified"
 VENDOR_SOURCE_DEFAULTED = "defaulted"
@@ -328,26 +328,7 @@ def _read_json(path):
         return None
 
 
-def _canonical_json(obj):
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-
-
-def _payload_sha256(payload):
-    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
-
-
-def _finding_identity_key(finding):
-    fid = finding.get("id")
-    if isinstance(fid, str) and fid:
-        return fid
-    title = finding.get("title")
-    if isinstance(title, str) and title:
-        return title
-    path = finding.get("file")
-    line = finding.get("line")
-    if isinstance(path, str) and path:
-        return "%s@L%s" % (path, line)
-    return None
+_finding_identity_key = session_contract.finding_identity_key
 
 
 def _is_fix_content_receipt(receipt):
@@ -653,14 +634,17 @@ def _journal_open_seats(journal):
 
 
 def _certified_head_sha(ctx):
-    resolved = _resolve_repo_head_sha(ctx)
-    if isinstance(resolved, str) and resolved:
-        return resolved
     meta = ctx.get("meta") or {}
+    cfg = (ctx.get("state") or {}).get("config") or {}
+    head = meta.get(session_contract.FIX_FOLD_HEAD_KEY)
+    if isinstance(head, str) and head:
+        return head
+    head = cfg.get(session_contract.FIX_FOLD_HEAD_KEY)
+    if isinstance(head, str) and head:
+        return head
     head = meta.get("headSha")
     if isinstance(head, str) and head:
         return head
-    cfg = (ctx.get("state") or {}).get("config") or {}
     head = cfg.get("headSha")
     if isinstance(head, str) and head:
         return head
@@ -848,7 +832,7 @@ def _hand_landed_evidence_qualifies(
         return False, "execution-evidence-binding-incomplete"
     if not isinstance(payload, dict) or result_kind not in payload:
         return False, "execution-evidence-result-mismatch"
-    computed = _payload_sha256(payload[result_kind])
+    computed = round_records.payload_sha256(payload[result_kind])
     if result_digest != computed:
         return False, "execution-evidence-result-mismatch"
     cited = envelope.get("headSha") or evidence.get("headSha")
@@ -959,8 +943,8 @@ def _fix_still_present_at_head(ctx, finding, receipt):
         return _refusal(
             "disposition-without-receipt",
             fid,
-            "fixed disposition fix-content read failed on certified head",
-            binding_failure="fix-content-unreadable",
+            "fixed disposition fix is not present in content at the certified head",
+            binding_failure="fix-content-reverted",
         )
     fix_content_digest = receipt.get("fixContentDigest")
     if not isinstance(fix_content_digest, str) or not fix_content_digest:
@@ -1158,7 +1142,7 @@ def check_unfetched_findings(ctx):
                 "journal record lacks payloadSha256 integrity field",
             )
         try:
-            computed = _payload_sha256(env.get("payload"))
+            computed = round_records.payload_sha256(env.get("payload"))
         except (TypeError, ValueError):
             return _refusal(
                 "unfetched-findings",
@@ -1216,6 +1200,12 @@ def check_disposition_without_receipt(ctx):
                 "disposition-without-receipt",
                 fid,
                 "finding has no disposition recorded",
+            )
+        if _severity_rank(severity) == 99:
+            return _refusal(
+                "disposition-without-receipt",
+                fid,
+                "finding severity %r is not in the closed severity contract" % (severity,),
             )
         if disposition == "fixed":
             receipt = finding.get("dispositionReceipt")

@@ -134,7 +134,7 @@ RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 CERTIFICATION_RECEIPT_FILE = "certification-receipt.json"
 CERTIFICATION_REFUSAL_FILE = "certification-refusal.json"
-HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
+HEAD_CONTENT_BLOBS_FILE = session_contract.HEAD_CONTENT_BLOBS_FILE
 
 # --- the #723 schema matrix -------------------------------------------------------------------
 # `SCHEMA_VERSION` stays the version a v2 RECEIPT keys off (and the version an in-flight v2 state
@@ -1207,18 +1207,7 @@ def _restore_round_disclosures(state, records):
 
 
 def _finding_identity_key(finding):
-    """Mirror round_certification._finding_identity_key — writer stays importable without driver."""
-    fid = finding.get("id")
-    if isinstance(fid, str) and fid:
-        return fid
-    title = finding.get("title")
-    if isinstance(title, str) and title:
-        return title
-    path = finding.get("file")
-    line = finding.get("line")
-    if isinstance(path, str) and path:
-        return "%s@L%s" % (path, line)
-    return None
+    return session_contract.finding_identity_key(finding)
 
 
 def _archive_disposition_findings(state, departing):
@@ -1229,20 +1218,23 @@ def _archive_disposition_findings(state, departing):
     if not isinstance(ledger, list):
         ledger = []
         state["dispositionLedger"] = ledger
-    seen = set()
-    for entry in ledger:
+    seen = {}
+    for i, entry in enumerate(ledger):
         if isinstance(entry, dict):
             key = _finding_identity_key(entry)
             if key:
-                seen.add(key)
+                seen[key] = i
     for finding in departing:
         if not isinstance(finding, dict) or finding.get("disposition") is None:
             continue
         key = _finding_identity_key(finding)
-        if not key or key in seen:
+        if not key:
             continue
-        ledger.append(finding)
-        seen.add(key)
+        if key in seen:
+            ledger[seen[key]] = finding
+        else:
+            seen[key] = len(ledger)
+            ledger.append(finding)
 
 
 def _set_findings(state, new_findings):
@@ -4411,7 +4403,7 @@ def _run_seam(seams, action, payload, state, config):
     return {}
 
 
-FIX_FOLD_HEAD_KEY = "fixFoldHeadSha"
+FIX_FOLD_HEAD_KEY = session_contract.FIX_FOLD_HEAD_KEY
 
 
 def _persist_fix_fold_head_sha(session_dir, state, head):
@@ -4442,6 +4434,15 @@ def _resolve_fix_fold_head_sha(session_dir, state):
 
     Returns (head_sha, error). On success the head is persisted so a resumed session reads the
     same value rather than re-deriving a now-different one."""
+    if _fix_batch_paths(state):
+        repo_root = _resolve_repo_root(session_dir, state)
+        if not repo_root:
+            return None, "fix-fold head: repo root unresolvable"
+        head = store_core.run_git(repo_root, "rev-parse", "HEAD")
+        if not head:
+            return None, "fix-fold head: git rev-parse HEAD failed in %r" % repo_root
+        _persist_fix_fold_head_sha(session_dir, state, head)
+        return head, None
     cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
     persisted = cfg.get(FIX_FOLD_HEAD_KEY)
     if isinstance(persisted, str) and persisted:
@@ -4470,12 +4471,18 @@ def _session_certified_head(session_dir, state):
         try:
             with open(meta_path, encoding="utf-8") as fh:
                 meta = json.load(fh)
+            head = (meta or {}).get(FIX_FOLD_HEAD_KEY)
+            if isinstance(head, str) and head:
+                return head
             head = (meta or {}).get("headSha")
             if isinstance(head, str) and head:
                 return head
         except (OSError, ValueError):
             pass
     cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
+    head = cfg.get(FIX_FOLD_HEAD_KEY)
+    if isinstance(head, str) and head:
+        return head
     head = cfg.get("headSha")
     if isinstance(head, str) and head:
         return head
@@ -5482,7 +5489,11 @@ def _finalize_receipt(session_dir, state):
         _write_receipt(session_dir, state)
     except OSError as exc:
         return "terminal receipt write failed (%s) — cannot certify; treat as park" % exc
-    _persist_head_content_blobs(session_dir, state)
+    _persist_head_content_blobs(
+        session_dir,
+        state,
+        head_sha=_session_certified_head(session_dir, state),
+    )
     cert_fault = _write_certification_artifacts(session_dir)
     if cert_fault:
         return cert_fault

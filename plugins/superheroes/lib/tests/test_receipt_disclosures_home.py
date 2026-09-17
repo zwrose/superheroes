@@ -26,8 +26,10 @@ def test_session_contract_exports_match_driver_records_and_writer():
         "STATE_FILE",
         "JOURNAL_FILE",
         "JOURNAL_FAULT_FILE",
+        "HEAD_CONTENT_BLOBS_FILE",
+        "FIX_FOLD_HEAD_KEY",
     }
-    records_names = {"META_FILE"}
+    records_names = {"META_FILE", "SEAT_MISSING_SCHEMA"}
     writer_names = set(session_contract.__all__)
     for name in session_contract.__all__:
         home = getattr(session_contract, name)
@@ -37,3 +39,6 @@ def test_session_contract_exports_match_driver_records_and_writer():
             assert getattr(round_records, name) is home, name
         if name in writer_names and hasattr(round_certification, name):
             assert getattr(round_certification, name) is home, name
+    sample = {"id": "v0", "title": "probe", "file": "a.py", "line": 1}
+    assert round_driver._finding_identity_key(sample) == session_contract.finding_identity_key(sample)
+    assert round_certification._finding_identity_key is session_contract.finding_identity_key

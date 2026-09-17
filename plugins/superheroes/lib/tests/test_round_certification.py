@@ -1512,7 +1512,7 @@ def test_bite_fix_content_bytes_digest_mismatch_refuses(tmp_path):
     ctx, _ = RC._load_context(session_dir)
     refusal = RC.check_disposition_without_receipt(ctx)
     assert refusal is not None
-    assert refusal["bindingFailure"] == "fix-content-unreadable"
+    assert refusal["bindingFailure"] == "fix-content-reverted"
 
 
 def test_hand_landed_journal_recorded_runner_nonce_certifies(tmp_path):

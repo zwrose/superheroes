@@ -3789,7 +3789,8 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                     sanitized_view.destroy_sanitized_view(view_path)
                 except Exception:
                     pass
-                return _finish_preflight_terminal(repo_detail, err, engine=engine)
+                return _finish_preflight_terminal(
+                    repo_detail, err, run_dir=run_dir_real or "", engine=engine)
 
             argv = built["argv"]
             if run_dir_real is None:

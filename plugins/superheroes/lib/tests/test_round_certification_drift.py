@@ -51,8 +51,11 @@ def test_execution_evidence_binding_fields_match_records():
 
 
 def test_head_content_blobs_file_name():
-    assert RC.HEAD_CONTENT_BLOBS_FILE == "head-content-blobs.json"
+    assert RC.HEAD_CONTENT_BLOBS_FILE == RD.HEAD_CONTENT_BLOBS_FILE
 
+
+def test_seat_missing_schema_matches_records():
+    assert RC.SEAT_MISSING_SCHEMA == RR.SEAT_MISSING_SCHEMA
 
 def test_execution_evidence_observation_fields_match_records():
     assert (
