@@ -9079,184 +9079,51 @@ def test_wo8_edge5_corrupt_journal_with_opened_carries_snapshot_and_status(tmp_p
     assert echo["resolvedInputs"] == snapshot_before
 
 
-# --- #1269 WO-INV: entry-refusal run provenance by invariant ------------------
+# --- #1269 WO-CENSUS: behavioural entry-refusal reason census -----------------
 
-_ENTRY_REFUSAL_PROVENANCE_HELPERS = frozenset({
-    "_entry_refusal_terminal",
-    "_with_run_fields",
-    "_attach_resolved_inputs_echo",
-    "_finish_preflight_terminal",
-    "_resolved_inputs_echo_from_run_dir",
-    "_entry_allowlist_refusal",
-})
+def test_entry_refusal_reason_census_provenance_by_declared_set(tmp_path):
+    """Every declared entry-refusal reason carries run provenance at the chokepoint."""
+    assert ED.dispatch_outcome.REASON_UNRUNNABLE in ED.seat_bundle.ENTRY_REFUSAL_REASONS
+    assert ED.seat_bundle.ENTRY_REASON_UNDECLARED in ED.seat_bundle.ENTRY_REFUSAL_REASONS
 
+    run_dir = str(tmp_path / "census-run")
+    _manual_open_review_run(tmp_path, run_dir)
+    run_dir_real = os.path.realpath(run_dir)
+    snapshot = _opened_resolved_inputs(run_dir)
 
-def _engine_dispatch_module_functions():
-    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
-    with open(mod_path, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read(), filename=mod_path)
-    return {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    for reason in sorted(ED.seat_bundle.ENTRY_REFUSAL_REASONS):
+        refusal = {"ok": False, "reason": reason, "detail": "census-probe"}
 
+        no_run = ED._entry_refusal_terminal(refusal, run_dir=None)
+        assert no_run["reason"] == reason
+        assert no_run.get("runOpened") is False
+        assert no_run["runDir"] == ""
+        assert no_run.get("resolvedInputsStatus") is None
+        assert "resolvedInputs" not in no_run
 
-def _module_func_calls(func_node, module_funcs):
-    called = set()
-    for child in ast.walk(func_node):
-        if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
-            if child.func.id in module_funcs:
-                called.add(child.func.id)
-    return called
-
-
-def _entry_refusal_call_graph(module_funcs):
-    graph = {"dispatch_review", "dispatch_write"}
-    changed = True
-    while changed:
-        changed = False
-        for name in list(graph):
-            if name not in module_funcs:
-                continue
-            for called in _module_func_calls(module_funcs[name], module_funcs):
-                if called not in graph:
-                    graph.add(called)
-                    changed = True
-    return graph - _ENTRY_REFUSAL_PROVENANCE_HELPERS
+        with_run = ED._entry_refusal_terminal(refusal, run_dir=run_dir)
+        assert with_run["reason"] == reason
+        assert with_run.get("runOpened") is True
+        assert with_run["runDir"] == run_dir_real
+        assert with_run.get("resolvedInputsStatus") is None
+        assert with_run["resolvedInputs"] == snapshot
 
 
-# Whitelist, not blacklist: approved producers are the only permitted return sources on
-# entry-refusal surfaces. Any syntactic shape not traceable to them fails by default.
-_ENTRY_REFUSAL_APPROVED_RETURN_PRODUCERS = frozenset({
-    "_entry_refusal_terminal",
-    "_dispatch_review_impl",
-    "_dispatch_write_impl",
-    "_entry_allowlist_refusal",
-})
+def test_entry_refusal_chokepoint_rejects_undeclared_reason(tmp_path):
+    """Undeclared entry-refusal reasons fail closed at both chokepoints."""
+    planted_reason = "planted-not-in-vocabulary"
+    refusal = {"ok": False, "reason": planted_reason, "detail": "census-probe"}
 
-_ENTRY_REFUSAL_AUDITED_FUNCTIONS = frozenset({
-    "dispatch_review",
-    "dispatch_write",
-    "_max_wait_refusal",
-})
+    terminal = ED._entry_refusal_terminal(refusal, run_dir=None)
+    assert terminal["reason"] == ED.seat_bundle.ENTRY_REASON_UNDECLARED
+    assert planted_reason in terminal["detail"]
+    assert "declared vocabulary" in terminal["detail"]
+    assert terminal.get("runOpened") is False
+    assert terminal["runDir"] == ""
 
-
-def _approved_return_producers_for_function(func_name):
-    if func_name == "_max_wait_refusal":
-        return frozenset({"_entry_refusal_terminal"})
-    producers = set(_ENTRY_REFUSAL_APPROVED_RETURN_PRODUCERS)
-    if func_name == "dispatch_review":
-        producers.discard("_dispatch_write_impl")
-    elif func_name == "dispatch_write":
-        producers.discard("_dispatch_review_impl")
-    return frozenset(producers)
-
-
-def _expr_traces_to_approved_producer(expr, func_node, approved_producers, seen_names):
-    if isinstance(expr, ast.Call):
-        if isinstance(expr.func, ast.Name) and expr.func.id in approved_producers:
-            return True
-        if isinstance(expr.func, ast.Name) and expr.func.id == "dict" and expr.args:
-            return _expr_traces_to_approved_producer(
-                expr.args[0], func_node, approved_producers, seen_names,
-            )
-        return False
-    if isinstance(expr, ast.Name):
-        return _name_traces_to_approved_producer(
-            expr.id, func_node, approved_producers, seen_names,
-        )
-    return False
-
-
-def _assign_value_traces_to_approved(value, func_node, approved_producers, seen_names):
-    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
-        if value.func.id in approved_producers:
-            return True
-        if value.func.id == "dict" and value.args:
-            return _expr_traces_to_approved_producer(
-                value.args[0], func_node, approved_producers, set(seen_names),
-            )
-    return _expr_traces_to_approved_producer(
-        value, func_node, approved_producers, set(seen_names),
-    )
-
-
-def _name_traces_to_approved_producer(name, func_node, approved_producers, seen_names):
-    if name in seen_names:
-        return False
-    seen_names.add(name)
-    for stmt in ast.walk(func_node):
-        if isinstance(stmt, ast.Assign):
-            for target in stmt.targets:
-                if isinstance(target, ast.Name) and target.id == name:
-                    if _assign_value_traces_to_approved(
-                        stmt.value, func_node, approved_producers, set(seen_names),
-                    ):
-                        return True
-        elif isinstance(stmt, ast.AnnAssign):
-            if isinstance(stmt.target, ast.Name) and stmt.target.id == name:
-                if stmt.value is not None and _assign_value_traces_to_approved(
-                    stmt.value, func_node, approved_producers, set(seen_names),
-                ):
-                    return True
-    return False
-
-
-def _entry_refusal_unapproved_return_lines(func_node, func_name):
-    approved_producers = _approved_return_producers_for_function(func_name)
-    violations = []
-    for node in ast.walk(func_node):
-        if not isinstance(node, ast.Return) or node.value is None:
-            continue
-        if not _expr_traces_to_approved_producer(
-            node.value, func_node, approved_producers, set(),
-        ):
-            violations.append(node.lineno)
-    return violations
-
-
-def test_entry_refusal_chokepoint_invariant_returns_trace_to_approved_producers():
-    """Assert I1 by construction: entry-refusal surfaces return only through the chokepoint,
-    dispatch impl, or a value traceable to one of those — never a hand-built dict escape."""
-    module_funcs = _engine_dispatch_module_functions()
-    assert "dispatch_review" in module_funcs, "invariant roots missing dispatch_review"
-    assert "dispatch_write" in module_funcs, "invariant roots missing dispatch_write"
-    _entry_refusal_call_graph(module_funcs)
-    violations = []
-    for name in sorted(_ENTRY_REFUSAL_AUDITED_FUNCTIONS):
-        func_node = module_funcs.get(name)
-        if func_node is None:
-            violations.append((name, 0))
-            continue
-        for lineno in _entry_refusal_unapproved_return_lines(func_node, name):
-            violations.append((name, lineno))
-    assert violations == []
-
-
-def test_entry_refusal_census_rejects_planted_bypass_shapes():
-    """Prove whitelist default-deny: shapes that evaded the old blacklist must fail here."""
-    planted = (
-        (
-            "setdefault_run_dir",
-            "def dispatch_review():\n"
-            "    out = {}\n"
-            "    out.setdefault(\"runDir\", \"\")\n"
-            "    return out\n",
-        ),
-        (
-            "dict_run_opened_false",
-            "def dispatch_review():\n"
-            "    out = dict(runOpened=False)\n"
-            "    return out\n",
-        ),
-        (
-            "subscript_run_dir",
-            "def dispatch_review():\n"
-            "    out = {}\n"
-            "    out[\"runDir\"] = \"\"\n"
-            "    return out\n",
-        ),
-    )
-    for _label, src in planted:
-        func_node = ast.parse(src).body[0]
-        assert _entry_refusal_unapproved_return_lines(func_node, "dispatch_review")
+    bundle = ED.seat_bundle._entry_refusal(planted_reason, "census-probe")
+    assert bundle["reason"] == ED.seat_bundle.ENTRY_REASON_UNDECLARED
+    assert planted_reason in bundle["detail"]
 
 
 def test_entry_unknown_kwargs_refusal_preserves_existing_review_run_provenance(tmp_path):

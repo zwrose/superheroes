@@ -58,6 +58,48 @@ _ENTRY_VERBS = frozenset({
     "dispatch-review", "dispatch-write", "build-argv", "guard-check",
 })
 
+ENTRY_REASON_UNDECLARED = "entry-reason-undeclared"
+
+"""Closed vocabulary of outward entry-refusal reason tokens (#1269).
+
+Every refusal the dispatch shell emits at entry must use a member of this set.
+The entry chokepoints refuse any reason outside it with ENTRY_REASON_UNDECLARED.
+"""
+ENTRY_REFUSAL_REASONS = frozenset({
+    "allowlist-malformed",
+    "allowlist-raised",
+    "allowlist-refused",
+    "effort-invalid",
+    "effort-key-absent",
+    "effort-token-conflict",
+    ENTRY_REASON_UNDECLARED,
+    "invalid-model-effort",
+    "legacy-seat-args",
+    "mode-role-mismatch",
+    "model-ambiguous",
+    "model-invalid",
+    "model-required",
+    "role-key-absent",
+    "role-null",
+    "run-kind-role-mismatch",
+    "run-kind-unclassified",
+    "seat-empty",
+    "seat-not-object",
+    "seat-token-dropped",
+    "seat-unparseable",
+    "token-unresolvable",
+    "undispatchable-vendor",
+    "unknown-dispatch-kwargs",
+    "unknown-model",
+    "unknown-role",
+    "unknown-vendor",
+    "unknown-verb",
+    "unrunnable",
+    "vendor-hint-mismatch",
+    "vendor-invalid",
+    "verb-role-mismatch",
+})
+
 
 def _format_valid(values: tuple[str, ...]) -> str:
     return ", ".join(values)
@@ -672,6 +714,16 @@ def validate_effort_only(bundle: dict) -> dict:
 
 
 def _entry_refusal(reason: str, detail: str) -> dict:
+    if reason not in ENTRY_REFUSAL_REASONS:
+        vocabulary = ", ".join(sorted(ENTRY_REFUSAL_REASONS))
+        return {
+            "ok": False,
+            "reason": ENTRY_REASON_UNDECLARED,
+            "detail": (
+                f"entry refusal reason {reason!r} is not in the declared vocabulary "
+                f"({vocabulary})"
+            ),
+        }
     return {"ok": False, "reason": reason, "detail": detail}
 
 

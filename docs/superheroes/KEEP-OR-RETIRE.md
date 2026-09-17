@@ -1081,6 +1081,29 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** structural — doc generated from argparse declarations guards declaration drift by
   construction; a zero citation count means no drift reached commit, not that drift is impossible.
 
+#### S11 — Entry-refusal reason census
+
+- **Component.** Not a census row. The closed `ENTRY_REFUSAL_REASONS` vocabulary in
+  `plugins/superheroes/lib/seat_bundle.py` and the behavioural census in
+  `plugins/superheroes/lib/tests/test_engine_dispatch.py` that iterates it against
+  `_entry_refusal_terminal` with and without an opened run, plus the chokepoint refusal for
+  undeclared reasons (`entry-reason-undeclared`). Its cost is that every new outward entry-refusal
+  reason must be added to the declared set before it can pass the chokepoint.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing an
+  `entry-reason-undeclared` refusal that caught a reason outside the declared vocabulary before
+  dispatch ran. On firing, a proposal to the owner at a gardening pass. A zero citation count
+  means no undeclared reason reached the chokepoint, not that the census can go.
+- **Last demonstrated benefit.** The hand-maintained audited-functions list in the syntactic census
+  could not see a new refusal path; the declared set plus chokepoint refusal closed that gap (this
+  child's build record and `plugins/superheroes/lib/tests/bite_proofs/wo_census_1269.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a closed reason vocabulary with chokepoint enforcement guards entry-refusal
+  completeness by construction; a zero citation count means callers are not hitting undeclared
+  reasons, not that new paths cannot forget to declare. Retired the syntactic AST call-graph census
+  (`test_entry_refusal_chokepoint_invariant_returns_trace_to_approved_producers` and helpers) because
+  its hand-maintained audited-functions list was invisible to new refusal paths.
+
 
 ## The workaround-marker inventory
 

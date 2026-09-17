@@ -253,6 +253,19 @@ def _entry_refusal_terminal(
     run_kind=RUN_KIND_REVIEW,
 ):
     """Single chokepoint for dispatch_review/dispatch_write entry refusals (#1269)."""
+    reason = refusal.get("reason")
+    if not isinstance(reason, str) or reason not in seat_bundle.ENTRY_REFUSAL_REASONS:
+        undeclared = reason if isinstance(reason, str) else repr(reason)
+        vocabulary = ", ".join(sorted(seat_bundle.ENTRY_REFUSAL_REASONS))
+        refusal = {
+            **refusal,
+            "ok": False,
+            "reason": seat_bundle.ENTRY_REASON_UNDECLARED,
+            "detail": (
+                f"entry refusal reason {undeclared!r} is not in the declared vocabulary "
+                f"({vocabulary})"
+            ),
+        }
     result = {
         "attempts": 0,
         "forfeited": False,
