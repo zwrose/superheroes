@@ -311,7 +311,41 @@ def test_author_family_matches_registry_for_each_vendor(tmp_path):
         )
 
 
-def test_same_family_seat_non_matching_family_does_not_refuse(tmp_path):
+@pytest.mark.parametrize("with_seats_entry", [False, True])
+def test_same_family_declared_degradation_refuses(tmp_path, with_seats_entry):
+    seat_map = {
+        "degradations": [
+            {
+                "constraint": "same-family",
+                "seat": "code-reviewer",
+            }
+        ],
+    }
+    if with_seats_entry:
+        seat_map["seats"] = {"code-reviewer": {"vendor": "claude", "model": "sonnet-5"}}
+    session_dir = write_session(
+        tmp_path,
+        state={
+            "seatMapReceipts": [
+                {
+                    "round": "1",
+                    "map": seat_map,
+                }
+            ]
+        },
+        envelopes=[],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_same_family_seat(ctx)
+    assert refusal["class"] == "same-family-seat"
+    assert refusal["artifact"] == "code-reviewer"
+
+
+@pytest.mark.parametrize(
+    "vendor",
+    [pytest.param(None, id="missing"), pytest.param("", id="empty"), pytest.param(42, id="not-string")],
+)
+def test_same_family_declared_degradation_refuses_malformed_vendor(tmp_path, vendor):
     session_dir = write_session(
         tmp_path,
         state={
@@ -319,7 +353,7 @@ def test_same_family_seat_non_matching_family_does_not_refuse(tmp_path):
                 {
                     "round": "1",
                     "map": {
-                        "seats": {"code-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"}},
+                        "seats": {"code-reviewer": {"vendor": vendor, "model": "sonnet-5"}},
                         "degradations": [
                             {
                                 "constraint": "same-family",
@@ -333,7 +367,61 @@ def test_same_family_seat_non_matching_family_does_not_refuse(tmp_path):
         envelopes=[],
     )
     ctx, _ = RC._load_context(session_dir)
-    assert RC.check_same_family_seat(ctx) is None
+    refusal = RC.check_same_family_seat(ctx)
+    assert refusal["class"] == "same-family-seat"
+    assert refusal["artifact"] == "code-reviewer"
+
+
+def test_same_family_unresolvable_maker_family_refuses(tmp_path):
+    unknown_vendor = "not-a-registered-vendor"
+    session_dir = write_session(
+        tmp_path,
+        state={
+            "config": {"fixerVendor": unknown_vendor},
+            "seatMapReceipts": [
+                {
+                    "round": "1",
+                    "map": {
+                        "degradations": [
+                            {
+                                "constraint": "same-family",
+                                "seat": "code-reviewer",
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+        envelopes=[],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_same_family_seat(ctx)
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == "seatMapReceipts/1"
+    assert unknown_vendor in refusal["detail"]
+
+
+def test_same_family_additive_undeclared_matching_family_refuses(tmp_path):
+    session_dir = write_session(
+        tmp_path,
+        state={
+            "seatMapReceipts": [
+                {
+                    "round": "1",
+                    "map": {
+                        "seats": {
+                            "code-reviewer": {"vendor": "claude", "model": "sonnet-5"},
+                        },
+                    },
+                }
+            ]
+        },
+        envelopes=[],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_same_family_seat(ctx)
+    assert refusal["class"] == "same-family-seat"
+    assert refusal["artifact"] == "code-reviewer"
 
 
 # --- check_unfetched_findings -------------------------------------------------

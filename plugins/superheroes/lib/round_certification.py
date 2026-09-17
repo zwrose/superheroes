@@ -315,17 +315,11 @@ def _effective_seat_map(state):
     return {}
 
 
-def _same_family_seats(state):
-    author = _author_family(state)
-    if not author:
-        return []
+def _declared_same_family_seats(state):
+    """Seats named by upstream same-family degradations — collected unconditionally."""
     seats = []
-    seat_configs = {}
     for entry in _seat_map_receipts(state):
         smap = entry["map"]
-        raw_seats = smap.get("seats")
-        if isinstance(raw_seats, dict):
-            seat_configs.update(raw_seats)
         degradations = smap.get("degradations")
         if not isinstance(degradations, list):
             continue
@@ -339,10 +333,50 @@ def _same_family_seats(state):
                 seat = deg.get("configured")
             if not isinstance(seat, str) or not seat:
                 continue
-            if _seat_family(seat, seat_configs.get(seat)) != author:
-                continue
             seats.append(seat)
     return sorted(set(seats))
+
+
+def _seat_map_artifact(state):
+    receipts = _seat_map_receipts(state)
+    if receipts:
+        rnd = receipts[-1].get("round")
+        if isinstance(rnd, str) and rnd:
+            return "seatMapReceipts/%s" % rnd
+    if isinstance(state.get("seatMap"), dict) and state["seatMap"]:
+        return "seatMap"
+    cfg_sm = (state.get("config") or {}).get("seatMap")
+    if isinstance(cfg_sm, dict) and cfg_sm:
+        return "config.seatMap"
+    return "seatMapReceipts"
+
+
+def _additive_same_family_seats(state, author):
+    """Undeclared seats whose resolved family matches the maker — registry may only add refusals."""
+    declared = set(_declared_same_family_seats(state))
+    seat_configs = {}
+    for entry in _seat_map_receipts(state):
+        smap = entry["map"]
+        raw_seats = smap.get("seats")
+        if isinstance(raw_seats, dict):
+            seat_configs.update(raw_seats)
+    seats = []
+    for seat, cfg in seat_configs.items():
+        if seat in declared:
+            continue
+        fam = _seat_family(seat, cfg)
+        if fam is None or fam == author:
+            seats.append(seat)
+    return sorted(set(seats))
+
+
+def _same_family_seats(state):
+    declared = _declared_same_family_seats(state)
+    author = _author_family(state)
+    if not author:
+        return declared
+    additive = _additive_same_family_seats(state, author)
+    return sorted(set(declared + additive))
 
 
 def _journal_recorded_identities(journal):
@@ -573,7 +607,20 @@ def check_unrun_review(ctx):
 
 
 def check_same_family_seat(ctx):
-    seats = _same_family_seats(ctx["state"])
+    state = ctx["state"]
+    declared = _declared_same_family_seats(state)
+    author = _author_family(state)
+    if not author:
+        if declared:
+            cfg = state.get("config") or {}
+            vendor = cfg.get("fixerVendor") or "claude"
+            return _refusal(
+                "unfetched-findings",
+                _seat_map_artifact(state),
+                "maker family could not be resolved for fixerVendor %r" % (vendor,),
+            )
+        return None
+    seats = _same_family_seats(state)
     if seats:
         return _refusal(
             "same-family-seat",
