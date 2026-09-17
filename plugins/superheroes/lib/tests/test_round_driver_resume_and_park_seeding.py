@@ -20,6 +20,18 @@ def _load(name):
 
 RD = _load("round_driver")
 
+_RUN_LOOP_REFUSAL_CLASS = "unrun-review"
+_RUN_LOOP_REFUSAL_ARTIFACT = "driver-journal.jsonl"
+_RUN_LOOP_REFUSAL_DETAIL = (
+    "run-loop session lacks per-seat recorded evidence — cannot materialize for certification")
+
+
+def _assert_run_loop_refusal_only(result):
+    assert result["class"] == _RUN_LOOP_REFUSAL_CLASS
+    assert result["artifact"] == _RUN_LOOP_REFUSAL_ARTIFACT
+    assert result["detail"] == _RUN_LOOP_REFUSAL_DETAIL
+    assert "verdict" not in result
+
 
 def _cfg(**over):
     base = {"leg": "code", "vendors": ["claude", "codex"], "fixerVendor": "claude",
@@ -64,7 +76,7 @@ def test_f1_corrupt_records_resume_parks_instead_of_raising(tmp_path):
     assert state["_resumeCorrupt"]
     assert state.get("_records") == []
     result = RD.run_loop(_seams(), cfg)
-    assert result["class"] == "disposition-without-receipt"
+    _assert_run_loop_refusal_only(result)
     assert result["loopTerminal"] == "cannot-certify"
     assert "verdict" not in result
 
@@ -80,7 +92,7 @@ def test_f1_nested_record_field_corruption_parks_instead_of_raising(tmp_path):
     assert isinstance(state["_resumeCorrupt"], str)
     assert state.get("_records") == []
     result = RD.run_loop(_seams(), cfg)
-    assert result["class"] == "disposition-without-receipt"
+    _assert_run_loop_refusal_only(result)
     assert result["loopTerminal"] == "cannot-certify"
     assert "verdict" not in result
 
