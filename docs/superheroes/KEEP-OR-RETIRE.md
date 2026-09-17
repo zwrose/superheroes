@@ -662,6 +662,90 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** structural — whether an attempt ended cleanly is a property of the dispatch journal,
   not of how a grader judged the stdout. No engine family applies.
 
+#### D18 — Certification receipt writer
+
+- **Component.** `round_certification.py` — the journal-backed certification receipt writer that
+  emits `certification-receipt.json` or `certification-refusal.json` beside the driver's terminal
+  receipt; it costs one full journal/state read at every terminal and four refusal-class checks before
+  a certified receipt is stamped.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing a certification
+  refusal class (`unrun-review`, `same-family-seat`, `unfetched-findings`,
+  `disposition-without-receipt`) or a missing certification artifact at a terminal that wrote
+  `round-receipt.json`. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change (#1271 C12 layer 2).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a single writer for the certified receipt is a load-bearing boundary; no
+  engine family applies.
+
+#### D19 — `check_unrun_review`
+
+- **Component.** `round_certification.check_unrun_review` — refuses when a dispatch-observed or
+  hand-landed seat lacks qualifying execution telemetry on the certified head; it costs one journal
+  and envelope scan per collected seat at certification time.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
+  `unrun-review` refusal class. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — engagement telemetry on the certified head is a property of how evidence
+  is bound, not of model strength. No engine family applies.
+
+#### D20 — `check_same_family_seat`
+
+- **Component.** `round_certification.check_same_family_seat` — refuses when the seat map records
+  same-family degradation against the maker's model family; it costs one seat-map receipt walk at
+  certification time.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
+  `same-family-seat` refusal class. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — panel independence is a build property guarded regardless of vendor. No
+  engine family applies.
+
+#### D21 — `check_unfetched_findings`
+
+- **Component.** `round_certification.check_unfetched_findings` — refuses when the journal leaves a
+  seat open or an on-disk envelope is not reconciled with a recorded identity; it costs one journal
+  pass and one envelope read per collected seat at certification time.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
+  `unfetched-findings` refusal class. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — journal/envelope reconciliation is load-bearing regardless of host. No
+  engine family applies.
+
+#### D22 — `check_disposition_without_receipt`
+
+- **Component.** `round_certification.check_disposition_without_receipt` — refuses when a finding's
+  disposition lacks the verification receipt, refutation reason, or out-of-scope follow-up the
+  certified-head contract requires, or when the base guard did not run; it costs one findings walk
+  at certification time.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
+  `disposition-without-receipt` refusal class. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — disposition receipts on the certified head are receipts-before-claims
+  regardless of model. No engine family applies.
+
+#### D23 — `build_interim_receipt`
+
+- **Component.** `round_driver.build_interim_receipt` — the loop's own progress artifact on the CLI
+  and advance path (not a certification); it costs a second receipt-shaped builder beside the
+  certification writer until FR-D9 retires it.
+- **Condition.** Usage-based, 60 days: the signal is CLI/advance invocations that write
+  `round-receipt-interim.json` against terminal certifications written in the same window — a zero
+  count means the interim path is unused, not that certification absorbed progress reporting. On
+  firing, a retirement proposal to the owner at a gardening pass at FR-D9.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — interim progress disclosure is structural on long CLI sessions; maintaining a
+  second receipt builder is capability-gap baggage until FR-D9 lands the single-writer cut.
+
 #### D13 — The order-bound evidence channel
 
 - **Component.** The `--evidence-run-dir` stamping path in `round_driver._assemble_dispatch_evidence`

@@ -556,9 +556,6 @@ def _validate_execution_evidence(evidence):
             "field": sorted(extra_top)[0],
             "location": "executionEvidence",
         })
-    for field in EXECUTION_EVIDENCE_FIELDS:
-        if field not in evidence:
-            return ("execution-evidence-malformed", {})
     source = evidence.get("source")
     runner_nonce = evidence.get("runnerNonce")
     record_digest = evidence.get("recordDigest")
