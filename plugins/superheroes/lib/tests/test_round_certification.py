@@ -10,6 +10,7 @@ import record_paths
 
 import round_certification as RC
 from round_certification_fixtures import (
+    DEFAULT_FINDINGS_RESULT_SHA,
     DEFAULT_PANEL_PAYLOAD_SHA,
     MUST_REFUSE_FIXTURES,
     write_session,
@@ -25,12 +26,13 @@ QUALIFICATION_HELPER_CENSUS = (
 )
 
 
-def _binding_fields(nonce="test-nonce"):
+def _binding_fields(nonce="test-nonce", *, result_digest=None):
+    digest = result_digest if isinstance(result_digest, str) and result_digest else ("e" * 64)
     return {
         "source": "runner",
         "runnerNonce": nonce,
         "recordDigest": "d" * 64,
-        "resultDigest": "e" * 64,
+        "resultDigest": digest,
         "resultKind": "findings",
     }
 
@@ -50,7 +52,8 @@ def _dispatch_journal_with_binding(
         "telemetry": "tool-calls",
         "stdoutBytes": 10,
         "wallSeconds": 1.0,
-        **_binding_fields(nonce),
+        "toolCalls": 1,
+        **_binding_fields(nonce, result_digest=DEFAULT_FINDINGS_RESULT_SHA),
     }
     row = {
         "cmd": "record-result",
@@ -384,7 +387,7 @@ def test_check_unrun_review_stale_head_refuses(tmp_path):
 
 def test_check_unrun_review_hand_landed_clean_passes(tmp_path):
     evidence = {
-        **_binding_fields("hand-nonce"),
+        **_binding_fields("hand-nonce", result_digest=DEFAULT_FINDINGS_RESULT_SHA),
         "observation": {
             "read": "engaged",
             "source": "runner",

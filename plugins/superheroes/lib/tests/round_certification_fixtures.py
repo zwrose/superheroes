@@ -13,6 +13,7 @@ HEAD_SHA = "a" * 40
 ANCHOR_SHA = "feb91032a2cb2106f089a25063b8178527ae4359f5412ccf549e9d2f98f28ce9"
 DEFAULT_PANEL_PAYLOAD = {"findings": []}
 DEFAULT_PANEL_PAYLOAD_SHA = RR.payload_sha256(DEFAULT_PANEL_PAYLOAD)
+DEFAULT_FINDINGS_RESULT_SHA = RR.payload_sha256(DEFAULT_PANEL_PAYLOAD["findings"])
 AUDIT_PHASE = "dispatch-audits"
 SIXTEEN_AUDIT_SEATS = tuple("audit-target-%02d" % i for i in range(16))
 
@@ -155,17 +156,18 @@ def _minimal_terminal_state():
     }
 
 
-def _binding_fields(nonce):
+def _binding_fields(nonce, *, result_digest=None):
+    digest = result_digest if isinstance(result_digest, str) and result_digest else ("e" * 64)
     return {
         "source": "runner",
         "runnerNonce": nonce,
         "recordDigest": "d" * 64,
-        "resultDigest": "e" * 64,
+        "resultDigest": digest,
         "resultKind": "findings",
     }
 
 
-def _observation_fields(*, read="engaged"):
+def _observation_fields(*, read="engaged", tool_calls=1):
     return {
         "read": read,
         "source": "runner",
@@ -173,7 +175,7 @@ def _observation_fields(*, read="engaged"):
         "stdoutBytes": 10,
         "wallSeconds": 1.0,
         "tokens": None,
-        "toolCalls": None,
+        "toolCalls": tool_calls,
     }
 
 
@@ -191,9 +193,14 @@ def _ad_hoc_envelope(seat, payload, spec):
     occurrence = spec.get("occurrence", 0)
     provenance = spec.get("provenance", RC.PROVENANCE_DISPATCH_OBSERVED)
     evidence = spec.get("executionEvidence")
+    payload_sha = spec.get("payloadSha256") or RR.payload_sha256(payload)
+    result_digest = RR.payload_sha256(payload.get("findings", []))
     if evidence is None:
-        evidence = _execution_evidence(
-            _binding_fields(_slot_nonce(seat, phase, attempt, occurrence)))
+        binding = _binding_fields(
+            _slot_nonce(seat, phase, attempt, occurrence),
+            result_digest=result_digest,
+        )
+        evidence = _execution_evidence(binding)
     envelope = {
         "schema": RR.SEAT_RESULT_SCHEMA_V2,
         "session": "test-session-001",
@@ -204,7 +211,7 @@ def _ad_hoc_envelope(seat, payload, spec):
         "vendor": "codex",
         "model": "gpt-5.6-sol",
         "payload": payload,
-        "payloadSha256": spec.get("payloadSha256") or RR.payload_sha256(payload),
+        "payloadSha256": payload_sha,
         "provenance": provenance,
         "executionEvidence": evidence,
     }

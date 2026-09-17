@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 
 import model_registry
 import record_paths
@@ -213,6 +214,16 @@ def _refusal(class_name, artifact, detail, binding_failure=None):
     }
 
 
+def writer_fault(artifact, detail, binding_failure=None):
+    """Driver-facing writer-fault envelope — intentionally outside REFUSAL_CLASSES."""
+    return {
+        "class": "writer-fault",
+        "artifact": artifact,
+        "detail": detail,
+        "bindingFailure": binding_failure,
+    }
+
+
 def _load_context(session_dir):
     if not isinstance(session_dir, str) or not session_dir:
         return None, _refusal(
@@ -323,6 +334,105 @@ def _canonical_json(obj):
 
 def _payload_sha256(payload):
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def _finding_identity_key(finding):
+    fid = finding.get("id")
+    if isinstance(fid, str) and fid:
+        return fid
+    title = finding.get("title")
+    if isinstance(title, str) and title:
+        return title
+    path = finding.get("file")
+    line = finding.get("line")
+    if isinstance(path, str) and path:
+        return "%s@L%s" % (path, line)
+    return None
+
+
+def _is_fix_content_receipt(receipt):
+    if not isinstance(receipt, dict):
+        return False
+    return any(
+        isinstance(key, str) and key.startswith("fixContent")
+        for key in receipt
+    )
+
+
+def _refuted_reason_text(finding):
+    reason = finding.get("refutedReason")
+    if isinstance(reason, str) and reason.strip():
+        return reason
+    receipt = finding.get("dispositionReceipt")
+    if isinstance(receipt, str) and receipt.strip():
+        return receipt
+    if isinstance(receipt, dict):
+        if _is_fix_content_receipt(receipt):
+            return None
+        for key in ("reason", "refutedReason", "text"):
+            val = receipt.get(key)
+            if isinstance(val, str) and val.strip():
+                return val
+    return None
+
+
+def _out_of_scope_follow_up(finding):
+    follow_up = finding.get("followUp")
+    if isinstance(follow_up, dict):
+        return follow_up
+    receipt = finding.get("dispositionReceipt")
+    if isinstance(receipt, dict) and not _is_fix_content_receipt(receipt):
+        return receipt
+    return None
+
+
+def _certification_findings(state):
+    """Live open-work plus durable ledger and review-record history for disposition checks."""
+    by_key = {}
+    ledger = state.get("dispositionLedger")
+    if isinstance(ledger, list):
+        for finding in ledger:
+            if isinstance(finding, dict):
+                key = _finding_identity_key(finding)
+                if key:
+                    by_key[key] = finding
+    for rec in state.get("_records") or []:
+        if not isinstance(rec, dict):
+            continue
+        for finding in rec.get("findings") or []:
+            if not isinstance(finding, dict):
+                continue
+            key = _finding_identity_key(finding)
+            if key and key not in by_key:
+                by_key[key] = finding
+    for finding in state.get("findings") or []:
+        if isinstance(finding, dict):
+            key = _finding_identity_key(finding)
+            if key:
+                by_key[key] = finding
+    return list(by_key.values())
+
+
+def _resolve_repo_head_sha(ctx):
+    meta = ctx.get("meta") or {}
+    cfg = (ctx.get("state") or {}).get("config") or {}
+    repo_root = meta.get("repoRoot") or cfg.get("repoRoot")
+    if not isinstance(repo_root, str) or not repo_root:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    head = proc.stdout.strip()
+    return head if head else None
 
 
 def _journal_event_slot(event):
@@ -543,6 +653,9 @@ def _journal_open_seats(journal):
 
 
 def _certified_head_sha(ctx):
+    resolved = _resolve_repo_head_sha(ctx)
+    if isinstance(resolved, str) and resolved:
+        return resolved
     meta = ctx.get("meta") or {}
     head = meta.get("headSha")
     if isinstance(head, str) and head:
@@ -667,7 +780,24 @@ def _execution_evidence_read_value(evidence):
     return evidence.get("read")
 
 
-def _observation_qualifies(obs, certified_head, cited_head, journal_binding=None, recorded_nonces=None):
+def _runner_tool_calls(obs):
+    if not isinstance(obs, dict):
+        return None
+    observation = obs.get("observation")
+    if isinstance(observation, dict) and "toolCalls" in observation:
+        return observation.get("toolCalls")
+    return obs.get("toolCalls")
+
+
+def _observation_qualifies(
+    obs,
+    certified_head,
+    cited_head,
+    journal_binding=None,
+    recorded_nonces=None,
+    *,
+    require_runner_action=False,
+):
     if not isinstance(obs, dict):
         return False, "execution-evidence-absent"
     read = _execution_evidence_read_value(obs)
@@ -675,6 +805,10 @@ def _observation_qualifies(obs, certified_head, cited_head, journal_binding=None
         return False, "execution-evidence-read-invalid"
     if read != "engaged":
         return False, "execution-evidence-not-engaged"
+    if require_runner_action:
+        tool_calls = _runner_tool_calls(obs)
+        if not isinstance(tool_calls, int) or tool_calls < 1:
+            return False, "execution-evidence-no-runner-action"
     observation = obs.get("observation")
     if isinstance(observation, dict):
         extra_obs = set(observation.keys()) - EXECUTION_EVIDENCE_OBSERVATION_FIELDS
@@ -698,11 +832,25 @@ def _hand_landed_evidence_qualifies(
     evidence = envelope.get("executionEvidence") if isinstance(envelope, dict) else None
     if not isinstance(evidence, dict):
         return False, "execution-evidence-absent"
+    order_sha = envelope.get("orderSha256")
+    if not isinstance(order_sha, str) or not order_sha:
+        return False, "execution-evidence-order-unbound"
     ok, binding_failure = _execution_binding_matches_journal(
         evidence, journal_binding, recorded_nonces or set()
     )
     if not ok:
         return False, binding_failure
+    result_kind = evidence.get("resultKind")
+    result_digest = evidence.get("resultDigest")
+    payload = envelope.get("payload")
+    if (not isinstance(result_kind, str) or not result_kind
+            or not isinstance(result_digest, str) or not result_digest):
+        return False, "execution-evidence-binding-incomplete"
+    if not isinstance(payload, dict) or result_kind not in payload:
+        return False, "execution-evidence-result-mismatch"
+    computed = _payload_sha256(payload[result_kind])
+    if result_digest != computed:
+        return False, "execution-evidence-result-mismatch"
     cited = envelope.get("headSha") or evidence.get("headSha")
     if cited and certified_head and cited != certified_head:
         return False, "execution-evidence-stale-head"
@@ -878,6 +1026,7 @@ def check_unrun_review(ctx):
                 seat_entry.get("citedHead"),
                 journal_binding=journal_binding,
                 recorded_nonces=slot_nonces,
+                require_runner_action=True,
             )
             if not ok:
                 return _refusal(
@@ -1056,7 +1205,7 @@ def check_disposition_without_receipt(ctx):
         )
     certified_head = _certified_head_sha(ctx)
     disclosures = []
-    for finding in state.get("findings") or []:
+    for finding in _certification_findings(state):
         if not isinstance(finding, dict):
             continue
         fid = finding.get("id") or finding.get("title") or "finding"
@@ -1088,10 +1237,7 @@ def check_disposition_without_receipt(ctx):
             if refusal is not None:
                 return refusal
         elif disposition == "refuted":
-            reason = finding.get("dispositionReceipt") or finding.get("refutedReason")
-            if not isinstance(reason, (str, dict)) or (
-                isinstance(reason, str) and not reason.strip()
-            ):
+            if _refuted_reason_text(finding) is None:
                 return _refusal(
                     "disposition-without-receipt",
                     fid,
@@ -1104,7 +1250,7 @@ def check_disposition_without_receipt(ctx):
                     fid,
                     "Critical finding may not take out-of-scope disposition",
                 )
-            follow_up = finding.get("followUp") or finding.get("dispositionReceipt")
+            follow_up = _out_of_scope_follow_up(finding)
             if not isinstance(follow_up, dict):
                 return _refusal(
                     "disposition-without-receipt",
@@ -1164,8 +1310,7 @@ def _severity_rank(severity):
 def _collect_seats(ctx):
     state = ctx["state"]
     journal = ctx["journal"]
-    seats = []
-    seen = set()
+    latest = {}
     for event in journal:
         if event.get("outcome") != "recorded":
             continue
@@ -1185,22 +1330,17 @@ def _collect_seats(ctx):
             continue
         occurrence = event.get("occurrence", 0)
         key = (phase, rnd, attempt, seat, occurrence)
-        if key in seen:
-            continue
-        seen.add(key)
         cited_head = event.get("headSha") or event.get("citedHead")
-        seats.append(
-            {
-                "seat": seat,
-                "phase": phase,
-                "round": rnd,
-                "attempt": attempt,
-                "occurrence": occurrence,
-                "provenance": provenance,
-                "citedHead": cited_head,
-            }
-        )
-    return seats
+        latest[key] = {
+            "seat": seat,
+            "phase": phase,
+            "round": rnd,
+            "attempt": attempt,
+            "occurrence": occurrence,
+            "provenance": provenance,
+            "citedHead": cited_head,
+        }
+    return list(latest.values())
 
 
 def _terminal_decision_key(state):
@@ -1284,9 +1424,12 @@ def _scriptran_summary(journal):
 def _finding_disposition_proof(finding):
     disposition = finding.get("disposition")
     if disposition == "out-of-scope":
-        return finding.get("followUp") or finding.get("dispositionReceipt")
+        return _out_of_scope_follow_up(finding)
     if disposition == "refuted":
-        return finding.get("dispositionReceipt") or finding.get("refutedReason")
+        reason = _refuted_reason_text(finding)
+        if isinstance(reason, str):
+            return reason
+        return finding.get("refutedReason")
     return finding.get("dispositionReceipt")
 
 
@@ -1407,7 +1550,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
     ]
     findings = [
         _project_finding(f)
-        for f in (state.get("findings") or [])
+        for f in _certification_findings(state)
         if isinstance(f, dict)
     ]
     rounds = _build_receipt_rounds(state, form)
