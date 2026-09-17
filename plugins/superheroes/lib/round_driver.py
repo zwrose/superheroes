@@ -37,6 +37,7 @@ its shape). The confirmation economics (`review_round_policy.confirmation_follow
 not re-implemented.
 """
 import argparse
+import base64
 import errno
 import hashlib
 import json
@@ -44,6 +45,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -132,6 +134,7 @@ RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 CERTIFICATION_RECEIPT_FILE = "certification-receipt.json"
 CERTIFICATION_REFUSAL_FILE = "certification-refusal.json"
+HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
 
 # --- the #723 schema matrix -------------------------------------------------------------------
 # `SCHEMA_VERSION` stays the version a v2 RECEIPT keys off (and the version an in-flight v2 state
@@ -1613,7 +1616,7 @@ def _record_adapter_provenance(state, artifact, phase):
         rec["adapterProvenance"] = {"byPhase": by_phase}
 
 
-def _fold(state, config, phase, artifact, changed_subjects_seam=None):
+def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_dir=None):
     """Fold one submitted artifact and advance state. Big switch on phase; each arm delegates the
     JUDGMENT to a pure decider and only records/sequences here. Returns the mutated state.
 
@@ -1637,7 +1640,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
     elif phase == P_VERIFY:
         _fold_verify(state, config, artifact)
     elif phase == P_FIXER:
-        _fold_fixer(state, config, artifact, changed_subjects_seam)
+        _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir)
     elif phase == P_JUDGMENT:
         _fold_judgment(state, config, artifact)
     elif phase == P_STALL:
@@ -2742,7 +2745,7 @@ def _resolve_head_diff(artifact):
     return None, "unknown"
 
 
-def _fold_fixer(state, config, artifact, changed_subjects_seam=None):
+def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None):
     """Record the fixer's result; the fix-batch COMPOSITION stays orchestrator-side (the artifact),
     the driver sequences + records. The post-fix head diff rides the artifact (git, per the
     dispatch-fixer contract) so the next delta round can split_fix_surface against git — INLINE
@@ -2784,6 +2787,10 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None):
     _record_round(state, "fix", {"fixes": artifact.get("fixes") or [],
                                  "escalated": bool(artifact.get("escalated") or state.get("_escalatedRung"))})
     state.pop("_escalatedRung", None)
+    if session_dir:
+        head = _session_certified_head(session_dir, state)
+        _record_fix_content_on_findings(state, session_dir, artifact, head)
+        _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
     state["step"] = P_VERIFY
 
 
@@ -4339,6 +4346,218 @@ def _run_seam(seams, action, payload, state, config):
     return {}
 
 
+def _session_certified_head(session_dir, state):
+    """Head SHA the certification writer binds fixed-disposition evidence to."""
+    meta_path = os.path.join(session_dir, round_records.META_FILE)
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path, encoding="utf-8") as fh:
+                meta = json.load(fh)
+            head = (meta or {}).get("headSha")
+            if isinstance(head, str) and head:
+                return head
+        except (OSError, ValueError):
+            pass
+    cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
+    head = cfg.get("headSha")
+    if isinstance(head, str) and head:
+        return head
+    if isinstance(state, dict) and state.get("headDiff") is not None:
+        return hashlib.sha256(
+            json.dumps(state.get("headDiff") or "run-loop", sort_keys=True).encode()
+        ).hexdigest()[:40]
+    return None
+
+
+def _resolve_repo_root(session_dir, state):
+    """Repository root for byte-safe git reads — meta.json first, else cwd discovery."""
+    meta = _session_meta(session_dir)
+    repo_root = meta.get("repoRoot")
+    if isinstance(repo_root, str) and repo_root:
+        return os.path.realpath(repo_root)
+    root = store_core.repo_root(os.getcwd())
+    return os.path.realpath(root) if root else None
+
+
+def _fixed_finding_paths(state):
+    paths = []
+    seen = set()
+    for finding in (state.get("findings") or []) if isinstance(state, dict) else []:
+        if not isinstance(finding, dict) or finding.get("disposition") != "fixed":
+            continue
+        path = finding.get("file")
+        if isinstance(path, str) and path and path not in seen:
+            seen.add(path)
+            paths.append(path)
+    return paths
+
+
+def _fix_batch_paths(state, artifact=None):
+    paths = []
+    seen = set()
+    for batch in ((state or {}).get("_fixBatch"), (state or {}).get("fixBatch")):
+        if not isinstance(batch, list):
+            continue
+        for item in batch:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("file")
+            if isinstance(path, str) and path and path not in seen:
+                seen.add(path)
+                paths.append(path)
+    if isinstance(artifact, dict):
+        for fix in artifact.get("fixes") or []:
+            if not isinstance(fix, dict):
+                continue
+            path = fix.get("file") or fix.get("path")
+            if isinstance(path, str) and path and path not in seen:
+                seen.add(path)
+                paths.append(path)
+    return paths
+
+
+def _git_show_bytes(repo_root, head_sha, path):
+    """Return (raw_bytes, read_error) from ``git show head:path`` — never decoded or stripped."""
+    if not repo_root:
+        return None, "repo-root-unresolvable"
+    try:
+        proc = subprocess.run(
+            ["git", "show", "%s:%s" % (head_sha, path)],
+            cwd=repo_root,
+            capture_output=True,
+            text=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, "git-show failed: %s" % exc
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", errors="replace").strip() if proc.stderr else ""
+        msg = "git-show failed: exit %d" % proc.returncode
+        if err:
+            msg += ": %s" % err
+        return None, msg
+    return proc.stdout, None
+
+
+def _head_content_read_row(repo_root, head_sha, path, read_at=None):
+    """One ``reads[]`` row for head-content-blobs/2 — evidence of a read, never asserted presence.
+
+    Returns (row, raw_bytes) where raw_bytes is None on a failed read."""
+    read_at = read_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    raw, read_error = _git_show_bytes(repo_root, head_sha, path)
+    if read_error is not None:
+        return {
+            "headSha": head_sha,
+            "path": path,
+            "contentDigest": None,
+            "bytes": None,
+            "readAt": read_at,
+            "source": "git-show",
+            "readError": read_error,
+        }, None
+    return {
+        "headSha": head_sha,
+        "path": path,
+        "contentDigest": hashlib.sha256(raw).hexdigest(),
+        "bytes": len(raw),
+        "readAt": read_at,
+        "source": "git-show",
+        "readError": None,
+    }, raw
+
+
+def _read_head_content_blobs_file(session_dir):
+    path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _record_fix_content_on_findings(state, session_dir, artifact, head):
+    """Overwrite fix-time content observation on each finding touched by this fix batch."""
+    if not isinstance(head, str) or not head:
+        return
+    paths = _fix_batch_paths(state, artifact)
+    if not paths:
+        return
+    repo_root = _resolve_repo_root(session_dir, state)
+    read_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    by_path = {}
+    for path in paths:
+        row, _raw = _head_content_read_row(repo_root, head, path, read_at)
+        by_path[path] = row
+    path_set = set(paths)
+    for finding in state.get("findings") or []:
+        if not isinstance(finding, dict):
+            continue
+        path = finding.get("file")
+        if not isinstance(path, str) or path not in path_set:
+            continue
+        row = by_path.get(path)
+        if row is None:
+            continue
+        receipt = finding.get("dispositionReceipt")
+        if not isinstance(receipt, dict):
+            receipt = {}
+            finding["dispositionReceipt"] = receipt
+        receipt["fixContentHeadSha"] = head
+        receipt["fixContentDigest"] = row.get("contentDigest")
+        receipt["fixContentBytes"] = row.get("bytes")
+
+
+def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None, paths=None):
+    """Write or merge head-content reads bound to a named head (#1271 layer 2).
+
+    Every row records a read that actually happened; presence is never written here."""
+    if not session_dir:
+        return
+    try:
+        head = head_sha or _session_certified_head(session_dir, state)
+        if not isinstance(head, str) or not head:
+            return
+        if paths is None:
+            paths = _fixed_finding_paths(state)
+            for path in _fix_batch_paths(state, artifact):
+                if path not in paths:
+                    paths.append(path)
+        if not paths:
+            return
+        repo_root = _resolve_repo_root(session_dir, state)
+        existing = _read_head_content_blobs_file(session_dir) or {}
+        files = dict(existing.get("files") or {})
+        reads = [row for row in (existing.get("reads") or []) if isinstance(row, dict)]
+        indexed = {(row.get("headSha"), row.get("path")): i for i, row in enumerate(reads)}
+        read_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        for path in paths:
+            row, raw = _head_content_read_row(repo_root, head, path, read_at)
+            key = (head, path)
+            if key in indexed:
+                reads[indexed[key]] = row
+            else:
+                indexed[key] = len(reads)
+                reads.append(row)
+            if row.get("readError") is None and raw is not None:
+                files[path] = base64.b64encode(raw).decode("ascii")
+            else:
+                files.pop(path, None)
+        blobs = {
+            "schema": "head-content-blobs/2",
+            "headSha": head,
+            "files": files,
+            "reads": reads,
+        }
+        out_path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
+        round_commit.atomic_write_bytes(
+            out_path, (json.dumps(blobs, sort_keys=True) + "\n").encode("utf-8"))
+    except Exception:
+        pass
+
+
 def _write_certification_artifacts(session_dir):
     """Write certification-receipt.json or certification-refusal.json beside round-receipt.json.
 
@@ -4387,21 +4606,6 @@ def _write_certification_artifacts(session_dir):
         return ("certification refusal artifact write failed (%s) — cannot certify; treat as park"
                 % exc)
     return None
-
-
-def _run_loop_seat_map(state):
-    for entry in reversed(state.get("seatMapReceipts") or []):
-        if not isinstance(entry, dict):
-            continue
-        smap = entry.get("map")
-        if isinstance(smap, dict) and isinstance(smap.get("seats"), dict) and smap["seats"]:
-            rnd = entry.get("round", state.get("round") or 1)
-            n = review_loop_plan._round_number(rnd)
-            return smap, n if n is not None else rnd
-    cfg_sm = (state.get("config") or {}).get("seatMap")
-    if isinstance(cfg_sm, dict) and isinstance(cfg_sm.get("seats"), dict) and cfg_sm["seats"]:
-        return cfg_sm, state.get("round") or 1
-    return None, state.get("round") or 1
 
 
 def _copy_session_tree(source_dir, dest_dir):
@@ -4455,6 +4659,7 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     save_state(session_dir, state_copy)
     if source_session_dir:
         _copy_session_tree(source_session_dir, session_dir)
+        _persist_head_content_blobs(session_dir, state_copy, head_sha=head)
         return session_dir
     shutil.rmtree(session_dir, ignore_errors=True)
     return None
@@ -4793,7 +4998,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             state = prep["state"]
             round_no = prep["round_no"]
             art_hash = prep["art_hash"]
-            _fold(state, state["config"], phase, artifact)
+            _fold(state, state["config"], phase, artifact, session_dir=session_dir)
             if _via_advance and _pending_policy_applied is not None:
                 applied = state.get("_policyApplied")
                 if not isinstance(applied, list):
@@ -5159,6 +5364,7 @@ def _finalize_receipt(session_dir, state):
         _write_receipt(session_dir, state)
     except OSError as exc:
         return "terminal receipt write failed (%s) — cannot certify; treat as park" % exc
+    _persist_head_content_blobs(session_dir, state)
     cert_fault = _write_certification_artifacts(session_dir)
     if cert_fault:
         return cert_fault
