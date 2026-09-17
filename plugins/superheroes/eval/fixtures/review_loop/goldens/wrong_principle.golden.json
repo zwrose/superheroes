@@ -1,10 +1,10 @@
 {
   "benchmarkValid": true,
   "certificationRefusal": {
-    "artifact": "architecture-reviewer-b784c838315fcad8.a0.json",
+    "artifact": "driver-journal.jsonl",
     "bindingFailure": null,
-    "class": "unfetched-findings",
-    "detail": "seat result never landed on disk"
+    "class": "unrun-review",
+    "detail": "run-loop session lacks per-seat recorded evidence — cannot materialize for certification"
   },
   "coverageDecisionIds": [
     "RCD-wrong"
