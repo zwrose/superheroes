@@ -727,6 +727,13 @@ naming one of the four escape classes (`unrun-review`, `same-family-seat`, `unfe
 four classes is filed as a **misses-log entry on the collector's pinned comment**, so the
 keep-or-retire list reads catches and escapes together.
 
+**Writer fault (non-escape).** A crash inside `certify` or a write failure is **not** one of the
+four escape classes. On the CLI path the driver maps those to `certification-refusal.json` with
+`class: "unfetched-findings"` and `bindingFailure: "writer-exception"` or `"writer-empty"`. On the
+library `run_loop` path the return carries `class: "writer-fault"` instead, kept apart so the four
+real refusal classes stay trustworthy and the misses log is not inflated by internal crashes. See
+`skills/review-code/reference/certification-surface.md` for the full writer contract.
+
 The certification receipt is a **superset** of today's `round-receipt.json` fields, plus:
 
 - `terminalState` — `certified`, `cap`, or `cannot-certify`
@@ -902,8 +909,32 @@ Layer 2 (`next`/`submit`) is the state machine between orchestrator dispatches. 
 by the goldens in `test_round_driver.py` and the PARITY receipt in `test_retry_budget_parity.py`.
 Treat `round_driver.py` as the contract of record.
 
+**`run_loop` return contract.** `run_loop` returns the certification writer's receipt or refusal
+directly — no fallback to a legacy `build_receipt`-only dict. A successful return carries
+`terminalState` and `terminalCause` (writer fields). A refusal carries `class` (one of the four
+escape classes, or `writer-fault` on an internal writer failure) and **no** `verdict` key.
+Callers that previously read `receipt["verdict"]` must discriminate on the return shape. Every
+refusal from `run_loop` also carries `loopTerminal` — the loop's own terminal verdict — with the
+same warning the field's comment carries: it states what the loop reached and asserts nothing about
+certification. `loopCertificationShape` and `loopRounds` mirror `build_receipt` for observability
+only.
+
+**Leaf modules (`record_paths`, `receipt_disclosures`).** Pure vocabulary and path helpers live in
+two leaf modules neither the driver nor the writer owns:
+
+- `receipt_disclosures` — disclosure-channel registry, per-round selection rule, degraded-prose
+  collector, and certification-shape inputs. Both `round_driver` and `round_certification` import
+  and re-export its `__all__` names as aliases (same function objects — drift-tested by
+  `test_receipt_disclosures_home.py`).
+- `record_paths` — `storage_key` and `store_path` for seat envelope filenames. `round_records` and
+  `round_certification` import from here; the writer may not import the driver's state machine.
+
+The writer must not import the driver; a drift-tested copy in either consumer is not a second home.
+Shared pure functions live in the leaf module both import.
+
 **Which builder produces which artifact.** `round_certification.certify` (the receipt writer,
 journal-only input) produces `certification-receipt.json` or `certification-refusal.json`.
 `build_receipt` produces `round-receipt.json` at terminal. `build_interim_receipt` is the loop's
 progress artifact on the CLI `checkpoint` path and the durable-record `advance` path — it is
-**not** a certification.
+**not** a certification. The live writer contract is declared in
+`skills/review-code/reference/certification-surface.md`.

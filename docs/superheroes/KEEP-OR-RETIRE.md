@@ -746,6 +746,43 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** mixed — interim progress disclosure is structural on long CLI sessions; maintaining a
   second receipt builder is capability-gap baggage until FR-D9 lands the single-writer cut.
 
+#### D24 — One-home identity tests (`receipt_disclosures` / `record_paths`)
+
+- **Component.** `test_receipt_disclosures_home.py` — by-construction identity assertions over each
+  leaf module's own `__all__`: every name the driver and the certification writer re-export must be
+  the same function object as the leaf defines, so a re-introduced mirror copy fails instead of
+  drifting quietly; it costs two import walks per suite run.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `test_receipt_disclosures_exports_match_driver_and_writer` or
+  `test_record_paths_exports_match_records_and_writer` as the thing that caught a re-introduced copy
+  or a writer/driver alias drift. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Bite-proof recorded at
+  `plugins/superheroes/lib/tests/bite_proofs/receipt-disclosures-home.md` (planted duplicate
+  `declared_disclosures` in the writer).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — one home per shared vocabulary is a property of how the certification
+  boundary is built; the test's export list is the coverage, not a hand-maintained duplicate list.
+  No engine family applies: it guards import identity, not model behaviour.
+
+#### D25 — Certification fixture generator drift test
+
+- **Component.** `test_round_certification_fixture_generator_drift.py` — regenerates every
+  `round_certification` session fixture from `generate_round_certification_fixtures.py` and
+  compares the tree to `fixtures/round_certification_generated/`; it costs one full regeneration per
+  suite run and refuses silent fixture/producer divergence.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `test_generated_certification_fixtures_match_producer` as the thing that caught a checked-in
+  fixture diverging from the production chokepoint. On firing, a proposal to the owner at a
+  gardening pass.
+- **Last demonstrated benefit.** Bite-proof recorded at
+  `plugins/superheroes/lib/tests/bite_proofs/fixture-generator-drift.md` (planted extra key in a
+  checked-in `meta.json`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — fixtures that drift from their producer lie about what the writer tests;
+  the generator's `FIXTURE_BUILDERS` list is the by-construction coverage. No engine family applies.
+
 #### D13 — The order-bound evidence channel
 
 - **Component.** The `--evidence-run-dir` stamping path in `round_driver._assemble_dispatch_evidence`
