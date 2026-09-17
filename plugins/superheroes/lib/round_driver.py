@@ -4096,6 +4096,13 @@ def _terminal_converged(state, config, full_panel, note=None):
 # the driver receipt + its validator
 # =============================================================================================
 
+def _apply_grounded_mode(mapping, mode_resolved):
+    """Record session mode on a mapping only when mode_resolved is grounded."""
+    _mode_key = "mode"
+    if mode_resolved["resolved"]:
+        mapping[_mode_key] = mode_resolved[_mode_key]
+
+
 def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
     """The terminal driver receipt. Per-round schedule (planned vs executed), every finding's
     outcome, the decision ledger, the seat map, the scriptRan summary from the journal, and the
@@ -4933,7 +4940,8 @@ def _run_loop_seat_map(state):
         smap = entry.get("map")
         if isinstance(smap, dict) and isinstance(smap.get("seats"), dict) and smap["seats"]:
             rnd = entry.get("round", state.get("round") or 1)
-            return smap, int(rnd) if str(rnd).isdigit() else rnd
+            n = review_loop_plan._round_number(rnd)
+            return smap, n if n is not None else rnd
     cfg_sm = (state.get("config") or {}).get("seatMap")
     if isinstance(cfg_sm, dict) and isinstance(cfg_sm.get("seats"), dict) and cfg_sm["seats"]:
         return cfg_sm, state.get("round") or 1
@@ -5000,9 +5008,7 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
             elif not receipt.get("headSha"):
                 receipt["headSha"] = head
     meta = {"sessionId": "run-loop-%s" % head[:16], "headSha": head, "producer": "run-loop"}
-    mode = cfg.get("mode")
-    if isinstance(mode, str) and mode:
-        meta["mode"] = mode
+    _apply_grounded_mode(meta, session_mode.resolve(meta, cfg))
     round_commit.atomic_write_bytes(
         os.path.join(session_dir, round_records.META_FILE),
         (json.dumps(meta, indent=2, sort_keys=True) + "\n").encode("utf-8"))

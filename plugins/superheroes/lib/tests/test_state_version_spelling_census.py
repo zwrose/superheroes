@@ -113,6 +113,51 @@ _SPELLING_ALLOWLIST = {
     },
 }
 
+_WRITER_MODULE = "round_certification.py"
+_WRITER_DRIFT_TEST = os.path.join(_TESTS, "test_round_certification_drift.py")
+_WRITER_AUTHORIZED_SYMBOLS = frozenset({
+    "SCHEMA_VERSION",
+    "STATE_SCHEMA_VERSION",
+    "SUPPORTED_STATE_VERSIONS",
+})
+_DRIFT_PIN_RE = re.compile(
+    r"assert\s+RC\.(\w+)\s*==\s*RD\.(\w+)",
+)
+
+
+def _drift_pinned_writer_symbols():
+    """Symbols in round_certification.py that have RC.X == RD.X pins in the drift test."""
+    with open(_WRITER_DRIFT_TEST, encoding="utf-8") as fh:
+        source = fh.read()
+    pinned = set()
+    for match in _DRIFT_PIN_RE.finditer(source):
+        if match.group(1) == match.group(2):
+            pinned.add(match.group(1))
+    return pinned
+
+
+def _writer_version_declaration_authorized(finding):
+    """Authorize the writer's mandated version copies when drift-pinned and driver-synced.
+
+    Closed to exactly three symbols (register R5 / Spec B FR-D8). A fourth hand-spelled
+    version constant in the writer stays unexpected even if values happen to match."""
+    if finding.relpath != _WRITER_MODULE or finding.leg != "constant-assignment":
+        return False
+    match = re.match(r"(\w+)\s*=", finding.segment)
+    if not match:
+        return False
+    symbol = match.group(1)
+    if symbol not in _WRITER_AUTHORIZED_SYMBOLS:
+        return False
+    import round_certification as RC
+
+    if getattr(RC, symbol) != getattr(RD, symbol):
+        return False
+    if symbol in _drift_pinned_writer_symbols():
+        return True
+    # Mandated writer copies not yet drift-pinned: closed triple + runtime sync only.
+    return symbol in {"SCHEMA_VERSION", "STATE_SCHEMA_VERSION"}
+
 
 def _scanned_py_paths():
     paths = []
@@ -501,6 +546,8 @@ def _unexpected_findings(findings):
         key = (finding.relpath, finding.segment)
         if key in _SPELLING_ALLOWLIST:
             by_key[key].append(finding)
+        elif _writer_version_declaration_authorized(finding):
+            continue
         else:
             unexpected.append(finding)
     for key, grouped in by_key.items():

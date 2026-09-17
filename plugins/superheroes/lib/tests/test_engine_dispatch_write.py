@@ -830,14 +830,22 @@ def test_write_argv_shape_codex(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
     cwd_real = os.path.realpath(wt)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, engine="codex", effort="high", model="sonnet")
+    run_dir = str(tmp_path / "run")
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, engine="codex", effort="high", model="sonnet")
     assert res["ok"] is True
     argv = fake.calls[0]["argv"]
-    built = EA.build_argv_result("codex", "build", "high", {"model": "sonnet", "cwd": cwd_real})
+    last_message_path = ED._attempt_last_message_path(run_dir, 1)
+    built = EA.build_argv_result(
+        "codex", "build", "high",
+        {"model": "sonnet", "cwd": cwd_real, "last_message_path": last_message_path},
+    )
     assert argv == built["argv"]
+    last_msg_idx = argv.index("--output-last-message")
     assert argv == [
         "codex", "exec", "--sandbox", "workspace-write", "-m", argv[5],
-        "-c", "model_reasoning_effort=high", "-C", cwd_real, "-",
+        "-c", "model_reasoning_effort=high", "-C", cwd_real,
+        "--json", "--output-last-message", argv[last_msg_idx + 1],
+        "-",
     ]
     assert "read-only" not in argv
     review_built = EA.build_argv_result("codex", "review", "high", {"model": "sonnet", "cwd": cwd_real})
@@ -856,9 +864,12 @@ def test_write_argv_shape_codex(tmp_path, monkeypatch):
     _dispatch_write(tmp_path, fake2, cwd=wt, run_dir=str(tmp_path / "run2"))
     bad_argv = fake2.calls[0]["argv"]
     with pytest.raises(AssertionError):
+        bad_last_msg_idx = bad_argv.index("--output-last-message")
         assert bad_argv == [
             "codex", "exec", "--sandbox", "workspace-write", "-m", bad_argv[5],
-            "-c", "model_reasoning_effort=high", "-C", cwd_real, "-",
+            "-c", "model_reasoning_effort=high", "-C", cwd_real,
+            "--json", "--output-last-message", bad_argv[bad_last_msg_idx + 1],
+            "-",
         ]
 
 
