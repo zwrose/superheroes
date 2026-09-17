@@ -309,9 +309,14 @@ interval (10 s), not to the byte. **`signalSource`** — the runner terminates t
 every path, so without this field a runner-inflicted `SIGTERM` (`runner-timeout`) is indistinguishable
 from an engine crash (`engine`).
 
+**`reason: "entry-reason-undeclared"`** — a terminal, not-run outcome: the dispatch never ran and
+the result is final. The entry chokepoint refused because the producer's reason was outside the
+shell's declared entry vocabulary — a signal that a producer has drifted, not a routine refusal.
+The producer's own reason is preserved in the result's `detail`.
+
 **Engaged vs delivered are two variables** — a seat can burn hundreds of thousands of tokens, reach
 real findings in its stdout, and deliver nothing gradeable through our transport (engaged but not
-delivered). Other terminal reasons: `forfeited`, `vacuous`, `unrunnable`.
+delivered). Other terminal reasons: `forfeited`, `vacuous`, `unrunnable`, `entry-reason-undeclared`.
 
 ### Brief-check dispatch (`--mode brief-check`)
 
