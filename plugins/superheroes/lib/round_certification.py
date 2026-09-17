@@ -384,7 +384,7 @@ def _certification_findings(state):
             if not isinstance(finding, dict):
                 continue
             key = _finding_identity_key(finding)
-            if key and key not in by_key:
+            if key:
                 by_key[key] = finding
     for finding in state.get("findings") or []:
         if isinstance(finding, dict):
