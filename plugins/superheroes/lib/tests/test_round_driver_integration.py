@@ -17,6 +17,7 @@ completeness, assemble, fold, emit. No `cmd_submit` is ever called by hand.
 """
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -39,6 +40,7 @@ import round_certification  # noqa: E402
 import round_driver  # noqa: E402
 import round_records  # noqa: E402
 import sanitized_view  # noqa: E402
+import session_contract  # noqa: E402
 
 # =============================================================================================
 # the diffs — a BIG round-1 diff (so the gap-sweep phase is on the path) and its post-fix head
@@ -73,6 +75,8 @@ HEAD_DIFF = ("".join(_section(p, "gamma-fixed" if p == FIXED_FILE else "gamma") 
 SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
                       for dim in round_driver.DIMENSIONS}}
 FINDING_SEAT = "code-reviewer"
+_FAKE_GIT_HEAD = "a" * 40
+_WRITE_META_HEAD = object()
 
 
 def _blocking_finding(title, line):
@@ -109,7 +113,7 @@ def _fake_git(gitdir):
         if args[:2] == ("rev-parse", "--absolute-git-dir"):
             return gitdir
         if args == ("rev-parse", "HEAD"):
-            return "a" * 40
+            return _FAKE_GIT_HEAD
         if args[:3] == ("rev-parse", "--abbrev-ref", "HEAD"):
             return "feature/x"
         if args[0] == "rev-parse" and "--verify" in args:
@@ -315,7 +319,7 @@ def _drive_one_phase(session_dir, gitdir, panel_findings, head_diff_path):
     return phase, out
 
 
-def _bootstrap(tmp_path, name="s", **cfg_over):
+def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
     session_dir = str(tmp_path / name)
     os.makedirs(session_dir, exist_ok=True)
     gitdir = str(tmp_path / (name + "-gitdir"))
@@ -325,6 +329,18 @@ def _bootstrap(tmp_path, name="s", **cfg_over):
         fh.write(HEAD_DIFF)
     out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
     assert out["ok"], out
+    if head_sha is not None:
+        if head_sha is _WRITE_META_HEAD:
+            head_sha = _fake_git(gitdir)(session_dir, "rev-parse", "HEAD")
+        meta_path = os.path.join(session_dir, round_records.META_FILE)
+        meta = {}
+        if os.path.exists(meta_path):
+            with open(meta_path, encoding="utf-8") as fh:
+                meta = json.load(fh)
+        meta["headSha"] = head_sha
+        with open(meta_path, "w", encoding="utf-8") as fh:
+            json.dump(meta, fh, sort_keys=True)
+            fh.write("\n")
     return session_dir, gitdir, head_diff_path
 
 
@@ -821,12 +837,16 @@ def _drive_to_terminal_with_panel_dispatch_evidence(session_dir, tmp_path, gitdi
     raise AssertionError("did not reach a terminal in %d steps: %s" % (max_steps, folded))
 
 
-def test_real_loop_certifies_dispatch_observed_through_writer(tmp_path):
-    """Proves the dispatch-observed telemetry path end to end on a real loop that raised no findings.
+def test_real_loop_refuses_dispatch_observed_without_cited_head_until_loop_records_head(
+        tmp_path):
+    """Seam between dispatch-observed telemetry and cited-head binding on the writer.
 
-    The dispatch-observed run directory is built by ``_execution_run_dir``; see that helper's
-    docstring for the telemetry-shape contract. This does not prove certification of a review that
-    raised findings — that is ``test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions``.
+    The telemetry half is proven here: before certification the journal row's execution evidence
+    shows read engaged, at least one tool call, and source codex-events. The head half waits for
+    C13's producer — when the loop records the cited head on journal rows, this test flips to a
+    certifying assertion under R28's classification.
+
+    A review that raised findings is ``test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions``.
     """
     seat_map = {
         "seats": {
@@ -861,16 +881,48 @@ def test_real_loop_certifies_dispatch_observed_through_writer(tmp_path):
     assert isinstance(observation["toolCalls"], int)
     assert observation["toolCalls"] >= 1
     assert observation["source"] == "codex-events"
+    ctx, load_refusal = round_certification._load_context(session_dir)
+    assert load_refusal is None, load_refusal
+    certified_head = round_certification._certified_head_sha(ctx)
+    assert isinstance(certified_head, str) and certified_head
     receipt, refusal = round_certification.certify(session_dir)
-    assert refusal is None, refusal
-    assert receipt is not None
-    assert receipt["terminalState"] == "certified"
-    assert receipt["terminalCause"] is None
-    assert receipt["seats"]
-    assert any(s.get("provenance") == round_certification.PROVENANCE_DISPATCH_OBSERVED
-               for s in receipt["seats"])
-    assert "terminalState" in receipt["provenanceLabels"]["derived"]
-    assert "seats" in receipt["provenanceLabels"]["derived"]
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert (
+        refusal["bindingFailure"]
+        == round_certification.BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND
+    )
+    assert refusal["artifact"] == FINDING_SEAT
+
+
+def test_real_loop_refuses_when_certified_head_unresolvable(tmp_path):
+    """Proves a session with no resolvable certified head does not certify."""
+    seat_map = {
+        "seats": {
+            dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
+            for dim in round_driver.DIMENSIONS
+        }
+    }
+    session_dir, gitdir, head_path = _bootstrap(
+        tmp_path,
+        name="writer-e2e-no-meta-head",
+        head_sha=None,
+        seatMap=seat_map,
+        vendors=["codex"],
+        baseGuard=round_certification.BASE_GUARD_CHECKED,
+    )
+    _drive_to_terminal_with_panel_dispatch_evidence(
+        session_dir, tmp_path, gitdir, [], head_path)
+    receipt, refusal = round_certification.certify(session_dir)
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert (
+        refusal["bindingFailure"]
+        == round_certification.BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE
+    )
+    assert refusal["artifact"] == round_certification.META_FILE
 
 
 def test_real_loop_refuses_dispatch_observed_seat_without_runner_tool_calls(tmp_path):
@@ -936,3 +988,181 @@ def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_r
     assert refusal is not None
     assert refusal["class"] == "disposition-without-receipt"
     assert refusal["artifact"] == finding["title"]
+
+
+def _git(cwd, *args, check=True):
+    return subprocess.run(
+        ["git", "-C", cwd, *args], capture_output=True, text=True, check=check,
+    )
+
+
+def _init_repo(path):
+    os.makedirs(path, exist_ok=True)
+    _git(path, "init", "-q")
+    readme = os.path.join(path, "README.md")
+    with open(readme, "w", encoding="utf-8") as fh:
+        fh.write("hello\n")
+    _git(path, "add", "README.md")
+    _git(path, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "init")
+    return path
+
+
+def _linked_worktree(tmp_path):
+    main = str(tmp_path / "main")
+    _init_repo(main)
+    wt = str(tmp_path / "wt")
+    _git(main, "worktree", "add", "-q", wt)
+    return wt, main
+
+
+def _write_ok_stdout():
+    body = json.dumps({
+        "ok": True, "signal": "ok",
+        "evidence": {"testFailed": False, "testPassed": True},
+    })
+    return "Receipt prose.\n" + engine_adapter.WRITE_REPORT_SENTINEL + "\n" + body
+
+
+def _write_execution_run_dir(tmp_path, order_path, echo_nonce="nonce-fixer-e2e"):
+    """Build a write run directory for fixer dispatch-evidence tests."""
+    run_dir = str(tmp_path / "fixer-write-evidence-run")
+    journal_root = str(tmp_path / "fixer-dispatch-journal-root")
+    os.makedirs(journal_root, exist_ok=True)
+    os.environ[engine_dispatch.JOURNAL_ROOT_ENV] = journal_root
+    wt, _main = _linked_worktree(tmp_path / "fixer-git")
+    wt_real = os.path.realpath(wt)
+    baseline = engine_dispatch._worktree_baseline(wt_real)
+    engine_dispatch._acquire_worktree_lease(wt_real, run_dir)
+    ok, detail = engine_dispatch._open_write_run(
+        run_dir, engine="codex", argv=[sys.executable, "-c", "pass"], cwd=wt_real,
+        timeout=engine_dispatch.RETRY_MIN_TIMEOUT,
+        retry_timeout=engine_dispatch.RETRY_MIN_TIMEOUT,
+        prompt_path=order_path, order_id="fixer-e2e-order", base_sha="abc",
+        worktree_baseline=baseline, progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert ok, detail
+    stdout = _write_ok_stdout()
+    records, _ = engine_dispatch._journal_read(run_dir)
+    path = engine_dispatch._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            if rec.get("kind") == "run-opened":
+                rec["echoNonce"] = echo_nonce
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    engine_dispatch._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    engine_dispatch._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "wallSeconds": 1.0, "stdoutBytes": len(stdout),
+        "at": time.time(),
+    })
+    return run_dir
+
+
+def _fixer_envelope_for_write_run(record, *, order_sha=None):
+    payload = {"fixes": [{"file": FIXED_FILE, "description": "applied fix"}]}
+    return {
+        "orderSha256": order_sha if order_sha is not None else record["orderPromptSha256"],
+        "payload": payload,
+    }
+
+
+def test_assemble_dispatch_evidence_write_run_fixer_envelope(tmp_path):
+    order_path = str(tmp_path / "fixer-order.txt")
+    with open(order_path, "w", encoding="utf-8") as fh:
+        fh.write("Fix the bug.\n")
+    run_dir = _write_execution_run_dir(tmp_path, order_path)
+    record, err = engine_dispatch.run_execution_record(run_dir)
+    assert err is None, err
+    envelope = _fixer_envelope_for_write_run(record)
+    assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir)
+    assert refusal is None, extra
+    assert assembled is not None
+    assert assembled["executionEvidence"]["resultKind"] == session_contract.WRITE_RESULT_KIND
+    assert assembled["envelopeSha256"] == round_records.envelope_sha256(
+        envelope["payload"], assembled["executionEvidence"])
+
+
+def test_assemble_dispatch_evidence_write_run_order_mismatch_refuses(tmp_path):
+    order_path = str(tmp_path / "fixer-order-mismatch.txt")
+    with open(order_path, "w", encoding="utf-8") as fh:
+        fh.write("Fix the bug.\n")
+    run_dir = _write_execution_run_dir(tmp_path, order_path)
+    record, err = engine_dispatch.run_execution_record(run_dir)
+    assert err is None, err
+    envelope = _fixer_envelope_for_write_run(record, order_sha="0" * 64)
+    assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir)
+    assert assembled is None
+    assert refusal == "evidence-order-mismatch"
+
+
+def test_assemble_dispatch_evidence_write_run_binding_incomplete_refuses(tmp_path):
+    order_path = str(tmp_path / "fixer-order-incomplete.txt")
+    with open(order_path, "w", encoding="utf-8") as fh:
+        fh.write("Fix the bug.\n")
+    run_dir = _write_execution_run_dir(tmp_path, order_path)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write("not a write report\n")
+    record, err = engine_dispatch.run_execution_record(run_dir)
+    assert err is None, err
+    assert "resultDigest" not in record
+    envelope = _fixer_envelope_for_write_run(record)
+    assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir)
+    assert assembled is None
+    assert refusal == "evidence-run-dir-unreadable"
+    assert extra.get("detail") == "result-binding-incomplete"
+
+
+def test_assemble_dispatch_evidence_kind_not_in_payload_refuses(tmp_path):
+    order_path = str(tmp_path / "fixer-order-unknown-kind.txt")
+    with open(order_path, "w", encoding="utf-8") as fh:
+        fh.write("Fix the bug.\n")
+    run_dir = _write_execution_run_dir(tmp_path, order_path)
+    record, err = engine_dispatch.run_execution_record(run_dir)
+    assert err is None, err
+    real_record = engine_dispatch.run_execution_record
+
+    def _patched(run_dir_arg):
+        out, error = real_record(run_dir_arg)
+        if out is not None:
+            out = dict(out)
+            out["resultKind"] = "unknown-kind"
+        return out, error
+
+    engine_dispatch.run_execution_record = _patched
+    try:
+        envelope = _fixer_envelope_for_write_run(record)
+        assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
+            str(tmp_path / "session"), envelope, run_dir)
+    finally:
+        engine_dispatch.run_execution_record = real_record
+    assert assembled is None
+    assert refusal == "evidence-result-mismatch"
+    assert extra.get("resultKind") == "unknown-kind"
+
+
+def test_assemble_dispatch_evidence_review_kind_absent_from_payload_refuses(tmp_path):
+    order_path = str(tmp_path / "review-order.txt")
+    with open(order_path, "w", encoding="utf-8") as fh:
+        fh.write("Review this.\n")
+    run_dir = _execution_run_dir(tmp_path, order_path, [])
+    record, err = engine_dispatch.run_execution_record(run_dir)
+    assert err is None, err
+    envelope = {
+        "orderSha256": record["orderPromptSha256"],
+        "payload": {"fixes": []},
+    }
+    assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir)
+    assert assembled is None
+    assert refusal == "evidence-result-mismatch"
+    assert extra.get("resultKind") == "findings"

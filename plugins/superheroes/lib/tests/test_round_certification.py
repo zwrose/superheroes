@@ -9,6 +9,7 @@ import pytest
 import record_paths
 
 import round_certification as RC
+import session_contract
 from round_certification_fixtures import (
     DEFAULT_FINDINGS_RESULT_SHA,
     DEFAULT_PANEL_PAYLOAD_SHA,
@@ -43,7 +44,7 @@ def _dispatch_journal_with_binding(
     *,
     nonce="test-nonce",
     attempt=0,
-    head_sha=None,
+    head_sha=HEAD,
     read="engaged",
 ):
     evidence = {
@@ -383,6 +384,49 @@ def test_check_unrun_review_stale_head_refuses(tmp_path):
     refusal = RC.check_unrun_review(ctx)
     assert refusal["class"] == "unrun-review"
     assert refusal["bindingFailure"] == "execution-evidence-stale-head"
+
+
+def test_check_evidence_head_bound_absent_cited_head_refuses(tmp_path):
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=[
+            _dispatch_journal_with_binding(head_sha=None),
+        ],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_evidence_head_bound(ctx)
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["artifact"] == "code-reviewer"
+    assert (
+        refusal["bindingFailure"]
+        == RC.BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND
+    )
+
+
+def test_check_evidence_head_bound_unresolvable_certified_head_refuses(tmp_path):
+    session_dir = write_session(
+        tmp_path,
+        meta={"headSha": None},
+        state={
+            "config": {
+                "fixerVendor": "claude",
+                "baseGuard": RC.BASE_GUARD_CHECKED,
+            },
+        },
+        journal_lines=[_dispatch_journal_with_binding()],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_evidence_head_bound(ctx)
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["artifact"] == RC.META_FILE
+    assert (
+        refusal["bindingFailure"]
+        == RC.BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE
+    )
 
 
 def test_check_unrun_review_hand_landed_clean_passes(tmp_path):
@@ -1586,6 +1630,80 @@ def test_hand_landed_unrecorded_runner_nonce_refuses(tmp_path):
     refusal = RC.check_unrun_review(ctx)
     assert refusal["class"] == "unrun-review"
     assert refusal["bindingFailure"] == "execution-evidence-dispatch-unrecorded"
+
+
+def _hand_landed_evidence_binding(**overrides):
+    evidence = {
+        "source": "runner",
+        "runnerNonce": "hand-landed-nonce",
+        "recordDigest": "d" * 64,
+        "resultDigest": "e" * 64,
+        "resultKind": "findings",
+        "observation": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+        },
+    }
+    evidence.update(overrides)
+    return evidence
+
+
+def _hand_landed_envelope(evidence, payload, *, order_sha="f" * 64):
+    return {
+        "orderSha256": order_sha,
+        "payload": payload,
+        "executionEvidence": evidence,
+    }
+
+
+def test_hand_landed_write_run_kind_qualifies_without_payload_key():
+    evidence = _hand_landed_evidence_binding(
+        resultKind=session_contract.WRITE_RESULT_KIND,
+        resultDigest=session_contract.payload_sha256(
+            {"testFailed": False, "testPassed": True}),
+    )
+    payload = {"fixes": [{"file": "a.py", "description": "fixed"}]}
+    envelope = _hand_landed_envelope(evidence, payload)
+    journal_binding = {field: evidence[field] for field in RC.EXECUTION_EVIDENCE_BINDING_FIELDS}
+    ok, failure = RC._hand_landed_evidence_qualifies(
+        envelope, HEAD, journal_binding=journal_binding,
+        recorded_nonces={"hand-landed-nonce"},
+    )
+    assert ok is True
+    assert failure is None
+
+
+def test_hand_landed_review_kind_absent_from_payload_refuses():
+    evidence = _hand_landed_evidence_binding(resultKind="findings")
+    payload = {"fixes": []}
+    envelope = _hand_landed_envelope(evidence, payload)
+    journal_binding = {field: evidence[field] for field in RC.EXECUTION_EVIDENCE_BINDING_FIELDS}
+    ok, failure = RC._hand_landed_evidence_qualifies(
+        envelope, HEAD, journal_binding=journal_binding,
+        recorded_nonces={"hand-landed-nonce"},
+    )
+    assert ok is False
+    assert failure == "execution-evidence-result-mismatch"
+
+
+def test_hand_landed_fixer_kind_qualifies_with_matching_digest():
+    fixes = [{"file": "a.py", "description": "fixed"}]
+    evidence = _hand_landed_evidence_binding(
+        resultKind="fixes",
+        resultDigest=session_contract.payload_sha256(fixes),
+    )
+    payload = {"fixes": fixes}
+    envelope = _hand_landed_envelope(evidence, payload)
+    journal_binding = {field: evidence[field] for field in RC.EXECUTION_EVIDENCE_BINDING_FIELDS}
+    ok, failure = RC._hand_landed_evidence_qualifies(
+        envelope, HEAD, journal_binding=journal_binding,
+        recorded_nonces={"hand-landed-nonce"},
+    )
+    assert ok is True
+    assert failure is None
 
 
 def test_hand_landed_journal_digest_mismatch_refuses(tmp_path):

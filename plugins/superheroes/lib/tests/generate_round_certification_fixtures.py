@@ -141,7 +141,7 @@ def production_dispatch_observed_envelope(seat, payload, *, phase=PANEL_PHASE, a
 
 
 def production_recorded_journal_row(envelope, *, seat, phase=PANEL_PHASE, attempt=0,
-                                    occurrence=0, provenance, payload_sha=None, head_sha=None,
+                                    occurrence=0, provenance, payload_sha=None, head_sha=HEAD_SHA,
                                     extra=None):
     if payload_sha is None:
         payload_sha = envelope.get("payloadSha256")
@@ -324,11 +324,18 @@ def _default_dispatch_row(seat, payload_sha, **kw):
     payload = {"findings": []}
     envelope = production_dispatch_observed_envelope(
         seat, payload, payload_sha=payload_sha, **kw)
-    return production_recorded_journal_row(
-        envelope, seat=seat, phase=kw.get("phase", PANEL_PHASE),
-        attempt=kw.get("attempt", 0), occurrence=kw.get("occurrence", 0),
-        provenance=RC.PROVENANCE_DISPATCH_OBSERVED, payload_sha=payload_sha,
-        head_sha=kw.get("head_sha"))
+    row_kwargs = {
+        "envelope": envelope,
+        "seat": seat,
+        "phase": kw.get("phase", PANEL_PHASE),
+        "attempt": kw.get("attempt", 0),
+        "occurrence": kw.get("occurrence", 0),
+        "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+        "payload_sha": payload_sha,
+    }
+    if "head_sha" in kw:
+        row_kwargs["head_sha"] = kw["head_sha"]
+    return production_recorded_journal_row(**row_kwargs)
 
 
 def build_converged_single_round():

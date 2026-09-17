@@ -12,10 +12,14 @@ __all__ = (
     "HEAD_CONTENT_BLOBS_FILE",
     "SEAT_MISSING_SCHEMA",
     "FIX_FOLD_HEAD_KEY",
+    "WRITE_RESULT_KIND",
     "canonical",
     "payload_sha256",
     "finding_identity_key",
 )
+
+# Result kind a write run's execution record carries — binds the run's own report, not a payload key.
+WRITE_RESULT_KIND = "evidence"
 
 STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"

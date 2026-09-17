@@ -396,6 +396,7 @@ def _default_journal_row():
         "occurrence": 0,
         "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
         "payloadSha256": payload_sha,
+        "headSha": HEAD_SHA,
         "executionEvidence": evidence,
         "recordIdentity": {
             "phase": PANEL_PHASE,

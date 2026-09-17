@@ -71,6 +71,9 @@ PANEL_PHASE = session_contract.PANEL_PHASE
 
 SEAT_MISSING_SCHEMA = session_contract.SEAT_MISSING_SCHEMA
 
+BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND = "execution-evidence-head-unbound"
+BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE = "certified-head-unresolvable"
+
 RECEIPT_FORM_CERTIFIED = "certified"
 VENDOR_SOURCE_DEFAULTED = "defaulted"
 ROUND_ENTRY_KEY_FORMS = receipt_disclosures.ROUND_ENTRY_KEY_FORMS
@@ -187,6 +190,7 @@ def certify(session_dir):
         check_unrun_review,
         check_same_family_seat,
         check_disposition_without_receipt,
+        check_evidence_head_bound,
     ):
         refusal = check(ctx)
         if refusal is not None:
@@ -829,14 +833,14 @@ def _hand_landed_evidence_qualifies(
     if (not isinstance(result_kind, str) or not result_kind
             or not isinstance(result_digest, str) or not result_digest):
         return False, "execution-evidence-binding-incomplete"
-    if not isinstance(payload, dict) or result_kind not in payload:
-        return False, "execution-evidence-result-mismatch"
-    computed = session_contract.payload_sha256(payload[result_kind])
-    if result_digest != computed:
-        return False, "execution-evidence-result-mismatch"
-    cited = envelope.get("headSha") or evidence.get("headSha")
-    if cited and certified_head and cited != certified_head:
-        return False, "execution-evidence-stale-head"
+    if result_kind == session_contract.WRITE_RESULT_KIND:
+        pass
+    else:
+        if not isinstance(payload, dict) or result_kind not in payload:
+            return False, "execution-evidence-result-mismatch"
+        computed = session_contract.payload_sha256(payload[result_kind])
+        if result_digest != computed:
+            return False, "execution-evidence-result-mismatch"
     return True, None
 
 
@@ -1284,6 +1288,30 @@ def check_disposition_without_receipt(ctx):
                 "unknown disposition %r" % (disposition,),
             )
     ctx["important_disclosures"] = disclosures
+    return None
+
+
+def check_evidence_head_bound(ctx):
+    certified_head = _certified_head_sha(ctx)
+    if not certified_head:
+        return _refusal(
+            "unrun-review",
+            META_FILE,
+            "session certified head cannot be resolved",
+            binding_failure=BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE,
+        )
+    for seat_entry in _collect_seats(ctx):
+        if seat_entry.get("provenance") != PROVENANCE_DISPATCH_OBSERVED:
+            continue
+        cited_head = seat_entry.get("citedHead")
+        if cited_head:
+            continue
+        return _refusal(
+            "unrun-review",
+            seat_entry["seat"],
+            "dispatch-observed seat lacks cited head on the certified head",
+            binding_failure=BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND,
+        )
     return None
 
 

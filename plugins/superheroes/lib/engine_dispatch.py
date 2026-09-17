@@ -45,6 +45,7 @@ import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
 import review_findings_schema  # noqa: E402  findings example renderer (#1145 WO-C)
 import sanitized_view  # noqa: E402
+import session_contract  # noqa: E402  WRITE_RESULT_KIND — shared with writer via leaf module
 import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
 from guardian_tools import path_is_confidently_under  # noqa: E402
 
@@ -4338,7 +4339,7 @@ def _result_kind_and_content_from_write_parse(res):
     evidence = res.get("evidence")
     if not isinstance(evidence, dict) or not evidence:
         return None, None
-    return "evidence", evidence
+    return session_contract.WRITE_RESULT_KIND, evidence
 
 
 def _result_digest_and_kind_from_parse(res):

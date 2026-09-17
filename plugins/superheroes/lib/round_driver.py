@@ -7235,14 +7235,17 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
             or not isinstance(result_kind, str) or not result_kind):
         return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}
     envelope_payload = envelope.get("payload")
-    if not isinstance(envelope_payload, dict) or result_kind not in envelope_payload:
-        return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                   "resultKind": result_kind}
-    payload_digest = round_records.payload_sha256(envelope_payload[result_kind])
-    if result_digest != payload_digest:
-        return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                   "payloadSha256": payload_digest,
-                                                   "resultKind": result_kind}
+    if result_kind == session_contract.WRITE_RESULT_KIND:
+        pass
+    else:
+        if not isinstance(envelope_payload, dict) or result_kind not in envelope_payload:
+            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                       "resultKind": result_kind}
+        payload_digest = round_records.payload_sha256(envelope_payload[result_kind])
+        if result_digest != payload_digest:
+            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                       "payloadSha256": payload_digest,
+                                                       "resultKind": result_kind}
     evidence = {key: record[key] for key in round_records.EXECUTION_EVIDENCE_FIELDS}
     out = dict(envelope)
     out["executionEvidence"] = evidence

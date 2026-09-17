@@ -105,10 +105,11 @@ def test_live_wf17_round6_replays_synthesis_as_three_blockers_python_twin():
     _assert_replay_output(out)
 
 
-def test_panel_loop_session_certifies_through_writer(tmp_path):
-    """Part 4 entry point — delegates to the real-path integration certify proof."""
+def test_panel_loop_session_refuses_without_cited_head(tmp_path):
+    """Part 4 entry point — delegates to the real-path integration head-unbound refusal proof."""
     integ_path = Path(__file__).parent / "test_round_driver_integration.py"
     spec = importlib.util.spec_from_file_location("round_driver_integration", integ_path)
     integ = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(integ)
-    integ.test_real_loop_certifies_dispatch_observed_through_writer(tmp_path)
+    integ.test_real_loop_refuses_dispatch_observed_without_cited_head_until_loop_records_head(
+        tmp_path)
