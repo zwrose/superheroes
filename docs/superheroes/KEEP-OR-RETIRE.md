@@ -1133,9 +1133,10 @@ The list's units are the census rows, and each entry is keyed to its census id.
   `test_live_dispatch_snapshot_source_markers_are_declared`). Its cost is that every new source
   marker must be added to the vocabulary before a producer can write it.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
-  receipt showing the chokepoint caught an undeclared `<field>Source` marker that would otherwise
-  have reached a `resolvedInputs` snapshot. On firing, a proposal to the owner at a gardening pass.
-  A zero citation count means no producer wrote an undeclared marker, not that the chokepoint can go.
+  receipt carrying `reason: unrunnable` with `detail: internal-UndeclaredSourceMarker` that caught
+  an undeclared `<field>Source` marker that would otherwise have reached a `resolvedInputs`
+  snapshot. On firing, a proposal to the owner at a gardening pass. A zero citation count means no
+  producer wrote an undeclared marker, not that the chokepoint can go.
 - **Last demonstrated benefit.** An undeclared marker planted at a real producer terminated the
   dispatch as `unrunnable` before the run opened (`plugins/superheroes/lib/tests/bite_proofs/wo_a_1296_marker_chokepoint.md`).
 - **Consumer evidence.** unmeasured.
