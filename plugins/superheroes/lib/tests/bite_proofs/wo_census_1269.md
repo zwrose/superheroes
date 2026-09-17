@@ -1,6 +1,10 @@
 # WO-CENSUS (#1269) bite-proof — entry-refusal reason census
 
-**Provenance:** cursor / composer-2.5
+**Provenance:** cursor / composer-2.5 (implementer). **All three elements were re-run by the
+orchestrator on 2026-09-17** in a detached probe worktree (`/private/tmp/wh1269o5-bp` at
+`e79c7aa8`), red and green, with the neutralization applied and reverted through targeted edits.
+BP-CENSUS-1 and BP-CENSUS-2 reproduced as the implementer recorded them. **BP-CENSUS-3 did not** —
+its first record was vacuous and was rejected and re-taken; see the note in that section.
 
 ## Guarded elements
 
@@ -121,11 +125,19 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_entry_refusal
 
 - **axis:** opened run echoes `runOpened: true`
 
-**neutralization** (`plugins/superheroes/lib/tests/test_engine_dispatch.py`, opened-run assertion):
+**Re-taken by the orchestrator, 2026-09-17.** The implementer's first attempt at this element
+neutralized the **test's own assertion** (`assert with_run.get("runOpened") is True` inverted to
+`is False`) and showed the test fail. That is a vacuous proof: it demonstrates only that an inverted
+assertion fails, and says nothing about the guarded behaviour, because the detector was **edited**
+when it was shown red. It was rejected and re-taken below against production code with the detector
+unedited. Probe worktree: detached `/private/tmp/wh1269o5-bp` at `e79c7aa8`.
+
+**neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_entry_refusal_terminal`):
 ```python
-        assert with_run.get("runOpened") is False  # bite-proof neutralization
+    run_dir_value = ""  # bite-proof neutralization
 ```
-(replaces `assert with_run.get("runOpened") is True`)
+(replaces `run_dir_value = run_dir or ""`, so an opened run is never looked up and no run
+provenance is attached)
 
 **command:**
 ```
@@ -138,9 +150,6 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 _________ test_entry_refusal_reason_census_provenance_by_declared_set __________
 
-tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/pytest-of-zwrose/pytest-878/test_entry_refusal_reason_cens0')
-
-    def test_entry_refusal_reason_census_provenance_by_declared_set(tmp_path):
         """Every declared entry-refusal reason carries run provenance at the chokepoint."""
         assert ED.dispatch_outcome.REASON_UNRUNNABLE in ED.seat_bundle.ENTRY_REFUSAL_REASONS
         assert ED.seat_bundle.ENTRY_REASON_UNDECLARED in ED.seat_bundle.ENTRY_REFUSAL_REASONS
@@ -162,24 +171,28 @@ tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/p
     
             with_run = ED._entry_refusal_terminal(refusal, run_dir=run_dir)
             assert with_run["reason"] == reason
->           assert with_run.get("runOpened") is False  # bite-proof neutralization
-E           AssertionError: assert True is False
-E            +  where True = <built-in method get of dict object at 0x10ac9c480>('runOpened')
-E            +    where <built-in method get of dict object at 0x10ac9c480> = {'argv': [], 'attempts': 0, 'detail': 'census-probe', 'forfeited': False, ...}.get
+>           assert with_run.get("runOpened") is True
+E           AssertionError: assert False is True
+E            +  where False = <built-in method get of dict object at 0x10952be00>('runOpened')
+E            +    where <built-in method get of dict object at 0x10952be00> = {'argv': [], 'attempts': 0, 'detail': 'census-probe', 'forfeited': False, ...}.get
 
 plugins/superheroes/lib/tests/test_engine_dispatch.py:9106: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_entry_refusal_reason_census_provenance_by_declared_set
-1 failed in 0.63s
+1 failed in 0.53s
 ```
 
-**restore** (`plugins/superheroes/lib/tests/test_engine_dispatch.py`, opened-run assertion):
+Note the failing line: `assert with_run.get("runOpened") is True` — **the detector's own
+assertion, unedited**. The red comes from production code that stopped attaching run provenance.
+
+**restore** (`plugins/superheroes/lib/engine_dispatch.py`, `_entry_refusal_terminal`):
 ```python
-        assert with_run.get("runOpened") is True
+    run_dir_value = run_dir or ""
 ```
+(`git status --porcelain` in the probe worktree empty after restore)
 
 **raw green** (exit 0):
 ```
 .                                                                        [100%]
-1 passed in 0.47s
+1 passed in 0.45s
 ```
