@@ -87,7 +87,7 @@ The entry-refusal reasons are the closed set the dispatch shell's `entryReason` 
 
 Derived from `engine_adapter.BUILD_ARGV_REFUSAL_TOKENS`.
 
-The engine-config refusal tokens are what a refused `build-argv` surfaces as `detail: "engine-config:<token>"`.
+The engine-config refusal tokens name a refused argv build. The `build-argv` CLI surfaces `reason: "engine-config"` with the bare token in `detail`; the dispatch runner wraps the same token as `detail: "engine-config:<token>"`.
 
 - `engine-model-effort-conflict`
 - `fable-unrunnable`

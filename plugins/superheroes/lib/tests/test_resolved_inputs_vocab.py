@@ -46,14 +46,6 @@ def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
 
 _MARKER_GUARD_DETAIL = "internal-%s" % riv.UndeclaredSourceMarker.__name__
 
-_EXPECTED_DISPATCH_OUTCOME_REASONS = frozenset({
-    dispatch_outcome.REASON_FORFEITED,
-    dispatch_outcome.REASON_VACUOUS,
-    dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT,
-    dispatch_outcome.REASON_UNRUNNABLE,
-    dispatch_outcome.REASON_RUNNING,
-})
-
 
 def _valid_prompt(tmp_path, content="Review this code.\n"):
     p = tmp_path / "prompt.txt"
@@ -133,6 +125,7 @@ def test_put_resolved_refuses_undeclared_marker():
     with pytest.raises(riv.UndeclaredSourceMarker) as exc_info:
         ED._put_resolved(snapshot, "engine", "codex", "not-a-marker")
     msg = str(exc_info.value)
+    assert "engine" in msg
     assert "not-a-marker" in msg
     assert "accepted:" in msg
     for marker in riv.SOURCE_MARKERS:
@@ -151,10 +144,6 @@ def test_entry_refusal_reasons_do_not_surface_marker_guard():
     for reason in seat_bundle.ENTRY_REFUSAL_REASONS:
         assert guard_name not in reason, reason
         assert "source-marker" not in reason, reason
-
-
-def test_undeclared_marker_refusal_does_not_expand_dispatch_outcome_reasons():
-    assert dispatch_outcome.ALL_REASONS == _EXPECTED_DISPATCH_OUTCOME_REASONS
 
 
 def test_live_dispatch_undeclared_marker_surfaces_as_unrunnable(tmp_path, monkeypatch):

@@ -1121,6 +1121,29 @@ The list's units are the census rows, and each entry is keyed to its census id.
   (`test_entry_refusal_chokepoint_invariant_no_inline_run_dir_or_run_opened_stamp`) because
   hand-maintained lists were invisible to new refusal paths.
 
+#### S12 — resolvedInputs source-marker chokepoint
+
+- **Component.** Not a census row. `_put_resolved` in `plugins/superheroes/lib/engine_dispatch.py`:
+  the membership check that refuses any undeclared `<field>Source` marker before writing into a
+  `resolvedInputs` snapshot, backed by the closed `SOURCE_MARKERS` vocabulary in
+  `plugins/superheroes/lib/resolved_inputs_vocab.py` and the live-dispatch behavioural tests in
+  `plugins/superheroes/lib/tests/test_resolved_inputs_vocab.py`
+  (`test_put_resolved_refuses_undeclared_marker`, `test_put_resolved_accepts_every_source_marker`,
+  `test_live_dispatch_undeclared_marker_surfaces_as_unrunnable`,
+  `test_live_dispatch_snapshot_source_markers_are_declared`). Its cost is that every new source
+  marker must be added to the vocabulary before a producer can write it.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  receipt showing the chokepoint caught an undeclared `<field>Source` marker that would otherwise
+  have reached a `resolvedInputs` snapshot. On firing, a proposal to the owner at a gardening pass.
+  A zero citation count means no producer wrote an undeclared marker, not that the chokepoint can go.
+- **Last demonstrated benefit.** An undeclared marker planted at a real producer terminated the
+  dispatch as `unrunnable` before the run opened (`plugins/superheroes/lib/tests/bite_proofs/wo_a_1296_marker_chokepoint.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a closed marker vocabulary with chokepoint enforcement guards declared
+  source provenance on real producer paths; a zero citation count means producers are not writing
+  undeclared markers, not that new paths cannot forget to declare.
+
 
 ## The workaround-marker inventory
 

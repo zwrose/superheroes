@@ -31,5 +31,5 @@ SOURCE_MARKERS = frozenset({
 })
 
 
-class UndeclaredSourceMarker(ValueError):
+class UndeclaredSourceMarker(Exception):
     """Raised when a producer attempts to write an undeclared ``<field>Source`` marker."""

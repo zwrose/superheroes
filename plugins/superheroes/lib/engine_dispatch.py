@@ -585,8 +585,8 @@ def _put_resolved(snapshot, name, value, source):
     if source not in resolved_inputs_vocab.SOURCE_MARKERS:
         vocabulary = ", ".join(sorted(resolved_inputs_vocab.SOURCE_MARKERS))
         raise resolved_inputs_vocab.UndeclaredSourceMarker(
-            "resolvedInputs source marker %r is not declared; accepted: %s"
-            % (source, vocabulary)
+            "resolvedInputs field %r source marker %r is not declared; accepted: %s"
+            % (name, source, vocabulary)
         )
     snapshot[name] = value
     snapshot[name + "Source"] = source

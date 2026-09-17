@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -208,14 +209,24 @@ def test_declared_vocabularies_section_headings():
     assert "### Engine-config refusal tokens" in text
 
 
+def _subsection_members(section_text: str, heading: str) -> frozenset[str]:
+    pattern = r"### %s\n(.*?)(?=\n### |\Z)" % re.escape(heading)
+    match = re.search(pattern, section_text, re.DOTALL)
+    assert match is not None, "missing subsection: %s" % heading
+    members = re.findall(r"^- `([^`]+)`", match.group(1), re.MULTILINE)
+    return frozenset(members)
+
+
 def test_declared_vocabularies_include_all_members():
     text = DED.generate()
-    for marker in RIV.SOURCE_MARKERS:
-        assert "`%s`" % marker in text
-    for reason in SB.ENTRY_REFUSAL_REASONS:
-        assert "`%s`" % reason in text
-    for token in EA.BUILD_ARGV_REFUSAL_TOKENS:
-        assert "`%s`" % token in text
+    section = _vocabularies_section(text)
+    for heading, expected in (
+        ("resolvedInputs source markers", RIV.SOURCE_MARKERS),
+        ("Entry-refusal reasons", SB.ENTRY_REFUSAL_REASONS),
+        ("Engine-config refusal tokens", EA.BUILD_ARGV_REFUSAL_TOKENS),
+    ):
+        rendered = _subsection_members(section, heading)
+        assert rendered == expected, heading
 
 
 def test_vocabularies_rendering_deterministic():
