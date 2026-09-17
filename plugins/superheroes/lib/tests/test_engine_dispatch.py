@@ -9087,10 +9087,11 @@ DG = importlib.util.module_from_spec(_DG)
 _DG.loader.exec_module(DG)
 
 
-def _assert_entry_refusal_reason(result, producer):
+def _assert_entry_refusal_reason(result, producer, expected):
     assert result.get("ok") is False, (producer, result)
     reason = result.get("reason")
     assert isinstance(reason, str), (producer, result)
+    assert reason == expected, (producer, expected, reason, result)
     assert reason in ED.seat_bundle.ENTRY_REFUSAL_REASONS, (producer, reason, result)
 
 
@@ -9107,12 +9108,14 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
     _assert_entry_refusal_reason(
         ED.dispatch_review("codex", prompt_path=prompt, repo_root=repo_root),
         "dispatch-review-library-legacy",
+        "legacy-seat-args",
     )
     _assert_entry_refusal_reason(
         ED.dispatch_review(
             seat=_codex_seat(), prompt_path=prompt, repo_root=repo_root, prompt_pat="typo",
         ),
         "dispatch-review-library-unknown-kwargs",
+        "unknown-dispatch-kwargs",
     )
     _assert_entry_refusal_reason(
         ED.dispatch_review(
@@ -9120,6 +9123,7 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
             run_engine=_never_call, build_view=_never_build_view,
         ),
         "dispatch-review-library-mode-invalid",
+        ED.dispatch_outcome.REASON_UNRUNNABLE,
     )
     _assert_entry_refusal_reason(
         ED.dispatch_review(
@@ -9128,6 +9132,7 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
             run_engine=_never_call, build_view=_never_build_view,
         ),
         "dispatch-review-library-seat-invalid",
+        ED.dispatch_outcome.REASON_UNRUNNABLE,
     )
 
     assert ED.main([
@@ -9138,11 +9143,13 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
     _assert_entry_refusal_reason(
         json.loads(capsys.readouterr().out.strip()),
         "dispatch-review-cli-legacy",
+        "legacy-seat-args",
     )
 
     _assert_entry_refusal_reason(
         ED.dispatch_write(prompt_path=prompt, cwd=wt, engine="cursor"),
         "dispatch-write-library-legacy",
+        "legacy-seat-args",
     )
     _assert_entry_refusal_reason(
         ED.dispatch_write(
@@ -9152,6 +9159,7 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
             run_engine=_never_call,
         ),
         "dispatch-write-library-prompt-missing",
+        ED.dispatch_outcome.REASON_UNRUNNABLE,
     )
 
     assert ED.main([
@@ -9162,15 +9170,16 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
     _assert_entry_refusal_reason(
         json.loads(capsys.readouterr().out.strip()),
         "dispatch-write-cli-legacy",
+        "legacy-seat-args",
     )
 
     assert DG.main(["check", "--seat", '{"vendor":"codex","model":"gpt-5.6-sol","effort":"high"}']) == 1
     guard_out = json.loads(capsys.readouterr().out.splitlines()[0])
-    _assert_entry_refusal_reason(guard_out, "guard-check-cli-seat-invalid")
+    _assert_entry_refusal_reason(guard_out, "guard-check-cli-seat-invalid", "role-key-absent")
 
     assert DG.main(["check", "--seat", seat, "--role", _REVIEW_ROLE]) == 1
     guard_legacy = json.loads(capsys.readouterr().out.strip())
-    _assert_entry_refusal_reason(guard_legacy, "guard-check-cli-legacy")
+    _assert_entry_refusal_reason(guard_legacy, "guard-check-cli-legacy", "legacy-seat-args")
 
     assert EA.main([
         "build-argv", "--seat", '{"vendor":"codex","model":"gpt-5.6-sol","effort":"high"}',
@@ -9182,7 +9191,7 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
 
     assert EA.main(["build-argv", "--seat", seat, "--run-kind", "review", "--role", "reviewer"]) == 1
     build_legacy = json.loads(capsys.readouterr().out.strip())
-    _assert_entry_refusal_reason(build_legacy, "build-argv-cli-legacy")
+    _assert_entry_refusal_reason(build_legacy, "build-argv-cli-legacy", "legacy-seat-args")
 
 
 def test_entry_refusal_producer_undeclared_reason_becomes_entry_reason_undeclared(

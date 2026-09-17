@@ -43,6 +43,13 @@ Refusals raised before the run opened carry `runOpened: false` and no snapshot.
 Results no longer carry a `ledger` key. Preflight refusals return to the caller in the result body
 like every other refusal.
 
+A dispatch refused at entry may now return `reason: "entry-reason-undeclared"`. This is a terminal,
+not-run outcome: the dispatch never ran, and the result is final. It means the dispatch shell's
+entry chokepoint caught a refusal reason outside its declared entry vocabulary; the producer's own
+reason is preserved in `detail`. Consumers that interpret dispatch results by comparing `reason`
+against a hard-coded set of tokens must add this member; consumers that ask the shell's own helpers
+(`counts_as_run`, `is_terminal`) get the right answer with no change.
+
 ### Composition-liveness cache
 
 The default lifetime for a composition-liveness receipt is 3600 seconds. Set

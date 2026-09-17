@@ -85,15 +85,20 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_entry_allowli
 
 ---
 
-## BP-L2SM-2 — canary seat key bound to canonical tier
+## BP-L2SM-2 — canary seat key tier binding (`_resolve_canary_identity`)
 
-- **axis:** mismatched seat key and tier refuses before dispatch with accepted shape named
+Two guarded branches at `plugins/superheroes/lib/seat_canary.py:99–113`.
+
+### BP-L2SM-2a — two-member accepted-tier set (`accepted tiers: %s` refusal)
+
+- **guarded element:** `seat_canary.py:99` (`if tier not in accepted_tiers:`) → `seat_canary.py:108–113`
+- **axis:** mismatched tier refuses before dispatch and names the accepted tier set
 
 **neutralization** (`plugins/superheroes/lib/seat_canary.py`, `_resolve_canary_identity`):
 ```python
-    if False and tier != canonical_tier:  # bite-proof neutralization
+    if False and tier not in accepted_tiers:  # bite-proof neutralization
 ```
-(replaces `if tier != canonical_tier:`)
+(replaces `if tier not in accepted_tiers:`)
 
 **command:**
 ```
@@ -107,29 +112,37 @@ F                                                                        [100%]
 _________________ test_grounding_seat_rejects_mismatched_tier __________________
 
     def test_grounding_seat_rejects_mismatched_tier():
-        # axis: seat key tier binding — grounding-seat requires reviewer, not reviewer-deep
-        out = SC.run_canary(
-            "grounding-seat",
-            _seat_config("codex", "gpt-5.6-sol", "xhigh", "reviewer-deep"),
-            repo_root="/r",
-        )
-        assert out["outcome"] == "unrunnable"
->       assert "requires tier 'reviewer'" in out["detail"]
-E       assert "requires tier 'reviewer'" in 'not-dispatched: repo-root-missing'
+        # axis: seat key tier binding — grounding-seat refuses tiers outside seat_map's accepted set
+        SM = _load_seat_map()
+        foreign_tier = "verifier"
+        assert foreign_tier not in SM.accepted_tiers_for_seat("grounding-seat")
+        cfg = _seat_config("codex", "gpt-5.6-sol", "xhigh", foreign_tier)
+        resolved = SC._resolve_canary_identity("grounding-seat", cfg)
+>       assert resolved.get("reason") == "seat-tier-mismatch"
+E       AssertionError: assert None == 'seat-tier-mismatch'
+E        +  where None = <built-in method get of dict object at 0x10a558640>('reason')
+E        +    where <built-in method get of dict object at 0x10a558640> = {'ok': True, 'seat': {'effort': 'xhigh', 'model': 'gpt-5.6-sol', 'role': 'verifier', 'vendor': 'codex'}, 'seatKey': 'grounding-seat', 'tier': 'verifier'}.get
 
-plugins/superheroes/lib/tests/test_seat_canary.py:1074: AssertionError
+plugins/superheroes/lib/tests/test_seat_canary.py:1081: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_seat_canary.py::test_grounding_seat_rejects_mismatched_tier
-1 failed in 0.17s
+1 failed in 0.14s
 ```
 
 **restore:**
 ```python
-    if tier != canonical_tier:
+    if tier not in accepted_tiers:
 ```
 
-**raw green:**
+**raw green** (exit 0):
 ```
 .                                                                        [100%]
-1 passed in 0.12s
+1 passed in 0.13s
 ```
+
+### BP-L2SM-2b — single-member accepted-tier set (`requires tier %r` refusal)
+
+- **guarded element:** `seat_canary.py:100` (`if len(accepted_tiers) == 1:`) → `seat_canary.py:100–107`
+- **axis:** mismatched tier refuses before dispatch and names the single required tier
+
+**Unreachable through this entry point.** `seat_map.accepted_tiers_for_seat` (`seat_map.py:73–79`, via `_backfill_emittable_tiers`) always yields at least two tiers for every panel seat on head `b6b547f1` — verified: all six `PANEL_ROSTER` seats return `len=2` (`reviewer`, `reviewer-deep`). No test at head exercises the `requires tier %r` refusal message; every tier-mismatch test (`test_grounding_seat_rejects_mismatched_tier`, `test_sm2_1269_refuses_tier_outside_seat_map_emission`, `test_sm2_1269_grounding_refuses_reviewer_deep`) takes the two-member branch and asserts `accepted tiers:` in `detail`. The seam that prevents the single-member branch from being reachable is `seat_map._backfill_emittable_tiers` unioning `_BACKFILL_CLAUDE_ROTATION` into every seat's accepted set.

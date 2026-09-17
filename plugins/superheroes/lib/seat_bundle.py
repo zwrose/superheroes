@@ -11,6 +11,7 @@ import json
 import os
 
 import dispatch_allowlist
+import dispatch_outcome
 import model_registry
 
 _BUILD_ARGV_RUN_KINDS = frozenset({"review", "build", "fix"})
@@ -58,7 +59,7 @@ _ENTRY_VERBS = frozenset({
     "dispatch-review", "dispatch-write", "build-argv", "guard-check",
 })
 
-ENTRY_REASON_UNDECLARED = "entry-reason-undeclared"
+ENTRY_REASON_UNDECLARED = dispatch_outcome.REASON_ENTRY_UNDECLARED
 
 """Closed vocabulary of outward entry-refusal reason tokens (#1269).
 
@@ -94,7 +95,7 @@ ENTRY_REFUSAL_REASONS = frozenset({
     "unknown-role",
     "unknown-vendor",
     "unknown-verb",
-    "unrunnable",
+    dispatch_outcome.REASON_UNRUNNABLE,
     "vendor-hint-mismatch",
     "vendor-invalid",
     "verb-role-mismatch",

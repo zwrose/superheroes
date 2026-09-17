@@ -119,37 +119,65 @@ def test_four_key_seat_json_accepted(verb, role):
 _DROPPED = ("--engine", "--model", "--effort", "--engine-model", "--vendor", "--role")
 
 
+def _valid_cli_paths(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("review\n", encoding="utf-8")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / ".git").write_text("gitdir: /fake\n", encoding="utf-8")
+    return repo, prompt, run_dir, wt
+
+
 @pytest.mark.parametrize("flag", _DROPPED)
 @pytest.mark.parametrize("spelling", ["value", "equals"])
-def test_dropped_flags_refuse_and_name_seat_dispatch_review(flag, spelling):
+def test_dropped_flags_refuse_and_name_seat_dispatch_review(flag, spelling, tmp_path, capsys):
     # axis: R8 — dropped legacy flag refuses dispatch-review CLI and names the seat
+    repo, prompt, run_dir, _wt = _valid_cli_paths(tmp_path)
     seat = _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE)
-    base = ["dispatch-review", "--seat", seat,
-            "--prompt-path", "p", "--repo-root", "/tmp", "--run-dir", "/tmp/r"]
+    base = [
+        "dispatch-review", "--seat", seat,
+        "--prompt-path", str(prompt), "--repo-root", str(repo), "--run-dir", str(run_dir),
+    ]
     if spelling == "value":
         argv = base[:1] + [flag, "codex"] + base[1:]
     else:
         argv = base[:1] + [flag + "=codex"] + base[1:]
     assert ED.main(argv) == 1
+    result = json.loads(capsys.readouterr().out.strip())
+    assert result["reason"] == "legacy-seat-args"
+    assert flag in result["detail"]
+    assert "--seat" in result["detail"]
 
 
 @pytest.mark.parametrize("flag", _DROPPED)
 @pytest.mark.parametrize("spelling", ["value", "equals"])
-def test_dropped_flags_refuse_and_name_seat_dispatch_write(flag, spelling):
+def test_dropped_flags_refuse_and_name_seat_dispatch_write(flag, spelling, tmp_path, capsys):
     # axis: R8 — dropped legacy flag refuses dispatch-write CLI and names the seat
+    _repo, prompt, run_dir, wt = _valid_cli_paths(tmp_path)
     seat = _seat_json("codex", "gpt-5.6-sol", "high", _WRITE_ROLE)
-    base = ["dispatch-write", "--seat", seat,
-            "--prompt-path", "p", "--cwd", "/tmp", "--run-dir", "/tmp/r"]
+    base = [
+        "dispatch-write", "--seat", seat,
+        "--prompt-path", str(prompt), "--cwd", str(wt), "--run-dir", str(run_dir),
+    ]
     if spelling == "value":
         argv = base[:1] + [flag, "codex"] + base[1:]
     else:
         argv = base[:1] + [flag + "=codex"] + base[1:]
     assert ED.main(argv) == 1
+    result = json.loads(capsys.readouterr().out.strip())
+    assert result["reason"] == "legacy-seat-args"
+    assert flag in result["detail"]
+    assert "--seat" in result["detail"]
 
 
 @pytest.mark.parametrize("flag", _DROPPED)
 @pytest.mark.parametrize("spelling", ["value", "equals"])
-def test_dropped_flags_refuse_and_name_seat_guard_check(flag, spelling):
+def test_dropped_flags_refuse_and_name_seat_guard_check(flag, spelling, capsys):
     # axis: R8 — dropped legacy flag refuses guard-check CLI and names the seat
     seat = _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE)
     if spelling == "value":
@@ -157,6 +185,10 @@ def test_dropped_flags_refuse_and_name_seat_guard_check(flag, spelling):
     else:
         argv = ["check", "--seat", seat, flag + "=codex"]
     assert DG.main(argv) == 1
+    result = json.loads(capsys.readouterr().out.strip())
+    assert result["reason"] == "legacy-seat-args"
+    assert flag in result["detail"]
+    assert "--seat" in result["detail"]
     if flag == "--role":
         dropped = SB.scan_dropped_flags(argv)
         assert "--role" in dropped

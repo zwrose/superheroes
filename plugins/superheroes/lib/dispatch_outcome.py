@@ -3,12 +3,15 @@
 A new outcome member is a fall-open vector (#732 pattern): consumers that compare
 against the old members silently mis-handle the new one. ``test_dispatch_outcome_census.py``
 keeps producers and consumers honest — no module outside this file may name an outcome
-token as a literal.
+token as a literal. ``REASON_ENTRY_UNDECLARED`` means the dispatch shell's entry
+chokepoint emitted it because a producer's refusal reason was outside the declared
+entry vocabulary.
 """
 REASON_FORFEITED = "forfeited"
 REASON_VACUOUS = "vacuous"
 REASON_FORFEIT_ENGAGED_ARTIFACT = "forfeit-with-engaged-artifact"
 REASON_UNRUNNABLE = "unrunnable"
+REASON_ENTRY_UNDECLARED = "entry-reason-undeclared"
 REASON_RUNNING = "running"
 
 FORFEIT_REASONS = frozenset({
@@ -16,7 +19,7 @@ FORFEIT_REASONS = frozenset({
     REASON_VACUOUS,
     REASON_FORFEIT_ENGAGED_ARTIFACT,
 })
-NOT_RUN_REASONS = FORFEIT_REASONS | {REASON_UNRUNNABLE}
+NOT_RUN_REASONS = FORFEIT_REASONS | {REASON_UNRUNNABLE, REASON_ENTRY_UNDECLARED}
 ALL_REASONS = NOT_RUN_REASONS | {REASON_RUNNING}
 TERMINAL_REASONS = ALL_REASONS - {REASON_RUNNING}
 
