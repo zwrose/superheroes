@@ -3,6 +3,7 @@ import re
 
 import round_certification as RC
 import round_driver as RD
+import round_phases as RP
 import round_records as RR
 
 _LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,7 +52,27 @@ def test_execution_evidence_binding_fields_match_records():
 
 
 def test_head_content_blobs_file_name():
-    assert RC.HEAD_CONTENT_BLOBS_FILE == "head-content-blobs.json"
+    assert RC.HEAD_CONTENT_BLOBS_FILE == RR.HEAD_CONTENT_BLOBS_FILE == "head-content-blobs.json"
+
+
+def test_state_file_matches_driver():
+    assert RC.STATE_FILE == RD.STATE_FILE
+
+
+def test_journal_file_matches_driver():
+    assert RC.JOURNAL_FILE == RD.JOURNAL_FILE
+
+
+def test_journal_fault_file_matches_driver():
+    assert RC.JOURNAL_FAULT_FILE == RD.JOURNAL_FAULT_FILE
+
+
+def test_meta_file_matches_records():
+    assert RC.META_FILE == RR.META_FILE
+
+
+def test_panel_phase_matches_driver():
+    assert RC.PANEL_PHASE == RD.P_PANEL == RP.P_PANEL
 
 
 def test_execution_evidence_observation_fields_match_records():

@@ -1358,13 +1358,14 @@ def test_run_loop_certification_refusal_not_legacy_receipt():
     assert result.get("verdict") != "converged"
 
 
-def test_run_loop_certification_success_carries_writer_fields():
-    """WO-P3-B item 5: with a checked base guard, run_loop returns the writer's receipt."""
-    receipt = RD.run_loop(_seams(), _cfg(leg="panel", baseGuard=RD.BASE_GUARD_CHECKED))
-    assert receipt["terminalState"] == "certified"
-    assert receipt["terminalCause"] is None
-    assert "terminalState" in receipt["provenanceLabels"]["derived"]
-    assert "provenanceLabels" in receipt
+def test_run_loop_certification_refuses_without_landed_seat_evidence():
+    """WO-P3-B item 5: run_loop must not certify when seat envelopes never landed."""
+    result = RD.run_loop(_seams(), _cfg(leg="panel", baseGuard=RD.BASE_GUARD_CHECKED))
+    assert isinstance(result, dict)
+    assert "class" in result
+    assert result["class"] == "unfetched-findings"
+    assert "seat result never landed on disk" in result["detail"]
+    assert result.get("loopTerminal") == "converged"
 
 # =============================================================================
 # audit-keyed stall → self-recovery once → stall menu
@@ -2639,8 +2640,10 @@ def test_verify_fail_halts(tmp_path):
         verify_runner=lambda cmd, rnd: "fail"), _cfg_cert())
     assert "class" in result
     assert "verdict" not in result
-    assert result["class"] == "disposition-without-receipt"
-    assert "finding has no disposition" in result["detail"]
+    assert result["loopTerminal"] == "halted"
+    assert any(r.get("verifyResult") == "fail" for r in (result.get("loopRounds") or []))
+    assert result["class"] == "unfetched-findings"
+    assert "seat result never landed on disk" in result["detail"]
 
 
 def test_verify_timeout_halts(tmp_path):
@@ -2653,8 +2656,10 @@ def test_verify_timeout_halts(tmp_path):
         verify_runner=lambda cmd, rnd: "timeout"), _cfg_cert())
     assert "class" in result
     assert "verdict" not in result
-    assert result["class"] == "disposition-without-receipt"
-    assert "finding has no disposition" in result["detail"]
+    assert result["loopTerminal"] == "halted"
+    assert any(r.get("verifyResult") == "timeout" for r in (result.get("loopRounds") or []))
+    assert result["class"] == "unfetched-findings"
+    assert "seat result never landed on disk" in result["detail"]
 
 
 def test_omitted_panel_seat_cannot_certify_full_panel(tmp_path):
@@ -4153,28 +4158,37 @@ def _panel_seat_map_with_same_family(seat="code-reviewer"):
     return seat_map
 
 
-def test_same_family_seat_map_degrades_cert_shape():
-    cfg = _cfg_cert(leg="panel", vendors=["codex", "cursor"])
-    seat_map_clean = _assertable_seat_map(cfg["vendors"])
-    io_clean = {
-        "seatMap": seat_map_clean,
-        "canaryResult": _canary_probes_for(seat_map_clean),
+def test_same_family_seat_map_degrades_cert_shape(tmp_path):
+    RC = _load("round_certification")
+    spec = importlib.util.spec_from_file_location(
+        "round_certification_fixtures",
+        os.path.join(_HERE, "round_certification_fixtures.py"),
+    )
+    RCF = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(RCF)
+    head = RCF.HEAD_SHA
+    clean_map = _assertable_seat_map(["codex", "cursor"])
+    clean_state = {
+        "findings": [],
+        "seatMapReceipts": [{"round": "1", "map": clean_map}],
     }
-    result_clean = RD.run_loop(_seams(io=io_clean), cfg)
-    assert "class" in result_clean
-    assert "verdict" not in result_clean
-    assert result_clean["class"] == "unfetched-findings"
-    assert "seat result never landed on disk" in result_clean["detail"]
+    session_clean = RCF.write_session(
+        tmp_path, name="clean", state=clean_state, faithful_session=True)
+    receipt_clean, refusal_clean = RC.certify(session_clean)
+    assert refusal_clean is None
+    assert receipt_clean is not None
+    assert receipt_clean["terminalState"] == "certified"
     seat_map_deg = _panel_seat_map_with_same_family()
-    io_deg = {
-        "seatMap": seat_map_deg,
-        "canaryResult": _canary_probes_for(seat_map_deg),
+    deg_state = {
+        "findings": [],
+        "seatMapReceipts": [{"round": "1", "map": seat_map_deg}],
     }
-    result_deg = RD.run_loop(_seams(io=io_deg), cfg)
-    assert "class" in result_deg
-    assert "verdict" not in result_deg
-    assert result_deg["class"] == "unfetched-findings"
-    assert "seat result never landed on disk" in result_deg["detail"]
+    session_deg = RCF.write_session(
+        tmp_path, name="deg", state=deg_state, faithful_session=True)
+    receipt_deg, refusal_deg = RC.certify(session_deg)
+    assert receipt_deg is None
+    assert refusal_deg is not None
+    assert refusal_deg["class"] == "same-family-seat"
 
 
 def test_same_family_disclosed_in_receipt_degraded_list():

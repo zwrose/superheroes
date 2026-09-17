@@ -10,6 +10,8 @@ import round_records as RR
 GENERATED_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "fixtures", "round_certification_generated")
 HEAD_SHA = "a" * 40
+EMPTY_FINDINGS_PAYLOAD = {"findings": []}
+EMPTY_FINDINGS_PAYLOAD_SHA = RR.payload_sha256(EMPTY_FINDINGS_PAYLOAD)
 ANCHOR_SHA = "feb91032a2cb2106f089a25063b8178527ae4359f5412ccf549e9d2f98f28ce9"
 AUDIT_PHASE = "dispatch-audits"
 SIXTEEN_AUDIT_SEATS = tuple("audit-target-%02d" % i for i in range(16))
@@ -93,7 +95,9 @@ def write_session(
     with open(os.path.join(session_dir, JOURNAL_FILE), "w", encoding="utf-8") as fh:
         for row in lines:
             fh.write(json.dumps(row, sort_keys=True) + "\n")
-    for spec in envelopes if envelopes is not None else [{"seat": "code-reviewer", "payloadSha256": "abc123"}]:
+    for spec in envelopes if envelopes is not None else [
+        {"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}
+    ]:
         _write_envelope(session_dir, spec)
     if faithful:
         head = meta_obj.get("headSha") or (state_obj.get("config") or {}).get("headSha") or HEAD_SHA
@@ -156,7 +160,7 @@ def _binding_fields(nonce):
         "source": "runner",
         "runnerNonce": nonce,
         "recordDigest": "d" * 64,
-        "resultDigest": "e" * 64,
+        "resultDigest": RR.payload_sha256([]),
         "resultKind": "findings",
     }
 
@@ -236,9 +240,12 @@ def _write_envelope(session_dir, spec):
 
 
 def _default_journal_row():
-    payload_sha = "abc123"
-    envelope = _ad_hoc_envelope("code-reviewer", {"findings": []},
-                                {"payloadSha256": payload_sha})
+    envelope = _ad_hoc_envelope(
+        "code-reviewer",
+        EMPTY_FINDINGS_PAYLOAD,
+        {"payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA},
+    )
+    payload_sha = EMPTY_FINDINGS_PAYLOAD_SHA
     evidence = envelope["executionEvidence"]
     return {
         "cmd": "record-result",

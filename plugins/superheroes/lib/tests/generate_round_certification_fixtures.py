@@ -42,7 +42,7 @@ def _binding_fields(nonce):
         "source": "runner",
         "runnerNonce": nonce,
         "recordDigest": "d" * 64,
-        "resultDigest": "e" * 64,
+        "resultDigest": RR.payload_sha256([]),
         "resultKind": "findings",
     }
 
@@ -287,7 +287,7 @@ def _default_dispatch_row(seat, payload_sha, **kw):
 
 
 def build_converged_single_round():
-    payload_sha = "abc123"
+    payload_sha = RR.payload_sha256({"findings": []})
     envelope = production_dispatch_observed_envelope(
         "code-reviewer", {"findings": []}, payload_sha=payload_sha)
     return {
@@ -312,7 +312,7 @@ def build_converged_single_round():
 
 
 def build_multi_round_fix():
-    payload_sha = "abc123"
+    payload_sha = RR.payload_sha256({"findings": []})
     envelope = production_dispatch_observed_envelope(
         "code-reviewer", {"findings": []}, payload_sha=payload_sha)
     row = production_recorded_journal_row(
@@ -444,7 +444,7 @@ def build_policy_and_base():
 
 
 def build_capped_terminal():
-    payload_sha = "abc123"
+    payload_sha = RR.payload_sha256({"findings": []})
     envelope = production_dispatch_observed_envelope(
         "code-reviewer", {"findings": []}, payload_sha=payload_sha)
     return {
@@ -492,7 +492,7 @@ def build_capped_terminal():
 
 
 def build_halted_terminal():
-    payload_sha = "abc123"
+    payload_sha = RR.payload_sha256({"findings": []})
     envelope = production_dispatch_observed_envelope(
         "code-reviewer", {"findings": []}, payload_sha=payload_sha)
     return {
