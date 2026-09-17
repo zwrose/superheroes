@@ -4344,7 +4344,8 @@ def _write_certification_artifacts(session_dir):
 
     A failure inside the writer must not take down a terminal that would otherwise complete: catch
     it, write a refusal artifact naming what happened, and carry on — but never write a success
-    artifact the writer did not return from ``certify``."""
+    artifact the writer did not return from ``certify``. Returns a fault detail string when the
+    refusal artifact cannot be written; None when an artifact landed or no write was needed."""
     import round_certification as rc
 
     try:
@@ -4362,7 +4363,7 @@ def _write_certification_artifacts(session_dir):
             path = os.path.join(session_dir, CERTIFICATION_RECEIPT_FILE)
             round_commit.atomic_write_bytes(
                 path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-            return
+            return None
         except Exception as exc:
             refusal = {
                 "class": "unfetched-findings",
@@ -4382,8 +4383,10 @@ def _write_certification_artifacts(session_dir):
         path = os.path.join(session_dir, CERTIFICATION_REFUSAL_FILE)
         round_commit.atomic_write_bytes(
             path, (json.dumps(refusal, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-    except OSError:
-        pass
+    except OSError as exc:
+        return ("certification refusal artifact write failed (%s) — cannot certify; treat as park"
+                % exc)
+    return None
 
 
 def _run_loop_seat_map(state):
@@ -4417,7 +4420,11 @@ def _copy_session_tree(source_dir, dest_dir):
 
 
 def _materialize_run_loop_session(state, invocations, source_session_dir=None):
-    """Write loop-state.json, driver-journal.jsonl, meta.json for ``certify``."""
+    """Write loop-state.json, driver-journal.jsonl, meta.json for ``certify``.
+
+    Without ``source_session_dir`` the library ``run_loop`` path has no per-seat recorded
+    envelopes to copy — refuse materialization rather than synthesize step-only journal rows that
+    would let certification pass over zero seats."""
     session_dir = tempfile.mkdtemp(prefix="run-loop-")
     state_copy = json.loads(json.dumps(state))
     cfg = state_copy.setdefault("config", {})
@@ -4449,18 +4456,8 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     if source_session_dir:
         _copy_session_tree(source_session_dir, session_dir)
         return session_dir
-    _, rnd = _run_loop_seat_map(state_copy)
-    journal_lines = []
-    count = max(int(invocations or 0), 1)
-    for idx in range(count):
-        journal_lines.append(
-            {"cmd": "run-loop", "phase": P_PANEL, "round": rnd, "attempt": 0,
-             "outcome": "step", "seq": idx + 1})
-    journal_path = os.path.join(session_dir, JOURNAL_FILE)
-    with open(journal_path, "w", encoding="utf-8") as fh:
-        for row in journal_lines:
-            fh.write(json.dumps(row, sort_keys=True) + "\n")
-    return session_dir
+    shutil.rmtree(session_dir, ignore_errors=True)
+    return None
 
 
 def _attach_loop_observables_to_refusal(refusal, state):
@@ -4484,6 +4481,13 @@ def _run_loop_certified_receipt(state, invocations):
     import round_certification as rc
 
     session_dir = _materialize_run_loop_session(state, invocations)
+    if session_dir is None:
+        return _attach_loop_observables_to_refusal({
+            "class": "unrun-review",
+            "artifact": JOURNAL_FILE,
+            "detail": ("run-loop session lacks per-seat recorded evidence — cannot materialize "
+                       "for certification"),
+        }, state)
     try:
         try:
             receipt, refusal = rc.certify(session_dir)
@@ -5155,7 +5159,9 @@ def _finalize_receipt(session_dir, state):
         _write_receipt(session_dir, state)
     except OSError as exc:
         return "terminal receipt write failed (%s) — cannot certify; treat as park" % exc
-    _write_certification_artifacts(session_dir)
+    cert_fault = _write_certification_artifacts(session_dir)
+    if cert_fault:
+        return cert_fault
     return _verify_terminal_receipt(session_dir)
 
 
