@@ -231,10 +231,16 @@ def _terminal_pre_open_refusal(refusal: dict, *, mode=None) -> dict:
 
 
 def _seat_dispatch_refusal(seat_result, *, mode=None):
+    seat_reason = seat_result.get("reason", "seat-invalid")
+    detail = seat_result.get("detail") or seat_reason
+    if not isinstance(seat_reason, str) or seat_reason not in seat_bundle.ENTRY_REFUSAL_REASONS:
+        outward_reason = seat_bundle.ENTRY_REASON_UNDECLARED
+    else:
+        outward_reason = dispatch_outcome.REASON_UNRUNNABLE
     base = {
         "ok": False,
-        "reason": dispatch_outcome.REASON_UNRUNNABLE,
-        "detail": seat_result.get("detail") or seat_result.get("reason", "seat-invalid"),
+        "reason": outward_reason,
+        "detail": detail,
         "seatDetail": seat_result.get("detail"),
     }
     if mode is not None:
@@ -267,10 +273,11 @@ def _entry_refusal_terminal(
             ),
         }
     result = {
+        **refusal,
+        "ok": False,
+        "terminal": True,
         "attempts": 0,
         "forfeited": False,
-        "terminal": True,
-        **refusal,
     }
     if mode is not None and "mode" not in result:
         result["mode"] = mode
@@ -3969,7 +3976,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
         return _with_run_fields(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": repo_detail,
              "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir="", argv=[],
+            run_dir=run_dir or "", argv=[],
         )
 
     pr_body_set = pr_body_path is not None
@@ -3980,7 +3987,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
              "detail": "pr-body-args-unpaired",
              "attempts": 0, "forfeited": False, "terminal": True},
-            engine=engine,
+            run_dir=run_dir or "", engine=engine,
         )
 
     if pr_body_set:
@@ -3993,7 +4000,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                  "detail": "sanitized-view-pr-body-outside-session",
                  "attempts": 0, "forfeited": False, "terminal": True},
-                engine=engine,
+                run_dir=run_dir or "", engine=engine,
             )
         if not path_is_confidently_under(pr_real, session_real):
             return _finish_preflight_terminal(
@@ -4001,7 +4008,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                  "detail": "sanitized-view-pr-body-outside-session",
                  "attempts": 0, "forfeited": False, "terminal": True},
-                engine=engine,
+                run_dir=run_dir or "", engine=engine,
             )
 
     ok, why = engine_adapter.prompt_path_ok(prompt_path)
@@ -4010,7 +4017,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
             repo_detail,
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "prompt-%s" % why,
              "attempts": 0, "forfeited": False, "terminal": True},
-            engine=engine,
+            run_dir=run_dir or "", engine=engine,
         )
 
     try:
@@ -4021,7 +4028,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
             repo_detail,
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "prompt-unreadable",
              "attempts": 0, "forfeited": False, "terminal": True},
-            engine=engine,
+            run_dir=run_dir or "", engine=engine,
         )
 
     if mode == sanitized_view.MODE_BRIEF_CHECK and diff_base is not None:
@@ -4134,7 +4141,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                     repo_detail,
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": exc.detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
-                    engine=engine,
+                    run_dir=run_dir or "", engine=engine,
                 )
 
             view_path = view["path"]
@@ -4453,17 +4460,18 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
             "cwd-absent", "cwd-missing", "cwd-not-a-directory",
             "cwd-not-a-repo", "git-preflight-timeout",
         ):
-            return _with_run_fields(refusal, run_dir="", argv=[])
+            return _with_run_fields(refusal, run_dir=run_dir or "", argv=[])
         try:
             cwd_real = os.path.realpath((cwd or "").strip())
         except OSError:
-            return _with_run_fields(refusal, run_dir="", argv=[])
+            return _with_run_fields(refusal, run_dir=run_dir or "", argv=[])
         repo_root = _repository_root_from_git_cwd(cwd_real, timeout=preflight_timeout)
         if repo_root:
             return _finish_preflight_terminal(
-                repo_root, refusal, engine=engine, run_kind=RUN_KIND_WRITE,
+                repo_root, refusal, run_dir=run_dir or "", engine=engine,
+                run_kind=RUN_KIND_WRITE,
             )
-        return _with_run_fields(refusal, run_dir="", argv=[])
+        return _with_run_fields(refusal, run_dir=run_dir or "", argv=[])
     cwd_real = cwd_detail
     repo_root = _repository_root_from_git_cwd(cwd_real, timeout=preflight_timeout)
 
@@ -4480,12 +4488,14 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "prompt-%s" % why,
              "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir=run_dir or "",
         )
 
     if run_dir is None:
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-absent",
              "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir="",
         )
 
     ok_rd, rd_detail = _validate_run_dir(run_dir, create=True)

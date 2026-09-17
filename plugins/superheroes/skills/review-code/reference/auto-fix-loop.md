@@ -436,9 +436,14 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > # produced each seat's folded findings (omit or `{}` when none fell open). One representative seat
 > # per effective cross-vendor vendor that ran with zero usable findings (dict members only — mirrors
 > # `round_driver._usable_findings`).
+> RAN_MANIFEST_JSON="${RAN_MANIFEST:-}"
+> if [ -z "$RAN_MANIFEST_JSON" ]; then RAN_MANIFEST_JSON="{}"; fi
+> PANEL_SEAT_STATUS_JSON="${PANEL_SEAT_STATUS:-}"
+> if [ -z "$PANEL_SEAT_STATUS_JSON" ]; then PANEL_SEAT_STATUS_JSON="{}"; fi
 > CANARY_PLANS=()
 > while IFS= read -r plan; do CANARY_PLANS+=("$plan"); done < <(python3 -B -c "
 > import json, sys
+> import model_registry
 > PANEL_VENDORS = ('claude', 'codex', 'cursor')
 > seat_map = json.loads(sys.argv[1])
 > panel = json.loads(sys.argv[2])
@@ -464,21 +469,18 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >     if not isinstance(cell, dict):
 >         return None
 >     tier = cell.get('tier')
->     if cell.get('vendor') == vendor:
->         return {'key': dim, 'vendor': vendor, 'model': cell.get('model'),
->                 'tier': tier, 'effort': cell.get('effort')}
->     for other_key, other in seats.items():
->         if not isinstance(other, dict) or other.get('vendor') != vendor:
->             continue
->         if tier is not None and other.get('tier') != tier:
->             continue
->         return {'key': dim, 'vendor': vendor, 'model': other.get('model'),
->                 'tier': tier or other.get('tier'), 'effort': other.get('effort')}
->     return None
+>     if not isinstance(tier, str):
+>         return None
+>     matrix = model_registry.matrix_config(tier, vendor)
+>     if matrix is None:
+>         return None
+>     model, effort = matrix
+>     return {'key': dim, 'vendor': vendor, 'model': model,
+>             'tier': tier, 'effort': effort}
 >
 > seen = set()
 > plans = []
-> for key in seats:
+> for key in status:
 >     if status.get(key) != 'run':
 >         continue
 >     payload = panel.get(key)
@@ -501,7 +503,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >     plans.append(cfg)
 > for plan in plans:
 >     print(json.dumps(plan))
-> " "$SEAT_MAP" "$PANEL_SEATS" "${RAN_MANIFEST:-{}}" "${PANEL_SEAT_STATUS:-{}}")
+> " "$SEAT_MAP" "$PANEL_SEATS" "$RAN_MANIFEST_JSON" "$PANEL_SEAT_STATUS_JSON")
 > CANARY_RESULTS=()
 > for CANARY_PLAN in "${CANARY_PLANS[@]}"; do
 >   CANARY_SEAT_KEY=$(printf '%s' "$CANARY_PLAN" | jq -r '.key')

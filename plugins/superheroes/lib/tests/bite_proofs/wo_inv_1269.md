@@ -6,7 +6,7 @@
 
 | ID | Guarded element | Axis | Proving test |
 |---|---|---|---|
-| BP-INV-1 | AST chokepoint invariant | no inline `runDir` dict literal or `runOpened` stamp on entry-refusal paths | `test_entry_refusal_chokepoint_invariant_no_inline_run_dir_or_run_opened_stamp` |
+| BP-INV-1 | AST chokepoint invariant | no inline `runDir` dict literal or `runOpened` stamp on entry-refusal paths | **retired** — replaced by producer-side behavioural census `test_entry_refusal_producer_census_declared_reasons` |
 | BP-INV-2 | `_entry_refusal_terminal` provenance | continuation entry refusal echoes `runOpened: true` and journal `resolvedInputs` | `test_entry_unknown_kwargs_refusal_preserves_existing_review_run_provenance` |
 | BP-INV-3 | `resolve_entry` mode/role ordering | resumed review run with mode disagreement reaches `run-dir-mode-mismatch` with provenance | `test_continuation_brief_check_mode_on_review_run_refuses_with_provenance` |
 

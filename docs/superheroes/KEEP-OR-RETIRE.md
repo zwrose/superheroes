@@ -1036,6 +1036,8 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — a single entry resolver guards how dispatch seats are authorized; a zero
   citation count means callers are not attempting unauthorized seats, not that bypass paths vanished.
+  Retired `test_chokepoint_invariant_all_paths_use_resolve_entry` and the hand-listed `_CLI_CASES`
+  tuple (FR-B1 — a census on another gate; resolver bite-proof is `wo_1269_chokepoint.md`).
 
 #### S9 — Spawn-time allowlist gate
 
@@ -1084,11 +1086,15 @@ The list's units are the census rows, and each entry is keyed to its census id.
 #### S11 — Entry-refusal reason census
 
 - **Component.** Not a census row. The closed `ENTRY_REFUSAL_REASONS` vocabulary in
-  `plugins/superheroes/lib/seat_bundle.py` and the behavioural census in
-  `plugins/superheroes/lib/tests/test_engine_dispatch.py` that iterates it against
-  `_entry_refusal_terminal` with and without an opened run, plus the chokepoint refusal for
-  undeclared reasons (`entry-reason-undeclared`). Its cost is that every new outward entry-refusal
-  reason must be added to the declared set before it can pass the chokepoint.
+  `plugins/superheroes/lib/seat_bundle.py`, the producer-side behavioural census in
+  `plugins/superheroes/lib/tests/test_engine_dispatch.py`
+  (`test_entry_refusal_producer_census_declared_reasons`), the chokepoint provenance census against
+  `_entry_refusal_terminal` with and without an opened run
+  (`test_entry_refusal_reason_census_provenance_by_declared_set`), plus the chokepoint refusal for
+  undeclared reasons (`test_entry_refusal_chokepoint_rejects_undeclared_reason` and
+  `test_entry_refusal_producer_undeclared_reason_becomes_entry_reason_undeclared`). Its cost is that
+  every new outward entry-refusal reason must be added to the declared set before it can pass the
+  chokepoint.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing an
   `entry-reason-undeclared` refusal that caught a reason outside the declared vocabulary before
   dispatch ran. On firing, a proposal to the owner at a gardening pass. A zero citation count
@@ -1098,11 +1104,14 @@ The list's units are the census rows, and each entry is keyed to its census id.
   child's build record and `plugins/superheroes/lib/tests/bite_proofs/wo_census_1269.md`).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** structural — a closed reason vocabulary with chokepoint enforcement guards entry-refusal
-  completeness by construction; a zero citation count means callers are not hitting undeclared
-  reasons, not that new paths cannot forget to declare. Retired the syntactic AST call-graph census
-  (`test_entry_refusal_chokepoint_invariant_returns_trace_to_approved_producers` and helpers) because
-  its hand-maintained audited-functions list was invisible to new refusal paths.
+- **Notes.** structural — a closed reason vocabulary with chokepoint enforcement and a producer-side
+  behavioural census guards declared outward reasons on real entry paths; a zero citation count means
+  callers are not hitting undeclared reasons, not that new paths cannot forget to declare. Retired
+  the syntactic AST call-graph census
+  (`test_entry_refusal_chokepoint_invariant_returns_trace_to_approved_producers` and helpers) and the
+  inline-stamp census
+  (`test_entry_refusal_chokepoint_invariant_no_inline_run_dir_or_run_opened_stamp`) because
+  hand-maintained lists were invisible to new refusal paths.
 
 
 ## The workaround-marker inventory

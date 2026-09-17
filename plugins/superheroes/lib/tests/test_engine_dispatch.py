@@ -9079,7 +9079,211 @@ def test_wo8_edge5_corrupt_journal_with_opened_carries_snapshot_and_status(tmp_p
     assert echo["resolvedInputs"] == snapshot_before
 
 
-# --- #1269 WO-CENSUS: behavioural entry-refusal reason census -----------------
+# --- #1269 WO-L2FIX / WO-CENSUS: behavioural entry-refusal reason census -------
+
+_DG = importlib.util.spec_from_file_location(
+    "dispatch_guard", os.path.join(_HERE, "..", "dispatch_guard.py"))
+DG = importlib.util.module_from_spec(_DG)
+_DG.loader.exec_module(DG)
+
+
+def _assert_entry_refusal_reason(result, producer):
+    assert result.get("ok") is False, (producer, result)
+    reason = result.get("reason")
+    assert isinstance(reason, str), (producer, result)
+    assert reason in ED.seat_bundle.ENTRY_REFUSAL_REASONS, (producer, reason, result)
+
+
+def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, capsys):
+    """Behavioural census: entry producers emit declared outward refusal reasons."""
+    repo_root = _repo(tmp_path)
+    prompt = _valid_prompt(tmp_path)
+    run_dir = str(tmp_path / "census-open")
+    _manual_open_review_run(tmp_path, run_dir)
+    wt = _linked_worktree(tmp_path)
+    seat = _seat_json("codex", "gpt-5.6-sol", "high")
+    write_seat = _seat_json("codex", "gpt-5.6-sol", "high", _WRITE_ROLE)
+
+    _assert_entry_refusal_reason(
+        ED.dispatch_review("codex", prompt_path=prompt, repo_root=repo_root),
+        "dispatch-review-library-legacy",
+    )
+    _assert_entry_refusal_reason(
+        ED.dispatch_review(
+            seat=_codex_seat(), prompt_path=prompt, repo_root=repo_root, prompt_pat="typo",
+        ),
+        "dispatch-review-library-unknown-kwargs",
+    )
+    _assert_entry_refusal_reason(
+        ED.dispatch_review(
+            seat=_codex_seat(), prompt_path=prompt, repo_root=repo_root, mode="not-a-mode",
+            run_engine=_never_call, build_view=_never_build_view,
+        ),
+        "dispatch-review-library-mode-invalid",
+    )
+    _assert_entry_refusal_reason(
+        ED.dispatch_review(
+            seat={"vendor": "codex", "model": "gpt-5.6-sol", "effort": "high"},
+            prompt_path=prompt, repo_root=repo_root,
+            run_engine=_never_call, build_view=_never_build_view,
+        ),
+        "dispatch-review-library-seat-invalid",
+    )
+
+    assert ED.main([
+        "dispatch-review", "--seat", seat,
+        "--prompt-path", prompt, "--repo-root", repo_root, "--run-dir", run_dir,
+        "--engine", "codex",
+    ]) == 1
+    _assert_entry_refusal_reason(
+        json.loads(capsys.readouterr().out.strip()),
+        "dispatch-review-cli-legacy",
+    )
+
+    _assert_entry_refusal_reason(
+        ED.dispatch_write(prompt_path=prompt, cwd=wt, engine="cursor"),
+        "dispatch-write-library-legacy",
+    )
+    _assert_entry_refusal_reason(
+        ED.dispatch_write(
+            seat=_codex_seat(role=_WRITE_ROLE),
+            prompt_path=str(tmp_path / "missing-write-prompt.txt"),
+            cwd=wt, run_dir=str(tmp_path / "write-run"), order_id="census",
+            run_engine=_never_call,
+        ),
+        "dispatch-write-library-prompt-missing",
+    )
+
+    assert ED.main([
+        "dispatch-write", "--seat", write_seat,
+        "--prompt-path", prompt, "--cwd", wt, "--run-dir", run_dir,
+        "--model", "gpt-5.6-sol",
+    ]) == 1
+    _assert_entry_refusal_reason(
+        json.loads(capsys.readouterr().out.strip()),
+        "dispatch-write-cli-legacy",
+    )
+
+    assert DG.main(["check", "--seat", '{"vendor":"codex","model":"gpt-5.6-sol","effort":"high"}']) == 1
+    guard_out = json.loads(capsys.readouterr().out.splitlines()[0])
+    _assert_entry_refusal_reason(guard_out, "guard-check-cli-seat-invalid")
+
+    assert DG.main(["check", "--seat", seat, "--role", _REVIEW_ROLE]) == 1
+    guard_legacy = json.loads(capsys.readouterr().out.strip())
+    _assert_entry_refusal_reason(guard_legacy, "guard-check-cli-legacy")
+
+    assert EA.main([
+        "build-argv", "--seat", '{"vendor":"codex","model":"gpt-5.6-sol","effort":"high"}',
+        "--run-kind", "review",
+    ]) == 0
+    build_out = json.loads(capsys.readouterr().out.strip())
+    assert build_out["reason"] == "engine-config"
+    assert build_out["detail"] in ED.seat_bundle.ENTRY_REFUSAL_REASONS
+
+    assert EA.main(["build-argv", "--seat", seat, "--run-kind", "review", "--role", "reviewer"]) == 1
+    build_legacy = json.loads(capsys.readouterr().out.strip())
+    _assert_entry_refusal_reason(build_legacy, "build-argv-cli-legacy")
+
+
+def test_entry_refusal_producer_undeclared_reason_becomes_entry_reason_undeclared(
+    tmp_path, monkeypatch,
+):
+    sentinel = {"ok": False, "reason": "chokepoint-sentinel", "detail": "sentinel"}
+    monkeypatch.setattr(ED.seat_bundle, "resolve_entry", lambda *a, **k: sentinel)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_never_build_view,
+    )
+    assert res["reason"] == ED.seat_bundle.ENTRY_REASON_UNDECLARED
+    assert res["detail"] == "sentinel"
+
+
+def test_early_review_prompt_missing_preserves_opened_run_provenance(tmp_path):
+    run_dir = str(tmp_path / "early-prompt-review")
+    repo_root = _repo(tmp_path)
+    _manual_open_review_run(tmp_path, run_dir)
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=str(tmp_path / "missing-prompt.txt"),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+    )
+    assert res["detail"] == "prompt-missing"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_early_review_pr_body_unpaired_preserves_opened_run_provenance(tmp_path):
+    run_dir = str(tmp_path / "early-prbody-review")
+    repo_root = _repo(tmp_path)
+    _manual_open_review_run(tmp_path, run_dir)
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        pr_body_path=str(tmp_path / "pr.md"),
+    )
+    assert res["detail"] == "pr-body-args-unpaired"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_early_review_invalid_repo_root_preserves_opened_run_provenance(tmp_path):
+    run_dir = str(tmp_path / "early-repo-review")
+    _manual_open_review_run(tmp_path, run_dir)
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root="   ",
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+    )
+    assert res["detail"] == "repo-root-absent"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_early_write_prompt_missing_preserves_opened_run_provenance(tmp_path):
+    wt = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "early-prompt-write")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=_valid_prompt(tmp_path),
+        cwd=wt,
+        run_dir=run_dir,
+        order_id="early-write-open",
+        run_engine=fake,
+        max_wait=0,
+    )
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=str(tmp_path / "missing-write-prompt.txt"),
+        cwd=wt,
+        run_dir=run_dir,
+        run_engine=_never_call,
+    )
+    assert res["detail"] == "prompt-missing"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
 
 def test_entry_refusal_reason_census_provenance_by_declared_set(tmp_path):
     """Every declared entry-refusal reason carries run provenance at the chokepoint."""
@@ -9280,32 +9484,25 @@ def test_continuation_brief_check_mode_on_review_run_refuses_with_provenance(tmp
     assert "resolvedInputs" in res
 
 
-def test_entry_refusal_terminal_defaulting_caller_values_win():
-    # axis: caller's value wins over the default
+def test_entry_refusal_terminal_fail_closed_fields_not_overridable():
+    # axis: chokepoint invariant fields win over producer-supplied values
     with_defaults = ED._entry_refusal_terminal({"signal": "needs_context"})
+    assert with_defaults["ok"] is False
     assert with_defaults["attempts"] == 0
     assert with_defaults["forfeited"] is False
     assert with_defaults["terminal"] is True
 
     with_caller = ED._entry_refusal_terminal({
+        "ok": True,
         "signal": "needs_context",
         "attempts": 3,
         "forfeited": True,
         "terminal": False,
     })
-    assert with_caller["attempts"] == 3
-    assert with_caller["forfeited"] is True
-    assert with_caller["terminal"] is False
-
-    with_falsy_caller = ED._entry_refusal_terminal({
-        "signal": "needs_context",
-        "attempts": 0,
-        "forfeited": False,
-        "terminal": False,
-    })
-    assert with_falsy_caller["attempts"] == 0
-    assert with_falsy_caller["forfeited"] is False
-    assert with_falsy_caller["terminal"] is False
+    assert with_caller["ok"] is False
+    assert with_caller["attempts"] == 0
+    assert with_caller["forfeited"] is False
+    assert with_caller["terminal"] is True
 
 
 def test_entry_refusal_fail_closed_no_run_dir_supplied(tmp_path):

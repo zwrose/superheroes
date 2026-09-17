@@ -117,29 +117,46 @@ def test_four_key_seat_json_accepted(verb, role):
 
 
 _DROPPED = ("--engine", "--model", "--effort", "--engine-model", "--vendor", "--role")
-_CLI_CASES = [
-    (ED, "dispatch-review", ["--prompt-path", "p", "--repo-root", "/tmp", "--run-dir", "/tmp/r"]),
-    (ED, "dispatch-write", ["--prompt-path", "p", "--cwd", "/tmp", "--run-dir", "/tmp/r"]),
-    (DG, "check", []),
-]
 
 
 @pytest.mark.parametrize("flag", _DROPPED)
 @pytest.mark.parametrize("spelling", ["value", "equals"])
-@pytest.mark.parametrize("cli_module,subcmd,tail", _CLI_CASES)
-def test_dropped_flags_refuse_and_name_seat(cli_module, subcmd, tail, flag, spelling):
+def test_dropped_flags_refuse_and_name_seat_dispatch_review(flag, spelling):
+    # axis: R8 — dropped legacy flag refuses dispatch-review CLI and names the seat
     seat = _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE)
-    base = [subcmd, "--seat", seat] + tail
+    base = ["dispatch-review", "--seat", seat,
+            "--prompt-path", "p", "--repo-root", "/tmp", "--run-dir", "/tmp/r"]
     if spelling == "value":
         argv = base[:1] + [flag, "codex"] + base[1:]
     else:
         argv = base[:1] + [flag + "=codex"] + base[1:]
-    if cli_module is DG:
+    assert ED.main(argv) == 1
+
+
+@pytest.mark.parametrize("flag", _DROPPED)
+@pytest.mark.parametrize("spelling", ["value", "equals"])
+def test_dropped_flags_refuse_and_name_seat_dispatch_write(flag, spelling):
+    # axis: R8 — dropped legacy flag refuses dispatch-write CLI and names the seat
+    seat = _seat_json("codex", "gpt-5.6-sol", "high", _WRITE_ROLE)
+    base = ["dispatch-write", "--seat", seat,
+            "--prompt-path", "p", "--cwd", "/tmp", "--run-dir", "/tmp/r"]
+    if spelling == "value":
+        argv = base[:1] + [flag, "codex"] + base[1:]
+    else:
+        argv = base[:1] + [flag + "=codex"] + base[1:]
+    assert ED.main(argv) == 1
+
+
+@pytest.mark.parametrize("flag", _DROPPED)
+@pytest.mark.parametrize("spelling", ["value", "equals"])
+def test_dropped_flags_refuse_and_name_seat_guard_check(flag, spelling):
+    # axis: R8 — dropped legacy flag refuses guard-check CLI and names the seat
+    seat = _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE)
+    if spelling == "value":
         argv = ["check", "--seat", seat, flag, "codex"]
-        if spelling == "equals":
-            argv = ["check", "--seat", seat, flag + "=codex"]
-    rc = cli_module.main(argv)
-    assert rc == 1
+    else:
+        argv = ["check", "--seat", seat, flag + "=codex"]
+    assert DG.main(argv) == 1
     if flag == "--role":
         dropped = SB.scan_dropped_flags(argv)
         assert "--role" in dropped
@@ -529,62 +546,6 @@ def test_dict_seat_without_ok_promotion_refused():
     )
     assert resolved["ok"] is False
     assert resolved["reason"] == "role-key-absent"
-
-
-def test_chokepoint_invariant_all_paths_use_resolve_entry(monkeypatch, tmp_path, capsys):
-    sentinel = {"ok": False, "reason": "chokepoint-sentinel", "detail": "sentinel"}
-
-    def _sentinel(*_a, **_k):
-        return sentinel
-
-    monkeypatch.setattr(SB, "resolve_entry", _sentinel)
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / ".git").mkdir()
-    prompt = tmp_path / "prompt.txt"
-    prompt.write_text("review\n", encoding="utf-8")
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    seat = _seat_json("codex", "gpt-5.6-sol", "high")
-
-    review_argv = [
-        "dispatch-review", "--seat", seat,
-        "--prompt-path", str(prompt), "--repo-root", str(repo), "--run-dir", str(run_dir),
-    ]
-    assert ED.main(review_argv) == 0
-    review_out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert review_out["detail"] == "sentinel"
-
-    wt = tmp_path / "wt"
-    wt.mkdir()
-    (wt / ".git").write_text("gitdir: /fake\n", encoding="utf-8")
-    write_argv = [
-        "dispatch-write",
-        "--seat", _seat_json("codex", "gpt-5.6-sol", "high", _WRITE_ROLE),
-        "--prompt-path", str(prompt), "--cwd", str(wt), "--run-dir", str(run_dir),
-    ]
-    assert ED.main(write_argv) == 0
-    write_out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert write_out["detail"] == "sentinel"
-
-    assert DG.main(["check", "--seat", seat]) == 1
-    guard_out = json.loads(capsys.readouterr().out.splitlines()[0])
-    assert guard_out["reason"] == "chokepoint-sentinel"
-
-    opened = {
-        "resolvedInputs": {
-            "engine": "codex",
-            "model": "gpt-5.6-sol",
-            "effort": "high",
-            "role": _REVIEW_ROLE,
-        },
-        "runKind": ED.RUN_KIND_REVIEW,
-        "mode": "review",
-    }
-    verdict = ED._spawn_allowlist_verdict(opened)
-    assert verdict["ok"] is False
-    assert "sentinel" in verdict["reason"]
 
 
 def test_match_effort_empty_allowed_always_none():
