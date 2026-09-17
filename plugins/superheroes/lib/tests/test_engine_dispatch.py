@@ -9118,6 +9118,58 @@ def test_run_execution_record_missing_stdout_never_raises(tmp_path):
         assert isinstance(record["observation"], dict)
 
 
+def test_attempt_ended_successfully_rejects_empty_dict():
+    assert ED._attempt_ended_successfully({}) is False
+
+
+def test_attempt_ended_successfully_rejects_kind_only_record():
+    assert ED._attempt_ended_successfully(
+        {"kind": "attempt-ended", "attempt": 1},
+    ) is False
+
+
+def test_attempt_ended_successfully_rejects_missing_exit():
+    assert ED._attempt_ended_successfully({
+        "kind": "attempt-ended", "attempt": 1,
+        "timedOut": False, "refusal": None,
+    }) is False
+
+
+def test_attempt_ended_successfully_rejects_missing_timed_out():
+    assert ED._attempt_ended_successfully({
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "refusal": None,
+    }) is False
+
+
+def test_attempt_ended_successfully_rejects_missing_refusal():
+    assert ED._attempt_ended_successfully({
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False,
+    }) is False
+
+
+def test_attempt_ended_successfully_rejects_exit_as_string():
+    assert ED._attempt_ended_successfully({
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": "0", "timedOut": False, "refusal": None,
+    }) is False
+
+
+def test_attempt_ended_successfully_rejects_timed_out_as_zero():
+    assert ED._attempt_ended_successfully({
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": 0, "refusal": None,
+    }) is False
+
+
+def test_attempt_ended_successfully_accepts_clean_record():
+    assert ED._attempt_ended_successfully({
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+    }) is True
+
+
 def _append_flat_attempt_ended(run_dir, **over):
     """Journal attempt-ended with flat exit/timedOut/refusal fields (seam-test shape)."""
     ended = {
