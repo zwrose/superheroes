@@ -105,7 +105,6 @@ SIDECAR_FIELDS = ("schema", "repoId", "branch", "headSha", "baseRef", "baseSha",
 NOT_EMITTED = "not-emitted"
 
 META_FILE = "meta.json"
-HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
 LOCK_FILE = "session.lock"
 # Orchestrator-written files live in the `_` namespace inside the landing area; a seat key may
 # therefore never begin with `_` (`storage_key` refuses one).
@@ -1150,39 +1149,6 @@ def mint_session_id(session_dir):
     meta["sessionId"] = sid
     atomic_write_json(path, meta)
     return sid, None
-
-
-def head_content_blobs_path(session_dir):
-    return os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
-
-
-def build_head_content_blobs(findings, head_sha, read_file_at_head):
-    """Build head-content evidence for fixed findings.
-
-    ``read_file_at_head(path)`` returns ``(content, present)`` where ``content`` is the file
-    text at the certified head (or ``None``) and ``present`` records whether the fix is present.
-    """
-    fix_commits = []
-    files = {}
-    for finding in findings:
-        if not isinstance(finding, dict):
-            continue
-        if finding.get("disposition") != "fixed":
-            continue
-        path = finding.get("file")
-        if not isinstance(path, str) or not path:
-            continue
-        content, present = read_file_at_head(path)
-        fix_commits.append({"headSha": head_sha, "path": path, "present": bool(present)})
-        if content is not None:
-            files[path] = content
-    if not fix_commits:
-        return None
-    return {"headSha": head_sha, "files": files, "fixCommits": fix_commits}
-
-
-def write_head_content_blobs(session_dir, blobs):
-    atomic_write_json(head_content_blobs_path(session_dir), blobs)
 
 
 # =============================================================================================

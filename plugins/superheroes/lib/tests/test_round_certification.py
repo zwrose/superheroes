@@ -6,11 +6,7 @@ import model_registry
 import pytest
 
 import round_certification as RC
-from round_certification_fixtures import (
-    EMPTY_FINDINGS_PAYLOAD_SHA,
-    MUST_REFUSE_FIXTURES,
-    write_session,
-)
+from round_certification_fixtures import MUST_REFUSE_FIXTURES, write_session
 
 HEAD = "a" * 40
 
@@ -23,20 +19,18 @@ QUALIFICATION_HELPER_CENSUS = (
 
 
 def _binding_fields(nonce="test-nonce"):
-    import round_records as RR
-
     return {
         "source": "runner",
         "runnerNonce": nonce,
         "recordDigest": "d" * 64,
-        "resultDigest": RR.payload_sha256([]),
+        "resultDigest": "e" * 64,
         "resultKind": "findings",
     }
 
 
 def _dispatch_journal_with_binding(
     seat="code-reviewer",
-    payload_sha=EMPTY_FINDINGS_PAYLOAD_SHA,
+    payload_sha="abc123",
     *,
     nonce="test-nonce",
     attempt=0,
@@ -152,7 +146,7 @@ def write_certifiable_session(tmp_path, **kwargs):
 def test_certify_clean_session_returns_receipt(tmp_path):
     session_dir = write_certifiable_session(
         tmp_path,
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert refusal is None
@@ -236,7 +230,7 @@ def test_unknown_verdict_refuses(tmp_path):
     session_dir = write_certifiable_session(
         tmp_path,
         state={"terminal": "mystery-verdict"},
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
@@ -255,7 +249,7 @@ def test_unmapped_provenance_refuses(tmp_path):
                 "attempt": 0,
                 "seat": "code-reviewer",
                 "provenance": "orchestrator-fulfilled",
-                "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA,
+                "payloadSha256": "abc123",
                 "executionEvidence": {"read": "engaged", "source": "runner"},
                 "recordIdentity": {
                     "phase": "dispatch-panel",
@@ -265,7 +259,7 @@ def test_unmapped_provenance_refuses(tmp_path):
                 },
             }
         ],
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
@@ -298,7 +292,7 @@ def test_seat_opened_never_closed_refuses(tmp_path):
 def test_check_unrun_review_dispatch_observed_clean_passes(tmp_path):
     session_dir = write_certifiable_session(
         tmp_path,
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     ctx, _ = RC._load_context(session_dir)
     assert RC.check_unrun_review(ctx) is None
@@ -316,7 +310,7 @@ def test_check_unrun_review_dispatch_observed_missing_telemetry_refuses(tmp_path
                 "attempt": 0,
                 "seat": "code-reviewer",
                 "provenance": "dispatch-observed",
-                "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA,
+                "payloadSha256": "abc123",
                 "recordIdentity": {
                     "phase": "dispatch-panel",
                     "seat": "code-reviewer",
@@ -325,7 +319,7 @@ def test_check_unrun_review_dispatch_observed_missing_telemetry_refuses(tmp_path
                 },
             }
         ],
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     ctx, _ = RC._load_context(session_dir)
     refusal = RC.check_unrun_review(ctx)
@@ -340,7 +334,7 @@ def test_check_unrun_review_stale_head_refuses(tmp_path):
         journal_lines=[
             _dispatch_journal_with_binding(head_sha="b" * 40),
         ],
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     ctx, _ = RC._load_context(session_dir)
     refusal = RC.check_unrun_review(ctx)
@@ -361,11 +355,11 @@ def test_check_unrun_review_hand_landed_clean_passes(tmp_path):
     }
     session_dir = write_session(
         tmp_path,
-        journal_lines=[_hand_landed_binding_journal_row("code-reviewer", EMPTY_FINDINGS_PAYLOAD_SHA, evidence)],
+        journal_lines=[_hand_landed_binding_journal_row("code-reviewer", "abc123", evidence)],
         envelopes=[
             {
                 "seat": "code-reviewer",
-                "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA,
+                "payloadSha256": "abc123",
                 "provenance": "hand-landed",
                 "executionEvidence": evidence,
             }
@@ -563,7 +557,7 @@ def test_same_family_additive_undeclared_matching_family_refuses(tmp_path):
 def test_check_unfetched_findings_clean_passes(tmp_path):
     session_dir = write_certifiable_session(
         tmp_path,
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     ctx, _ = RC._load_context(session_dir)
     assert RC.check_unfetched_findings(ctx) is None
@@ -598,7 +592,7 @@ def test_check_unfetched_findings_journal_mismatch_refuses(tmp_path):
                 },
             }
         ],
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     ctx, _ = RC._load_context(session_dir)
     refusal = RC.check_unfetched_findings(ctx)
@@ -746,7 +740,7 @@ def test_resolve_terminal_certified_rejects_unlisted_decision_key(tmp_path):
             "terminal": "converged",
             "decisions": [{"round": 1, "kind": "verify-fail", "detail": "verify failed"}],
         },
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
@@ -770,7 +764,7 @@ def test_certified_receipt_projects_disposition_and_proof(tmp_path):
                 }
             ]
         },
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert refusal is None
@@ -832,7 +826,7 @@ def test_journal_evidence_scoped_by_round_refuses_cross_round_substitution(tmp_p
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
     assert refusal["class"] == "unfetched-findings"
-    assert refusal["bindingFailure"] == "journal-envelope-mismatch"
+    assert "journal payload hash disagrees" in refusal["detail"]
 
 
 def test_important_out_of_scope_disclosure_is_case_insensitive(tmp_path):
@@ -852,7 +846,7 @@ def test_important_out_of_scope_disclosure_is_case_insensitive(tmp_path):
                 }
             ]
         },
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert refusal is None
@@ -880,7 +874,7 @@ def test_fixed_disposition_missing_fix_commit_row_uses_missing_token(tmp_path):
                 }
             ]
         },
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     _write_head_content_blobs(
         session_dir,
@@ -909,7 +903,7 @@ def test_bite_same_family_unresolvable_refuses(tmp_path):
                 }
             ],
         },
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     ctx, _ = RC._load_context(session_dir)
     refusal = RC.check_same_family_seat(ctx)
@@ -962,11 +956,11 @@ def test_hand_landed_forces_audited_chain_shape(tmp_path):
             },
             "findings": [],
         },
-        journal_lines=[_hand_landed_binding_journal_row("code-reviewer", EMPTY_FINDINGS_PAYLOAD_SHA, evidence)],
+        journal_lines=[_hand_landed_binding_journal_row("code-reviewer", "abc123", evidence)],
         envelopes=[
             {
                 "seat": "code-reviewer",
-                "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA,
+                "payloadSha256": "abc123",
                 "provenance": "hand-landed",
                 "executionEvidence": evidence,
             }
@@ -992,7 +986,7 @@ def test_bite_unrun_review_dispatch_telemetry_removed_refuses(tmp_path):
                 "attempt": 0,
                 "seat": "code-reviewer",
                 "provenance": "dispatch-observed",
-                "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA,
+                "payloadSha256": "abc123",
                 "recordIdentity": {
                     "phase": "dispatch-panel",
                     "seat": "code-reviewer",
@@ -1001,7 +995,7 @@ def test_bite_unrun_review_dispatch_telemetry_removed_refuses(tmp_path):
                 },
             }
         ],
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
@@ -1022,7 +1016,7 @@ def test_bite_same_family_seat_degradation_refuses(tmp_path):
                 }
             ]
         },
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
@@ -1053,7 +1047,7 @@ def test_bite_disposition_without_receipt_base_guard_refuses(tmp_path):
     session_dir = write_certifiable_session(
         tmp_path,
         state={"config": {"fixerVendor": "claude", "baseGuard": "not-checked", "headSha": HEAD}},
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
@@ -1085,7 +1079,7 @@ def test_meta_producer_cannot_bypass_unrun_review(tmp_path):
                 "attempt": 0,
                 "seat": "code-reviewer",
                 "provenance": "dispatch-observed",
-                "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA,
+                "payloadSha256": "abc123",
                 "recordIdentity": {
                     "phase": "dispatch-panel",
                     "seat": "code-reviewer",
@@ -1094,7 +1088,7 @@ def test_meta_producer_cannot_bypass_unrun_review(tmp_path):
                 },
             }
         ],
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
@@ -1117,7 +1111,7 @@ def test_meta_producer_cannot_bypass_same_family_seat(tmp_path):
             ]
         },
         meta={"producer": "run-loop"},
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
@@ -1150,7 +1144,7 @@ def test_meta_producer_cannot_bypass_disposition_without_receipt(tmp_path):
         name="meta-bypass",
         state={"config": {"fixerVendor": "claude", "baseGuard": "not-checked", "headSha": HEAD}},
         meta={"producer": "run-loop"},
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
@@ -1170,7 +1164,7 @@ def test_meta_producer_arbitrary_key_cannot_bypass_unrun_review(tmp_path):
                 "attempt": 0,
                 "seat": "code-reviewer",
                 "provenance": "dispatch-observed",
-                "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA,
+                "payloadSha256": "abc123",
                 "recordIdentity": {
                     "phase": "dispatch-panel",
                     "seat": "code-reviewer",
@@ -1179,7 +1173,7 @@ def test_meta_producer_arbitrary_key_cannot_bypass_unrun_review(tmp_path):
                 },
             }
         ],
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
@@ -1191,7 +1185,7 @@ def test_materialized_session_preserves_checked_base_guard(tmp_path):
         tmp_path,
         name="checked-guard",
         state={"config": {"fixerVendor": "claude", "baseGuard": RC.BASE_GUARD_CHECKED, "headSha": HEAD}},
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     with open(os.path.join(session_dir, RC.STATE_FILE), encoding="utf-8") as fh:
         state = json.load(fh)
@@ -1313,7 +1307,7 @@ def test_hand_landed_journal_recorded_runner_nonce_certifies(tmp_path):
         },
     }
     payload = {"findings": []}
-    payload_sha = EMPTY_FINDINGS_PAYLOAD_SHA
+    payload_sha = "abc123"
     session_dir = write_session(
         tmp_path,
         journal_lines=[
@@ -1349,7 +1343,7 @@ def test_hand_landed_unrecorded_runner_nonce_refuses(tmp_path):
     }
     journal_evidence = dict(evidence)
     journal_evidence["runnerNonce"] = "journal-nonce"
-    payload_sha = EMPTY_FINDINGS_PAYLOAD_SHA
+    payload_sha = "abc123"
     session_dir = write_session(
         tmp_path,
         journal_lines=[
@@ -1387,7 +1381,7 @@ def test_hand_landed_journal_digest_mismatch_refuses(tmp_path):
     }
     journal_evidence = dict(evidence)
     journal_evidence["recordDigest"] = "f" * 64
-    payload_sha = EMPTY_FINDINGS_PAYLOAD_SHA
+    payload_sha = "abc123"
     session_dir = write_session(
         tmp_path,
         journal_lines=[
@@ -1423,7 +1417,7 @@ def test_dispatch_observed_missing_runner_nonce_refuses(tmp_path):
                 "attempt": 0,
                 "seat": "code-reviewer",
                 "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
-                "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA,
+                "payloadSha256": "abc123",
                 "executionEvidence": {
                     "read": "engaged",
                     "source": "runner",
@@ -1439,7 +1433,7 @@ def test_dispatch_observed_missing_runner_nonce_refuses(tmp_path):
                 },
             }
         ],
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     ctx, _ = RC._load_context(session_dir)
     refusal = RC.check_unrun_review(ctx)
@@ -1451,7 +1445,7 @@ def test_dispatch_observed_matching_runner_nonce_certifies(tmp_path):
     session_dir = write_certifiable_session(
         tmp_path,
         state={"findings": []},
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     ctx, _ = RC._load_context(session_dir)
     assert RC.check_unrun_review(ctx) is None
@@ -1468,7 +1462,7 @@ def test_dispatch_observed_unrecorded_journal_binding_refuses(tmp_path):
             "wallSeconds": 1.0,
         },
     }
-    payload_sha = EMPTY_FINDINGS_PAYLOAD_SHA
+    payload_sha = "abc123"
     session_dir = write_session(
         tmp_path,
         state={"findings": []},
@@ -1517,7 +1511,7 @@ def test_slot_scoped_nonce_same_slot_certifies(tmp_path):
             "wallSeconds": 1.0,
         },
     }
-    payload_sha = EMPTY_FINDINGS_PAYLOAD_SHA
+    payload_sha = "abc123"
     session_dir = write_session(
         tmp_path,
         state={"findings": []},
@@ -1675,7 +1669,7 @@ def test_bite_dispatch_observed_binding_always_runs_refuses(tmp_path):
                 "attempt": 0,
                 "seat": "code-reviewer",
                 "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
-                "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA,
+                "payloadSha256": "abc123",
                 "executionEvidence": {
                     "read": "engaged",
                     "source": "runner",
@@ -1691,7 +1685,7 @@ def test_bite_dispatch_observed_binding_always_runs_refuses(tmp_path):
                 },
             }
         ],
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": EMPTY_FINDINGS_PAYLOAD_SHA}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None

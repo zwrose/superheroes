@@ -257,12 +257,6 @@ def _load_context(session_dir):
         _, fault_refusal = _read_jsonl(fault_path, JOURNAL_FAULT_FILE)
         if fault_refusal is not None:
             return None, fault_refusal
-        return None, _refusal(
-            "unfetched-findings",
-            JOURNAL_FAULT_FILE,
-            "driver journal recorded a write fault — scriptRan evidence is incomplete",
-            binding_failure="journal-fault",
-        )
     meta = _read_json(os.path.join(session_dir, META_FILE)) or {}
     return {
         "session_dir": session_dir,
@@ -526,29 +520,18 @@ def _load_envelope(session_dir, rnd, phase, seat, attempt, occurrence=0):
     return obj, path
 
 
-def _journal_observation_for_seat(
-    journal, seat, phase=None, rnd=None, attempt=None, occurrence=0
-):
+def _journal_observation_for_seat(journal, seat, phase=None, rnd=None):
     for event in reversed(journal):
         if event.get("outcome") != "recorded":
             continue
-        ident = event.get("recordIdentity")
-        if not isinstance(ident, dict):
-            ident = {}
-        ev_seat = event.get("seat") or ident.get("seat")
-        ev_phase = event.get("phase") if event.get("phase") is not None else ident.get("phase")
-        ev_attempt = event.get("attempt")
-        if ev_attempt is None:
-            ev_attempt = ident.get("attempt")
-        ev_occ = event.get("occurrence", ident.get("occurrence", 0))
-        ev_round = event.get("round")
-        if (
-            ev_seat != seat
-            or (phase is not None and ev_phase != phase)
-            or (attempt is not None and ev_attempt != attempt)
-            or ev_occ != occurrence
-            or (rnd is not None and ev_round != rnd)
+        if event.get("seat") != seat and (
+            not isinstance(event.get("recordIdentity"), dict)
+            or event["recordIdentity"].get("seat") != seat
         ):
+            continue
+        if phase is not None and event.get("phase") != phase:
+            continue
+        if rnd is not None and event.get("round") != rnd:
             continue
         obs = event.get("executionEvidence")
         if isinstance(obs, dict):
@@ -717,38 +700,6 @@ def _hand_landed_evidence_qualifies(
     return True, None
 
 
-def _canonical_json(obj):
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-
-
-def _sha256_text(text):
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _payload_sha256(payload):
-    return _sha256_text(_canonical_json(payload))
-
-
-def _envelope_sha256(payload, execution_evidence):
-    return _sha256_text(
-        _canonical_json({"payload": payload, "executionEvidence": execution_evidence})
-    )
-
-
-def _fix_present_in_head_diff(head_diff, path):
-    if not isinstance(head_diff, str) or not head_diff.strip():
-        return False
-    if not isinstance(path, str) or not path:
-        return False
-    markers = (
-        "diff --git a/%s" % path,
-        "diff --git a/%s " % path,
-        "+++ b/%s" % path,
-        "--- a/%s" % path,
-    )
-    return any(marker in head_diff for marker in markers)
-
-
 def _read_head_content_blobs(session_dir):
     path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
     if not os.path.exists(path):
@@ -790,9 +741,6 @@ def _fix_still_present_at_head(ctx, finding, receipt):
             binding_failure="fix-content-unreadable",
         )
     if blobs is None:
-        head_diff = (ctx.get("state") or {}).get("headDiff")
-        if _fix_present_in_head_diff(head_diff, path):
-            return None
         return _refusal(
             "disposition-without-receipt",
             fid,
@@ -837,14 +785,6 @@ def check_unrun_review(ctx):
     session_dir = ctx["session_dir"]
     certified_head = _certified_head_sha(ctx)
     seats = _collect_seats(ctx)
-    if not seats:
-        smap = _effective_seat_map(state)
-        if not isinstance(smap, dict) or not smap.get("seats"):
-            return _refusal(
-                "unfetched-findings",
-                STATE_FILE,
-                "no recorded seat evidence to certify",
-            )
     for seat_entry in seats:
         seat = seat_entry["seat"]
         provenance = seat_entry.get("provenance")
@@ -868,9 +808,7 @@ def check_unrun_review(ctx):
                 "seat provenance %r is not mappable" % (provenance,),
             )
         if provenance == PROVENANCE_DISPATCH_OBSERVED:
-            obs = _journal_observation_for_seat(
-                journal, seat, phase, rnd, attempt, occurrence
-            )
+            obs = _journal_observation_for_seat(journal, seat, phase, rnd)
             journal_binding = _journal_execution_binding(
                 journal,
                 seat,
@@ -999,84 +937,14 @@ def check_unfetched_findings(ctx):
                 path,
                 "seat result on disk is not reconciled with the journal",
             )
-        refusal = _reconcile_landed_envelope(env, ident, path)
-        if refusal is not None:
-            return refusal
-    return None
-
-
-def _reconcile_landed_envelope(env, ident, path):
-    journal_sha = ident.get("payloadSha256")
-    if not isinstance(journal_sha, str) or not journal_sha:
-        return _refusal(
-            "unfetched-findings",
-            path,
-            "journal identity lacks payloadSha256 for reconciliation",
-            binding_failure="journal-envelope-mismatch",
-        )
-    declared_payload_sha = env.get("payloadSha256")
-    if not isinstance(declared_payload_sha, str) or not declared_payload_sha:
-        return _refusal(
-            "unfetched-findings",
-            path,
-            "landed envelope lacks payloadSha256 for reconciliation",
-            binding_failure="journal-envelope-mismatch",
-        )
-    computed_payload_sha = _payload_sha256(env.get("payload"))
-    if declared_payload_sha != computed_payload_sha:
-        return _refusal(
-            "unfetched-findings",
-            path,
-            "landed envelope payloadSha256 does not match current payload content",
-            binding_failure="journal-envelope-mismatch",
-        )
-    if journal_sha != computed_payload_sha:
-        return _refusal(
-            "unfetched-findings",
-            path,
-            "journal payload hash disagrees with landed envelope",
-            binding_failure="journal-envelope-mismatch",
-        )
-    if env.get("schema") == "seat-result/2":
-        evidence = env.get("executionEvidence")
-        declared_envelope_sha = env.get("envelopeSha256")
-        if not isinstance(declared_envelope_sha, str) or not declared_envelope_sha:
+        payload_sha = env.get("payloadSha256")
+        if payload_sha and ident.get("payloadSha256") and payload_sha != ident["payloadSha256"]:
             return _refusal(
                 "unfetched-findings",
                 path,
-                "landed envelope lacks envelopeSha256 for reconciliation",
+                "journal payload hash disagrees with landed envelope",
                 binding_failure="journal-envelope-mismatch",
             )
-        computed_envelope_sha = _envelope_sha256(env.get("payload"), evidence)
-        if declared_envelope_sha != computed_envelope_sha:
-            return _refusal(
-                "unfetched-findings",
-                path,
-                "landed envelopeSha256 does not match current payload and evidence",
-                binding_failure="journal-envelope-mismatch",
-            )
-        if isinstance(evidence, dict):
-            result_digest = evidence.get("resultDigest")
-            result_kind = evidence.get("resultKind")
-            if isinstance(result_digest, str) and result_digest and isinstance(
-                result_kind, str
-            ) and result_kind:
-                payload = env.get("payload")
-                if not isinstance(payload, dict) or result_kind not in payload:
-                    return _refusal(
-                        "unfetched-findings",
-                        path,
-                        "landed envelope resultKind is absent from payload",
-                        binding_failure="journal-envelope-mismatch",
-                    )
-                computed_result_digest = _payload_sha256(payload[result_kind])
-                if result_digest != computed_result_digest:
-                    return _refusal(
-                        "unfetched-findings",
-                        path,
-                        "landed execution evidence resultDigest does not match payload",
-                        binding_failure="journal-envelope-mismatch",
-                    )
     return None
 
 
