@@ -44,45 +44,7 @@ def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
     monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, journal_root)
     yield
 
-_EXPECTED_ENTRY_REFUSAL_REASONS = frozenset({
-    "allowlist-malformed",
-    "allowlist-raised",
-    "allowlist-refused",
-    "effort-invalid",
-    "effort-key-absent",
-    "effort-token-conflict",
-    "expected-result-kind-invalid",
-    seat_bundle.ENTRY_REASON_UNDECLARED,
-    "internal-error",
-    "invalid-model-effort",
-    "legacy-seat-args",
-    "max-wait-out-of-range",
-    "mode-invalid",
-    "mode-role-mismatch",
-    "model-ambiguous",
-    "model-invalid",
-    "model-key-absent",
-    "model-required",
-    "seat-extra-keys",
-    "role-key-absent",
-    "role-null",
-    "run-kind-role-mismatch",
-    "run-kind-unclassified",
-    "seat-empty",
-    "seat-not-object",
-    "seat-token-dropped",
-    "seat-unparseable",
-    "token-unresolvable",
-    "undispatchable-vendor",
-    "unknown-dispatch-kwargs",
-    "unknown-model",
-    "unknown-role",
-    "unknown-vendor",
-    "unknown-verb",
-    "vendor-hint-mismatch",
-    "vendor-invalid",
-    "verb-role-mismatch",
-})
+_MARKER_GUARD_DETAIL = "internal-%s" % riv.UndeclaredSourceMarker.__name__
 
 _EXPECTED_DISPATCH_OUTCOME_REASONS = frozenset({
     dispatch_outcome.REASON_FORFEITED,
@@ -184,18 +146,23 @@ def test_put_resolved_accepts_every_source_marker():
         assert snapshot["probeSource"] == marker
 
 
-def test_undeclared_marker_refusal_does_not_expand_entry_refusal_reasons():
-    assert seat_bundle.ENTRY_REFUSAL_REASONS == _EXPECTED_ENTRY_REFUSAL_REASONS
+def test_entry_refusal_reasons_do_not_surface_marker_guard():
+    guard_name = riv.UndeclaredSourceMarker.__name__
+    for reason in seat_bundle.ENTRY_REFUSAL_REASONS:
+        assert guard_name not in reason, reason
+        assert "source-marker" not in reason, reason
 
 
 def test_undeclared_marker_refusal_does_not_expand_dispatch_outcome_reasons():
     assert dispatch_outcome.ALL_REASONS == _EXPECTED_DISPATCH_OUTCOME_REASONS
 
 
-def test_live_dispatch_snapshot_source_markers_are_declared(tmp_path):
+def test_live_dispatch_undeclared_marker_surfaces_as_unrunnable(tmp_path, monkeypatch):
+    shrunk = frozenset(m for m in riv.SOURCE_MARKERS if m != riv.CALLER)
+    monkeypatch.setattr(riv, "SOURCE_MARKERS", shrunk)
     repo_root = _repo(tmp_path)
     run_dir = str(tmp_path / "run")
-    ED.dispatch_review(
+    result = ED.dispatch_review(
         seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path),
         repo_root=repo_root,
@@ -204,6 +171,36 @@ def test_live_dispatch_snapshot_source_markers_are_declared(tmp_path):
         run_dir=run_dir,
         max_wait=0,
         order_id="order-1",
+    )
+    assert result.get("ok") is False
+    assert result.get("terminal") is True
+    assert result.get("reason") == dispatch_outcome.REASON_UNRUNNABLE
+    assert result.get("detail") == _MARKER_GUARD_DETAIL
+    assert result.get("runOpened") is False
+    assert result.get("entryReason") is None
+    assert result.get("resolvedInputsStatus") is None
+
+
+def test_live_dispatch_snapshot_source_markers_are_declared(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    result = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+        order_id="order-1",
+    )
+    assert result.get("runOpened") is True, (
+        "expected run to open; got reason=%r detail=%r runOpened=%r"
+        % (result.get("reason"), result.get("detail"), result.get("runOpened"))
+    )
+    assert result.get("detail") != _MARKER_GUARD_DETAIL, (
+        "marker guard refusal surfaced: reason=%r detail=%r runOpened=%r"
+        % (result.get("reason"), result.get("detail"), result.get("runOpened"))
     )
     snapshot = _opened_resolved_inputs(run_dir)
     for key, value in _source_marker_values(snapshot).items():
