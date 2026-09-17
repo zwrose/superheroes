@@ -152,6 +152,26 @@ def _execution_evidence(**over):
     return evidence
 
 
+def _execution_evidence_for_payload(payload):
+    observation = {
+        "tokens": None,
+        "toolCalls": None,
+        "stdoutBytes": 0,
+        "wallSeconds": 0.0,
+        "source": "none",
+        "read": "unknown",
+        "telemetry": "none",
+    }
+    for kind in engine_adapter.REVIEW_RESULT_KINDS + ("fixes", "result"):
+        if kind in payload:
+            return _execution_evidence(
+                resultKind=kind,
+                resultDigest=round_records.payload_sha256(payload[kind]),
+                observation=observation,
+            )
+    return _execution_evidence(observation=observation)
+
+
 def _land(session_dir, state, pend, seat, payload, occurrence=0):
     """Write ONE seat's envelope into the LANDING area (what the host does)."""
     manifest_sha, order_sha = _anchor_hashes(session_dir, state, pend, seat)
@@ -175,7 +195,7 @@ def _land(session_dir, state, pend, seat, payload, occurrence=0):
         "payload": payload,
     }
     if schema == round_records.SEAT_RESULT_SCHEMA_V2:
-        evidence = _execution_evidence()
+        evidence = _execution_evidence_for_payload(payload)
         envelope["executionEvidence"] = evidence
         envelope["provenance"] = round_records.PROVENANCE_HAND_LANDED
         envelope["envelopeSha256"] = round_records.envelope_sha256(payload, evidence)
@@ -667,7 +687,44 @@ def _dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence=
     return path
 
 
-def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-panel-e2e"):
+def _codex_item_completed(item_type, item_id="item_0", **item_extra):
+    item = {"id": item_id, "type": item_type}
+    item.update(item_extra)
+    return json.dumps({"type": "item.completed", "item": item})
+
+
+def _codex_event_stream(payload_text, *, action_items=1):
+    lines = []
+    for i in range(action_items):
+        lines.append(_codex_item_completed("command_execution", "ce_%d" % i))
+    lines.append(_codex_item_completed(
+        "agent_message", "agent_msg", text=payload_text))
+    lines.append(json.dumps({
+        "type": "turn.completed",
+        "usage": {
+            "input_tokens": 100,
+            "cached_input_tokens": 0,
+            "output_tokens": 10,
+            "reasoning_output_tokens": 0,
+        },
+    }))
+    return "\n".join(lines)
+
+
+def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-panel-e2e",
+                       telemetry_shape="dispatch-observed"):
+    """Build a runner run directory for dispatch-observed evidence tests.
+
+    This run directory is a test double for the runner's own record of a real dispatch; the
+    parsing of a real codex event stream is covered by the adapter's own tests
+    (``test_engine_adapter.py``), not by this module.
+
+    ``telemetry_shape`` selects the stdout/engine pairing:
+    - ``dispatch-observed`` (default): codex engine with a JSONL event stream carrying at
+      least one completed action item and the panel findings as the last ``agent_message``.
+    - ``no-telemetry``: claude engine with plain JSON stdout from which no runner tool-call
+      count can be derived.
+    """
     run_dir = str(tmp_path / "dispatch-evidence-run")
     journal_root = str(tmp_path / "dispatch-journal-root")
     os.makedirs(journal_root, exist_ok=True)
@@ -687,15 +744,21 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
         + review_findings_schema.example_prompt_block(echo_nonce) + "\n\n"
         + engine_adapter.REVIEW_RESULT_CONTRACT("findings")
     )
+    findings_text = json.dumps({"findings": panel_findings})
+    if telemetry_shape == "no-telemetry":
+        engine = "claude"
+        stdout = findings_text
+    else:
+        engine = "codex"
+        stdout = _codex_event_stream(findings_text, action_items=1)
     ok, detail = engine_dispatch._open_review_run(
-        run_dir, engine="claude", argv=[sys.executable, "-c", "pass"], cwd=repo_root,
+        run_dir, engine=engine, argv=[sys.executable, "-c", "pass"], cwd=repo_root,
         timeout=30, retry_timeout=30, prompt_path=order_path, view_path=view_path,
         view_meta=view_meta, fed_prompt=fed_prompt, order_id="panel-e2e-order",
         progress_path=os.path.join(run_dir, "progress.jsonl"), repo_root=repo_root,
         echo_nonce=echo_nonce, base_prompt=base_prompt,
     )
     assert ok, detail
-    stdout = json.dumps({"findings": panel_findings})
     engine_dispatch._journal_append(run_dir, {
         "kind": "attempt-ended", "attempt": 1,
         "exit": 0, "timedOut": False, "refusal": None,
@@ -710,7 +773,8 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
 
 
 def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
-                                                  panel_findings, head_diff_path):
+                                                  panel_findings, head_diff_path,
+                                                  telemetry_shape="dispatch-observed"):
     _assert_adapters_are_real()
     state = _state(session_dir)
     pend = state["pending"]
@@ -726,7 +790,8 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
             order_path = round_records.order_prompt_path(
                 session_dir, pend["round"], pend["phase"],
                 round_records.storage_key(seat, occurrence), pend["attempt"])
-            run_dir = _execution_run_dir(tmp_path, order_path, panel_findings)
+            run_dir = _execution_run_dir(
+                tmp_path, order_path, panel_findings, telemetry_shape=telemetry_shape)
             out = round_driver.cmd_record_result(
                 session_dir, seat, occurrence=occurrence, evidence_run_dir=run_dir)
         else:
@@ -739,14 +804,16 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
 
 def _drive_to_terminal_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
                                                       panel_findings, head_diff_path,
-                                                      max_steps=24):
+                                                      max_steps=24,
+                                                      telemetry_shape="dispatch-observed"):
     folded = []
     for _ in range(max_steps):
         if _state(session_dir).get("terminal"):
             return folded
         before = _state(session_dir)["pending"]["phase"]
         phase, out = _drive_one_phase_with_panel_dispatch_evidence(
-            session_dir, tmp_path, gitdir, panel_findings, head_diff_path)
+            session_dir, tmp_path, gitdir, panel_findings, head_diff_path,
+            telemetry_shape=telemetry_shape)
         assert out["ok"], (phase, out)
         assert out["folded"]["phase"] == phase, out
         assert _state(session_dir)["step"] != before, (phase, _state(session_dir)["step"])
@@ -755,7 +822,12 @@ def _drive_to_terminal_with_panel_dispatch_evidence(session_dir, tmp_path, gitdi
 
 
 def test_real_loop_certifies_dispatch_observed_through_writer(tmp_path):
-    """WO-P2-A Part 4: real advance loop to terminal, then certify on the session dir."""
+    """Proves the dispatch-observed telemetry path end to end on a real loop that raised no findings.
+
+    The dispatch-observed run directory is built by ``_execution_run_dir``; see that helper's
+    docstring for the telemetry-shape contract. This does not prove certification of a review that
+    raised findings — that is ``test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions``.
+    """
     seat_map = {
         "seats": {
             dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
@@ -769,9 +841,8 @@ def test_real_loop_certifies_dispatch_observed_through_writer(tmp_path):
         vendors=["codex"],
         baseGuard=round_certification.BASE_GUARD_CHECKED,
     )
-    findings = [_blocking_finding("missing bounds guard", 2)]
     folded = _drive_to_terminal_with_panel_dispatch_evidence(
-        session_dir, tmp_path, gitdir, findings, head_path)
+        session_dir, tmp_path, gitdir, [], head_path)
     assert round_driver.P_PANEL in folded
     state = _state(session_dir)
     assert state["terminal"] == "converged", state.get("certification")
@@ -785,7 +856,11 @@ def test_real_loop_certifies_dispatch_observed_through_writer(tmp_path):
     evidence = recorded[0].get("executionEvidence")
     assert isinstance(evidence, dict)
     assert evidence.get("runnerNonce")
-    assert evidence["observation"]["read"] == "engaged"
+    observation = evidence["observation"]
+    assert observation["read"] == "engaged"
+    assert isinstance(observation["toolCalls"], int)
+    assert observation["toolCalls"] >= 1
+    assert observation["source"] == "codex-events"
     receipt, refusal = round_certification.certify(session_dir)
     assert refusal is None, refusal
     assert receipt is not None
@@ -796,3 +871,68 @@ def test_real_loop_certifies_dispatch_observed_through_writer(tmp_path):
                for s in receipt["seats"])
     assert "terminalState" in receipt["provenanceLabels"]["derived"]
     assert "seats" in receipt["provenanceLabels"]["derived"]
+
+
+def test_real_loop_refuses_dispatch_observed_seat_without_runner_tool_calls(tmp_path):
+    """Proves the engagement gate bites on a real loop, not only on a fixture."""
+    seat_map = {
+        "seats": {
+            dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
+            for dim in round_driver.DIMENSIONS
+        }
+    }
+    session_dir, gitdir, head_path = _bootstrap(
+        tmp_path,
+        name="writer-e2e-no-telemetry",
+        seatMap=seat_map,
+        vendors=["codex"],
+        baseGuard=round_certification.BASE_GUARD_CHECKED,
+    )
+    findings = [_blocking_finding("missing bounds guard", 2)]
+    folded = _drive_to_terminal_with_panel_dispatch_evidence(
+        session_dir, tmp_path, gitdir, findings, head_path,
+        telemetry_shape="no-telemetry")
+    assert round_driver.P_PANEL in folded
+    state = _state(session_dir)
+    assert state["terminal"] == "converged", state.get("certification")
+    receipt, refusal = round_certification.certify(session_dir)
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-no-runner-action"
+
+
+def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions(
+        tmp_path):
+    """Seam between this child (the writer's disposition-without-receipt check) and C13.
+
+    C13 lands the loop's disposition recording at ``round_driver.py`` :2349, :2720, and :3318,
+    all routed through ``_set_findings``. When that producer lands, this test flips to a certifying
+    assertion in C13 under R28's first clause (the behavior is fixed and the test is kept). This
+    is not a statement that refusing is desirable — only that refusing is what the code correctly
+    does while no producer exists.
+    """
+    seat_map = {
+        "seats": {
+            dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
+            for dim in round_driver.DIMENSIONS
+        }
+    }
+    session_dir, gitdir, head_path = _bootstrap(
+        tmp_path,
+        name="writer-e2e-disposition-seam",
+        seatMap=seat_map,
+        vendors=["codex"],
+        baseGuard=round_certification.BASE_GUARD_CHECKED,
+    )
+    finding = _blocking_finding("missing bounds guard", 2)
+    folded = _drive_to_terminal_with_panel_dispatch_evidence(
+        session_dir, tmp_path, gitdir, [finding], head_path)
+    assert round_driver.P_PANEL in folded
+    state = _state(session_dir)
+    assert state["terminal"] == "converged", state.get("certification")
+    receipt, refusal = round_certification.certify(session_dir)
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["artifact"] == finding["title"]

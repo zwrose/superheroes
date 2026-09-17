@@ -2019,6 +2019,8 @@ def test_unknown_fixer_vendor_degraded_end_to_end_two_vendor(tmp_path):
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=auditor), cfg)
+    assert "class" in result
+    assert "verdict" not in result
     assert result["loopTerminal"] == "converged"
     assert result["loopCertificationShape"] == "audited-chain-degraded"
     t = captured["targets"][0]
@@ -2149,6 +2151,8 @@ def test_verify_skip_with_configured_command_halts(tmp_path):
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verify_runner=lambda cmd, rnd: "skipped"), _cfg_cert(verifyCommand="pytest -q"))
+    assert "class" in result
+    assert "verdict" not in result
     assert result["loopTerminal"] == "halted"
 
 
@@ -2694,6 +2698,8 @@ def test_verify_fail_halts(tmp_path):
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verify_runner=lambda cmd, rnd: "fail"), _cfg_cert())
+    assert "class" in result
+    assert "verdict" not in result
     assert result["loopTerminal"] == "halted"
 
 
@@ -2705,6 +2711,8 @@ def test_verify_timeout_halts(tmp_path):
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verify_runner=lambda cmd, rnd: "timeout"), _cfg_cert())
+    assert "class" in result
+    assert "verdict" not in result
     assert result["loopTerminal"] == "halted"
 
 
@@ -2861,6 +2869,8 @@ def test_challenged_coverage_recurrence_cannot_certify(tmp_path):
         _seams(reviewer=reviewer, fix_step=fix_step),
         _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records),
              coveragePath=str(coverage), maxRounds=20))
+    assert "class" in result
+    assert "verdict" not in result
     assert result["loopTerminal"] == "cannot-certify"
     assert result["loopCertificationShape"] is None
 
@@ -4217,6 +4227,8 @@ def test_same_family_seat_map_degrades_cert_shape():
         "canaryResult": _canary_probes_for(seat_map_clean),
     }
     result_clean = RD.run_loop(_seams(io=io_clean), cfg)
+    assert "class" in result_clean
+    assert "verdict" not in result_clean
     assert result_clean["loopTerminal"] == "converged"
     assert result_clean["loopCertificationShape"] == "full-panel-confirmed"
     seat_map_deg = _panel_seat_map_with_same_family()
@@ -4225,6 +4237,8 @@ def test_same_family_seat_map_degrades_cert_shape():
         "canaryResult": _canary_probes_for(seat_map_deg),
     }
     result_deg = RD.run_loop(_seams(io=io_deg), cfg)
+    assert "class" in result_deg
+    assert "verdict" not in result_deg
     assert result_deg["loopTerminal"] == "converged"
     assert result_deg["loopCertificationShape"].endswith("-degraded")
 
@@ -4284,6 +4298,8 @@ def test_seat_map_unexcused_violation_constraint_violated_cert_shape():
     SM = _load("seat_map")
     assert SM.unexcused_violations(seat_map)
     result = RD.run_loop(_seams(io={"seatMap": seat_map}), cfg)
+    assert "class" in result
+    assert "verdict" not in result
     assert result["loopTerminal"] == "converged"
     assert "-constraint-violated" in result["loopCertificationShape"]
 
@@ -4474,6 +4490,8 @@ def test_seat_map_violations_round_field_and_degraded_disclosure():
     seat_map = _seat_map_receipt_with_unexcused_maker_family()
     cfg = _cfg_cert(leg="panel", vendors=["codex", "cursor"])
     result = RD.run_loop(_seams(io={"seatMap": seat_map}), cfg)
+    assert "class" in result
+    assert "verdict" not in result
     assert result["loopTerminal"] == "converged"
     assert "-constraint-violated" in result["loopCertificationShape"]
 
@@ -4495,8 +4513,11 @@ def test_seat_map_violations_e8_sticky_across_round_map_overwrite():
 
 def test_library_receipt_omits_base_not_checked(tmp_path):
     """Without a checked base guard the loop still runs; run_loop never mints a legacy receipt."""
+    # base-guard binding assertion no longer reachable through run_loop; coverage lives on
+    # round_certification.certify's base-guard-not-checked refusal (test_round_certification.py).
     result = RD.run_loop(_seams(), _cfg())
     assert isinstance(result, dict)
+    assert "class" in result
     assert "verdict" not in result
     assert result["loopTerminal"] == "converged"
 
@@ -4506,6 +4527,7 @@ def test_library_receipt_mode_without_cli_guard_stays_not_checked(tmp_path):
     result = RD.run_loop(_seams(), _cfg(mode="pr"))
     assert isinstance(result, dict)
     assert "verdict" not in result
+    assert "class" in result
     assert result["loopTerminal"] == "converged"
 
 
@@ -5711,6 +5733,8 @@ def test_unattested_cross_vendor_map_without_canary_still_parks():
         "premortem-reviewer": "cursor",
     })
     result = RD.run_loop(_seams(io={"seatMap": seat_map}), cfg)
+    assert "class" in result
+    assert "verdict" not in result
     assert result["loopTerminal"] == "cannot-certify"
     assert result["loopCertificationShape"] is None
 
@@ -6288,6 +6312,8 @@ def test_fell_open_in_seat_ran_vendor_echo_ignored_at_fold():
 def test_fell_open_clean_claude_panel_no_manifest_degraded_unchanged(tmp_path):
     seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
     result = RD.run_loop(_seams(io={"seatMap": seat_map}), _cfg_cert(leg="panel"))
+    assert "class" in result
+    assert "verdict" not in result
     assert result["loopTerminal"] == "converged"
     assert result["loopCertificationShape"].endswith("-constraint-violated")
 
@@ -6593,6 +6619,8 @@ def test_io_seam_forwards_multi_probe_canary_result_list():
     ]
     seams = _seams(io={"seatMap": seat_map, "canaryResult": probes})
     result = RD.run_loop(seams, _cfg_cert(leg="panel", vendors=["codex", "cursor"]))
+    assert "class" in result
+    assert "verdict" not in result
     assert result["loopTerminal"] == "converged"
     assert result["loopCertificationShape"] is not None
 
@@ -7750,6 +7778,8 @@ def test_clean_rearm_forever_halts_at_round_ceiling(tmp_path):
     seams = _rearm_forever_seams()
     result = RD.run_loop(seams,
                          _cfg_cert(maxRoundsAbsolute=ceiling, maxRounds=ceiling))
+    assert "class" in result
+    assert "verdict" not in result
     assert result["loopTerminal"] == "halted"
     leg_rnds = seams["_legRnds"]
     # axis: the ceiling round runs to completion — fixer and verify both ran at the ceiling before park
@@ -7763,6 +7793,8 @@ def test_clean_rearm_forever_halts_at_distinct_ceiling(tmp_path):
     ceiling = 11
     result = RD.run_loop(_rearm_forever_seams(),
                          _cfg_cert(maxRoundsAbsolute=ceiling, maxRounds=7))
+    assert "class" in result
+    assert "verdict" not in result
     assert result["loopTerminal"] == "halted"
 
 
@@ -8038,6 +8070,8 @@ def test_max_rounds_absolute_fresh_with_max_rounds_loads(tmp_path, capsys):
 def test_run_loop_parks_on_ceiling_refusal():
     """B2: run_loop with ceiling below maxRounds parks cannot-certify; never raises."""
     result = RD.run_loop(_seams(), _cfg_cert(maxRounds=7, maxRoundsAbsolute=5))
+    assert "class" in result
+    assert "verdict" not in result
     assert result["loopTerminal"] == "cannot-certify"
     assert result["loopCertificationShape"] is None
 
