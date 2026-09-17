@@ -159,3 +159,286 @@ def _write_envelope(session_dir, spec):
     }
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(envelope, fh, sort_keys=True)
+
+
+HEAD_SHA = "a" * 40
+
+
+def parity_converged_single_round(tmp_path):
+    """Converged single-round session with one baseline round entry."""
+    return write_session(
+        tmp_path,
+        name="converged-single",
+        state={
+            "rounds": {
+                "1": {
+                    "roundKind": "baseline",
+                    "seatStatus": {"code-reviewer": "run"},
+                    "blockingCount": 0,
+                    "verifyResult": "pass",
+                    "verifyPasses": [],
+                }
+            }
+        },
+    )
+
+
+def parity_multi_round_fix(tmp_path):
+    """Multi-round session whose second round is a fix round."""
+    return write_session(
+        tmp_path,
+        name="multi-fix",
+        state={
+            "round": 2,
+            "rounds": {
+                "1": {
+                    "roundKind": "baseline",
+                    "seatStatus": {"code-reviewer": "run"},
+                    "blockingCount": 1,
+                    "verifyResult": "pass",
+                    "verifyPasses": [],
+                },
+                "2": {
+                    "roundKind": "fix",
+                    "seatStatus": {"code-reviewer": "run"},
+                    "blockingCount": 0,
+                    "verifyResult": "pass",
+                    "verifyPasses": [],
+                    "selfRecovery": False,
+                },
+            },
+            "decisions": [
+                {"round": 1, "kind": "verify-skip-but-configured", "detail": "skipped"},
+                {"round": 2, "kind": "converged", "detail": "certified"},
+            ],
+        },
+    )
+
+
+def parity_disclosure_channels(tmp_path):
+    """Session whose round carries per-round disclosure channels."""
+    return write_session(
+        tmp_path,
+        name="disclosures",
+        state={
+            "rounds": {
+                "1": {
+                    "roundKind": "baseline",
+                    "seatStatus": {"code-reviewer": "run"},
+                    "blockingCount": 0,
+                    "verifyResult": "pass",
+                    "verifyPasses": [
+                        {
+                            "CONFIRMED": 1,
+                            "PLAUSIBLE": 0,
+                            "REFUTED": 0,
+                            "drops": 0,
+                            "downgrades": 0,
+                            "unverified": 0,
+                            "ambiguous": 0,
+                        }
+                    ],
+                    "canaryUnverified": ["code-reviewer"],
+                    "vacuousSeats": ["architecture-reviewer"],
+                    "fellOpen": [
+                        {
+                            "seat": "test-reviewer",
+                            "configured": "codex",
+                            "reason": "forfeit",
+                            "ran": "claude",
+                        }
+                    ],
+                }
+            }
+        },
+    )
+
+
+def parity_skipped_blockers(tmp_path):
+    """Session carrying owner-skipped judgment blockers."""
+    return write_session(
+        tmp_path,
+        name="skipped-blockers",
+        state={
+            "_skippedBlockers": [
+                {
+                    "id": "B1",
+                    "title": "tradeoff blocker",
+                    "severity": "Important",
+                    "file": "b.py",
+                    "line": 2,
+                    "reason": "owner accepted risk",
+                }
+            ],
+            "rounds": {
+                "1": {
+                    "roundKind": "baseline",
+                    "seatStatus": {"code-reviewer": "run"},
+                    "blockingCount": 0,
+                    "verifyResult": "pass",
+                    "verifyPasses": [],
+                }
+            },
+        },
+    )
+
+
+def parity_seat_map_degradations(tmp_path):
+    """Session with seat-map/base degradations reflected in receipt prose."""
+    return write_session(
+        tmp_path,
+        name="seat-map-degraded",
+        state={
+            "independenceDegraded": True,
+            "config": {
+                "fixerVendor": "claude",
+                "baseGuard": RC.BASE_GUARD_CHECKED,
+                "headSha": HEAD_SHA,
+                "baseDegraded": True,
+                "baseFetch": "degraded",
+            },
+            "certification": {
+                "shape": "full-panel-confirmed-degraded",
+                "fullPanel": True,
+                "independence": "degraded",
+                "base": "degraded",
+                "pluginVersionSkew": "not-checked",
+                "shapeDrivers": ["independence", "base"],
+            },
+            "rounds": {
+                "1": {
+                    "roundKind": "baseline",
+                    "seatStatus": {"code-reviewer": "run"},
+                    "blockingCount": 0,
+                    "verifyResult": "pass",
+                    "verifyPasses": [],
+                }
+            },
+        },
+    )
+
+
+def parity_policy_and_base(tmp_path):
+    """Session with policyApplied and a populated base block."""
+    return write_session(
+        tmp_path,
+        name="policy-base",
+        meta={"mode": "branch", "headSha": HEAD_SHA},
+        state={
+            "config": {
+                "fixerVendor": "claude",
+                "baseGuard": RC.BASE_GUARD_CHECKED,
+                "headSha": HEAD_SHA,
+                "baseRef": HEAD_SHA,
+                "baseBranch": "main",
+                "baseFetch": "fetched",
+                "baseRepo": "origin",
+                "repoRoot": "/tmp/repo",
+            },
+            "_policyApplied": [
+                {
+                    "source": "gate-policy",
+                    "phase": "dispatch-judgment",
+                    "detail": "pre-authorized skip",
+                }
+            ],
+            "rounds": {
+                "1": {
+                    "roundKind": "baseline",
+                    "seatStatus": {"code-reviewer": "run"},
+                    "blockingCount": 0,
+                    "verifyResult": "pass",
+                    "verifyPasses": [],
+                }
+            },
+        },
+    )
+
+
+def parity_capped_terminal(tmp_path):
+    """Capped terminal with open critical findings."""
+    return write_session(
+        tmp_path,
+        name="capped",
+        state={
+            "terminal": "capped-with-open-critical",
+            "findings": [
+                {
+                    "id": "F1",
+                    "file": "a.py",
+                    "line": 1,
+                    "title": "critical open",
+                    "severity": "Critical",
+                    "disposition": "refuted",
+                    "dispositionReceipt": "owner accepted residual risk for cap",
+                }
+            ],
+            "decisions": [
+                {
+                    "round": 1,
+                    "kind": "capped-with-open-critical",
+                    "detail": "open findings remain",
+                }
+            ],
+            "certification": {
+                "shape": "capped-with-open-critical",
+                "fullPanel": True,
+                "independence": "independent",
+                "base": "fetched",
+                "pluginVersionSkew": "not-checked",
+                "shapeDrivers": [],
+            },
+            "rounds": {
+                "1": {
+                    "roundKind": "baseline",
+                    "seatStatus": {"code-reviewer": "run"},
+                    "blockingCount": 1,
+                    "verifyResult": "pass",
+                    "verifyPasses": [],
+                }
+            },
+        },
+    )
+
+
+def parity_halted_terminal(tmp_path):
+    """Halted terminal after verify failure."""
+    return write_session(
+        tmp_path,
+        name="halted",
+        state={
+            "terminal": "halted",
+            "decisions": [
+                {"round": 1, "kind": "verify-fail", "detail": "verify gate failed"}
+            ],
+            "certification": {
+                "shape": "halted",
+                "fullPanel": False,
+                "independence": "independent",
+                "base": "fetched",
+                "pluginVersionSkew": "not-checked",
+                "shapeDrivers": [],
+            },
+            "rounds": {
+                "1": {
+                    "roundKind": "baseline",
+                    "seatStatus": {"code-reviewer": "run"},
+                    "blockingCount": 0,
+                    "verifyResult": "fail",
+                    "verifyPasses": [],
+                }
+            },
+        },
+    )
+
+
+PARITY_FIXTURES = (
+    ("converged-single-round", parity_converged_single_round),
+    ("multi-round-fix", parity_multi_round_fix),
+    ("disclosure-channels", parity_disclosure_channels),
+    ("skipped-blockers", parity_skipped_blockers),
+    ("seat-map-degradations", parity_seat_map_degradations),
+    ("policy-and-base", parity_policy_and_base),
+    ("capped-terminal", parity_capped_terminal),
+    ("halted-terminal", parity_halted_terminal),
+)
