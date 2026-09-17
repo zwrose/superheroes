@@ -22,6 +22,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 
 import pytest
 
@@ -39,6 +40,7 @@ def _load(name):
 
 
 RD = _load("round_driver")
+RD_DISCLOSURES = _load("receipt_disclosures")
 LPC = _load("loop_plan_common")
 FI = _load("finding_identity")
 LC = _load("liveness_cache")
@@ -3570,6 +3572,36 @@ def test_disclosure_block_survives_the_durable_skeleton(tmp_path):
 
 # --- the census: the channel set is closed BY CONSTRUCTION --------------------
 
+def _symbol_label(obj):
+    return getattr(obj, "__qualname__", repr(obj))
+
+
+def _module_source(mod):
+    path = getattr(mod, "__file__", None)
+    if not path:
+        pytest.fail("cannot resolve source file for module %r" % getattr(mod, "__name__", mod))
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError as exc:
+        pytest.fail("cannot read source for module %s (%s): %s" % (
+            getattr(mod, "__name__", mod), path, exc))
+
+
+def _disclosure_channel_consumer_source():
+    channel_home = _module_source(RD_DISCLOSURES)
+    consumer_modules = {RD.build_receipt.__module__, RD_DISCLOSURES.build_degraded_prose.__module__}
+    parts = [channel_home]
+    for mod_name in sorted(consumer_modules):
+        mod = sys.modules.get(mod_name)
+        if mod is None:
+            pytest.fail("cannot import module %r for disclosure channel consumer scan" % mod_name)
+        if mod is RD_DISCLOSURES:
+            continue
+        parts.append(_module_source(mod))
+    return "\n".join(parts)
+
+
 def _round_driver_ast():
     import ast
     with open(os.path.join(_LIB, "round_driver.py"), encoding="utf-8") as fh:
@@ -3670,8 +3702,7 @@ def test_disclosure_channels_have_one_home_read_by_receipt_and_resume():
                  if isinstance(n, ast_mod.Name)}
         assert "RESUMABLE_DISCLOSURE_CHANNELS" in names, \
             "%s must read the channel set from its one home" % fn
-    with open(os.path.join(_LIB, "round_driver.py"), encoding="utf-8") as fh:
-        src = fh.read()
+    src = _disclosure_channel_consumer_source()
     for chan in RD.RESUMABLE_DISCLOSURE_CHANNELS:
         assert source_obj_accesses_key(src, "rec|rrec|declared", chan), \
             "%r is named restorable but no round record read consumes it" % chan
