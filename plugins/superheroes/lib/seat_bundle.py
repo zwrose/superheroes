@@ -57,6 +57,8 @@ _ACCEPTED_SEAT = _SEAT_JSON_SHAPE
 _ENTRY_VERBS = frozenset({
     "dispatch-review", "dispatch-write", "build-argv", "guard-check",
 })
+_SEAT_KEYS = frozenset({"vendor", "model", "effort", "role"})
+_LEGACY_SEAT_JSON_KEYS = frozenset({"engine", "engine_model"})
 
 ENTRY_REASON_UNDECLARED = "entry-reason-undeclared"
 
@@ -82,7 +84,9 @@ ENTRY_REFUSAL_REASONS = frozenset({
     "mode-role-mismatch",
     "model-ambiguous",
     "model-invalid",
+    "model-key-absent",
     "model-required",
+    "seat-extra-keys",
     "role-key-absent",
     "role-null",
     "run-kind-role-mismatch",
@@ -491,7 +495,11 @@ def _resolve_entry_model_effort(parsed: dict, role: str) -> dict:
 
     pairs = model_registry.allowlist(role, vendor)
     if model is None and effort is not None and pairs:
-        matching = [pair for pair in pairs if pair[1] == effort]
+        matching = [
+            pair
+            for pair in pairs
+            if pair[1] is not None and _match_effort(effort, (pair[1],)) is not None
+        ]
         distinct = sorted({pair[0] for pair in matching})
         if len(distinct) > 1:
             return _ambiguous_null_model_refusal(role, vendor, effort, tuple(distinct))
@@ -508,6 +516,17 @@ def _resolve_entry_model_effort(parsed: dict, role: str) -> dict:
                 vendor=vendor,
             )
         model = distinct[0]
+        for pair in matching:
+            if pair[0] == model:
+                effort = pair[1]
+                break
+
+    if isinstance(model, str) and model and effort is not None:
+        model_efforts = tuple(p[1] for p in pairs if p[0] == model and p[1] is not None)
+        if model_efforts:
+            matched = _match_effort(effort, model_efforts)
+            if matched is not None:
+                effort = matched
 
     resolved = model_registry.resolve_dispatch(role, vendor, model, effort)
     if not resolved.get("ok"):
@@ -722,11 +741,47 @@ def _entry_refusal(entry_reason: str, detail: str) -> dict:
     return {"ok": False, "entryReason": entry_reason, "detail": detail}
 
 
+def _seat_extra_keys_refusal(obj: dict) -> dict | None:
+    extra = set(obj.keys()) - _SEAT_KEYS
+    if not extra:
+        return None
+    legacy = sorted(k for k in extra if k in _LEGACY_SEAT_JSON_KEYS)
+    if legacy:
+        keys = ", ".join(legacy)
+        return _entry_refusal(
+            "legacy-seat-args",
+            (
+                f"legacy seat JSON key(s) {keys} are no longer accepted; "
+                f"pass --seat as {_ACCEPTED_SEAT}"
+            ),
+        )
+    unknown = ", ".join(sorted(extra))
+    return _entry_refusal(
+        "seat-extra-keys",
+        (
+            f"unknown seat JSON key(s) {unknown}; "
+            "accepted keys: vendor, model, effort, role; "
+            f"accepted: {_ACCEPTED_SEAT}"
+        ),
+    )
+
+
 def _parse_entry_dict(obj: dict) -> dict:
     if not isinstance(obj, dict):
         return _entry_refusal(
             "seat-not-object",
             f"seat JSON must be an object; accepted: {_ACCEPTED_SEAT}",
+        )
+    extra_refusal = _seat_extra_keys_refusal(obj)
+    if extra_refusal is not None:
+        return extra_refusal
+    if "model" not in obj:
+        return _entry_refusal(
+            "model-key-absent",
+            (
+                'JSON seat must include the "model" key (value may be null); '
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
         )
     if "effort" not in obj:
         return _entry_refusal(

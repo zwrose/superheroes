@@ -50,6 +50,16 @@ def test_ttl_seconds_env_positive_override(monkeypatch):
     assert lc.ttl_seconds() == 120
 
 
+def test_write_omitted_ttl_stamps_configured_ceiling(tmp_path, monkeypatch):
+    monkeypatch.setenv(lc._ENV_TTL, "600")
+    path = str(tmp_path / "r.json")
+    now = 1000.0
+    assert lc.write(_good_liveness(), _good_needed(), path=path, now=now) is True
+    with open(path, encoding="utf-8") as fh:
+        raw = json.load(fh)
+    assert raw["ttl"] == 600
+
+
 @pytest.mark.parametrize("val", ["abc", "0", "-5", ""])
 def test_ttl_seconds_env_invalid_falls_back(monkeypatch, val):
     if val == "":

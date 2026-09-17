@@ -1384,6 +1384,36 @@ def test_live_vendors_for_composition_cache_hit_skips_probe(tmp_path, monkeypatc
     )
 
 
+def test_live_vendors_for_composition_stamps_configured_ttl_and_refuses_after_env_change(
+    tmp_path, monkeypatch,
+):
+    import liveness_cache
+
+    monkeypatch.setenv(liveness_cache._ENV_TTL, "600")
+    cache_path = str(tmp_path / "composition-liveness.json")
+    now = 10_000.0
+
+    def _run(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="READY", stderr="")
+
+    live, _, _, _, _, _ = pp.live_vendors_for_composition(
+        ["codex"],
+        run=_run,
+        cache_path=cache_path,
+        now=now,
+    )
+    assert "codex" in live
+    with open(cache_path, encoding="utf-8") as fh:
+        raw = json.load(fh)
+    assert raw["ttl"] == 600
+
+    monkeypatch.delenv(liveness_cache._ENV_TTL, raising=False)
+    assert liveness_cache.read(cache_path, now=now + 700) is None
+
+    monkeypatch.setenv(liveness_cache._ENV_TTL, "100000")
+    assert liveness_cache.read(cache_path, now=now + 700) is None
+
+
 def test_live_vendors_for_composition_cache_miss_stale_probes_and_writes(tmp_path, monkeypatch):
     import liveness_cache
 

@@ -443,12 +443,13 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > CANARY_PLANS=()
 > while IFS= read -r plan; do CANARY_PLANS+=("$plan"); done < <(python3 -B -c "
 > import json, sys
+> sys.path.insert(0, sys.argv[1] + '/lib')
 > import model_registry
-> PANEL_VENDORS = ('claude', 'codex', 'cursor')
-> seat_map = json.loads(sys.argv[1])
-> panel = json.loads(sys.argv[2])
-> ran_manifest = json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
-> seat_status = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
+> PANEL_VENDORS = tuple(model_registry.VENDORS)
+> seat_map = json.loads(sys.argv[2])
+> panel = json.loads(sys.argv[3])
+> ran_manifest = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
+> seat_status = json.loads(sys.argv[5]) if len(sys.argv) > 5 else {}
 > seats = seat_map.get('seats') or {}
 > manifest = ran_manifest if isinstance(ran_manifest, dict) else {}
 > status = seat_status if isinstance(seat_status, dict) else {}
@@ -503,7 +504,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >     plans.append(cfg)
 > for plan in plans:
 >     print(json.dumps(plan))
-> " "$SEAT_MAP" "$PANEL_SEATS" "$RAN_MANIFEST_JSON" "$PANEL_SEAT_STATUS_JSON")
+> " "$ROOT_DIR" "$SEAT_MAP" "$PANEL_SEATS" "$RAN_MANIFEST_JSON" "$PANEL_SEAT_STATUS_JSON")
 > CANARY_RESULTS=()
 > for CANARY_PLAN in "${CANARY_PLANS[@]}"; do
 >   CANARY_SEAT_KEY=$(printf '%s' "$CANARY_PLAN" | jq -r '.key')

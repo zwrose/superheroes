@@ -377,6 +377,51 @@ def test_effort_key_absent_refused():
     assert "effort" in resolved["detail"]
 
 
+def test_model_key_absent_refused():
+    raw = json.dumps({"vendor": "cursor", "effort": None, "role": "implementer"})
+    resolved = SB.resolve_entry(raw, verb="dispatch-write")
+    assert resolved["ok"] is False
+    assert resolved["entryReason"] == "model-key-absent"
+    assert "model" in resolved["detail"]
+
+
+def test_legacy_seat_json_engine_key_refused():
+    raw = json.dumps({
+        "vendor": "cursor",
+        "model": "composer-2.5",
+        "effort": None,
+        "role": "implementer",
+        "engine": "cursor",
+    })
+    resolved = SB.resolve_entry(raw, verb="guard-check")
+    assert resolved["ok"] is False
+    assert resolved["entryReason"] == "legacy-seat-args"
+    assert "engine" in resolved["detail"]
+
+
+def test_seat_extra_keys_refused():
+    raw = json.dumps({
+        "vendor": "cursor",
+        "model": "composer-2.5",
+        "effort": None,
+        "role": "implementer",
+        "foo": "bar",
+    })
+    resolved = SB.resolve_entry(raw, verb="guard-check")
+    assert resolved["ok"] is False
+    assert resolved["entryReason"] == "seat-extra-keys"
+    assert "foo" in resolved["detail"]
+
+
+def test_effort_alias_accepted_via_resolve_entry():
+    resolved = SB.resolve_entry(
+        _seat_json("cursor", "cursor-grok-4.6", "XHIGH", "reviewer-deep"),
+        verb="guard-check",
+    )
+    assert resolved["ok"] is True
+    assert resolved["effort"] == "xhigh"
+
+
 def test_role_key_absent_refused():
     raw = json.dumps({"vendor": "cursor", "model": "composer-2.5", "effort": None})
     resolved = SB.resolve_entry(raw, verb="guard-check")

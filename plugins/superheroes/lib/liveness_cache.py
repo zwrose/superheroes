@@ -220,7 +220,7 @@ def write(liveness, needed, *, path, now, ttl=None):
             if _is_timestamp(existing_at) and float(existing_at) >= float(now):
                 return True
         if ttl is None:
-            stored_ttl = DEFAULT_TTL_SECONDS
+            stored_ttl = ttl_seconds()
         elif not _stored_ttl_valid(ttl):
             return False
         else:
