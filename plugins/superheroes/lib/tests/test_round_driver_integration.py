@@ -18,6 +18,7 @@ completeness, assemble, fold, emit. No `cmd_submit` is ever called by hand.
 import json
 import os
 import sys
+import time
 
 import pytest
 
@@ -29,10 +30,15 @@ if _LIB not in sys.path:
 # PLAIN imports, not importlib side-loads: the driver imports `round_adapters` at CALL time through
 # `sys.modules`, so the module objects this test asserts about must be the very ones the driver
 # reaches. A side-loaded copy would let a stub sit in `sys.modules` unnoticed.
+import engine_adapter  # noqa: E402
+import engine_dispatch  # noqa: E402
 import payload_contracts  # noqa: E402
+import review_findings_schema  # noqa: E402
 import round_adapters  # noqa: E402
+import round_certification  # noqa: E402
 import round_driver  # noqa: E402
 import round_records  # noqa: E402
+import sanitized_view  # noqa: E402
 
 # =============================================================================================
 # the diffs — a BIG round-1 diff (so the gap-sweep phase is on the path) and its post-fix head
@@ -630,3 +636,163 @@ def test_driver_landing_envelope_schema_derives_from_state_version(tmp_path):
             assert env["provenance"] == round_records.PROVENANCE_HAND_LANDED
             assert "envelopeSha256" in env
             assert "executionEvidence" in env
+
+
+def _dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence=0):
+    manifest_sha, order_sha = _anchor_hashes(session_dir, state, pend, seat, occurrence)
+    envelope = {
+        "schema": round_records.SEAT_RESULT_SCHEMA_V2,
+        "session": _session_id(session_dir),
+        "round": pend["round"],
+        "phase": pend["phase"],
+        "seat": seat,
+        "attempt": pend["attempt"],
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "dispatchRef": manifest_sha,
+        "orderSha256": order_sha,
+        "manifestSha256": manifest_sha,
+        "recordedAt": "2026-01-01T00:00:00",
+        "payloadSha256": round_records.payload_sha256(payload),
+        "payload": payload,
+        "provenance": round_records.PROVENANCE_DISPATCH_OBSERVED,
+        "envelopeSha256": round_records.envelope_sha256(payload, None),
+    }
+    if occurrence:
+        envelope["occurrence"] = occurrence
+    path = round_records.landing_path(session_dir, pend["round"], pend["phase"],
+                                      round_records.storage_key(seat, occurrence),
+                                      pend["attempt"])
+    round_records.atomic_write_json(path, envelope)
+    return path
+
+
+def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-panel-e2e"):
+    run_dir = str(tmp_path / "dispatch-evidence-run")
+    journal_root = str(tmp_path / "dispatch-journal-root")
+    os.makedirs(journal_root, exist_ok=True)
+    os.environ[engine_dispatch.JOURNAL_ROOT_ENV] = journal_root
+    repo_root = str(tmp_path / "dispatch-evidence-repo")
+    os.makedirs(repo_root, exist_ok=True)
+    with open(os.path.join(repo_root, ".git"), "w", encoding="utf-8") as fh:
+        fh.write("gitdir: /fake/worktree\n")
+    view_path = str(tmp_path / "dispatch-evidence-view")
+    os.makedirs(view_path, exist_ok=True)
+    view_meta = {"headSha": "abc123fake", "stripped": [], "path": view_path}
+    with open(order_path, encoding="utf-8") as fh:
+        base_prompt = fh.read()
+    notice = sanitized_view.sanitized_view_notice(view_meta, mode="review")
+    fed_prompt = (
+        engine_dispatch.ANTIHIJACK_PREAMBLE + notice + base_prompt + "\n\n"
+        + review_findings_schema.example_prompt_block(echo_nonce) + "\n\n"
+        + engine_adapter.REVIEW_RESULT_CONTRACT("findings")
+    )
+    ok, detail = engine_dispatch._open_review_run(
+        run_dir, engine="claude", argv=[sys.executable, "-c", "pass"], cwd=repo_root,
+        timeout=30, retry_timeout=30, prompt_path=order_path, view_path=view_path,
+        view_meta=view_meta, fed_prompt=fed_prompt, order_id="panel-e2e-order",
+        progress_path=os.path.join(run_dir, "progress.jsonl"), repo_root=repo_root,
+        echo_nonce=echo_nonce, base_prompt=base_prompt,
+    )
+    assert ok, detail
+    stdout = json.dumps({"findings": panel_findings})
+    engine_dispatch._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "wallSeconds": 0.1, "stdoutBytes": len(stdout),
+        "at": time.time(),
+    })
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "wb") as fh:
+        fh.write(stdout.encode("utf-8"))
+    with open(os.path.join(run_dir, "attempt-1.stderr"), "wb") as fh:
+        fh.write(b"")
+    return run_dir
+
+
+def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
+                                                  panel_findings, head_diff_path):
+    _assert_adapters_are_real()
+    state = _state(session_dir)
+    pend = state["pending"]
+    phase = pend["phase"]
+    roster, reason = round_adapters.roster_for(phase, state, state.get("config") or {})
+    assert reason is None, (phase, reason)
+    slots = _slots_of(roster)
+    _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
+    for seat, occurrence in slots:
+        payload = _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
+        if phase == round_driver.P_PANEL and seat == FINDING_SEAT and state["round"] == 1:
+            _dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence)
+            order_path = round_records.order_prompt_path(
+                session_dir, pend["round"], pend["phase"],
+                round_records.storage_key(seat, occurrence), pend["attempt"])
+            run_dir = _execution_run_dir(tmp_path, order_path, panel_findings)
+            out = round_driver.cmd_record_result(
+                session_dir, seat, occurrence=occurrence, evidence_run_dir=run_dir)
+        else:
+            _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
+            out = _record(session_dir, seat, occurrence=occurrence)
+        assert out["ok"], (phase, seat, occurrence, out)
+    out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
+    return phase, out
+
+
+def _drive_to_terminal_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
+                                                      panel_findings, head_diff_path,
+                                                      max_steps=24):
+    folded = []
+    for _ in range(max_steps):
+        if _state(session_dir).get("terminal"):
+            return folded
+        before = _state(session_dir)["pending"]["phase"]
+        phase, out = _drive_one_phase_with_panel_dispatch_evidence(
+            session_dir, tmp_path, gitdir, panel_findings, head_diff_path)
+        assert out["ok"], (phase, out)
+        assert out["folded"]["phase"] == phase, out
+        assert _state(session_dir)["step"] != before, (phase, _state(session_dir)["step"])
+        folded.append(phase)
+    raise AssertionError("did not reach a terminal in %d steps: %s" % (max_steps, folded))
+
+
+def test_real_loop_certifies_dispatch_observed_through_writer(tmp_path):
+    """WO-P2-A Part 4: real advance loop to terminal, then certify on the session dir."""
+    seat_map = {
+        "seats": {
+            dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
+            for dim in round_driver.DIMENSIONS
+        }
+    }
+    session_dir, gitdir, head_path = _bootstrap(
+        tmp_path,
+        name="writer-e2e",
+        seatMap=seat_map,
+        vendors=["codex"],
+        baseGuard=round_certification.BASE_GUARD_CHECKED,
+    )
+    findings = [_blocking_finding("missing bounds guard", 2)]
+    folded = _drive_to_terminal_with_panel_dispatch_evidence(
+        session_dir, tmp_path, gitdir, findings, head_path)
+    assert round_driver.P_PANEL in folded
+    state = _state(session_dir)
+    assert state["terminal"] == "converged", state.get("certification")
+    journal = round_driver.read_journal(session_dir)
+    recorded = [row for row in journal
+                if row.get("outcome") == "recorded"
+                and row.get("seat") == FINDING_SEAT
+                and row.get("phase") == round_driver.P_PANEL
+                and row.get("provenance") == round_records.PROVENANCE_DISPATCH_OBSERVED]
+    assert recorded, journal
+    evidence = recorded[0].get("executionEvidence")
+    assert isinstance(evidence, dict)
+    assert evidence.get("runnerNonce")
+    assert evidence["observation"]["read"] == "engaged"
+    receipt, refusal = round_certification.certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt is not None
+    assert receipt["terminalState"] == "certified"
+    assert receipt["terminalCause"] is None
+    assert receipt["seats"]
+    assert any(s.get("provenance") == round_certification.PROVENANCE_DISPATCH_OBSERVED
+               for s in receipt["seats"])
+    assert "terminalState" in receipt["provenanceLabels"]["derived"]
+    assert "seats" in receipt["provenanceLabels"]["derived"]

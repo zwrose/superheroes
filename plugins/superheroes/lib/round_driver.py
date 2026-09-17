@@ -6629,15 +6629,14 @@ def _journal_revision_fields(envelope):
     if not isinstance(envelope, dict):
         return {"payloadSha256": None, "casToken": None, "executionEvidence": None}
     evidence = envelope.get("executionEvidence")
-    observation = None
+    execution_evidence = None
     if isinstance(evidence, dict):
-        obs = evidence.get("observation")
-        if isinstance(obs, dict):
-            observation = {key: obs.get(key)
-                           for key in round_records.EXECUTION_EVIDENCE_OBSERVATION_FIELDS}
+        if all(field in evidence for field in round_records.EXECUTION_EVIDENCE_FIELDS):
+            execution_evidence = {field: evidence[field]
+                                  for field in round_records.EXECUTION_EVIDENCE_FIELDS}
     return {"payloadSha256": envelope.get("payloadSha256"),
             "casToken": round_records.envelope_cas_token(envelope),
-            "executionEvidence": observation}
+            "executionEvidence": execution_evidence}
 
 
 def _journal_record_identities(session_dir, rnd, phase):
