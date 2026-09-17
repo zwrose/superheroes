@@ -6,7 +6,7 @@ import textwrap
 
 import pytest
 
-from round_certification_fixtures import write_session
+from round_certification_fixtures import DEFAULT_PANEL_PAYLOAD_SHA, write_session
 
 _LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FORBIDDEN_IMPORTS = ("round_driver", "round_phases", "round_records")
@@ -70,7 +70,7 @@ def _run_subprocess_certify(session_dir):
 def test_certify_subprocess_with_forbidden_modules_unimportable(tmp_path):
     session_dir = write_session(
         tmp_path,
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
     )
     result = _run_subprocess_certify(session_dir)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -83,7 +83,7 @@ def test_module_source_has_no_forbidden_driver_imports():
 def test_certify_runs_without_importing_driver_modules(tmp_path):
     session_dir = write_session(
         tmp_path,
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
     )
     saved = {name: sys.modules.pop(name) for name in list(sys.modules) if name in _FORBIDDEN_IMPORTS}
     try:
