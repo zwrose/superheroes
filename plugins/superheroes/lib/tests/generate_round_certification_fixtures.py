@@ -51,7 +51,7 @@ def _binding_fields(nonce, payload=None):
     }
 
 
-def _observation_fields(*, read="engaged"):
+def _observation_fields(*, read="engaged", tool_calls=1):
     return {
         "read": read,
         "source": "runner",
@@ -59,19 +59,25 @@ def _observation_fields(*, read="engaged"):
         "stdoutBytes": 10,
         "wallSeconds": 1.0,
         "tokens": None,
-        "toolCalls": None,
+        "toolCalls": tool_calls,
     }
 
 
-def _execution_evidence(nonce, *, payload=None, read="engaged"):
-    return {**_binding_fields(nonce, payload=payload), "observation": _observation_fields(read=read)}
+def _execution_evidence(nonce, *, payload=None, read="engaged", tool_calls=1):
+    return {
+        **_binding_fields(nonce, payload=payload),
+        "observation": _observation_fields(read=read, tool_calls=tool_calls),
+    }
 
 
 def production_hand_landed_envelope(seat, payload, *, phase=PANEL_PHASE, attempt=0,
                                     occurrence=0, evidence=None):
     if evidence is None:
         evidence = _execution_evidence(
-            _slot_nonce(seat, phase, attempt, occurrence), payload=payload)
+            _slot_nonce(seat, phase, attempt, occurrence),
+            payload=payload,
+            tool_calls=None,
+        )
     envelope = {
         "schema": RR.SEAT_RESULT_SCHEMA_V2,
         "session": SESSION_ID,
@@ -104,7 +110,10 @@ def production_dispatch_observed_envelope(seat, payload, *, phase=PANEL_PHASE, a
     elif "observation" in binding:
         evidence = binding
     else:
-        evidence = {**binding, "observation": _observation_fields(read=read)}
+        evidence = {
+            **binding,
+            "observation": _observation_fields(read=read, tool_calls=1),
+        }
     if payload_sha is None:
         payload_sha = RR.payload_sha256(payload)
     envelope = {
@@ -188,6 +197,7 @@ def _minimal_terminal_state():
                 "title": "issue",
                 "severity": "Minor",
                 "disposition": "refuted",
+                "refutedReason": "Reviewer confirmed the cited behavior is intentional.",
                 "dispositionReceipt": {"headSha": HEAD_SHA, "verifyResult": "pass"},
             }
         ],
@@ -725,7 +735,10 @@ def build_case06_mixed_panel():
         "code-reviewer", dispatch_payload, payload_sha=dispatch_sha)
     hand_payload = {"findings": []}
     hand_evidence = _execution_evidence(
-        _slot_nonce("security-reviewer", PANEL_PHASE, 0), payload=hand_payload)
+        _slot_nonce("security-reviewer", PANEL_PHASE, 0),
+        payload=hand_payload,
+        tool_calls=None,
+    )
     hand_envelope = production_hand_landed_envelope(
         "security-reviewer", hand_payload, evidence=hand_evidence)
     hand_sha = hand_envelope["payloadSha256"]
@@ -760,7 +773,11 @@ def build_specimen_must_certify_sixteen_seat_audit():
     envelope_specs = []
     for seat in SIXTEEN_AUDIT_SEATS:
         payload = {"findings": [{"id": seat, "severity": "Minor", "title": "audit ok"}]}
-        evidence = _execution_evidence(_slot_nonce(seat, AUDIT_PHASE, 0), payload=payload)
+        evidence = _execution_evidence(
+            _slot_nonce(seat, AUDIT_PHASE, 0),
+            payload=payload,
+            tool_calls=None,
+        )
         envelope = production_hand_landed_envelope(
             seat, payload, phase=AUDIT_PHASE, evidence=evidence)
         journal_lines.append(
@@ -822,7 +839,11 @@ def build_specimen_refuse_fabricated_envelope_audited_chain():
             }
         ]
     }
-    evidence = _execution_evidence(_slot_nonce("code-reviewer", PANEL_PHASE, 0), payload=payload)
+    evidence = _execution_evidence(
+        _slot_nonce("code-reviewer", PANEL_PHASE, 0),
+        payload=payload,
+        tool_calls=None,
+    )
     envelope = production_hand_landed_envelope("code-reviewer", payload, evidence=evidence)
     return {
         "state": {"certification": {"shape": "full-panel-confirmed", "fullPanel": True}},
@@ -837,7 +858,11 @@ def build_specimen_refuse_fabricated_envelope_audited_chain():
 
 def build_specimen_refuse_caller_supplied_execution_evidence():
     payload = {"findings": []}
-    evidence = _execution_evidence(_slot_nonce("code-reviewer", PANEL_PHASE, 0), payload=payload)
+    evidence = _execution_evidence(
+        _slot_nonce("code-reviewer", PANEL_PHASE, 0),
+        payload=payload,
+        tool_calls=None,
+    )
     evidence = dict(evidence)
     evidence["source"] = "/tmp/caller-minted-evidence.json"
     envelope = production_hand_landed_envelope("code-reviewer", payload, evidence=evidence)

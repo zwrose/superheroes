@@ -90,12 +90,17 @@ def write_session(
     state_obj = _minimal_terminal_state()
     if state:
         state_obj.update(state)
+    _normalize_refuted_findings(state_obj)
     with open(os.path.join(session_dir, STATE_FILE), "w", encoding="utf-8") as fh:
         json.dump(state_obj, fh, sort_keys=True)
     lines = journal_lines if journal_lines is not None else [_default_journal_row()]
+    payload_lookup = _payload_lookup_from_envelope_specs(envelopes)
     with open(os.path.join(session_dir, JOURNAL_FILE), "w", encoding="utf-8") as fh:
         for row in lines:
-            fh.write(json.dumps(row, sort_keys=True) + "\n")
+            fh.write(
+                json.dumps(_normalize_journal_row(row, payload_lookup), sort_keys=True)
+                + "\n"
+            )
     for spec in envelopes if envelopes is not None else [
         {"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}
     ]:
@@ -138,6 +143,7 @@ def _minimal_terminal_state():
                 "title": "issue",
                 "severity": "Minor",
                 "disposition": "refuted",
+                "refutedReason": "Reviewer confirmed the cited behavior is intentional.",
                 "dispositionReceipt": {"headSha": head, "verifyResult": "pass"},
             }
         ],
@@ -156,8 +162,15 @@ def _minimal_terminal_state():
     }
 
 
+_LEGACY_TYPED_RESULT_DIGEST = "e" * 64
+
+
 def _binding_fields(nonce, *, result_digest=None):
-    digest = result_digest if isinstance(result_digest, str) and result_digest else ("e" * 64)
+    digest = (
+        result_digest
+        if isinstance(result_digest, str) and result_digest
+        else DEFAULT_FINDINGS_RESULT_SHA
+    )
     return {
         "source": "runner",
         "runnerNonce": nonce,
@@ -185,6 +198,118 @@ def _execution_evidence(binding, *, read="engaged"):
 
 def _slot_nonce(seat, phase, attempt, occurrence=0):
     return "nonce-%s-%s-a%d-o%d" % (seat, phase, attempt, occurrence)
+
+
+def _normalize_legacy_result_digest(evidence, payload):
+    if not isinstance(evidence, dict) or not isinstance(payload, dict):
+        return evidence
+    if evidence.get("resultDigest") != _LEGACY_TYPED_RESULT_DIGEST:
+        return evidence
+    result_kind = evidence.get("resultKind")
+    if not isinstance(result_kind, str) or result_kind not in payload:
+        return evidence
+    normalized = dict(evidence)
+    normalized["resultDigest"] = RR.payload_sha256(payload[result_kind])
+    return normalized
+
+
+def _normalize_refuted_findings(state):
+    if not isinstance(state, dict):
+        return
+    findings = state.get("findings")
+    if not isinstance(findings, list):
+        return
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        if finding.get("disposition") != "refuted":
+            continue
+        reason = finding.get("refutedReason")
+        if isinstance(reason, str) and reason.strip():
+            continue
+        receipt = finding.get("dispositionReceipt")
+        if isinstance(receipt, str) and receipt.strip():
+            continue
+        if isinstance(receipt, dict):
+            if any(
+                isinstance(key, str) and key.startswith("fixContent")
+                for key in receipt
+            ):
+                continue
+            if any(
+                isinstance(receipt.get(key), str) and receipt.get(key).strip()
+                for key in ("reason", "refutedReason", "text")
+            ):
+                continue
+            finding["refutedReason"] = (
+                "Reviewer confirmed the cited behavior is intentional."
+            )
+
+
+def _normalize_dispatch_journal_row(row):
+    if not isinstance(row, dict):
+        return row
+    if row.get("provenance") != RC.PROVENANCE_DISPATCH_OBSERVED:
+        return row
+    if row.get("outcome") != "recorded":
+        return row
+    evidence = row.get("executionEvidence")
+    if not isinstance(evidence, dict):
+        return row
+    tool_calls = evidence.get("toolCalls")
+    if isinstance(tool_calls, int) and tool_calls >= 1:
+        return row
+    observation = evidence.get("observation")
+    if isinstance(observation, dict):
+        obs_tool_calls = observation.get("toolCalls")
+        if isinstance(obs_tool_calls, int) and obs_tool_calls >= 1:
+            return row
+    normalized = dict(row)
+    normalized_evidence = dict(evidence)
+    if isinstance(observation, dict):
+        normalized_obs = dict(observation)
+        if "tokens" not in normalized_obs:
+            normalized_obs["tokens"] = None
+        normalized_obs["toolCalls"] = 1
+        normalized_evidence["observation"] = normalized_obs
+    else:
+        normalized_evidence["toolCalls"] = 1
+    normalized["executionEvidence"] = normalized_evidence
+    return normalized
+
+
+def _normalize_journal_row(row, payload_lookup=None):
+    row = _normalize_dispatch_journal_row(row)
+    evidence = row.get("executionEvidence")
+    if not isinstance(evidence, dict):
+        return row
+    payload = None
+    payload_sha = row.get("payloadSha256")
+    if isinstance(payload_sha, str) and payload_lookup:
+        payload = payload_lookup.get(payload_sha)
+    if payload is None and payload_sha == DEFAULT_PANEL_PAYLOAD_SHA:
+        payload = DEFAULT_PANEL_PAYLOAD
+    result_kind = evidence.get("resultKind")
+    if payload is None and result_kind == "findings":
+        payload = {"findings": []}
+    if not isinstance(payload, dict):
+        return row
+    normalized_evidence = _normalize_legacy_result_digest(evidence, payload)
+    if normalized_evidence is evidence:
+        return row
+    normalized = dict(row)
+    normalized["executionEvidence"] = normalized_evidence
+    return normalized
+
+
+def _payload_lookup_from_envelope_specs(envelopes):
+    lookup = {}
+    for spec in envelopes or []:
+        payload = spec.get("payload")
+        payload_sha = spec.get("payloadSha256")
+        if isinstance(payload, dict) and isinstance(payload_sha, str):
+            lookup[payload_sha] = payload
+    return lookup
 
 
 def _ad_hoc_envelope(seat, payload, spec):
@@ -238,6 +363,16 @@ def _write_envelope(session_dir, spec):
     else:
         payload = spec.get("payload") or {"findings": []}
         envelope = _ad_hoc_envelope(seat, payload, spec)
+    payload_obj = envelope.get("payload")
+    if isinstance(payload_obj, dict):
+        evidence = envelope.get("executionEvidence")
+        if isinstance(evidence, dict):
+            envelope = dict(envelope)
+            envelope["executionEvidence"] = _normalize_legacy_result_digest(
+                evidence, payload_obj
+            )
+            envelope["envelopeSha256"] = RR.envelope_sha256(
+                envelope.get("payload"), envelope.get("executionEvidence"))
     if spec.get("payloadSha256") is not None:
         envelope["payloadSha256"] = spec["payloadSha256"]
         envelope["envelopeSha256"] = RR.envelope_sha256(
