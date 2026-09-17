@@ -1072,10 +1072,12 @@ The list's units are the census rows, and each entry is keyed to its census id.
   branch's stale-doc refusal test and its distinct missing-doc refusal test. Its cost is that any
   change to a dispatch flag's declaration requires regenerating the doc in the same change.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
-  `test_generated_doc_matches_committed_file` catching a committed
-  `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md` that had drifted from the
-  argparse declarations. On firing, a proposal to the owner at a gardening pass. A zero citation
-  count means the doc and the declarations have stayed together, not that the guard can go.
+  `test_generated_doc_matches_committed_file` (the CI guard) or a local
+  `plugins/superheroes/lib/dispatch_entry_doc.py --check` refusal (`is stale` / `is missing`)
+  catching a committed `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md` that had
+  drifted from the argparse declarations. On firing, a proposal to the owner at a gardening pass. A
+  zero citation count means the doc and the declarations have stayed together, not that the guard can
+  go.
 - **Last demonstrated benefit.** The generated doc had embedded a Python object address, so it
   could not be regenerated identically; the sentinel now renders in the doc's own vocabulary and a
   cross-process determinism test guards it (this child's build record on PR #1283 and

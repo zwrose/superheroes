@@ -574,11 +574,11 @@ model/vendor taxonomy; #510). **Exit 1 = an unlisted model = a park, not a pick:
 allowlist, and you **park before any work runs** — never treat a model-within-engine choice as "just a
 preference," and this governs **a dispatch you are going to make**: declining to dispatch and doing the
 work yourself instead is a different act, not what this park rule forbids. On exit 0 the gate
-returns a structured triple — thread `model_id` and `effort` into the `--seat` JSON (`model` and
-`effort` keys), and `dispatch_token` as the seat's `model` value when the vendor supports a composed
-token;
-putting the composed token where a registry id belongs is the trap that seats a cursor role on
-Claude and loses the model family. A null `effort` field **resolves** when the allowlist makes the
+returns a structured triple — thread `model_id` into the seat's `model` key and `effort` into
+`effort`; the composed `dispatch_token` is also accepted in `model` and resolves identically, but
+the registry id is what you write. Putting the composed token where the registry id belongs, or an
+`effort` that contradicts a composed token, is the trap that seats a cursor role on Claude and loses
+the model family. A null `effort` field **resolves** when the allowlist makes the
 model unambiguous (and picks the lowest ladder rung when it does not), reporting the choice in
 `effort_source` — never a silent guess. **Record the resolved `model_id` and `effort`** (or the
 `dispatch_token`, which encodes both where the vendor supports it) in the dispatch-provenance
@@ -889,9 +889,11 @@ needs a run no review seat may make:
    interrupted order leaves its captures in session scratch until cleared — a bound, not a
    guarantee). **Resolve the seat's model through the §7 gate** — `--seat` with `"role":"mechanical"`
    and the **host's own vendor**, with a null `model` field (a query only; it resolves the seat
-   default, `effort_source: "seat-default"`). **Exit 1 with an empty `allowlist`** — no sanctioned model for
-   the role on this vendor — means the **route is unavailable**: go straight to destination 1, which
-   is always available, and **disclose the fallback**; exit 1 for any other reason **parks**, and
+   default, `effort_source: "default"`). **Exit 1 with `reason: "allowlist-refused"` and a
+   `seat_detail` that names no sanctioned model for the role on this vendor** — the route is
+   unavailable: go straight to destination 1, which is always available, and **disclose the
+   fallback**; exit 1 with any other `reason` or `seat_detail` (a mistyped `--seat`, an off-allowlist
+   model, or any other refusal) **parks**, and
    exit 0 dispatches — as a **host subagent** (`Agent` on Claude, `spawn_agent` on Codex), **never
    to an external engine** (it renders no judgment, so no independence or maker-family constraint
    applies) — threading and recording the resolved `model_id` and `effort` exactly as §7 says. If

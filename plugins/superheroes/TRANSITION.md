@@ -37,8 +37,9 @@ the accepted `--seat` shape. There is no silent fallback and no alias window for
 
 Every dispatch result carries `runOpened`. When `runOpened` is true the result also carries a
 `resolvedInputs` snapshot; `resolvedInputsStatus` is `pre-upgrade` when the journal predates the
-seat bundle, or `journal-corrupt` when the journal could not be read cleanly (the snapshot is still
-present but synthesized or partial). Each snapshot value is paired with a source marker that says
+seat bundle (the snapshot is synthesized from the legacy run-opened record), or `journal-corrupt`
+when the journal could not be read cleanly (the snapshot is the real opened record — what was
+corrupt is elsewhere in the journal). Each snapshot value is paired with a source marker that says
 whether the run took the value from the caller, a default, a clamp, or the registry. Refusals raised
 before the run opened carry `runOpened: false` and no snapshot. When the shell could not establish
 whether a run had opened — an unreadable journal, corruption without an opened record, or an internal

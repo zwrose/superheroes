@@ -85,4 +85,12 @@ _PARAM_UNSET = _ParamUnsetType()
 1 passed in 0.30s
 ```
 
-**restore receipt:** `git status --porcelain` after restore showed only the order's intended deliverable edits (no residue on `engine_dispatch.py` or `dispatch_entry_doc.py`).
+**restore receipt:**
+```
+ M docs/superheroes/KEEP-OR-RETIRE.md
+ M plugins/superheroes/TRANSITION.md
+ M plugins/superheroes/lib/tests/bite_proofs/wo_9_1269_doc_determinism.md
+ M plugins/superheroes/skills/review-code/reference/auto-fix-loop.md
+ M plugins/superheroes/skills/workhorse/SKILL.md
+```
+
