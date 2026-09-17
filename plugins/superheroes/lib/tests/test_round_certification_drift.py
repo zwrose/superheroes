@@ -42,3 +42,13 @@ def test_decision_keys_match_driver_census():
 
 def test_execution_evidence_telemetry_values_match_records():
     assert RC.EXECUTION_EVIDENCE_TELEMETRY_VALUES == RR.EXECUTION_EVIDENCE_TELEMETRY_VALUES
+
+
+def test_execution_evidence_binding_fields_match_records():
+    assert RC.EXECUTION_EVIDENCE_BINDING_FIELDS == tuple(
+        field for field in RR.EXECUTION_EVIDENCE_FIELDS if field != "observation"
+    )
+
+
+def test_head_content_blobs_file_name():
+    assert RC.HEAD_CONTENT_BLOBS_FILE == "head-content-blobs.json"
