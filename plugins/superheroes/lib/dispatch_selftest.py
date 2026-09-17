@@ -264,7 +264,7 @@ def _leg_registry(failures, checked):
                                 cell,
                             ),
                         )
-                    elif rd_def.get("effort_source") != "seat-default":
+                    elif rd_def.get("effort_source") != model_registry.EFFORT_SOURCE_SEAT_DEFAULT:
                         _fail(
                             failures,
                             w_cell,

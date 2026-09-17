@@ -22,6 +22,7 @@ if _LIB_DIR not in sys.path:
 
 import readout  # noqa: E402  (the band's single scrub seam; same-tree sibling)
 import model_registry  # noqa: E402  (band-wide model taxonomy; same-tree sibling)
+import resolved_inputs_vocab  # noqa: E402  resolvedInputs <field>Source marker home (#1296)
 import seat_bundle  # noqa: E402  (single dispatch seat entry; #1269 WO-A1)
 
 # The SINGLE-SOURCED commit trailer. The committer (commit_result, Task 7) and the
@@ -319,34 +320,34 @@ def _resolve_engine_model_pin(vendor, model_id, claude_tier):
         engine_model = model_id
         if isinstance(engine_model, str) and engine_model:
             if model_registry.is_registered("codex", engine_model):
-                return engine_model, "caller", None, None
+                return engine_model, resolved_inputs_vocab.CALLER, None, None
             parsed = model_registry.parse_dispatch_token("codex", engine_model)
             if parsed is None:
                 return (
                     None,
-                    "declared-none",
+                    resolved_inputs_vocab.DECLARED_NONE,
                     "unregistered-engine-model",
                     _registered_engine_models_detail("codex"),
                 )
-            return parsed[0], "resolved", None, None
+            return parsed[0], resolved_inputs_vocab.RESOLVED, None, None
         try:
             return (
                 model_registry.codex_peer_for_claude_tier(claude_tier),
-                "resolved",
+                resolved_inputs_vocab.RESOLVED,
                 None,
                 None,
             )
         except (ValueError, TypeError):
             return (
                 None,
-                "declared-none",
+                resolved_inputs_vocab.DECLARED_NONE,
                 "fable-unrunnable",
                 _fable_unrunnable_detail(claude_tier),
             )
         except Exception:
             return (
                 None,
-                "declared-none",
+                resolved_inputs_vocab.DECLARED_NONE,
                 "unregistered-engine-model",
                 _registered_engine_models_detail("codex"),
             )
@@ -354,20 +355,20 @@ def _resolve_engine_model_pin(vendor, model_id, claude_tier):
         engine_model = model_id
         if isinstance(engine_model, str) and engine_model:
             if model_registry.is_registered("cursor", engine_model):
-                return engine_model, "caller", None, None
+                return engine_model, resolved_inputs_vocab.CALLER, None, None
             parsed = model_registry.parse_dispatch_token("cursor", engine_model)
             if parsed is None:
                 return (
                     None,
-                    "declared-none",
+                    resolved_inputs_vocab.DECLARED_NONE,
                     "unregistered-engine-model",
                     _registered_engine_models_detail("cursor"),
                 )
-            return parsed[0], "resolved", None, None
-        return "composer-2.5", "default", None, None
+            return parsed[0], resolved_inputs_vocab.RESOLVED, None, None
+        return "composer-2.5", resolved_inputs_vocab.DEFAULT, None, None
     return (
         None,
-        "declared-none",
+        resolved_inputs_vocab.DECLARED_NONE,
         "unknown-engine",
         _unknown_engine_detail(vendor),
     )

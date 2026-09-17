@@ -563,14 +563,16 @@ def test_effort_source_matches_allowlist_verdict():
         verb="guard-check",
     )
     assert resolved["ok"] is True
-    assert resolved["effortSource"] in SB._EFFORT_SOURCE_CANONICAL
+    mapped_markers = set(SB._EFFORT_SOURCE_MAP.values())
+    assert resolved["effortSource"] in mapped_markers
     assert resolved["allowlistVerdict"]["effort_source"] == resolved["effortSource"]
 
 
 def test_effort_source_map_is_closed_canonical_vocabulary():
+    import resolved_inputs_vocab as riv
     assert set(SB._EFFORT_SOURCE_MAP.keys()) == MR.EFFORT_SOURCES
     mapped = set(SB._EFFORT_SOURCE_MAP.values())
-    assert mapped <= SB._EFFORT_SOURCE_CANONICAL
+    assert mapped <= riv.SOURCE_MARKERS
 
 
 def test_resolve_entry_refusal_has_no_reason_key():

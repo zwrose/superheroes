@@ -12,6 +12,7 @@ import os
 
 import dispatch_allowlist
 import model_registry
+import resolved_inputs_vocab
 
 _BUILD_ARGV_RUN_KINDS = frozenset({"review", "build", "fix"})
 _DROPPED_FLAGS = ("--engine", "--model", "--effort", "--engine-model", "--vendor", "--role")
@@ -396,14 +397,12 @@ def parse(raw, *, vendor_hint=None) -> dict:
     return _parse_token(text, vendor_hint=vendor_hint)
 
 
-_EFFORT_SOURCE_CANONICAL = frozenset({"caller", "default", "resolved"})
-
 _EFFORT_SOURCE_MAP = {
-    model_registry.EFFORT_SOURCE_SEAT_DEFAULT: "default",
-    model_registry.EFFORT_SOURCE_GIVEN: "caller",
-    model_registry.EFFORT_SOURCE_TOKEN_ENCODED: "resolved",
-    model_registry.EFFORT_SOURCE_RESOLVED_UNIQUE: "resolved",
-    model_registry.EFFORT_SOURCE_RESOLVED_LOWEST_RUNG: "resolved",
+    model_registry.EFFORT_SOURCE_SEAT_DEFAULT: resolved_inputs_vocab.DEFAULT,
+    model_registry.EFFORT_SOURCE_GIVEN: resolved_inputs_vocab.CALLER,
+    model_registry.EFFORT_SOURCE_TOKEN_ENCODED: resolved_inputs_vocab.RESOLVED,
+    model_registry.EFFORT_SOURCE_RESOLVED_UNIQUE: resolved_inputs_vocab.RESOLVED,
+    model_registry.EFFORT_SOURCE_RESOLVED_LOWEST_RUNG: resolved_inputs_vocab.RESOLVED,
 }
 
 assert set(_EFFORT_SOURCE_MAP.keys()) == model_registry.EFFORT_SOURCES
@@ -417,10 +416,10 @@ def _map_effort_source(registry_source: str) -> str:
 
 def _model_source_from_resolution(parsed_model, registry_effort_source: str) -> str:
     if parsed_model is not None:
-        return "caller"
-    if registry_effort_source == "seat-default":
-        return "seat-default"
-    return "resolved"
+        return resolved_inputs_vocab.CALLER
+    if registry_effort_source == model_registry.EFFORT_SOURCE_SEAT_DEFAULT:
+        return resolved_inputs_vocab.SEAT_DEFAULT
+    return resolved_inputs_vocab.RESOLVED
 
 
 def _ambiguous_null_model_refusal(
@@ -573,10 +572,10 @@ def _resolve_entry_model_effort(parsed: dict, role: str) -> dict:
         allowed is not None
         and not allowed
         and effort_val is None
-        and reg_effort_source != "seat-default"
+        and reg_effort_source != model_registry.EFFORT_SOURCE_SEAT_DEFAULT
         and model is not None
     ):
-        effort_source = "caller"
+        effort_source = resolved_inputs_vocab.CALLER
 
     out = dict(parsed)
     out.update({
@@ -616,7 +615,7 @@ def _validate_model_effort(bundle: dict) -> dict:
                 "vendor": vendor,
                 "model": model_id,
                 "effort": effort,
-                "effortSource": "caller",
+                "effortSource": resolved_inputs_vocab.CALLER,
             })
             return out
         model_id, tok_effort = parsed
@@ -644,7 +643,7 @@ def _validate_model_effort(bundle: dict) -> dict:
             ),
         }
 
-    effort_source = "caller"
+    effort_source = resolved_inputs_vocab.CALLER
     if not allowed:
         if effort is not None:
             return {
@@ -655,7 +654,7 @@ def _validate_model_effort(bundle: dict) -> dict:
                     f"is accepted; got {effort!r}; accepted efforts for this model: (none)"
                 ),
             }
-        effort_source = "caller"
+        effort_source = resolved_inputs_vocab.CALLER
     else:
         matched = _match_effort(effort, allowed)
         if matched is None:
@@ -675,7 +674,7 @@ def _validate_model_effort(bundle: dict) -> dict:
         if effort is None:
             if len(allowed) == 1:
                 matched = allowed[0]
-                effort_source = "resolved"
+                effort_source = resolved_inputs_vocab.RESOLVED
             else:
                 return {
                     "ok": False,
@@ -686,9 +685,9 @@ def _validate_model_effort(bundle: dict) -> dict:
                     ),
                 }
         elif source == "token" and bundle.get("effort") is None:
-            effort_source = "resolved"
+            effort_source = resolved_inputs_vocab.RESOLVED
         else:
-            effort_source = "caller"
+            effort_source = resolved_inputs_vocab.CALLER
         effort = matched
 
     out = dict(bundle)
@@ -1132,7 +1131,7 @@ def resolve_entry(
     )
     if not normalized.get("ok"):
         return normalized
-    effort_source = checked.get("effortSource", "caller")
+    effort_source = checked.get("effortSource", resolved_inputs_vocab.CALLER)
     allowlist_verdict = dict(normalized["allowlistVerdict"])
     allowlist_verdict["effort_source"] = effort_source
     return {
@@ -1141,8 +1140,8 @@ def resolve_entry(
         "model": model,
         "effort": effort,
         "role": role,
-        "modelSource": checked.get("modelSource", "caller"),
+        "modelSource": checked.get("modelSource", resolved_inputs_vocab.CALLER),
         "effortSource": effort_source,
-        "roleSource": "seat",
+        "roleSource": resolved_inputs_vocab.SEAT,
         "allowlistVerdict": allowlist_verdict,
     }

@@ -45,6 +45,7 @@ import seat_bundle  # noqa: E402  single dispatch seat entry (#1269 WO-A1)
 import file_lock  # noqa: E402
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
 import model_registry  # noqa: E402  role read_write classification (#1269 WO-FIX1)
+import resolved_inputs_vocab  # noqa: E402  resolvedInputs <field>Source marker home (#1296)
 import review_findings_schema  # noqa: E402  findings example renderer (#1145 WO-C)
 import sanitized_view  # noqa: E402
 import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
@@ -144,9 +145,9 @@ class _ParamUnsetType:
 
 _PARAM_UNSET = _ParamUnsetType()
 
-_JOURNAL_ROOT_SOURCE_POINTER = "run-dir-pointer"
-_JOURNAL_ROOT_SOURCE_ENV = "environment-variable"
-_JOURNAL_ROOT_SOURCE_TEMP = "temp-directory"
+_JOURNAL_ROOT_SOURCE_POINTER = resolved_inputs_vocab.RUN_DIR_POINTER
+_JOURNAL_ROOT_SOURCE_ENV = resolved_inputs_vocab.ENVIRONMENT_VARIABLE
+_JOURNAL_ROOT_SOURCE_TEMP = resolved_inputs_vocab.TEMP_DIRECTORY
 
 _REJECTED_MODE_MAX_LEN = 120
 
@@ -581,6 +582,12 @@ def _journal_root_with_source(run_dir_real):
 
 
 def _put_resolved(snapshot, name, value, source):
+    if source not in resolved_inputs_vocab.SOURCE_MARKERS:
+        vocabulary = ", ".join(sorted(resolved_inputs_vocab.SOURCE_MARKERS))
+        raise resolved_inputs_vocab.UndeclaredSourceMarker(
+            "resolvedInputs source marker %r is not declared; accepted: %s"
+            % (source, vocabulary)
+        )
     snapshot[name] = value
     snapshot[name + "Source"] = source
 
@@ -588,26 +595,26 @@ def _put_resolved(snapshot, name, value, source):
 def _synthesize_legacy_resolved_inputs(opened):
     """Best-effort snapshot from a pre-upgrade run-opened record (#1269 WO-A2 I4)."""
     snapshot = {}
-    _put_resolved(snapshot, "engine", opened.get("engine"), "legacy-journal")
-    _put_resolved(snapshot, "model", None, "legacy-journal")
-    _put_resolved(snapshot, "effort", None, "legacy-journal")
-    _put_resolved(snapshot, "engineModel", opened.get("engineModel"), "legacy-journal")
-    _put_resolved(snapshot, "role", opened.get("roleKind"), "legacy-journal")
-    _put_resolved(snapshot, "repoRoot", opened.get("repoRoot"), "legacy-journal")
-    _put_resolved(snapshot, "runDir", None, "legacy-journal")
-    _put_resolved(snapshot, "promptPath", opened.get("promptPath"), "legacy-journal")
-    _put_resolved(snapshot, "timeout", opened.get("timeout"), "legacy-journal")
-    _put_resolved(snapshot, "retryTimeout", opened.get("retryTimeout"), "legacy-journal")
-    _put_resolved(snapshot, "maxWait", None, "legacy-journal")
-    _put_resolved(snapshot, "preflightTimeout", None, "legacy-journal")
-    _put_resolved(snapshot, "mode", opened.get("mode"), "legacy-journal")
+    _put_resolved(snapshot, "engine", opened.get("engine"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "model", None, resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "effort", None, resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "engineModel", opened.get("engineModel"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "role", opened.get("roleKind"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "repoRoot", opened.get("repoRoot"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "runDir", None, resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "promptPath", opened.get("promptPath"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "timeout", opened.get("timeout"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "retryTimeout", opened.get("retryTimeout"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "maxWait", None, resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "preflightTimeout", None, resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "mode", opened.get("mode"), resolved_inputs_vocab.LEGACY_JOURNAL)
     _put_resolved(
-        snapshot, "expectedResultKind", opened.get("expectedResultKind"), "legacy-journal",
+        snapshot, "expectedResultKind", opened.get("expectedResultKind"), resolved_inputs_vocab.LEGACY_JOURNAL,
     )
-    _put_resolved(snapshot, "baseSha", opened.get("baseSha"), "legacy-journal")
-    _put_resolved(snapshot, "diffBase", None, "legacy-journal")
-    _put_resolved(snapshot, "progressPath", opened.get("progressPath"), "legacy-journal")
-    _put_resolved(snapshot, "journalRoot", None, "legacy-journal")
+    _put_resolved(snapshot, "baseSha", opened.get("baseSha"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "diffBase", None, resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "progressPath", opened.get("progressPath"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "journalRoot", None, resolved_inputs_vocab.LEGACY_JOURNAL)
     return snapshot
 
 
@@ -676,18 +683,24 @@ def _build_resolved_inputs(
     engine_model_opts,
 ):
     snapshot = {}
-    model_source = seat.get("modelSource", "caller")
-    _put_resolved(snapshot, "engine", seat.get("vendor"), "caller")
+    model_source = seat.get("modelSource", resolved_inputs_vocab.CALLER)
+    _put_resolved(snapshot, "engine", seat.get("vendor"), resolved_inputs_vocab.CALLER)
     _put_resolved(snapshot, "model", seat.get("model"), model_source)
-    _put_resolved(snapshot, "effort", seat.get("effort"), seat.get("effortSource", "caller"))
+    _put_resolved(
+        snapshot, "effort", seat.get("effort"),
+        seat.get("effortSource", resolved_inputs_vocab.CALLER),
+    )
     engine_model, _engine_model_source = engine_adapter.resolve_engine_model(
         seat, role_kind, engine_model_opts,
     )
     _put_resolved(snapshot, "engineModel", engine_model, model_source)
-    _put_resolved(snapshot, "role", seat.get("role"), seat.get("roleSource", "seat"))
-    _put_resolved(snapshot, "repoRoot", repo_root, "resolved")
+    _put_resolved(
+        snapshot, "role", seat.get("role"),
+        seat.get("roleSource", resolved_inputs_vocab.SEAT),
+    )
+    _put_resolved(snapshot, "repoRoot", repo_root, resolved_inputs_vocab.RESOLVED)
     _put_resolved(snapshot, "runDir", run_dir_real, run_dir_source)
-    _put_resolved(snapshot, "promptPath", staged_prompt_path, "resolved")
+    _put_resolved(snapshot, "promptPath", staged_prompt_path, resolved_inputs_vocab.RESOLVED)
     _put_resolved(snapshot, "timeout", timeout, timeout_source)
     _put_resolved(snapshot, "retryTimeout", retry_timeout, retry_timeout_source)
     _put_resolved(snapshot, "maxWait", max_wait, max_wait_source)
@@ -3854,13 +3867,21 @@ def dispatch_review(*args, seat=None, prompt_path=None,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
     caller always sees JSON and can fall open to the host model."""
     resolved_mode = {"mode": None}
-    timeout_source = "default" if timeout is _PARAM_UNSET else "caller"
+    timeout_source = (
+        resolved_inputs_vocab.DEFAULT if timeout is _PARAM_UNSET else resolved_inputs_vocab.CALLER
+    )
     if timeout is _PARAM_UNSET:
         timeout = RETRY_MIN_TIMEOUT
-    retry_timeout_source = "default" if retry_timeout is _PARAM_UNSET else "caller"
+    retry_timeout_source = (
+        resolved_inputs_vocab.DEFAULT
+        if retry_timeout is _PARAM_UNSET
+        else resolved_inputs_vocab.CALLER
+    )
     if retry_timeout is _PARAM_UNSET:
         retry_timeout = RETRY_MIN_TIMEOUT
-    max_wait_source = "default" if max_wait is _PARAM_UNSET else "caller"
+    max_wait_source = (
+        resolved_inputs_vocab.DEFAULT if max_wait is _PARAM_UNSET else resolved_inputs_vocab.CALLER
+    )
     if max_wait is _PARAM_UNSET:
         max_wait = None
     run_dir_supplied = run_dir is not _PARAM_UNSET
@@ -3947,12 +3968,14 @@ def dispatch_review(*args, seat=None, prompt_path=None,
 
 
 def _dispatch_review_impl(seat, *, prompt_path,
-                          repo_root=None, timeout=RETRY_MIN_TIMEOUT, timeout_source="default",
-                          retry_timeout=RETRY_MIN_TIMEOUT, retry_timeout_source="default",
+                          repo_root=None, timeout=RETRY_MIN_TIMEOUT,
+                          timeout_source=resolved_inputs_vocab.DEFAULT,
+                          retry_timeout=RETRY_MIN_TIMEOUT,
+                          retry_timeout_source=resolved_inputs_vocab.DEFAULT,
                           progress_path=None, run_engine=_run_engine,
                           build_view=sanitized_view.build_sanitized_view,
                           run_dir=None, run_dir_supplied=False, max_wait=None,
-                          max_wait_source="default", order_id=None, diff_base=None,
+                          max_wait_source=resolved_inputs_vocab.DEFAULT, order_id=None, diff_base=None,
                           mode=None, resolved_mode=None, expected_result_kind=None,
                           pr_body_path=None, session_dir=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
@@ -4183,17 +4206,25 @@ def _dispatch_review_impl(seat, *, prompt_path,
             effective_progress = progress_path or os.path.join(run_dir_real, PROGRESS_NAME)
             resolved_diff_base = view.get("diffBase") if view else diff_base
             diff_base_source = (
-                "resolved" if resolved_diff_base is not None else "declared-none"
+                resolved_inputs_vocab.RESOLVED
+                if resolved_diff_base is not None
+                else resolved_inputs_vocab.DECLARED_NONE
             )
             expected_kind_source = (
-                "caller" if expected_result_kind is not None else "declared-none"
+                resolved_inputs_vocab.CALLER
+                if expected_result_kind is not None
+                else resolved_inputs_vocab.DECLARED_NONE
             )
             resolved_inputs = _build_resolved_inputs(
                 seat=seat,
                 role_kind=role_kind,
                 repo_root=repo_detail,
                 run_dir_real=run_dir_real,
-                run_dir_source="caller" if run_dir_supplied else "resolved",
+                run_dir_source=(
+                    resolved_inputs_vocab.CALLER
+                    if run_dir_supplied
+                    else resolved_inputs_vocab.RESOLVED
+                ),
                 staged_prompt_path=staged_prompt,
                 timeout=timeout,
                 timeout_source=timeout_source,
@@ -4202,18 +4233,24 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 max_wait=max_wait,
                 max_wait_source=max_wait_source,
                 preflight_timeout=None,
-                preflight_timeout_source="declared-none",
+                preflight_timeout_source=resolved_inputs_vocab.DECLARED_NONE,
                 mode=resolved_mode["mode"],
-                mode_source="caller" if mode is not None else "default",
+                mode_source=(
+                    resolved_inputs_vocab.CALLER
+                    if mode is not None
+                    else resolved_inputs_vocab.DEFAULT
+                ),
                 expected_result_kind=expected_result_kind,
                 expected_result_kind_source=expected_kind_source,
                 base_sha=None,
-                base_sha_source="declared-none",
+                base_sha_source=resolved_inputs_vocab.DECLARED_NONE,
                 diff_base=resolved_diff_base,
                 diff_base_source=diff_base_source,
                 progress_path=effective_progress,
                 progress_path_source=(
-                    "caller" if progress_path is not None else "resolved"
+                    resolved_inputs_vocab.CALLER
+                    if progress_path is not None
+                    else resolved_inputs_vocab.RESOLVED
                 ),
                 engine_model_opts={"cwd": cwd},
             )
@@ -4365,13 +4402,21 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
     Never raises: any unexpected internal failure is converted to a structured result."""
-    timeout_source = "default" if timeout is _PARAM_UNSET else "caller"
+    timeout_source = (
+        resolved_inputs_vocab.DEFAULT if timeout is _PARAM_UNSET else resolved_inputs_vocab.CALLER
+    )
     if timeout is _PARAM_UNSET:
         timeout = RETRY_MIN_TIMEOUT
-    retry_timeout_source = "default" if retry_timeout is _PARAM_UNSET else "caller"
+    retry_timeout_source = (
+        resolved_inputs_vocab.DEFAULT
+        if retry_timeout is _PARAM_UNSET
+        else resolved_inputs_vocab.CALLER
+    )
     if retry_timeout is _PARAM_UNSET:
         retry_timeout = RETRY_MIN_TIMEOUT
-    max_wait_source = "default" if max_wait is _PARAM_UNSET else "caller"
+    max_wait_source = (
+        resolved_inputs_vocab.DEFAULT if max_wait is _PARAM_UNSET else resolved_inputs_vocab.CALLER
+    )
     if max_wait is _PARAM_UNSET:
         max_wait = None
     run_dir_supplied = run_dir is not _PARAM_UNSET
@@ -4428,10 +4473,13 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
 
 def _dispatch_write_impl(seat, *, prompt_path, cwd,
                          order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
-                         timeout_source="default", retry_timeout=RETRY_MIN_TIMEOUT,
-                         retry_timeout_source="default", progress_path=None,
+                         timeout_source=resolved_inputs_vocab.DEFAULT,
+                         retry_timeout=RETRY_MIN_TIMEOUT,
+                         retry_timeout_source=resolved_inputs_vocab.DEFAULT,
+                         progress_path=None,
                          run_engine=_run_engine, run_dir=None, run_dir_supplied=False,
-                         max_wait=None, max_wait_source="default", expected_items=None,
+                         max_wait=None, max_wait_source=resolved_inputs_vocab.DEFAULT,
+                         expected_items=None,
                          expected_items_file=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     engine = seat["vendor"]
@@ -4443,10 +4491,14 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
         return _max_wait_refusal(wait_detail, run_dir=run_dir, run_kind=RUN_KIND_WRITE)
     if max_wait is not None:
         preflight_timeout = max(int(max_wait), 1)
-        preflight_timeout_source = "clamped" if int(max_wait) < 1 else "caller"
+        preflight_timeout_source = (
+            resolved_inputs_vocab.CLAMPED
+            if int(max_wait) < 1
+            else resolved_inputs_vocab.CALLER
+        )
     else:
         preflight_timeout = None
-        preflight_timeout_source = "declared-none"
+        preflight_timeout_source = resolved_inputs_vocab.DECLARED_NONE
     base_sha_supplied = base_sha is not None
 
     ok, cwd_detail = _validate_linked_build_cwd(cwd, timeout=preflight_timeout)
@@ -4648,17 +4700,21 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
             staged_prompt = os.path.join(run_dir_real, PROMPT_NAME)
             effective_progress = progress_path or os.path.join(run_dir_real, PROGRESS_NAME)
             if base_sha_supplied:
-                base_sha_source = "caller"
+                base_sha_source = resolved_inputs_vocab.CALLER
             elif base_sha is not None:
-                base_sha_source = "resolved"
+                base_sha_source = resolved_inputs_vocab.RESOLVED
             else:
-                base_sha_source = "declared-none"
+                base_sha_source = resolved_inputs_vocab.DECLARED_NONE
             resolved_inputs = _build_resolved_inputs(
                 seat=seat,
                 role_kind=role_kind,
                 repo_root=repo_root,
                 run_dir_real=run_dir_real,
-                run_dir_source="caller" if run_dir_supplied else "resolved",
+                run_dir_source=(
+                    resolved_inputs_vocab.CALLER
+                    if run_dir_supplied
+                    else resolved_inputs_vocab.RESOLVED
+                ),
                 staged_prompt_path=staged_prompt,
                 timeout=timeout,
                 timeout_source=timeout_source,
@@ -4669,16 +4725,18 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 preflight_timeout=preflight_timeout,
                 preflight_timeout_source=preflight_timeout_source,
                 mode=None,
-                mode_source="declared-none",
+                mode_source=resolved_inputs_vocab.DECLARED_NONE,
                 expected_result_kind=None,
-                expected_result_kind_source="declared-none",
+                expected_result_kind_source=resolved_inputs_vocab.DECLARED_NONE,
                 base_sha=base_sha,
                 base_sha_source=base_sha_source,
                 diff_base=None,
-                diff_base_source="declared-none",
+                diff_base_source=resolved_inputs_vocab.DECLARED_NONE,
                 progress_path=effective_progress,
                 progress_path_source=(
-                    "caller" if progress_path is not None else "resolved"
+                    resolved_inputs_vocab.CALLER
+                    if progress_path is not None
+                    else resolved_inputs_vocab.RESOLVED
                 ),
                 engine_model_opts={"cwd": cwd_real},
             )
