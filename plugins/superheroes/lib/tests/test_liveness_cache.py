@@ -301,10 +301,11 @@ def test_read_uses_reader_ttl_not_stored_ttl(tmp_path, monkeypatch):
 
 def test_read_env_ttl_does_not_revive_receipt_past_stored_default(tmp_path, monkeypatch):
     # I1: raising configured TTL via env must not prolong a receipt written under the default.
-    monkeypatch.setenv(lc._ENV_TTL, "100000")
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
     path = str(tmp_path / "r.json")
     now = 30_000.0
     lc.write(_good_liveness(), _good_needed(), path=path, now=now - 3601)
+    monkeypatch.setenv(lc._ENV_TTL, "100000")
     assert lc.read(path, now=now) is None
 
 
