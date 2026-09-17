@@ -4462,6 +4462,22 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     return session_dir
 
 
+def _attach_loop_observables_to_refusal(refusal, state):
+    """Add loop observables — what the loop reached, not certification claims.
+
+    loopTerminal states the driver's terminal verdict. loopCertificationShape and loopRounds
+    mirror build_receipt fields for callers that need loop observability on a refusal; they
+    assert nothing about certification."""
+    if isinstance(refusal, dict):
+        terminal = state.get("terminal")
+        if terminal is not None:
+            refusal["loopTerminal"] = terminal
+        loop_receipt = build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED)
+        refusal["loopCertificationShape"] = loop_receipt.get("certificationShape")
+        refusal["loopRounds"] = loop_receipt.get("rounds") or []
+    return refusal
+
+
 def _run_loop_certified_receipt(state, invocations):
     """Materialize a temp session, call the certification writer, return its receipt or refusal."""
     import round_certification as rc
@@ -4471,23 +4487,23 @@ def _run_loop_certified_receipt(state, invocations):
         try:
             receipt, refusal = rc.certify(session_dir)
         except Exception as exc:
-            refusal = {
+            refusal = _attach_loop_observables_to_refusal({
                 "class": "writer-fault",
                 "artifact": CERTIFICATION_RECEIPT_FILE,
                 "detail": "certify raised %s: %s" % (type(exc).__name__, exc),
                 "bindingFailure": "writer-exception",
-            }
+            }, state)
             receipt = None
         if receipt is not None:
             return receipt
         if refusal is None:
-            refusal = {
+            refusal = _attach_loop_observables_to_refusal({
                 "class": "writer-fault",
                 "artifact": CERTIFICATION_RECEIPT_FILE,
                 "detail": "certify returned neither receipt nor refusal",
                 "bindingFailure": "writer-empty",
-            }
-        return refusal
+            }, state)
+        return _attach_loop_observables_to_refusal(refusal, state)
     finally:
         shutil.rmtree(session_dir, ignore_errors=True)
 
