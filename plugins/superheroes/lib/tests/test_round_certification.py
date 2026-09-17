@@ -6,7 +6,7 @@ import model_registry
 import pytest
 
 import round_certification as RC
-from round_certification_fixtures import write_session
+from round_certification_fixtures import MUST_REFUSE_FIXTURES, write_session
 
 HEAD = "a" * 40
 
@@ -1530,3 +1530,25 @@ def test_bite_slot_scoped_nonce_refuses_cross_slot(tmp_path):
     assert receipt is None
     assert refusal["class"] == "unrun-review"
     assert refusal["bindingFailure"] == "execution-evidence-dispatch-unrecorded"
+
+
+@pytest.mark.parametrize(
+    "label,builder,expect",
+    MUST_REFUSE_FIXTURES,
+    ids=[label for label, _, _ in MUST_REFUSE_FIXTURES],
+)
+def test_must_refuse_fixtures_keep_refusal_reason(tmp_path, label, builder, expect):
+    session_dir = builder(tmp_path)
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None, label
+    assert refusal is not None, label
+    if "class_" in expect:
+        assert refusal["class"] == expect["class_"], label
+    if "class_in" in expect:
+        assert refusal["class"] in expect["class_in"], label
+    if expect.get("artifact_required"):
+        assert refusal.get("artifact"), label
+    if "artifact" in expect:
+        assert refusal["artifact"] == expect["artifact"], label
+    if "binding_failure" in expect:
+        assert refusal.get("bindingFailure") == expect["binding_failure"], label
