@@ -1023,9 +1023,9 @@ The list's units are the census rows, and each entry is keyed to its census id.
   new entry path must route through it rather than reading seat fields itself. Open PR #1286 takes
   S7; whichever of the two PRs lands second renumbers.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
-  chokepoint refusal (`legacy-seat-args`, `seat-token-dropped`, `unknown-role`, `mode-role-mismatch`,
-  `verb-role-mismatch`, `invalid-model-effort`, `allowlist-refused`) that stopped a dispatch from
-  running a seat it was not entitled to. On firing, a proposal to the owner at a gardening pass. A
+  chokepoint refusal from the entry-refusal vocabulary
+  (`plugins/superheroes/skills/workhorse/reference/dispatch-entry.md#entry-refusal-reasons`) that
+  stopped a dispatch from running a seat it was not entitled to. On firing, a proposal to the owner at a gardening pass. A
   zero citation count means no dispatch tried an unauthorized seat past the chokepoint, not that the
   gate can go.
 - **Last demonstrated benefit.** Before the chokepoint, the seat's registry role was a separate
@@ -1065,15 +1065,16 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 #### S10 — Entry-doc determinism guard
 
-- **Component.** Not a census row. `plugins/superheroes/lib/dispatch_entry_doc.py --check`, which
+- **Component.** Not a census row. `/usr/bin/python3 -B plugins/superheroes/lib/dispatch_entry_doc.py --check`, which
   regenerates the entry doc from the dispatch shell's own argparse declarations and refuses when
   the committed `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md` differs from a
-  fresh generation, plus the cross-process determinism test that guards it, plus the `--check`
+  fresh generation — including the doc's declared-vocabulary sections, so a vocabulary change without
+  regeneration is refused — plus the cross-process determinism test that guards it, plus the `--check`
   branch's stale-doc refusal test and its distinct missing-doc refusal test. Its cost is that any
-  change to a dispatch flag's declaration requires regenerating the doc in the same change.
+  change to a dispatch flag's declaration or a declared vocabulary requires regenerating the doc in the same change.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
   `test_generated_doc_matches_committed_file` (the CI guard) or a local
-  `plugins/superheroes/lib/dispatch_entry_doc.py --check` refusal (`is stale` / `is missing`)
+  `/usr/bin/python3 -B plugins/superheroes/lib/dispatch_entry_doc.py --check` refusal (`is stale` / `is missing`)
   catching a committed `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md` that had
   drifted from the argparse declarations. On firing, a proposal to the owner at a gardening pass. A
   zero citation count means the doc and the declarations have stayed together, not that the guard can
