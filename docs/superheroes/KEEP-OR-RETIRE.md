@@ -1023,8 +1023,8 @@ The list's units are the census rows, and each entry is keyed to its census id.
   new entry path must route through it rather than reading seat fields itself. Open PR #1286 takes
   S7; whichever of the two PRs lands second renumbers.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
-  chokepoint refusal from the entry-refusal vocabulary
-  (`plugins/superheroes/skills/workhorse/reference/dispatch-entry.md#entry-refusal-reasons`) that
+  chokepoint refusal from the entry-refusal vocabulary (see the entry refusal reasons section of
+  `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md`) that
   stopped a dispatch from running a seat it was not entitled to. On firing, a proposal to the owner at a gardening pass. A
   zero citation count means no dispatch tried an unauthorized seat past the chokepoint, not that the
   gate can go.

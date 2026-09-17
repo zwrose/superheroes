@@ -28,7 +28,7 @@ and `engine_adapter build-argv`:
 
 **Newly required.**
 
-- `--seat` — pass as JSON object `{"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, "role": "<role>"}` (the `effort` key is required and its value may be null; `role` is required and must be a valid role — see `skills/workhorse/reference/dispatch-entry.md#accepted-seat-shapes`).
+- `--seat` — pass as JSON object `{"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, "role": "<role>"}` (the `effort` key is required and its value may be null; `role` is required and must be a valid role — see the accepted seat shapes section of `skills/workhorse/reference/dispatch-entry.md`).
 
 If you pass a dropped flag, the dispatch refuses immediately. The refusal names the replacement and
 the accepted `--seat` shape. There is no silent fallback and no alias window for dropped forms.
@@ -40,7 +40,7 @@ Every dispatch result carries `runOpened`. When `runOpened` is true the result a
 seat bundle (the snapshot is synthesized from the legacy run-opened record), or `journal-corrupt`
 when the journal could not be read cleanly (the snapshot is the real opened record — what was
 corrupt is elsewhere in the journal). Each snapshot field has a paired `<field>Source` marker; see
-`skills/workhorse/reference/dispatch-entry.md#resolvedinputs-source-markers`. Refusals raised
+the resolvedInputs source markers section of `skills/workhorse/reference/dispatch-entry.md`. Refusals raised
 before the run opened carry `runOpened: false` and no snapshot. When the shell could not establish
 whether a run had opened — an unreadable journal, corruption without an opened record, or an internal
 error while reading the run directory — the result carries `runOpened: false` and

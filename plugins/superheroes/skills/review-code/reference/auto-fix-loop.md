@@ -831,8 +831,8 @@ carries `{vendor, model, effort, tier, family, source}`:
   `effort`. `build-argv` also accepts the **composed dispatch token** in `model`, and resolves it
   identically, but an `effort` that **contradicts** a composed token is refused rather than
   silently resolved either way. A refused dispatch surfaces
-  `detail: "engine-config:<reason>"` (see
-  `skills/workhorse/reference/dispatch-entry.md#engine-config-refusal-tokens`) — so the panel's
+  `detail: "engine-config:<reason>"` (see the engine-config refusal tokens section of
+  `skills/workhorse/reference/dispatch-entry.md`) — so the panel's
   degradation disclosure names **what** died. The persona and `$RUBRIC` are identical across engines; the only per-seat difference is
   the dispatch target.
 - **The grounding seat** (`$SEAT_MAP.seats["grounding-seat"]`) is *assigned* a vendor by the seat map
