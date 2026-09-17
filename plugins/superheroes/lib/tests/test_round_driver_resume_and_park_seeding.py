@@ -63,9 +63,10 @@ def test_f1_corrupt_records_resume_parks_instead_of_raising(tmp_path):
     assert isinstance(state["_resumeCorrupt"], str)
     assert state["_resumeCorrupt"]
     assert state.get("_records") == []
-    receipt = RD.run_loop(_seams(), cfg)
-    assert receipt["verdict"] == "cannot-certify"
-    assert receipt["certificationShape"] is None
+    result = RD.run_loop(_seams(), cfg)
+    assert result["class"] == "disposition-without-receipt"
+    assert result["loopTerminal"] == "cannot-certify"
+    assert "verdict" not in result
 
 
 def test_f1_nested_record_field_corruption_parks_instead_of_raising(tmp_path):
@@ -78,9 +79,10 @@ def test_f1_nested_record_field_corruption_parks_instead_of_raising(tmp_path):
     assert state.get("_resumeCorrupt")
     assert isinstance(state["_resumeCorrupt"], str)
     assert state.get("_records") == []
-    receipt = RD.run_loop(_seams(), cfg)
-    assert receipt["verdict"] == "cannot-certify"
-    assert receipt["certificationShape"] is None
+    result = RD.run_loop(_seams(), cfg)
+    assert result["class"] == "disposition-without-receipt"
+    assert result["loopTerminal"] == "cannot-certify"
+    assert "verdict" not in result
 
 
 # --- F2: structured refusals unchanged ---

@@ -676,10 +676,19 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
     return_kind, driver_result = _run_loop_return_kind(receipt)
     certification_refusal = None
     if return_kind == "refusal":
-        terminal = "certification-refused"
+        loop_terminal = driver_result.get("loopTerminal")
+        if loop_terminal in _TERMINAL_MAP:
+            terminal = _TERMINAL_MAP[loop_terminal]
+        elif loop_terminal is not None:
+            terminal = loop_terminal
+        else:
+            terminal = "unexpected-driver-return"
+        artifact = driver_result.get("artifact")
+        if isinstance(artifact, str) and ("/" in artifact or os.sep in artifact):
+            artifact = os.path.basename(artifact)
         certification_refusal = {
             "class": driver_result.get("class"),
-            "artifact": driver_result.get("artifact"),
+            "artifact": artifact,
             "detail": driver_result.get("detail"),
             "bindingFailure": driver_result.get("bindingFailure"),
         }
@@ -752,6 +761,12 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
     else:
         token_total = fallback_total
 
+    driver_receipt = receipt
+    if return_kind == "refusal":
+        driver_receipt = dict(driver_result)
+        driver_receipt["certificationShape"] = driver_result.get("loopCertificationShape")
+        driver_receipt["rounds"] = driver_result.get("loopRounds") or []
+
     observed = {
         "terminal": terminal,
         "roundCount": round_count,
@@ -762,7 +777,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
         "seen": seen,
         "fixContexts": fix_contexts,
         "fixResults": fix_results,
-        "_driverReceipt": receipt,
+        "_driverReceipt": driver_receipt,
         "_runDir": run_dir if not own_dir else None,
     }
     if certification_refusal is not None:

@@ -1,5 +1,11 @@
 {
   "benchmarkValid": true,
+  "certificationRefusal": {
+    "artifact": "architecture-reviewer-b784c838315fcad8.a0.json",
+    "bindingFailure": null,
+    "class": "unfetched-findings",
+    "detail": "seat result never landed on disk"
+  },
   "coverageDecisionIds": [
     "RCD-wrong"
   ],
