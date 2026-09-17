@@ -844,10 +844,24 @@ def _execution_evidence_source_is_caller_supplied(source):
     return False
 
 
-def _journal_recorded_runner_nonces(journal):
+def _journal_recorded_runner_nonces_for_slot(journal, seat, phase, attempt, occurrence=0):
+    """Runner nonces recorded for one dispatch slot — not session-wide."""
     nonces = set()
     for event in journal:
         if not isinstance(event, dict):
+            continue
+        if event.get("outcome") != "recorded":
+            continue
+        ident = event.get("recordIdentity")
+        if not isinstance(ident, dict):
+            ident = {}
+        ev_seat = event.get("seat") or ident.get("seat")
+        ev_phase = event.get("phase") if event.get("phase") is not None else ident.get("phase")
+        ev_attempt = event.get("attempt")
+        if ev_attempt is None:
+            ev_attempt = ident.get("attempt")
+        ev_occ = event.get("occurrence", ident.get("occurrence", 0))
+        if ev_seat != seat or ev_phase != phase or ev_attempt != attempt or ev_occ != occurrence:
             continue
         evidence = event.get("executionEvidence")
         if isinstance(evidence, dict):
@@ -901,13 +915,14 @@ def _execution_binding_matches_journal(evidence, journal_binding, recorded_nonce
         val = evidence.get(field)
         if not isinstance(val, str) or not val:
             return False, "execution-evidence-binding-incomplete"
-    runner_nonce = evidence.get("runnerNonce")
-    if recorded_nonces and runner_nonce not in recorded_nonces:
+    if journal_binding is None:
         return False, "execution-evidence-dispatch-unrecorded"
-    if journal_binding is not None:
-        for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
-            if evidence.get(field) != journal_binding.get(field):
-                return False, "execution-evidence-binding-mismatch"
+    runner_nonce = evidence.get("runnerNonce")
+    if runner_nonce not in recorded_nonces:
+        return False, "execution-evidence-dispatch-unrecorded"
+    for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
+        if evidence.get(field) != journal_binding.get(field):
+            return False, "execution-evidence-binding-mismatch"
     return True, None
 
 
@@ -921,12 +936,11 @@ def _observation_qualifies(obs, certified_head, cited_head, journal_binding=None
         return False, "execution-evidence-not-engaged"
     if cited_head and certified_head and cited_head != certified_head:
         return False, "execution-evidence-stale-head"
-    if isinstance(obs, dict) and obs.get("runnerNonce"):
-        ok, binding_failure = _execution_binding_matches_journal(
-            obs, journal_binding, recorded_nonces or set()
-        )
-        if not ok:
-            return False, binding_failure
+    ok, binding_failure = _execution_binding_matches_journal(
+        obs, journal_binding, recorded_nonces or set()
+    )
+    if not ok:
+        return False, binding_failure
     return True, None
 
 
@@ -962,22 +976,38 @@ def _read_head_content_blobs(session_dir):
 
 
 def _fix_still_present_at_head(ctx, finding, receipt):
+    fid = finding.get("id") or finding.get("title") or "finding"
     path = finding.get("file")
     if not isinstance(path, str) or not path:
-        return None
+        return _refusal(
+            "disposition-without-receipt",
+            fid,
+            "fixed disposition lacks file path for head-content verification",
+            binding_failure="fix-content-missing",
+        )
     head = receipt.get("headSha") or _certified_head_sha(ctx)
     if not isinstance(head, str) or not head:
-        return None
+        return _refusal(
+            "disposition-without-receipt",
+            fid,
+            "fixed disposition lacks certified head for content verification",
+            binding_failure="fix-content-missing",
+        )
     blobs, err = _read_head_content_blobs(ctx["session_dir"])
     if err is not None:
         return _refusal(
             "disposition-without-receipt",
-            finding.get("id") or finding.get("title") or "finding",
+            fid,
             "fixed disposition fix-content read failed on certified head",
             binding_failure="fix-content-unreadable",
         )
     if blobs is None:
-        return None
+        return _refusal(
+            "disposition-without-receipt",
+            fid,
+            "fixed disposition lacks head-content evidence on certified head",
+            binding_failure="fix-content-missing",
+        )
     commits = blobs.get("fixCommits")
     if not isinstance(commits, list):
         return _refusal(
@@ -1015,11 +1045,16 @@ def check_unrun_review(ctx):
     journal = ctx["journal"]
     session_dir = ctx["session_dir"]
     certified_head = _certified_head_sha(ctx)
-    recorded_nonces = _journal_recorded_runner_nonces(journal)
     seats = _collect_seats(ctx)
     for seat_entry in seats:
         seat = seat_entry["seat"]
         provenance = seat_entry.get("provenance")
+        phase = seat_entry.get("phase")
+        attempt = seat_entry["attempt"]
+        occurrence = seat_entry.get("occurrence", 0)
+        slot_nonces = _journal_recorded_runner_nonces_for_slot(
+            journal, seat, phase, attempt, occurrence
+        )
         if provenance not in RECEIPT_PROVENANCE:
             if provenance == PROVENANCE_ORCHESTRATOR_FULFILLED:
                 return _refusal(
@@ -1033,20 +1068,20 @@ def check_unrun_review(ctx):
                 "seat provenance %r is not mappable" % (provenance,),
             )
         if provenance == PROVENANCE_DISPATCH_OBSERVED:
-            obs = _journal_observation_for_seat(journal, seat, seat_entry.get("phase"))
+            obs = _journal_observation_for_seat(journal, seat, phase)
             journal_binding = _journal_execution_binding(
                 journal,
                 seat,
-                seat_entry.get("phase"),
-                seat_entry["attempt"],
-                seat_entry.get("occurrence", 0),
+                phase,
+                attempt,
+                occurrence,
             )
             ok, binding = _observation_qualifies(
                 obs,
                 certified_head,
                 seat_entry.get("citedHead"),
                 journal_binding=journal_binding,
-                recorded_nonces=recorded_nonces,
+                recorded_nonces=slot_nonces,
             )
             if not ok:
                 return _refusal(
@@ -1073,15 +1108,15 @@ def check_unrun_review(ctx):
             journal_binding = _journal_execution_binding(
                 journal,
                 seat,
-                seat_entry.get("phase"),
-                seat_entry["attempt"],
-                seat_entry.get("occurrence", 0),
+                phase,
+                attempt,
+                occurrence,
             )
             ok, binding = _hand_landed_evidence_qualifies(
                 env,
                 certified_head,
                 journal_binding=journal_binding,
-                recorded_nonces=recorded_nonces,
+                recorded_nonces=slot_nonces,
             )
             if not ok:
                 return _refusal(
