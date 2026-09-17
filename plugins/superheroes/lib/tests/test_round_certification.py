@@ -10,9 +10,141 @@ from round_certification_fixtures import write_session
 
 HEAD = "a" * 40
 
+QUALIFICATION_HELPER_CENSUS = (
+    "_execution_binding_matches_journal",
+    "_observation_qualifies",
+    "_hand_landed_evidence_qualifies",
+    "_fix_still_present_at_head",
+)
+
+
+def _binding_fields(nonce="test-nonce"):
+    return {
+        "source": "runner",
+        "runnerNonce": nonce,
+        "recordDigest": "d" * 64,
+        "resultDigest": "e" * 64,
+        "resultKind": "findings",
+    }
+
+
+def _dispatch_journal_with_binding(
+    seat="code-reviewer",
+    payload_sha="abc123",
+    *,
+    nonce="test-nonce",
+    attempt=0,
+    head_sha=None,
+    read="engaged",
+):
+    evidence = {
+        "read": read,
+        "source": "runner",
+        "telemetry": "tool-calls",
+        "stdoutBytes": 10,
+        "wallSeconds": 1.0,
+        **_binding_fields(nonce),
+    }
+    row = {
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "phase": RC.PANEL_PHASE,
+        "round": 1,
+        "attempt": attempt,
+        "seat": seat,
+        "occurrence": 0,
+        "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+        "payloadSha256": payload_sha,
+        "executionEvidence": evidence,
+        "recordIdentity": {
+            "phase": RC.PANEL_PHASE,
+            "seat": seat,
+            "occurrence": 0,
+            "attempt": attempt,
+        },
+    }
+    if head_sha is not None:
+        row["headSha"] = head_sha
+    return row
+
+
+def _hand_landed_binding_journal_row(seat, payload_sha, evidence, *, attempt=0):
+    return {
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "phase": RC.PANEL_PHASE,
+        "round": 1,
+        "attempt": attempt,
+        "seat": seat,
+        "provenance": RC.PROVENANCE_HAND_LANDED,
+        "payloadSha256": payload_sha,
+        "executionEvidence": {
+            field: evidence[field]
+            for field in RC.EXECUTION_EVIDENCE_BINDING_FIELDS
+        },
+        "recordIdentity": {
+            "phase": RC.PANEL_PHASE,
+            "seat": seat,
+            "occurrence": 0,
+            "attempt": attempt,
+        },
+    }
+
+
+def _head_content_blobs_for_findings(findings, head=HEAD):
+    fix_commits = []
+    files = {}
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        if finding.get("disposition") != "fixed":
+            continue
+        path = finding.get("file")
+        if not isinstance(path, str) or not path:
+            continue
+        fix_commits.append({"headSha": head, "path": path, "present": True})
+        files[path] = "fix present\n"
+    if not fix_commits:
+        return None
+    return {"headSha": head, "files": files, "fixCommits": fix_commits}
+
+
+def _write_head_content_blobs(session_dir, blobs):
+    path = os.path.join(session_dir, RC.HEAD_CONTENT_BLOBS_FILE)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(blobs, fh, sort_keys=True)
+
+
+def write_certifiable_session(tmp_path, **kwargs):
+    """Session with binding telemetry and head-content evidence for fixed findings."""
+    state = kwargs.get("state")
+    if state is None:
+        state = {}
+    elif not isinstance(state, dict):
+        state = {}
+    kwargs = dict(kwargs)
+    kwargs["state"] = state
+    if kwargs.get("journal_lines") is None:
+        kwargs["journal_lines"] = [_dispatch_journal_with_binding()]
+    session_dir = write_session(tmp_path, **kwargs)
+    findings = (state.get("findings") if state else None) or []
+    blobs = _head_content_blobs_for_findings(findings)
+    if blobs is None:
+        blobs = _head_content_blobs_for_findings(
+            [
+                {
+                    "id": "F1",
+                    "file": "a.py",
+                    "disposition": "fixed",
+                }
+            ]
+        )
+    _write_head_content_blobs(session_dir, blobs)
+    return session_dir
+
 
 def test_certify_clean_session_returns_receipt(tmp_path):
-    session_dir = write_session(
+    session_dir = write_certifiable_session(
         tmp_path,
         envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
@@ -95,7 +227,7 @@ def test_journal_blank_lines_only_does_not_certify_claimed_seats(tmp_path):
 
 
 def test_unknown_verdict_refuses(tmp_path):
-    session_dir = write_session(
+    session_dir = write_certifiable_session(
         tmp_path,
         state={"terminal": "mystery-verdict"},
         envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
@@ -158,7 +290,7 @@ def test_seat_opened_never_closed_refuses(tmp_path):
 # --- check_unrun_review -------------------------------------------------------
 
 def test_check_unrun_review_dispatch_observed_clean_passes(tmp_path):
-    session_dir = write_session(
+    session_dir = write_certifiable_session(
         tmp_path,
         envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
@@ -200,30 +332,7 @@ def test_check_unrun_review_stale_head_refuses(tmp_path):
     session_dir = write_session(
         tmp_path,
         journal_lines=[
-            {
-                "cmd": "record-result",
-                "outcome": "recorded",
-                "phase": "dispatch-panel",
-                "round": 1,
-                "attempt": 0,
-                "seat": "code-reviewer",
-                "provenance": "dispatch-observed",
-                "payloadSha256": "abc123",
-                "headSha": "b" * 40,
-                "executionEvidence": {
-                    "read": "engaged",
-                    "source": "runner",
-                    "telemetry": "tool-calls",
-                    "stdoutBytes": 1,
-                    "wallSeconds": 1.0,
-                },
-                "recordIdentity": {
-                    "phase": "dispatch-panel",
-                    "seat": "code-reviewer",
-                    "occurrence": 0,
-                    "attempt": 0,
-                },
-            }
+            _dispatch_journal_with_binding(head_sha="b" * 40),
         ],
         envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
@@ -234,31 +343,25 @@ def test_check_unrun_review_stale_head_refuses(tmp_path):
 
 
 def test_check_unrun_review_hand_landed_clean_passes(tmp_path):
+    evidence = {
+        **_binding_fields("hand-nonce"),
+        "observation": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+        },
+    }
     session_dir = write_session(
         tmp_path,
-        journal_lines=[
-            {
-                "cmd": "record-result",
-                "outcome": "recorded",
-                "phase": "dispatch-panel",
-                "round": 1,
-                "attempt": 0,
-                "seat": "code-reviewer",
-                "provenance": "hand-landed",
-                "payloadSha256": "abc123",
-                "recordIdentity": {
-                    "phase": "dispatch-panel",
-                    "seat": "code-reviewer",
-                    "occurrence": 0,
-                    "attempt": 0,
-                },
-            }
-        ],
+        journal_lines=[_hand_landed_binding_journal_row("code-reviewer", "abc123", evidence)],
         envelopes=[
             {
                 "seat": "code-reviewer",
                 "payloadSha256": "abc123",
                 "provenance": "hand-landed",
+                "executionEvidence": evidence,
             }
         ],
     )
@@ -427,7 +530,7 @@ def test_same_family_additive_undeclared_matching_family_refuses(tmp_path):
 # --- check_unfetched_findings -------------------------------------------------
 
 def test_check_unfetched_findings_clean_passes(tmp_path):
-    session_dir = write_session(
+    session_dir = write_certifiable_session(
         tmp_path,
         envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
@@ -475,7 +578,7 @@ def test_check_unfetched_findings_journal_mismatch_refuses(tmp_path):
 # --- check_disposition_without_receipt ------------------------------------------
 
 def test_check_disposition_without_receipt_clean_passes(tmp_path):
-    session_dir = write_session(tmp_path)
+    session_dir = write_certifiable_session(tmp_path)
     ctx, _ = RC._load_context(session_dir)
     assert RC.check_disposition_without_receipt(ctx) is None
 
@@ -631,40 +734,36 @@ def test_certification_shape_matrix():
 
 
 def test_hand_landed_forces_audited_chain_shape(tmp_path):
+    evidence = {
+        **_binding_fields("hand-shape-nonce"),
+        "observation": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+        },
+    }
     session_dir = write_session(
         tmp_path,
         state={
             "certification": {
                 "shape": "full-panel-confirmed",
                 "fullPanel": True,
-            }
+            },
+            "findings": [],
         },
-        journal_lines=[
-            {
-                "cmd": "record-result",
-                "outcome": "recorded",
-                "phase": "dispatch-panel",
-                "round": 1,
-                "attempt": 0,
-                "seat": "code-reviewer",
-                "provenance": "hand-landed",
-                "payloadSha256": "abc123",
-                "recordIdentity": {
-                    "phase": "dispatch-panel",
-                    "seat": "code-reviewer",
-                    "occurrence": 0,
-                    "attempt": 0,
-                },
-            }
-        ],
+        journal_lines=[_hand_landed_binding_journal_row("code-reviewer", "abc123", evidence)],
         envelopes=[
             {
                 "seat": "code-reviewer",
                 "payloadSha256": "abc123",
                 "provenance": "hand-landed",
+                "executionEvidence": evidence,
             }
         ],
     )
+    _write_head_content_blobs(session_dir, {"headSha": HEAD, "files": {}, "fixCommits": []})
     receipt, refusal = RC.certify(session_dir)
     assert refusal is None
     assert receipt["certificationShape"] == "audited-chain"
@@ -701,7 +800,7 @@ def test_bite_unrun_review_dispatch_telemetry_removed_refuses(tmp_path):
 
 
 def test_bite_same_family_seat_degradation_refuses(tmp_path):
-    session_dir = write_session(
+    session_dir = write_certifiable_session(
         tmp_path,
         state={
             "seatMapReceipts": [
@@ -742,7 +841,7 @@ def test_bite_unfetched_findings_open_seat_refuses(tmp_path):
 
 
 def test_bite_disposition_without_receipt_base_guard_refuses(tmp_path):
-    session_dir = write_session(
+    session_dir = write_certifiable_session(
         tmp_path,
         state={"config": {"fixerVendor": "claude", "baseGuard": "not-checked", "headSha": HEAD}},
         envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
@@ -794,8 +893,9 @@ def test_meta_producer_cannot_bypass_unrun_review(tmp_path):
 
 
 def test_meta_producer_cannot_bypass_same_family_seat(tmp_path):
-    session_dir = _meta_bypass_session(
+    session_dir = write_certifiable_session(
         tmp_path,
+        name="meta-bypass",
         state={
             "seatMapReceipts": [
                 {
@@ -807,6 +907,7 @@ def test_meta_producer_cannot_bypass_same_family_seat(tmp_path):
                 }
             ]
         },
+        meta={"producer": "run-loop"},
         envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
@@ -835,9 +936,11 @@ def test_meta_producer_cannot_bypass_unfetched_findings(tmp_path):
 
 
 def test_meta_producer_cannot_bypass_disposition_without_receipt(tmp_path):
-    session_dir = _meta_bypass_session(
+    session_dir = write_certifiable_session(
         tmp_path,
+        name="meta-bypass",
         state={"config": {"fixerVendor": "claude", "baseGuard": "not-checked", "headSha": HEAD}},
+        meta={"producer": "run-loop"},
         envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
     )
     receipt, refusal = RC.certify(session_dir)
@@ -875,7 +978,7 @@ def test_meta_producer_arbitrary_key_cannot_bypass_unrun_review(tmp_path):
 
 
 def test_materialized_session_preserves_checked_base_guard(tmp_path):
-    session_dir = write_session(
+    session_dir = write_certifiable_session(
         tmp_path,
         name="checked-guard",
         state={"config": {"fixerVendor": "claude", "baseGuard": RC.BASE_GUARD_CHECKED, "headSha": HEAD}},
@@ -890,6 +993,12 @@ def test_materialized_session_preserves_checked_base_guard(tmp_path):
         with open(os.path.join(materialized, RC.STATE_FILE), encoding="utf-8") as fh:
             materialized_state = json.load(fh)
         assert materialized_state["config"]["baseGuard"] == RC.BASE_GUARD_CHECKED
+        blobs = _head_content_blobs_for_findings(materialized_state.get("findings") or [])
+        if blobs is None:
+            blobs = _head_content_blobs_for_findings(
+                [{"id": "F1", "file": "a.py", "disposition": "fixed"}]
+            )
+        _write_head_content_blobs(materialized, blobs)
         receipt, refusal = RC.certify(materialized)
         assert refusal is None, refusal
         assert receipt["baseGuard"] == RC.BASE_GUARD_CHECKED
@@ -897,35 +1006,6 @@ def test_materialized_session_preserves_checked_base_guard(tmp_path):
         import shutil
 
         shutil.rmtree(materialized, ignore_errors=True)
-
-
-def _write_head_content_blobs(session_dir, blobs):
-    path = os.path.join(session_dir, RC.HEAD_CONTENT_BLOBS_FILE)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(blobs, fh, sort_keys=True)
-
-
-def _hand_landed_binding_journal_row(seat, payload_sha, evidence, *, attempt=0):
-    return {
-        "cmd": "record-result",
-        "outcome": "recorded",
-        "phase": RC.PANEL_PHASE,
-        "round": 1,
-        "attempt": attempt,
-        "seat": seat,
-        "provenance": RC.PROVENANCE_HAND_LANDED,
-        "payloadSha256": payload_sha,
-        "executionEvidence": {
-            field: evidence[field]
-            for field in RC.EXECUTION_EVIDENCE_BINDING_FIELDS
-        },
-        "recordIdentity": {
-            "phase": RC.PANEL_PHASE,
-            "seat": seat,
-            "occurrence": 0,
-            "attempt": attempt,
-        },
-    }
 
 
 def test_fixed_disposition_fix_still_present_at_head_certifies(tmp_path):
@@ -942,24 +1022,7 @@ def test_fixed_disposition_fix_still_present_at_head_certifies(tmp_path):
                 }
             ]
         },
-        journal_lines=[{
-            "cmd": "record-result",
-            "outcome": "recorded",
-            "phase": RC.PANEL_PHASE,
-            "round": 1,
-            "attempt": 0,
-            "seat": "code-reviewer",
-            "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
-            "payloadSha256": "panel-sha",
-            "executionEvidence": {"read": "engaged", "source": "runner", "telemetry": "tool-calls",
-                                  "stdoutBytes": 10, "wallSeconds": 1.0},
-            "recordIdentity": {
-                "phase": RC.PANEL_PHASE,
-                "seat": "code-reviewer",
-                "occurrence": 0,
-                "attempt": 0,
-            },
-        }],
+        journal_lines=[_dispatch_journal_with_binding(payload_sha="panel-sha", nonce="panel-nonce")],
         envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
     )
     _write_head_content_blobs(
@@ -976,6 +1039,29 @@ def test_fixed_disposition_fix_still_present_at_head_certifies(tmp_path):
     assert RC.check_disposition_without_receipt(ctx) is None
 
 
+def test_fixed_disposition_missing_head_content_blobs_refuses(tmp_path):
+    session_dir = write_session(
+        tmp_path,
+        state={
+            "findings": [
+                {
+                    "id": "F-missing-blobs",
+                    "file": "src/guard.py",
+                    "severity": "Important",
+                    "disposition": "fixed",
+                    "dispositionReceipt": {"headSha": HEAD, "verifyResult": "pass"},
+                }
+            ]
+        },
+        journal_lines=[_dispatch_journal_with_binding(payload_sha="panel-sha", nonce="panel-nonce")],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["bindingFailure"] == "fix-content-missing"
+
+
 def test_fixed_disposition_fix_content_unreadable_refuses(tmp_path):
     session_dir = write_session(
         tmp_path,
@@ -990,24 +1076,7 @@ def test_fixed_disposition_fix_content_unreadable_refuses(tmp_path):
                 }
             ]
         },
-        journal_lines=[{
-            "cmd": "record-result",
-            "outcome": "recorded",
-            "phase": RC.PANEL_PHASE,
-            "round": 1,
-            "attempt": 0,
-            "seat": "code-reviewer",
-            "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
-            "payloadSha256": "panel-sha",
-            "executionEvidence": {"read": "engaged", "source": "runner", "telemetry": "tool-calls",
-                                  "stdoutBytes": 10, "wallSeconds": 1.0},
-            "recordIdentity": {
-                "phase": RC.PANEL_PHASE,
-                "seat": "code-reviewer",
-                "occurrence": 0,
-                "attempt": 0,
-            },
-        }],
+        journal_lines=[_dispatch_journal_with_binding(payload_sha="panel-sha", nonce="panel-nonce")],
         envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
     )
     path = os.path.join(session_dir, RC.HEAD_CONTENT_BLOBS_FILE)
@@ -1128,3 +1197,336 @@ def test_hand_landed_journal_digest_mismatch_refuses(tmp_path):
     refusal = RC.check_unrun_review(ctx)
     assert refusal["class"] == "unrun-review"
     assert refusal["bindingFailure"] == "execution-evidence-binding-mismatch"
+
+
+# --- WO-L2-M: evidence qualifies by proof, never by default -------------------
+
+def test_dispatch_observed_missing_runner_nonce_refuses(tmp_path):
+    session_dir = write_session(
+        tmp_path,
+        state={"findings": []},
+        journal_lines=[
+            {
+                "cmd": "record-result",
+                "outcome": "recorded",
+                "phase": RC.PANEL_PHASE,
+                "round": 1,
+                "attempt": 0,
+                "seat": "code-reviewer",
+                "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+                "payloadSha256": "abc123",
+                "executionEvidence": {
+                    "read": "engaged",
+                    "source": "runner",
+                    "telemetry": "tool-calls",
+                    "stdoutBytes": 10,
+                    "wallSeconds": 1.0,
+                },
+                "recordIdentity": {
+                    "phase": RC.PANEL_PHASE,
+                    "seat": "code-reviewer",
+                    "occurrence": 0,
+                    "attempt": 0,
+                },
+            }
+        ],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_unrun_review(ctx)
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-binding-incomplete"
+
+
+def test_dispatch_observed_matching_runner_nonce_certifies(tmp_path):
+    session_dir = write_certifiable_session(
+        tmp_path,
+        state={"findings": []},
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    assert RC.check_unrun_review(ctx) is None
+
+
+def test_dispatch_observed_unrecorded_journal_binding_refuses(tmp_path):
+    envelope_evidence = {
+        **_binding_fields("orphan-nonce"),
+        "observation": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+        },
+    }
+    payload_sha = "abc123"
+    session_dir = write_session(
+        tmp_path,
+        state={"findings": []},
+        journal_lines=[
+            {
+                "cmd": "record-result",
+                "outcome": "recorded",
+                "phase": RC.PANEL_PHASE,
+                "round": 1,
+                "attempt": 0,
+                "seat": "code-reviewer",
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "payloadSha256": payload_sha,
+                "recordIdentity": {
+                    "phase": RC.PANEL_PHASE,
+                    "seat": "code-reviewer",
+                    "occurrence": 0,
+                    "attempt": 0,
+                },
+            }
+        ],
+        envelopes=[
+            {
+                "seat": "code-reviewer",
+                "payloadSha256": payload_sha,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "executionEvidence": envelope_evidence,
+            }
+        ],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_unrun_review(ctx)
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-dispatch-unrecorded"
+
+
+def test_slot_scoped_nonce_same_slot_certifies(tmp_path):
+    nonce = "slot-nonce"
+    evidence = {
+        **_binding_fields(nonce),
+        "observation": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+        },
+    }
+    payload_sha = "abc123"
+    session_dir = write_session(
+        tmp_path,
+        state={"findings": []},
+        journal_lines=[
+            _hand_landed_binding_journal_row("code-reviewer", payload_sha, evidence)
+        ],
+        envelopes=[
+            {
+                "seat": "code-reviewer",
+                "payloadSha256": payload_sha,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "executionEvidence": evidence,
+            }
+        ],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    assert RC.check_unrun_review(ctx) is None
+
+
+def _plain_hand_landed_journal_row(seat, payload_sha):
+    return {
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "phase": RC.PANEL_PHASE,
+        "round": 1,
+        "attempt": 0,
+        "seat": seat,
+        "provenance": RC.PROVENANCE_HAND_LANDED,
+        "payloadSha256": payload_sha,
+        "recordIdentity": {
+            "phase": RC.PANEL_PHASE,
+            "seat": seat,
+            "occurrence": 0,
+            "attempt": 0,
+        },
+    }
+
+
+def test_slot_scoped_nonce_different_slot_refuses(tmp_path):
+    borrowed_nonce = "shared-nonce"
+    evidence_a = {
+        **_binding_fields(borrowed_nonce),
+        "observation": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+        },
+    }
+    evidence_b = dict(evidence_a)
+    payload_a = "sha-a"
+    payload_b = "sha-b"
+    session_dir = write_session(
+        tmp_path,
+        state={"findings": []},
+        journal_lines=[
+            _hand_landed_binding_journal_row("code-reviewer", payload_a, evidence_a),
+            _plain_hand_landed_journal_row("security-reviewer", payload_b),
+        ],
+        envelopes=[
+            {
+                "seat": "code-reviewer",
+                "payloadSha256": payload_a,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "executionEvidence": evidence_a,
+            },
+            {
+                "seat": "security-reviewer",
+                "payloadSha256": payload_b,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "executionEvidence": evidence_b,
+            },
+        ],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_unrun_review(ctx)
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-dispatch-unrecorded"
+
+
+@pytest.mark.parametrize("helper_name", QUALIFICATION_HELPER_CENSUS)
+def test_qualification_helpers_refuse_empty_or_absent_evidence(tmp_path, helper_name):
+    if helper_name == "_execution_binding_matches_journal":
+        ok, failure = RC._execution_binding_matches_journal(None, None, set())
+        assert not ok
+        assert failure
+        ok, failure = RC._execution_binding_matches_journal({}, None, set())
+        assert not ok
+        assert failure
+    elif helper_name == "_observation_qualifies":
+        ok, failure = RC._observation_qualifies(None, HEAD, None)
+        assert not ok
+        assert failure
+        ok, failure = RC._observation_qualifies({}, HEAD, None)
+        assert not ok
+        assert failure
+    elif helper_name == "_hand_landed_evidence_qualifies":
+        ok, failure = RC._hand_landed_evidence_qualifies({}, HEAD)
+        assert not ok
+        assert failure
+        ok, failure = RC._hand_landed_evidence_qualifies({"executionEvidence": None}, HEAD)
+        assert not ok
+        assert failure
+    elif helper_name == "_fix_still_present_at_head":
+        session_dir = write_session(tmp_path, state={"findings": []})
+        ctx, _ = RC._load_context(session_dir)
+        finding = {
+            "id": "F-empty",
+            "file": "src/missing.py",
+            "disposition": "fixed",
+        }
+        receipt = {"headSha": HEAD}
+        refusal = RC._fix_still_present_at_head(ctx, finding, receipt)
+        assert refusal is not None
+        assert refusal["bindingFailure"] == "fix-content-missing"
+    else:
+        pytest.fail("uncovered qualification helper in census: %s" % helper_name)
+
+
+def test_bite_fix_content_missing_blobs_refuses(tmp_path):
+    session_dir = write_session(
+        tmp_path,
+        state={
+            "findings": [
+                {
+                    "id": "F-bite",
+                    "file": "src/guard.py",
+                    "severity": "Important",
+                    "disposition": "fixed",
+                    "dispositionReceipt": {"headSha": HEAD, "verifyResult": "pass"},
+                }
+            ]
+        },
+        journal_lines=[_dispatch_journal_with_binding(payload_sha="panel-sha", nonce="bite-nonce")],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "panel-sha"}],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is not None
+    assert refusal["bindingFailure"] == "fix-content-missing"
+
+
+def test_bite_dispatch_observed_binding_always_runs_refuses(tmp_path):
+    session_dir = write_session(
+        tmp_path,
+        state={"findings": []},
+        journal_lines=[
+            {
+                "cmd": "record-result",
+                "outcome": "recorded",
+                "phase": RC.PANEL_PHASE,
+                "round": 1,
+                "attempt": 0,
+                "seat": "code-reviewer",
+                "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+                "payloadSha256": "abc123",
+                "executionEvidence": {
+                    "read": "engaged",
+                    "source": "runner",
+                    "telemetry": "tool-calls",
+                    "stdoutBytes": 10,
+                    "wallSeconds": 1.0,
+                },
+                "recordIdentity": {
+                    "phase": RC.PANEL_PHASE,
+                    "seat": "code-reviewer",
+                    "occurrence": 0,
+                    "attempt": 0,
+                },
+            }
+        ],
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": "abc123"}],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unrun-review"
+
+
+def test_bite_slot_scoped_nonce_refuses_cross_slot(tmp_path):
+    borrowed_nonce = "cross-slot-nonce"
+    evidence_a = {
+        **_binding_fields(borrowed_nonce),
+        "observation": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+        },
+    }
+    evidence_b = dict(evidence_a)
+    payload_a = "sha-a"
+    payload_b = "sha-b"
+    session_dir = write_session(
+        tmp_path,
+        state={"findings": []},
+        journal_lines=[
+            _hand_landed_binding_journal_row("code-reviewer", payload_a, evidence_a),
+            _plain_hand_landed_journal_row("security-reviewer", payload_b),
+        ],
+        envelopes=[
+            {
+                "seat": "code-reviewer",
+                "payloadSha256": payload_a,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "executionEvidence": evidence_a,
+            },
+            {
+                "seat": "security-reviewer",
+                "payloadSha256": payload_b,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "executionEvidence": evidence_b,
+            },
+        ],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-dispatch-unrecorded"
