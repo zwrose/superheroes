@@ -46,9 +46,17 @@ RECEIPT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
 
 EXECUTION_EVIDENCE_READ_VALUES = frozenset(("engaged", "unknown"))
 EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
+EXECUTION_EVIDENCE_BINDING_FIELDS = (
+    "source",
+    "runnerNonce",
+    "recordDigest",
+    "resultDigest",
+    "resultKind",
+)
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry")
 )
+HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
 
 REFUSAL_CLASSES = frozenset(
     ("unrun-review", "same-family-seat", "unfetched-findings", "disposition-without-receipt")
@@ -824,7 +832,86 @@ def _journal_observation_for_seat(journal, seat, phase=None):
     return None
 
 
-def _observation_qualifies(obs, certified_head, cited_head):
+def _execution_evidence_source_is_caller_supplied(source):
+    if not isinstance(source, str) or not source:
+        return True
+    if source.startswith(("/", "./", "../")):
+        return True
+    if "/" in source or "\\" in source:
+        return True
+    if source.endswith(".json"):
+        return True
+    return False
+
+
+def _journal_recorded_runner_nonces(journal):
+    nonces = set()
+    for event in journal:
+        if not isinstance(event, dict):
+            continue
+        evidence = event.get("executionEvidence")
+        if isinstance(evidence, dict):
+            nonce = evidence.get("runnerNonce")
+            if isinstance(nonce, str) and nonce:
+                nonces.add(nonce)
+        nonce = event.get("runnerNonce")
+        if isinstance(nonce, str) and nonce:
+            nonces.add(nonce)
+    return nonces
+
+
+def _journal_execution_binding(journal, seat, phase, attempt, occurrence=0):
+    for event in reversed(journal):
+        if event.get("outcome") != "recorded":
+            continue
+        ident = event.get("recordIdentity")
+        if not isinstance(ident, dict):
+            ident = {}
+        ev_seat = event.get("seat") or ident.get("seat")
+        ev_phase = event.get("phase") if event.get("phase") is not None else ident.get("phase")
+        ev_attempt = event.get("attempt")
+        if ev_attempt is None:
+            ev_attempt = ident.get("attempt")
+        ev_occ = event.get("occurrence", ident.get("occurrence", 0))
+        if ev_seat != seat or ev_phase != phase or ev_attempt != attempt or ev_occ != occurrence:
+            continue
+        binding = {}
+        evidence = event.get("executionEvidence")
+        if isinstance(evidence, dict) and evidence.get("runnerNonce"):
+            for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
+                val = evidence.get(field)
+                if isinstance(val, str) and val:
+                    binding[field] = val
+        for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
+            val = event.get(field)
+            if isinstance(val, str) and val and field not in binding:
+                binding[field] = val
+        if binding.get("runnerNonce"):
+            return binding
+    return None
+
+
+def _execution_binding_matches_journal(evidence, journal_binding, recorded_nonces):
+    if not isinstance(evidence, dict):
+        return False, "execution-evidence-absent"
+    source = evidence.get("source")
+    if _execution_evidence_source_is_caller_supplied(source):
+        return False, "execution-evidence-caller-supplied"
+    for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
+        val = evidence.get(field)
+        if not isinstance(val, str) or not val:
+            return False, "execution-evidence-binding-incomplete"
+    runner_nonce = evidence.get("runnerNonce")
+    if recorded_nonces and runner_nonce not in recorded_nonces:
+        return False, "execution-evidence-dispatch-unrecorded"
+    if journal_binding is not None:
+        for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
+            if evidence.get(field) != journal_binding.get(field):
+                return False, "execution-evidence-binding-mismatch"
+    return True, None
+
+
+def _observation_qualifies(obs, certified_head, cited_head, journal_binding=None, recorded_nonces=None):
     if not isinstance(obs, dict):
         return False, "execution-evidence-absent"
     read = obs.get("read")
@@ -834,21 +921,93 @@ def _observation_qualifies(obs, certified_head, cited_head):
         return False, "execution-evidence-not-engaged"
     if cited_head and certified_head and cited_head != certified_head:
         return False, "execution-evidence-stale-head"
+    if isinstance(obs, dict) and obs.get("runnerNonce"):
+        ok, binding_failure = _execution_binding_matches_journal(
+            obs, journal_binding, recorded_nonces or set()
+        )
+        if not ok:
+            return False, binding_failure
     return True, None
 
 
-def _hand_landed_evidence_qualifies(envelope, certified_head):
+def _hand_landed_evidence_qualifies(
+    envelope, certified_head, journal_binding=None, recorded_nonces=None
+):
     evidence = envelope.get("executionEvidence") if isinstance(envelope, dict) else None
     if not isinstance(evidence, dict):
         return False, "execution-evidence-absent"
-    for field in ("source", "runnerNonce", "recordDigest", "resultDigest", "resultKind"):
-        val = evidence.get(field)
-        if not isinstance(val, str) or not val:
-            return False, "execution-evidence-binding-incomplete"
+    ok, binding_failure = _execution_binding_matches_journal(
+        evidence, journal_binding, recorded_nonces or set()
+    )
+    if not ok:
+        return False, binding_failure
     cited = envelope.get("headSha") or evidence.get("headSha")
     if cited and certified_head and cited != certified_head:
         return False, "execution-evidence-stale-head"
     return True, None
+
+
+def _read_head_content_blobs(session_dir):
+    path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
+    if not os.path.exists(path):
+        return None, None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            blobs = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return None, "fix-content-unreadable: %s" % exc
+    if not isinstance(blobs, dict):
+        return None, "fix-content-unreadable: root is not an object"
+    return blobs, None
+
+
+def _fix_still_present_at_head(ctx, finding, receipt):
+    path = finding.get("file")
+    if not isinstance(path, str) or not path:
+        return None
+    head = receipt.get("headSha") or _certified_head_sha(ctx)
+    if not isinstance(head, str) or not head:
+        return None
+    blobs, err = _read_head_content_blobs(ctx["session_dir"])
+    if err is not None:
+        return _refusal(
+            "disposition-without-receipt",
+            finding.get("id") or finding.get("title") or "finding",
+            "fixed disposition fix-content read failed on certified head",
+            binding_failure="fix-content-unreadable",
+        )
+    if blobs is None:
+        return None
+    commits = blobs.get("fixCommits")
+    if not isinstance(commits, list):
+        return _refusal(
+            "disposition-without-receipt",
+            finding.get("id") or finding.get("title") or "finding",
+            "fixed disposition fix-content read failed on certified head",
+            binding_failure="fix-content-unreadable",
+        )
+    matching = [
+        row
+        for row in commits
+        if isinstance(row, dict)
+        and row.get("headSha") == head
+        and row.get("path") == path
+    ]
+    if not matching:
+        return _refusal(
+            "disposition-without-receipt",
+            finding.get("id") or finding.get("title") or "finding",
+            "fixed disposition fix is not present in content at the certified head",
+            binding_failure="fix-content-unreadable",
+        )
+    if matching[-1].get("present") is not True:
+        return _refusal(
+            "disposition-without-receipt",
+            finding.get("id") or finding.get("title") or "finding",
+            "fixed disposition fix is not present in content at the certified head",
+            binding_failure="fix-content-reverted",
+        )
+    return None
 
 
 def check_unrun_review(ctx):
@@ -856,6 +1015,7 @@ def check_unrun_review(ctx):
     journal = ctx["journal"]
     session_dir = ctx["session_dir"]
     certified_head = _certified_head_sha(ctx)
+    recorded_nonces = _journal_recorded_runner_nonces(journal)
     seats = _collect_seats(ctx)
     for seat_entry in seats:
         seat = seat_entry["seat"]
@@ -874,8 +1034,19 @@ def check_unrun_review(ctx):
             )
         if provenance == PROVENANCE_DISPATCH_OBSERVED:
             obs = _journal_observation_for_seat(journal, seat, seat_entry.get("phase"))
+            journal_binding = _journal_execution_binding(
+                journal,
+                seat,
+                seat_entry.get("phase"),
+                seat_entry["attempt"],
+                seat_entry.get("occurrence", 0),
+            )
             ok, binding = _observation_qualifies(
-                obs, certified_head, seat_entry.get("citedHead")
+                obs,
+                certified_head,
+                seat_entry.get("citedHead"),
+                journal_binding=journal_binding,
+                recorded_nonces=recorded_nonces,
             )
             if not ok:
                 return _refusal(
@@ -899,7 +1070,19 @@ def check_unrun_review(ctx):
                     path,
                     "hand-landed envelope missing or unreadable",
                 )
-            ok, binding = _hand_landed_evidence_qualifies(env, certified_head)
+            journal_binding = _journal_execution_binding(
+                journal,
+                seat,
+                seat_entry.get("phase"),
+                seat_entry["attempt"],
+                seat_entry.get("occurrence", 0),
+            )
+            ok, binding = _hand_landed_evidence_qualifies(
+                env,
+                certified_head,
+                journal_binding=journal_binding,
+                recorded_nonces=recorded_nonces,
+            )
             if not ok:
                 return _refusal(
                     "unrun-review",
@@ -1028,6 +1211,9 @@ def check_disposition_without_receipt(ctx):
                     "fixed disposition verification receipt is not on the certified head",
                     binding_failure="verify-not-on-head",
                 )
+            refusal = _fix_still_present_at_head(ctx, finding, receipt)
+            if refusal is not None:
+                return refusal
         elif disposition == "refuted":
             reason = finding.get("dispositionReceipt") or finding.get("refutedReason")
             if not isinstance(reason, (str, dict)) or (
