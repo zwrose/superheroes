@@ -1206,6 +1206,68 @@ def _restore_round_disclosures(state, records):
             state["rounds"].pop(key, None)
 
 
+def _finding_identity_key(finding):
+    """Mirror round_certification._finding_identity_key — writer stays importable without driver."""
+    fid = finding.get("id")
+    if isinstance(fid, str) and fid:
+        return fid
+    title = finding.get("title")
+    if isinstance(title, str) and title:
+        return title
+    path = finding.get("file")
+    line = finding.get("line")
+    if isinstance(path, str) and path:
+        return "%s@L%s" % (path, line)
+    return None
+
+
+def _archive_disposition_findings(state, departing):
+    """Append findings leaving the live list that carry disposition into dispositionLedger."""
+    if not departing:
+        return
+    ledger = state.get("dispositionLedger")
+    if not isinstance(ledger, list):
+        ledger = []
+        state["dispositionLedger"] = ledger
+    seen = set()
+    for entry in ledger:
+        if isinstance(entry, dict):
+            key = _finding_identity_key(entry)
+            if key:
+                seen.add(key)
+    for finding in departing:
+        if not isinstance(finding, dict) or finding.get("disposition") is None:
+            continue
+        key = _finding_identity_key(finding)
+        if not key or key in seen:
+            continue
+        ledger.append(finding)
+        seen.add(key)
+
+
+def _set_findings(state, new_findings):
+    """The only assignment site for state['findings'] — archives disposition-bearing departures."""
+    prior = state.get("findings") or []
+    if not isinstance(prior, list):
+        prior = []
+    new_list = list(new_findings) if new_findings is not None else []
+    new_keys = set()
+    for finding in new_list:
+        if isinstance(finding, dict):
+            key = _finding_identity_key(finding)
+            if key:
+                new_keys.add(key)
+    departing = []
+    for finding in prior:
+        if not isinstance(finding, dict):
+            continue
+        key = _finding_identity_key(finding)
+        if key and key not in new_keys:
+            departing.append(finding)
+    _archive_disposition_findings(state, departing)
+    state["findings"] = new_list
+
+
 def _park_finding_key(finding):
     """Stable dedupe identity for the park-time findings merge — the module's EXISTING per-location
     key (`_location_id`: `finding_identity` plus line), so two same-title candidates at different
@@ -1254,7 +1316,7 @@ def _seed_findings_before_record_park(state):
             seen.add(key)
             key_to_idx[key] = len(merged)
         merged.append(f)
-    state["findings"] = merged
+    _set_findings(state, merged)
 
 
 def _round_records_payload(state, config):
@@ -2284,7 +2346,7 @@ def _fold_synthesis(state, config, artifact):
         _decision(state, "author-justified-drop", d.get("justification"))
     _record_round(state, "authorJustifiedDrops", aj_drops)
     _record_round(state, "merges", merged["merges"])
-    state["findings"] = kept
+    _set_findings(state, kept)
     # big diff → a gap-sweep over verified findings + the whole diff, before the fix leg. (Not on
     # a delta settle — the delta round has its own scoped scan + audit breaker.)
     plan = delta_surface.shard_plan(state.get("reviewedDiff") or "")
@@ -2655,7 +2717,7 @@ def _after_findings_settled(state, config):
     # merge any gap-sweep / verify carry back in.
     if state.get("_verifiedCarry") is not None:
         carry = state.pop("_verifiedCarry")
-        state["findings"] = (carry or []) + (state.get("findings") or [])
+        _set_findings(state, (carry or []) + (state.get("findings") or []))
         state.pop("_gapMerge", None)
     if state.get("_settleDelta"):
         _settle_delta(state, config)
@@ -2788,9 +2850,12 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
                                  "escalated": bool(artifact.get("escalated") or state.get("_escalatedRung"))})
     state.pop("_escalatedRung", None)
     if session_dir:
-        head = _session_certified_head(session_dir, state)
-        _record_fix_content_on_findings(state, session_dir, artifact, head)
-        _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
+        head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
+        if head_err:
+            _record_round(state, "fixFoldHeadRefused", head_err)
+        else:
+            _record_fix_content_on_findings(state, session_dir, artifact, head)
+            _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
     state["step"] = P_VERIFY
 
 
@@ -3250,7 +3315,7 @@ def _fold_scoped(state, config, artifact):
         # audit-breaker + confirmation re-arm, handled in _settle_delta.
         state["_settleDelta"] = True
         return
-    state["findings"] = []
+    _set_findings(state, [])
     _settle_delta(state, config)
 
 
@@ -4346,6 +4411,58 @@ def _run_seam(seams, action, payload, state, config):
     return {}
 
 
+FIX_FOLD_HEAD_KEY = "fixFoldHeadSha"
+
+
+def _persist_fix_fold_head_sha(session_dir, state, head):
+    """Write the fix-fold head into state config and meta.json for resumed sessions."""
+    if not isinstance(head, str) or not head:
+        return
+    cfg = state.setdefault("config", {})
+    if isinstance(cfg, dict):
+        cfg[FIX_FOLD_HEAD_KEY] = head
+    meta_path = os.path.join(session_dir, round_records.META_FILE)
+    if not os.path.isfile(meta_path):
+        return
+    try:
+        with open(meta_path, encoding="utf-8") as fh:
+            meta_obj = json.load(fh)
+    except (OSError, ValueError):
+        return
+    if not isinstance(meta_obj, dict):
+        return
+    meta_obj[FIX_FOLD_HEAD_KEY] = head
+    round_commit.atomic_write_bytes(
+        meta_path,
+        (json.dumps(meta_obj, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+
+
+def _resolve_fix_fold_head_sha(session_dir, state):
+    """Resolve the certified head once at fix-fold time — never the session-setup headSha.
+
+    Returns (head_sha, error). On success the head is persisted so a resumed session reads the
+    same value rather than re-deriving a now-different one."""
+    cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
+    persisted = cfg.get(FIX_FOLD_HEAD_KEY)
+    if isinstance(persisted, str) and persisted:
+        return persisted, None
+    meta = _session_meta(session_dir)
+    persisted = meta.get(FIX_FOLD_HEAD_KEY)
+    if isinstance(persisted, str) and persisted:
+        if isinstance(cfg, dict):
+            cfg[FIX_FOLD_HEAD_KEY] = persisted
+            state["config"] = cfg
+        return persisted, None
+    repo_root = _resolve_repo_root(session_dir, state)
+    if not repo_root:
+        return None, "fix-fold head: repo root unresolvable"
+    head = store_core.run_git(repo_root, "rev-parse", "HEAD")
+    if not head:
+        return None, "fix-fold head: git rev-parse HEAD failed in %r" % repo_root
+    _persist_fix_fold_head_sha(session_dir, state, head)
+    return head, None
+
+
 def _session_certified_head(session_dir, state):
     """Head SHA the certification writer binds fixed-disposition evidence to."""
     meta_path = os.path.join(session_dir, round_records.META_FILE)
@@ -4495,6 +4612,8 @@ def _record_fix_content_on_findings(state, session_dir, artifact, head):
     for finding in state.get("findings") or []:
         if not isinstance(finding, dict):
             continue
+        if finding.get("disposition") != "fixed":
+            continue
         path = finding.get("file")
         if not isinstance(path, str) or path not in path_set:
             continue
@@ -4503,8 +4622,7 @@ def _record_fix_content_on_findings(state, session_dir, artifact, head):
             continue
         receipt = finding.get("dispositionReceipt")
         if not isinstance(receipt, dict):
-            receipt = {}
-            finding["dispositionReceipt"] = receipt
+            continue
         receipt["fixContentHeadSha"] = head
         receipt["fixContentDigest"] = row.get("contentDigest")
         receipt["fixContentBytes"] = row.get("bytes")
