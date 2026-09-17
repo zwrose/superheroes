@@ -9170,6 +9170,20 @@ def test_attempt_ended_successfully_accepts_clean_record():
     }) is True
 
 
+def test_attempt_ended_successfully_rejects_exit_as_false():
+    assert ED._attempt_ended_successfully({
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": False, "timedOut": False, "refusal": None,
+    }) is False
+
+
+def test_attempt_ended_successfully_rejects_exit_as_true():
+    assert ED._attempt_ended_successfully({
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": True, "timedOut": False, "refusal": None,
+    }) is False
+
+
 def _append_flat_attempt_ended(run_dir, **over):
     """Journal attempt-ended with flat exit/timedOut/refusal fields (seam-test shape)."""
     ended = {

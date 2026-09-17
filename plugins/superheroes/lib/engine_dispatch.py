@@ -4260,7 +4260,10 @@ def _attempt_ended_successfully(ended):
     """True when the journal's attempt-ended record is a clean completion. Never raises."""
     if not isinstance(ended, dict):
         return False
-    if "exit" not in ended or ended["exit"] != 0:
+    if "exit" not in ended:
+        return False
+    exit_val = ended["exit"]
+    if not isinstance(exit_val, int) or isinstance(exit_val, bool) or exit_val != 0:
         return False
     if "timedOut" not in ended or ended["timedOut"] is not False:
         return False
