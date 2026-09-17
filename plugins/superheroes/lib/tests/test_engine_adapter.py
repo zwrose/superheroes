@@ -1593,47 +1593,35 @@ def test_codex_event_tokens_last_turn_completed_wins():
     assert EA.codex_event_tokens(stream) == 9
 
 
-def test_build_argv_result_codex_json_flags_with_last_message_path():
-    path = "/tmp/run/attempt-1.last-message"
-    r = EA.build_argv_result("codex", "review", "high", {"last_message_path": path})
+def test_codex_event_tokens_parsed_stream_without_turn_completed_returns_zero():
+    stream = "\n".join([
+        json.dumps({"type": "thread.started", "thread_id": "t1"}),
+        json.dumps({"type": "turn.started"}),
+    ])
+    assert EA.codex_event_tokens(stream) == 0
+
+
+def test_codex_event_tokens_unrecognized_stream_returns_none():
+    assert EA.codex_event_tokens("not jsonl\nstill not\n") is None
+
+
+def test_is_codex_event_stream_recognizes_telemetry():
+    stream = json.dumps({"type": "thread.started", "thread_id": "t1"})
+    assert EA.is_codex_event_stream(stream) is True
+    assert EA.is_codex_event_stream("plain text review output") is False
+
+
+def test_build_argv_result_codex_omits_json_flags():
+    r = EA.build_argv_result("codex", "review", "high", {})
     assert r["reason"] is None
-    argv = r["argv"]
-    assert "--json" in argv
-    idx = argv.index("--output-last-message")
-    assert argv[idx + 1] == path
-    assert argv[-1] == "-"
+    assert "--json" not in r["argv"]
+    assert "--output-last-message" not in r["argv"]
 
 
-def test_build_argv_result_codex_omits_json_without_last_message_path():
-    for opts in (None, {}, {"last_message_path": ""}, {"last_message_path": None}, {"last_message_path": 1}):
-        r = EA.build_argv_result("codex", "review", "high", opts)
-        assert r["reason"] is None
-        assert "--json" not in r["argv"]
-        assert "--output-last-message" not in r["argv"]
-
-
-def test_build_argv_result_cursor_argv_unchanged_with_last_message_path():
+def test_build_argv_result_cursor_argv_unchanged():
     base = EA.build_argv_result("cursor", "review", "high", {})
-    with_path = EA.build_argv_result(
-        "cursor", "review", "high", {"last_message_path": "/tmp/x"})
-    assert base == with_path
-
-
-def test_codex_tokens_used_parses_trailing_block():
-    assert EA.codex_tokens_used("noise\ntokens used\n17,417\n") == 17417
-
-
-def test_codex_tokens_used_takes_last_block():
-    tail = "tokens used\n1\nmore\ntokens used\n9,876\n"
-    assert EA.codex_tokens_used(tail) == 9876
-
-
-def test_codex_tokens_used_absent_garbage_empty_returns_none():
-    assert EA.codex_tokens_used("") is None
-    assert EA.codex_tokens_used("no token line here") is None
-    assert EA.codex_tokens_used("tokens used\n") is None
-    assert EA.codex_tokens_used("tokens used\nnot-a-number\n") is None
-
+    assert base["reason"] is None
+    assert "--json" not in base["argv"]
 
 def test_cursor_tool_calls_counts_distinct_call_ids():
     lines = [

@@ -1408,7 +1408,9 @@ def _scan_review_engaged_candidates(run_dir_real, state):
         if stdout is None:
             continue
         if engine == "codex":
-            stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, att) or stdout
+            stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, att)
+            if not stdout:
+                continue
         shape = engine_adapter.review_artifact_shape(stdout, fed_prompt)
         if not shape.get("engaged"):
             continue
@@ -2470,9 +2472,10 @@ def _argv_for_attempt(argv, run_dir_real, attempt, engine):
             argv[idx + 1] = path
         return argv
     # Preflight builds argv before run_dir resolves; inject codex json flags here.
+    flags = engine_adapter.codex_json_argv_flags(path)
     if argv and argv[-1] == "-":
-        return argv[:-1] + ["--json", "--output-last-message", path, "-"]
-    return argv + ["--json", "--output-last-message", path]
+        return argv[:-1] + flags + ["-"]
+    return argv + flags
 
 
 def _review_stdout_for_parse(engine, stdout, run_dir_real, attempt):
@@ -2484,9 +2487,8 @@ def _review_stdout_for_parse(engine, stdout, run_dir_real, attempt):
     if payload is not None:
         return payload
     if isinstance(stdout, str):
-        for obj in engine_adapter._iter_codex_event_lines(stdout):
-            if engine_adapter._is_codex_event_object(obj):
-                return ""
+        if engine_adapter.is_codex_event_stream(stdout):
+            return ""
         return stdout
     return ""
 

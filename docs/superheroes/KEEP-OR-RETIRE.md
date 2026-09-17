@@ -773,17 +773,15 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 #### D13b — `engine_adapter.codex_tokens_used` (pre-`--json` stderr read-back)
 
-- **Component.** `engine_adapter.codex_tokens_used` — parses the codex stderr `"tokens used"` block
-  that `--json` removes; it costs a stderr-tail scan on every pre-C12 record read-back.
-- **Condition.** Usage-based, 60 days: stamped dispatch records whose `observation.source` is still
-  `codex-stderr` against all codex stamped records. On firing when none of the window's codex
-  records still cite `codex-stderr`, a proposal to the owner at a gardening pass.
+- **Component.** `engine_adapter.codex_tokens_used` — parsed the codex stderr `"tokens used"` block
+  that `--json` removes; superseded by `codex_event_tokens` on the event stream (#1271 C12).
+- **Condition.** Retired 2026-09-17 (#1271 P3-B): no production read-back path scanned stderr for
+  pre-C12 records; the usage-based condition could never observe calls into the function.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** harness-limit — it exists only to read engagement tokens off pre-C12 records stamped
-  before codex dispatch carried `--json`; C12's event-stream telemetry (`codex-events`) supersedes it
-  for new runs. Observed on codex 0.153.4.
+- **Decision.** retired — `codex_event_tokens` is the sole token reader on new dispatch paths.
+- **Notes.** harness-limit — the function and its unit tests were removed; historical records that
+  still cite `codex-stderr` observation source remain readable through fixture coverage only.
 
 #### D14 — The record-identity CAS-token agreement
 

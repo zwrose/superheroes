@@ -4357,10 +4357,19 @@ def _write_certification_artifacts(session_dir):
         }
         receipt = None
     if receipt is not None:
-        path = os.path.join(session_dir, CERTIFICATION_RECEIPT_FILE)
-        round_commit.atomic_write_bytes(
-            path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-        return
+        try:
+            path = os.path.join(session_dir, CERTIFICATION_RECEIPT_FILE)
+            round_commit.atomic_write_bytes(
+                path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+            return
+        except Exception as exc:
+            refusal = {
+                "class": "unfetched-findings",
+                "artifact": CERTIFICATION_RECEIPT_FILE,
+                "detail": "certification receipt write failed: %s: %s" % (type(exc).__name__, exc),
+                "bindingFailure": "writer-exception",
+            }
+            receipt = None
     if refusal is None:
         refusal = {
             "class": "unfetched-findings",
@@ -4391,24 +4400,6 @@ def _run_loop_seat_map(state):
     return None, state.get("round") or 1
 
 
-def _run_loop_execution_evidence(head_sha):
-    return {
-        "source": "runner",
-        "runnerNonce": "run-loop",
-        "recordDigest": hashlib.sha256(b"run-loop-record").hexdigest(),
-        "resultDigest": hashlib.sha256(b"run-loop-result").hexdigest(),
-        "resultKind": "findings",
-        "observation": {
-            "read": "engaged",
-            "source": "runner",
-            "telemetry": "none",
-            "stdoutBytes": 0,
-            "wallSeconds": 0.0,
-        },
-        "headSha": head_sha,
-    }
-
-
 def _copy_session_tree(source_dir, dest_dir):
     """Copy journal, envelopes, and other round artifacts from a source session directory."""
     journal_src = os.path.join(source_dir, JOURNAL_FILE)
@@ -4425,9 +4416,7 @@ def _copy_session_tree(source_dir, dest_dir):
 
 
 def _materialize_run_loop_session(state, invocations, source_session_dir=None):
-    """Write loop-state.json, driver-journal.jsonl, meta.json, and seat envelopes for ``certify``."""
-    import round_certification as rc
-
+    """Write loop-state.json, driver-journal.jsonl, meta.json for ``certify``."""
     session_dir = tempfile.mkdtemp(prefix="run-loop-")
     state_copy = json.loads(json.dumps(state))
     cfg = state_copy.setdefault("config", {})
@@ -4459,53 +4448,8 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     if source_session_dir:
         _copy_session_tree(source_session_dir, session_dir)
         return session_dir
-    smap, rnd = _run_loop_seat_map(state_copy)
+    _, rnd = _run_loop_seat_map(state_copy)
     journal_lines = []
-    if smap:
-        for seat in sorted(smap.get("seats") or {}):
-            payload_sha = hashlib.sha256(json.dumps([], sort_keys=True).encode()).hexdigest()
-            evidence = _run_loop_execution_evidence(head)
-            journal_lines.append(
-                {
-                    "cmd": "record-result",
-                    "outcome": "recorded",
-                    "phase": rc.PANEL_PHASE,
-                    "round": rnd,
-                    "attempt": 0,
-                    "seat": seat,
-                    "occurrence": 0,
-                    "provenance": rc.PROVENANCE_DISPATCH_OBSERVED,
-                    "payloadSha256": payload_sha,
-                    "executionEvidence": evidence["observation"],
-                    "headSha": head,
-                    "recordIdentity": {
-                        "phase": rc.PANEL_PHASE,
-                        "seat": seat,
-                        "occurrence": 0,
-                        "attempt": 0,
-                    },
-                }
-            )
-            skey = record_paths.storage_key(seat, 0)
-            env_path = record_paths.store_path(session_dir, rnd, rc.PANEL_PHASE, skey, 0)
-            os.makedirs(os.path.dirname(env_path), exist_ok=True)
-            envelope = {
-                "schema": round_records.SEAT_RESULT_SCHEMA_V2,
-                "session": meta["sessionId"],
-                "round": rnd,
-                "phase": rc.PANEL_PHASE,
-                "seat": seat,
-                "attempt": 0,
-                "vendor": "codex",
-                "model": "gpt-5.6-sol",
-                "payloadSha256": payload_sha,
-                "provenance": rc.PROVENANCE_DISPATCH_OBSERVED,
-                "payload": {"findings": []},
-                "executionEvidence": evidence,
-                "headSha": head,
-            }
-            round_commit.atomic_write_bytes(
-                env_path, (json.dumps(envelope, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     count = max(int(invocations or 0), 1)
     for idx in range(count):
         journal_lines.append(
@@ -4519,17 +4463,33 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
 
 
 def _run_loop_certified_receipt(state, invocations):
-    """Materialize a temp session, call the certification writer, return its receipt."""
+    """Materialize a temp session, call the certification writer, return its receipt or refusal."""
     import round_certification as rc
 
     session_dir = _materialize_run_loop_session(state, invocations)
     try:
-        receipt, refusal = rc.certify(session_dir)
+        try:
+            receipt, refusal = rc.certify(session_dir)
+        except Exception as exc:
+            refusal = {
+                "class": "unfetched-findings",
+                "artifact": CERTIFICATION_RECEIPT_FILE,
+                "detail": "certify raised %s: %s" % (type(exc).__name__, exc),
+                "bindingFailure": "writer-exception",
+            }
+            receipt = None
+        if receipt is not None:
+            return receipt
+        if refusal is None:
+            refusal = {
+                "class": "unfetched-findings",
+                "artifact": CERTIFICATION_RECEIPT_FILE,
+                "detail": "certify returned neither receipt nor refusal",
+                "bindingFailure": "writer-empty",
+            }
+        return refusal
     finally:
         shutil.rmtree(session_dir, ignore_errors=True)
-    if receipt is not None:
-        return receipt
-    return build_receipt(state)
 
 
 def run_loop(seams, config=None):
