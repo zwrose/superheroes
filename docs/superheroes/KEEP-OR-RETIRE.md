@@ -689,6 +689,16 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — a single writer for the certified receipt is a load-bearing boundary; no
   engine family applies.
+- **Property.** Hand-landed single-source binding — for a hand-landed seat the binding has one
+  source, the landed envelope: `round_driver._journal_revision_fields` copies `executionEvidence` from
+  that envelope into the `record-result` journal row, so the row the writer reads is derived from the
+  same envelope it is compared against, not independent corroboration. The writer resolves evidence by
+  provenance — telemetry on the certified head for a dispatch-observed seat, the envelope's
+  execution-evidence binding for a hand-landed one — never by field presence alone; it labels the seat
+  hand-landed, which forces the `audited-chain` shape and can never call such a session
+  full-panel-confirmed.
+- **Property condition.** Usage-based, 60 days: a hand-landed seat gains an independent record of its
+  landing that the journal can cross-check. On firing, a proposal to the owner at a gardening pass.
 
 #### D19 — `check_unrun_review`
 
