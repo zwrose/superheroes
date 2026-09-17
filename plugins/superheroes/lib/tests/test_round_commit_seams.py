@@ -772,6 +772,72 @@ def test_seam_a_record_result_evidence_binding_accepts_genuine_run(tmp_path, ada
       key: record[key] for key in RR.EXECUTION_EVIDENCE_FIELDS}
 
 
+def test_seam_a_evidence_result_digest_mismatch_refuses(tmp_path, adapters):
+  d = _session(tmp_path, name="ev-digest-mismatch")
+  pend = _pending(d)
+  path, _env, before = _dispatch_observed_land(
+      d, "code-reviewer", payload={"findings": ["stale-content"]})
+  order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
+                                     RR.storage_key("code-reviewer"), pend["attempt"])
+  run_dir = _execution_run_dir(tmp_path, order_path, name="ev-digest-mismatch-run")
+  out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
+  assert out["ok"] is False
+  assert out["reason"] == "evidence-result-mismatch"
+  assert _read_bytes(path) == before
+
+
+def test_seam_a_evidence_result_kind_absent_from_landing_refuses(tmp_path, adapters):
+  d = _session(tmp_path, name="ev-kind-absent")
+  pend = _pending(d)
+  path, _env, before = _dispatch_observed_land(d, "code-reviewer", payload={"other": []})
+  order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
+                                     RR.storage_key("code-reviewer"), pend["attempt"])
+  run_dir = _execution_run_dir(tmp_path, order_path, name="ev-kind-absent-run")
+  out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
+  assert out["ok"] is False
+  assert out["reason"] == "evidence-result-mismatch"
+  assert out.get("resultKind") == "findings"
+  assert _read_bytes(path) == before
+
+
+def test_seam_a_evidence_result_binding_incomplete_refuses(tmp_path, adapters):
+  d = _session(tmp_path, name="ev-binding-incomplete")
+  pend = _pending(d)
+  path, _env, before = _dispatch_observed_land(d, "code-reviewer")
+  order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
+                                     RR.storage_key("code-reviewer"), pend["attempt"])
+  run_dir = _execution_run_dir(tmp_path, order_path, name="ev-binding-incomplete-run")
+  open(os.path.join(run_dir, "attempt-1.stdout"), "wb").write(b"not parseable review output\n")
+  out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
+  assert out["ok"] is False
+  assert out["reason"] == "evidence-run-dir-unreadable"
+  assert out.get("detail") == "result-binding-incomplete"
+  assert _read_bytes(path) == before
+
+
+def test_seam_a_zero_finding_review_still_stamps(tmp_path, adapters):
+  d = _session(tmp_path, name="ev-zero-findings")
+  pend = _pending(d)
+  path, _env, before = _dispatch_observed_land(d, "code-reviewer", payload={"findings": []})
+  order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
+                                     RR.storage_key("code-reviewer"), pend["attempt"])
+  run_dir = _execution_run_dir(tmp_path, order_path, name="ev-zero-findings-run")
+  record, err = ED.run_execution_record(run_dir)
+  assert err is None
+  assert record.get("resultKind") == "findings"
+  assert record.get("resultDigest") == RR.payload_sha256([])
+  out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
+  assert out["ok"], out
+  after_obj, after_err = RR.read_json(path)
+  assert after_err is None
+  assert "executionEvidence" in after_obj
+  assert after_obj["executionEvidence"]["resultKind"] == "findings"
+  assert after_obj["executionEvidence"]["resultDigest"] == RR.payload_sha256([])
+  assert after_obj["envelopeSha256"] == RR.envelope_sha256(
+      after_obj["payload"], after_obj["executionEvidence"])
+  assert _read_bytes(path) != before
+
+
 def test_seam_a_record_result_refusal_evidence_order_mismatch_leaves_landing_bytes(
     tmp_path, adapters):
   d = _session(tmp_path, name="ev-mismatch")

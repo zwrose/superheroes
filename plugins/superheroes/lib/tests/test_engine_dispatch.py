@@ -8815,3 +8815,51 @@ def test_run_execution_record_missing_stdout_never_raises(tmp_path):
         assert error is None
         assert isinstance(record["observation"], dict)
 
+
+def _append_flat_attempt_ended(run_dir, **over):
+    """Journal attempt-ended with flat exit/timedOut/refusal fields (seam-test shape)."""
+    ended = {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "wallSeconds": 0.1, "stdoutBytes": 0, "at": time.time(),
+    }
+    ended.update(over)
+    ED._journal_append(run_dir, ended)
+
+
+def test_run_execution_record_refuses_attempt_ended_by_refusal(tmp_path):
+    run_dir = str(tmp_path / "attempt-refusal")
+    _manual_open_review_run(tmp_path, run_dir)
+    _append_flat_attempt_ended(run_dir, refusal="engine-refused")
+    record, error = ED.run_execution_record(run_dir)
+    assert record is None
+    assert error == "attempt-not-completed"
+
+
+def test_run_execution_record_refuses_attempt_ended_by_timeout(tmp_path):
+    run_dir = str(tmp_path / "attempt-timeout")
+    _manual_open_review_run(tmp_path, run_dir)
+    _append_flat_attempt_ended(run_dir, timedOut=True)
+    record, error = ED.run_execution_record(run_dir)
+    assert record is None
+    assert error == "attempt-not-completed"
+
+
+def test_run_execution_record_refuses_attempt_with_nonzero_exit(tmp_path):
+    run_dir = str(tmp_path / "attempt-nonzero-exit")
+    _manual_open_review_run(tmp_path, run_dir)
+    _append_flat_attempt_ended(run_dir, exit=1)
+    record, error = ED.run_execution_record(run_dir)
+    assert record is None
+    assert error == "attempt-not-completed"
+
+
+def test_run_execution_record_omits_result_binding_when_parse_yields_nothing(tmp_path):
+    run_dir = str(tmp_path / "no-parse-binding")
+    _execution_record_completed_attempt(tmp_path, run_dir, stdout="not json at all\n")
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert "resultDigest" not in record
+    assert "resultKind" not in record
+
