@@ -5,6 +5,7 @@
 - [Refusal classes](#refusal-classes)
 - [Execution-evidence field set](#execution-evidence-field-set)
 - [Seat provenance and certification shape](#seat-provenance-and-certification-shape)
+- [Head-content contract (`head-content-blobs.json`)](#head-content-contract-head-content-blobsjson)
 - [Import boundary](#import-boundary)
 
 # Certification writer surface
@@ -72,6 +73,9 @@ Four escape classes (`REFUSAL_CLASSES`). Each refusal is `{class, artifact, deta
 | `unfetched-findings` | Journal seat never closed; envelope missing or unreadable; journal/envelope hash disagreement; unreadable session/journal/state; orchestrator-fulfilled provenance on receipt | Path, seat key, or state file |
 | `disposition-without-receipt` | Base guard did not run; finding lacks disposition; fixed/refuted/out-of-scope disposition lacks required proof on certified head; Critical out-of-scope | Finding id or `loop-state.json` |
 
+A post-shrink escape in any of the four classes is filed as a **misses-log entry on the collector's
+pinned comment**, so the keep-or-retire list reads catches and escapes together.
+
 ### Writer fault (non-escape)
 
 `writer-fault` is **not** an escape class. It appears only on the `run_loop` return path when
@@ -114,11 +118,50 @@ envelope evidence against the same binding and observation rules.
 `full-panel-confirmed`, and any `full-panel*` shape in loop state is downgraded the same way.
 Otherwise the shape follows loop state's `certification.shape`.
 
+## Head-content contract (`head-content-blobs.json`)
+
+At terminal, the driver may write `head-content-blobs.json` beside the session artifacts. The
+writer reads it when certifying a `fixed` disposition; the producer is the driver's
+`_persist_head_content_blobs` chokepoint on the CLI fold path.
+
+**Schema `head-content-blobs/2`.**
+
+| Key | Carries |
+| --- | --- |
+| `schema` | Literal `head-content-blobs/2` |
+| `headSha` | Certified head the reads bind to |
+| `files` | Map of path → base64(raw bytes read at `headSha`) |
+| `reads` | One row per read: `headSha`, `path`, `contentDigest`, `bytes`, `readAt`, `source`, `readError` |
+
+Legacy shapes (`present`, `fixCommits`, or any schema other than `head-content-blobs/2`) are
+**refused**, not reinterpreted — binding failure `fix-content-schema-unsupported`. A resumed
+pre-upgrade session must be re-run to certify its `fixed` dispositions.
+
+**Ordered decision table (`_fix_still_present_at_head`).** For each `fixed` finding, after the
+disposition receipt is on the certified head, the writer applies these steps in order; the first
+failure refuses `disposition-without-receipt` with the named binding failure:
+
+| Step | Check | Binding failure |
+| --- | --- | --- |
+| 1 | Finding carries a file path | `fix-content-missing` |
+| 2 | Certified head is known | `fix-content-missing` |
+| 3 | `head-content-blobs.json` is readable | `fix-content-unreadable` |
+| 4 | Blob file is present | `fix-content-missing` |
+| 5 | `schema` is `head-content-blobs/2` | `fix-content-schema-unsupported` |
+| 6 | `reads[]` has a row for `(certified head, path)` | `fix-content-missing` |
+| 7 | Row `readError` is null (read succeeded) | `fix-content-unreadable` |
+| 8 | SHA-256 over `files[path]` decoded bytes equals row `contentDigest` | `fix-content-reverted` |
+| 9 | Row `contentDigest` equals the finding's `dispositionReceipt.fixContentDigest` | `fix-content-reverted` |
+
+**Residual.** Step 8 refuses a blob whose recorded content does not hash to its recorded digest, but
+a journal-only writer that may not read git **cannot** verify that a read ever happened — a fully
+self-consistent forgery passes.
+
 ## Import boundary
 
 **Must not import:** `round_driver` (or any driver state-machine module). The writer reads only
-`loop-state.json`, `driver-journal.jsonl`, `driver-journal-fault.jsonl`, `meta.json`, and per-seat
-envelope files under `round-N/seats/`.
+`loop-state.json`, `driver-journal.jsonl`, `driver-journal-fault.jsonl`, `meta.json`,
+`head-content-blobs.json`, and per-seat envelope files under `round-N/seats/`.
 
 **Imports instead:**
 

@@ -909,15 +909,16 @@ Layer 2 (`next`/`submit`) is the state machine between orchestrator dispatches. 
 by the goldens in `test_round_driver.py` and the PARITY receipt in `test_retry_budget_parity.py`.
 Treat `round_driver.py` as the contract of record.
 
-**`run_loop` return contract.** `run_loop` returns the certification writer's receipt or refusal
-directly — no fallback to a legacy `build_receipt`-only dict. A successful return carries
-`terminalState` and `terminalCause` (writer fields). A refusal carries `class` (one of the four
-escape classes, or `writer-fault` on an internal writer failure) and **no** `verdict` key.
-Callers that previously read `receipt["verdict"]` must discriminate on the return shape. Every
-refusal from `run_loop` also carries `loopTerminal` — the loop's own terminal verdict — with the
-same warning the field's comment carries: it states what the loop reached and asserts nothing about
-certification. `loopCertificationShape` and `loopRounds` mirror `build_receipt` for observability
-only.
+**`run_loop` return contract.** `run_loop` keeps its non-certifying job for consumers that use it
+as a library loop — it still drives the scripted seam path end-to-end and returns the loop's
+terminal state in memory. Its **certification answer is always the writer's refusal terminal** —
+class `unrun-review`, artifact `driver-journal.jsonl` — carrying the loop observables
+(`loopTerminal`, `loopCertificationShape`, `loopRounds`). **Never a certified receipt, and never a
+fallback.** A library `run_loop` persists no per-seat evidence, so there is nothing to certify; any
+certified receipts it used to return were minted over synthesized journal rows. Callers that
+previously read `receipt["verdict"]` on the return must discriminate on shape: a refusal carries
+`class` and **no** `verdict` key; `loopTerminal` states what the loop reached and asserts nothing
+about certification.
 
 **Leaf modules (`record_paths`, `receipt_disclosures`).** Pure vocabulary and path helpers live in
 two leaf modules neither the driver nor the writer owns:

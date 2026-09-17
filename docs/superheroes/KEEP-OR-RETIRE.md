@@ -305,6 +305,18 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** capability-gap — measures whether review seats investigate and name planted defects;
   evidence observed on the real dispatch path (#668).
 
+**Could-not-produce note (canary census, 2026-08-30 forward).** The C12 DoD asked for a canary
+census from 2026-08-30 forward as the receipt C13 consumes. It cannot be produced; this note is the
+receipt. Measured on the build host by the orchestrator: **43** review sessions currently on disk
+carry loop state; **25** of them record `canaryUnavailable: true`; **zero** record a canary verified
+or a canary failed (three sessions contain the strings `canaryVerified` / `canaryFailed` in prose
+only, with no recorded result value — checked); the single `_canary` landing directory on disk is
+**empty**; sessions older than roughly 2026-09-13 are **gone from `/tmp` to OS cleanup**, so the
+first two weeks of the window are unrecoverable by any route from this host. **Conclusion:** the
+plant did not run in any recoverable session in the window, and the instrument that would produce
+the receipt is not recording. **Fail direction:** because the records cannot produce the number,
+the comparator fails toward alerting (per D1's fail-toward-alerting rule).
+
 #### B5 — Environment probes
 
 - **Component.** Scaffold probes that detect harness and worktree environment faults before
@@ -783,6 +795,41 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** structural — fixtures that drift from their producer lie about what the writer tests;
   the generator's `FIXTURE_BUILDERS` list is the by-construction coverage. No engine family applies.
 
+#### D26 — Head-content producer (`head-content-blobs/2`)
+
+- **Component.** The head-content producer in `round_driver.py` (`_persist_head_content_blobs`,
+  `_head_content_read_row`) — the `git show` read at the certified head that writes
+  `head-content-blobs.json`; it costs one subprocess read per fixed path on each fixer fold.
+- **Condition.** Usage-based, 60 days: certified review rounds whose fixer fold writes
+  `head-content-blobs.json` through this producer. On firing, a proposal to the owner at a
+  gardening pass.
+- **Last demonstrated benefit.** Four-case round-trip smoke at
+  `plugins/superheroes/lib/tests/test_head_content_producer.py` (text with trailing newline,
+  non-UTF-8 round-trip, missing path as failed read, unresolved head as failed read).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — one producer function writes the file and one reader consumes it; the
+  producer's chokepoint is the by-construction coverage. No engine family applies: it guards a data
+  shape, not a model behaviour.
+
+#### D27 — Head-content recomputation check (`_fix_still_present_at_head`)
+
+- **Component.** `round_certification._fix_still_present_at_head` step 8 — the writer recomputes the
+  digest over the bytes the blob carries and refuses a mismatch; it costs one blob read and one hash
+  per `fixed` finding at certification time.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `fix-content-reverted` or `fix-content-schema-unsupported` as the thing that refused a fixed
+  disposition on head-content grounds. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Bite-proof recorded at
+  `plugins/superheroes/lib/tests/bite_proofs/wo_a3_1271.md`.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — one reader (`_fix_still_present_at_head`) consumes the producer's file;
+  the nine-step ordered decision table in `certification-surface.md` is the by-construction
+  coverage. **Residual:** the check refuses a blob whose recorded content does not hash to its
+  recorded digest, but a journal-only writer that may not read git **cannot** verify that a read
+  ever happened, so a fully self-consistent forgery passes. No engine family applies.
+
 #### D13 — The order-bound evidence channel
 
 - **Component.** The `--evidence-run-dir` stamping path in `round_driver._assemble_dispatch_evidence`
@@ -1187,6 +1234,24 @@ The list's units are the census rows, and each entry is keyed to its census id.
   against 0.32.0 current (the assessment record, H4 reframing).
 
 ### Supplemental entries
+
+#### S7 — `run_loop`'s certified path (retired)
+
+- **Component.** Not a census row. The library `run_loop` path that materialized a temp session and
+  called `certify` to return a certified receipt over synthesized journal rows when no per-seat
+  envelopes existed on disk.
+- **Condition.** Usage-based: the retirement condition that **reopens** it is *"a consumer needs a
+  certified receipt from a library run"*, at which point the path is **rebuilt on real persisted
+  per-seat envelopes as its own child, never patched back.*
+- **Last demonstrated benefit.** none — the path certified over synthesized evidence; that is why it
+  retired. The receipt for the retirement is this PR.
+- **Consumer evidence.** unmeasured.
+- **Decision.** retired — library `run_loop` always returns class `unrun-review` on artifact
+  `driver-journal.jsonl`, carrying loop observables; never a certified receipt and never a
+  fallback.
+- **Notes.** capability-gap — it compensated for the library path persisting no per-seat evidence by
+  minting certification over synthesized journal rows; reopening requires real envelopes, not
+  restoring the shortcut.
 
 #### S1 — Dispatch stdout cap
 
