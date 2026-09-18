@@ -18,6 +18,7 @@ import dispatch_guard  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
 import liveness_cache  # noqa: E402
+import resolved_inputs_vocab  # noqa: E402
 import seat_bundle  # noqa: E402
 
 _PLUGIN_ROOT = os.path.normpath(os.path.join(_LIB_DIR, ".."))
@@ -174,6 +175,58 @@ def _render_envelope() -> list[str]:
     ]
 
 
+def _render_vocabulary_subsection(
+    heading: str,
+    module_name: str,
+    symbol: str,
+    prose: str,
+    members: frozenset[str],
+) -> list[str]:
+    out = [
+        "### %s" % heading,
+        "",
+        "Derived from `%s.%s`." % (module_name, symbol),
+        "",
+        prose,
+        "",
+    ]
+    for member in sorted(members):
+        out.append("- `%s`" % member)
+    out.append("")
+    return out
+
+
+def _render_vocabularies() -> list[str]:
+    out: list[str] = [
+        "## Declared vocabularies",
+        "",
+    ]
+    out.extend(_render_vocabulary_subsection(
+        "resolvedInputs source markers",
+        "resolved_inputs_vocab",
+        "SOURCE_MARKERS",
+        "The source markers name how each `resolvedInputs` field's value was chosen.",
+        resolved_inputs_vocab.SOURCE_MARKERS,
+    ))
+    out.extend(_render_vocabulary_subsection(
+        "Entry-refusal reasons",
+        "seat_bundle",
+        "ENTRY_REFUSAL_REASONS",
+        "The entry-refusal reasons are the closed set the dispatch shell's `entryReason` key draws from.",
+        seat_bundle.ENTRY_REFUSAL_REASONS,
+    ))
+    out.extend(_render_vocabulary_subsection(
+        "Engine-config refusal tokens",
+        "engine_adapter",
+        "BUILD_ARGV_REFUSAL_TOKENS",
+        "The engine-config refusal tokens name a refused argv build. The `build-argv` CLI "
+        "surfaces `reason: \"engine-config\"` with the bare token in `detail`; the dispatch "
+        "runner wraps the same token as `detail: \"engine-config:<token>\"`.",
+        engine_adapter.BUILD_ARGV_REFUSAL_TOKENS,
+    ))
+    return out
+
+
 def _parser_sections() -> list[str]:
     parsers = (
         ("engine_dispatch.py", engine_dispatch.build_parser()),
@@ -213,8 +266,9 @@ def generate(*, check_contracts: bool = True) -> str:
         "",
         "1. [Dispatch entry reference](#dispatch-entry-reference)",
         "2. [Accepted seat shapes](#accepted-seat-shapes)",
-        "3. [Dispatch CLIs](#dispatch-clis)",
-        "4. [Variance envelope](#variance-envelope)",
+        "3. [Declared vocabularies](#declared-vocabularies)",
+        "4. [Dispatch CLIs](#dispatch-clis)",
+        "5. [Variance envelope](#variance-envelope)",
         "",
         "---",
         "",
@@ -230,6 +284,7 @@ def generate(*, check_contracts: bool = True) -> str:
         seat_bundle.accepted_seat_detail() + ". " + seat_bundle.accepted_role_detail(),
         "",
     ]
+    lines.extend(_render_vocabularies())
     lines.extend(_parser_sections())
     lines.extend(_render_envelope())
     return "\n".join(lines)

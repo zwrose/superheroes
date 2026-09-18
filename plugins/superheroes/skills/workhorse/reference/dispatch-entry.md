@@ -3,8 +3,9 @@
 
 1. [Dispatch entry reference](#dispatch-entry-reference)
 2. [Accepted seat shapes](#accepted-seat-shapes)
-3. [Dispatch CLIs](#dispatch-clis)
-4. [Variance envelope](#variance-envelope)
+3. [Declared vocabularies](#declared-vocabularies)
+4. [Dispatch CLIs](#dispatch-clis)
+5. [Variance envelope](#variance-envelope)
 
 ---
 
@@ -17,6 +18,84 @@ Generated from the dispatch shell's argparse declarations. To refresh after an a
 ## Accepted seat shapes
 
 pass --seat as JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, "role": "<role>"} (the effort key is required; its value may be null; role is required and must not be null). role must be a member of the seat JSON "role" key; valid roles: implementer, code-fixer, doc-reviser, reviewer, reviewer-deep, verifier, brief-check, synthesis, mechanical, pilot
+
+## Declared vocabularies
+
+### resolvedInputs source markers
+
+Derived from `resolved_inputs_vocab.SOURCE_MARKERS`.
+
+The source markers name how each `resolvedInputs` field's value was chosen.
+
+- `caller`
+- `clamped`
+- `declared-none`
+- `default`
+- `environment-variable`
+- `legacy-journal`
+- `resolved`
+- `run-dir-pointer`
+- `seat`
+- `seat-default`
+- `temp-directory`
+
+### Entry-refusal reasons
+
+Derived from `seat_bundle.ENTRY_REFUSAL_REASONS`.
+
+The entry-refusal reasons are the closed set the dispatch shell's `entryReason` key draws from.
+
+- `allowlist-malformed`
+- `allowlist-raised`
+- `allowlist-refused`
+- `effort-invalid`
+- `effort-key-absent`
+- `effort-token-conflict`
+- `entry-reason-undeclared`
+- `expected-result-kind-invalid`
+- `internal-error`
+- `invalid-model-effort`
+- `legacy-seat-args`
+- `max-wait-out-of-range`
+- `mode-invalid`
+- `mode-role-mismatch`
+- `model-ambiguous`
+- `model-invalid`
+- `model-key-absent`
+- `model-required`
+- `role-key-absent`
+- `role-null`
+- `run-kind-role-mismatch`
+- `run-kind-unclassified`
+- `seat-empty`
+- `seat-extra-keys`
+- `seat-not-object`
+- `seat-token-dropped`
+- `seat-unparseable`
+- `token-unresolvable`
+- `undispatchable-vendor`
+- `unknown-dispatch-kwargs`
+- `unknown-model`
+- `unknown-role`
+- `unknown-vendor`
+- `unknown-verb`
+- `vendor-hint-mismatch`
+- `vendor-invalid`
+- `verb-role-mismatch`
+
+### Engine-config refusal tokens
+
+Derived from `engine_adapter.BUILD_ARGV_REFUSAL_TOKENS`.
+
+The engine-config refusal tokens name a refused argv build. The `build-argv` CLI surfaces `reason: "engine-config"` with the bare token in `detail`; the dispatch runner wraps the same token as `detail: "engine-config:<token>"`.
+
+- `engine-model-effort-conflict`
+- `fable-unrunnable`
+- `invalid-model-effort`
+- `unknown-claude-tier`
+- `unknown-engine`
+- `unregistered-engine-model`
+- `untokenizable`
 
 ## Dispatch CLIs
 

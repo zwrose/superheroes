@@ -29,6 +29,7 @@ _ENGINE_ADAPTER_LIB_CLOSURE = frozenset({
     "payload_contracts",
     "pr_comment",
     "readout",
+    "resolved_inputs_vocab",
     "review_findings_schema",
     "review_memory",
     "round_phases",

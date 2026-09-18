@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,8 @@ ED = _load("engine_dispatch", "engine_dispatch.py")
 DG = _load("dispatch_guard", "dispatch_guard.py")
 EA = _load("engine_adapter", "engine_adapter.py")
 LC = _load("liveness_cache", "liveness_cache.py")
+RIV = _load("resolved_inputs_vocab", "resolved_inputs_vocab.py")
+SB = _load("seat_bundle", "seat_bundle.py")
 
 
 def _iter_leaf_subcommands(parser: argparse.ArgumentParser):
@@ -190,6 +193,46 @@ def test_cli_check_stale_file_refuses(tmp_path, monkeypatch, capsys):
     assert rc == 1
     err = capsys.readouterr().err
     assert "is stale — run the generator" in err
+
+
+def _vocabularies_section(text: str) -> str:
+    start = text.index("## Declared vocabularies")
+    end = text.index("## Dispatch CLIs")
+    return text[start:end]
+
+
+def test_declared_vocabularies_section_headings():
+    text = DED.generate()
+    assert "## Declared vocabularies" in text
+    assert "### resolvedInputs source markers" in text
+    assert "### Entry-refusal reasons" in text
+    assert "### Engine-config refusal tokens" in text
+
+
+def _subsection_members(section_text: str, heading: str) -> frozenset[str]:
+    pattern = r"### %s\n(.*?)(?=\n### |\Z)" % re.escape(heading)
+    match = re.search(pattern, section_text, re.DOTALL)
+    assert match is not None, "missing subsection: %s" % heading
+    members = re.findall(r"^- `([^`]+)`", match.group(1), re.MULTILINE)
+    return frozenset(members)
+
+
+def test_declared_vocabularies_include_all_members():
+    text = DED.generate()
+    section = _vocabularies_section(text)
+    for heading, expected in (
+        ("resolvedInputs source markers", RIV.SOURCE_MARKERS),
+        ("Entry-refusal reasons", SB.ENTRY_REFUSAL_REASONS),
+        ("Engine-config refusal tokens", EA.BUILD_ARGV_REFUSAL_TOKENS),
+    ):
+        rendered = _subsection_members(section, heading)
+        assert rendered == expected, heading
+
+
+def test_vocabularies_rendering_deterministic():
+    first = _vocabularies_section(DED.generate())
+    second = _vocabularies_section(DED.generate())
+    assert first == second
 
 
 def test_format_default_param_unset_distinct_from_none():

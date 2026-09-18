@@ -1048,9 +1048,9 @@ The list's units are the census rows, and each entry is keyed to its census id.
   allowlist — and refuses with text naming what would have been accepted. Its cost is that every
   new entry path must route through it rather than reading seat fields itself.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
-  chokepoint refusal (`legacy-seat-args`, `seat-token-dropped`, `unknown-role`, `mode-role-mismatch`,
-  `verb-role-mismatch`, `invalid-model-effort`, `allowlist-refused`) that stopped a dispatch from
-  running a seat it was not entitled to. On firing, a proposal to the owner at a gardening pass. A
+  chokepoint refusal from the entry-refusal vocabulary (see the entry refusal reasons section of
+  `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md`) that
+  stopped a dispatch from running a seat it was not entitled to. On firing, a proposal to the owner at a gardening pass. A
   zero citation count means no dispatch tried an unauthorized seat past the chokepoint, not that the
   gate can go.
 - **Last demonstrated benefit.** Before the chokepoint, the seat's registry role was a separate
@@ -1090,15 +1090,16 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 #### S10 — Entry-doc determinism guard
 
-- **Component.** Not a census row. `plugins/superheroes/lib/dispatch_entry_doc.py --check`, which
+- **Component.** Not a census row. `/usr/bin/python3 -B plugins/superheroes/lib/dispatch_entry_doc.py --check`, which
   regenerates the entry doc from the dispatch shell's own argparse declarations and refuses when
   the committed `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md` differs from a
-  fresh generation, plus the cross-process determinism test that guards it, plus the `--check`
+  fresh generation — including the doc's declared-vocabulary sections, so a vocabulary change without
+  regeneration is refused — plus the cross-process determinism test that guards it, plus the `--check`
   branch's stale-doc refusal test and its distinct missing-doc refusal test. Its cost is that any
-  change to a dispatch flag's declaration requires regenerating the doc in the same change.
+  change to a dispatch flag's declaration or a declared vocabulary requires regenerating the doc in the same change.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
   `test_generated_doc_matches_committed_file` (the CI guard) or a local
-  `plugins/superheroes/lib/dispatch_entry_doc.py --check` refusal (`is stale` / `is missing`)
+  `/usr/bin/python3 -B plugins/superheroes/lib/dispatch_entry_doc.py --check` refusal (`is stale` / `is missing`)
   catching a committed `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md` that had
   drifted from the argparse declarations. On firing, a proposal to the owner at a gardening pass. A
   zero citation count means the doc and the declarations have stayed together, not that the guard can
@@ -1144,6 +1145,30 @@ The list's units are the census rows, and each entry is keyed to its census id.
   inline-stamp census
   (`test_entry_refusal_chokepoint_invariant_no_inline_run_dir_or_run_opened_stamp`) because
   hand-maintained lists were invisible to new refusal paths.
+
+#### S12 — resolvedInputs source-marker chokepoint
+
+- **Component.** Not a census row. `_put_resolved` in `plugins/superheroes/lib/engine_dispatch.py`:
+  the membership check that refuses any undeclared `<field>Source` marker before writing into a
+  `resolvedInputs` snapshot, backed by the closed `SOURCE_MARKERS` vocabulary in
+  `plugins/superheroes/lib/resolved_inputs_vocab.py` and the live-dispatch behavioural tests in
+  `plugins/superheroes/lib/tests/test_resolved_inputs_vocab.py`
+  (`test_put_resolved_refuses_undeclared_marker`, `test_put_resolved_accepts_every_source_marker`,
+  `test_live_dispatch_undeclared_marker_surfaces_as_unrunnable`,
+  `test_live_dispatch_snapshot_source_markers_are_declared`). Its cost is that every new source
+  marker must be added to the vocabulary before a producer can write it.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  receipt carrying `reason: unrunnable` with `detail: internal-UndeclaredSourceMarker` that caught
+  an undeclared `<field>Source` marker that would otherwise have reached a `resolvedInputs`
+  snapshot. On firing, a proposal to the owner at a gardening pass. A zero citation count means no
+  producer wrote an undeclared marker, not that the chokepoint can go.
+- **Last demonstrated benefit.** An undeclared marker planted at a real producer terminated the
+  dispatch as `unrunnable` before the run opened (`plugins/superheroes/lib/tests/bite_proofs/wo_a_1296_marker_chokepoint.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a closed marker vocabulary with chokepoint enforcement guards declared
+  source provenance on real producer paths; a zero citation count means producers are not writing
+  undeclared markers, not that new paths cannot forget to declare.
 
 
 ## The workaround-marker inventory
