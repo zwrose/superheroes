@@ -56,7 +56,7 @@ def test_lib_roots_exist_in_this_repository():
 def test_changed_test_file_resolves_itself(tmp_path):
     root = str(tmp_path)
     _touch(root, "plugins/superheroes/lib/tests/test_thing.py")
-    files, unresolved, code = V.resolve_targets(
+    files, unresolved, code, _retired = V.resolve_targets(
         root, ["plugins/superheroes/lib/tests/test_thing.py"])
     assert files == ["plugins/superheroes/lib/tests/test_thing.py"]
     assert unresolved == []
@@ -69,7 +69,7 @@ def test_changed_module_resolves_its_prefix_matched_siblings(tmp_path):
     _touch(root, "plugins/superheroes/lib/tests/test_round_certification.py")
     _touch(root, "plugins/superheroes/lib/tests/test_round_certification_extra.py")
     _touch(root, "plugins/superheroes/lib/tests/test_unrelated.py")
-    files, unresolved, code = V.resolve_targets(
+    files, unresolved, code, _retired = V.resolve_targets(
         root, ["plugins/superheroes/lib/round_certification.py"])
     assert files == [
         "plugins/superheroes/lib/tests/test_round_certification.py",
@@ -81,7 +81,7 @@ def test_changed_module_resolves_its_prefix_matched_siblings(tmp_path):
 
 def test_deleted_test_file_is_not_handed_to_pytest(tmp_path):
     # The path is in the diff but no longer on disk; pytest would error on it.
-    files, unresolved, code = V.resolve_targets(
+    files, unresolved, code, _retired = V.resolve_targets(
         str(tmp_path), ["plugins/superheroes/lib/tests/test_gone.py"])
     assert files == []
     assert unresolved == []
@@ -90,9 +90,11 @@ def test_deleted_test_file_is_not_handed_to_pytest(tmp_path):
 
 def test_deleted_module_with_its_tests_gone_too_is_not_a_mapping_miss(tmp_path):
     # A retirement commit deletes the module and its tests together; that is not a miss.
-    files, unresolved, code = V.resolve_targets(
+    files, unresolved, code, retired = V.resolve_targets(
         str(tmp_path), ["plugins/superheroes/lib/retired.py"])
     assert (files, unresolved, code) == ([], [], True)
+    # Not a failure, but never silent either: the resolution is named on stdout.
+    assert retired == ["plugins/superheroes/lib/retired.py"]
 
 
 def test_deleted_module_still_runs_its_surviving_tests(tmp_path):
@@ -100,7 +102,7 @@ def test_deleted_module_still_runs_its_surviving_tests(tmp_path):
     # exempting the deletion outright would let that failure pass unseen.
     root = str(tmp_path)
     _touch(root, "eval/lib/tests/test_skills.py")
-    files, unresolved, code = V.resolve_targets(root, ["eval/lib/skills.py"])
+    files, unresolved, code, _retired = V.resolve_targets(root, ["eval/lib/skills.py"])
     assert files == ["eval/lib/tests/test_skills.py"]
     assert unresolved == []
     assert code is True
@@ -108,12 +110,12 @@ def test_deleted_module_still_runs_its_surviving_tests(tmp_path):
 
 def test_unmapped_module_with_no_test_is_not_unresolved(tmp_path):
     # Only the mapped library roots carry the module -> test obligation.
-    files, unresolved, code = V.resolve_targets(str(tmp_path), [".github/scripts/whatever.py"])
+    files, unresolved, code, _retired = V.resolve_targets(str(tmp_path), [".github/scripts/whatever.py"])
     assert (files, unresolved, code) == ([], [], True)
 
 
 def test_non_python_changes_are_not_code(tmp_path):
-    files, unresolved, code = V.resolve_targets(str(tmp_path), ["README.md", "docs/x.md"])
+    files, unresolved, code, _retired = V.resolve_targets(str(tmp_path), ["README.md", "docs/x.md"])
     assert (files, unresolved, code) == ([], [], False)
 
 
@@ -124,7 +126,7 @@ def test_mapped_module_without_a_test_file_is_unresolved(tmp_path):
     root = str(tmp_path)
     _touch(root, "eval/lib/orphan.py")
     os.makedirs(os.path.join(root, "eval/lib/tests"), exist_ok=True)
-    files, unresolved, code = V.resolve_targets(root, ["eval/lib/orphan.py"])
+    files, unresolved, code, _retired = V.resolve_targets(root, ["eval/lib/orphan.py"])
     assert files == []
     assert unresolved == ["eval/lib/orphan.py"]
     assert code is True
@@ -272,7 +274,7 @@ def test_rename_keeps_the_pre_image_so_surviving_tests_still_run(repo):
 
     paths = V.changed_paths(repo, base="main~1")
     assert "plugins/superheroes/lib/foo.py" in paths      # the pre-image survives the listing
-    files, unresolved, _ = V.resolve_targets(repo, paths)
+    files, unresolved, _code, _retired = V.resolve_targets(repo, paths)
     assert "plugins/superheroes/lib/tests/test_foo.py" in files
     assert unresolved == []
 
@@ -286,7 +288,7 @@ def test_non_ascii_path_survives_gits_default_quoting(repo):
     _git(repo, "commit", "-qm", "non-ascii test file")
     paths = V.changed_paths(repo, base="main~1")
     assert "plugins/superheroes/lib/tests/test_café.py" in paths
-    files, unresolved, code = V.resolve_targets(repo, paths)
+    files, unresolved, code, _retired = V.resolve_targets(repo, paths)
     assert files == ["plugins/superheroes/lib/tests/test_café.py"]
     assert (unresolved, code) == ([], True)
 

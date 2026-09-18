@@ -123,14 +123,16 @@ def mapped_module(path):
 
 
 def resolve_targets(repo_root, paths):
-    """(test_files, unresolved_modules, code_changed) for a changed-path set.
+    """(test_files, unresolved_modules, code_changed, retired_modules) for a changed-path set.
 
     ``test_files`` are existing, repo-relative and sorted; ``unresolved_modules`` are mapped-root
-    modules whose test siblings do not exist; ``code_changed`` says whether the diff touched any
-    ``.py`` file at all.
+    modules that are still on disk and whose test siblings do not exist; ``code_changed`` says
+    whether the diff touched any ``.py`` file at all; ``retired_modules`` are mapped-root modules
+    the diff deleted along with their tests — reported, never a failure (see ``main``).
     """
     test_files = set()
     unresolved = []
+    retired = []
     code_changed = False
     for path in paths:
         if not path.endswith(".py"):
@@ -154,9 +156,13 @@ def resolve_targets(repo_root, paths):
             test_files.update(matches)
         elif os.path.exists(os.path.join(repo_root, path)):
             unresolved.append(path)
-        # else: the diff deleted the module and its tests together. Nothing is left to test,
-        # so it carries no obligation — a retirement must never read as a mapping miss.
-    return sorted(test_files), sorted(unresolved), code_changed
+        else:
+            # The diff deleted the module and its tests together. Nothing is left to test, so
+            # this is not a mapping miss — failing here would redden every retirement commit
+            # (measured: 3c9bd58b, which retired two modules with their tests). It is still
+            # NAMED on stdout, so the resolution is readable rather than silent.
+            retired.append(path)
+    return sorted(test_files), sorted(unresolved), code_changed, sorted(retired)
 
 
 def pytest_command(python, test_files):
@@ -194,7 +200,12 @@ def main(argv=None):
         sys.stderr.write("verify-touched-tests: %s\n" % exc)
         return 2
 
-    test_files, unresolved, code_changed = resolve_targets(repo_root, paths)
+    test_files, unresolved, code_changed, retired = resolve_targets(repo_root, paths)
+
+    if retired:
+        sys.stdout.write(
+            "verify-touched-tests: %d mapped module(s) deleted with their tests; nothing left "
+            "to run for them:\n%s" % (len(retired), "".join("  - %s\n" % m for m in retired)))
 
     if unresolved:
         sys.stderr.write(
