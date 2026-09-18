@@ -1648,6 +1648,31 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   `skills/discuss-open-decisions/SKILL.md` migrated in WO-B (`0ca6f4f1`), emptying
   `_TIER_VOCAB_NOT_YET_MIGRATED` on the merged head of issue #1287.
 
+#### S14 — Cross-instance launch pin refusal
+
+- **Component.** Not a census row. The pre-reservation instance-pin gate in
+  `plugins/superheroes/lib/launcher.py` `launch_build` runs only when the caller is a Claude Code
+  seat — `_claude_seat_pin_gate_applies` keys on `CLAUDE_PID`, so a host without one (Codex, a
+  scripted or cron caller) is not gated. Where it applies, `seat_config_dir` reads the calling seat's
+  own Claude instance from its process snapshot (`CLAUDE_PID`), compares it to the config root the
+  child would be spawned under (`spawn_config_dir`), and refuses with `launch-foreign-instance-pin`
+  or `launch-seat-instance-undetermined` before any worktree, reservation, or spawn unless the caller
+  passes `--allow-foreign-instance`. Its cost is that a stale inherited `CLAUDE_CONFIG_DIR` pin blocks
+  launch until cleared or explicitly overridden.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  `launch-foreign-instance-pin` or `launch-seat-instance-undetermined` refusal, or a cross-instance
+  builder launch caught by the gate. On firing, a proposal to the owner at a gardening pass. A zero
+  citation count means no stale cross-instance pin reached spawn, or that callers ran on hosts the
+  gate does not cover — not that the gate can go.
+- **Last demonstrated benefit.** It closes the advisor-handoff class where a new session inherited a
+  stale `CLAUDE_CONFIG_DIR` pin and launched builders under the wrong account's usage limit
+  (issue #1311 build record and `plugins/superheroes/lib/tests/bite_proofs/wo_a1_1311_refusal.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a fail-closed pre-reservation gate guards the spawn config root against a
+  stale inherited pin; a zero citation count means callers are not attempting cross-instance
+  launches, not that bypass paths vanished. On an ungated host the pin is left unchecked, not approved.
+
 
 ## The workaround-marker inventory
 
