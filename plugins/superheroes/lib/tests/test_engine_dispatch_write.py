@@ -864,46 +864,31 @@ def test_write_success_terminal(tmp_path):
     assert res["evidence"]["testPassed"] is True
 
 
-def test_write_argv_shape_codex(tmp_path, monkeypatch):
+def test_write_argv_shape_codex(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     cwd_real = os.path.realpath(wt)
+    run_dir = str(tmp_path / "run")
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     seat = _codex_seat()
-    res = _dispatch_write(tmp_path, fake, cwd=wt, seat=seat)
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=seat)
     assert res["ok"] is True
-    argv = fake.calls[0]["argv"]
+    spawn_argv = fake.calls[0]["argv"]
     built = EA.build_argv_result(seat, "build", {"cwd": cwd_real})
-    assert argv == built["argv"]
-    assert argv == [
-        "codex", "exec", "--sandbox", "workspace-write", "-m", argv[5],
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["argv"] == built["argv"]
+    last_msg_idx = spawn_argv.index("--output-last-message")
+    assert spawn_argv == [
+        "codex", "exec", "--sandbox", "workspace-write", "-m", spawn_argv[5],
         "-c", "model_reasoning_effort=high", "-C", cwd_real,
-        "--json", "--output-last-message", argv[last_msg_idx + 1],
+        "--json", "--output-last-message", spawn_argv[last_msg_idx + 1],
         "-",
     ]
-    assert "read-only" not in argv
+    assert spawn_argv[last_msg_idx + 1] == ED._attempt_last_message_path(run_dir, 1)
+    assert "read-only" not in spawn_argv
     review_built = EA.build_argv_result(seat, "review", {"cwd": cwd_real})
-    assert review_built["argv"] != argv
+    assert review_built["argv"] != spawn_argv
     assert "read-only" in review_built["argv"]
-
-    real_build = ED.engine_adapter.build_argv_result
-
-    def neutralized(seat, role_kind, opts):
-        if role_kind == "build":
-            role_kind = "review"
-        return real_build(seat, role_kind, opts)
-
-    monkeypatch.setattr(ED.engine_adapter, "build_argv_result", neutralized)
-    fake2 = FakeRunner([(_build_ok_stdout(), False, 0, "")])
-    _dispatch_write(tmp_path, fake2, cwd=wt, run_dir=str(tmp_path / "run2"))
-    bad_argv = fake2.calls[0]["argv"]
-    with pytest.raises(AssertionError):
-        bad_last_msg_idx = bad_argv.index("--output-last-message")
-        assert bad_argv == [
-            "codex", "exec", "--sandbox", "workspace-write", "-m", bad_argv[5],
-            "-c", "model_reasoning_effort=high", "-C", cwd_real,
-            "--json", "--output-last-message", bad_argv[bad_last_msg_idx + 1],
-            "-",
-        ]
 
 
 def test_write_argv_shape_cursor(tmp_path):

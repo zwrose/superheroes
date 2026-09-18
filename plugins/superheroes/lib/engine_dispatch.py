@@ -2621,7 +2621,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     if coherence_err:
         _journal_spawn_guard_refusal(run_dir_real, attempt, coherence_err)
         return
-    argv = spawn_argv
+    argv = _argv_for_attempt(
+        spawn_argv, run_dir_real, attempt, opened.get("engine"))
     dispatch_path = _dispatch_path_from_opened(opened)
     try:
         prompt_bytes = os.path.getsize(prompt_path)
@@ -2767,7 +2768,8 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     spawn_argv, coherence_err = _spawn_argv_coherence(opened, opened.get("argv"))
     if coherence_err:
         return False, coherence_err
-    argv = spawn_argv
+    argv = _argv_for_attempt(
+        spawn_argv, run_dir_real, attempt, opened.get("engine"))
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, attempt)
     prompt_path = opened["promptPath"]
@@ -2898,7 +2900,7 @@ def _argv_for_attempt(argv, run_dir_real, attempt, engine):
         if idx + 1 < len(argv):
             argv[idx + 1] = path
         return argv
-    # Preflight builds argv before run_dir resolves; inject codex json flags here.
+    # Spawn-time only — downstream of the G2 argv coherence gate.
     flags = engine_adapter.codex_json_argv_flags(path)
     if argv and argv[-1] == "-":
         return argv[:-1] + flags + ["-"]
@@ -3860,8 +3862,7 @@ def _run_child_main(run_dir_real):
         })
         return 0
 
-    argv = _argv_for_attempt(
-        opened["argv"], run_dir_real, pending_att, opened.get("engine"))
+    argv = opened["argv"]
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, pending_att)
     prompt_path = opened["promptPath"]
@@ -4330,8 +4331,6 @@ def _dispatch_review_impl(seat, *, prompt_path,
             argv = built["argv"]
             if run_dir_real is None:
                 run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
-            if engine == "codex":
-                argv = _argv_for_attempt(argv, run_dir_real, 1, engine)
             notice = sanitized_view.sanitized_view_notice(view, mode=resolved_mode["mode"])
             fed_prompt = ANTIHIJACK_PREAMBLE + notice + base_prompt
             echo_nonce = secrets.token_hex(16)
@@ -4701,9 +4700,6 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
             run_dir=run_dir or "", argv=[],
         )
     run_dir_real = rd_detail
-
-    if engine == "codex":
-        argv = _argv_for_attempt(argv, run_dir_real, 1, engine)
 
     caller_omitted_expected = expected_items is None and expected_items_file is None
 

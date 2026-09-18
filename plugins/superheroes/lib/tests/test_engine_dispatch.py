@@ -481,6 +481,34 @@ def test_argv_for_attempt_injects_codex_json_flags(tmp_path):
     assert argv[-1] == "-"
 
 
+def test_codex_open_argv_is_canonical_spawn_seam_carries_per_attempt_flags(tmp_path):
+    """Journal at open stores canonical seat argv; spawn seam gets per-attempt codex flags."""
+    repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    seat = _codex_seat()
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        seat=seat,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view, run_dir=run_dir,
+    )
+    assert res["ok"] is True
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    canonical, err = ED._canonical_spawn_argv(opened)
+    assert err is None
+    assert opened["argv"] == canonical
+    assert fake.calls, "spawn seam never reached"
+    spawn_argv = fake.calls[0]["argv"]
+    assert spawn_argv != canonical
+    expected_spawn = ED._argv_for_attempt(canonical, run_dir, 1, "codex")
+    assert spawn_argv == expected_spawn
+    idx = spawn_argv.index("--output-last-message")
+    assert spawn_argv[idx + 1] == ED._attempt_last_message_path(run_dir, 1)
+
+
 def test_dispatch_review_codex_json_wiring_grades_last_message(tmp_path):
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
