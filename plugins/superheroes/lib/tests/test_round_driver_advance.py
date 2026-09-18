@@ -3524,6 +3524,46 @@ def test_death_between_ingest_and_journal_append(tmp_path, adapters):
     assert open(ingested["storePath"], "rb").read() == before
 
 
+def test_reappend_recorded_row_carries_stored_envelope_revision_identity(tmp_path, adapters):
+    """Reconcile reappend must journal the STORED envelope's revision identity — provenance and
+    execution-evidence markers — not the reconcile entry's payloadSha256/casToken alone. Covers
+    crash recovery and store-revision-newer-than-journal (CAS mismatch) paths."""
+    d = _session(tmp_path)
+    seat = "test-reviewer"
+    payload = {"findings": [], "confidence": "high", "seat": seat,
+               "verificationReceipt": {"ran": True}}
+    first_evidence = _execution_evidence(runnerNonce="nonce-first")
+    first = _result_envelope(d, seat, payload=payload,
+                             provenance=RR.PROVENANCE_DISPATCH_OBSERVED,
+                             executionEvidence=first_evidence)
+    _land(d, seat, payload=payload, provenance=RR.PROVENANCE_DISPATCH_OBSERVED,
+          executionEvidence=first_evidence)
+    assert RD.cmd_record_result(d, seat)["ok"]
+    second_evidence = _execution_evidence(runnerNonce="nonce-second")
+    _land(d, seat, payload=payload, provenance=RR.PROVENANCE_DISPATCH_OBSERVED,
+          executionEvidence=second_evidence)
+    anchor = RD._orders_anchor(_state(d), d, 1, RD.P_PANEL, 0)
+    ingested = RR.ingest_landing(d, 1, RD.P_PANEL, seat, 0, current_attempt=0,
+                                 roster=list(RD.DIMENSIONS), anchor=anchor,
+                                 supersede=True, expect_sha256=first["envelopeSha256"],
+                                 seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert ingested["ok"], ingested
+    stored, _err = RR.read_json(ingested["storePath"])
+    assert _err is None and stored["envelopeSha256"] != first["envelopeSha256"]
+    _record_all_panel_seats(d, seats=[s for s in RD.DIMENSIONS if s != seat])
+    assert _advance(d, tmp_path)["ok"]
+    reappended = [e for e in _journal(d)
+                  if e.get("outcome") == "recorded" and e.get("reappended") is True
+                  and e.get("seat") == seat]
+    assert len(reappended) == 1
+    row = reappended[0]
+    assert row.get("provenance") == RR.PROVENANCE_DISPATCH_OBSERVED
+    assert row.get("envelopeSha256") == stored["envelopeSha256"]
+    assert row.get("executionEvidencePresent") is True
+    assert row.get("payloadSha256") == stored["payloadSha256"]
+    assert row.get("casToken") == RR.envelope_cas_token(stored)
+
+
 def test_death_between_journal_append_and_advance(tmp_path, adapters):
     d = _session(tmp_path)
     _record_all_panel_seats(d)                       # records + journal complete, no fold — kill
