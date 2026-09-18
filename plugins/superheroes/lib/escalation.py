@@ -3,12 +3,11 @@
 
 Paired with the prose rubric `the-architect/rubric/escalation-base.md` exactly as
 `review-base.md` is paired with `loop_state.py`: the model supplies the fuzzy axis
-judgments, this module owns the deterministic floor + routing table + the fixer
-file-scope guard. Design: the 2026-06-16 escalation-rubric design (an out-of-repo doc).
+judgments, this module owns the deterministic floor + routing table. Design: the
+2026-06-16 escalation-rubric design (an out-of-repo doc).
 """
 import argparse
 import json
-import os
 import re
 import sys
 
@@ -89,82 +88,6 @@ def classify_floor(descriptor):
     return False
 
 
-# The safety-machinery set (§4 bound-2). INCLUSION CRITERION (the source of truth): any module
-# whose edit could disable a floor / gate / halt / escalation guarantee. Includes
-# escalation_resolve.py — the review-crew-local wrapper that OWNS the fail-closed verdict
-# (review caught this; without it a fixer could neuter the guard). Read-only proposers
-# (decisions.py) are excluded; identifiers.py was run through the criterion and EXCLUDED (it
-# mints slugs but can't itself disable a guarantee — its misuse surfaces via gate_write's
-# canonical guard, which IS pinned). review-base.md is included because editing severity
-# reclassifies what counts as a blocker (a gate input).
-SAFETY_MACHINERY = (
-    "escalation.py",
-    "escalation_resolve.py",
-    "loop_state.py",
-    "circuit_breaker.py",
-    "gate_write.py",
-    "definition_doc.py",
-    "model_tier.py",          # band model-tier core — policy, protect from auto-edits
-    "model_registry.py",      # band model/vendor registry — the single taxonomy data home; protect from auto-edits
-    "engine_pref.py",         # band engine-selection policy (per-seat engine, loud pins, stall watchdog timeouts); a fixer editing it could disable a loud pin or a watchdog
-    "seat_map.py",            # panel seat-map composition decider (constraints, maker-family check, loud degradation) — same protected class as panel_tally.py
-    "dispatch_guard.py",     # workhorse dispatch-path model-allowlist gate (#600); a fixer editing it could re-allow an off-allowlist/cross-vendor model dispatch (the WE#511 escape)
-    "engine_dispatch.py",     # #606 supervised external-engine dispatch runner for both review and write paths (auto-retry, liveness, anti-hijack); a fixer editing it could neuter confinement, the liveness gate, or the lease without tripping the pin (#608)
-    "seat_canary.py",         # #668 control-probe engagement scoring; a fixer editing it could neuter round_driver's cross-vendor seat downgrade on its verdict
-    "engine_adapter.py",      # #685 parse trust boundary (echo strip, parse_result, investigation-floor inputs); a fixer could weaken strip or vacuous-parse detection
-    "hooks.json",             # workhorse PreToolUse hook registration (F3)
-    "session_start.py",       # workhorse resume hooks (resilience)
-    "session_mode.py",        # #1151: session-mode fail direction (UNRESOLVED_MODE -> PR); a fixer editing it could flip conservative PR default to branch and drop PR-only context
-    "escalation-base.md",
-    "review-base.md",
-    # shared review-and-fix loop (#104): the loop's deciders, its durable record, and its
-    # orchestration shell — anything its correctness or audit trail depends on (FR-24).
-    "panel_tally.py",         # terminal/accounting decider + rounds-assembler + resume + fail-closed
-    "loop_synthesis.py",      # panel synthesis drop/keep/normalize decider
-    "verification.py",          # per-finding verification 3-state verdict fold (#506)
-    "round_phases.py",          # verifier-verdict enum + verify submit-shape guard (#1123)
-    "payload_contracts.py",     # per-seat payload contracts engine_adapter enforces (#1123)
-    "round_adapters.py",        # #1147: module-level REBINDABLE ALIASES in front of protected contract code
-                                # (payload_fault/payload_contract/VACUOUS_FIELD <- payload_contracts, the phase
-                                # tokens <- round_phases), and round_driver resolves the record-time validator
-                                # THROUGH them (_preflight_payload_fault -> _adapters().payload_fault). An
-                                # unprotected alias in front of a protected callee is a bypass path: a fixer
-                                # could rebind it to a permissive stub and disable per-field validation without
-                                # editing any pinned file. Its own missing_policy is a halt surface too.
-    "verify_gate.py",         # code-leg verify gate decider
-    "review_result.py",       # the durable terminal-record writer (UFR-9)
-    "round_driver.py",        # the one-entrypoint loop orchestration (#507)
-    "audits.py",              # fix-audit fold decider
-    "delta_surface.py",       # delta-surface/shard decider
-    # worktree-protection gate, band-wide storage resolver, and hook wrapper (collector #695 item 55):
-    # protected implementation files must not be editable by the fixer they constrain — an edit here
-    # could disable a halt/refusal guarantee without tripping any pin.
-    "worktree_guard.py",      # worktree-protection gate core (git-discard/forced-removal refusals)
-    "mode_registry.py",       # band-wide storage resolver — a fixer edit can silently redirect where every project reads calibration from or flip whether it reads as calibrated at all
-    "worktree_guard_gate.py", # PreToolUse hook wrapper that invokes worktree_guard
-)
-
-
-def is_safety_machinery(path, band_roots):
-    """True iff `path` is a safety-machinery file — KEYED BY RESOLVED CANONICAL PATH, not bare
-    basename (§4: the set spans both plugins and must match the right copy whether installed or
-    dogfooded-in-repo, WITHOUT false-positiving a like-named file in the target repo under
-    review). Protected iff the resolved basename is in SAFETY_MACHINERY AND the path resolves
-    under one of `band_roots` (the resolved review-crew / the-architect plugin dirs the wrapper
-    supplies). Fails CLOSED: an unparseable path, or no band_roots to anchor against, is treated
-    as protected.
-    """
-    if not isinstance(path, str) or not path:
-        return True
-    rp = os.path.realpath(path)
-    if os.path.basename(rp) not in SAFETY_MACHINERY:
-        return False
-    roots = [os.path.realpath(r) for r in (band_roots or []) if r]
-    if not roots:
-        return True   # cannot anchor -> fail closed (protect)
-    return any(rp == r or rp.startswith(r + os.sep) for r in roots)
-
-
 def _as_bool(s):
     if s in ("true", "True", "1", "yes"):
         return True
@@ -184,10 +107,6 @@ def _build_parser():
     r.add_argument("--confidence", required=True)
     c = sub.add_parser("classify", help="action descriptor -> on_floor true/false")
     c.add_argument("--action", required=True)
-    g = sub.add_parser("guard", help="path -> allow/refuse (fixer file-scope guard)")
-    g.add_argument("--path", required=True)
-    g.add_argument("--band-root", action="append", default=[],
-                   help="a resolved plugin root to anchor the canonical-path match (repeatable)")
     return p
 
 
@@ -203,10 +122,6 @@ def main(argv):
         return 0
     if args.cmd == "classify":
         sys.stdout.write(json.dumps({"on_floor": classify_floor(args.action)}) + "\n")
-        return 0
-    if args.cmd == "guard":
-        sys.stdout.write(json.dumps(
-            {"allow": not is_safety_machinery(args.path, args.band_root)}) + "\n")
         return 0
     return 2
 

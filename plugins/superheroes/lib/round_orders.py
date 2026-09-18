@@ -537,7 +537,7 @@ _INLINE_TICK_RE = re.compile(r"`([^`\n]+)`")
 _ANGLE_SUB_RE = re.compile(r"<([a-zA-Z][a-zA-Z0-9_]*)>")
 
 # Driver-rendered placeholders — not branch-controlled (quoted or numeric at render time).
-_SHELL_SAFE_PLACEHOLDERS = frozenset({"ESCALATION_WRAPPER_PATH", "REPO_ROOT", "ROUND"})
+_SHELL_SAFE_PLACEHOLDERS = frozenset({"REPO_ROOT", "ROUND"})
 
 # Model-authored commit-message slots — not branch-controlled diff paths.
 _SAFE_ANGLE_SUBSTITUTIONS = frozenset({"count", "dimensions"})

@@ -40,7 +40,6 @@ _SUBSECTION_HEADINGS = [
     "### Sweep for unpushed work before adopting",
     "### Pin the transcript; never re-discover it",
     "### Read liveness from the right signals",
-    "### Suspect quota before you suspect a defect",
 ]
 
 _HOME_CLAUSES = {
@@ -71,11 +70,6 @@ _HOME_CLAUSES = {
         "stdout log is not a liveness signal",
         "buffers its output to exit",
         "identify a worker by a global process match",
-    ],
-    "### Suspect quota before you suspect a defect": [
-        "unexplained early exit",
-        "the account the builder was burning",
-        "not proof of deep headroom",
     ],
 }
 
@@ -113,7 +107,6 @@ _HOLDER_CLAUSES = {
         "rubric/launch-doctrine.md` § Recovery",
         "the branch and the sha it adopted",
         "the only path across instances or accounts",
-        "suspected quota death",
         "adoption is a launch",
     ],
     "skills/workhorse/SKILL.md": [
@@ -124,7 +117,7 @@ _HOLDER_CLAUSES = {
 }
 
 _EXPECTED_HOLDER_CLAUSE_COUNTS = {
-    "skills/showrunner/SKILL.md": 5,
+    "skills/showrunner/SKILL.md": 4,
     "skills/workhorse/SKILL.md": 3,
 }
 
@@ -410,7 +403,7 @@ def test_negative_assert_heading_exactly_once_duplicated():
 
 
 def test_negative_home_clause_absent_from_section():
-    out_of_section_clause = "not proof of deep headroom"
+    out_of_section_clause = "double-confirmed"
     synthetic_text = _synthetic_home_with_all_clauses_except(out_of_section_clause)
 
     def read_text(rel):

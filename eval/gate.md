@@ -55,7 +55,7 @@ are the frozen ground truth. Fix the implementation, or add a new fixture.
 ### [Phase 2a-core] Escalation calibration
 
 - **Layer 1 — routing-logic (deterministic, HARD GATE).** `escalation.py`'s floor-classifier,
-  `route()` truth-table, `route()` fail-closed, the fixer file-scope guard, and the loop_state
+  `route()` truth-table, `route()` fail-closed, and the loop_state
   disposition-pipeline property must match the frozen fixture
   `plugins/superheroes/eval/escalation/expected.json` exactly (see
   `plugins/superheroes/eval/tests/test_escalation_eval.py` and `…/lib/tests/test_loop_state.py`).

@@ -809,17 +809,16 @@ above).
    charter's `## Memory` section — read it there; this charter does not restate it.
 9. **Orchestration — dispatch and preflight.** Before launching a builder session, run a **dispatch
    preflight**. At dispatch time you are where the builder is at *its* preflight — about to go
-   autonomous on assumptions not yet exercised — with no equivalent check unless you run it. **Eight
-   checks:**
-   The enumerated checks live one hop away in
+   autonomous on assumptions not yet exercised — with no equivalent check unless you run
+   it. **Seven checks:** The enumerated checks live one hop away in
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/dispatch-preflight.md` — read
-   them at dispatch time. Check 7's "(see below)" points at the owner-involvement taxonomy later in
+   them at dispatch time. Check 6's "(see below)" points at the owner-involvement taxonomy later in
    this duty, not at anything in that file.
    **Invoke the launcher — never hand-compose a launch.** Run
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/launcher.py` to `preflight`, `compose`, and `launch` a
    headless builder session, so **standing rulings come verbatim from
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md`** — reconstructing a rulings block
-   from memory is what caused the shared-checkout collision. Supply the **eight checks as data**;
+   from memory is what caused the shared-checkout collision. Supply the **seven checks as data**;
    the tool records each and the go/no-go. **`standing-rulings` is launcher-owned** — the launcher
    establishes it from the doctrine artifact and **refuses if you supply a result for it**. **Declare a
    batch before its launches**; **record every terminal outcome** with `record-outcome` — handback, park,
@@ -859,9 +858,9 @@ above).
    checkout**. A path that already exists or that git still registers **refuses the launch**
    (`launch-worktree-collision`) — reap the stale checkout, then relaunch; never force it.
    Reaping a finished lane's worktree is yours, not the builder's.
-   **Scale with the batch:** checks **1–3 and 5** (account headroom, engine auth, base state, workspace
-   isolation) are cheap mechanical checks that **always run**; **4, 6, 7, and 8** only when the work
-   needs them. Every check is recorded **ran** or **N/A** in the dispatch durable record — an N/A
+   **Scale with the batch:** checks **1–2 and 4** (engine auth, base state, workspace isolation) are
+   cheap mechanical checks that **always run**; **3, 5, 6, and 7** only when the work needs
+   them. Every check is recorded **ran** or **N/A** in the dispatch durable record — an N/A
    carries a **one-line reason**; "marked N/A" without a reason is a silent skip. The preflight ends
    in a recorded **go / no-go** there. **A failed check is a no-go** — the dispatch does not launch
    until it is cleared or explicitly owner-accepted. A twenty-minute preflight before every dispatch
@@ -895,8 +894,7 @@ above).
    artifacts, and **the only path across instances or accounts**); **pinning** each builder's
    transcript by its issue token instead of re-discovering it newest-first; reading **liveness**
    from a double-confirmed process check plus pinned-transcript freshness, never from a `-p`
-   session's buffered stdout and never from a global process match; and treating an unexplained
-   early exit as a **suspected quota death** on the account the builder burned until ruled out.
+   session's buffered stdout and never from a global process match.
    **An adoption is a launch** — it carries the standing rulings and records its preflight like any
    other, its dispatch record names the **branch and the sha it adopted**, and **record the dead
    builder's terminal outcome** with `record-outcome` before its successor launches — an unrecorded
@@ -916,12 +914,12 @@ above).
    There is no daemon to orphan. The arming pattern lives one hop away in
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/wave-watch.md` — read it at
    arming time.
-   **Wave-preflight live canary (strengthens `engine-auth`, not a ninth check).** A wave preflight
+   **Wave-preflight live canary (strengthens `engine-auth`, not an eighth check).** A wave preflight
    includes **one cheap live probe per engine** (~3s). The dispatch selftest validates
    **configuration, not engine liveness** — `lib/dispatch_selftest.py` is explicitly a config-time
    round-trip that never touches disk — so **780 green config checks were able to coexist undetected
    with a 3-of-4 live-review failure rate**. This strengthens what the existing `engine-auth` check
-   must mean in a wave; it does **not** add a ninth check to the eight-check list.
+   must mean in a wave; it does **not** add an eighth check to the seven-check list.
 10. **Provision slots for an authenticated wave.** When a build needs authenticated pilot coverage
    across multiple accounts, provisioning is yours before any headless builder launches — the builder
    never self-provisions. **The sequence is load-bearing:** backend identity is only observable on
@@ -995,7 +993,7 @@ above).
 | Excuse | Reality |
 |---|---|
 | "The PR is small, I'll just merge it" | Approval is never yours, and there is no merge without the owner's scoped word. A PR opened after the word rides it only as the disclosed red-train follow-up, once the last lane has merged and while the fix is craft with no material consequence. A PR that materially changed since the word always asks again. Vet it, then execute inside the word and report the merge at once. |
-| "I just ran a batch an hour ago — skip the preflight" | Preflight scales with the batch; N/A is explicit, never silent skip. Stale quota, base, or grant state kills the next launch. |
+| "I just ran a batch an hour ago — skip the preflight" | Preflight scales with the batch; N/A is explicit, never silent skip. Stale base or grant state kills the next launch. |
 | "Zero parks — clean batch" | Zero park/refusal rate is a signal to inspect, not a clean sheet. |
 | "CI is green, ship it" | Green means the suite passed, not that the owner got what they asked. Probe what the suite cannot test. |
 | "I'll re-run the tests to be sure" | Trust CI-green; spend the time on probes CI cannot contain. Re-running green suites is wasted vetting. |
