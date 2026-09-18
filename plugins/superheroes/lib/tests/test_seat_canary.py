@@ -38,10 +38,27 @@ def _load_dispatch_outcome():
     return mod
 
 
+def _load_seat_map():
+    spec = importlib.util.spec_from_file_location(
+        "seat_map", os.path.join(_HERE, "..", "seat_map.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 SC = _load()
 EA = _load_engine_adapter()
 CO = _load_canary_outcome()
 DO = _load_dispatch_outcome()
+
+
+def _seat(vendor, model, effort):
+    return {"vendor": vendor, "model": model, "effort": effort}
+
+
+def _seat_config(vendor, model, effort, tier="reviewer-deep"):
+    return {"vendor": vendor, "model": model, "effort": effort, "tier": tier}
+
 
 _PLUGIN_ROOT = os.path.join(_HERE, "..", "..")
 
@@ -139,7 +156,7 @@ def _base_dispatch_result(**overrides):
 def test_findings_with_plant_engaged_and_detected():
     captured = {}
 
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         captured.update(kwargs)
         return _base_dispatch_result(
             findings=[{
@@ -154,7 +171,8 @@ def test_findings_with_plant_engaged_and_detected():
         )
 
     out = SC.run_canary(
-        "codex", engine_model="gpt-5.6-terra", effort="high",
+        "security-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh", "reviewer-deep"),
         repo_root="/tmp/fake", dispatch=dispatch,
     )
     assert out["engaged"] is True
@@ -164,7 +182,7 @@ def test_findings_with_plant_engaged_and_detected():
 
 
 def test_vacuous_no_telemetry_not_engaged():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "vacuous",
@@ -180,7 +198,9 @@ def test_vacuous_no_telemetry_not_engaged():
         }
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
     assert out["outcome"] == "vacuous"
@@ -188,7 +208,7 @@ def test_vacuous_no_telemetry_not_engaged():
 
 
 def test_high_token_spend_alone_not_engaged():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             investigated=[],
             engagement={
@@ -200,14 +220,16 @@ def test_high_token_spend_alone_not_engaged():
         )
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
     assert out["outcome"] == CO.OUTCOME_NOT_ENGAGED
 
 
 def test_wall_time_alone_not_engaged():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             engagement={
                 "tokens": None,
@@ -218,14 +240,16 @@ def test_wall_time_alone_not_engaged():
         )
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
     assert out["outcome"] == CO.OUTCOME_NOT_ENGAGED
 
 
 def test_vacuous_with_investigation_still_engaged_path_alive():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "vacuous",
@@ -243,7 +267,9 @@ def test_vacuous_with_investigation_still_engaged_path_alive():
         }
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is True
     assert out["outcome"] == "vacuous"
@@ -251,7 +277,7 @@ def test_vacuous_with_investigation_still_engaged_path_alive():
 
 
 def test_vacuous_with_tool_calls_only_not_engaged():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "vacuous",
@@ -268,7 +294,9 @@ def test_vacuous_with_tool_calls_only_not_engaged():
         }
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
     assert out["outcome"] == "vacuous"
@@ -276,7 +304,7 @@ def test_vacuous_with_tool_calls_only_not_engaged():
 
 
 def test_finding_with_fast_wall_engaged():
-    def dispatch_finding(engine, **kwargs):
+    def dispatch_finding(**kwargs):
         return _base_dispatch_result(
             findings=[{"id": "f", "file": "a.py", "title": "t", "body": "b"}],
             investigated=["a.py"],
@@ -289,47 +317,55 @@ def test_finding_with_fast_wall_engaged():
         )
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch_finding,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch_finding,
     )
     assert out["engaged"] is True
 
 
 def test_tool_calls_without_investigated_not_engaged():
-    def dispatch_one(engine, **kwargs):
+    def dispatch_one(**kwargs):
         return _base_dispatch_result(
             engagement={"tokens": None, "toolCalls": 1, "stdoutBytes": 0, "wallSeconds": 0.0},
         )
 
     assert SC.run_canary(
-        "cursor", engine_model="c", effort="high", repo_root="/r", dispatch=dispatch_one,
+        "code-reviewer",
+        _seat_config("cursor", "cursor-grok-4.6", "xhigh"),
+        repo_root="/r", dispatch=dispatch_one,
     )["engaged"] is False
 
-    def dispatch_zero(engine, **kwargs):
+    def dispatch_zero(**kwargs):
         return _base_dispatch_result(
             engagement={"tokens": None, "toolCalls": 0, "stdoutBytes": 0, "wallSeconds": 0.0},
         )
 
     assert SC.run_canary(
-        "cursor", engine_model="c", effort="high", repo_root="/r", dispatch=dispatch_zero,
+        "code-reviewer",
+        _seat_config("cursor", "cursor-grok-4.6", "xhigh"),
+        repo_root="/r", dispatch=dispatch_zero,
     )["engaged"] is False
 
 
 def test_investigated_without_findings_not_engaged_after_r7():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             investigated=["lib/a.py"],
             engagement={"tokens": None, "toolCalls": None, "stdoutBytes": 0, "wallSeconds": 0.0},
         )
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
     assert out["evidence"]["investigated"] == 1
 
 
 def test_non_terminal_running_maps_to_non_terminal_slice():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "terminal": False,
@@ -337,14 +373,16 @@ def test_non_terminal_running_maps_to_non_terminal_slice():
         }
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["outcome"] == "unrunnable"
     assert out["detail"] == "not-dispatched: non-terminal-slice"
 
 
 def test_unrunnable_attempts_zero_not_engaged_despite_telemetry():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "unrunnable",
@@ -355,7 +393,9 @@ def test_unrunnable_attempts_zero_not_engaged_despite_telemetry():
         }
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
     assert out["outcome"] == "unrunnable"
@@ -363,11 +403,13 @@ def test_unrunnable_attempts_zero_not_engaged_despite_telemetry():
 
 
 def test_dispatch_raises_becomes_unrunnable_no_escape():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         raise RuntimeError("boom")
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["outcome"] == "unrunnable"
     assert out["engaged"] is False
@@ -379,13 +421,15 @@ def test_no_residue_and_repo_untouched(tmp_path):
     marker = tmp_path / "repo" / "marker.txt"
     paths_seen = []
 
-    def dispatch(engine, *, prompt_path, repo_root, **kwargs):
+    def dispatch(*, prompt_path, repo_root, **kwargs):
         paths_seen.append(prompt_path)
         assert os.path.isfile(prompt_path)
         return _base_dispatch_result()
 
     SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root=repo, dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root=repo, dispatch=dispatch,
     )
     assert marker.read_text(encoding="utf-8") == "keep-me"
     for p in paths_seen:
@@ -396,7 +440,7 @@ def test_dispatch_receives_fixture_prompt_and_repo_root(tmp_path):
     repo = _repo(tmp_path)
     seen = {}
 
-    def dispatch(engine, *, prompt_path, repo_root, **kwargs):
+    def dispatch(*, prompt_path, repo_root, **kwargs):
         seen["prompt_path"] = prompt_path
         seen["repo_root"] = repo_root
         seen["kwargs"] = kwargs
@@ -406,7 +450,9 @@ def test_dispatch_receives_fixture_prompt_and_repo_root(tmp_path):
         return _base_dispatch_result()
 
     SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root=repo, dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root=repo, dispatch=dispatch,
     )
     assert seen["repo_root"] == repo
     assert "verify_submission" in seen["contents"]
@@ -421,14 +467,37 @@ def test_run_canary_pins_findings_expected_result_kind(tmp_path):
     repo = _repo(tmp_path)
     seen = {}
 
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         seen.update(kwargs)
         return _base_dispatch_result()
 
     SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root=repo, dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root=repo, dispatch=dispatch,
     )
     assert seen.get("expected_result_kind") == "findings"
+
+
+def test_run_canary_default_dispatch_uses_seat_and_role(tmp_path):
+    repo = _repo(tmp_path)
+    seen = {}
+
+    def dispatch(**kwargs):
+        seen.update(kwargs)
+        return _base_dispatch_result()
+
+    SC.run_canary(
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root=repo, dispatch=dispatch,
+    )
+    assert seen["seat"] == {
+        "vendor": "codex", "model": "gpt-5.6-sol", "effort": "xhigh", "role": "reviewer-deep",
+    }
+    assert "role" not in seen
+    assert "engine" not in seen
+    assert "engine_model" not in seen
 
 
 def _engagement_decision_source(src):
@@ -470,14 +539,16 @@ def _assert_engaged_not_branched_on_plant_detection(engagement_src, full_src):
 def test_detected_plant_does_not_drive_engaged():
     # detectedPlant True requires a finding carrying PLANT_MARKER, which also satisfies the
     # engagement OR-ladder — combination unconstructible at the behavioural layer.
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             findings=[],
             engagement={"tokens": None, "toolCalls": None, "stdoutBytes": 0, "wallSeconds": 0.0},
         )
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
     assert out["detectedPlant"] is False
@@ -502,11 +573,13 @@ def test_probe_passes_sanitized_view_from_dispatch(tmp_path):
         "fileCount": 5,
     }
 
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(sanitizedView=block)
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root=repo, dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root=repo, dispatch=dispatch,
     )
     assert out["sanitizedView"] == block
 
@@ -524,7 +597,7 @@ def test_probe_passes_sanitized_view_on_vacuous_dispatch(tmp_path):
         "fileCount": 5,
     }
 
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "vacuous",
@@ -541,13 +614,15 @@ def test_probe_passes_sanitized_view_on_vacuous_dispatch(tmp_path):
         }
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root=repo, dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root=repo, dispatch=dispatch,
     )
     assert out["sanitizedView"] == block
 
 
 def test_probe_sanitized_view_absent_when_dispatch_unrunnable(tmp_path):
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "unrunnable",
@@ -557,7 +632,9 @@ def test_probe_sanitized_view_absent_when_dispatch_unrunnable(tmp_path):
         }
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out.get("sanitizedView") is None
 
@@ -566,12 +643,14 @@ def test_dispatch_exception_still_cleans_temp_file(tmp_path):
     repo = _repo(tmp_path)
     created = []
 
-    def dispatch(engine, *, prompt_path, **kwargs):
+    def dispatch(*, prompt_path, **kwargs):
         created.append(prompt_path)
         raise ValueError("nope")
 
     SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root=repo, dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root=repo, dispatch=dispatch,
     )
     assert created
     assert not os.path.exists(created[0])
@@ -646,7 +725,7 @@ def test_engaged_from_dispatch_diverges_from_engagement_read():
 
 
 def test_dod_row1_field_recurrence_specimen_not_engaged():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             findings=[{"id": "f", "file": "x.py", "title": "t", "body": "b"}],
             investigated=[],
@@ -659,7 +738,9 @@ def test_dod_row1_field_recurrence_specimen_not_engaged():
         )
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
     assert out["outcome"] == CO.OUTCOME_NOT_ENGAGED
@@ -667,7 +748,7 @@ def test_dod_row1_field_recurrence_specimen_not_engaged():
 
 
 def test_dod_row2_engaged_dispatch_plant_undetected_when_marker_missing():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             findings=[{"id": "f", "file": "lib/gate.py", "title": "other", "body": "b"}],
             investigated=["lib/gate.py"],
@@ -675,7 +756,9 @@ def test_dod_row2_engaged_dispatch_plant_undetected_when_marker_missing():
         )
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is True
     assert out["detectedPlant"] is False
@@ -755,7 +838,7 @@ def test_plant_marker_literal_pinned():
 
 
 def test_detected_plant_names_verify_submission_naturally():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             findings=[{
                 "id": "p1",
@@ -769,14 +852,16 @@ def test_detected_plant_names_verify_submission_naturally():
         )
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["detectedPlant"] is True
     assert out["outcome"] == CO.OUTCOME_OK
 
 
 def test_check_receipt_echo_no_longer_scores_detection():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return _base_dispatch_result(
             findings=[{
                 "id": "p1",
@@ -790,7 +875,9 @@ def test_check_receipt_echo_no_longer_scores_detection():
         )
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["detectedPlant"] is False
     assert out["outcome"] == CO.OUTCOME_PLANT_UNDETECTED
@@ -837,10 +924,11 @@ def _run_main(monkeypatch, argv):
     """Drive the probe CLI with run_canary stubbed; return the kwargs it was called with."""
     seen = {}
 
-    def fake_run_canary(engine, **kwargs):
-        seen["engine"] = engine
+    def fake_run_canary(seat_key, seat_config, **kwargs):
+        seen["seat_key"] = seat_key
+        seen["seat_config"] = seat_config
         seen.update(kwargs)
-        return {"engine": engine, "engaged": False}
+        return {"engaged": False}
 
     monkeypatch.setattr(SC, "run_canary", fake_run_canary)
     assert SC.main(argv) == 0
@@ -851,22 +939,26 @@ def test_cli_effort_omitted_passes_none(monkeypatch):
     # #963: cursor's implementer/code-fixer registry config is effort-LESS — ("composer-2.5", None).
     # Omitting --effort must reach the seat path as None, not as any effort string.
     seen = _run_main(monkeypatch, [
-        "probe", "--engine", "cursor", "--engine-model", "composer-2.5", "--repo-root", "/r",
+        "probe", "--seat-key", "code-reviewer", "--tier", "implementer",
+        "--engine", "cursor", "--engine-model", "composer-2.5", "--repo-root", "/r",
     ])
-    assert seen["effort"] is None
-    assert seen["engine"] == "cursor"
-    assert seen["engine_model"] == "composer-2.5"
+    assert seen["seat_config"]["effort"] is None
+    assert seen["seat_config"]["vendor"] == "cursor"
+    assert seen["seat_config"]["model"] == "composer-2.5"
+    assert seen["seat_config"]["tier"] == "implementer"
 
 
 def test_cli_effort_supplied_passes_through(monkeypatch):
     # The other direction: an explicit effort is still carried verbatim, unchanged by #963.
     seen = _run_main(monkeypatch, [
-        "probe", "--engine", "codex", "--engine-model", "gpt-5.6-terra",
+        "probe", "--seat-key", "security-reviewer", "--tier", "reviewer-deep",
+        "--engine", "codex", "--engine-model", "gpt-5.6-terra",
         "--effort", "high", "--repo-root", "/r",
     ])
-    assert seen["effort"] == "high"
-    assert seen["engine"] == "codex"
-    assert seen["engine_model"] == "gpt-5.6-terra"
+    assert seen["seat_config"]["effort"] == "high"
+    assert seen["seat_config"]["vendor"] == "codex"
+    assert seen["seat_config"]["model"] == "gpt-5.6-terra"
+    assert seen["seat_config"]["tier"] == "reviewer-deep"
 
 
 def test_effort_none_builds_cursor_argv_and_still_refuses_where_effort_required():
@@ -875,20 +967,20 @@ def test_effort_none_builds_cursor_argv_and_still_refuses_where_effort_required(
     Grounds the #963 DoD — the probe reaches the engine — without dispatching one, and pins that
     the relaxation is CLI-side only: a model that requires an effort still refuses without one.
     """
-    runnable = EA.build_argv_result("cursor", "review", None, {"engine_model": "composer-2.5"})
+    runnable = EA.build_argv_result(_seat("cursor", "composer-2.5", None), "review", {})
     assert runnable["reason"] is None
     assert runnable["argv"]
 
     # Unchanged fail-closed edges: an effort string on the effort-less model, and a missing effort
     # on models that require one.
     assert EA.build_argv_result(
-        "cursor", "review", "high", {"engine_model": "composer-2.5"},
+        _seat("cursor", "composer-2.5", "high"), "review", {},
     )["reason"] == "invalid-model-effort"
     assert EA.build_argv_result(
-        "cursor", "review", None, {"engine_model": "cursor-grok-4.6"},
+        _seat("cursor", "cursor-grok-4.6", None), "review", {},
     )["reason"] == "invalid-model-effort"
     assert EA.build_argv_result(
-        "codex", "review", None, {"engine_model": "gpt-5.6-terra"},
+        _seat("codex", "gpt-5.6-terra", None), "review", {},
     )["reason"] == "invalid-model-effort"
 
 
@@ -908,7 +1000,7 @@ def test_map_outcome_engaged_artifact_not_unrunnable():
 
 
 def test_run_canary_engaged_artifact_not_engaged():
-    def dispatch(engine, **kwargs):
+    def dispatch(**kwargs):
         return {
             "ok": False,
             "reason": "forfeit-with-engaged-artifact",
@@ -919,8 +1011,173 @@ def test_run_canary_engaged_artifact_not_engaged():
         }
 
     out = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+        "code-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh"),
+        repo_root="/r", dispatch=dispatch,
     )
     assert out["outcome"] == "forfeit-with-engaged-artifact"
     assert out["engaged"] is False
     assert "not credited" in out["detail"]
+
+
+def test_probe_without_seat_identity_refuses():
+    out = SC.run_canary(
+        "",
+        {"vendor": "codex", "model": "gpt-5.6-terra", "effort": "high", "tier": "reviewer"},
+        repo_root="/r",
+    )
+    assert out["outcome"] == "unrunnable"
+    assert "seat-identity-absent" in out["detail"] or "seat-key" in out["detail"]
+
+
+def test_seat_config_missing_tier_refuses():
+    out = SC.run_canary(
+        "code-reviewer",
+        {"vendor": "codex", "model": "gpt-5.6-terra", "effort": "high"},
+        repo_root="/r",
+    )
+    assert out["outcome"] == "unrunnable"
+    assert "tier" in out["detail"]
+
+
+def test_unknown_tier_refuses():
+    out = SC.run_canary(
+        "code-reviewer",
+        {"vendor": "codex", "model": "gpt-5.6-terra", "effort": "high", "tier": "not-a-role"},
+        repo_root="/r",
+    )
+    assert out["outcome"] == "unrunnable"
+    assert "not-a-role" in out["detail"]
+
+
+def test_codex_reviewer_and_reviewer_deep_resolve_independently():
+    """One vendor, two tiers — each probe must ride its own registry role in the four-key seat."""
+    seen = []
+
+    def dispatch(**kwargs):
+        seen.append(kwargs.get("seat"))
+        return _base_dispatch_result()
+
+    SC.run_canary(
+        "grounding-seat",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh", "reviewer"),
+        repo_root="/r", dispatch=dispatch,
+    )
+    SC.run_canary(
+        "security-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh", "reviewer-deep"),
+        repo_root="/r", dispatch=dispatch,
+    )
+    assert seen[0]["role"] == "reviewer"
+    assert seen[1]["role"] == "reviewer-deep"
+    assert seen[0] != seen[1]
+
+
+def test_grounding_seat_rejects_mismatched_tier():
+    # axis: seat key tier binding — grounding-seat refuses tiers outside seat_map's accepted set
+    SM = _load_seat_map()
+    foreign_tier = "verifier"
+    assert foreign_tier not in SM.accepted_tiers_for_seat("grounding-seat")
+    cfg = _seat_config("codex", "gpt-5.6-sol", "xhigh", foreign_tier)
+    resolved = SC._resolve_canary_identity("grounding-seat", cfg)
+    assert resolved.get("reason") == "seat-tier-mismatch"
+    out = SC.run_canary("grounding-seat", cfg, repo_root="/r")
+    assert out["outcome"] == "unrunnable"
+    assert "accepted tiers:" in out["detail"]
+    assert "reviewer" in out["detail"]
+    assert "reviewer-deep" in out["detail"]
+
+
+def test_sm2_1269_backfilled_tier_probes_not_refuses():
+    # axis: legitimately backfilled reviewer tier probes rather than recording canaryUnverified
+    seen = []
+
+    def dispatch(**kwargs):
+        seen.append(kwargs.get("seat"))
+        return _base_dispatch_result()
+
+    out = SC.run_canary(
+        "security-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh", "reviewer"),
+        repo_root="/r",
+        dispatch=dispatch,
+    )
+    assert out["outcome"] != "unrunnable"
+    assert seen
+    assert seen[0]["role"] == "reviewer"
+
+
+def test_sm2_1269_refuses_tier_outside_seat_map_emission():
+    # axis: tier seat_map cannot emit refuses naming accepted tiers
+    out = SC.run_canary(
+        "security-reviewer",
+        _seat_config("codex", "gpt-5.6-sol", "xhigh", "implementer"),
+        repo_root="/r",
+    )
+    assert out["outcome"] == "unrunnable"
+    assert "accepted tiers:" in out["detail"]
+    assert "implementer" in out["detail"]
+
+
+def test_sm4_1269_grounding_backfill_reviewer_deep_probes():
+    # axis: tier seat_map.build backfills via claude fallback probes, not seat-tier-mismatch
+    SM = _load_seat_map()
+    built = SM.build(
+        roster=["grounding-seat"],
+        live_vendors=["codex"],
+        author_family="xai",
+        narrative_family="anthropic",
+        live_cells=[["codex", "gpt-5.6-sol", "xhigh"]],
+        live_cells_source="probed",
+        seed=0,
+    )
+    seat_cfg = built["seats"]["grounding-seat"]
+    assert seat_cfg["tier"] == "reviewer-deep"
+    assert seat_cfg["source"] == "backfill"
+    resolved = SC._resolve_canary_identity("grounding-seat", seat_cfg)
+    assert resolved.get("reason") != "seat-tier-mismatch"
+    assert seat_cfg["tier"] in SM.accepted_tiers_for_seat("grounding-seat")
+
+
+def test_sm2_1269_grounding_refuses_reviewer_deep():
+    # axis: tier seat_map cannot emit for grounding-seat refuses naming accepted tiers
+    SM = _load_seat_map()
+    foreign_tier = "implementer"
+    assert foreign_tier not in SM.accepted_tiers_for_seat("grounding-seat")
+    cfg = _seat_config("codex", "gpt-5.6-sol", "xhigh", foreign_tier)
+    resolved = SC._resolve_canary_identity("grounding-seat", cfg)
+    assert resolved.get("reason") == "seat-tier-mismatch"
+    out = SC.run_canary("grounding-seat", cfg, repo_root="/r")
+    assert out["outcome"] == "unrunnable"
+    assert "accepted tiers:" in out["detail"]
+    assert foreign_tier in out["detail"]
+
+
+def test_sm5_1269_grounding_reviewer_deep_passes_tier_check():
+    # axis: reviewer-deep passes the tier check for grounding-seat (claude fallback can emit it)
+    SM = _load_seat_map()
+    assert "reviewer-deep" in SM.accepted_tiers_for_seat("grounding-seat")
+    tier_cfg = _seat_config("codex", "gpt-5.6-sol", "xhigh", "reviewer-deep")
+    resolved = SC._resolve_canary_identity("grounding-seat", tier_cfg)
+    assert resolved.get("reason") != "seat-tier-mismatch"
+    assert resolved.get("ok") is True
+    # Whether claude fallback ought to upgrade a seat above its configured tier is seat_map selection behaviour — out of scope; canary accepts what build emits.
+    claude_cfg = _seat_config("claude", "opus-5", "xhigh", "reviewer-deep")
+    out = SC.run_canary("grounding-seat", claude_cfg, repo_root="/r")
+    assert out["outcome"] == "unrunnable"
+    assert "seat-tier-mismatch" not in out["detail"]
+
+
+def test_sm2_1269_tier_override_below_default_resolves():
+    # axis: tier seat_map emits via override/backfill is accepted, not refused as default-only
+    cell = {
+        "effort": "high",
+        "family": "openai",
+        "model": "gpt-5.6-terra",
+        "source": "rotated",
+        "tier": "reviewer",
+        "vendor": "codex",
+    }
+    resolved = SC._resolve_canary_identity("code-reviewer", cell)
+    assert resolved["ok"] is True
+    assert resolved["tier"] == "reviewer"

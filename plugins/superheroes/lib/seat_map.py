@@ -13,7 +13,6 @@ import math
 
 import liveness_cache
 from model_registry import family_for, is_allowed, matrix_config, vendors
-import version_skew
 
 LIVE_CELLS_SOURCES = liveness_cache.LIVE_CELLS_SOURCES
 
@@ -53,6 +52,30 @@ UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
 })
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
 DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
+
+# Tiers _backfill's primary rotation tries after the seat's configured tier (#1269).
+_BACKFILL_DOWNGRADE_TO = "reviewer"
+# Tiers _backfill's claude-only fallback rotation tries (#1269).
+_BACKFILL_CLAUDE_ROTATION = (STRONG_TIER_REQUIRED, _BACKFILL_DOWNGRADE_TO)
+
+
+def _backfill_rotation_tiers(primary_tier: str) -> tuple[str, ...]:
+    """Tiers ``_backfill`` tries in order: configured tier, then reviewer."""
+    return (primary_tier, _BACKFILL_DOWNGRADE_TO)
+
+
+def _backfill_emittable_tiers(primary_tier: str) -> frozenset[str]:
+    """Every tier ``_backfill`` may record — primary rotation, claude fallback, terminal."""
+    return frozenset(_backfill_rotation_tiers(primary_tier)) | frozenset(_BACKFILL_CLAUDE_ROTATION)
+
+
+def accepted_tiers_for_seat(seat: str, tier_by_seat: dict[str, str] | None = None) -> frozenset[str]:
+    """Every tier seat_map.build may record for ``seat`` — default, override, and backfill."""
+    tiers_map = dict(DEFAULT_TIER_BY_SEAT)
+    if tier_by_seat:
+        tiers_map.update(tier_by_seat)
+    primary = tiers_map.get(seat, "reviewer")
+    return _backfill_emittable_tiers(primary)
 
 ALT_LIVE = "alternative-live"
 ALT_NONE = "no-alternative-live"
@@ -489,7 +512,7 @@ def build(
 
     def _backfill(seat: str) -> dict:
         tier = _tier_for(seat)
-        for try_tier in (tier, "reviewer"):
+        for try_tier in _backfill_rotation_tiers(tier):
             for vendor in seating_vendors:
                 cfg = _resolve_at_tier(seat, vendor, try_tier)
                 if cfg is not None:
@@ -498,7 +521,7 @@ def build(
                     if try_tier != tier:
                         cfg["tier"] = try_tier
                     return cfg
-        for try_tier in ("reviewer-deep", "reviewer"):
+        for try_tier in _BACKFILL_CLAUDE_ROTATION:
             cfg = _resolve_at_tier(seat, "claude", try_tier)
             if cfg is not None:
                 cfg = dict(cfg)
@@ -1077,20 +1100,6 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
             seen.add(key)
             degradations.append(rec)
     receipt_live_cells, receipt_cells_source = _live_cells_fields_for_receipt(seat_map)
-    raw_skew = seat_map.get("pluginVersionSkew")
-    if isinstance(raw_skew, dict) and isinstance(raw_skew.get("status"), str):
-        plugin_version_skew = {
-            "status": raw_skew["status"],
-            "detail": raw_skew.get("detail", ""),
-            "inspectedRoot": raw_skew.get("inspectedRoot", ""),
-        }
-    else:
-        # build()-only maps never ran compose skew detection — not-checked, never checked-clean.
-        plugin_version_skew = {
-            "status": version_skew.STATUS_NOT_CHECKED,
-            "detail": version_skew.DETAIL_NOT_COMPOSED,
-            "inspectedRoot": "",
-        }
     out = {
         "seats": seat_map.get("seats", {}),
         "degradations": degradations,
@@ -1102,7 +1111,6 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         "authorFamily": af,
         "livenessPinScoped": bool(seat_map.get("livenessPinScoped")),
         "violations": verify(seat_map, af),
-        "pluginVersionSkew": plugin_version_skew,
     }
     return out
 
@@ -1150,7 +1158,6 @@ def main(argv):
 
     args = build_parser().parse_args(argv[1:])
     if args.cmd == "compose":
-        import os
         import time
 
         notes: list[dict[str, str]] = []
@@ -1184,7 +1191,7 @@ def main(argv):
             configured = [e for e in args.configured_engines.split(",") if e]
             needed_override = reachable_configs(configured, pins) if pins else None
             liveness_pin_scoped = needed_override is not None
-            live, live_cells, _liveness, notes, live_cells_source = (
+            live, live_cells, _liveness, notes, live_cells_source, _cache_provenance = (
                 preflight_probe.live_vendors_for_composition(
                     configured,
                     needed_override=needed_override,
@@ -1205,21 +1212,6 @@ def main(argv):
             live_cells_source=live_cells_source,
         )
         extra_degradations: list[dict[str, str]] = []
-        plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        # bite-axis: skew record reaches the receipt before to_receipt derives it — a record
-        # appended after can never be seen by the evidence check (#677; same ordering bound as
-        # the preflight notes merge below).
-        skew_record = version_skew.detect(args.repo_root, plugin_root)
-        sm["pluginVersionSkew"] = {
-            "status": skew_record["status"],
-            "detail": skew_record["detail"],
-            "inspectedRoot": skew_record["inspectedRoot"],
-        }
-        # bite-axis: only statuses version_skew.appends_degradation declares reach degradations —
-        # checked-clean and not-checked stay off the list so a clean or skipped check never reads
-        # as degraded (#677; rule lives in version_skew.py; if-and-only-if with CONVENTIONS §6).
-        if version_skew.appends_degradation(skew_record.get("status")):
-            extra_degradations.append(skew_record)
         if notes:
             extra_degradations.extend(notes)
         if extra_degradations:

@@ -6,9 +6,8 @@ drift notice on every run. Strictly READ-ONLY — viewing never writes, so it ca
 confirm provisional calibration (FR-18). Terminal-first; no graphical rendering.
 
 v2: the old config-file `## Permission posture` section is retired — `permission_rules` is dead
-and there is nothing to render. Owner-authority narrowing is via a hand-edited allow file
-(`owner-authority-allow.json`), not configure. In its place
-this screen carries the v2 dispatch-calibration observability surface: the EFFECTIVE engine +
+and there is nothing to render. In its place this screen carries the v2 dispatch-calibration
+observability surface: the EFFECTIVE engine +
 model for each v2 dispatch role (`## Dispatch calibration`), and the Codex model-pin detail
 (`## Engine model pins (Codex)`)."""
 import json

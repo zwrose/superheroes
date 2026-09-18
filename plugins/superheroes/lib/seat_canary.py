@@ -16,7 +16,10 @@ import canary_outcome  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
+import model_registry  # noqa: E402
 import review_findings_schema  # noqa: E402
+import seat_bundle  # noqa: E402
+import seat_map  # noqa: E402
 
 PLANT_MARKER = "verify_submission"
 
@@ -50,6 +53,116 @@ repo-relative file path from that repository and the top-level definition it con
 list that path in `investigated`. A review that lists nothing in `investigated` has not grounded
 itself and will be graded as not engaged.
 """ % review_findings_schema.example_prompt_block()
+
+
+def _identity_refusal(reason, detail):
+    return {
+        "ok": False,
+        "reason": reason,
+        "detail": detail,
+    }
+
+
+def _resolve_canary_identity(seat_key, seat_config):
+    """Derive the four-key dispatch seat from seat-map identity; refuse without a tier."""
+    if not isinstance(seat_key, str) or not seat_key.strip():
+        return _identity_refusal(
+            "seat-identity-absent",
+            "seat_canary requires --seat-key and seat config with tier from the seat map",
+        )
+    if not isinstance(seat_config, dict):
+        return _identity_refusal(
+            "seat-identity-absent",
+            "seat_canary requires seat config dict with vendor, model, effort, and tier",
+        )
+    if "tier" not in seat_config:
+        return _identity_refusal(
+            "tier-absent",
+            "seat config must carry tier (registry role name); seat key %r" % seat_key.strip(),
+        )
+    tier = seat_config.get("tier")
+    if not isinstance(tier, str) or tier not in model_registry.roles():
+        valid = ", ".join(model_registry.roles())
+        return _identity_refusal(
+            "unknown-tier",
+            "tier %r is not a registry role; valid roles: %s" % (tier, valid),
+        )
+    seat_name = seat_key.strip()
+    if seat_name not in seat_map.PANEL_ROSTER:
+        valid = ", ".join(sorted(seat_map.PANEL_ROSTER))
+        return _identity_refusal(
+            "unknown-seat-key",
+            "seat key %r is not a panel seat; accepted seat keys: %s"
+            % (seat_name, valid),
+        )
+    accepted_tiers = seat_map.accepted_tiers_for_seat(seat_name)
+    if tier not in accepted_tiers:
+        if len(accepted_tiers) == 1:
+            canonical_tier = next(iter(accepted_tiers))
+            return _identity_refusal(
+                "seat-tier-mismatch",
+                "seat key %r requires tier %r (registry role); accepted canonical "
+                "seat-bundle shape is {vendor, model, effort, tier: %r}"
+                % (seat_name, canonical_tier, canonical_tier),
+            )
+        accepted_label = ", ".join(sorted(accepted_tiers))
+        return _identity_refusal(
+            "seat-tier-mismatch",
+            "seat key %r tier %r is not accepted; accepted tiers: %s"
+            % (seat_name, tier, accepted_label),
+        )
+    vendor = seat_config.get("vendor")
+    model = seat_config.get("model")
+    if "effort" not in seat_config:
+        return _identity_refusal(
+            "effort-key-absent",
+            "seat config must include effort key (value may be null); seat key %r"
+            % seat_key.strip(),
+        )
+    effort = seat_config.get("effort")
+    seat = {
+        "vendor": vendor,
+        "model": model,
+        "effort": effort,
+        "role": tier,
+    }
+    entry = seat_bundle.resolve_entry(seat, verb="dispatch-review")
+    if not entry.get("ok"):
+        return _identity_refusal(
+            entry.get("entryReason") or "seat-unresolved",
+            entry.get("detail") or "seat resolution refused",
+        )
+    return {
+        "ok": True,
+        "seat": {
+            "vendor": entry["vendor"],
+            "model": entry["model"],
+            "effort": entry.get("effort"),
+            "role": entry["role"],
+        },
+        "seatKey": seat_key.strip(),
+        "tier": tier,
+    }
+
+
+def _unrunnable_identity_result(resolved, *, vendor=None, model=None):
+    detail = resolved.get("detail") or resolved.get("entryReason") or "seat-identity-refused"
+    return {
+        "engine": vendor,
+        "model": model,
+        "outcome": dispatch_outcome.REASON_UNRUNNABLE,
+        "engaged": False,
+        "evidence": {
+            "findings": 0,
+            "investigated": 0,
+            "tokens": None,
+            "toolCalls": None,
+            "stdoutBytes": None,
+            "wallSeconds": None,
+        },
+        "detectedPlant": False,
+        "detail": "not-dispatched: %s" % detail,
+    }
 
 
 def _safe_engagement(raw):
@@ -129,14 +242,27 @@ def _evidence_from_dispatch(res):
     }
 
 
-def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeout=300):
+def run_canary(seat_key, seat_config, *, repo_root, dispatch=None, timeout=300):
     """Dispatch the planted-defect fixture through the real seat path and score ENGAGEMENT.
+
+    ``seat_key`` and ``seat_config`` (with ``tier`` from the seat map) supply seat identity; the
+    registry role rides inside the four-key seat — never chosen locally.
 
     ``timeout`` bounds the first dispatch attempt only. On retry the runner floors its wait at
     ``RETRY_MIN_TIMEOUT`` (900 s), so worst-case wall time is ``timeout + 900`` seconds.
     """
     if dispatch is None:
         dispatch = engine_dispatch.dispatch_review
+
+    resolved = _resolve_canary_identity(seat_key, seat_config)
+    if not resolved.get("ok"):
+        vendor = seat_config.get("vendor") if isinstance(seat_config, dict) else None
+        model = seat_config.get("model") if isinstance(seat_config, dict) else None
+        return _unrunnable_identity_result(resolved, vendor=vendor, model=model)
+
+    seat = resolved["seat"]
+    vendor = seat["vendor"]
+    model_id = seat["model"]
 
     prompt_path = None
     try:
@@ -147,10 +273,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
 
         try:
             res = dispatch(
-                engine,
-                model=None,
-                effort=effort,
-                engine_model=engine_model,
+                seat=seat,
                 prompt_path=prompt_path,
                 repo_root=repo_root,
                 timeout=timeout,
@@ -158,8 +281,8 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
             )
         except Exception as exc:
             return {
-                "engine": engine,
-                "model": engine_model,
+                "engine": vendor,
+                "model": model_id,
                 "outcome": dispatch_outcome.REASON_UNRUNNABLE,
                 "engaged": False,
                 "evidence": {
@@ -211,14 +334,16 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
                     "engaged artifact, delivery failed — re-dispatch required")
 
         return {
-            "engine": engine,
-            "model": engine_model,
+            "engine": vendor,
+            "model": model_id,
             "outcome": outcome,
             "engaged": engaged,
             "evidence": _evidence_from_dispatch(res),
             "detectedPlant": detected_plant,
             "detail": detail,
             "sanitizedView": res.get("sanitizedView"),
+            "seatKey": resolved.get("seatKey"),
+            "tier": resolved.get("tier"),
         }
     finally:
         if prompt_path and os.path.isfile(prompt_path):
@@ -232,6 +357,9 @@ def main(argv):
     ap = argparse.ArgumentParser(prog="seat_canary")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("probe")
+    p.add_argument("--seat-key", required=True)
+    p.add_argument("--tier", required=True,
+                   help="Seat-map tier (registry role name) for this probe")
     p.add_argument("--engine", required=True, choices=("codex", "cursor"))
     p.add_argument("--engine-model", required=True)
     # Optional, defaulting to None (#963): the registry's cursor implementer/code-fixer config is
@@ -246,10 +374,15 @@ def main(argv):
     p.add_argument("--repo-root", required=True)
     p.add_argument("--timeout", type=int, default=300)
     args = ap.parse_args(argv)
+    seat_config = {
+        "vendor": args.engine,
+        "model": args.engine_model,
+        "effort": args.effort,
+        "tier": args.tier,
+    }
     res = run_canary(
-        args.engine,
-        engine_model=args.engine_model,
-        effort=args.effort,
+        args.seat_key,
+        seat_config,
         repo_root=args.repo_root,
         timeout=args.timeout,
     )

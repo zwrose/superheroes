@@ -152,17 +152,22 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 #### A1 — Owner-authority gate
 
-- **Component.** PreToolUse(Bash) gate and classifier that ask before enumerated owner-authority
-  actions on calibrated projects; it costs a stdin parse and command inspection on every Bash call.
+- **Component.** PreToolUse(Bash) gate and classifier that asked before enumerated owner-authority
+  actions on calibrated projects; it cost a stdin parse and command inspection on every Bash call.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing an
   owner-authority gate `ask` that blocked an unauthorized merge, release, force-push, default-branch
-  push, or workflow dispatch. On firing, a proposal to the owner at a gardening pass.
+  push, or workflow dispatch. On firing, a proposal to the owner at a gardening pass. **Retired —
+  condition moot.**
 - **Last demonstrated benefit.** Re-derived tool-to-subcommand matching to close a silent
-  classification bypass in workflow dispatch (#989).
+  classification bypass in workflow dispatch (#989). **False-positive specimen (issue #1264
+  retirement build, 2026-09-16):** during this build the gate refused a plain read-only `grep` census
+  command, classifying it as `run-workflow` because the pattern list it read contained those words.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural — implements the never-merge-on-agent-authority hard line; a zero citation
-  count means the floor is holding, not that the bypass class is gone.
+- **Decision.** retired — issue #1264 (C5 merge-gate retirement).
+- **Notes.** structural — implemented the never-merge-on-agent-authority hard line as a mechanical
+  tripwire; retired because merge approval now rests on the owner's scoped word plus advisor
+  discipline (`PHILOSOPHY.md` promise 1, showrunner charter merge duty) and the gate's
+  false-positive cost outweighed its remaining tripwire value.
 
 #### A2 — Worktree guard
 
@@ -243,12 +248,13 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** Plugin-version skew detector appended to seat-map degradations; K2 retires it with
   trigger to rebuild at the front door when a real skew incident recurs.
 - **Condition.** Citation-based, 45 days: real skew-incident receipts (the K2 rebuild trigger). On
-  firing, a rebuild proposal to the owner at a gardening pass.
+  firing, a rebuild proposal to the owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — issue #1264 (C5 merge-gate retirement).
 - **Notes.** capability-gap — detection-only record with zero recorded firings; the motivating
-  incident (#675) predates the module and was fixed by other means.
+  incident (#675) predates the module and was fixed by other means. The K2 rebuild trigger survives
+  the retirement as a revisit-registry row on the standing collector.
 
 ### B. Launch & wave machinery
 
@@ -382,20 +388,6 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — fail-loud go/no-go before dispatch is load-bearing wave hygiene.
-
-#### C4 — Forfeit ledger
-
-- **Component.** The durable forfeit ledger and attribution decider (`forfeit_ledger.py`); it costs
-  disk rows and gardening-pass read time, and records every terminal dispatch with telemetry and
-  attribution outside the session that produced it.
-- **Condition.** Usage-based, 60 days: the signal is `forfeit_ledger.py report` reads or gardening
-  pass rows that cite a ledger path when attributing a dispatch forfeit. On firing, a proposal to
-  the owner at a gardening pass.
-- **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural — the ledger is a record, never a control input; absence of reads is not
-  proof it is unused.
 
 #### C5 — Payload/findings contracts
 
@@ -1029,7 +1021,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
   owner at a gardening pass.
 - **Last demonstrated benefit.** Separated stdout-cap truncation from `worktree-dirtied-by-attempt`
   so a long implementer report forfeits with an explicit cap reason instead of a dirtied-worktree
-  misread (#1109 hardening class, `dispatch-mechanics.md`).
+  misread (dispatch hardening class, `dispatch-mechanics.md`).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — external engines paste long receipts; the cap bounds what the runner
@@ -1091,11 +1083,14 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 - **Component.** Not a census row. The grading helper that refuses a P0 or P1 claim, and queues a
   cleared P2 instead of filing, when the project has no stamped severity ladder
-  (`front_door.py`). It costs one profile read per graded claim.
+  (`front_door.py`); it also refuses any P0 claim when the project has no stamped
+  `p0Definition`, because an unstamped definition gives nothing to govern the claim against.
+  It costs one profile read per graded claim.
 - **Condition.** Citation-based, 45 days: vet, walk, or incident receipts citing a door refusal
-  (`ladder-unstamped`, `band-unknown`, `evidence-argued`, `p0-band-excluded`) that stopped a filing
-  from expanding its own authority. On firing, a proposal to the owner at a gardening pass. A zero
-  citation count means no filing tried to claim a band it could not cite, not that the door can go.
+  (`ladder-unstamped`, `band-unknown`, `evidence-argued`, `p0-band-excluded`,
+  `p0-definition-unstamped`) that stopped a filing from expanding its own authority. On firing, a
+  proposal to the owner at a gardening pass. A zero citation count means no filing tried to claim a
+  band it could not cite, not that the door can go.
 - **Last demonstrated benefit.** Recorded refusals on a throwaway profile with no ladder, and the
   advisor's own probe at vet reproducing every refusal (the configuration-items child's build
   record and its vet receipt).
@@ -1120,6 +1115,188 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** capability-gap — a person could create two labels by hand; the helper exists so the
   routing vocabulary is present before the first issue is routed.
+
+#### S7 — Bite-proof pointer census
+
+- **Component.** Not a census row. The pointer census in
+  `plugins/superheroes/lib/tests/test_bite_proof_doctrine.py`: the hand-maintained
+  `_CONSUMER_ROSTER` of consumer sections with their `rubric/bite-proof.md` pointer counts, plus the
+  completeness walker that refuses any pointer-carrying section the roster does not name. It costs a
+  roster row every time a shipped surface gains a deliberate pointer at the bite-proof home.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the pointer
+  census catching a real drift — a rostered section that lost its pointer, a section that gained an
+  unrostered one, or a consumer section that moved. On zero citations for the full window, a
+  proposal to the owner at a gardening pass. A zero count reads as the roster holding rather than as
+  the census being idle: the walker's refusal is what keeps the roster from going stale unnoticed,
+  so its success is quiet by construction.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the one-home rule is what makes a second pointer a deliberate act, and
+  this census is what keeps that act from being absorbed silently; no change of host or model
+  removes the need.
+
+#### S8 — Seat-bundle entry chokepoint
+
+- **Component.** Not a census row. `seat_bundle.resolve_entry` in `plugins/superheroes/lib/seat_bundle.py`:
+  the one resolver every dispatch entry path routes through (`dispatch-review`, `dispatch-write`,
+  brief-check mode, `dispatch_guard check`, and the command-builder CLI). It validates a caller's
+  seat bundle in a fixed leg order — the role is real, the role agrees with the mode, the role
+  agrees with the verb, the model and effort are valid for that vendor, and only then the
+  allowlist — and refuses with text naming what would have been accepted. Its cost is that every
+  new entry path must route through it rather than reading seat fields itself.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  chokepoint refusal from the entry-refusal vocabulary (see the entry refusal reasons section of
+  `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md`) that
+  stopped a dispatch from running a seat it was not entitled to. On firing, a proposal to the owner at a gardening pass. A
+  zero citation count means no dispatch tried an unauthorized seat past the chokepoint, not that the
+  gate can go.
+- **Last demonstrated benefit.** Before the chokepoint, the seat's registry role was a separate
+  argument every caller decided independently and four of them decided wrong; the chokepoint made
+  one function the only place that decides (this child's build record on PR #1283 and the bite-proof
+  record `plugins/superheroes/lib/tests/bite_proofs/wo_1269_chokepoint.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a single entry resolver guards how dispatch seats are authorized; a zero
+  citation count means callers are not attempting unauthorized seats, not that bypass paths vanished.
+  Retired `test_chokepoint_invariant_all_paths_use_resolve_entry` and the hand-listed `_CLI_CASES`
+  tuple (FR-B1 — a census on another gate; resolver bite-proof is `wo_1269_chokepoint.md`).
+
+#### S9 — Spawn-time allowlist gate
+
+- **Component.** Not a census row. The spawn-time allowlist re-validation in
+  `plugins/superheroes/lib/engine_dispatch.py`: `_spawn_allowlist_verdict` re-validates the seat
+  from the journal's stored `resolvedInputs` snapshot before any engine process starts, and the
+  argv that runs is derived from that validated snapshot rather than stored separately alongside
+  it. A safety refusal at this gate folds as a terminal refusal returned to the caller, not as an
+  engine forfeit. Its cost is that a journal written before the snapshot existed refuses rather
+  than spawning.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  spawn-gate refusal (`run seat cannot be established`, `spawn argv does not match resolvedInputs
+  snapshot`, or an allowlist refusal replayed from the journal seat snapshot) or an argv/snapshot
+  divergence caught at spawn. On firing, a proposal to the owner at a gardening pass. A zero
+  citation count means no continuation, retry, or run-child re-entry slipped the entry gate, not
+  that the spawn gate can go.
+- **Last demonstrated benefit.** It closed the paths that had slipped the entry gate — the
+  continuation spawn, the retry attempt, and the run-child re-entry all re-read the journal seat
+  instead of trusting caller argv (this child's build record on PR #1283 and
+  `plugins/superheroes/lib/tests/bite_proofs/wo_10_1269_spawn_gate.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — spawn-time re-validation guards argv coherence independent of which
+  engine family runs the seat.
+
+#### S10 — Entry-doc determinism guard
+
+- **Component.** Not a census row. `/usr/bin/python3 -B plugins/superheroes/lib/dispatch_entry_doc.py --check`, which
+  regenerates the entry doc from the dispatch shell's own argparse declarations and refuses when
+  the committed `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md` differs from a
+  fresh generation — including the doc's declared-vocabulary sections, so a vocabulary change without
+  regeneration is refused — plus the cross-process determinism test that guards it, plus the `--check`
+  branch's stale-doc refusal test and its distinct missing-doc refusal test. Its cost is that any
+  change to a dispatch flag's declaration or a declared vocabulary requires regenerating the doc in the same change.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
+  `test_generated_doc_matches_committed_file` (the CI guard) or a local
+  `/usr/bin/python3 -B plugins/superheroes/lib/dispatch_entry_doc.py --check` refusal (`is stale` / `is missing`)
+  catching a committed `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md` that had
+  drifted from the argparse declarations. On firing, a proposal to the owner at a gardening pass. A
+  zero citation count means the doc and the declarations have stayed together, not that the guard can
+  go.
+- **Last demonstrated benefit.** The generated doc had embedded a Python object address, so it
+  could not be regenerated identically; the sentinel now renders in the doc's own vocabulary and a
+  cross-process determinism test guards it (this child's build record on PR #1283 and
+  `plugins/superheroes/lib/tests/bite_proofs/wo_9_1269_doc_determinism.md` and
+  `plugins/superheroes/lib/tests/bite_proofs/wo_o7_1269_entry_channel.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — doc generated from argparse declarations guards declaration drift by
+  construction; a zero citation count means no drift reached commit, not that drift is impossible.
+
+#### S11 — Entry-refusal reason census
+
+- **Component.** Not a census row. The closed `ENTRY_REFUSAL_REASONS` vocabulary in
+  `plugins/superheroes/lib/seat_bundle.py`, the producer-side behavioural census in
+  `plugins/superheroes/lib/tests/test_engine_dispatch.py`
+  (`test_entry_refusal_producer_census_declared_reasons`), the chokepoint provenance census against
+  `_entry_refusal_terminal` with and without an opened run
+  (`test_entry_refusal_reason_census_provenance_by_declared_set`), plus the chokepoint refusal for
+  undeclared reasons (`test_entry_refusal_chokepoint_rejects_undeclared_reason`). Its cost is that
+  every new outward entry-refusal reason must be added to the declared set before it can pass the
+  chokepoint; the outcome channel is written unconditionally by the chokepoint and the declared
+  vocabulary governs the additive `entryReason` key.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  receipt carrying `entryReason: entry-reason-undeclared` that caught a reason outside the declared
+  vocabulary before dispatch ran. On firing, a proposal to the owner at a gardening pass. A zero
+  citation count means no undeclared reason reached the chokepoint, not that the census can go.
+- **Last demonstrated benefit.** The hand-maintained audited-functions list in the syntactic census
+  could not see a new refusal path; the declared set plus chokepoint refusal closed that gap (this
+  child's build record and `plugins/superheroes/lib/tests/bite_proofs/wo_census_1269.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a closed reason vocabulary with chokepoint enforcement and a producer-side
+  behavioural census guards declared outward reasons on real entry paths; a zero citation count means
+  callers are not hitting undeclared reasons, not that new paths cannot forget to declare. Retired
+  `test_entry_refusal_producer_undeclared_reason_becomes_entry_reason_undeclared` because it proved
+  the path by monkeypatching the resolver — a synthetic path, replaced by a bite-proof that plants
+  the drift in a real producer. Retired the syntactic AST call-graph census
+  (`test_entry_refusal_chokepoint_invariant_returns_trace_to_approved_producers` and helpers) and the
+  inline-stamp census
+  (`test_entry_refusal_chokepoint_invariant_no_inline_run_dir_or_run_opened_stamp`) because
+  hand-maintained lists were invisible to new refusal paths.
+
+#### S12 — resolvedInputs source-marker chokepoint
+
+- **Component.** Not a census row. `_put_resolved` in `plugins/superheroes/lib/engine_dispatch.py`:
+  the membership check that refuses any undeclared `<field>Source` marker before writing into a
+  `resolvedInputs` snapshot, backed by the closed `SOURCE_MARKERS` vocabulary in
+  `plugins/superheroes/lib/resolved_inputs_vocab.py` and the live-dispatch behavioural tests in
+  `plugins/superheroes/lib/tests/test_resolved_inputs_vocab.py`
+  (`test_put_resolved_refuses_undeclared_marker`, `test_put_resolved_accepts_every_source_marker`,
+  `test_live_dispatch_undeclared_marker_surfaces_as_unrunnable`,
+  `test_live_dispatch_snapshot_source_markers_are_declared`). Its cost is that every new source
+  marker must be added to the vocabulary before a producer can write it.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
+  receipt carrying `reason: unrunnable` with `detail: internal-UndeclaredSourceMarker` that caught
+  an undeclared `<field>Source` marker that would otherwise have reached a `resolvedInputs`
+  snapshot. On firing, a proposal to the owner at a gardening pass. A zero citation count means no
+  producer wrote an undeclared marker, not that the chokepoint can go.
+- **Last demonstrated benefit.** An undeclared marker planted at a real producer terminated the
+  dispatch as `unrunnable` before the run opened (`plugins/superheroes/lib/tests/bite_proofs/wo_a_1296_marker_chokepoint.md`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a closed marker vocabulary with chokepoint enforcement guards declared
+  source provenance on real producer paths; a zero citation count means producers are not writing
+  undeclared markers, not that new paths cannot forget to declare.
+
+#### S13 — Retired tier-vocabulary census
+
+- **Component.** The retired-tier-vocabulary census in
+  `plugins/superheroes/lib/tests/test_disposition_flow.py`, with two legs. The first,
+  `_assert_retired_tier_literals_absent`, reads every shipped doctrine surface the module already
+  knows — `_TOUCHED_FILES` plus `skills/showrunner/reference/issue-contract.md` — with
+  `_TIER_VOCAB_NOT_YET_MIGRATED` now empty, and fails on any of the four retired tier literals
+  (`Tier 1`, `Tier 2`, `Tier-1`, `Tier-2`). The second walks every shipped markdown file under
+  `plugins/superheroes/` except `plugins/superheroes/lib/tests/` (fixtures and bite-proof records,
+  which quote retired text on purpose) and `plugins/superheroes/CHANGELOG.md` (generated release
+  history) and fails when the retired gate heading `## The worth-it gate and the venue ladder` or the
+  bare phrase `worth-it gate` appears. It costs one file read per censused surface plus one tree
+  walk per suite run. A surface leaves `_TIER_VOCAB_NOT_YET_MIGRATED` in the same change that renames
+  its text, never before.
+- **Condition.** Catch-based, 45 days: real catches — a retired tier literal or retired gate phrase
+  reappearing in a shipped surface and being caught on either leg rather than in review. On firing, a
+  proposal to the owner at a gardening pass. A zero count means the retired vocabulary is staying
+  retired, which is the expected steady state, not evidence the census should go.
+- **Last demonstrated benefit.** The rename of the routing vocabulary left two shipped copy-holders
+  on the retired names with no detector bound to them, and the single-literal census was green on
+  exactly the drift it was minted to catch; the extended set is what closes that.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a doc-to-doc vocabulary census over the module's known surfaces plus a
+  shipped-markdown tree walk with a closed exclusion pair; coverage grows by construction as surfaces
+  migrate. **Tracked exception (2026-09-16) discharged 2026-09-16** when
+  `skills/showrunner/reference/owner-decisions.md` migrated in WO-A (`bf909d23`) and
+  `skills/discuss-open-decisions/SKILL.md` migrated in WO-B (`0ca6f4f1`), emptying
+  `_TIER_VOCAB_NOT_YET_MIGRATED` on the merged head of issue #1287.
 
 
 ## The workaround-marker inventory
