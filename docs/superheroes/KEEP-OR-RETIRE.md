@@ -904,14 +904,22 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** `engine_dispatch._derive_and_record_spawn_argv` — journals the exact argv handed
   to the engine on each attempt that reaches post-derivation launch, and refuses the attempt when
   that journal append fails; it costs one journal append per engine invocation on both the real
-  subprocess spawn path and the injected `run_engine` seam.
+  subprocess spawn path and the injected `run_engine` seam. Its **reader half** is the started-gate
+  in `_with_run_fields`, which reports an attempt's journaled argv only when that attempt also
+  carries an `engine-started` record. The two halves are one component but not one guarantee: the
+  append must happen *before* the spawn to be fail-closed, so the record's existence is by
+  construction not evidence the engine ran, and the gate is what keeps intent from being reported as
+  execution. The gate costs one dictionary lookup per attempt on a read the function already does.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
   `journal-append-failed` refusal on the spawned-argv record path, or a dispatch result whose
   top-level `argv` disagreed with the engine that actually ran. On firing, a proposal to the
   owner at a gardening pass.
-- **Last demonstrated benefit.** Birth bite-proof recorded at
-  `plugins/superheroes/lib/tests/bite_proofs/spawned-argv-record.md` (three guarded elements,
-  each red → restore → green).
+- **Last demonstrated benefit.** A **real catch**: the condition's second clause — a dispatch result
+  whose top-level `argv` disagreed with the engine that actually ran — fired on this component's own
+  merge review, where two independent review seats found the reader reporting the argv of an attempt
+  that never reached the engine. The gate was added in response and is proven as E4. Before that, the
+  birth bite-proof at `plugins/superheroes/lib/tests/bite_proofs/spawned-argv-record.md` (now four
+  guarded elements, six proofs, each red → restore → green, all re-run on the final head).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — an audit record that can silently go missing is not an audit record;
