@@ -988,6 +988,7 @@ def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_r
     assert refusal is not None
     assert refusal["class"] == "disposition-without-receipt"
     assert refusal["artifact"] == finding["title"]
+    assert refusal["detail"] == "finding has no disposition recorded"
 
 
 def _git(cwd, *args, check=True):

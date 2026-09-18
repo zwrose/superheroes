@@ -1206,6 +1206,12 @@ def check_disposition_without_receipt(ctx):
                 fid,
                 "finding has no disposition recorded",
             )
+        if disposition not in ("fixed", "refuted", "out-of-scope"):
+            return _refusal(
+                "disposition-without-receipt",
+                fid,
+                "unknown disposition %r" % (disposition,),
+            )
         if _severity_rank(severity) == 99:
             return _refusal(
                 "disposition-without-receipt",
@@ -1290,12 +1296,6 @@ def check_disposition_without_receipt(ctx):
                         "reason": finding.get("outOfScopeReason"),
                     }
                 )
-        else:
-            return _refusal(
-                "disposition-without-receipt",
-                fid,
-                "unknown disposition %r" % (disposition,),
-            )
     ctx["important_disclosures"] = disclosures
     return None
 
