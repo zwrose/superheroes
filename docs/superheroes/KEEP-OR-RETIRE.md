@@ -311,6 +311,18 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** capability-gap — measures whether review seats investigate and name planted defects;
   evidence observed on the real dispatch path (#668).
 
+**Could-not-produce note (canary census, 2026-08-30 forward).** The C12 DoD asked for a canary
+census from 2026-08-30 forward as the receipt C13 consumes. It cannot be produced; this note is the
+receipt. Measured on the build host by the orchestrator: **43** review sessions currently on disk
+carry loop state; **25** of them record `canaryUnavailable: true`; **zero** record a canary verified
+or a canary failed (three sessions contain the strings `canaryVerified` / `canaryFailed` in prose
+only, with no recorded result value — checked); the single `_canary` landing directory on disk is
+**empty**; sessions older than roughly 2026-09-13 are **gone from `/tmp` to OS cleanup**, so the
+first two weeks of the window are unrecoverable by any route from this host. **Conclusion:** the
+plant did not run in any recoverable session in the window, and the instrument that would produce
+the receipt is not recording. **Fail direction:** because the records cannot produce the number,
+the comparator fails toward alerting (per D1's fail-toward-alerting rule).
+
 #### B5 — Environment probes
 
 - **Component.** Scaffold probes that detect harness and worktree environment faults before
@@ -597,16 +609,20 @@ The list's units are the census rows, and each entry is keyed to its census id.
   costs a contract every producer of a landed envelope must satisfy, and one chokepoint governs six
   refusals: `provenance-unknown`, `execution-evidence-malformed`,
   `execution-evidence-not-inline`, `execution-evidence-unknown-field`,
-  `execution-evidence-unexpected`, and `envelope-torn`.
+  `execution-evidence-unexpected`, and `envelope-torn`. The validator checks observation values as
+  well as the closed field set — each telemetry literal, read literal, and numeric observation
+  field is type-checked, not merely present.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing one of the six
   tokens as the thing that caught a defect or blocked a landing. On firing, a proposal to the owner
   at a gardening pass.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** structural — the envelope binds a payload to the evidence of the act that produced it,
-  and no change of host or model removes the need to know that a landed artifact was not re-paired
-  with different content. No engine family applies: it guards a data shape, not a model behaviour.
+- **Notes.** structural — the envelope binds the recorded run to this order, by comparing the
+  record's `orderPromptSha256` against the envelope's `orderSha256`. That does not prove the landed
+  payload came out of that run; the strong evidence binding closes that gap. No change of host or
+  model removes the need to know that a landed artifact was not re-paired with different content. No
+  engine family applies: it guards a data shape, not a model behaviour.
 
 #### D12 — The state-version schema fence
 
@@ -621,6 +637,300 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — a stored-state version boundary is a property of how the loop is built.
+
+#### D16 — The result-content evidence binding
+
+- **Component.** The strong evidence binding in `round_driver._assemble_dispatch_evidence` and
+  `engine_dispatch.run_execution_record`: the runner stamps `resultDigest` and `resultKind` from the
+  parse (not the grade), and the driver compares that digest to the landed envelope's
+  `payload[resultKind]` via `round_records.payload_sha256`. It costs one parse per stamped landing
+  and one refusal token: `evidence-result-mismatch`.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `evidence-result-mismatch` or a digest/kind binding refusal as the thing that caught a re-paired
+  payload or blocked a forged landing. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — digesting the parse rather than the grade keeps the vacuity forfeit
+  decision from becoming load-bearing for evidence stamping; digesting result-kind content rather
+  than the whole payload object keeps orchestrator-added envelope keys from inverting the binding.
+  No engine family applies: it guards a data shape, not a model behaviour.
+
+#### D17 — The completed-attempt gate on execution records
+
+- **Component.** `engine_dispatch._attempt_ended_successfully` and its refusal token
+  `attempt-not-completed` in `run_execution_record` — the disjunction over `refusal`, `timedOut`,
+  and non-zero `exit` that refuses to stamp evidence from an attempt that never completed cleanly.
+  It costs one journal read per execution-record call.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `attempt-not-completed` as the thing that refused to certify an incomplete dispatch. On firing, a
+  proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — whether an attempt ended cleanly is a property of the dispatch journal,
+  not of how a grader judged the stdout. No engine family applies.
+
+#### D18 — Certification receipt writer
+
+- **Component.** `round_certification.py` — the journal-backed certification receipt writer that
+  emits `certification-receipt.json` or `certification-refusal.json` beside the driver's terminal
+  receipt; it costs one full journal/state read at every terminal and four refusal-class checks before
+  a certified receipt is stamped.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing a certification
+  refusal class (`unrun-review`, `same-family-seat`, `unfetched-findings`,
+  `disposition-without-receipt`) or a missing certification artifact at a terminal that wrote
+  `round-receipt.json`. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change (#1271 C12 layer 2).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a single writer for the certified receipt is a load-bearing boundary; no
+  engine family applies.
+- **Property.** Hand-landed single-source binding — for a hand-landed seat the binding has one
+  source, the landed envelope: `round_driver._journal_revision_fields` copies `executionEvidence` from
+  that envelope into the `record-result` journal row, so the row the writer reads is derived from the
+  same envelope it is compared against, not independent corroboration. The writer resolves evidence by
+  provenance — telemetry on the certified head for a dispatch-observed seat, the envelope's
+  execution-evidence binding for a hand-landed one — never by field presence alone; it labels the seat
+  hand-landed, which forces the `audited-chain` shape and can never call such a session
+  full-panel-confirmed.
+- **Property condition.** Usage-based, 60 days: a hand-landed seat gains an independent record of its
+  landing that the journal can cross-check. On firing, a proposal to the owner at a gardening pass.
+- **Property.** A hand-landed envelope carries no cited head at all — neither
+  `round_records.SEAT_RESULT_V2_FIELDS` nor `EXECUTION_EVIDENCE_FIELDS` contains `headSha` — so a
+  hand-landed seat's evidence is bound by the envelope's payload/evidence binding and is never
+  head-bound; the writer's dead read of that absent field has been removed rather than left as a
+  guard that cannot be one.
+- **Property condition.** Usage-based, 60 days: a landed envelope carries a cited head the writer
+  can check. On firing, a proposal to the owner at a gardening pass.
+
+#### D19 — `check_unrun_review`
+
+- **Component.** `round_certification.check_unrun_review` — refuses when a dispatch-observed or
+  hand-landed seat lacks qualifying execution telemetry on the certified head; it costs one journal
+  and envelope scan per collected seat at certification time.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
+  `unrun-review` refusal class. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — engagement telemetry on the certified head is a property of how evidence
+  is bound, not of model strength. No engine family applies.
+
+#### D20 — `check_same_family_seat`
+
+- **Component.** `round_certification.check_same_family_seat` — refuses when the seat map records
+  same-family degradation against the maker's model family; it costs one seat-map receipt walk at
+  certification time.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
+  `same-family-seat` refusal class. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — panel independence is a build property guarded regardless of vendor. No
+  engine family applies.
+
+#### D21 — `check_unfetched_findings`
+
+- **Component.** `round_certification.check_unfetched_findings` — refuses when the journal leaves a
+  seat open or an on-disk envelope is not reconciled with a recorded identity; it costs one journal
+  pass and one envelope read per collected seat at certification time.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
+  `unfetched-findings` refusal class. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — journal/envelope reconciliation is load-bearing regardless of host. No
+  engine family applies.
+
+#### D22 — `check_disposition_without_receipt`
+
+- **Component.** `round_certification.check_disposition_without_receipt` — refuses when a finding's
+  disposition lacks the verification receipt, refutation reason, or out-of-scope follow-up the
+  certified-head contract requires, or when the base guard did not run; it costs one findings walk
+  at certification time.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
+  `disposition-without-receipt` refusal class. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change. Its two disposition-class
+  guards carry a recorded bite-proof at
+  `plugins/superheroes/lib/tests/bite_proofs/disposition-class-guards.md` (three detectors, each
+  red → restore → green at the child's build head).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — disposition receipts on the certified head are receipts-before-claims
+  regardless of model. No engine family applies.
+
+#### D29 — Disposition-class guard pinning tests
+
+- **Component.** `test_check_disposition_without_receipt_missing_disposition_refuses` and
+  `test_check_disposition_without_receipt_unknown_disposition_refuses` in
+  `test_round_certification.py`, together with the `detail` assertion added to
+  `test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions`
+  in `test_round_driver_integration.py` — they pin each of D22's two disposition-class guards to its
+  own line by asserting the refusal's `detail`, not only its shared `class` and `artifact`. They cost
+  two unit tests and one assertion.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing either test by
+  name as the thing that caught a removed or bypassed disposition-class guard. On firing, a proposal
+  to the owner at a gardening pass.
+- **Last demonstrated benefit.** Birth bite-proof recorded at
+  `plugins/superheroes/lib/tests/bite_proofs/disposition-class-guards.md`. The gap they close was a
+  measured one: before this change, neutralizing either guard left the other refusing with the same
+  class and artifact, so the seam test passed on a code path it was written to forbid.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — whether a guard is pinned to its own line is a property of the assertion,
+  not of model strength. No engine family applies. The C13 flip converts the seam test's refusal
+  assertion to a certifying one under R28's first clause; these two unit tests are unaffected by that
+  flip and stay.
+
+#### D23 — `build_interim_receipt`
+
+- **Component.** `round_driver.build_interim_receipt` — the loop's own progress artifact on the CLI
+  and advance path (not a certification); it costs a second receipt-shaped builder beside the
+  certification writer until FR-D9 retires it.
+- **Condition.** Usage-based, 60 days: the signal is CLI/advance invocations that write
+  `round-receipt-interim.json` against terminal certifications written in the same window — a zero
+  count means the interim path is unused, not that certification absorbed progress reporting. On
+  firing, a retirement proposal to the owner at a gardening pass at FR-D9.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — interim progress disclosure is structural on long CLI sessions; maintaining a
+  second receipt builder is capability-gap baggage until FR-D9 lands the single-writer cut.
+
+#### D24 — One-home identity tests (`receipt_disclosures` / `record_paths`)
+
+- **Component.** `test_receipt_disclosures_home.py` — by-construction identity assertions over each
+  leaf module's own `__all__`: every name the driver and the certification writer re-export must be
+  the same function object as the leaf defines, so a re-introduced mirror copy fails instead of
+  drifting quietly; it costs two import walks per suite run.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `test_receipt_disclosures_exports_match_driver_and_writer` or
+  `test_record_paths_exports_match_records_and_writer` as the thing that caught a re-introduced copy
+  or a writer/driver alias drift. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Bite-proof recorded at
+  `plugins/superheroes/lib/tests/bite_proofs/receipt-disclosures-home.md` (planted duplicate
+  `declared_disclosures` in the writer).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — one home per shared vocabulary is a property of how the certification
+  boundary is built; the test's export list is the coverage, not a hand-maintained duplicate list.
+  No engine family applies: it guards import identity, not model behaviour.
+
+#### D25 — Certification fixture generator drift test
+
+- **Component.** `test_round_certification_fixture_generator_drift.py` — regenerates every
+  `round_certification` session fixture from `generate_round_certification_fixtures.py` and
+  compares the tree to `fixtures/round_certification_generated/`; it costs one full regeneration per
+  suite run and refuses silent fixture/producer divergence.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `test_generated_certification_fixtures_match_producer` as the thing that caught a checked-in
+  fixture diverging from the production chokepoint. On firing, a proposal to the owner at a
+  gardening pass.
+- **Last demonstrated benefit.** Bite-proof recorded at
+  `plugins/superheroes/lib/tests/bite_proofs/fixture-generator-drift.md` (planted extra key in a
+  checked-in `meta.json`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — fixtures that drift from their producer lie about what the writer tests;
+  the generator's `FIXTURE_BUILDERS` list is the by-construction coverage. No engine family applies.
+
+#### D26 — Head-content producer (`head-content-blobs/2`)
+
+- **Component.** The head-content producer in `round_driver.py` (`_persist_head_content_blobs`,
+  `_head_content_read_row`) — the `git show` read at the certified head that writes
+  `head-content-blobs.json`; it costs one subprocess read per fixed path on each fixer fold.
+- **Condition.** Usage-based, 60 days: certified review rounds whose fixer fold writes
+  `head-content-blobs.json` through this producer. On firing, a proposal to the owner at a
+  gardening pass.
+- **Last demonstrated benefit.** Four-case round-trip smoke at
+  `plugins/superheroes/lib/tests/test_head_content_producer.py` (text with trailing newline,
+  non-UTF-8 round-trip, missing path as failed read, unresolved head as failed read).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — one producer function writes the file and one reader consumes it; the
+  producer's chokepoint is the by-construction coverage. No engine family applies: it guards a data
+  shape, not a model behaviour.
+
+#### D27 — Head-content recomputation check (`_fix_still_present_at_head`)
+
+- **Component.** `round_certification._fix_still_present_at_head` step 8 — the writer recomputes the
+  digest over the bytes the blob carries and refuses a mismatch; it costs one blob read and one hash
+  per `fixed` finding at certification time.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `fix-content-reverted` or `fix-content-schema-unsupported` as the thing that refused a fixed
+  disposition on head-content grounds. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Bite-proof recorded at
+  `plugins/superheroes/lib/tests/bite_proofs/wo_a3_1271.md`.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — one reader (`_fix_still_present_at_head`) consumes the producer's file;
+  the nine-step ordered decision table in `certification-surface.md` is the by-construction
+  coverage. **Residual:** the check refuses a blob whose recorded content does not hash to its
+  recorded digest, but a journal-only writer that may not read git **cannot** verify that a read
+  ever happened, so a fully self-consistent forgery passes. No engine family applies.
+
+#### D28 — `check_evidence_head_bound`
+
+- **Component.** `round_certification.check_evidence_head_bound` — refuses when the session's
+  certified head cannot be resolved or when a dispatch-observed seat row cites no head; it costs one
+  `_certified_head_sha` resolution plus one collected-seat walk at certification time.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `execution-evidence-head-unbound` or `certified-head-unresolvable`. On firing, a proposal to the
+  owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change. Birth bite-proof recorded at
+  `plugins/superheroes/lib/tests/bite_proofs/head-binding-check.md` (both legs red → restore →
+  green, run at the child's final head).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — binding evidence to a head is a property of how evidence is bound, not of
+  model strength. No engine family applies.
+
+#### D30 — Orders-manifest seat-entry roster refusal
+
+- **Component.** `round_certification._orders_emitted_roster_or_refusal` — refuses when a
+  hash-authenticated orders manifest holds any unusable `seats` entry (non-object entry, missing or
+  empty `seat`, or a present but non-negative-int `occurrence`); it costs one manifest read and one
+  pass over the `seats` mapping per orders-emitted roster derivation.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
+  `unfetched-findings` refusal class on an orders-manifest seat-entry detail string. On firing, a
+  proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Birth bite-proof recorded at
+  `plugins/superheroes/lib/tests/bite_proofs/orders-roster-entry-refusal.md` (three guarded edges,
+  each red → restore → green).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a producer defect that silently narrows the opened-seat roster would
+  shrink certification coverage without disclosure; refusing by construction is load-bearing
+  regardless of host. No engine family applies.
+
+#### D31 — Fail-closed spawned-argv journal record
+
+- **Component.** `engine_dispatch._derive_and_record_spawn_argv` — journals the exact argv handed
+  to the engine on each attempt that reaches post-derivation launch, and refuses the attempt when
+  that journal append fails; it costs one journal append per engine invocation on both the real
+  subprocess spawn path and the injected `run_engine` seam. Its **reader half** is the started-gate
+  in `_with_run_fields`, which reports an attempt's journaled argv only when that attempt also
+  carries an `engine-started` record. The two halves are one component but not one guarantee: the
+  append must happen *before* the spawn to be fail-closed, so the record's existence is by
+  construction not evidence the engine ran, and the gate is what keeps intent from being reported as
+  execution. The gate costs one dictionary lookup per attempt on a read the function already does.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
+  `journal-append-failed` refusal on the spawned-argv record path, or a dispatch result whose
+  top-level `argv` disagreed with the engine that actually ran. On firing, a proposal to the
+  owner at a gardening pass.
+- **Last demonstrated benefit.** A **real catch**: the condition's second clause — a dispatch result
+  whose top-level `argv` disagreed with the engine that actually ran — fired on this component's own
+  merge review, where two independent review seats found the reader reporting the argv of an attempt
+  that never reached the engine. The gate was added in response and is proven as E4. Before that, the
+  birth bite-proof at `plugins/superheroes/lib/tests/bite_proofs/spawned-argv-record.md` (now four
+  guarded elements, six proofs, each red → restore → green; the record names the head each red was
+  taken at rather than claiming one head for all of them).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — an audit record that can silently go missing is not an audit record;
+  fail-closed append before engine invocation is load-bearing regardless of host. Applies to all
+  engine families.
 
 #### D13 — The order-bound evidence channel
 
@@ -642,9 +952,22 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** capability-gap — it exists because a dispatched seat cannot presently be trusted to
   report its own engagement, and a host that recorded tool calls natively and verifiably would
   remove the need. Whether a dispatched seat with no runner-side telemetry is refused is decided by
-  the certification receipt writer's unrun-review check in layer 2 (Spec B FR-D8), not here; **C11
-  (#1270)** is the child that gives codex a runner-side record and therefore closes the gap. No
-  engine family is named for the binding itself; the reason it exists is engine-general.
+  the certification receipt writer's unrun-review check in layer 2 (Spec B FR-D8), not here; **C12
+  (#1271)** is the child that gives codex a runner-side record from its own event stream and
+  therefore closes the gap. No engine family is named for the binding itself; the reason it exists
+  is engine-general.
+
+#### D13b — `engine_adapter.codex_tokens_used` (pre-`--json` stderr read-back)
+
+- **Component.** `engine_adapter.codex_tokens_used` — parsed the codex stderr `"tokens used"` block
+  that `--json` removes; superseded by `codex_event_tokens` on the event stream (#1271 C12).
+- **Condition.** Retired 2026-09-17 (#1271 P3-B): no production read-back path scanned stderr for
+  pre-C12 records; the usage-based condition could never observe calls into the function.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** retired — `codex_event_tokens` is the sole token reader on new dispatch paths.
+- **Notes.** harness-limit — the function and its unit tests were removed; historical records that
+  still cite `codex-stderr` observation source remain readable through fixture coverage only.
 
 #### D14 — The record-identity CAS-token agreement
 
@@ -1013,6 +1336,28 @@ The list's units are the census rows, and each entry is keyed to its census id.
   against 0.32.0 current (the assessment record, H4 reframing).
 
 ### Supplemental entries
+
+#### S7 — `run_loop`'s certified path (retired)
+
+- **Component.** Not a census row. The library `run_loop` path that materialized a temp session and
+  called `certify` to return a certified receipt over synthesized journal rows when no per-seat
+  envelopes existed on disk.
+- **Condition.** Usage-based: the retirement condition that **reopens** it is *"a consumer needs a
+  certified receipt from a library run"*, at which point the path is **rebuilt on real persisted
+  per-seat envelopes as its own child, never patched back.* That rebuild child also routes both
+  hand-built `writer-fault` envelopes in `round_driver._run_loop_certified_receipt`
+  (`plugins/superheroes/lib/round_driver.py:4817–4822`, `4827–4832`) through
+  `round_certification.writer_fault()` — review finding v19, carried open and inert rather than
+  patched on a surface the third-rework tripwire has closed.
+- **Last demonstrated benefit.** none — the path certified over synthesized evidence; that is why it
+  retired. The receipt for the retirement is this PR.
+- **Consumer evidence.** unmeasured.
+- **Decision.** retired — library `run_loop` always returns class `unrun-review` on artifact
+  `driver-journal.jsonl`, carrying loop observables; never a certified receipt and never a
+  fallback.
+- **Notes.** capability-gap — it compensated for the library path persisting no per-seat evidence by
+  minting certification over synthesized journal rows; reopening requires real envelopes, not
+  restoring the shortcut.
 
 #### S1 — Dispatch stdout cap
 

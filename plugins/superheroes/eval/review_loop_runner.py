@@ -121,6 +121,17 @@ _TERMINAL_MAP = {
     "cannot-certify": "halted",
 }
 
+
+def _run_loop_return_kind(result):
+    """Distinguish a certification refusal from a driver receipt — never read refusal through receipt keys."""
+    if not isinstance(result, dict):
+        return "unexpected", result
+    if "class" in result and "verdict" not in result:
+        return "refusal", result
+    if "verdict" in result:
+        return "receipt", result
+    return "unexpected", result
+
 # INV-15: the harness's simulated maker vendor must not be seated on its review panel —
 # choose a vendor whose family is absent from the live pool so barring it yields a mixed panel.
 _EVAL_FIXER_VENDOR = "cursor"
@@ -656,13 +667,41 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             # This harness owns round-records.json via _fold_panel_persist — not the driver producer.
             "persistRecords": False,
             "coveragePath": coverage_path,
+            "baseGuard": RD.BASE_GUARD_CHECKED,
         }
         receipt = RD.run_loop(seams, config)
     finally:
         RD._fold_panel = _orig_fold_panel
 
-    driver_terminal = receipt.get("verdict")
-    terminal = _TERMINAL_MAP.get(driver_terminal, driver_terminal or "halted")
+    return_kind, driver_result = _run_loop_return_kind(receipt)
+    certification_refusal = None
+    if return_kind == "refusal":
+        loop_terminal = driver_result.get("loopTerminal")
+        if loop_terminal in _TERMINAL_MAP:
+            terminal = _TERMINAL_MAP[loop_terminal]
+        elif loop_terminal is not None:
+            terminal = loop_terminal
+        else:
+            terminal = "unexpected-driver-return"
+        artifact = driver_result.get("artifact")
+        if isinstance(artifact, str) and ("/" in artifact or os.sep in artifact):
+            artifact = os.path.basename(artifact)
+        certification_refusal = {
+            "class": driver_result.get("class"),
+            "artifact": artifact,
+            "detail": driver_result.get("detail"),
+            "bindingFailure": driver_result.get("bindingFailure"),
+        }
+    elif return_kind == "receipt":
+        driver_terminal = driver_result.get("verdict")
+        if driver_terminal is None:
+            terminal = "unexpected-driver-return"
+        elif driver_terminal in _TERMINAL_MAP:
+            terminal = _TERMINAL_MAP[driver_terminal]
+        else:
+            terminal = driver_terminal
+    else:
+        terminal = "unexpected-driver-return"
 
     round_count = max((c["round"] for c in seen), default=0)
     # Expected leaves: prefer the JS finalize schedule shape when every roster seat ran
@@ -722,7 +761,13 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
     else:
         token_total = fallback_total
 
-    return {
+    driver_receipt = receipt
+    if return_kind == "refusal":
+        driver_receipt = dict(driver_result)
+        driver_receipt["certificationShape"] = driver_result.get("loopCertificationShape")
+        driver_receipt["rounds"] = driver_result.get("loopRounds") or []
+
+    observed = {
         "terminal": terminal,
         "roundCount": round_count,
         "tokenTotal": token_total,
@@ -732,9 +777,12 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
         "seen": seen,
         "fixContexts": fix_contexts,
         "fixResults": fix_results,
-        "_driverReceipt": receipt,
+        "_driverReceipt": driver_receipt,
         "_runDir": run_dir if not own_dir else None,
     }
+    if certification_refusal is not None:
+        observed["certificationRefusal"] = certification_refusal
+    return observed
 
 
 def main(argv=None):

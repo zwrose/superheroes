@@ -35,6 +35,8 @@ C17 configuration items.
 *Owner ruling embedded:* FR-D8 ruled 2026-09-06; the module boundary ruled 2026-09-13 (read-back area 8); the provenance field ruled 2026-09-13 (stamp sitting item 8).
 *Consumers:* C12 (owns the writer), C13 (calls it at certification and at every terminal), C8 (reads dispositions from the receipt), C14 (hand-landed and CLI-Claude results go through it).
 
+*Package pointer (FR-D8):* "journal on disk" means the dispatch journals **and** the loop records.
+
 **R6 — Dispositions.** A finding has exactly one of three dispositions: fixed with a verification receipt on the certified head; refuted with a recorded reason; or out of scope with a named follow-up item that exists at certification time and carries a revisit trigger (a condition, date, or milestone, never "documented") and a class-closure line. Minor and Nit findings may take the third disposition by the review's orchestrator; an Important finding may take it only for a very good reason stated on the disposition, and the receipt writer lists every such Important finding in the receipt's disclosures block; a Critical finding may not take it at all, by anyone: fixed or refuted, or the review is uncertified and the PR merges only as owner-accepted in its body.
 *Owner ruling embedded:* the Critical prohibition and the two deferral rules ruled 2026-09-13 after the review-crew replay; the Important rider ruled 2026-09-13 at the stamp sitting (item 9).
 *Consumers:* C12 (the writer refuses a follow-up with no trigger and reads severity), C13 (the loop records dispositions), C8 (the deferral disposition contract in calmer reviews).

@@ -1641,21 +1641,113 @@ def test_strip_echoed_prompt_empty_or_non_string_inputs_unchanged_no_raise():
         assert EA.strip_echoed_prompt("keep", bad_prompt) == "keep"
 
 
-def test_codex_tokens_used_parses_trailing_block():
-    assert EA.codex_tokens_used("noise\ntokens used\n17,417\n") == 17417
+def _codex_item_completed(item_type, item_id="item_0"):
+    return json.dumps({
+        "type": "item.completed",
+        "item": {"id": item_id, "type": item_type},
+    })
 
 
-def test_codex_tokens_used_takes_last_block():
-    tail = "tokens used\n1\nmore\ntokens used\n9,876\n"
-    assert EA.codex_tokens_used(tail) == 9876
+def test_codex_tool_calls_counts_each_action_kind():
+    stream = "\n".join([
+        _codex_item_completed("command_execution", "ce"),
+        _codex_item_completed("file_change", "fc"),
+        _codex_item_completed("mcp_tool_call", "mcp"),
+        _codex_item_completed("web_search", "ws"),
+    ])
+    assert EA.codex_tool_calls(stream) == 4
 
 
-def test_codex_tokens_used_absent_garbage_empty_returns_none():
-    assert EA.codex_tokens_used("") is None
-    assert EA.codex_tokens_used("no token line here") is None
-    assert EA.codex_tokens_used("tokens used\n") is None
-    assert EA.codex_tokens_used("tokens used\nnot-a-number\n") is None
+def test_codex_tool_calls_ignores_other_item_types():
+    stream = "\n".join([
+        _codex_item_completed("agent_message", "am"),
+        _codex_item_completed("error", "err"),
+        '{"type":"item.started","item":{"type":"command_execution"}}',
+        _codex_item_completed("command_execution", "ce"),
+    ])
+    assert EA.codex_tool_calls(stream) == 1
 
+
+def test_codex_tool_calls_zero_action_items_returns_zero():
+    stream = "\n".join([
+        _codex_item_completed("agent_message", "am"),
+        '{"type":"turn.completed","usage":{"input_tokens":1}}',
+    ])
+    assert EA.codex_tool_calls(stream) == 0
+
+
+def test_codex_tool_calls_unparseable_and_empty_return_none():
+    assert EA.codex_tool_calls("") is None
+    assert EA.codex_tool_calls(None) is None
+    assert EA.codex_tool_calls("not json\nstill not") is None
+
+
+def test_codex_tool_calls_malformed_line_mid_stream_no_raise():
+    stream = "not json\n" + _codex_item_completed("command_execution") + "\n{broken"
+    assert EA.codex_tool_calls(stream) == 1
+
+
+def test_codex_event_tokens_sums_four_parts():
+    stream = json.dumps({
+        "type": "turn.completed",
+        "usage": {
+            "input_tokens": 10, "cached_input_tokens": 5,
+            "output_tokens": 3, "reasoning_output_tokens": 2,
+        },
+    })
+    assert EA.codex_event_tokens(stream) == 20
+
+
+def test_codex_event_tokens_missing_parts_count_zero():
+    stream = json.dumps({"type": "turn.completed", "usage": {"input_tokens": 7}})
+    assert EA.codex_event_tokens(stream) == 7
+
+
+def test_codex_event_tokens_non_integer_part_returns_none():
+    stream = json.dumps({
+        "type": "turn.completed",
+        "usage": {"input_tokens": "x", "output_tokens": 1},
+    })
+    assert EA.codex_event_tokens(stream) is None
+
+
+def test_codex_event_tokens_last_turn_completed_wins():
+    stream = "\n".join([
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1}}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 9}}),
+    ])
+    assert EA.codex_event_tokens(stream) == 9
+
+
+def test_codex_event_tokens_parsed_stream_without_turn_completed_returns_zero():
+    stream = "\n".join([
+        json.dumps({"type": "thread.started", "thread_id": "t1"}),
+        json.dumps({"type": "turn.started"}),
+    ])
+    assert EA.codex_event_tokens(stream) == 0
+
+
+def test_codex_event_tokens_unrecognized_stream_returns_none():
+    assert EA.codex_event_tokens("not jsonl\nstill not\n") is None
+
+
+def test_is_codex_event_stream_recognizes_telemetry():
+    stream = json.dumps({"type": "thread.started", "thread_id": "t1"})
+    assert EA.is_codex_event_stream(stream) is True
+    assert EA.is_codex_event_stream("plain text review output") is False
+
+
+def test_build_argv_result_codex_omits_json_flags():
+    r = EA.build_argv_result(_seat("codex", "gpt-5.6-sol", "high"), "review", {})
+    assert r["reason"] is None
+    assert "--json" not in r["argv"]
+    assert "--output-last-message" not in r["argv"]
+
+
+def test_build_argv_result_cursor_argv_unchanged():
+    base = EA.build_argv_result(_seat("cursor", "cursor-grok-4.6", "xhigh"), "review", {})
+    assert base["reason"] is None
+    assert "--json" not in base["argv"]
 
 def test_cursor_tool_calls_counts_distinct_call_ids():
     lines = [

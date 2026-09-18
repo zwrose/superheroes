@@ -257,6 +257,8 @@ def _execution_evidence(**over):
         "source": "runner",
         "runnerNonce": "nonce-1",
         "recordDigest": "digest-1",
+        "resultKind": "findings",
+        "resultDigest": RR.payload_sha256([]),
         "observation": {
             "tokens": None,
             "toolCalls": None,
@@ -1133,6 +1135,29 @@ def test_record_result_sweep_ingests_every_unclaimed_landing(tmp_path, adapters)
     assert len(_outcomes(d, "recorded")) == len(RD.DIMENSIONS)
 
 
+def test_sweep_recorded_journal_carries_stored_envelope_revision_identity(tmp_path, adapters):
+    """#1271 WO-A12-G finding 2: sweep must journal the stored envelope's complete revision
+    identity — provenance and execution-evidence markers — not the revision triple alone."""
+    d = _session(tmp_path)
+    seat = "code-reviewer"
+    evidence = _execution_evidence(runnerNonce="nonce-sweep")
+    _land(d, seat, provenance=RR.PROVENANCE_DISPATCH_OBSERVED, executionEvidence=evidence)
+    out = RD.cmd_record_result(d, sweep=True)
+    assert out["ok"], out
+    recorded = [e for e in _outcomes(d, "recorded") if e.get("seat") == seat]
+    assert recorded
+    row = recorded[-1]
+    pend = _pending(d)
+    spath = RR.store_path(d, pend["round"], pend["phase"],
+                          RR.storage_key(seat), pend["attempt"])
+    stored, err = RR.read_json(spath)
+    assert err is None
+    assert row["provenance"] == stored.get("provenance")
+    assert row["envelopeSha256"] == stored.get("envelopeSha256")
+    assert row["executionEvidencePresent"] == ("executionEvidence" in stored)
+    assert row["executionEvidencePresent"] is True
+
+
 def test_record_result_sweep_supersede_refuses_by_name(tmp_path, adapters):
     """T1 — `--sweep --supersede` must refuse `sweep-supersede-unsupported`, not false-success."""
     d = _session(tmp_path)
@@ -1760,6 +1785,24 @@ def test_orchestrator_fulfilled_fold_writes_the_durable_seat_record(tmp_path, ad
     assert record["fulfilledBy"] == "orchestrator"
     # reconstructed from the record alone
     assert record["payload"]["result"] == "pass"
+
+
+def test_orchestrator_fulfilled_recorded_journal_carries_stored_envelope_revision_identity(
+        tmp_path, adapters):
+    """#1271 WO-A12-G finding 2: orchestrator-fulfilled advance must journal the stored envelope's
+    complete revision identity — provenance and execution-evidence markers — not the triple alone."""
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "pass"})
+    assert _advance(d, tmp_path)["ok"]
+    recorded = [e for e in _outcomes(d, "recorded") if e.get("seat") == "verify"]
+    assert recorded
+    row = recorded[-1]
+    stored, err = RR.read_json(_verify_store_path(d))
+    assert err is None
+    assert row.get("provenance") == stored.get("provenance")
+    assert row.get("envelopeSha256") == stored.get("envelopeSha256")
+    assert row.get("executionEvidencePresent") == ("executionEvidence" in stored)
 
 
 def test_orchestrator_fulfilled_fold_writes_record_and_receipt_on_a_terminal_verify(
@@ -3520,6 +3563,46 @@ def test_death_between_ingest_and_journal_append(tmp_path, adapters):
                 if e.get("payloadSha256") == ingested["payloadSha256"]]
     assert len(recorded) == 1 and recorded[0].get("reappended") is True
     assert open(ingested["storePath"], "rb").read() == before
+
+
+def test_reappend_recorded_row_carries_stored_envelope_revision_identity(tmp_path, adapters):
+    """Reconcile reappend must journal the STORED envelope's revision identity — provenance and
+    execution-evidence markers — not the reconcile entry's payloadSha256/casToken alone. Covers
+    crash recovery and store-revision-newer-than-journal (CAS mismatch) paths."""
+    d = _session(tmp_path)
+    seat = "test-reviewer"
+    payload = {"findings": [], "confidence": "high", "seat": seat,
+               "verificationReceipt": {"ran": True}}
+    first_evidence = _execution_evidence(runnerNonce="nonce-first")
+    first = _result_envelope(d, seat, payload=payload,
+                             provenance=RR.PROVENANCE_DISPATCH_OBSERVED,
+                             executionEvidence=first_evidence)
+    _land(d, seat, payload=payload, provenance=RR.PROVENANCE_DISPATCH_OBSERVED,
+          executionEvidence=first_evidence)
+    assert RD.cmd_record_result(d, seat)["ok"]
+    second_evidence = _execution_evidence(runnerNonce="nonce-second")
+    _land(d, seat, payload=payload, provenance=RR.PROVENANCE_DISPATCH_OBSERVED,
+          executionEvidence=second_evidence)
+    anchor = RD._orders_anchor(_state(d), d, 1, RD.P_PANEL, 0)
+    ingested = RR.ingest_landing(d, 1, RD.P_PANEL, seat, 0, current_attempt=0,
+                                 roster=list(RD.DIMENSIONS), anchor=anchor,
+                                 supersede=True, expect_sha256=first["envelopeSha256"],
+                                 seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert ingested["ok"], ingested
+    stored, _err = RR.read_json(ingested["storePath"])
+    assert _err is None and stored["envelopeSha256"] != first["envelopeSha256"]
+    _record_all_panel_seats(d, seats=[s for s in RD.DIMENSIONS if s != seat])
+    assert _advance(d, tmp_path)["ok"]
+    reappended = [e for e in _journal(d)
+                  if e.get("outcome") == "recorded" and e.get("reappended") is True
+                  and e.get("seat") == seat]
+    assert len(reappended) == 1
+    row = reappended[0]
+    assert row.get("provenance") == RR.PROVENANCE_DISPATCH_OBSERVED
+    assert row.get("envelopeSha256") == stored["envelopeSha256"]
+    assert row.get("executionEvidencePresent") is True
+    assert row.get("payloadSha256") == stored["payloadSha256"]
+    assert row.get("casToken") == RR.envelope_cas_token(stored)
 
 
 def test_death_between_journal_append_and_advance(tmp_path, adapters):
