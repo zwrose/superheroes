@@ -1032,8 +1032,27 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** capability-gap — a person could create two labels by hand; the helper exists so the
   routing vocabulary is present before the first issue is routed.
 
-<<<<<<< HEAD
-#### S7 — Retired tier-vocabulary census
+#### S7 — Bite-proof pointer census
+
+- **Component.** Not a census row. The pointer census in
+  `plugins/superheroes/lib/tests/test_bite_proof_doctrine.py`: the hand-maintained
+  `_CONSUMER_ROSTER` of consumer sections with their `rubric/bite-proof.md` pointer counts, plus the
+  completeness walker that refuses any pointer-carrying section the roster does not name. It costs a
+  roster row every time a shipped surface gains a deliberate pointer at the bite-proof home.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the pointer
+  census catching a real drift — a rostered section that lost its pointer, a section that gained an
+  unrostered one, or a consumer section that moved. On zero citations for the full window, a
+  proposal to the owner at a gardening pass. A zero count reads as the roster holding rather than as
+  the census being idle: the walker's refusal is what keeps the roster from going stale unnoticed,
+  so its success is quiet by construction.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the one-home rule is what makes a second pointer a deliberate act, and
+  this census is what keeps that act from being absorbed silently; no change of host or model
+  removes the need.
+
+#### S13 — Retired tier-vocabulary census
 
 - **Component.** The retired-tier-vocabulary census
   `_assert_retired_tier_literals_absent` in `plugins/superheroes/lib/tests/test_disposition_flow.py`,
@@ -1062,27 +1081,6 @@ The list's units are the census rows, and each entry is keyed to its census id.
   that bound copies to the home was retired with the verbatim-clause pins in this child, and no
   replacement prose pin ships here per register R4; issue #1287 closes the home-side rename and
   restores copy/home alignment.
-=======
-#### S7 — Bite-proof pointer census
-
-- **Component.** Not a census row. The pointer census in
-  `plugins/superheroes/lib/tests/test_bite_proof_doctrine.py`: the hand-maintained
-  `_CONSUMER_ROSTER` of consumer sections with their `rubric/bite-proof.md` pointer counts, plus the
-  completeness walker that refuses any pointer-carrying section the roster does not name. It costs a
-  roster row every time a shipped surface gains a deliberate pointer at the bite-proof home.
-- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the pointer
-  census catching a real drift — a rostered section that lost its pointer, a section that gained an
-  unrostered one, or a consumer section that moved. On zero citations for the full window, a
-  proposal to the owner at a gardening pass. A zero count reads as the roster holding rather than as
-  the census being idle: the walker's refusal is what keeps the roster from going stale unnoticed,
-  so its success is quiet by construction.
-- **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural — the one-home rule is what makes a second pointer a deliberate act, and
-  this census is what keeps that act from being absorbed silently; no change of host or model
-  removes the need.
->>>>>>> origin/main
 
 
 ## The workaround-marker inventory
