@@ -136,6 +136,7 @@ Children: C1 founding texts · C2 front-door references (issue-contract.md, the 
 | A | FR-E1 | n11 | numbered | Guardian staleness** *(ruled 2026-09-13)*: the plugin defaults, ten me… | **C17** |
 | A | FR-E1 | n12 | numbered | Keep list** *(ruled 2026-09-13)*: seeded by the verification-policy ch… | **C17** |
 | A | FR-E1 | n13 | numbered | Material-consequence line** *(ruled 2026-09-13 at the stamp sitting, a… | **C17** |
+| A | FR-E1 | n13 | Scope repair (2026-09-16): | the Tier 1 / Tier 2 to craft-call / owner-call rename (FR-E1 item 13) reaches `skills/discuss-open-… | **C18** (split from C2 on the owner's word, 2026-09-16) |
 | A | FR-F1 | 1 | Acceptance (rule): | approval is still the owner's and is never delegated. It is given as a scoped word in chat after the… | **C1** (all four homes of promise 1 amended together: PHILOSOPHY, the covenant, showrunner duty 6, merge-train.md) |
 | A | FR-F1 | 2 | Acceptance (rule, a red merge train; rul | a red on the train (a per-lane green that goes red on the union or on main's post-merge run) is fixe… | **C1** (all four homes of promise 1 amended together: PHILOSOPHY, the covenant, showrunner duty 6, merge-train.md) |
 | A | FR-F1 | 3 | Acceptance (rule, force-push): | the advisor states the reason in chat first and proceeds on a word; the word and the reason are reco… | **C1** (all four homes of promise 1 amended together: PHILOSOPHY, the covenant, showrunner duty 6, merge-train.md) |

@@ -438,15 +438,6 @@ above).
      you when a build's defects point at order quality rather than the engine. An **owner-half
      omission caught at vet** attributes to the **orchestrator's own integration/assembly**, so
      systematic under-statement surfaces as a **rate** rather than an anecdote.
-   - **Record the forfeit accounting.** From
-     `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/forfeit_ledger.py" report --repo-root
-     <repo-root>`, read the standing summary per attribution class per window — **name the window**
-     the same way the order-quality bullet does. Track the **attribution mix** — caller-error,
-     our-transport-contract, our-environment, engine-side, unknown — under the ratified posture that
-     a forfeit is **presumed self-inflicted until attributed**, and treat **unknown as a queue, not a
-     bucket**. **Salvage usage trending to zero is the success metric**; a rising salvage rate is a
-     signal to inspect caps and transport, never a clean sheet. Standing accounting, not machinery —
-     the same framing the order-quality bullet uses.
    - **Vet dispatch provenance against engine doctrine** (CONVENTIONS `§7.5`): a provenance row
      showing a non-first-party model dispatched through the cursor CLI, or a fable tier on an
      external engine, is a **defect to catch at vet** — not a builder judgment call to accept.
@@ -454,23 +445,25 @@ above).
      for the advisor* section; you own what becomes of it, and a routing you only *intend* is a claim
      without a receipt — it evaporates in working context (weekly-eats: ~8 routings recorded as
      intent evaporated across four rapid vets until an owner-forced sweep found 2 genuinely dropped,
-     filed late as we#526/we#527). Tier 1 is craft — the resolution follows from already-ratified
-     intent and no plausible product preference distinguishes the options — and the advisor executes
-     it now and records the determination dated and reasoned for cheap owner veto; Tier 2 is product
-     — taste, trade, or commitment — and it is the owner's word, via the collector. Doubt resolves
-     upward. **Tier 1 — craft record-keeping writes** — venue-1 continuations, craft declines with
-     revisit trigger, an owner-owed or relay memory entry — happen **immediately**; **Tier 2 — board
-     decisions** — new issues, product folds, scope changes, product declines — are the owner's word.
-     Venue-3 filings are always Tier
-     2 — a new issue spends board attention, a commitment call by definition, even when its content is
-     craft. The project's **standing proposals collector** is one open issue per project
-     (auto-filing per proposal was rejected as overcorrection). Every Tier-2 item is appended to the
+     filed late as we#526/we#527). At a [craft call](../../rubric/glossary.md#craft-call) the
+     advisor executes it now and records the determination dated and reasoned for cheap owner veto;
+     at an [owner call](../../rubric/glossary.md#owner-call) it is the owner's word, via the
+     collector; doubt resolves upward. **Craft calls** — craft record-keeping writes — venue-1
+     continuations, craft declines with revisit trigger, an owner-owed or relay memory entry — happen
+     **immediately**; **Owner calls** — board decisions — new issues, product folds, scope changes,
+     product declines — are the owner's word. Venue-3 filings are always owner calls — a new issue
+     spends board attention, a commitment call by definition, even when its content is craft. The
+     project's **standing proposals collector** is one open issue per project (auto-filing per
+     proposal was rejected as overcorrection). Every owner call is appended to the
      collector at vet time, unconditionally, so the collector is the complete register by
      construction; owner attendance governs only when discussion happens — attended, the item is
      proposed in the vet-delivery message and may be struck minutes after it was appended; absent,
      it awaits the batch. This replaces the previous availability-branching rule. Each append
-     carries its gate verdict and its venue recommendation, so the owner's batch is one word per
-     item. Read attendance from whether the owner is actually reachable here, never inferred from who
+     carries its door grading for a machinery item — the band, the evidence tier, and the resulting
+     tier the front door recorded — and for a product item the classification and the ratification it
+     rides, since no evidence bar applied to it; each append also carries its venue recommendation,
+     so the owner's batch is one word per item. Read attendance from whether the owner is actually
+     reachable here, never inferred from who
      launched the advisor (duty 9's three states are independent axes, not a proxy for absence) —
      attendance governs **discussion**, not appending:
      - **Attended** — the owner is here now and the vet-delivery message reaches them in this session.
@@ -581,7 +574,7 @@ above).
      there at vet time rather than reconstructing it from memory. **One conditional:**
      when the principle check finds an omission, the missing consequence goes **there too**, not only
      in the receipt — recording it only in a document addressed to you repeats the original defect in
-     a politer voice. **Never Tier-2 proposals:** *what should we do next* is a different question
+     a politer voice. **Never owner-call proposals:** *what should we do next* is a different question
      from *do I merge*. **The slot is append-only and yours** — edit your own prior text in place,
      never the builder's prose. **The builder stamps `<!-- superheroes:advisor-vet -->` into the
      empty slot for you** and seeds a reminder comment beneath it: write **beneath the marker**,
@@ -1012,7 +1005,7 @@ above).
 | "I'll coordinate the owner's merge of this other PR now; their rebase order can absorb it" | An owner merge you coordinated moves the world under their live order — amend the order, don't assume they absorb it. |
 | "That reviewer has been quiet too long, I'll kill it and move on" | The structural timeout is the tripwire; intermediate silence licenses nothing — let it run. |
 | "The convention says the diff should have covered X, so send it back" | Owner-ratified scope beats a convention argument — route the gap as a follow-up, not a rework. |
-| "I'll note the follow-up and file it after the vet" | A routing you only intend is a claim without a receipt — it evaporates. Disposition the PR's follow-ups **before** the vet receipt posts (Tier-1 craft writes now; every Tier-2 item **appended to the collector before the vet receipt posts** — attendance governs only immediate proposal and striking); receipts never use the future tense. |
+| "I'll note the follow-up and file it after the vet" | A routing you only intend is a claim without a receipt — it evaporates. Disposition the PR's follow-ups **before** the vet receipt posts (craft-call writes now; every owner call **appended to the collector before the vet receipt posts** — attendance governs only immediate proposal and striking); receipts never use the future tense. |
 | "It's tiny — I'll just type it in micro" | **Micro** is a named hard-line edit, not a shortcut. The advisor IS the maker — no advisor vet for that PR; one reviewer **outside the maker's family** plus per-change owner authorization; pass the quiet-failure question or get an explicit waiver with the risk stated; say what could go wrong before the owner decides. |
 | "The builder died — I'll resume it and keep going" | Resume works only from the same instance and account, and it inherits the dead session's claims along with its context. Across accounts, **adoption from durable artifacts is the only path** — and every inherited claim is unverified until re-run. |
 | "The account default tier is fine — I'll let the launch inherit" | Headless builders launch on **`opus`** — the launcher pins it; **`fable` is never a launch default**. An unset or unreadable profile resolves to **`opus`**, not an inherited session tier — and a wrong tier does not error, it burns a shared account's limit at multiplied cost. |

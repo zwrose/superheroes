@@ -564,21 +564,25 @@ gives you this per role.
 **The registry is the model authority — run the gate before every dispatch.** For **each** of the
 four dispatch kinds this charter sanctions — an **implementer order**, a **fix-batch order**, a
 **`check-runner` dispatch**, and a **hand-rolled fallback dispatch** — you **run the model gate** on
-the effective `--model` you will pass (explicit or defaulted) *before dispatching*:
-`python3 -B ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/dispatch_guard.py check --role <role> --vendor <engine> --model <model> [--effort <effort>]`.
-It validates that model against the seat's **registry allowlist** (`lib/model_registry.py`, the single
+the effective seat model you will pass (explicit in the seat JSON or null for the seat default)
+*before dispatching*:
+`python3 -B ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/dispatch_guard.py check --seat '{"vendor":"<vendor>","model":"<id>","effort":<str-or-null>,"role":"<role>"}'`.
+For the full dispatch CLI argument surface, read `skills/workhorse/reference/dispatch-entry.md`.
+It validates that
+model against the seat's **registry allowlist** (`lib/model_registry.py`, the single
 model/vendor taxonomy; #510). **Exit 1 = an unlisted model = a park, not a pick:** the gate prints the
 allowlist, and you **park before any work runs** — never treat a model-within-engine choice as "just a
 preference," and this governs **a dispatch you are going to make**: declining to dispatch and doing the
 work yourself instead is a different act, not what this park rule forbids. On exit 0 the gate
-returns a structured triple — thread `model_id` as an engine dispatch's `engine_model`, `effort` as
-`--effort`, and `dispatch_token` as the CLI argv model;
-putting the composed token where a registry id belongs is the trap that seats a cursor role on
-Claude and loses the model family. Omitting `--effort` **resolves** when the allowlist makes the
-model unambiguous (and picks the lowest ladder rung when it does not), reporting the choice in
-`effort_source` — never a silent guess. **Record the resolved `model_id` and `effort`** (or the
-`dispatch_token`, which encodes both where the vendor supports it) in the dispatch-provenance
-table — not a bare model string that drops the effort. **Running the gate is your discipline, not
+returns a structured triple — thread `model_id` into the seat's `model` key and `effort` into
+`effort`; prefer the registry id in `model` and the effort in `effort`. A composed
+`dispatch_token` in `model` is also accepted and resolves to the same pair. An `effort` that
+**contradicts** a composed token is refused rather than silently resolved either way. A null
+`effort` field **resolves** when the allowlist makes the model unambiguous (and picks the lowest
+ladder rung when it does not), reporting the choice in `effort_source` — never a silent guess.
+**Record the resolved `model_id` and `effort`** in the dispatch-provenance table — recording the
+bare composed token instead of the resolved pair drops the effort, which is why both fields matter;
+not a bare model string that drops the effort either. **Running the gate is your discipline, not
 an automatic trigger** — a skipped gate leaves the dispatch's provenance row without a validated
 model, which is how the advisor spots it. The registry, not a session's judgment, decides what may
 run (WE#511 — a codex-family model dispatched through `cursor-agent` — is exactly the escape this
@@ -883,11 +887,13 @@ needs a run no review seat may make:
    artifacts, not the durable receipt** — the PR record is: quote what matters (**redacted** —
    secrets, tokens, private URLs, PII), then **remove them once the verification closes** (an
    interrupted order leaves its captures in session scratch until cleared — a bound, not a
-   guarantee). **Resolve the seat's model through the §7 gate** — `--role mechanical` against the
-   **host's own vendor**, omitting `--model` (a query only; it resolves the seat default,
-   `effort_source: "seat-default"`). **Exit 1 with an empty `allowlist`** — no sanctioned model for
-   the role on this vendor — means the **route is unavailable**: go straight to destination 1, which
-   is always available, and **disclose the fallback**; exit 1 for any other reason **parks**, and
+   guarantee). **Resolve the seat's model through the §7 gate** — `--seat` with `"role":"mechanical"`
+   and the **host's own vendor**, with a null `model` field (a query only; it resolves the seat
+   default, `effort_source: "default"`). **Exit 1 with `reason: "allowlist-refused"` and a
+   `seat_detail` that names no sanctioned model for the role on this vendor** — the route is
+   unavailable: go straight to destination 1, which is always available, and **disclose the
+   fallback**; exit 1 with any other `reason` or `seat_detail` (a mistyped `--seat`, an off-allowlist
+   model, or any other refusal) **parks**, and
    exit 0 dispatches — as a **host subagent** (`Agent` on Claude, `spawn_agent` on Codex), **never
    to an external engine** (it renders no judgment, so no independence or maker-family constraint
    applies) — threading and recording the resolved `model_id` and `effort` exactly as §7 says. If

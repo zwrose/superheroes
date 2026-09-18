@@ -38,11 +38,14 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cli_contract as cc  # noqa: E402  argparse caller-contract builders
+import dispatch_guard  # noqa: E402  model allowlist gate (#600, #1269 WO-B)
 import dispatch_outcome  # noqa: E402  outcome vocabulary chokepoint (#747)
 import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
+import seat_bundle  # noqa: E402  single dispatch seat entry (#1269 WO-A1)
 import file_lock  # noqa: E402
-import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
+import model_registry  # noqa: E402  role read_write classification (#1269 WO-FIX1)
+import resolved_inputs_vocab  # noqa: E402  resolvedInputs <field>Source marker home (#1296)
 import review_findings_schema  # noqa: E402  findings example renderer (#1145 WO-C)
 import sanitized_view  # noqa: E402
 import session_contract  # noqa: E402  WRITE_RESULT_KIND — shared with writer via leaf module
@@ -129,6 +132,24 @@ MODE_REFUSAL_RUN_DIR_MISMATCH = "run-dir-mode-mismatch"
 PR_BODY_REFUSAL_RUN_DIR_MISMATCH = "run-dir-pr-body-mismatch"
 RESULT_KIND_REFUSAL_INVALID = "expected-result-kind-invalid"
 RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH = "run-dir-result-kind-mismatch"
+SEAT_REFUSAL_RUN_DIR_MISMATCH = "run-dir-seat-mismatch"
+ALLOWLIST_GUARD_DETAIL = "allowlist-guard"
+SEAT_UNVERIFIABLE_DETAIL = "run-seat-unverifiable"
+
+class _ParamUnsetType:
+    """Sentinel: argparse default meaning caller omitted a provenance-tracked optional flag."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "none"
+
+
+_PARAM_UNSET = _ParamUnsetType()
+
+_JOURNAL_ROOT_SOURCE_POINTER = resolved_inputs_vocab.RUN_DIR_POINTER
+_JOURNAL_ROOT_SOURCE_ENV = resolved_inputs_vocab.ENVIRONMENT_VARIABLE
+_JOURNAL_ROOT_SOURCE_TEMP = resolved_inputs_vocab.TEMP_DIRECTORY
 
 _REJECTED_MODE_MAX_LEN = 120
 
@@ -145,19 +166,391 @@ def _coerce_rejected_mode(mode):
 
 
 def _mode_invalid_refusal(rejected_mode):
-    return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+    return {"ok": False, "entryReason": "mode-invalid",
             "detail": MODE_REFUSAL_INVALID,
-            "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
             "mode": sanitized_view.MODE_REVIEW,
             "rejectedMode": _coerce_rejected_mode(rejected_mode)}
 
 
 def _expected_result_kind_invalid_refusal(rejected_kind, effective_mode):
-    return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+    return {"ok": False, "entryReason": "expected-result-kind-invalid",
             "detail": RESULT_KIND_REFUSAL_INVALID,
-            "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
             "mode": effective_mode,
             "rejectedResultKind": _coerce_rejected_mode(rejected_kind)}
+
+
+def _coerce_seat_input(seat):
+    """Route library dict/str seat input through resolve_entry parse legs (#1269 WO-1)."""
+    resolved = seat_bundle.resolve_entry(seat, verb="guard-check")
+    return resolved
+
+
+def _unknown_kwargs_refusal(unknown_keys, *, accepted_params):
+    refusal = seat_bundle.unknown_kwargs_refusal(
+        unknown_keys, accepted_params=accepted_params,
+    )
+    return {
+        "ok": False,
+        "entryReason": refusal["entryReason"],
+        "detail": refusal["detail"],
+    }
+
+
+def _role_verb_mismatch_refusal(role, *, verb):
+    rw = model_registry.role_read_write(role)
+    if verb == "dispatch-write" and rw == "read":
+        detail = (
+            f"role {role!r} is read-only (read_write=read); "
+            f"dispatch-write requires a write role"
+        )
+    elif verb == "dispatch-review" and rw == "write":
+        detail = (
+            f"role {role!r} is write-only (read_write=write); "
+            f"dispatch-review requires a read role"
+        )
+    else:
+        return None
+    return {
+        "ok": False,
+        "reason": dispatch_outcome.REASON_UNRUNNABLE,
+        "detail": detail,
+    }
+
+
+def _legacy_dispatch_refusal(*, mode=None):
+    refusal = seat_bundle.legacy_refusal()
+    return _terminal_pre_open_refusal(refusal, mode=mode)
+
+
+def _terminal_pre_open_refusal(refusal: dict, *, mode=None) -> dict:
+    base = {
+        "ok": False,
+        "entryReason": refusal["entryReason"],
+        "detail": refusal["detail"],
+    }
+    if mode is not None:
+        base["mode"] = mode
+    return base
+
+
+def _seat_dispatch_refusal(seat_result, *, mode=None):
+    entry_reason = seat_result.get("entryReason", "seat-invalid")
+    detail = seat_result.get("detail") or entry_reason
+    base = {
+        "ok": False,
+        "entryReason": entry_reason,
+        "detail": detail,
+        "seatDetail": seat_result.get("detail"),
+    }
+    if mode is not None:
+        base["mode"] = mode
+    return base
+
+
+def _entry_refusal_terminal(
+    refusal,
+    *,
+    run_dir=None,
+    mode=None,
+    argv=None,
+    repo_root=None,
+    engine=None,
+    run_kind=RUN_KIND_REVIEW,
+):
+    """Single chokepoint for dispatch_review/dispatch_write entry refusals (#1269)."""
+    entry_reason = refusal.get("entryReason")
+    if not isinstance(entry_reason, str) or entry_reason not in seat_bundle.ENTRY_REFUSAL_REASONS:
+        undeclared = entry_reason if isinstance(entry_reason, str) else repr(entry_reason)
+        vocabulary = ", ".join(sorted(seat_bundle.ENTRY_REFUSAL_REASONS))
+        refusal = {
+            **refusal,
+            "ok": False,
+            "entryReason": seat_bundle.ENTRY_REASON_UNDECLARED,
+            "detail": (
+                f"entry refusal reason {undeclared!r} is not in the declared vocabulary "
+                f"({vocabulary})"
+            ),
+        }
+    result = {
+        **refusal,
+        "ok": False,
+        "terminal": True,
+        "attempts": 0,
+        "forfeited": False,
+    }
+    result["reason"] = dispatch_outcome.REASON_UNRUNNABLE
+    if mode is not None and "mode" not in result:
+        result["mode"] = mode
+    run_dir_value = run_dir or ""
+    argv_value = list(argv or [])
+    if repo_root is not None:
+        out = _finish_preflight_terminal(
+            repo_root, result,
+            run_dir=run_dir_value, argv=argv_value,
+            engine=engine, run_kind=run_kind,
+        )
+    else:
+        out = _with_run_fields(result, run_dir=run_dir_value, argv=argv_value)
+    if not out.get("runOpened") and out.get("resolvedInputsStatus") != "unverifiable":
+        out["runDir"] = ""
+    return out
+
+
+def _malformed_allowlist_verdict_reason(role, vendor):
+    if role is not None and vendor is not None:
+        return (
+            "allowlist guard returned malformed verdict — expected dispatch_guard.validate("
+            "%r, %r, model, effort) to return ok, reason, allowlist, and allowlist_pairs "
+            "naming the sanctioned model allowlist for this role and vendor; "
+            "fix the seat or re-run dispatch_guard check"
+            % (role, vendor)
+        )
+    return (
+        "allowlist guard returned malformed verdict — expected a well-formed "
+        "dispatch_guard.validate verdict with ok, reason, allowlist, and allowlist_pairs "
+        "naming the sanctioned model allowlist; fix the guard call or seat"
+    )
+
+
+def _normalize_allowlist_verdict(verdict, *, role=None, vendor=None):
+    """Refuse on malformed dispatch_guard verdict — never proceed."""
+    malformed = _malformed_allowlist_verdict_reason(role, vendor)
+    if not isinstance(verdict, dict):
+        return {
+            "ok": False,
+            "reason": malformed,
+            "allowlist": [],
+            "allowlist_pairs": [],
+        }
+    if verdict.get("ok") is True:
+        return verdict
+    reason = verdict.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        return {
+            "ok": False,
+            "reason": malformed,
+            "allowlist": list(verdict.get("allowlist") or []),
+            "allowlist_pairs": list(verdict.get("allowlist_pairs") or []),
+        }
+    return verdict
+
+
+def _dispatch_allowlist_validate(role, vendor, model, effort):
+    seat_raw = {
+        "vendor": vendor,
+        "model": model,
+        "effort": effort,
+        "role": role,
+    }
+    resolved = seat_bundle.resolve_entry(seat_raw, verb="guard-check")
+    if resolved.get("ok"):
+        return resolved["allowlistVerdict"]
+    verdict = resolved.get("allowlistVerdict")
+    if isinstance(verdict, dict):
+        return _normalize_allowlist_verdict(verdict, role=role, vendor=vendor)
+    return {
+        "ok": False,
+        "reason": resolved.get("detail") or resolved.get("entryReason"),
+        "allowlist": [],
+        "allowlist_pairs": [],
+    }
+
+
+def _allowlist_guard_payload(verdict):
+    return {
+        "reason": verdict["reason"],
+        "allowlist": list(verdict.get("allowlist") or []),
+        "allowlist_pairs": list(verdict.get("allowlist_pairs") or []),
+    }
+
+
+def _entry_allowlist_refusal(
+    verdict, *, repo_root=None, engine=None, role=None, run_dir="", argv=None,
+    mode=None, run_kind=RUN_KIND_REVIEW,
+):
+    """G1 terminal refusal — no lease, no opened run, no child."""
+    verdict = _normalize_allowlist_verdict(verdict, role=role, vendor=engine)
+    if verdict.get("ok"):
+        return None
+    result = {
+        "ok": False,
+        "entryReason": "allowlist-refused",
+        "detail": verdict["reason"],
+        "allowlistGuard": _allowlist_guard_payload(verdict),
+        "attempts": 0,
+        "forfeited": False,
+        "terminal": True,
+    }
+    return _entry_refusal_terminal(
+        result, run_dir=run_dir, mode=mode, argv=argv,
+        repo_root=repo_root, engine=engine, run_kind=run_kind,
+    )
+
+
+def _seat_tuple_from_resolved_snapshot(snapshot):
+    if not isinstance(snapshot, dict):
+        return None
+    vendor = snapshot.get("engine")
+    model = snapshot.get("model")
+    effort = snapshot.get("effort")
+    role = snapshot.get("role")
+    if not isinstance(vendor, str) or not isinstance(role, str):
+        return None
+    if not isinstance(model, str):
+        return None
+    if effort is not None and not isinstance(effort, str):
+        return None
+    return role, vendor, model, effort
+
+
+def _seat_dict_from_resolved_snapshot(snapshot):
+    seat_tuple = _seat_tuple_from_resolved_snapshot(snapshot)
+    if seat_tuple is None:
+        return None
+    role, vendor, model, effort = seat_tuple
+    return {"vendor": vendor, "model": model, "effort": effort, "role": role}
+
+
+def _canonical_spawn_argv(opened):
+    """Derive argv from the journal seat snapshot and cwd — G2 coherence source of truth."""
+    snapshot = opened.get("resolvedInputs")
+    seat = _seat_dict_from_resolved_snapshot(snapshot)
+    if seat is None:
+        return None, (
+            "run seat cannot be established — resolvedInputs snapshot lacks valid seat fields; "
+            "re-open the run with a fresh dispatch that persists resolvedInputs"
+        )
+    run_kind = opened.get("runKind", RUN_KIND_REVIEW)
+    expected_role_kind = "build" if run_kind == RUN_KIND_WRITE else RUN_KIND_REVIEW
+    journal_role_kind = opened.get("roleKind")
+    if isinstance(journal_role_kind, str) and journal_role_kind != expected_role_kind:
+        return None, (
+            "spawn sandbox roleKind %r disagrees with runKind %r — only roleKind %r is "
+            "accepted for this run; re-open the run with a fresh dispatch"
+            % (journal_role_kind, run_kind, expected_role_kind)
+        )
+    role_kind = expected_role_kind
+    cwd = opened.get("cwd")
+    opts = {"cwd": cwd} if cwd else {}
+    built = engine_adapter.build_argv_result(seat, role_kind, opts)
+    if built.get("reason") is not None:
+        return None, "engine-config:%s" % built["reason"]
+    return list(built["argv"]), None
+
+
+def _spawn_argv_coherence(opened, stored_argv):
+    """G2 argv coherence — refuse when stored argv diverges from the validated snapshot."""
+    canonical, build_err = _canonical_spawn_argv(opened)
+    if build_err:
+        return None, build_err
+    stored = list(stored_argv or [])
+    if canonical == stored:
+        return canonical, None
+    return None, (
+        "spawn argv does not match resolvedInputs snapshot — stored argv %r differs from "
+        "the seat snapshot's canonical argv %r; re-open the run with a fresh dispatch"
+        % (stored, canonical)
+    )
+
+
+def _journal_spawn_guard_refusal(run_dir_real, attempt, reason):
+    """Record a spawn-gate refusal that supervision must fold as terminal unrunnable."""
+    _journal_append(run_dir_real, {
+        "kind": "attempt-ended", "attempt": attempt,
+        "exit": 127, "timedOut": False, "signal": None,
+        "refusal": reason[:_STDERR_TAIL], "at": time.time(),
+        "guardRefusal": True,
+    })
+
+
+def _grade_spawn_guard_refusal(ended):
+    return {
+        "guard_refusal": True,
+        "reason": dispatch_outcome.REASON_UNRUNNABLE,
+        "detail": ended.get("refusal") or "spawn-gate-refused",
+    }
+
+
+def _spawn_allowlist_verdict(opened, *, journal_corrupt=False):
+    """G2/R1 spawn gate — validate seat from journal resolvedInputs snapshot."""
+    if journal_corrupt:
+        return {
+            "ok": False,
+            "reason": (
+                "run seat cannot be established — journal is corrupt; "
+                "re-open the run with a fresh dispatch that persists resolvedInputs"
+            ),
+            "allowlist": [],
+            "allowlist_pairs": [],
+        }
+    if not isinstance(opened, dict):
+        return {
+            "ok": False,
+            "reason": (
+                "run seat cannot be established — run is not opened; "
+                "re-open the run with a fresh dispatch that persists resolvedInputs "
+                "(engine/model/effort/role snapshot at open)"
+            ),
+            "allowlist": [],
+            "allowlist_pairs": [],
+        }
+    snapshot = opened.get("resolvedInputs")
+    if not isinstance(snapshot, dict):
+        return {
+            "ok": False,
+            "reason": (
+                "run seat cannot be established — run-opened record lacks resolvedInputs; "
+                "re-open the run with a fresh dispatch that persists resolvedInputs "
+                "(engine/model/effort/role snapshot at open)"
+            ),
+            "allowlist": [],
+            "allowlist_pairs": [],
+        }
+    seat_tuple = _seat_tuple_from_resolved_snapshot(snapshot)
+    if seat_tuple is None:
+        missing = []
+        if not isinstance(snapshot.get("engine"), str):
+            missing.append("engine")
+        if not isinstance(snapshot.get("model"), str):
+            missing.append("model")
+        if not isinstance(snapshot.get("role"), str):
+            missing.append("role")
+        effort = snapshot.get("effort")
+        if effort is not None and not isinstance(effort, str):
+            missing.append("effort")
+        fields = ", ".join(missing) if missing else "seat fields"
+        return {
+            "ok": False,
+            "reason": (
+                "run seat cannot be established — resolvedInputs snapshot lacks valid %s; "
+                "re-open the run with a fresh dispatch that persists resolvedInputs"
+                % fields
+            ),
+            "allowlist": [],
+            "allowlist_pairs": [],
+        }
+    role, vendor, model, effort = seat_tuple
+    run_kind = opened.get("runKind", RUN_KIND_REVIEW)
+    verb = "dispatch-review" if run_kind == RUN_KIND_REVIEW else "dispatch-write"
+    mode = opened.get("mode")
+    seat_raw = {
+        "vendor": vendor,
+        "model": model,
+        "effort": effort,
+        "role": role,
+    }
+    resolved = seat_bundle.resolve_entry(seat_raw, verb=verb, mode=mode)
+    if resolved.get("ok"):
+        return resolved["allowlistVerdict"]
+    verdict = resolved.get("allowlistVerdict")
+    if isinstance(verdict, dict):
+        return _normalize_allowlist_verdict(verdict, role=role, vendor=vendor)
+    return {
+        "ok": False,
+        "reason": resolved.get("detail") or resolved.get("entryReason"),
+        "allowlist": list((verdict or {}).get("allowlist") or []),
+        "allowlist_pairs": list((verdict or {}).get("allowlist_pairs") or []),
+    }
 
 
 def _scrub_env(env=None):
@@ -170,19 +563,198 @@ def _scrub_env(env=None):
 
 
 def _journal_root_for_run_dir(run_dir_real):
+    root, _source = _journal_root_with_source(run_dir_real)
+    return root
+
+
+def _journal_root_with_source(run_dir_real):
     pointer = os.path.join(run_dir_real, "journal-root.txt")
     if os.path.isfile(pointer):
         try:
             with open(pointer, encoding="utf-8") as fh:
                 root = fh.read().strip()
             if root:
-                return root
+                return root, _JOURNAL_ROOT_SOURCE_POINTER
         except OSError:
             pass
     env_root = os.environ.get(JOURNAL_ROOT_ENV)
     if env_root:
-        return env_root
-    return os.path.join(tempfile.gettempdir(), JOURNAL_ROOT_NAME)
+        return env_root, _JOURNAL_ROOT_SOURCE_ENV
+    return os.path.join(tempfile.gettempdir(), JOURNAL_ROOT_NAME), _JOURNAL_ROOT_SOURCE_TEMP
+
+
+def _put_resolved(snapshot, name, value, source):
+    if source not in resolved_inputs_vocab.SOURCE_MARKERS:
+        vocabulary = ", ".join(sorted(resolved_inputs_vocab.SOURCE_MARKERS))
+        raise resolved_inputs_vocab.UndeclaredSourceMarker(
+            "resolvedInputs field %r source marker %r is not declared; accepted: %s"
+            % (name, source, vocabulary)
+        )
+    snapshot[name] = value
+    snapshot[name + "Source"] = source
+
+
+def _synthesize_legacy_resolved_inputs(opened):
+    """Best-effort snapshot from a pre-upgrade run-opened record (#1269 WO-A2 I4)."""
+    snapshot = {}
+    _put_resolved(snapshot, "engine", opened.get("engine"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "model", None, resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "effort", None, resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "engineModel", opened.get("engineModel"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "role", opened.get("roleKind"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "repoRoot", opened.get("repoRoot"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "runDir", None, resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "promptPath", opened.get("promptPath"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "timeout", opened.get("timeout"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "retryTimeout", opened.get("retryTimeout"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "maxWait", None, resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "preflightTimeout", None, resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "mode", opened.get("mode"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(
+        snapshot, "expectedResultKind", opened.get("expectedResultKind"), resolved_inputs_vocab.LEGACY_JOURNAL,
+    )
+    _put_resolved(snapshot, "baseSha", opened.get("baseSha"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "diffBase", None, resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "progressPath", opened.get("progressPath"), resolved_inputs_vocab.LEGACY_JOURNAL)
+    _put_resolved(snapshot, "journalRoot", None, resolved_inputs_vocab.LEGACY_JOURNAL)
+    return snapshot
+
+
+def _resolved_inputs_from_opened(opened):
+    snapshot = opened.get("resolvedInputs")
+    if isinstance(snapshot, dict):
+        return snapshot
+    return _synthesize_legacy_resolved_inputs(opened)
+
+
+def _resolved_inputs_status_from_opened(opened):
+    snapshot = opened.get("resolvedInputs")
+    if isinstance(snapshot, dict):
+        return None
+    return "pre-upgrade"
+
+
+def _continuation_seat_tuple(snapshot):
+    return (
+        snapshot.get("engine"),
+        snapshot.get("model"),
+        snapshot.get("effort"),
+        snapshot.get("role"),
+    )
+
+
+def _incoming_seat_tuple(seat):
+    return (seat.get("vendor"), seat.get("model"), seat.get("effort"), seat.get("role"))
+
+
+def _continuation_seat_mismatch(opened, seat):
+    snapshot = opened.get("resolvedInputs")
+    if not isinstance(snapshot, dict):
+        return None
+    if _continuation_seat_tuple(snapshot) != _incoming_seat_tuple(seat):
+        return SEAT_REFUSAL_RUN_DIR_MISMATCH
+    return None
+
+
+def _build_resolved_inputs(
+    *,
+    seat,
+    role_kind,
+    repo_root,
+    run_dir_real,
+    run_dir_source,
+    staged_prompt_path,
+    timeout,
+    timeout_source,
+    retry_timeout,
+    retry_timeout_source,
+    max_wait,
+    max_wait_source,
+    preflight_timeout,
+    preflight_timeout_source,
+    mode,
+    mode_source,
+    expected_result_kind,
+    expected_result_kind_source,
+    base_sha,
+    base_sha_source,
+    diff_base,
+    diff_base_source,
+    progress_path,
+    progress_path_source,
+    engine_model_opts,
+):
+    snapshot = {}
+    model_source = seat.get("modelSource", resolved_inputs_vocab.CALLER)
+    _put_resolved(snapshot, "engine", seat.get("vendor"), resolved_inputs_vocab.CALLER)
+    _put_resolved(snapshot, "model", seat.get("model"), model_source)
+    _put_resolved(
+        snapshot, "effort", seat.get("effort"),
+        seat.get("effortSource", resolved_inputs_vocab.CALLER),
+    )
+    engine_model, _engine_model_source = engine_adapter.resolve_engine_model(
+        seat, role_kind, engine_model_opts,
+    )
+    _put_resolved(snapshot, "engineModel", engine_model, model_source)
+    _put_resolved(
+        snapshot, "role", seat.get("role"),
+        seat.get("roleSource", resolved_inputs_vocab.SEAT),
+    )
+    _put_resolved(snapshot, "repoRoot", repo_root, resolved_inputs_vocab.RESOLVED)
+    _put_resolved(snapshot, "runDir", run_dir_real, run_dir_source)
+    _put_resolved(snapshot, "promptPath", staged_prompt_path, resolved_inputs_vocab.RESOLVED)
+    _put_resolved(snapshot, "timeout", timeout, timeout_source)
+    _put_resolved(snapshot, "retryTimeout", retry_timeout, retry_timeout_source)
+    _put_resolved(snapshot, "maxWait", max_wait, max_wait_source)
+    _put_resolved(snapshot, "preflightTimeout", preflight_timeout, preflight_timeout_source)
+    _put_resolved(snapshot, "mode", mode, mode_source)
+    _put_resolved(
+        snapshot, "expectedResultKind", expected_result_kind, expected_result_kind_source,
+    )
+    _put_resolved(snapshot, "baseSha", base_sha, base_sha_source)
+    _put_resolved(snapshot, "diffBase", diff_base, diff_base_source)
+    _put_resolved(snapshot, "progressPath", progress_path, progress_path_source)
+    journal_root, journal_root_source = _journal_root_with_source(run_dir_real)
+    _put_resolved(snapshot, "journalRoot", journal_root, journal_root_source)
+    return snapshot
+
+
+def _resolved_inputs_echo_from_run_dir(run_dir_real):
+    try:
+        records, corrupt, journal_state = _journal_read_raw(run_dir_real)
+        opened = _journal_state(records).get("opened")
+        if opened is None:
+            if journal_state == "unreadable" or corrupt:
+                return {"runOpened": False, "resolvedInputsStatus": "unverifiable"}
+            return {"runOpened": False}
+        status = _resolved_inputs_status_from_opened(opened)
+        echo = {
+            "runOpened": True,
+            "resolvedInputs": _resolved_inputs_from_opened(opened),
+        }
+        if corrupt:
+            echo["resolvedInputsStatus"] = "journal-corrupt"
+        elif status is not None:
+            echo["resolvedInputsStatus"] = status
+        return echo
+    except Exception:
+        return {"runOpened": False, "resolvedInputsStatus": "unverifiable"}
+
+
+def _attach_resolved_inputs_echo(out, *, run_dir, snapshot=None):
+    try:
+        if snapshot is not None:
+            out["runOpened"] = True
+            out["resolvedInputs"] = snapshot
+            return out
+        if run_dir:
+            out.update(_resolved_inputs_echo_from_run_dir(run_dir))
+        else:
+            out["runOpened"] = False
+    except Exception:
+        out["runOpened"] = False
+        out["resolvedInputsStatus"] = "unverifiable"
+    return out
 
 
 def _journal_path(run_dir_real):
@@ -206,18 +778,23 @@ def _journal_append(run_dir_real, record):
         return False
 
 
-def _journal_read(run_dir_real):
-    """Return (records, interior_corrupt). Skips torn trailing write; never raises."""
+def _journal_read_raw(run_dir_real):
+    """Return (records, interior_corrupt, journal_state).
+
+    journal_state is one of: absent, empty, ok, unreadable. Never raises.
+    """
     path = _journal_path(run_dir_real)
     records = []
     interior_corrupt = False
     try:
+        if not os.path.isfile(path):
+            return records, interior_corrupt, "absent"
         with open(path, "rb") as fh:
             raw = fh.read()
     except OSError:
-        return records, interior_corrupt
+        return records, interior_corrupt, "unreadable"
     if not raw:
-        return records, interior_corrupt
+        return records, interior_corrupt, "empty"
     text = raw.decode("utf-8", "ignore")
     if not text.endswith("\n"):
         text = text.rsplit("\n", 1)[0] if "\n" in text else ""
@@ -228,6 +805,12 @@ def _journal_read(run_dir_real):
             records.append(json.loads(line))
         except (ValueError, TypeError):
             interior_corrupt = True
+    return records, interior_corrupt, "ok"
+
+
+def _journal_read(run_dir_real):
+    """Return (records, interior_corrupt). Skips torn trailing write; never raises."""
+    records, interior_corrupt, _journal_state = _journal_read_raw(run_dir_real)
     return records, interior_corrupt
 
 
@@ -1261,11 +1844,17 @@ def _validate_max_wait(max_wait):
     return True, ""
 
 
-def _max_wait_refusal(detail):
-    return _with_run_fields(
-        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": detail,
-         "attempts": 0, "forfeited": False, "terminal": True},
-        run_dir="", argv=[],
+def _max_wait_refusal(
+    detail, *, run_dir=None, mode=None, repo_root=None, engine=None,
+    run_kind=RUN_KIND_REVIEW,
+):
+    refusal = {
+        "ok": False, "entryReason": "max-wait-out-of-range", "detail": detail,
+        "attempts": 0, "forfeited": False, "terminal": True,
+    }
+    return _entry_refusal_terminal(
+        refusal, run_dir=run_dir, mode=mode, argv=[],
+        repo_root=repo_root, engine=engine, run_kind=run_kind,
     )
 
 
@@ -1628,191 +2217,16 @@ def _maybe_upgrade_review_terminal_forfeit(run_dir_real, state, terminal, engine
     return out
 
 
-def _ledger_attempt_records(state, run_dir_real, *, thin=False):
-    """Per-attempt telemetry from journal slots for the forfeit ledger."""
-    records = []
-    for att in sorted(state.get("attempts") or {}):
-        slot = state["attempts"][att]
-        ended = slot.get("ended") or {}
-        if thin:
-            records.append({
-                "attempt": att,
-                "exit": ended.get("exit"),
-                "timedOut": ended.get("timedOut"),
-            })
-            continue
-        rec = {"attempt": att}
-        for key in (
-            "exit", "timedOut", "signal", "signalSource", "refusal", "at",
-            "wallSeconds", "capSeconds", "stdoutBytes", "stderrBytes",
-            "silenceSeconds", "lastActivityAt", "activityStream",
-            "dispatchPath", "promptBytes", "stdoutCapRewriteFailed",
-        ):
-            if key in ended:
-                rec[key] = ended[key]
-        superseded = slot.get("endedSuperseded")
-        if isinstance(superseded, dict):
-            rec["endedSuperseded"] = True
-        records.append(rec)
-    return records
-
-
-def _ledger_evidence(run_dir_real, state, opened):
-    stdout_paths = []
-    stderr_paths = []
-    for att in sorted(state.get("attempts") or {}):
-        stdout_paths.append(os.path.join(run_dir_real, "attempt-%d.stdout" % att))
-        stderr_paths.append(os.path.join(run_dir_real, "attempt-%d.stderr" % att))
-    stood_down = list(state.get("stoodDown") or [])
-    stood_down_count = len(stood_down)
-    stood_down_truncated = stood_down_count > 20
-    if stood_down_truncated:
-        stood_down = stood_down[:20]
-    evidence = {
-        "stdoutPaths": stdout_paths,
-        "stderrPaths": stderr_paths,
-        "journalPath": _journal_path(run_dir_real),
-        "promptPath": opened.get("promptPath"),
-        "stoodDownCount": stood_down_count,
-        "stoodDown": stood_down,
-        "stoodDownTruncated": stood_down_truncated,
-    }
-    return evidence
-
-
-def _ledger_stages(result, state, run_dir_real, opened):
-    """engaged vs delivered — never collapsed (#747 WO-4b)."""
-    stages = {"engaged": None, "delivered": None}
-    run_kind = opened.get("runKind")
-    if run_kind == RUN_KIND_REVIEW:
-        candidates = _scan_review_engaged_candidates(run_dir_real, state)
-        if candidates:
-            stages["engaged"] = True
-        elif result.get("engagement"):
-            stages["engaged"] = engine_adapter.engagement_read(result) == "engaged"
-        delivered = False
-        if result.get("ok"):
-            kind = result.get("resultKind")
-            if kind in REVIEW_RESULT_KINDS:
-                if _parse_review_has_payload(result):
-                    delivered = True
-            if not delivered and result.get("investigated"):
-                delivered = True
-        stages["delivered"] = delivered
-    else:
-        if result.get("ok"):
-            stages["delivered"] = True
-            stages["engaged"] = True
-        else:
-            stages["delivered"] = False
-            stages["engaged"] = True if result.get("salvage") else None
-    return stages
-
-
-def _build_ledger_row(run_dir_real, state, result):
-    opened = state.get("opened") or {}
-    reason = result.get("reason")
-    ok = result.get("ok")
-    is_success = ok is True and reason is None
-    attempts = result.get("attempts")
-    if attempts is None:
-        attempts = _highest_attempt(state)
-    attempt_records = _ledger_attempt_records(
-        state, run_dir_real, thin=is_success,
-    )
-    stages = _ledger_stages(result, state, run_dir_real, opened)
-    evidence = _ledger_evidence(run_dir_real, state, opened)
-    detail = result.get("detail") or result.get("disclosure")
-    ledger_kwargs = dict(
-        run_dir=run_dir_real,
-        order_id=opened.get("orderId"),
-        engine=opened.get("engine"),
-        engine_model=opened.get("engineModel"),
-        run_kind=opened.get("runKind"),
-        reason=reason,
-        detail=detail,
-        attempt_count=attempts,
-        attempts=attempt_records,
-        stages=stages,
-        engagement=result.get("engagement"),
-        evidence=evidence,
-        ok=ok,
-    )
-    if opened.get("runKind") == RUN_KIND_REVIEW:
-        ledger_kwargs["mode"] = opened.get("mode") or result.get("mode")
-    row = forfeit_ledger.build_row(**ledger_kwargs)
-    salvage = result.get("salvage")
-    if isinstance(salvage, dict):
-        ledger_salvage = engine_adapter.scrub_salvage_block(dict(salvage))
-        ledger_salvage["detected"] = True
-        row["salvage"] = ledger_salvage
-    return row
-
-
-def _preflight_run_id(repo_root_resolved, row, run_dir_real=None):
-    """Namespace-separated preflight id — never reuses a real run's dedupe key."""
-    # axis: that a preflight row cannot take a real run's dedupe key — collision, not presence.
-    material = json.dumps({
-        "namespace": "preflight",
-        "repo": repo_root_resolved,
-        "runDir": run_dir_real or row.get("runDir"),
-        "reason": row.get("reason"),
-        "detail": row.get("detail"),
-        "at": row.get("at"),
-        "attemptCount": row.get("attemptCount"),
-    }, sort_keys=True, separators=(",", ":"))
-    return "preflight-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
-
-
-def _append_fold_ledger(run_dir_real, state, result, *, repo_root=None, preflight=False):
-    """Append one ledger row at terminal fold or preflight refusal; fail-soft — never changes dispatch outcome."""
-    try:
-        opened = state.get("opened") or {}
-        repo_root_resolved = repo_root or opened.get("repoRoot")
-        if not repo_root_resolved:
-            return {"written": False, "path": None, "why": "repo-root-absent-from-run-opened"}
-        row = _build_ledger_row(run_dir_real, state, result)
-        if preflight:
-            row["runId"] = _preflight_run_id(repo_root_resolved, row, run_dir_real)
-        elif not row.get("runId"):
-            row["runId"] = _preflight_run_id(repo_root_resolved, row, run_dir_real)
-        append_result = forfeit_ledger.append(repo_root_resolved, row)
-        return {
-            "written": append_result.get("written", False),
-            "path": append_result.get("path"),
-            "why": append_result.get("why"),
-        }
-    except Exception:
-        return {"written": False, "path": None, "why": "ledger-internal-error"}
-
-
 def _finish_preflight_terminal(
     repo_root, result, *, run_dir="", argv=None, engine=None, run_kind=RUN_KIND_REVIEW,
 ):
-    """Return a terminal pre-spawn refusal; append a ledger row when repo identity is known."""
-    # axis: which entry points append — review and write pre-spawn refusals with repo identity.
-    out = _with_run_fields(result, run_dir=run_dir, argv=argv or [])
-    if (
-        repo_root
-        and out.get("terminal")
-        and not (out.get("ok") is True and out.get("reason") is None)
-    ):
-        state = {
-            "opened": {
-                "repoRoot": repo_root,
-                "engine": engine,
-                "runKind": run_kind,
-            },
-        }
-        out["ledger"] = _append_fold_ledger(
-            run_dir, state, out, repo_root=repo_root, preflight=True,
-        )
-    return out
+    """Return a terminal pre-spawn refusal."""
+    return _with_run_fields(result, run_dir=run_dir, argv=argv or [])
 
 
 def _abandon_terminal_result(run_dir_real, state):
-    """Terminal run-abandoned payload with fail-soft ledger receipt for idempotent re-reads."""
-    abandon_result = {
+    """Terminal run-abandoned payload for idempotent re-reads."""
+    return {
         "ok": False,
         "terminal": True,
         "reason": dispatch_outcome.REASON_UNRUNNABLE,
@@ -1820,8 +2234,6 @@ def _abandon_terminal_result(run_dir_real, state):
         "attempts": len(state.get("attempts") or {}),
         "forfeited": False,
     }
-    abandon_result["ledger"] = _append_fold_ledger(run_dir_real, state, abandon_result)
-    return abandon_result
 
 
 def _stored_abandon_result(run_dir_real, state):
@@ -1841,13 +2253,9 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
     argv = list(opened.get("argv") or result.get("argv") or [])
 
     if record_kind == "run-folded":
-        # axis: one ledger append per terminal fold — before view teardown captures evidence paths.
-        ledger_receipt = _append_fold_ledger(run_dir_real, state, result)
-        result = dict(result)
-        result["ledger"] = ledger_receipt
-        record = {"kind": "run-folded", "result": result, "at": time.time()}
+        record = {"kind": "run-folded", "result": dict(result), "at": time.time()}
     elif record_kind == "run-abandoned":
-        # axis: that repeat reads return the stored result — not a fresh ledger append.
+        # axis: that repeat reads return the stored result — not a fresh abandon mint.
         abandon_result = _abandon_terminal_result(run_dir_real, state)
         record = {
             "kind": "run-abandoned",
@@ -1939,13 +2347,15 @@ def _fold_run(run_dir_real, state, result):
     return _terminate_run(run_dir_real, state, record_kind="run-folded", result=result)
 
 
-def _with_run_fields(result, *, run_dir, argv):
+def _with_run_fields(result, *, run_dir, argv, snapshot=None):
+    # axis: every exit echoes resolvedInputs from the run-opened snapshot, never the invocation.
     out = dict(result)
+    out.pop("ledger", None)
     out["runDir"] = run_dir
     out["argv"] = list(argv or [])
     if "terminal" not in out:
         out["terminal"] = out.get("reason") != dispatch_outcome.REASON_RUNNING
-    return out
+    return _attach_resolved_inputs_echo(out, run_dir=run_dir, snapshot=snapshot)
 
 
 def _cleanup(proc, pgid):
@@ -2200,8 +2610,18 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
 
     Caller must journal engine-launching before invoking. Journals engine-started
     immediately after Popen returns, then attempt-ended on completion or spawn failure."""
-    records, _corrupt = _journal_read(run_dir_real)
+    records, corrupt = _journal_read(run_dir_real)
     opened = _journal_state(records).get("opened")
+    # axis: G2 — no external engine Popen without dispatch_guard.validate on the journal seat.
+    guard_verdict = _spawn_allowlist_verdict(opened, journal_corrupt=corrupt)
+    if not guard_verdict.get("ok"):
+        _journal_spawn_guard_refusal(run_dir_real, attempt, guard_verdict["reason"])
+        return
+    spawn_argv, coherence_err = _spawn_argv_coherence(opened, argv)
+    if coherence_err:
+        _journal_spawn_guard_refusal(run_dir_real, attempt, coherence_err)
+        return
+    argv = spawn_argv
     dispatch_path = _dispatch_path_from_opened(opened)
     try:
         prompt_bytes = os.path.getsize(prompt_path)
@@ -2340,8 +2760,14 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     This path does NOT exercise the real run-child spawn — production uses subprocess.Popen in
     _spawn_attempt and _run_engine_files instead."""
     opened = state["opened"]
-    argv = _argv_for_attempt(
-        opened["argv"], run_dir_real, attempt, opened.get("engine"))
+    # axis: G2 — injected run_engine seam still refuses before any engine invocation.
+    guard_verdict = _spawn_allowlist_verdict(opened)
+    if not guard_verdict.get("ok"):
+        return False, guard_verdict["reason"]
+    spawn_argv, coherence_err = _spawn_argv_coherence(opened, opened.get("argv"))
+    if coherence_err:
+        return False, coherence_err
+    argv = spawn_argv
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, attempt)
     prompt_path = opened["promptPath"]
@@ -2733,6 +3159,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
     stderr_path = os.path.join(run_dir_real, "attempt-%d.stderr" % attempt)
 
+    if ended.get("guardRefusal"):
+        return _grade_spawn_guard_refusal(ended)
     if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
@@ -2887,6 +3315,8 @@ def _grade_write_attempt(run_dir_real, state, attempt):
     ended = slot.get("ended") or {}
     stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
 
+    if ended.get("guardRefusal"):
+        return _grade_spawn_guard_refusal(ended)
     if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
@@ -3309,6 +3739,15 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     )
                     return _fold_run(run_dir_real, state, result)
 
+                if grade.get("guard_refusal"):
+                    return _fold_run(run_dir_real, state, _with_run_fields(
+                        {"ok": False, "terminal": True,
+                         "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": grade.get("detail"),
+                         "attempts": latest, "forfeited": False},
+                        run_dir=run_dir_real, argv=argv,
+                    ))
+
                 reason = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
                 if run_kind == RUN_KIND_WRITE:
                     truncated_bytes = _attempt_stdout_truncated(
@@ -3498,7 +3937,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                      prompt_path, view_path, view_meta, fed_prompt, order_id,
                      progress_path, repo_root=None, mode="review",
                      expected_result_kind=None, pr_body_source_path=None,
-                     echo_nonce=None, base_prompt=None):
+                     echo_nonce=None, base_prompt=None, resolved_inputs=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -3551,57 +3990,140 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         record["echoNonce"] = effective_nonce
     if pr_body_source_path is not None:
         record["prBodySourcePath"] = pr_body_source_path
+    if resolved_inputs is not None:
+        record["resolvedInputs"] = resolved_inputs
     if not _journal_append(run_dir_real, record):
         return False, "journal-append-failed"
     return True, ""
 
 
-def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
-                    repo_root=None, timeout=RETRY_MIN_TIMEOUT,
-                    retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
+def dispatch_review(*args, seat=None, prompt_path=None,
+                    repo_root=None, timeout=_PARAM_UNSET,
+                    retry_timeout=_PARAM_UNSET, progress_path=None, run_engine=_run_engine,
                     build_view=sanitized_view.build_sanitized_view,
-                    run_dir=None, max_wait=None, order_id=None, diff_base=None, mode=None,
-                    expected_result_kind=None, pr_body_path=None, session_dir=None):
+                    run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, order_id=None, diff_base=None,
+                    mode=None, expected_result_kind=None, pr_body_path=None, session_dir=None,
+                    **kwargs):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
     caller always sees JSON and can fall open to the host model."""
-    resolved = {"mode": None}
+    resolved_mode = {"mode": None}
+    timeout_source = (
+        resolved_inputs_vocab.DEFAULT if timeout is _PARAM_UNSET else resolved_inputs_vocab.CALLER
+    )
+    if timeout is _PARAM_UNSET:
+        timeout = RETRY_MIN_TIMEOUT
+    retry_timeout_source = (
+        resolved_inputs_vocab.DEFAULT
+        if retry_timeout is _PARAM_UNSET
+        else resolved_inputs_vocab.CALLER
+    )
+    if retry_timeout is _PARAM_UNSET:
+        retry_timeout = RETRY_MIN_TIMEOUT
+    max_wait_source = (
+        resolved_inputs_vocab.DEFAULT if max_wait is _PARAM_UNSET else resolved_inputs_vocab.CALLER
+    )
+    if max_wait is _PARAM_UNSET:
+        max_wait = None
+    run_dir_supplied = run_dir is not _PARAM_UNSET
+    if run_dir is _PARAM_UNSET:
+        run_dir = None
     try:
+        if seat_bundle.legacy_call_detected(args, kwargs):
+            return _entry_refusal_terminal(
+                _legacy_dispatch_refusal(mode=mode or sanitized_view.MODE_REVIEW),
+                run_dir=run_dir,
+                mode=mode or sanitized_view.MODE_REVIEW,
+            )
+        unknown = seat_bundle.unknown_kwargs_detected(kwargs)
+        if unknown:
+            return _entry_refusal_terminal(
+                _unknown_kwargs_refusal(
+                    unknown, accepted_params=seat_bundle.dispatch_review_accepted_params(),
+                ),
+                run_dir=run_dir,
+                mode=mode or sanitized_view.MODE_REVIEW,
+            )
         if mode is not None:
             if not isinstance(mode, str) or mode not in sanitized_view.REVIEW_MODES:
-                return _mode_invalid_refusal(mode)
+                return _entry_refusal_terminal(
+                    _mode_invalid_refusal(mode),
+                    run_dir=run_dir,
+                    mode=mode or sanitized_view.MODE_REVIEW,
+                )
         if expected_result_kind is not None:
             if not isinstance(expected_result_kind, str) or expected_result_kind not in REVIEW_RESULT_KINDS:
-                return _expected_result_kind_invalid_refusal(
-                    expected_result_kind, mode or sanitized_view.MODE_REVIEW)
+                return _entry_refusal_terminal(
+                    _expected_result_kind_invalid_refusal(
+                        expected_result_kind, mode or sanitized_view.MODE_REVIEW,
+                    ),
+                    run_dir=run_dir,
+                    mode=mode or sanitized_view.MODE_REVIEW,
+                )
+        entry = seat_bundle.resolve_entry(
+            seat, verb="dispatch-review", mode=mode,
+            mode_for_role_check=seat_bundle.dispatch_review_mode_for_role_check(
+                mode, run_dir,
+            ),
+        )
+        if not entry.get("ok"):
+            allowlist_verdict = entry.get("allowlistVerdict")
+            if isinstance(allowlist_verdict, dict):
+                entry_refusal = _entry_allowlist_refusal(
+                    allowlist_verdict,
+                    repo_root=repo_root,
+                    engine=allowlist_verdict.get("vendor"),
+                    role=allowlist_verdict.get("role"),
+                    run_dir=run_dir or "",
+                    mode=mode or sanitized_view.MODE_REVIEW,
+                )
+                if entry_refusal is not None:
+                    return entry_refusal
+            return _entry_refusal_terminal(
+                _seat_dispatch_refusal(
+                    entry, mode=mode or sanitized_view.MODE_REVIEW,
+                ),
+                run_dir=run_dir,
+                mode=mode or sanitized_view.MODE_REVIEW,
+            )
         result = _dispatch_review_impl(
-            engine, model=model, effort=effort, engine_model=engine_model, prompt_path=prompt_path,
-            repo_root=repo_root, timeout=timeout,
-            retry_timeout=retry_timeout, progress_path=progress_path, run_engine=run_engine,
-            build_view=build_view, run_dir=run_dir, max_wait=max_wait, order_id=order_id,
-            diff_base=diff_base, mode=mode, resolved_mode=resolved,
+            entry, prompt_path=prompt_path,
+            repo_root=repo_root, timeout=timeout, timeout_source=timeout_source,
+            retry_timeout=retry_timeout, retry_timeout_source=retry_timeout_source,
+            progress_path=progress_path, run_engine=run_engine,
+            build_view=build_view, run_dir=run_dir, run_dir_supplied=run_dir_supplied,
+            max_wait=max_wait, max_wait_source=max_wait_source, order_id=order_id,
+            diff_base=diff_base, mode=mode, resolved_mode=resolved_mode,
             expected_result_kind=expected_result_kind,
             pr_body_path=pr_body_path, session_dir=session_dir)
         stamped = dict(result)
-        stamped["mode"] = resolved["mode"] or (mode or sanitized_view.MODE_REVIEW)
+        stamped["mode"] = resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW)
         return stamped
     except Exception as exc:
-        return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                "detail": "internal-%s" % type(exc).__name__,
-                "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
-                "mode": resolved["mode"] or (mode or sanitized_view.MODE_REVIEW)}
+        return _entry_refusal_terminal(
+            {"ok": False, "entryReason": "internal-error",
+             "detail": "internal-%s" % type(exc).__name__},
+            run_dir=run_dir,
+            mode=resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW),
+        )
 
 
-def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_path,
+def _dispatch_review_impl(seat, *, prompt_path,
                           repo_root=None, timeout=RETRY_MIN_TIMEOUT,
-                          retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
+                          timeout_source=resolved_inputs_vocab.DEFAULT,
+                          retry_timeout=RETRY_MIN_TIMEOUT,
+                          retry_timeout_source=resolved_inputs_vocab.DEFAULT,
+                          progress_path=None, run_engine=_run_engine,
                           build_view=sanitized_view.build_sanitized_view,
-                          run_dir=None, max_wait=None, order_id=None, diff_base=None,
+                          run_dir=None, run_dir_supplied=False, max_wait=None,
+                          max_wait_source=resolved_inputs_vocab.DEFAULT, order_id=None, diff_base=None,
                           mode=None, resolved_mode=None, expected_result_kind=None,
                           pr_body_path=None, session_dir=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
+    engine = seat["vendor"]
+    role = seat["role"]
     role_kind = RUN_KIND_REVIEW
     if resolved_mode is None:
         resolved_mode = {"mode": None}
@@ -3609,14 +4131,17 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
     ok, wait_detail = _validate_max_wait(max_wait)
     if not ok:
-        return _max_wait_refusal(wait_detail)
+        return _max_wait_refusal(
+            wait_detail, run_dir=run_dir, mode=resolved_mode["mode"],
+            run_kind=RUN_KIND_REVIEW,
+        )
 
     ok, repo_detail = _validate_repo_root(repo_root)
     if not ok:
         return _with_run_fields(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": repo_detail,
              "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir="", argv=[],
+            run_dir=run_dir or "", argv=[],
         )
 
     pr_body_set = pr_body_path is not None
@@ -3627,7 +4152,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
              "detail": "pr-body-args-unpaired",
              "attempts": 0, "forfeited": False, "terminal": True},
-            engine=engine,
+            run_dir=run_dir or "", engine=engine,
         )
 
     if pr_body_set:
@@ -3640,7 +4165,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                  "detail": "sanitized-view-pr-body-outside-session",
                  "attempts": 0, "forfeited": False, "terminal": True},
-                engine=engine,
+                run_dir=run_dir or "", engine=engine,
             )
         if not path_is_confidently_under(pr_real, session_real):
             return _finish_preflight_terminal(
@@ -3648,7 +4173,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                  "detail": "sanitized-view-pr-body-outside-session",
                  "attempts": 0, "forfeited": False, "terminal": True},
-                engine=engine,
+                run_dir=run_dir or "", engine=engine,
             )
 
     ok, why = engine_adapter.prompt_path_ok(prompt_path)
@@ -3657,7 +4182,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             repo_detail,
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "prompt-%s" % why,
              "attempts": 0, "forfeited": False, "terminal": True},
-            engine=engine,
+            run_dir=run_dir or "", engine=engine,
         )
 
     try:
@@ -3668,7 +4193,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             repo_detail,
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "prompt-unreadable",
              "attempts": 0, "forfeited": False, "terminal": True},
-            engine=engine,
+            run_dir=run_dir or "", engine=engine,
         )
 
     if mode == sanitized_view.MODE_BRIEF_CHECK and diff_base is not None:
@@ -3706,6 +4231,15 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                     return _finish_preflight_terminal(
                         repo_detail,
                         {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-reused",
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=opened.get("argv") or [], engine=engine,
+                    )
+                seat_detail = _continuation_seat_mismatch(opened, seat)
+                if seat_detail is not None:
+                    return _finish_preflight_terminal(
+                        repo_detail,
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": seat_detail,
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=opened.get("argv") or [], engine=engine,
                     )
@@ -3772,13 +4306,13 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                     repo_detail,
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": exc.detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
-                    engine=engine,
+                    run_dir=run_dir or "", engine=engine,
                 )
 
             view_path = view["path"]
             cwd = os.path.realpath(view_path)
-            opts = {"model": model, "engine_model": engine_model, "cwd": cwd}
-            built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
+            opts = {"cwd": cwd}
+            built = engine_adapter.build_argv_result(seat, role_kind, opts)
             if built["reason"] is not None:
                 err = _attach_sanitized_view(_with_run_fields(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
@@ -3807,16 +4341,71 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 fed_prompt += _prompt_section_sep + review_findings_schema.example_prompt_block(echo_nonce)
             fed_prompt += _prompt_section_sep + engine_adapter.REVIEW_RESULT_CONTRACT(expected_result_kind)
 
+            if run_dir_real is None:
+                run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
+            staged_prompt = os.path.join(run_dir_real, PROMPT_NAME)
+            effective_progress = progress_path or os.path.join(run_dir_real, PROGRESS_NAME)
+            resolved_diff_base = view.get("diffBase") if view else diff_base
+            diff_base_source = (
+                resolved_inputs_vocab.RESOLVED
+                if resolved_diff_base is not None
+                else resolved_inputs_vocab.DECLARED_NONE
+            )
+            expected_kind_source = (
+                resolved_inputs_vocab.CALLER
+                if expected_result_kind is not None
+                else resolved_inputs_vocab.DECLARED_NONE
+            )
+            resolved_inputs = _build_resolved_inputs(
+                seat=seat,
+                role_kind=role_kind,
+                repo_root=repo_detail,
+                run_dir_real=run_dir_real,
+                run_dir_source=(
+                    resolved_inputs_vocab.CALLER
+                    if run_dir_supplied
+                    else resolved_inputs_vocab.RESOLVED
+                ),
+                staged_prompt_path=staged_prompt,
+                timeout=timeout,
+                timeout_source=timeout_source,
+                retry_timeout=retry_timeout,
+                retry_timeout_source=retry_timeout_source,
+                max_wait=max_wait,
+                max_wait_source=max_wait_source,
+                preflight_timeout=None,
+                preflight_timeout_source=resolved_inputs_vocab.DECLARED_NONE,
+                mode=resolved_mode["mode"],
+                mode_source=(
+                    resolved_inputs_vocab.CALLER
+                    if mode is not None
+                    else resolved_inputs_vocab.DEFAULT
+                ),
+                expected_result_kind=expected_result_kind,
+                expected_result_kind_source=expected_kind_source,
+                base_sha=None,
+                base_sha_source=resolved_inputs_vocab.DECLARED_NONE,
+                diff_base=resolved_diff_base,
+                diff_base_source=diff_base_source,
+                progress_path=effective_progress,
+                progress_path_source=(
+                    resolved_inputs_vocab.CALLER
+                    if progress_path is not None
+                    else resolved_inputs_vocab.RESOLVED
+                ),
+                engine_model_opts={"cwd": cwd},
+            )
             ok_open, open_detail = _open_review_run(
                 run_dir_real, engine=engine, argv=argv, cwd=cwd,
                 timeout=timeout, retry_timeout=retry_timeout,
                 prompt_path=prompt_path, view_path=view_path, view_meta=view,
                 fed_prompt=fed_prompt, order_id=order_id,
-                progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
+                progress_path=effective_progress,
                 repo_root=repo_detail, mode=resolved_mode["mode"],
                 expected_result_kind=expected_result_kind,
                 pr_body_source_path=os.path.realpath(pr_body_path) if pr_body_set else None,
                 echo_nonce=echo_nonce, base_prompt=base_prompt,
+                resolved_inputs=resolved_inputs,
             )
             if not ok_open:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -3890,7 +4479,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                     prompt_path, order_id, base_sha, worktree_baseline, progress_path,
                     repo_root=None, expected_items=None, baseline_dirty=None,
-                    sibling_baseline=None):
+                    sibling_baseline=None, resolved_inputs=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -3940,44 +4529,120 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "supervisorPid": os.getpid(),
         "at": time.time(),
     }
+    if resolved_inputs is not None:
+        record["resolvedInputs"] = resolved_inputs
     if not _journal_append(run_dir_real, record):
         return False, "journal-append-failed"
     return True, ""
 
 
-def dispatch_write(engine, *, model, effort=None, engine_model=None, prompt_path, cwd,
-                   order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
-                   retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
-                   run_dir=None, max_wait=None, expected_items=None, expected_items_file=None):
+def dispatch_write(*args, seat=None, prompt_path=None, cwd,
+                   order_id=None, base_sha=None, timeout=_PARAM_UNSET,
+                   retry_timeout=_PARAM_UNSET, progress_path=None, run_engine=_run_engine,
+                   run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, expected_items=None,
+                   expected_items_file=None, **kwargs):
     """Build-scoped dispatch into a linked worktree (#702). Role is HARD-CODED 'build'
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
     Never raises: any unexpected internal failure is converted to a structured result."""
+    timeout_source = (
+        resolved_inputs_vocab.DEFAULT if timeout is _PARAM_UNSET else resolved_inputs_vocab.CALLER
+    )
+    if timeout is _PARAM_UNSET:
+        timeout = RETRY_MIN_TIMEOUT
+    retry_timeout_source = (
+        resolved_inputs_vocab.DEFAULT
+        if retry_timeout is _PARAM_UNSET
+        else resolved_inputs_vocab.CALLER
+    )
+    if retry_timeout is _PARAM_UNSET:
+        retry_timeout = RETRY_MIN_TIMEOUT
+    max_wait_source = (
+        resolved_inputs_vocab.DEFAULT if max_wait is _PARAM_UNSET else resolved_inputs_vocab.CALLER
+    )
+    if max_wait is _PARAM_UNSET:
+        max_wait = None
+    run_dir_supplied = run_dir is not _PARAM_UNSET
+    if run_dir is _PARAM_UNSET:
+        run_dir = None
     try:
+        if seat_bundle.legacy_call_detected(args, kwargs):
+            return _entry_refusal_terminal(
+                _legacy_dispatch_refusal(),
+                run_dir=run_dir,
+            )
+        unknown = seat_bundle.unknown_kwargs_detected(kwargs)
+        if unknown:
+            return _entry_refusal_terminal(
+                _unknown_kwargs_refusal(
+                    unknown, accepted_params=seat_bundle.dispatch_write_accepted_params(),
+                ),
+                run_dir=run_dir,
+            )
+        resolved = seat_bundle.resolve_entry(seat, verb="dispatch-write")
+        if not resolved.get("ok"):
+            allowlist_verdict = resolved.get("allowlistVerdict")
+            if isinstance(allowlist_verdict, dict):
+                entry_refusal = _entry_allowlist_refusal(
+                    allowlist_verdict,
+                    repo_root=None,
+                    engine=allowlist_verdict.get("vendor"),
+                    role=allowlist_verdict.get("role"),
+                    run_dir=run_dir or "",
+                    run_kind=RUN_KIND_WRITE,
+                )
+                if entry_refusal is not None:
+                    return entry_refusal
+            return _entry_refusal_terminal(
+                _seat_dispatch_refusal(resolved),
+                run_dir=run_dir,
+            )
         return _dispatch_write_impl(
-            engine, model=model, effort=effort, engine_model=engine_model,
-            prompt_path=prompt_path, cwd=cwd, order_id=order_id, base_sha=base_sha,
-            timeout=timeout, retry_timeout=retry_timeout, progress_path=progress_path,
-            run_engine=run_engine, run_dir=run_dir, max_wait=max_wait,
-            expected_items=expected_items, expected_items_file=expected_items_file,
+            resolved, prompt_path=prompt_path, cwd=cwd, order_id=order_id,
+            base_sha=base_sha, timeout=timeout, timeout_source=timeout_source,
+            retry_timeout=retry_timeout, retry_timeout_source=retry_timeout_source,
+            progress_path=progress_path, run_engine=run_engine, run_dir=run_dir,
+            run_dir_supplied=run_dir_supplied, max_wait=max_wait,
+            max_wait_source=max_wait_source, expected_items=expected_items,
+            expected_items_file=expected_items_file,
         )
     except Exception as exc:
-        return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "internal-%s" % type(exc).__name__,
-                "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": []}
+        return _entry_refusal_terminal(
+            {"ok": False, "entryReason": "internal-error",
+             "detail": "internal-%s" % type(exc).__name__},
+            run_dir=run_dir,
+        )
 
 
-def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, prompt_path, cwd,
+def _dispatch_write_impl(seat, *, prompt_path, cwd,
                          order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
-                         retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
-                         run_dir=None, max_wait=None, expected_items=None,
+                         timeout_source=resolved_inputs_vocab.DEFAULT,
+                         retry_timeout=RETRY_MIN_TIMEOUT,
+                         retry_timeout_source=resolved_inputs_vocab.DEFAULT,
+                         progress_path=None,
+                         run_engine=_run_engine, run_dir=None, run_dir_supplied=False,
+                         max_wait=None, max_wait_source=resolved_inputs_vocab.DEFAULT,
+                         expected_items=None,
                          expected_items_file=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
+    engine = seat["vendor"]
+    role = seat["role"]
     role_kind = "build"
     argv = []
     ok, wait_detail = _validate_max_wait(max_wait)
     if not ok:
-        return _max_wait_refusal(wait_detail)
-    preflight_timeout = max(int(max_wait), 1) if max_wait is not None else None
+        return _max_wait_refusal(wait_detail, run_dir=run_dir, run_kind=RUN_KIND_WRITE)
+    if max_wait is not None:
+        preflight_timeout = max(int(max_wait), 1)
+        preflight_timeout_source = (
+            resolved_inputs_vocab.CLAMPED
+            if int(max_wait) < 1
+            else resolved_inputs_vocab.CALLER
+        )
+    else:
+        preflight_timeout = None
+        preflight_timeout_source = resolved_inputs_vocab.DECLARED_NONE
+    base_sha_supplied = base_sha is not None
 
     ok, cwd_detail = _validate_linked_build_cwd(cwd, timeout=preflight_timeout)
     if not ok:
@@ -3990,17 +4655,18 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             "cwd-absent", "cwd-missing", "cwd-not-a-directory",
             "cwd-not-a-repo", "git-preflight-timeout",
         ):
-            return _with_run_fields(refusal, run_dir="", argv=[])
+            return _with_run_fields(refusal, run_dir=run_dir or "", argv=[])
         try:
             cwd_real = os.path.realpath((cwd or "").strip())
         except OSError:
-            return _with_run_fields(refusal, run_dir="", argv=[])
+            return _with_run_fields(refusal, run_dir=run_dir or "", argv=[])
         repo_root = _repository_root_from_git_cwd(cwd_real, timeout=preflight_timeout)
         if repo_root:
             return _finish_preflight_terminal(
-                repo_root, refusal, engine=engine, run_kind=RUN_KIND_WRITE,
+                repo_root, refusal, run_dir=run_dir or "", engine=engine,
+                run_kind=RUN_KIND_WRITE,
             )
-        return _with_run_fields(refusal, run_dir="", argv=[])
+        return _with_run_fields(refusal, run_dir=run_dir or "", argv=[])
     cwd_real = cwd_detail
     repo_root = _repository_root_from_git_cwd(cwd_real, timeout=preflight_timeout)
 
@@ -4017,23 +4683,14 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "prompt-%s" % why,
              "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir=run_dir or "",
         )
-
-    opts = {"model": model, "engine_model": engine_model, "cwd": cwd_real}
-    built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
-    if built["reason"] is not None:
-        return _write_preflight_terminal(
-            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-             "detail": "engine-config:%s" % built["reason"],
-             "attempts": 0, "forfeited": False, "terminal": True},
-        )
-    argv = built["argv"]
 
     if run_dir is None:
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-absent",
              "attempts": 0, "forfeited": False, "terminal": True},
-            argv=argv,
+            run_dir="",
         )
 
     ok_rd, rd_detail = _validate_run_dir(run_dir, create=True)
@@ -4041,7 +4698,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": rd_detail,
              "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir=run_dir or "", argv=argv,
+            run_dir=run_dir or "", argv=[],
         )
     run_dir_real = rd_detail
 
@@ -4055,6 +4712,17 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
         state = _journal_state(records)
         opened = state.get("opened")
 
+        opts = {"cwd": cwd_real}
+        built = engine_adapter.build_argv_result(seat, role_kind, opts)
+        if built["reason"] is not None:
+            return _write_preflight_terminal(
+                {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                 "detail": "engine-config:%s" % built["reason"],
+                 "attempts": 0, "forfeited": False, "terminal": True},
+                run_dir=run_dir_real, argv=[],
+            )
+        argv = built["argv"]
+
         if opened is not None:
             if os.path.realpath(opened.get("cwd", "")) != cwd_real:
                 return _write_preflight_terminal(
@@ -4065,6 +4733,14 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             if order_id is not None and opened.get("orderId") != order_id:
                 return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-reused",
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=opened.get("argv") or argv,
+                )
+            seat_detail = _continuation_seat_mismatch(opened, seat)
+            if seat_detail is not None:
+                return _write_preflight_terminal(
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": seat_detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
@@ -4167,6 +4843,49 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             sibling_baseline = _capture_sibling_baseline(
                 repo_root, cwd_real, preflight_timeout=preflight_timeout,
             )
+            staged_prompt = os.path.join(run_dir_real, PROMPT_NAME)
+            effective_progress = progress_path or os.path.join(run_dir_real, PROGRESS_NAME)
+            if base_sha_supplied:
+                base_sha_source = resolved_inputs_vocab.CALLER
+            elif base_sha is not None:
+                base_sha_source = resolved_inputs_vocab.RESOLVED
+            else:
+                base_sha_source = resolved_inputs_vocab.DECLARED_NONE
+            resolved_inputs = _build_resolved_inputs(
+                seat=seat,
+                role_kind=role_kind,
+                repo_root=repo_root,
+                run_dir_real=run_dir_real,
+                run_dir_source=(
+                    resolved_inputs_vocab.CALLER
+                    if run_dir_supplied
+                    else resolved_inputs_vocab.RESOLVED
+                ),
+                staged_prompt_path=staged_prompt,
+                timeout=timeout,
+                timeout_source=timeout_source,
+                retry_timeout=retry_timeout,
+                retry_timeout_source=retry_timeout_source,
+                max_wait=max_wait,
+                max_wait_source=max_wait_source,
+                preflight_timeout=preflight_timeout,
+                preflight_timeout_source=preflight_timeout_source,
+                mode=None,
+                mode_source=resolved_inputs_vocab.DECLARED_NONE,
+                expected_result_kind=None,
+                expected_result_kind_source=resolved_inputs_vocab.DECLARED_NONE,
+                base_sha=base_sha,
+                base_sha_source=base_sha_source,
+                diff_base=None,
+                diff_base_source=resolved_inputs_vocab.DECLARED_NONE,
+                progress_path=effective_progress,
+                progress_path_source=(
+                    resolved_inputs_vocab.CALLER
+                    if progress_path is not None
+                    else resolved_inputs_vocab.RESOLVED
+                ),
+                engine_model_opts={"cwd": cwd_real},
+            )
             ok_lease, lease_detail, _token, lease_path = _acquire_worktree_lease(
                 cwd_real, run_dir_real,
             )
@@ -4181,11 +4900,12 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                 timeout=timeout, retry_timeout=retry_timeout,
                 prompt_path=prompt_path, order_id=order_id, base_sha=base_sha,
                 worktree_baseline=baseline,
-                progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
+                progress_path=effective_progress,
                 repo_root=repo_root,
                 expected_items=declared_expected_items,
                 baseline_dirty=baseline_dirty,
                 sibling_baseline=sibling_baseline,
+                resolved_inputs=resolved_inputs,
             )
             if not ok_open:
                 holder = file_lock.read_holder(lease_path)
@@ -4656,20 +5376,16 @@ def build_parser():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     d = sub.add_parser("dispatch-review")
-    cc.add_argument(d, "--engine", contract="choices:codex,cursor",
-                    required=True, choices=("codex", "cursor"))
-    cc.add_argument(d, "--model", contract="model-not-a-role", default=None,
-                    type=cc.optional_model_not_a_role)
-    cc.add_argument(d, "--effort", contract="effort", required=True)
-    cc.add_argument(d, "--engine-model", contract="free-text", default=None)
+    cc.add_argument(d, "--seat", contract="free-text", required=True,
+                    help="JSON seat bundle with vendor, model, effort, and role")
     cc.add_argument(d, "--prompt-path", contract="free-text", required=True)
-    cc.add_argument(d, "--timeout", contract="integer", default=RETRY_MIN_TIMEOUT, type=int)
+    cc.add_argument(d, "--timeout", contract="integer", default=_PARAM_UNSET, type=int)
     cc.add_argument(d, "--retry-timeout", contract="integer",
-                    default=RETRY_MIN_TIMEOUT, type=int)
+                    default=_PARAM_UNSET, type=int)
     cc.add_argument(d, "--progress-file", contract="free-text", default=None)
     cc.add_argument(d, "--repo-root", contract="repo-root", required=True)
-    cc.add_argument(d, "--run-dir", contract="creatable-path", default=None)
-    cc.add_argument(d, "--max-wait", contract="integer", default=None, type=int)
+    cc.add_argument(d, "--run-dir", contract="creatable-path", default=_PARAM_UNSET)
+    cc.add_argument(d, "--max-wait", contract="integer", default=_PARAM_UNSET, type=int)
     cc.add_argument(d, "--order-id", contract="free-text", default=None)
     cc.add_argument(d, "--diff-base", contract="free-text", default=None, metavar="<commit-oid>",
                     help="pinned commit object id (40 hex, or 64 in a SHA-256 repository) "
@@ -4684,21 +5400,17 @@ def build_parser():
     cc.add_argument(d, "--session-dir", contract="existing-directory", default=None)
 
     w = sub.add_parser("dispatch-write")
-    cc.add_argument(w, "--engine", contract="choices:codex,cursor",
-                    required=True, choices=("codex", "cursor"))
-    cc.add_argument(w, "--model", contract="model-not-a-role", default=None,
-                    type=cc.optional_model_not_a_role)
-    cc.add_argument(w, "--effort", contract="effort", default=None)
-    cc.add_argument(w, "--engine-model", contract="free-text", default=None)
+    cc.add_argument(w, "--seat", contract="free-text", required=True,
+                    help="JSON seat bundle with vendor, model, effort, and role")
     cc.add_argument(w, "--prompt-path", contract="free-text", required=True)
     cc.add_argument(w, "--cwd", contract="existing-directory", required=True)
     cc.add_argument(w, "--order-id", contract="free-text", default=None)
     cc.add_argument(w, "--base-sha", contract="free-text", default=None)
     cc.add_argument(w, "--run-dir", contract="creatable-path", required=True)
-    cc.add_argument(w, "--timeout", contract="integer", default=RETRY_MIN_TIMEOUT, type=int)
+    cc.add_argument(w, "--timeout", contract="integer", default=_PARAM_UNSET, type=int)
     cc.add_argument(w, "--retry-timeout", contract="integer",
-                    default=RETRY_MIN_TIMEOUT, type=int)
-    cc.add_argument(w, "--max-wait", contract="integer", default=None, type=int)
+                    default=_PARAM_UNSET, type=int)
+    cc.add_argument(w, "--max-wait", contract="integer", default=_PARAM_UNSET, type=int)
     cc.add_argument(w, "--progress-file", contract="free-text", default=None)
     cc.add_argument(w, "--expect-item", contract="free-text", action="append", default=None)
     cc.add_argument(w, "--expect-items-file", contract="free-text", default=None)
@@ -4716,10 +5428,28 @@ def build_parser():
 
 
 def main(argv):
+    dropped = seat_bundle.scan_dropped_flags(argv)
+    if dropped:
+        run_dir = None
+        for i, arg in enumerate(argv):
+            if arg == "--run-dir" and i + 1 < len(argv):
+                run_dir = argv[i + 1]
+                break
+            if arg.startswith("--run-dir="):
+                run_dir = arg.split("=", 1)[1]
+                break
+        refusal = _entry_refusal_terminal(
+            _terminal_pre_open_refusal(
+                seat_bundle.legacy_refusal(dropped_flags=tuple(dropped)),
+            ),
+            run_dir=run_dir,
+        )
+        sys.stdout.write(json.dumps(refusal) + "\n")
+        return 1
     args = build_parser().parse_args(argv)
     if args.cmd == "dispatch-review":
-        res = dispatch_review(args.engine, model=args.model, effort=args.effort,
-                              engine_model=args.engine_model, prompt_path=args.prompt_path,
+        res = dispatch_review(seat=args.seat,
+                              prompt_path=args.prompt_path,
                               repo_root=args.repo_root,
                               timeout=args.timeout, retry_timeout=args.retry_timeout,
                               progress_path=args.progress_file, run_dir=args.run_dir,
@@ -4728,8 +5458,8 @@ def main(argv):
                               expected_result_kind=args.expected_result_kind,
                               pr_body_path=args.pr_body_path, session_dir=args.session_dir)
     elif args.cmd == "dispatch-write":
-        res = dispatch_write(args.engine, model=args.model, effort=args.effort,
-                             engine_model=args.engine_model, prompt_path=args.prompt_path,
+        res = dispatch_write(seat=args.seat,
+                             prompt_path=args.prompt_path,
                              cwd=args.cwd, order_id=args.order_id, base_sha=args.base_sha,
                              run_dir=args.run_dir, timeout=args.timeout,
                              retry_timeout=args.retry_timeout, max_wait=args.max_wait,

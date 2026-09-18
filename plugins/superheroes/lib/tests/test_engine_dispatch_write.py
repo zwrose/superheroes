@@ -23,6 +23,9 @@ def _load():
 
 ED = _load()
 
+_REVIEW_ROLE = "reviewer"
+_WRITE_ROLE = "implementer"
+
 import file_lock as _file_lock
 
 _EA = importlib.util.spec_from_file_location(
@@ -125,14 +128,57 @@ class FakeRunner:
 _NO_CWD = object()
 
 
-def _dispatch_write(tmp_path, fake, *, cwd=_NO_CWD, run_dir=None, engine="codex", **kwargs):
+def _seat(vendor, model, effort, role=_WRITE_ROLE):
+    return {"vendor": vendor, "model": model, "effort": effort, "role": role}
+
+
+def _seat_json(vendor, model, effort, role=_WRITE_ROLE):
+    return json.dumps({"vendor": vendor, "model": model, "effort": effort, "role": role})
+
+
+def _codex_seat(model="gpt-5.6-sol", effort="high", role=_WRITE_ROLE):
+    return _seat("codex", model, effort, role)
+
+
+def _spawn_gate_resolved_inputs(seat, role_source="caller"):
+    return {
+        "engine": seat["vendor"],
+        "engineSource": "caller",
+        "model": seat["model"],
+        "modelSource": "caller",
+        "effort": seat.get("effort"),
+        "effortSource": "declared-none" if seat.get("effort") is None else "caller",
+        "role": seat["role"],
+        "roleSource": role_source,
+    }
+
+
+def _install_fake_codex(monkeypatch, tmp_path, script_body):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text("#!/usr/bin/env python3\n" + script_body, encoding="utf-8")
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+
+
+def _codex_argv_for_run(seat, role_kind, cwd):
+    built = EA.build_argv_result(seat, role_kind, {"cwd": cwd})
+    assert built["reason"] is None, built
+    return built["argv"]
+
+
+def _cursor_seat(model="composer-2.5", effort=None):
+    return _seat("cursor", model, effort)
+
+
+def _dispatch_write(tmp_path, fake, *, cwd=_NO_CWD, run_dir=None, seat=None, **kwargs):
     if cwd is _NO_CWD:
         cwd, _main = _linked_worktree(tmp_path)
     if run_dir is None:
         run_dir = str(tmp_path / "run")
     defaults = {
-        "model": "sonnet",
-        "effort": "high",
+        "seat": seat or _codex_seat(),
         "cwd": cwd,
         "run_dir": run_dir,
         "order_id": "order-1",
@@ -141,7 +187,7 @@ def _dispatch_write(tmp_path, fake, *, cwd=_NO_CWD, run_dir=None, engine="codex"
     if "prompt_path" not in kwargs:
         defaults["prompt_path"] = _prompt(tmp_path)
     defaults.update(kwargs)
-    return ED.dispatch_write(engine, **defaults)
+    return ED.dispatch_write(**defaults)
 
 
 # --- cwd validation refusals ---------------------------------------------------
@@ -322,6 +368,26 @@ def test_worktree_lease_held_no_spawn(tmp_path):
         file_lock.release(lease_path)
 
 
+def test_worktree_lease_refused_twice_leaves_no_run_opened(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run-a")
+    lease_path = ED._worktree_lease_path(os.path.realpath(wt))
+    os.makedirs(os.path.dirname(lease_path), exist_ok=True)
+    import file_lock
+    file_lock.acquire(lease_path)
+    try:
+        fake = FakeRunner([])
+        for _ in range(2):
+            res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir)
+            assert res["detail"] == "worktree-lease-held"
+            assert res["attempts"] == 0
+            assert len(fake.calls) == 0
+            records, _ = ED._journal_read(run_dir)
+            assert not any(r.get("kind") == "run-opened" for r in records)
+    finally:
+        file_lock.release(lease_path)
+
+
 def test_lease_journal_append_failed_releases(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
     lease_path = ED._worktree_lease_path(os.path.realpath(wt))
@@ -367,7 +433,9 @@ def test_run_kind_mismatch_both_directions(tmp_path):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
     baseline = ED._worktree_baseline(os.path.realpath(wt))
-    built = EA.build_argv_result("codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)})
+    built = EA.build_argv_result(
+        _codex_seat(), "build", {"cwd": os.path.realpath(wt)},
+    )
     ED._acquire_worktree_lease(os.path.realpath(wt), run_dir)
     ED._open_write_run(
         run_dir, engine="codex", argv=built["argv"], cwd=os.path.realpath(wt),
@@ -440,8 +508,12 @@ def test_dispatch_write_never_raises(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ED, "_validate_linked_build_cwd", boom)
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high", prompt_path=_prompt(tmp_path),
-        cwd=wt, run_dir=str(tmp_path / "run"),
+        seat=_codex_seat(),
+        prompt_path=_prompt(tmp_path),
+        cwd=wt,
+        run_dir=str(tmp_path / "run"),
+        order_id="order-1",
+        run_engine=FakeRunner([]),
     )
     assert res["detail"] == "internal-ValueError"
     assert res["attempts"] == 0
@@ -747,22 +819,6 @@ def test_write_salvage_prefers_structured_report_over_later_prose(tmp_path, monk
     }]
 
 
-def test_write_salvage_prose_survives_ledger_scrubbing(tmp_path):
-    salvage = _prose_write_report()
-    # Deliberate fake token fixture; it must never resemble a real credential leak.
-    fake_token = "ghp_EXAMPLEfakenotarealtoken000000000"
-    salvage["excerpt"] = "token %s" % fake_token
-    row = ED._build_ledger_row(str(tmp_path), {"opened": {}, "attempts": {}}, {
-        "ok": False,
-        "salvage": salvage,
-    })
-    assert row["salvage"]["report"] is None
-    assert row["salvage"]["structured"] is False
-    assert row["salvage"]["requiresManualRead"] is True
-    assert "[REDACTED]" in row["salvage"]["excerpt"]
-    assert fake_token not in row["salvage"]["excerpt"]
-
-
 def test_write_dirty_tree_forfeit_attaches_salvage(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
 
@@ -797,29 +853,6 @@ def test_write_salvage_scan_exception_leaves_terminal_forfeit_unchanged(tmp_path
     assert "salvage" not in res
 
 
-def test_write_salvage_marks_ledger_engaged_but_not_delivered(tmp_path):
-    result = {"ok": False, "salvage": {"report": _write_report()["report"]}}
-    stages = ED._ledger_stages(
-        result,
-        {"attempts": {}},
-        str(tmp_path),
-        {"runKind": ED.RUN_KIND_WRITE},
-    )
-
-    assert stages == {"engaged": True, "delivered": False}
-
-
-def test_write_forfeit_without_salvage_leaves_ledger_unengaged(tmp_path):
-    stages = ED._ledger_stages(
-        {"ok": False},
-        {"attempts": {}},
-        str(tmp_path),
-        {"runKind": ED.RUN_KIND_WRITE},
-    )
-
-    assert stages == {"engaged": None, "delivered": False}
-
-
 def test_write_success_terminal(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
@@ -835,17 +868,12 @@ def test_write_argv_shape_codex(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
     cwd_real = os.path.realpath(wt)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
-    run_dir = str(tmp_path / "run")
-    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, engine="codex", effort="high", model="sonnet")
+    seat = _codex_seat()
+    res = _dispatch_write(tmp_path, fake, cwd=wt, seat=seat)
     assert res["ok"] is True
     argv = fake.calls[0]["argv"]
-    built = EA.build_argv_result(
-        "codex", "build", "high",
-        {"model": "sonnet", "cwd": cwd_real},
-    )
-    expected = ED._argv_for_attempt(built["argv"], run_dir, 1, "codex")
-    assert argv == expected
-    last_msg_idx = argv.index("--output-last-message")
+    built = EA.build_argv_result(seat, "build", {"cwd": cwd_real})
+    assert argv == built["argv"]
     assert argv == [
         "codex", "exec", "--sandbox", "workspace-write", "-m", argv[5],
         "-c", "model_reasoning_effort=high", "-C", cwd_real,
@@ -853,16 +881,16 @@ def test_write_argv_shape_codex(tmp_path, monkeypatch):
         "-",
     ]
     assert "read-only" not in argv
-    review_built = EA.build_argv_result("codex", "review", "high", {"model": "sonnet", "cwd": cwd_real})
+    review_built = EA.build_argv_result(seat, "review", {"cwd": cwd_real})
     assert review_built["argv"] != argv
     assert "read-only" in review_built["argv"]
 
     real_build = ED.engine_adapter.build_argv_result
 
-    def neutralized(engine, role_kind, effort, opts):
+    def neutralized(seat, role_kind, opts):
         if role_kind == "build":
             role_kind = "review"
-        return real_build(engine, role_kind, effort, opts)
+        return real_build(seat, role_kind, opts)
 
     monkeypatch.setattr(ED.engine_adapter, "build_argv_result", neutralized)
     fake2 = FakeRunner([(_build_ok_stdout(), False, 0, "")])
@@ -881,10 +909,7 @@ def test_write_argv_shape_codex(tmp_path, monkeypatch):
 def test_write_argv_shape_cursor(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
-    res = _dispatch_write(
-        tmp_path, fake, cwd=wt, engine="cursor",
-        engine_model="composer-2.5", effort=None, model=None,
-    )
+    res = _dispatch_write(tmp_path, fake, cwd=wt, seat=_cursor_seat())
     assert res["ok"] is True
     argv = fake.calls[0]["argv"]
     assert argv == [
@@ -892,58 +917,48 @@ def test_write_argv_shape_cursor(tmp_path):
         "--output-format", "stream-json",
     ]
     built = EA.build_argv_result(
-        "cursor", "build", None, {"engine_model": "composer-2.5", "cwd": os.path.realpath(wt)},
+        _cursor_seat(), "build",
+        {"engine_model": "composer-2.5", "cwd": os.path.realpath(wt)},
     )
     assert argv == built["argv"]
     assert argv[0] == "cursor-agent"
     assert "-f" in argv
     assert "--mode" not in argv
-    review_built = EA.build_argv_result("cursor", "review", None, {"engine_model": "composer-2.5"})
+    review_built = EA.build_argv_result(
+        _cursor_seat(), "review", {"engine_model": "composer-2.5"},
+    )
     assert "-f" not in review_built["argv"]
     assert "--mode" in review_built["argv"]
 
 
-def test_dispatch_write_codex_effort_none_refuses_no_lease(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    lease_path = ED._worktree_lease_path(os.path.realpath(wt))
-    fake = FakeRunner([])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, engine="codex", effort=None)
-    assert res["ok"] is False
-    assert res["terminal"] is True
-    assert res["reason"] == "unrunnable"
-    assert res["detail"] == "engine-config:invalid-model-effort"
-    assert res["attempts"] == 0
-    assert len(fake.calls) == 0
-    assert not os.path.exists(lease_path)
-
-
-def test_dispatch_write_cursor_grok_effort_none_refuses(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    fake = FakeRunner([])
-    res = _dispatch_write(
-        tmp_path, fake, cwd=wt, engine="cursor",
-        engine_model="cursor-grok-4.6", effort=None, model=None,
+def test_dispatch_write_codex_null_effort_resolves_at_entry():
+    resolved = ED.seat_bundle.resolve_entry(
+        _seat_json("codex", "gpt-5.6-sol", None, _WRITE_ROLE),
+        verb="dispatch-write",
     )
-    assert res["ok"] is False
-    assert res["terminal"] is True
-    assert res["reason"] == "unrunnable"
-    assert res["detail"] == "engine-config:invalid-model-effort"
-    assert res["attempts"] == 0
-    assert len(fake.calls) == 0
-    built = EA.build_argv_result(
-        "cursor", "build", None, {"engine_model": "cursor-grok-4.6", "cwd": os.path.realpath(wt)},
+    assert resolved["ok"] is True
+    assert resolved["effort"] == "high"
+    assert resolved["effortSource"] == "resolved"
+
+
+def test_dispatch_write_cursor_grok_null_effort_resolves_at_entry():
+    resolved = ED.seat_bundle.resolve_entry(
+        _seat_json("cursor", "cursor-grok-4.6", None, _WRITE_ROLE),
+        verb="dispatch-write",
     )
-    assert built["reason"] == "invalid-model-effort"
+    assert resolved["ok"] is True
+    assert resolved["effort"] == "xhigh"
+    assert resolved["effortSource"] == "resolved"
 
 
-def test_dispatch_write_cli_effort_optional(tmp_path):
+def test_dispatch_write_cli_effort_key_absent_refuses(tmp_path, capsys):
+    # axis: seat bundle makes absent effort unrepresentable — CLI must refuse by name
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")
     prompt = _prompt(tmp_path)
     argv = [
         "dispatch-write",
-        "--engine", "cursor",
-        "--engine-model", "composer-2.5",
+        "--seat", json.dumps({"vendor": "cursor", "model": "composer-2.5", "role": "implementer"}),
         "--prompt-path", prompt,
         "--cwd", wt,
         "--run-dir", run_dir,
@@ -951,6 +966,17 @@ def test_dispatch_write_cli_effort_optional(tmp_path):
     ]
     code = ED.main(argv)
     assert code == 0
+    res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    # Terminal envelope reason is unrunnable; the seat chokepoint token is in detail, not reason.
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == (
+        'JSON seat must include the "effort" key (value may be null); accepted: '
+        'JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, '
+        '"role": "<role>"} (the effort key is required; its value may be null; role is '
+        "required and must not be null)"
+    )
 
 
 # --- process-group liveness + abandon confirmation -----------------------------
@@ -1140,16 +1166,20 @@ def test_engine_started_append_failure_terminates_engine(tmp_path, monkeypatch):
     open(prompt_path, "w").write("go\n")
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _codex_argv_for_run(seat, "build", run_dir)
     ED._journal_append(run_dir, {
         "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
-        "roleKind": "build", "orderId": "x", "argv": [sys.executable, "-c", "import time; time.sleep(120)"],
+        "roleKind": "build", "orderId": "x", "argv": argv,
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
     })
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
     })
+    _install_fake_codex(monkeypatch, tmp_path, "import time\ntime.sleep(120)\n")
     real_append = ED._journal_append
 
     def fail_engine_started(rd, record):
@@ -1159,7 +1189,7 @@ def test_engine_started_append_failure_terminates_engine(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ED, "_journal_append", fail_engine_started)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", "import time; time.sleep(120)"], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30, os.path.join(run_dir, "progress.jsonl"),
     )
     records, _ = ED._journal_read(run_dir)
@@ -1225,8 +1255,7 @@ def test_write_cli_out_of_range_max_wait_prints_named_refusal(tmp_path, capsys):
     run_dir = str(tmp_path / "run")
     argv = [
         "dispatch-write",
-        "--engine", "cursor",
-        "--engine-model", "composer-2.5",
+        "--seat", _seat_json("cursor", "composer-2.5", None),
         "--prompt-path", _prompt(tmp_path),
         "--cwd", wt,
         "--run-dir", run_dir,
@@ -1488,6 +1517,27 @@ def test_write_terminal_folded_returns_stored_before_expectation_check(tmp_path,
     assert "itemCheck" not in res
 
 
+def test_edge4_dropped_role_flag_carries_terminal_envelope_write(capsys):
+    argv = [
+        "dispatch-write",
+        "--role", _WRITE_ROLE,
+        "--seat", _seat_json("cursor", "composer-2.5", None, _WRITE_ROLE),
+        "--prompt-path", "p",
+        "--cwd", "/tmp",
+        "--run-dir", "/tmp/r",
+    ]
+    assert ED.main(argv) == 1
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "legacy-seat-args"
+    assert res["terminal"] is True
+    assert res.get("runOpened") is False
+    assert res["attempts"] == 0
+    assert res["forfeited"] is False
+    assert res["runDir"] == ""
+    assert res["argv"] == []
+
+
 def test_write_cli_expect_item_and_file(tmp_path, capsys):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")
@@ -1495,8 +1545,7 @@ def test_write_cli_expect_item_and_file(tmp_path, capsys):
     items_file.write_text("from-file.txt\n", encoding="utf-8")
     argv = [
         "dispatch-write",
-        "--engine", "cursor",
-        "--engine-model", "composer-2.5",
+        "--seat", _seat_json("cursor", "composer-2.5", None),
         "--prompt-path", _prompt(tmp_path),
         "--cwd", wt,
         "--run-dir", run_dir,
@@ -2477,3 +2526,166 @@ def test_run_execution_record_write_omits_binding_when_parse_yields_nothing(tmp_
     assert isinstance(record, dict)
     assert "resultDigest" not in record
     assert "resultKind" not in record
+# --- #1269 WO-A2: resolved-input snapshot on write path -----------------------
+
+_WRITE_RESOLVED_INPUT_KEYS = frozenset({
+    "engine", "engineSource", "model", "modelSource", "effort", "effortSource",
+    "engineModel", "engineModelSource", "role", "roleSource", "repoRoot", "repoRootSource",
+    "runDir", "runDirSource", "promptPath", "promptPathSource", "timeout", "timeoutSource",
+    "retryTimeout", "retryTimeoutSource", "maxWait", "maxWaitSource", "preflightTimeout",
+    "preflightTimeoutSource", "mode", "modeSource", "expectedResultKind",
+    "expectedResultKindSource", "baseSha", "baseShaSource", "diffBase", "diffBaseSource",
+    "progressPath", "progressPathSource", "journalRoot", "journalRootSource",
+})
+
+
+def _write_opened_resolved_inputs(run_dir):
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    snapshot = opened.get("resolvedInputs")
+    assert isinstance(snapshot, dict)
+    assert frozenset(snapshot.keys()) == _WRITE_RESOLVED_INPUT_KEYS
+    return snapshot
+
+
+def test_write_run_opened_carries_resolved_inputs_snapshot(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([])
+    run_dir = str(tmp_path / "write-run")
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=0)
+    snapshot = _write_opened_resolved_inputs(run_dir)
+    assert snapshot["engine"] == "codex"
+    assert snapshot["role"] == "implementer"
+    assert snapshot["preflightTimeout"] == 1
+    assert snapshot["preflightTimeoutSource"] == "clamped"
+    assert snapshot["maxWait"] == 0
+    assert snapshot["maxWaitSource"] == "caller"
+    assert snapshot["timeoutSource"] == "default"
+
+
+def test_write_resolved_inputs_poll_echo_matches_opened_snapshot_without_seat(tmp_path):
+    # axis: I2 — poll has no seat; echo still comes from the journal snapshot
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "poll-echo")
+    fake = FakeRunner([])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=0)
+    snapshot = _write_opened_resolved_inputs(run_dir)
+    polled = ED.dispatch_poll(run_dir)
+    assert polled["runOpened"] is True
+    assert polled["resolvedInputs"] == snapshot
+
+
+def test_write_continuation_different_seat_refuses(tmp_path):
+    # axis: I3 — immutable seat at open; disagreeing continuation refuses by name
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "seat-mismatch")
+    fake = FakeRunner([])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=0)
+    res = ED.dispatch_write(
+        seat=_cursor_seat(),
+        cwd=wt,
+        run_dir=run_dir,
+        order_id="order-1",
+        prompt_path=_prompt(tmp_path),
+        run_engine=FakeRunner([]),
+        max_wait=0,
+    )
+    assert res["detail"] == ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
+    assert res["attempts"] == 0
+
+
+# --- #1269 WO-B: allowlist hard shell on write path --------------------------------
+
+_OFF_ALLOWLIST_CODEX = "gpt-5.3-codex-high"
+
+
+def _assert_allowlist_refusal(res, *, run_opened=False):
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res.get("runOpened") is run_opened
+    guard = res.get("allowlistGuard") or {}
+    assert guard.get("reason")
+    assert guard.get("allowlist")
+
+
+def test_entry_allowlist_refuses_off_allowlist_write_library(tmp_path):
+    # axis: G1 path 4 write — library dispatch_write refuses before run-open
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-g1")
+    res = ED.dispatch_write(
+        seat=_seat("codex", _OFF_ALLOWLIST_CODEX, "high"),
+        cwd=wt,
+        run_dir=run_dir,
+        prompt_path=_prompt(tmp_path),
+        run_engine=FakeRunner([]),
+        max_wait=0,
+    )
+    _assert_allowlist_refusal(res)
+    assert res["attempts"] == 0
+    assert res["runOpened"] is False
+    assert _OFF_ALLOWLIST_CODEX in res["detail"]
+
+
+def test_entry_allowlist_refuses_off_allowlist_write_cli(tmp_path):
+    # axis: G1 path 2 — dispatch-write CLI refuses with allowlist named
+    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-cli")
+    proc = subprocess.run(
+        [
+            sys.executable, "-B", mod_path,
+            "dispatch-write",
+            "--seat", _seat_json("codex", _OFF_ALLOWLIST_CODEX, "high"),
+            "--prompt-path", _prompt(tmp_path),
+            "--cwd", wt,
+            "--run-dir", run_dir,
+            "--max-wait", "0",
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    _assert_allowlist_refusal(payload)
+    assert _OFF_ALLOWLIST_CODEX in payload["detail"]
+
+
+def test_write_g1_refusal_leaves_no_lease_or_opened_run(tmp_path):
+    # axis: G1 refusal leaves no lease and no opened run on write path
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-no-open")
+    res = ED.dispatch_write(
+        seat=_seat("codex", _OFF_ALLOWLIST_CODEX, "high"),
+        cwd=wt,
+        run_dir=run_dir,
+        prompt_path=_prompt(tmp_path),
+        run_engine=FakeRunner([]),
+        max_wait=0,
+    )
+    _assert_allowlist_refusal(res)
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") == "run-opened" for r in records)
+    lease_path = ED._worktree_lease_path(os.path.realpath(wt))
+    assert not os.path.exists(lease_path)
+
+
+# --- #1269 WO-8: provenance truthfulness on write path ------------------------
+
+
+def test_wo8_edge1_cursor_implementer_null_model_snapshot_sources(tmp_path):
+    # axis: resolved model must not be recorded as caller-supplied
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([])
+    run_dir = str(tmp_path / "wo8-null-model")
+    _dispatch_write(
+        tmp_path,
+        fake,
+        cwd=wt,
+        run_dir=run_dir,
+        seat=_seat_json("cursor", None, None),
+        max_wait=0,
+    )
+    snapshot = _write_opened_resolved_inputs(run_dir)
+    assert snapshot["model"] == "composer-2.5"
+    assert snapshot["modelSource"] == "seat-default"
+    assert snapshot["engineModel"] == "composer-2.5"
+    assert snapshot["engineModelSource"] == "seat-default"

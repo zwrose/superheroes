@@ -28,6 +28,80 @@ def _load():
 
 ED = _load()
 
+_REVIEW_ROLE = "reviewer"
+_WRITE_ROLE = "implementer"
+
+
+def _seat(vendor, model, effort, role=_REVIEW_ROLE):
+    return {"vendor": vendor, "model": model, "effort": effort, "role": role}
+
+
+def _seat_json(vendor, model, effort, role=_REVIEW_ROLE):
+    return json.dumps({"vendor": vendor, "model": model, "effort": effort, "role": role})
+
+
+def _codex_seat(model="gpt-5.6-sol", effort="high", role=_REVIEW_ROLE):
+    return _seat("codex", model, effort, role)
+
+
+def _brief_check_codex_seat():
+    return _seat("codex", "gpt-5.6-sol", "xhigh", "brief-check")
+
+
+def _cursor_seat(model="composer-2.5", effort=None, role=_WRITE_ROLE):
+    return _seat("cursor", model, effort, role)
+
+
+def _reviewer_cursor_seat():
+    return _seat("cursor", "cursor-grok-4.6", "xhigh", _REVIEW_ROLE)
+
+
+def _spawn_gate_resolved_inputs(seat, role_source="caller"):
+    return {
+        "engine": seat["vendor"],
+        "engineSource": "caller",
+        "model": seat["model"],
+        "modelSource": "caller",
+        "effort": seat.get("effort"),
+        "effortSource": "declared-none" if seat.get("effort") is None else "caller",
+        "role": seat["role"],
+        "roleSource": role_source,
+    }
+
+
+def _install_fake_codex(monkeypatch, tmp_path, script_body):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text("#!/usr/bin/env python3\n" + script_body, encoding="utf-8")
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+
+
+def _codex_argv_for_run(seat, role_kind, cwd):
+    built = EA.build_argv_result(seat, role_kind, {"cwd": cwd})
+    assert built["reason"] is None, built
+    return built["argv"]
+
+
+def _journal_codex_run_for_engine_files(
+    run_dir, prompt_path, *, seat, role_kind, run_kind,
+):
+    argv = _codex_argv_for_run(seat, role_kind, run_dir)
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": run_kind, "engine": "codex",
+        "roleKind": role_kind, "orderId": "x", "argv": argv,
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    return argv
+
+
 _EA = importlib.util.spec_from_file_location(
     "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
 EA = importlib.util.module_from_spec(_EA)
@@ -277,14 +351,14 @@ def _never_call(*_args, **_kwargs):
 def test_dispatch_review_repo_root_absent_no_spawn(tmp_path):
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
         build_view=_never_build_view,
     )
     assert res == {
         "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
         "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
-        "mode": "review",
+        "mode": "review", "runOpened": False,
     }
     assert "sanitizedView" not in res
     assert len(fake.calls) == 0
@@ -293,7 +367,7 @@ def test_dispatch_review_repo_root_absent_no_spawn(tmp_path):
 def test_dispatch_review_repo_root_empty_string_no_spawn(tmp_path):
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root="   ", run_engine=fake,
         build_view=_never_build_view,
     )
@@ -307,7 +381,7 @@ def test_dispatch_review_repo_root_missing_path_no_spawn(tmp_path):
     fake = FakeRunner([])
     missing = str(tmp_path / "no-such-repo")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=missing, run_engine=fake,
         build_view=_never_build_view,
     )
@@ -321,7 +395,7 @@ def test_dispatch_review_repo_root_not_a_directory_no_spawn(tmp_path):
     f = tmp_path / "file-not-dir"
     f.write_text("x", encoding="utf-8")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=str(f), run_engine=fake,
         build_view=_never_build_view,
     )
@@ -335,7 +409,7 @@ def test_dispatch_review_repo_root_not_a_repo_no_spawn(tmp_path):
     bare = tmp_path / "bare-dir"
     bare.mkdir()
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=str(bare), run_engine=fake,
         build_view=_never_build_view,
     )
@@ -349,7 +423,7 @@ def test_dispatch_review_valid_repo_root_git_file_pins_cwd_codex(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -361,7 +435,7 @@ def test_dispatch_review_valid_repo_root_git_dir_pins_cwd_codex(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -373,7 +447,7 @@ def test_dispatch_review_valid_repo_root_pins_cwd_cursor(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "cursor", model=None, effort="high",
+        seat=_reviewer_cursor_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -385,7 +459,7 @@ def test_dispatch_review_codex_argv_has_c_repo_no_skip_git(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -462,7 +536,7 @@ def test_dispatch_review_prompt_has_new_preamble(tmp_path):
     base_body = "Review this code.\n"
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path, base_body), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -496,7 +570,7 @@ def test_dispatch_review_repo_survives_success(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -508,7 +582,7 @@ def test_dispatch_review_repo_survives_double_forfeit(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([("", True, 0, ""), ("", True, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -520,7 +594,7 @@ def test_dispatch_review_repo_survives_unreadable_both_attempts(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([("not json", False, 0, ""), ("not json", False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -535,7 +609,7 @@ def test_dispatch_review_repo_survives_run_engine_raises(tmp_path):
         raise RuntimeError("injected failure")
 
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=boom,
         build_view=_fake_build_view(tmp_path),
     )
@@ -555,7 +629,7 @@ def test_dispatch_review_retry_pins_same_cwd(tmp_path):
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
     ])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -572,7 +646,7 @@ def test_dispatch_review_does_not_inherit_orchestrator_cwd_codex(tmp_path, monke
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -588,7 +662,7 @@ def test_dispatch_review_does_not_inherit_orchestrator_cwd_cursor(tmp_path, monk
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "cursor", model=None, effort="high",
+        seat=_reviewer_cursor_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -599,7 +673,7 @@ def test_first_attempt_success_no_retry(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -616,7 +690,7 @@ def test_second_attempt_success(tmp_path):
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -632,7 +706,7 @@ def test_double_forfeit_no_third_attempt(tmp_path):
         ("", True, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -651,7 +725,7 @@ def test_unreadable_both_attempts_forfeits(tmp_path):
         ("not json", False, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -666,7 +740,7 @@ def test_invalid_empty_prompt_zero_attempts_no_spawn(tmp_path):
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=str(prompt_path), repo_root=repo_root, run_engine=_never_call,
         build_view=build_view,
     )
@@ -678,32 +752,32 @@ def test_invalid_empty_prompt_zero_attempts_no_spawn(tmp_path):
     assert build_view.meta["build_count"] == 0
 
 
-def test_unrunnable_engine_config_zero_attempts(tmp_path):
+def test_legacy_model_keyword_refuses_before_spawn(tmp_path):
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
     res = ED.dispatch_review(
-        "cursor", model="fable", effort="composer",
+        "codex", model="fable", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=build_view,
     )
-    assert res["reason"] == "unrunnable"
-    assert res["detail"] == "engine-config:fable-unrunnable"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "legacy-seat-args"
     assert res["attempts"] == 0
     assert res["forfeited"] is False
-    assert res["sanitizedView"] == _fake_view_receipt()
-    assert build_view.meta["build_count"] == 1
+    assert "sanitizedView" not in res
+    assert build_view.meta["build_count"] == 0
 
 
 def test_unrunnable_engine_config_unknown_claude_tier_no_spawn(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "cursor", model="cursor-grok-4.6-xhigh", effort="high",
+        seat=_seat("cursor", "cursor-grok-4.6-xhigh", "high"),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_fake_build_view(tmp_path),
     )
     assert res["ok"] is False
     assert res["reason"] == "unrunnable"
-    assert res["detail"] == "engine-config:unknown-claude-tier"
+    assert "conflicts with effort" in res["detail"]
     assert res["attempts"] == 0
     assert res["forfeited"] is False
 
@@ -711,14 +785,13 @@ def test_unrunnable_engine_config_unknown_claude_tier_no_spawn(tmp_path):
 def test_unrunnable_engine_config_effort_conflict_no_spawn(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "cursor", model=None, effort="low",
-        engine_model="cursor-grok-4.6-xhigh",
+        seat=_seat("cursor", "cursor-grok-4.6-xhigh", "low"),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_fake_build_view(tmp_path),
     )
     assert res["ok"] is False
     assert res["reason"] == "unrunnable"
-    assert res["detail"] == "engine-config:engine-model-effort-conflict"
+    assert "conflicts with effort" in res["detail"]
     assert res["attempts"] == 0
     assert res["forfeited"] is False
 
@@ -756,7 +829,7 @@ def test_timeout_mid_stream_partial_output_rejected(tmp_path):
         (partial, True, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -771,7 +844,7 @@ def test_nonzero_exit_with_parseable_stdout_rejected(tmp_path):
         (_VALID_FINDINGS_STDOUT, False, 1, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -783,7 +856,7 @@ def test_noisy_but_valid_output_accepted(tmp_path):
     noisy = "bootstrap noise\nsession start\n" + _VALID_FINDINGS_STDOUT
     fake = FakeRunner([(noisy, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -806,7 +879,7 @@ def test_liveness_heartbeats(tmp_path, monkeypatch):
         )
 
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path),
         repo_root=repo_root,
         progress_path=progress_path,
@@ -874,7 +947,7 @@ def test_reviewer_only_no_write_dispatch_reachable(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -891,7 +964,7 @@ def test_retry_uses_900s_floor(tmp_path):
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
     ])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
         retry_timeout=1, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
@@ -904,7 +977,7 @@ def test_antihijack_preamble_and_codex_c_flag(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -935,7 +1008,7 @@ def test_dispatch_echo_only_stdout_forfeits_not_clean_review(tmp_path):
     fed = _fed_prompt(base)
     fake = FakeRunner([(fed, False, 0, ""), (fed, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=prompt_path, repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -971,7 +1044,7 @@ def test_dispatch_genuine_finding_quoting_the_prompt_survives(tmp_path):
          "body": finding_body, "suggestion": "s"}]})
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=prompt_path, repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -987,7 +1060,7 @@ def test_dispatch_success_includes_engagement_fields(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1007,7 +1080,7 @@ def test_dispatch_codex_engagement_tokens_from_event_stream(tmp_path):
     )
     fake = FakeRunner([(stream, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1026,7 +1099,7 @@ def test_dispatch_cursor_engagement_tool_calls(tmp_path):
     ])
     fake = FakeRunner([(stream, False, 0, "")])
     res = ED.dispatch_review(
-        "cursor", model=None, effort="high",
+        seat=_reviewer_cursor_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1041,7 +1114,7 @@ def test_dispatch_empty_findings_no_investigated_is_vacuous_forfeit(tmp_path):
     empty = json.dumps({"findings": []})
     fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1064,7 +1137,7 @@ def test_dispatch_empty_findings_with_valid_investigated_accepted(tmp_path):
     stdout = json.dumps({"findings": [], "investigated": [rel]})
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1080,7 +1153,7 @@ def test_dispatch_empty_grouping_no_investigated_is_vacuous_forfeit(tmp_path, gr
     empty = json.dumps({"grouping": grouping})
     fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1101,7 +1174,7 @@ def test_dispatch_empty_grouping_with_valid_investigated_accepted(tmp_path, grou
     stdout = json.dumps({"grouping": grouping, "investigated": [rel]})
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1117,7 +1190,7 @@ def test_dispatch_empty_findings_all_investigated_rejected_is_vacuous(tmp_path):
     stdout = json.dumps({"findings": [], "investigated": ["/abs/path", "missing.py"]})
     fake = FakeRunner([(stdout, False, 0, ""), (stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1136,7 +1209,7 @@ def test_dispatch_mixed_findings_propagates_rejected_records(tmp_path):
     stdout = json.dumps({"findings": [42, {"id": "f1", "message": "issue found"}]})
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1160,7 +1233,7 @@ def test_dispatch_whitespace_padded_repo_root_accepts_honest_investigated(tmp_pa
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=padded, run_engine=fake,
         build_view=build_view,
     )
@@ -1177,7 +1250,7 @@ def test_dispatch_relative_repo_root_absolutized_for_cwd_and_codex_c(tmp_path, m
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=rel_root, run_engine=fake,
         build_view=build_view,
     )
@@ -1187,13 +1260,33 @@ def test_dispatch_relative_repo_root_absolutized_for_cwd_and_codex_c(tmp_path, m
     assert argv[i + 1] == view_cwd
 
 
+def test_edge4_dropped_role_flag_carries_terminal_envelope_review(capsys):
+    argv = [
+        "dispatch-review",
+        "--role", _REVIEW_ROLE,
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--prompt-path", "p",
+        "--repo-root", "/tmp",
+        "--run-dir", "/tmp/r",
+    ]
+    assert ED.main(argv) == 1
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "legacy-seat-args"
+    assert res["terminal"] is True
+    assert res.get("runOpened") is False
+    assert res["attempts"] == 0
+    assert res["forfeited"] is False
+    assert res["runDir"] == ""
+    assert res["argv"] == []
+
+
 def test_main_dispatch_review_without_repo_root_argparse_refusal(tmp_path):
     prompt = _valid_prompt(tmp_path)
     with pytest.raises(SystemExit) as excinfo:
         ED.main([
             "dispatch-review",
-            "--engine", "codex",
-            "--effort", "high",
+            "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
             "--prompt-path", prompt,
         ])
     assert excinfo.value.code == 2
@@ -1208,7 +1301,7 @@ def test_dispatch_vacuous_then_valid_investigated_succeeds_on_retry(tmp_path):
     good = json.dumps({"findings": [], "investigated": ["a.py"]})
     fake = FakeRunner([(bad, False, 0, ""), (good, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1222,7 +1315,7 @@ def test_dispatch_nonempty_findings_without_investigated_bypasses_floor(tmp_path
     stdout = json.dumps({"findings": [{"id": "f1", "message": "issue"}]})
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1246,7 +1339,7 @@ def test_dispatch_findings_with_investigated_survives_transport(tmp_path):
     })
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1265,7 +1358,7 @@ def test_dispatch_findings_with_empty_investigated_still_succeeds(tmp_path):
     })
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1282,7 +1375,7 @@ def test_dispatch_findings_with_wholly_rejected_investigated_still_succeeds(tmp_
     })
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1304,7 +1397,7 @@ def test_dispatch_clean_success_surfaces_mixed_investigated_rejections(tmp_path)
     })
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1318,7 +1411,7 @@ def test_dispatch_double_timeout_stays_forfeited_not_vacuous(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([("", True, 0, ""), ("", True, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1331,7 +1424,7 @@ def test_dispatch_timeout_then_vacuous_reports_vacuous(tmp_path):
     empty = json.dumps({"findings": []})
     fake = FakeRunner([("", True, 0, ""), (empty, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1344,13 +1437,13 @@ def test_double_forfeit_has_engagement_unrunnable_does_not(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([("not json", False, 0, ""), ("not json", False, 0, "")])
     forfeited = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
     assert "engagement" in forfeited
     unrunnable = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
         build_view=_never_build_view,
     )
@@ -1366,7 +1459,7 @@ def test_sanitized_view_build_error_refusal_no_spawn(tmp_path):
         raise ED.sanitized_view.SanitizedViewError("sanitized-view-export-failed")
 
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=fail_build,
     )
@@ -1378,7 +1471,7 @@ def test_sanitized_view_build_error_refusal_no_spawn(tmp_path):
     assert res["terminal"] is True
     assert res["runDir"] == ""
     assert res["argv"] == []
-    assert "ledger" in res
+    assert "ledger" not in res
     assert len(fake.calls) == 0
     assert "sanitizedView" not in res
 
@@ -1387,7 +1480,7 @@ def test_success_includes_sanitized_view_receipt(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1399,7 +1492,7 @@ def test_source_dirty_disclosure_when_view_flags_dirty(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path, source_dirty=True),
     )
@@ -1413,7 +1506,7 @@ def test_clean_source_has_no_dirty_disclosure(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path, source_dirty=False),
     )
@@ -1431,7 +1524,7 @@ def test_view_destroyed_after_dispatch(tmp_path):
 
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=capture_build,
     )
@@ -1466,11 +1559,11 @@ def test_view_destroyed_after_dispatch(tmp_path):
         (
             "engine_config_refusal",
             _never_call,
-            {"engine": "cursor", "model": "fable", "effort": "composer"},
+            {},
         ),
     ],
 )
-def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwargs):
+def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwargs, monkeypatch):
     repo_root = _repo(tmp_path)
     captured_path = []
     build_view_fn = _fake_build_view(tmp_path)
@@ -1480,14 +1573,29 @@ def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwa
         captured_path.append(view["path"])
         return view
 
+    engine = kwargs.get("engine", "codex")
+    if engine == "cursor":
+        seat = _cursor_seat(
+            model=kwargs.get("model", "composer-2.5"),
+            effort=kwargs.get("effort"),
+        )
+    else:
+        seat = _codex_seat(
+            model=kwargs.get("model", "gpt-5.6-sol"),
+            effort=kwargs.get("effort", "high"),
+        )
+    if case == "engine_config_refusal":
+        monkeypatch.setattr(
+            ED.engine_adapter,
+            "build_argv_result",
+            lambda *a, **k: {"argv": [], "reason": "unregistered-engine-model"},
+        )
     dispatch_kwargs = {
-        "model": kwargs.get("model", "sonnet"),
-        "effort": kwargs.get("effort", "high"),
+        "seat": seat,
         "prompt_path": _valid_prompt(tmp_path),
         "repo_root": repo_root,
         "build_view": capture_build,
     }
-    engine = kwargs.get("engine", "codex")
     if kwargs.get("run_engine_factory") == "boom":
         def boom(*_a, **_k):
             raise RuntimeError("injected failure")
@@ -1495,7 +1603,7 @@ def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwa
     else:
         dispatch_kwargs["run_engine"] = run_engine
 
-    ED.dispatch_review(engine, **dispatch_kwargs)
+    ED.dispatch_review(**dispatch_kwargs)
     assert captured_path
     assert not os.path.exists(captured_path[0])
 
@@ -1507,7 +1615,7 @@ def test_dispatch_investigated_stripped_path_is_vacuous_forfeit(tmp_path):
     stdout = json.dumps({"findings": [], "investigated": ["CLAUDE.md"]})
     fake = FakeRunner([(stdout, False, 0, ""), (stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -1528,12 +1636,12 @@ def test_pre_view_repo_root_refusals_have_no_sanitized_view(tmp_path, repo_root,
         repo_root = str(tmp_path / "no-such-repo")
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_never_build_view,
     )
     assert res["attempts"] == 0
-    assert res["detail"] == detail or detail in res["detail"]
+    assert res["detail"] == detail
     assert "sanitizedView" not in res
     assert len(fake.calls) == 0
 
@@ -1543,7 +1651,7 @@ def test_pre_view_repo_root_not_a_directory_no_sanitized_view(tmp_path):
     f.write_text("x", encoding="utf-8")
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=str(f), run_engine=fake,
         build_view=_never_build_view,
     )
@@ -1557,7 +1665,7 @@ def test_pre_view_repo_root_not_a_repo_no_sanitized_view(tmp_path):
     bare.mkdir()
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=str(bare), run_engine=fake,
         build_view=_never_build_view,
     )
@@ -1572,24 +1680,53 @@ def _manual_open_review_run(tmp_path, run_dir):
     build_view = _fake_build_view(tmp_path)
     view = build_view(os.path.realpath(repo_root))
     cwd = os.path.realpath(view["path"])
-    os.makedirs(run_dir, exist_ok=True)
-    built = EA.build_argv_result(
-        "codex", "review", "high", {
-            "model": "sonnet", "cwd": cwd,
-            "last_message_path": ED._attempt_last_message_path(run_dir, 1),
-        },
+    built = __import__("engine_adapter").build_argv_result(
+        _codex_seat(), "review", {"model": "sonnet", "cwd": cwd},
     )
     argv = built["argv"]
     prompt_path = _valid_prompt(tmp_path)
     with open(prompt_path, encoding="utf-8") as fh:
         base = fh.read()
     fed = _fed_prompt(base, view_meta=view)
+    os.makedirs(run_dir, exist_ok=True)
+    staged_prompt = os.path.join(run_dir, ED.PROMPT_NAME)
+    progress_path = os.path.join(run_dir, "progress.jsonl")
+    resolved_inputs = ED._build_resolved_inputs(
+        seat=_codex_seat(),
+        role_kind="review",
+        repo_root=os.path.realpath(repo_root),
+        run_dir_real=run_dir,
+        run_dir_source="caller",
+        staged_prompt_path=staged_prompt,
+        timeout=ED.RETRY_MIN_TIMEOUT,
+        timeout_source="default",
+        retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        retry_timeout_source="default",
+        max_wait=None,
+        max_wait_source="default",
+        preflight_timeout=None,
+        preflight_timeout_source="declared-none",
+        mode="review",
+        mode_source="default",
+        expected_result_kind=None,
+        expected_result_kind_source="declared-none",
+        base_sha=None,
+        base_sha_source="declared-none",
+        diff_base=view.get("diffBase"),
+        diff_base_source=(
+            "resolved" if view.get("diffBase") is not None else "declared-none"
+        ),
+        progress_path=progress_path,
+        progress_path_source="resolved",
+        engine_model_opts={"cwd": cwd},
+    )
     ok, detail = ED._open_review_run(
         run_dir, engine="codex", argv=argv, cwd=cwd,
         timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
         prompt_path=prompt_path, view_path=view["path"], view_meta=view,
-        fed_prompt=fed, order_id="test-order", progress_path=os.path.join(run_dir, "progress.jsonl"),
+        fed_prompt=fed, order_id="test-order", progress_path=progress_path,
         repo_root=os.path.realpath(repo_root),
+        resolved_inputs=resolved_inputs,
     )
     assert ok, detail
     return repo_root, view
@@ -1701,7 +1838,7 @@ def test_run_dir_not_empty_unopened_refused(tmp_path):
     (run_dir / "stale.txt").write_text("leftover\n", encoding="utf-8")
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), run_dir=str(run_dir),
     )
@@ -1791,7 +1928,7 @@ def test_dispatch_review_creates_missing_run_dir(tmp_path):
     assert not run_dir.exists()
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
     )
@@ -1810,7 +1947,7 @@ def test_dispatch_review_ancestor_symlink_physicalizes_run_dir(tmp_path):
     run_dir = alias_parent / "review-run"
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
     )
@@ -1825,7 +1962,7 @@ def test_dispatch_review_symlink_leaf_refused(tmp_path):
     link.symlink_to(real_dir)
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), run_dir=str(link),
     )
@@ -1842,7 +1979,7 @@ def test_dispatch_review_trailing_separator_symlink_leaf_refused(tmp_path):
     link.symlink_to(real_dir)
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), run_dir=str(link) + os.sep,
     )
@@ -1855,7 +1992,7 @@ def test_dispatch_review_continuation_reuses_created_run_dir(tmp_path):
     run_dir = tmp_path / "continue-run"
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     first = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
         order_id="order-1",
@@ -1865,7 +2002,7 @@ def test_dispatch_review_continuation_reuses_created_run_dir(tmp_path):
     assert len(opened_first) == 1
     assert os.path.isdir(first["runDir"])
     second = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
         build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
         order_id="order-1",
@@ -2065,7 +2202,7 @@ def test_review_continuation_builds_no_second_view(tmp_path):
     build_view = _fake_build_view(tmp_path)
     try:
         first = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(),
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
             run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
             order_id="test-order", max_wait=1,
@@ -2074,7 +2211,7 @@ def test_review_continuation_builds_no_second_view(tmp_path):
         assert build_view.meta["build_count"] == 0
 
         second = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(),
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
             run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
             order_id="test-order", max_wait=1,
@@ -2105,7 +2242,7 @@ def test_review_continuation_argv_matches_journal(tmp_path):
     build_view = _fake_build_view(tmp_path)
     try:
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(),
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
             run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
             order_id="test-order", max_wait=1,
@@ -2133,14 +2270,14 @@ def test_review_continuation_non_terminal_leaves_no_extra_view(tmp_path):
     build_view = _fake_build_view(tmp_path)
     try:
         ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(),
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
             run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
             order_id="test-order", max_wait=1,
         )
         assert os.path.isdir(view_path)
         ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(),
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
             run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
             order_id="test-order", max_wait=1,
@@ -2158,7 +2295,7 @@ def test_review_resume_order_id_mismatch(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view, run_dir=run_dir, order_id="order-2", max_wait=0,
     )
@@ -2190,7 +2327,7 @@ def test_blocking_supervise_loop_bounded_under_held_lock(tmp_path, monkeypatch):
 
         def run_dispatch():
             ED.dispatch_review(
-                "codex", model="sonnet", effort="high",
+                seat=_codex_seat(),
                 prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
                 run_engine=FakeRunner([]),
                 build_view=_fake_build_view(tmp_path), run_dir=run_dir,
@@ -2230,7 +2367,7 @@ def test_run_child_waits_for_late_attempt_started(tmp_path, monkeypatch):
     EA = importlib.util.module_from_spec(_EA)
     _EA.loader.exec_module(EA)
     built = EA.build_argv_result(
-        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
+        _codex_seat(), "build", {"model": "sonnet", "cwd": os.path.realpath(wt)},
     )
     ED._open_write_run(
         run_dir, engine="codex", argv=built["argv"], cwd=os.path.realpath(wt),
@@ -2238,6 +2375,7 @@ def test_run_child_waits_for_late_attempt_started(tmp_path, monkeypatch):
         prompt_path=_valid_prompt(tmp_path), order_id="race-1", base_sha="abc",
         worktree_baseline=baseline,
         progress_path=os.path.join(run_dir, "progress.jsonl"),
+        resolved_inputs=_spawn_gate_resolved_inputs(_codex_seat(role=_WRITE_ROLE)),
     )
 
     mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
@@ -2313,7 +2451,7 @@ def test_fold_append_failure_leaves_lease(tmp_path, monkeypatch):
     EA = importlib.util.module_from_spec(_EA)
     _EA.loader.exec_module(EA)
     built = EA.build_argv_result(
-        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
+        _codex_seat(), "build", {"model": "sonnet", "cwd": os.path.realpath(wt)},
     )
     ED._acquire_worktree_lease(os.path.realpath(wt), run_dir)
     ED._open_write_run(
@@ -2322,6 +2460,7 @@ def test_fold_append_failure_leaves_lease(tmp_path, monkeypatch):
         prompt_path=_valid_prompt(tmp_path), order_id="order-1", base_sha="abc",
         worktree_baseline=baseline,
         progress_path=os.path.join(run_dir, "progress.jsonl"),
+        resolved_inputs=_spawn_gate_resolved_inputs(_codex_seat(role=_WRITE_ROLE)),
     )
     lease_path = ED._worktree_lease_path(os.path.realpath(wt))
     assert os.path.exists(lease_path)
@@ -2351,7 +2490,7 @@ def test_abandon_append_failure_leaves_lease(tmp_path, monkeypatch):
     EA = importlib.util.module_from_spec(_EA)
     _EA.loader.exec_module(EA)
     built = EA.build_argv_result(
-        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
+        _codex_seat(), "build", {"model": "sonnet", "cwd": os.path.realpath(wt)},
     )
     ED._acquire_worktree_lease(os.path.realpath(wt), run_dir)
     ED._open_write_run(
@@ -2360,6 +2499,7 @@ def test_abandon_append_failure_leaves_lease(tmp_path, monkeypatch):
         prompt_path=_valid_prompt(tmp_path), order_id="order-1", base_sha="abc",
         worktree_baseline=baseline,
         progress_path=os.path.join(run_dir, "progress.jsonl"),
+        resolved_inputs=_spawn_gate_resolved_inputs(_codex_seat(role=_WRITE_ROLE)),
     )
     lease_path = ED._worktree_lease_path(os.path.realpath(wt))
     assert os.path.exists(lease_path)
@@ -2420,19 +2560,14 @@ def test_run_engine_files_caps_stdout(tmp_path, monkeypatch):
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
-        "roleKind": "build", "orderId": "x", "argv": ["python3", "-c", "x"],
-        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "supervisorPid": 1, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
-    })
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30, os.path.join(run_dir, "progress.jsonl"),
     )
     assert os.path.isfile(stdout_path)
@@ -2518,7 +2653,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         repo_root = _repo(tmp_path)
         fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(),
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
             build_view=_fake_build_view(tmp_path),
         )
@@ -2527,7 +2662,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         repo_root = _repo(tmp_path)
         fake = FakeRunner([("", True, 0, ""), ("", True, 0, "")])
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(),
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
             build_view=_fake_build_view(tmp_path),
         )
@@ -2537,7 +2672,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         empty = json.dumps({"findings": []})
         fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(),
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
             build_view=_fake_build_view(tmp_path),
         )
@@ -2546,7 +2681,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         wt = _linked_worktree(tmp_path)
         fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
         res = ED.dispatch_write(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(role=_WRITE_ROLE),
             prompt_path=_valid_prompt(tmp_path), cwd=wt,
             run_dir=str(tmp_path / "run-write"), order_id="inv-1", run_engine=fake,
         )
@@ -2555,7 +2690,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         wt = _linked_worktree(tmp_path)
         fake = FakeRunner([(_honest_refusal_stdout(), False, 0, "")])
         res = ED.dispatch_write(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(role=_WRITE_ROLE),
             prompt_path=_valid_prompt(tmp_path), cwd=wt,
             run_dir=str(tmp_path / "run-refusal"), order_id="inv-2", run_engine=fake,
         )
@@ -2570,7 +2705,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
                 return "", True, 0, ""
 
         res = ED.dispatch_write(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(role=_WRITE_ROLE),
             prompt_path=_valid_prompt(tmp_path), cwd=wt,
             run_dir=str(tmp_path / "run-dirty"), order_id="inv-3",
             run_engine=DirtyTimeoutRunner(), max_wait=120,
@@ -2616,7 +2751,7 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
         monkeypatch.setattr(ED, "_supervise", boom)
         fake = FakeRunner([])
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(),
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
             build_view=_fake_build_view(tmp_path),
         )
@@ -2645,19 +2780,14 @@ def test_run_engine_files_caps_under_live_writer_stdout_and_stderr(tmp_path, mon
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
-        "roleKind": "build", "orderId": "x", "argv": ["python3", "-c", "x"],
-        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "supervisorPid": 1, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
-    })
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30, os.path.join(run_dir, "progress.jsonl"),
     )
     assert os.path.getsize(stdout_path) <= ED.MAX_STDOUT_CAPTURE
@@ -2689,16 +2819,11 @@ def test_run_engine_files_caps_only_after_terminate_on_timeout(tmp_path, monkeyp
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
-        "roleKind": "build", "orderId": "x", "argv": ["python3", "-c", "x"],
-        "cwd": run_dir, "timeout": 1, "retryTimeout": 1,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "supervisorPid": 1, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
-    })
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
     events = []
     real_cap = ED._cap_file_tail
     real_terminate = ED._terminate_process_group
@@ -2720,7 +2845,7 @@ def test_run_engine_files_caps_only_after_terminate_on_timeout(tmp_path, monkeyp
     monkeypatch.setattr(ED, "_terminate_process_group", obs_terminate)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 1,
         os.path.join(run_dir, "progress.jsonl"),
     )
@@ -2752,20 +2877,15 @@ def test_run_engine_files_journals_wall_seconds_and_stdout_bytes(tmp_path, monke
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
-        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "x",
-        "argv": [sys.executable, "-c", "x"],
-        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "supervisorPid": 1, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
-    })
+    seat = _codex_seat()
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind=ED.RUN_KIND_REVIEW,
+        run_kind=ED.RUN_KIND_REVIEW,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.05)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30,
         os.path.join(run_dir, "progress.jsonl"),
     )
@@ -2775,7 +2895,7 @@ def test_run_engine_files_journals_wall_seconds_and_stdout_bytes(tmp_path, monke
     assert ended["stdoutBytes"] == os.path.getsize(stdout_path)
 
 
-def test_run_engine_files_spawn_failure_omits_timing_keys(tmp_path):
+def test_run_engine_files_spawn_failure_omits_timing_keys(tmp_path, monkeypatch):
     """E2: spawn-failure attempt-ended records must not invent wallSeconds/stdoutBytes."""
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
@@ -2783,8 +2903,13 @@ def test_run_engine_files_spawn_failure_omits_timing_keys(tmp_path):
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    monkeypatch.setenv("PATH", "/nonexistent")
     ED._run_engine_files(
-        run_dir, 1, ["/no/such/engine-binary-687"], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30,
         os.path.join(run_dir, "progress.jsonl"),
     )
@@ -2803,6 +2928,11 @@ def test_run_engine_files_journal_append_failed_omits_timing_keys(tmp_path, monk
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, "print('ok')\n")
     real_append = ED._journal_append
     calls = {"n": 0}
 
@@ -2814,7 +2944,7 @@ def test_run_engine_files_journal_append_failed_omits_timing_keys(tmp_path, monk
 
     monkeypatch.setattr(ED, "_journal_append", fail_engine_started)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", "print('ok')"], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30,
         os.path.join(run_dir, "progress.jsonl"),
     )
@@ -2840,19 +2970,14 @@ def test_run_engine_files_stdout_bytes_is_pre_cap_size(tmp_path, monkeypatch):
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
     monkeypatch.setattr(ED, "MAX_STDOUT_CAPTURE", 8192)
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
-        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "x",
-        "argv": [sys.executable, "-c", "x"],
-        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "supervisorPid": 1, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
-    })
+    seat = _codex_seat()
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind=ED.RUN_KIND_REVIEW,
+        run_kind=ED.RUN_KIND_REVIEW,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30,
         os.path.join(run_dir, "progress.jsonl"),
     )
@@ -2870,7 +2995,7 @@ def test_dispatch_review_payload_shape_on_unreadable_forfeit(tmp_path):
         (_UNREADABLE_REVIEW_STDOUT, False, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2886,7 +3011,7 @@ def test_dispatch_review_payload_shape_absent_on_vacuous_forfeit(tmp_path):
     empty = json.dumps({"findings": []})
     fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2899,7 +3024,7 @@ def test_dispatch_review_payload_shape_absent_on_success(tmp_path, monkeypatch):
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     monkeypatch.setattr(ED.engine_adapter, "review_payload_shape", lambda _stdout: {"parsed": "x"})
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2911,7 +3036,7 @@ def test_dispatch_review_engagement_read_on_success(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2922,7 +3047,7 @@ def test_dispatch_review_engagement_read_on_forfeit(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([("not json", False, 0, ""), ("not json", False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2934,7 +3059,7 @@ def test_dispatch_review_timeout_forfeit_has_no_engagement(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([("", True, 0, ""), ("", True, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -2949,7 +3074,7 @@ def test_dispatch_review_nonzero_exit_forfeit_has_no_engagement(tmp_path):
         (_VALID_FINDINGS_STDOUT, False, 1, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3015,7 +3140,7 @@ def test_review_dispatch_fed_prompt_includes_schema_example_block(
     stdout = _census_review_stdout(expected_result_kind or "findings")
     fake = FakeRunner([(stdout, False, 0, "")])
     dispatch_kwargs = dict(
-        engine="codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -3048,7 +3173,7 @@ def test_review_dispatch_fed_prompt_result_contract_unpinned_lists_all_kinds(tmp
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3074,7 +3199,7 @@ def test_review_dispatch_fed_prompt_result_contract_pinned_non_findings(
     stdout = _census_review_stdout(expected_result_kind)
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
         expected_result_kind=expected_result_kind,
@@ -3101,7 +3226,7 @@ def test_review_dispatch_fed_prompt_blocks_never_abut(tmp_path):
     for expected_result_kind, stdout in cases:
         fake = FakeRunner([(stdout, False, 0, "")])
         dispatch_kwargs = dict(
-            engine="codex", model="sonnet", effort="high",
+            seat=_codex_seat(),
             prompt_path=_valid_prompt(tmp_path, "Review this code.\n"),
             repo_root=repo_root, run_engine=fake,
             build_view=_fake_build_view(tmp_path),
@@ -3172,7 +3297,7 @@ def test_dispatch_review_open_stores_echo_nonce(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
         expected_result_kind="findings",
@@ -3190,7 +3315,7 @@ def test_dispatch_review_continuation_grades_with_stored_echo_nonce(tmp_path):
     repo_root = _repo(tmp_path)
     run_dir = tmp_path / "continue-echo-nonce"
     first = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
         build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
         order_id="order-echo-nonce", expected_result_kind="findings",
@@ -3204,7 +3329,7 @@ def test_dispatch_review_continuation_grades_with_stored_echo_nonce(tmp_path):
         (example_stdout, False, 0, ""),
     ])
     second = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_never_build_view, run_dir=str(run_dir), max_wait=60,
         order_id="order-echo-nonce", expected_result_kind="findings",
@@ -3342,7 +3467,7 @@ def test_dispatch_review_verdicts_terminal_carries_result_kind(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3414,7 +3539,7 @@ def test_review_result_kind_census_survives_consumers(tmp_path, kind):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3426,10 +3551,6 @@ def test_review_result_kind_census_survives_consumers(tmp_path, kind):
     other_kinds = tuple(k for k in ED.REVIEW_RESULT_KINDS if k != kind)
     for other_kind in other_kinds:
         assert other_kind not in res
-    opened = {"runKind": ED.RUN_KIND_REVIEW}
-    stages = ED._ledger_stages(res, {}, str(tmp_path / "run"), opened)
-    assert stages["delivered"] is True
-
     run_dir = str(tmp_path / ("run-graded-%s" % kind))
     os.makedirs(run_dir, exist_ok=True)
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
@@ -3493,7 +3614,7 @@ def test_dispatch_review_ruling_terminal_carries_payload(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_RULING_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3586,14 +3707,17 @@ def test_dispatch_poll_running_graded_attempt1_ended_attempt2_live(tmp_path):
 # --- WO-2 (#747): per-attempt telemetry + terminal-record supersede (PR #783) ---
 
 
-def _wo2_open_run(run_dir, prompt_path, **opened_overrides):
+def _wo2_open_run(run_dir, prompt_path, *, seat=None, role_kind=ED.RUN_KIND_REVIEW, **opened_overrides):
+    seat = seat or _codex_seat()
+    argv = _codex_argv_for_run(seat, role_kind, run_dir)
     opened = {
         "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
-        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "wo2",
-        "argv": [sys.executable, "-c", "x"],
+        "roleKind": role_kind, "orderId": "wo2",
+        "argv": argv,
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
     }
     opened.update(opened_overrides)
     ED._journal_append(run_dir, opened)
@@ -3601,18 +3725,22 @@ def _wo2_open_run(run_dir, prompt_path, **opened_overrides):
         "kind": "engine-launching", "attempt": 1, "childPid": 1,
         "argv": opened["argv"], "at": time.time(),
     })
+    return argv
 
 
-def _wo2_run_engine(run_dir, script, timeout=30, heartbeat=None, monkeypatch=None):
+def _wo2_run_engine(run_dir, script, timeout=30, heartbeat=None, monkeypatch=None, tmp_path=None):
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    _wo2_open_run(run_dir, prompt_path)
+    argv = _wo2_open_run(run_dir, prompt_path)
+    if monkeypatch is not None:
+        assert tmp_path is not None
+        _install_fake_codex(monkeypatch, tmp_path, script)
     if monkeypatch is not None and heartbeat is not None:
         monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", heartbeat)
     ED._run_engine_files(
-        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, timeout,
         os.path.join(run_dir, "progress.jsonl"),
     )
@@ -3664,7 +3792,7 @@ def test_run_engine_files_telemetry_stdout_activity(tmp_path, monkeypatch):
         "    sys.exit(4)\n"
     ) % (progress_path,)
     ended, stdout_path, _ = _wo2_run_engine(
-        run_dir, script, timeout=50, monkeypatch=monkeypatch, heartbeat=0.05)
+        run_dir, script, timeout=50, monkeypatch=monkeypatch, heartbeat=0.05, tmp_path=tmp_path)
     assert ended["exit"] == 0
     assert ended.get("signal") is None
     assert ended.get("signalSource") is None
@@ -3686,7 +3814,8 @@ def test_run_engine_files_telemetry_stderr_activity(tmp_path, monkeypatch):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
     script = "import sys\nsys.stderr.write('codex-progress')\n"
-    ended, _, stderr_path = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    ended, _, stderr_path = _wo2_run_engine(
+        run_dir, script, monkeypatch=monkeypatch, tmp_path=tmp_path)
     assert ended.get("activityStream") == "stderr"
     assert ended.get("stderrBytes", 0) > 0
     assert os.path.getsize(stderr_path) > 0
@@ -3701,7 +3830,8 @@ def test_run_engine_files_telemetry_sigkill(tmp_path, monkeypatch):
         "import os, signal\n"
         "os.kill(os.getpid(), signal.SIGKILL)\n"
     )
-    ended, _, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch, heartbeat=0.05)
+    ended, _, _ = _wo2_run_engine(
+        run_dir, script, monkeypatch=monkeypatch, heartbeat=0.05, tmp_path=tmp_path)
     assert ended["exit"] < 0
     assert ended.get("signal") == signal.SIGKILL
     assert ended.get("signalSource") == "engine"
@@ -3714,6 +3844,7 @@ def test_run_engine_files_telemetry_timeout(tmp_path, monkeypatch):
     script = "import time\ntime.sleep(2)\n"
     ended, _, _ = _wo2_run_engine(
         run_dir, script, timeout=0.15, heartbeat=0.05, monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
     )
     assert ended.get("timedOut") is True
     assert ended.get("capSeconds") == 0.15
@@ -3758,7 +3889,8 @@ def test_run_engine_files_telemetry_answer_at_exit_stdout(tmp_path, monkeypatch)
     os.makedirs(run_dir)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", _SAMPLER_OFF)
     script = "import sys\nsys.stdout.write('final')\n"
-    ended, stdout_path, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    ended, stdout_path, _ = _wo2_run_engine(
+        run_dir, script, monkeypatch=monkeypatch, tmp_path=tmp_path)
     _assert_answer_at_exit(ended, "stdout", stdout_path)
 
 
@@ -3768,7 +3900,8 @@ def test_run_engine_files_telemetry_answer_at_exit_stderr(tmp_path, monkeypatch)
     os.makedirs(run_dir)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", _SAMPLER_OFF)
     script = "import sys\nsys.stderr.write('final')\n"
-    ended, _, stderr_path = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    ended, _, stderr_path = _wo2_run_engine(
+        run_dir, script, monkeypatch=monkeypatch, tmp_path=tmp_path)
     _assert_answer_at_exit(ended, "stderr", stderr_path)
 
 
@@ -3880,11 +4013,6 @@ _DO = importlib.util.spec_from_file_location(
 _DO_MOD = importlib.util.module_from_spec(_DO)
 _DO.loader.exec_module(_DO_MOD)
 
-_FL = importlib.util.spec_from_file_location(
-    "forfeit_ledger", os.path.join(_HERE, "..", "forfeit_ledger.py"))
-_FL_MOD = importlib.util.module_from_spec(_FL)
-_FL.loader.exec_module(_FL_MOD)
-
 _LL = importlib.util.spec_from_file_location(
     "launch_ledger", os.path.join(_HERE, "..", "launch_ledger.py"))
 _LL_MOD = importlib.util.module_from_spec(_LL)
@@ -3896,19 +4024,12 @@ _EA_WO4B_MOD = importlib.util.module_from_spec(_EA_WO4B)
 _EA_WO4B.loader.exec_module(_EA_WO4B_MOD)
 
 
-def _ledger_env(tmp_path, monkeypatch):
-    root = str(tmp_path / "forfeit-ledger-root")
-    os.makedirs(root, mode=0o700, exist_ok=True)
-    monkeypatch.setenv(_FL_MOD.LEDGER_ROOT_ENV, root)
-    return root
-
-
 def _manual_open_review_run_git(tmp_path, run_dir, repo_root):
     build_view = _fake_build_view(tmp_path)
     view = build_view(os.path.realpath(repo_root))
     cwd = os.path.realpath(view["path"])
     built = __import__("engine_adapter").build_argv_result(
-        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+        _codex_seat(), "review", {"model": "sonnet", "cwd": cwd},
     )
     argv = built["argv"]
     prompt_path = _valid_prompt(tmp_path)
@@ -3954,7 +4075,7 @@ def test_poster_child_engaged_artifact_forfeit_plain_path(tmp_path):
         ("short echo only", False, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3977,7 +4098,7 @@ def test_engaged_artifact_forfeit_from_vacuous_path(tmp_path):
         (empty, False, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3989,7 +4110,7 @@ def test_forfeit_without_engaged_artifact_unchanged(tmp_path):
     repo_root = _git_init(str(tmp_path / "repo-plain"))
     fake = FakeRunner([("", True, 0, ""), ("echo", False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -3997,247 +4118,141 @@ def test_forfeit_without_engaged_artifact_unchanged(tmp_path):
     assert "salvage" not in res
 
 
-def test_fold_ledger_forfeited_transport_class(tmp_path, monkeypatch):
-    repo_root = _git_init(str(tmp_path / "repo-ledger"))
-    _ledger_env(tmp_path, monkeypatch)
-    prose = _poster_child_attempt1_stdout()
-    fake = FakeRunner([
-        (prose, False, 0, ""),
-        ('{"verdicts":[]}', False, 0, ""),
-    ])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["ledger"]["written"] is True
-    rows, _ = _FL_MOD.read(repo_root)
-    assert len(rows) == 1
-    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_TRANSPORT
-
-
-def test_fold_ledger_success_thin_row(tmp_path, monkeypatch):
-    repo_root = _git_init(str(tmp_path / "repo-success"))
-    _ledger_env(tmp_path, monkeypatch)
-    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["ok"] is True
-    assert res["ledger"]["written"] is True
-    rows, _ = _FL_MOD.read(repo_root)
-    assert len(rows) == 1
-    assert rows[0]["ok"] is True
-    thin = rows[0]["attempts"][0]
-    assert thin["attempt"] == 1
-    assert thin["exit"] == 0
-    assert thin["timedOut"] is False
-    assert "wallSeconds" not in thin
-
-
-def test_fold_ledger_idempotent_per_run_id(tmp_path, monkeypatch):
-    run_dir = str(tmp_path / "run-idem")
-    repo_root = _git_init(str(tmp_path / "repo-idem"))
-    _ledger_env(tmp_path, monkeypatch)
-    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
-    result = {
-        "ok": True, "terminal": True, "attempts": 1,
-        "findings": [{"id": "f1", "message": "x"}],
-        "engagement": {"read": "engaged"},
-    }
-    ED._append_fold_ledger(run_dir, state, result)
-    ED._append_fold_ledger(run_dir, state, result)
-    rows, _ = _FL_MOD.read(repo_root)
-    assert len(rows) == 1
-
-
-def test_fold_ledger_no_repo_root_written_false(tmp_path, monkeypatch):
-    run_dir = str(tmp_path / "run-noroot")
-    _ledger_env(tmp_path, monkeypatch)
-    os.makedirs(run_dir, exist_ok=True)
-    ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
-        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "x",
-        "argv": [], "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": os.path.join(run_dir, "prompt.txt"),
-        "supervisorPid": 1, "at": time.time(),
-    })
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
-    result = {"ok": False, "terminal": True, "reason": "forfeited", "forfeited": True, "attempts": 0}
-    receipt = ED._append_fold_ledger(run_dir, state, result)
-    assert receipt["written"] is False
-    assert receipt["why"] == "repo-root-absent-from-run-opened"
-
-
-def test_fold_ledger_append_failure_fail_soft(tmp_path, monkeypatch):
-    repo_root = _git_init(str(tmp_path / "repo-failsoft"))
-    _ledger_env(tmp_path, monkeypatch)
-    prose = _poster_child_attempt1_stdout()
-    fake = FakeRunner([
-        (prose, True, 0, ""),
-        ("short", False, 0, ""),
-    ])
-
-    def boom(*_a, **_k):
-        raise RuntimeError("ledger-boom")
-
-    monkeypatch.setattr(ED.forfeit_ledger, "append", boom)
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
-    assert res["ledger"]["written"] is False
-    assert res["ledger"]["why"] == "ledger-internal-error"
-
-
-def test_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkeypatch):
-    """axis: which entry points append — review pre-spawn refusals with repo identity."""
+def test_preflight_prompt_missing_returns_refusal_without_ledger(tmp_path):
     repo_root = _git_init(str(tmp_path / "repo-preflight"))
-    _ledger_env(tmp_path, monkeypatch)
     missing_prompt = str(tmp_path / "missing-prompt.txt")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=missing_prompt, repo_root=repo_root, run_engine=_never_call,
         build_view=_fake_build_view(tmp_path),
     )
     assert res["reason"] == "unrunnable"
     assert res["detail"] == "prompt-missing"
     assert res["attempts"] == 0
-    assert res["ledger"]["written"] is True
-    rows, _ = _FL_MOD.read(repo_root)
-    assert len(rows) == 1
-    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_CALLER_ERROR
+    assert "ledger" not in res
 
 
-def test_abandon_appends_ledger_row(tmp_path, monkeypatch):
-    """axis: which terminal paths append — run-abandoned with repo identity."""
-    repo_root = _git_init(str(tmp_path / "repo-abandon"))
-    _ledger_env(tmp_path, monkeypatch)
-    run_dir = str(tmp_path / "run-abandon")
+def test_preflight_run_dir_reused_returns_refusal_without_ledger(tmp_path):
+    repo_root = _git_init(str(tmp_path / "repo-preflight-id"))
+    run_dir = str(tmp_path / "run-preflight-id")
+    os.makedirs(run_dir, exist_ok=True)
     _manual_open_review_run_git(tmp_path, run_dir, repo_root)
-    res = ED.dispatch_abandon(run_dir)
-    assert res["detail"] == "run-abandoned"
-    assert res["ledger"]["written"] is True
-    rows, _ = _FL_MOD.read(repo_root)
-    assert len(rows) == 1
-    assert rows[0]["reason"] == "unrunnable"
-    assert rows[0]["detail"] == "run-abandoned"
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, order_id="wrong-order",
+    )
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "run-dir-reused"
+    assert "ledger" not in res
 
 
-def test_dispatch_abandon_idempotent_equal_results(tmp_path, monkeypatch):
-    """axis: that repeat reads return the stored result — not a fresh ledger append."""
+def test_dispatch_abandon_idempotent_equal_results(tmp_path):
+    """axis: that repeat reads return the stored result."""
     repo_root = _git_init(str(tmp_path / "repo-abandon-idem"))
-    _ledger_env(tmp_path, monkeypatch)
     run_dir = str(tmp_path / "run-abandon-idem")
     _manual_open_review_run_git(tmp_path, run_dir, repo_root)
     first = ED.dispatch_abandon(run_dir)
     second = ED.dispatch_abandon(run_dir)
     assert second == first
+    assert "ledger" not in first
 
 
-def test_preflight_run_id_namespaced_from_run_dir_dedupe_key(tmp_path, monkeypatch):
-    """axis: that a preflight row cannot take a real run's dedupe key — collision, not presence."""
-    repo_root = _git_init(str(tmp_path / "repo-preflight-id"))
-    _ledger_env(tmp_path, monkeypatch)
-    run_dir = str(tmp_path / "run-preflight-id")
-    os.makedirs(run_dir, exist_ok=True)
-    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
-    wrong_order = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
-        build_view=_fake_build_view(tmp_path), run_dir=run_dir, order_id="wrong-order",
-    )
-    assert wrong_order["detail"] == "run-dir-reused"
-    assert wrong_order["ledger"]["written"] is True
-    rows, _ = _FL_MOD.read(repo_root)
-    preflight_row = rows[-1]
-    real_run_id = _FL_MOD.run_id_from_run_dir(run_dir)
-    assert preflight_row["runId"] != real_run_id
-    assert preflight_row["runId"].startswith("preflight-")
-
-
-def test_dispatch_abandon_idempotent_after_failed_ledger_append(tmp_path, monkeypatch):
-    """axis: that repeat reads return the stored result even when ledger state changed."""
-    repo_root = _git_init(str(tmp_path / "repo-abandon-fail"))
-    _ledger_env(tmp_path, monkeypatch)
-    run_dir = str(tmp_path / "run-abandon-fail")
-    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
-    calls = {"n": 0}
-    real_append = _FL_MOD.append
-
-    def flaky_append(repo_root_arg, row):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"written": False, "path": None, "why": "ledger-lock-busy"}
-        return real_append(repo_root_arg, row)
-
-    monkeypatch.setattr(ED.forfeit_ledger, "append", flaky_append)
-    first = ED.dispatch_abandon(run_dir)
-    assert first["ledger"]["written"] is False
-    second = ED.dispatch_abandon(run_dir)
-    assert second == first
-    assert calls["n"] == 1
-
-
-def test_write_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkeypatch):
-    """axis: which entry points append — write pre-spawn refusals with repo identity."""
+def test_write_preflight_prompt_missing_returns_refusal_without_ledger(tmp_path):
     wt = _linked_worktree(tmp_path)
-    _ledger_env(tmp_path, monkeypatch)
     missing_prompt = str(tmp_path / "missing-write-prompt.txt")
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(role=_WRITE_ROLE),
         prompt_path=missing_prompt, cwd=wt,
         run_dir=str(tmp_path / "run-write-preflight"), order_id="inv-write",
         run_engine=_never_call,
     )
     assert res["reason"] == "unrunnable"
     assert res["detail"] == "prompt-missing"
-    assert res["ledger"]["written"] is True
-    repo_root = ED._repository_root_from_git_cwd(wt)
-    rows, _ = _FL_MOD.read(repo_root)
-    assert len(rows) == 1
-    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_CALLER_ERROR
-    assert rows[0]["runKind"] == ED.RUN_KIND_WRITE
+    assert "ledger" not in res
 
 
-def test_write_preflight_primary_checkout_ledgers_refusal(tmp_path, monkeypatch):
-    """axis: which entry points append — cwd-validation refusals with repo identity."""
+def test_write_preflight_primary_checkout_returns_refusal_without_ledger(tmp_path):
     main = _git_init(str(tmp_path / "main-primary"))
-    _ledger_env(tmp_path, monkeypatch)
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(role=_WRITE_ROLE),
         prompt_path=_valid_prompt(tmp_path), cwd=main,
         run_dir=str(tmp_path / "run-write-primary"), order_id="inv-primary",
         run_engine=_never_call,
     )
+    assert res["reason"] == "unrunnable"
     assert res["detail"] == "cwd-primary-checkout"
-    assert res["ledger"]["written"] is True
-    rows, _ = _FL_MOD.read(os.path.realpath(main))
-    assert len(rows) == 1
-    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_CALLER_ERROR
-    assert rows[0]["runKind"] == ED.RUN_KIND_WRITE
+    assert "ledger" not in res
 
 
-def test_write_preflight_non_repo_stays_unledgered(tmp_path, monkeypatch):
-    """axis: which entry points append — no repo identity means no ledger row."""
-    _ledger_env(tmp_path, monkeypatch)
+def test_write_preflight_non_repo_returns_refusal_without_ledger(tmp_path):
     non_repo = str(tmp_path / "not-a-repo")
     os.makedirs(non_repo)
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(role=_WRITE_ROLE),
         prompt_path=_valid_prompt(tmp_path), cwd=non_repo,
         run_dir=str(tmp_path / "run-write-nonrepo"), order_id="inv-nonrepo",
         run_engine=_never_call,
     )
+    assert res["reason"] == "unrunnable"
     assert res["detail"] == "cwd-not-a-repo"
     assert "ledger" not in res
+
+
+def test_stored_terminal_replay_strips_legacy_ledger_key(tmp_path):
+    """axis: legacy journal rows may still carry ledger; callers never see it."""
+    repo_root = _git_init(str(tmp_path / "repo-legacy-ledger"))
+    run_dir = str(tmp_path / "run-legacy-ledger")
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    legacy = {
+        "ok": False,
+        "terminal": True,
+        "reason": "unrunnable",
+        "detail": "run-abandoned",
+        "attempts": 0,
+        "forfeited": False,
+        "ledger": {"written": True, "path": "/tmp/forfeit-ledger.jsonl", "why": None},
+    }
+    ED._journal_append(run_dir, {
+        "kind": "run-abandoned",
+        "detail": "abandoned",
+        "result": legacy,
+        "at": time.time(),
+    })
+    res = ED.dispatch_abandon(run_dir)
+    assert res["detail"] == "run-abandoned"
+    assert "ledger" not in res
+
+    folded = {
+        "ok": True,
+        "terminal": True,
+        "attempts": 1,
+        "ledger": {"written": True, "path": "/tmp/forfeit-ledger.jsonl", "why": None},
+    }
+    run_dir_fold = str(tmp_path / "run-legacy-fold")
+    os.makedirs(run_dir_fold, exist_ok=True)
+    ED._journal_append(run_dir_fold, {
+        "kind": "run-opened",
+        "runKind": ED.RUN_KIND_REVIEW,
+        "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW,
+        "orderId": "legacy-fold",
+        "argv": ["codex", "exec"],
+        "cwd": run_dir_fold,
+        "timeout": 30,
+        "retryTimeout": 30,
+        "promptPath": os.path.join(run_dir_fold, "prompt.txt"),
+        "supervisorPid": 1,
+        "at": time.time(),
+    })
+    ED._journal_append(run_dir_fold, {
+        "kind": "run-folded",
+        "result": folded,
+        "at": time.time(),
+    })
+    folded_res = ED.dispatch_poll(run_dir_fold)
+    assert folded_res["ok"] is True
+    assert "ledger" not in folded_res
 
 
 def test_run_opened_records_repo_root_and_id(tmp_path):
@@ -4282,7 +4297,7 @@ def test_dispatch_review_diff_base_omitted_reaches_build_view(tmp_path):
     build_view = _capture_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -4298,7 +4313,7 @@ def test_dispatch_review_diff_base_forwarded_to_build_view(tmp_path):
     build_view = _capture_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view, diff_base="origin/main",
     )
@@ -4357,7 +4372,7 @@ def test_review_continuation_ignores_diff_base(tmp_path):
     build_view = _capture_build_view(tmp_path)
     try:
         ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(),
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
             run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
             order_id="test-order", max_wait=1, diff_base="other-ref",
@@ -4487,8 +4502,7 @@ def test_main_dispatch_review_diff_base_cli_wiring(tmp_path, monkeypatch, capsys
     repo_root = _repo(tmp_path)
     rc = ED.main([
         "dispatch-review",
-        "--engine", "codex",
-        "--effort", "high",
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
         "--prompt-path", prompt,
         "--repo-root", repo_root,
         "--diff-base", "REF",
@@ -4525,7 +4539,7 @@ def _running_slice_capture(monkeypatch):
 def _review_with_max_wait(tmp_path, repo_root, run_dir, max_wait, *, runner=None,
                           build_view=None):
     return ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
         run_engine=runner if runner is not None else FakeRunner([]),
         build_view=build_view if build_view is not None else _fake_build_view(tmp_path),
@@ -4754,79 +4768,6 @@ def test_journal_state_other_keys_unchanged_when_stand_down_present():
     ]
 
 
-def test_ledger_evidence_carries_stood_down_and_preserves_existing_keys(tmp_path):
-    """axis: ledger evidence includes stand-downs without altering path keys."""
-    run_dir = str(tmp_path / "run")
-    os.makedirs(run_dir)
-    opened = {"promptPath": os.path.join(run_dir, "prompt.txt")}
-    state = {
-        "attempts": {1: {"childPid": 200, "enginePgid": None, "ended": None}},
-        "stoodDown": [
-            {"attempt": 1, "childPid": 100, "recordedPid": 200, "at": 1.0},
-        ],
-    }
-    evidence = ED._ledger_evidence(run_dir, state, opened)
-    assert evidence["stoodDownCount"] == 1
-    assert evidence["stoodDown"] == [
-        {"attempt": 1, "childPid": 100, "recordedPid": 200, "at": 1.0},
-    ]
-    assert evidence["stoodDownTruncated"] is False
-    assert evidence["stdoutPaths"] == [os.path.join(run_dir, "attempt-1.stdout")]
-    assert evidence["stderrPaths"] == [os.path.join(run_dir, "attempt-1.stderr")]
-    assert evidence["journalPath"] == ED._journal_path(run_dir)
-    assert evidence["promptPath"] == opened["promptPath"]
-
-
-def _stood_down_records(n):
-    return [
-        {
-            "kind": "child-stood-down", "attempt": 1,
-            "childPid": 100 + i, "recordedPid": 200, "at": float(i),
-        }
-        for i in range(n)
-    ]
-
-
-def test_ledger_evidence_stood_down_truncated_at_twenty(tmp_path):
-    """axis: ledger evidence caps stand-down list at 20 with truncation flag."""
-    run_dir = str(tmp_path / "run")
-    os.makedirs(run_dir)
-    opened = {"promptPath": None}
-    state = {"attempts": {}, "stoodDown": []}
-    for rec in _stood_down_records(25):
-        state["stoodDown"].append({
-            "attempt": rec["attempt"],
-            "childPid": rec["childPid"],
-            "recordedPid": rec["recordedPid"],
-            "at": rec["at"],
-        })
-    evidence = ED._ledger_evidence(run_dir, state, opened)
-    assert evidence["stoodDownCount"] == 25
-    assert len(evidence["stoodDown"]) == 20
-    assert evidence["stoodDownTruncated"] is True
-    assert evidence["stoodDown"][0]["childPid"] == 100
-    assert evidence["stoodDown"][-1]["childPid"] == 119
-
-
-def test_ledger_evidence_stood_down_at_boundary_not_truncated(tmp_path):
-    """axis: exactly 20 stand-downs fit without truncation."""
-    run_dir = str(tmp_path / "run")
-    os.makedirs(run_dir)
-    opened = {"promptPath": None}
-    state = {"attempts": {}, "stoodDown": []}
-    for rec in _stood_down_records(20):
-        state["stoodDown"].append({
-            "attempt": rec["attempt"],
-            "childPid": rec["childPid"],
-            "recordedPid": rec["recordedPid"],
-            "at": rec["at"],
-        })
-    evidence = ED._ledger_evidence(run_dir, state, opened)
-    assert evidence["stoodDownCount"] == 20
-    assert len(evidence["stoodDown"]) == 20
-    assert evidence["stoodDownTruncated"] is False
-
-
 # --- #862 review finding: only the recorded child runs the attempt --------------
 # axis: WHICH child owns the attempt (identity), not whether one is alive.
 
@@ -4882,7 +4823,7 @@ def _open_write_run_manual(tmp_path, wt, *, run_dir=None, sibling_baseline=None)
     EA_mod = importlib.util.module_from_spec(_EA)
     _EA.loader.exec_module(EA_mod)
     built = EA_mod.build_argv_result(
-        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
+        _codex_seat(), "build", {"model": "sonnet", "cwd": os.path.realpath(wt)},
     )
     ED._acquire_worktree_lease(os.path.realpath(wt), run_dir)
     if sibling_baseline is None:
@@ -4897,6 +4838,7 @@ def _open_write_run_manual(tmp_path, wt, *, run_dir=None, sibling_baseline=None)
         progress_path=os.path.join(run_dir, "progress.jsonl"),
         repo_root=repo_root,
         sibling_baseline=sibling_baseline,
+        resolved_inputs=_spawn_gate_resolved_inputs(_codex_seat(role=_WRITE_ROLE)),
     )
     return run_dir, repo_root
 
@@ -4919,7 +4861,7 @@ def test_write_fold_carries_observed_sibling_worktrees(tmp_path):
     subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt1], check=True)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(role=_WRITE_ROLE),
         prompt_path=_valid_prompt(tmp_path), cwd=wt0,
         run_dir=str(tmp_path / "run-observed"), order_id="sib-1", run_engine=fake,
     )
@@ -4938,7 +4880,7 @@ def test_write_forfeit_fold_carries_sibling_worktrees(tmp_path):
             return "", True, 0, ""
 
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(role=_WRITE_ROLE),
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-forfeit-sib"), order_id="sib-2",
         run_engine=DirtyTimeoutRunner(), max_wait=120,
@@ -4951,7 +4893,7 @@ def test_write_terminal_refusal_fold_carries_sibling_worktrees(tmp_path):
     wt = _linked_worktree(tmp_path)
     fake = FakeRunner([(_honest_refusal_stdout(), False, 0, "")])
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(role=_WRITE_ROLE),
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-refusal-sib"), order_id="sib-3", run_engine=fake,
     )
@@ -4964,7 +4906,7 @@ def test_write_preflight_terminal_omits_sibling_worktrees(tmp_path):
     wt = _linked_worktree(tmp_path)
     missing_prompt = str(tmp_path / "missing.txt")
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(role=_WRITE_ROLE),
         prompt_path=missing_prompt, cwd=wt,
         run_dir=str(tmp_path / "run-preflight-sib"), order_id="sib-4",
         run_engine=_never_call,
@@ -5003,7 +4945,7 @@ def test_sibling_probe_failure_does_not_change_dispatch_outcome(tmp_path, monkey
 
     fake_ok = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_observed = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(role=_WRITE_ROLE),
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-probe-ok"), order_id="sib-5", run_engine=fake_ok,
     )
@@ -5016,7 +4958,7 @@ def test_sibling_probe_failure_does_not_change_dispatch_outcome(tmp_path, monkey
     monkeypatch.setattr(ED.sibling_worktree_probe, "snapshot", _snap_indeterminate)
     fake_fail = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_indeterminate = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(role=_WRITE_ROLE),
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-probe-boom"), order_id="sib-6", run_engine=fake_fail,
     )
@@ -5032,7 +4974,7 @@ def test_sibling_probe_timeout_does_not_change_dispatch_outcome(tmp_path, monkey
 
     fake_ok = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_observed = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(role=_WRITE_ROLE),
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-probe-timeout-ok"), order_id="sib-8", run_engine=fake_ok,
     )
@@ -5044,7 +4986,7 @@ def test_sibling_probe_timeout_does_not_change_dispatch_outcome(tmp_path, monkey
     monkeypatch.setattr(ED.sibling_worktree_probe, "snapshot", _snap_timeout)
     fake_fail = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_indeterminate = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(role=_WRITE_ROLE),
         prompt_path=_valid_prompt(tmp_path), cwd=wt,
         run_dir=str(tmp_path / "run-probe-timeout"), order_id="sib-9", run_engine=fake_fail,
     )
@@ -5098,7 +5040,7 @@ def test_legitimate_concurrent_sibling_change_observed_unattributed(tmp_path):
             return _build_ok_stdout(), False, 0, ""
 
     res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(role=_WRITE_ROLE),
         prompt_path=_valid_prompt(tmp_path), cwd=wt0,
         run_dir=str(tmp_path / "run-concurrent"), order_id="sib-7",
         run_engine=SiblingMutator(),
@@ -5122,8 +5064,9 @@ def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_
     build_view = _fake_build_view(tmp_path)
     view = build_view(os.path.realpath(repo_root))
     cwd = os.path.realpath(view["path"])
+    seat = _brief_check_codex_seat() if mode == "brief-check" else _codex_seat()
     built = EA.build_argv_result(
-        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+        seat, "review", {"model": "sonnet", "cwd": cwd},
     )
     argv = built["argv"]
     prompt_path = _valid_prompt(tmp_path)
@@ -5153,6 +5096,7 @@ def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_
         "repoRoot": os.path.realpath(repo_root),
         "supervisorPid": os.getpid(),
         "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
     }
     if not omit_mode:
         record["mode"] = mode
@@ -5167,7 +5111,7 @@ def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_
 def test_mode_brief_check_with_diff_base_refused_before_view_build(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_brief_check_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, mode="brief-check", diff_base="a" * 40,
     )
@@ -5180,7 +5124,7 @@ def test_mode_brief_check_with_diff_base_refused_before_view_build(tmp_path):
 def test_mode_invalid_refused_at_library_boundary(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, mode="bogus",
     )
@@ -5199,7 +5143,7 @@ class _ModeEqRaises:
 def test_mode_invalid_non_string_with_eq_raises_returns_structured_refusal(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, mode=_ModeEqRaises(),
     )
@@ -5214,7 +5158,7 @@ def test_continuation_legacy_journal_mode_normalizes_to_review(tmp_path):
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, omit_mode=True)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order", max_wait=0,
     )
@@ -5225,7 +5169,7 @@ def test_continuation_legacy_journal_with_explicit_review_mode_proceeds(tmp_path
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, omit_mode=True)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         mode="review", max_wait=0,
@@ -5238,7 +5182,7 @@ def test_run_dir_mode_mismatch_refused(tmp_path):
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_brief_check_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         mode="review", max_wait=0,
@@ -5252,7 +5196,7 @@ def test_continuation_omitted_mode_inherits_journal(tmp_path):
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_brief_check_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order", max_wait=0,
     )
@@ -5263,7 +5207,7 @@ def test_continuation_result_kind_pin_on_unpinned_run_refused(tmp_path):
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         expected_result_kind="verdicts", max_wait=0,
@@ -5280,7 +5224,7 @@ def test_continuation_result_kind_pin_disagreeing_refused(tmp_path):
         tmp_path, run_dir, expected_result_kind="findings",
     )
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         expected_result_kind="verdicts", max_wait=0,
@@ -5297,7 +5241,7 @@ def test_continuation_result_kind_pin_agreeing_proceeds(tmp_path):
         tmp_path, run_dir, expected_result_kind="verdicts",
     )
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         expected_result_kind="verdicts", max_wait=0,
@@ -5317,7 +5261,7 @@ def test_continuation_omitted_result_kind_inherits_journal(tmp_path):
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
     ])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
     )
@@ -5330,7 +5274,7 @@ def test_continuation_agreeing_brief_check_mode_proceeds(tmp_path):
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_brief_check_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         mode="brief-check", max_wait=0,
@@ -5343,7 +5287,7 @@ def test_continuation_inherited_brief_check_accepts_diff_base(tmp_path):
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_brief_check_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         diff_base="a" * 40, max_wait=0,
@@ -5356,7 +5300,7 @@ def test_continuation_explicit_brief_check_with_diff_base_still_refused(tmp_path
     run_dir = str(tmp_path / "run")
     repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_brief_check_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         mode="brief-check", diff_base="a" * 40, max_wait=0,
@@ -5370,7 +5314,7 @@ def test_dispatch_review_brief_check_end_to_end(tmp_path):
     build_view = _capture_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_brief_check_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view, mode="brief-check",
     )
@@ -5399,7 +5343,7 @@ def test_brief_check_notice_absent_from_default_review_fed_prompt(tmp_path):
     build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view,
     )
@@ -5436,8 +5380,8 @@ def test_review_mode_argparse_choices_match_review_modes():
      ED.MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE, False, True),
     ("run-dir-mode-mismatch", {"mode": "review"}, "brief_opened", "brief-check",
      ED.MODE_REFUSAL_RUN_DIR_MISMATCH, False, True),
-    ("engine-config", {"engine": "cursor", "model": "fable", "effort": "composer"},
-     "engine_config", "review", "engine-config:fable-unrunnable", False, True),
+    ("seat-effort-conflict", {"seat": _seat("cursor", "cursor-grok-4.6-xhigh", "low")},
+     None, "review", "effort-token-conflict", False, True),
     ("sanitized-view-error", {}, "view_error", "review", "sanitized-view-export-failed", False, True),
     ("success-review", {}, "success", "review", None, True, True),
     ("success-brief-check", {"mode": "brief-check"}, "success", "brief-check", None, True, True),
@@ -5451,8 +5395,7 @@ def test_dispatch_review_every_outcome_carries_mode(
     repo_root = _repo(tmp_path)
     prompt_path = _valid_prompt(tmp_path)
     base_kwargs = {
-        "model": "sonnet",
-        "effort": "high",
+        "seat": _codex_seat(),
         "prompt_path": prompt_path,
         "repo_root": repo_root,
         "run_engine": _never_call,
@@ -5461,11 +5404,11 @@ def test_dispatch_review_every_outcome_carries_mode(
     if "prompt_path" in kwargs and kwargs["prompt_path"] is None:
         base_kwargs["prompt_path"] = str(tmp_path / "missing-prompt.txt")
     for key, value in kwargs.items():
-        if key == "engine":
-            continue
         if key == "prompt_path" and value is None:
             continue
         base_kwargs[key] = value
+    if kwargs.get("mode") == "brief-check" and "seat" not in kwargs:
+        base_kwargs["seat"] = _brief_check_codex_seat()
 
     run_suffix = "run-%s" % label
     if setup == "opened":
@@ -5478,6 +5421,7 @@ def test_dispatch_review_every_outcome_carries_mode(
         base_kwargs["repo_root"] = journal_repo
         base_kwargs["prompt_path"] = _valid_prompt(tmp_path)
         base_kwargs["run_dir"] = run_dir
+        base_kwargs["seat"] = _brief_check_codex_seat()
         base_kwargs.setdefault("order_id", "test-order")
         base_kwargs["max_wait"] = 0
     elif setup == "stale":
@@ -5511,7 +5455,7 @@ def test_dispatch_review_every_outcome_carries_mode(
             "kind": "engine-started", "attempt": 1, "enginePgid": proc.pid, "at": time.time(),
         })
         try:
-            res = ED.dispatch_review("codex", **base_kwargs)
+            res = ED.dispatch_review(**base_kwargs)
             assert "mode" in res
             assert isinstance(res["mode"], str)
             assert res["mode"] == expected_mode
@@ -5525,7 +5469,7 @@ def test_dispatch_review_every_outcome_carries_mode(
         def boom(*_a, **_k):
             raise RuntimeError("wrapper-boom")
         monkeypatch.setattr(ED, "_dispatch_review_impl", boom)
-        res = ED.dispatch_review("codex", **base_kwargs)
+        res = ED.dispatch_review(**base_kwargs)
         assert "mode" in res
         assert isinstance(res["mode"], str)
         assert res["mode"] == expected_mode
@@ -5534,15 +5478,21 @@ def test_dispatch_review_every_outcome_carries_mode(
         assert res["terminal"] is expected_terminal
         return
 
-    engine = kwargs.get("engine", "codex")
-    res = ED.dispatch_review(engine, **base_kwargs)
+    res = ED.dispatch_review(**base_kwargs)
     assert "mode" in res, label
     assert isinstance(res["mode"], str), label
     assert res["mode"] == expected_mode, label
     assert res["ok"] is expected_ok, label
     assert res["terminal"] is expected_terminal, label
     if expected_detail is not None:
-        assert res.get("detail") == expected_detail, label
+        if expected_detail == "effort-token-conflict":
+            assert "conflicts with effort" in res.get("detail", ""), label
+        else:
+            assert res.get("detail") == expected_detail, label
+    if not expected_ok:
+        assert res.get("reason") == "unrunnable", label
+    if expected_terminal:
+        assert "ledger" not in res, label
 
 
 # --- #763-F: dispatch_review result key-presence matrix (F-I1–F-I4) ---
@@ -5734,7 +5684,7 @@ def test_dispatch_review_result_key_presence_matrix(tmp_path, row):
     if setup == "unrunnable":
         fake = FakeRunner([])
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(),
             prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
             build_view=_never_build_view,
         )
@@ -5744,7 +5694,7 @@ def test_dispatch_review_result_key_presence_matrix(tmp_path, row):
         repo_root, proc = _manual_running_attempt1_ended_attempt2_live(tmp_path, run_dir)
         try:
             res = ED.dispatch_review(
-                "codex", model="sonnet", effort="high",
+                seat=_codex_seat(),
                 prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
                 run_engine=FakeRunner([]), build_view=_never_build_view,
                 run_dir=run_dir, order_id="test-order", max_wait=1,
@@ -5765,7 +5715,7 @@ def test_dispatch_review_result_key_presence_matrix(tmp_path, row):
             repo_root = _repo(tmp_path)
         fake = FakeRunner(row["responses"])
         res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
+            seat=_codex_seat(),
             prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
             build_view=_fake_build_view(tmp_path),
         )
@@ -5820,7 +5770,7 @@ def test_grade_review_attempt_error_envelope_gate_survives_second_parse(tmp_path
 def test_dispatch_review_expected_result_kind_invalid_reports_effective_mode(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_brief_check_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, mode="brief-check", expected_result_kind="rulings",
     )
@@ -5835,7 +5785,7 @@ def test_dispatch_review_expected_result_kind_invalid_reports_effective_mode(tmp
 def test_dispatch_review_expected_result_kind_invalid_default_mode_when_none(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, expected_result_kind="rulings",
     )
@@ -5855,8 +5805,7 @@ def test_dispatch_review_cli_expected_result_kind_invalid_refused_by_argparse(tm
         [
             sys.executable, "-B", mod_path,
             "dispatch-review",
-            "--engine", "codex",
-            "--effort", "high",
+            "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
             "--prompt-path", prompt_path,
             "--repo-root", repo_root,
             "--expected-result-kind", "rulings",
@@ -5871,7 +5820,7 @@ def test_dispatch_review_cli_expected_result_kind_invalid_refused_by_argparse(tm
 def test_dispatch_review_expected_result_kind_non_string_refused_at_library_boundary(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, expected_result_kind=0,
     )
@@ -5886,7 +5835,7 @@ def test_dispatch_review_expected_result_kind_none_not_refused(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), expected_result_kind=None,
     )
@@ -5898,7 +5847,7 @@ def test_dispatch_review_expected_result_kind_pin_refuses_mismatch(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, ""), (_VALID_VERDICTS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), expected_result_kind="findings",
     )
@@ -5910,7 +5859,7 @@ def test_dispatch_review_expected_result_kind_pin_accepts_match(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), expected_result_kind="verdicts",
     )
@@ -5924,7 +5873,7 @@ def test_dispatch_review_expected_result_kind_pin_vacuous_not_masked(tmp_path):
     empty = json.dumps({"findings": []})
     fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), expected_result_kind="verdicts",
     )
@@ -5938,7 +5887,7 @@ def test_dispatch_review_unreadable_not_masked_by_kind_pin(tmp_path):
     unreadable = _UNREADABLE_REVIEW_STDOUT
     fake = FakeRunner([(unreadable, False, 0, ""), (unreadable, False, 0, "")])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), expected_result_kind="findings",
     )
@@ -6001,8 +5950,7 @@ def _dispatch_write(tmp_path, fake, *, cwd=None, run_dir=None, **kwargs):
     if run_dir is None:
         run_dir = str(tmp_path / "run")
     defaults = {
-        "model": "sonnet",
-        "effort": "high",
+        "seat": _codex_seat(role=_WRITE_ROLE),
         "prompt_path": _valid_prompt(tmp_path, "Build this.\n"),
         "cwd": cwd,
         "run_dir": run_dir,
@@ -6010,7 +5958,7 @@ def _dispatch_write(tmp_path, fake, *, cwd=None, run_dir=None, **kwargs):
         "run_engine": fake,
     }
     defaults.update(kwargs)
-    return ED.dispatch_write("codex", **defaults)
+    return ED.dispatch_write(**defaults)
 
 
 def _install_foreign_lease(wt_path):
@@ -6202,11 +6150,12 @@ def test_file_over_cap_grades_truncated_despite_under_cap_recorded_count(tmp_pat
     assert ED._attempt_stdout_truncated(run_dir, state, 1) == over
 
 
-def test_run_engine_files_stamps_stdout_bytes_pre_cap(tmp_path):
+def test_run_engine_files_stamps_stdout_bytes_pre_cap(tmp_path, monkeypatch):
     """axis: _run_engine_files stamps stdoutBytesPreCap on the attempt-ended record."""
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
-    ended, stdout_path, _ = _wo2_run_engine(run_dir, "print('hello stdout')")
+    ended, stdout_path, _ = _wo2_run_engine(
+        run_dir, "print('hello stdout')", monkeypatch=monkeypatch, tmp_path=tmp_path)
     assert ended["stdoutBytesPreCap"] is True
     assert ended["stdoutBytes"] == os.path.getsize(stdout_path)
 
@@ -6227,7 +6176,7 @@ def test_straggler_write_during_cap_window_grades_truncated(tmp_path, monkeypatc
 
     monkeypatch.setattr(ED, "_cap_file_tail", straggler_cap)
     ended, _, _ = _wo2_run_engine(
-        run_dir, "print('hello stdout')", monkeypatch=monkeypatch)
+        run_dir, "print('hello stdout')", monkeypatch=monkeypatch, tmp_path=tmp_path)
     state = {"attempts": {1: {"ended": ended}}}
     assert ED._attempt_stdout_truncated(run_dir, state, 1) is not None
 
@@ -6358,7 +6307,7 @@ def test_rewrite_failure_capture_grades_truncated(tmp_path, monkeypatch):
 
     monkeypatch.setattr("builtins.open", patched_open)
     ended, _, _ = _wo2_run_engine(
-        run_dir, "print('x' * 9000)", monkeypatch=monkeypatch)
+        run_dir, "print('x' * 9000)", monkeypatch=monkeypatch, tmp_path=tmp_path)
     state = {"attempts": {1: {"ended": ended}}}
     assert write_attempted is True
     assert os.path.getsize(stdout_path) == 0
@@ -6418,25 +6367,6 @@ def test_cap_file_tail_rewrite_failure_signal_distinct_from_clean_cap(tmp_path, 
     assert observed == over
     assert rewrite_failed is True
     assert write_attempted is True
-
-
-def test_ledger_attempt_records_carries_stdout_cap_rewrite_failed(tmp_path):
-    """axis: durable ledger row carries stdoutCapRewriteFailed from attempt-ended."""
-    run_dir = str(tmp_path / "run")
-    state = {
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0,
-                    "stdoutBytes": 9001,
-                    "stdoutBytesPreCap": True,
-                    "stdoutCapRewriteFailed": True,
-                }
-            }
-        }
-    }
-    records = ED._ledger_attempt_records(state, run_dir)
-    assert records[0]["stdoutCapRewriteFailed"] is True
 
 
 def test_stdout_capped_forfeit_disclosure_rewrite_failure_names_rewrite_problem(tmp_path):
@@ -6908,7 +6838,7 @@ def test_stderr_cap_file_tail_carries_stderr_marker_not_stdout(tmp_path, monkeyp
     monkeypatch.setattr(ED, "MAX_STDERR_CAPTURE", 512)
     script = "import sys; sys.stderr.write('e' * 2000); sys.stdout.write('ok\\n')"
     _ended, _stdout_path, stderr_path = _wo2_run_engine(
-        run_dir, script, monkeypatch=monkeypatch,
+        run_dir, script, monkeypatch=monkeypatch, tmp_path=tmp_path,
     )
     text = open(stderr_path, encoding="utf-8", errors="ignore").read()
     assert "<<<SUPERHEROES-STDERR-TRUNCATED:" in text
@@ -8437,7 +8367,7 @@ def test_dispatch_review_pr_body_unpaired_pr_only(tmp_path):
     repo_root = _repo(tmp_path)
     session, body = _session_with_pr_body(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, pr_body_path=body,
     )
@@ -8450,7 +8380,7 @@ def test_dispatch_review_pr_body_unpaired_session_only(tmp_path):
     repo_root = _repo(tmp_path)
     session, _body = _session_with_pr_body(tmp_path)
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, session_dir=session,
     )
@@ -8468,7 +8398,7 @@ def test_dispatch_review_pr_body_confinement_refusal(tmp_path):
     session = tmp_path / "session"
     session.mkdir()
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view,
         pr_body_path=str(body), session_dir=str(session),
@@ -8486,7 +8416,7 @@ def _manual_open_review_run_with_pr_body(tmp_path, run_dir, *, pr_body_source):
     view["prBodyBytes"] = 12
     cwd = os.path.realpath(view["path"])
     built = EA.build_argv_result(
-        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+        _codex_seat(), "review", {"model": "sonnet", "cwd": cwd},
     )
     argv = built["argv"]
     prompt_path = _valid_prompt(tmp_path)
@@ -8516,7 +8446,7 @@ def test_continuation_pr_body_run_dir_mismatch_refused(tmp_path):
     with open(other_body, "w", encoding="utf-8") as fh:
         fh.write("other body\n")
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         pr_body_path=other_body, session_dir=session, max_wait=0,
@@ -8555,6 +8485,1504 @@ def test_grade_review_pr_body_payload_without_investigation_forfeit(tmp_path):
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
     assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
+
+
+# --- #1269 WO-A2: resolved-input snapshot echoed on every exit -----------------
+
+_RESOLVED_INPUT_KEYS = frozenset({
+    "engine", "engineSource", "model", "modelSource", "effort", "effortSource",
+    "engineModel", "engineModelSource", "role", "roleSource", "repoRoot", "repoRootSource",
+    "runDir", "runDirSource", "promptPath", "promptPathSource", "timeout", "timeoutSource",
+    "retryTimeout", "retryTimeoutSource", "maxWait", "maxWaitSource", "preflightTimeout",
+    "preflightTimeoutSource", "mode", "modeSource", "expectedResultKind",
+    "expectedResultKindSource", "baseSha", "baseShaSource", "diffBase", "diffBaseSource",
+    "progressPath", "progressPathSource", "journalRoot", "journalRootSource",
+})
+
+
+def _opened_resolved_inputs(run_dir):
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    snapshot = opened.get("resolvedInputs")
+    assert isinstance(snapshot, dict)
+    assert frozenset(snapshot.keys()) == _RESOLVED_INPUT_KEYS
+    return snapshot
+
+
+def test_review_run_opened_carries_resolved_inputs_snapshot(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
+        order_id="order-1",
+    )
+    snapshot = _opened_resolved_inputs(run_dir)
+    assert snapshot["engine"] == "codex"
+    assert snapshot["engineSource"] == "caller"
+    assert snapshot["role"] == _REVIEW_ROLE
+    assert snapshot["roleSource"] == "seat"
+    assert snapshot["timeoutSource"] == "default"
+    assert snapshot["maxWaitSource"] == "caller"
+    assert snapshot["maxWait"] == 0
+    assert snapshot["preflightTimeout"] is None
+    assert snapshot["preflightTimeoutSource"] == "declared-none"
+
+
+def test_resolved_inputs_echo_identical_across_five_exits(tmp_path):
+    # axis: I2 — snapshot-sourced echo is byte-identical on dispatch, continuation, poll, abandon, fold
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "echo-run")
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    fresh = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
+        order_id="order-echo",
+    )
+    echo = fresh["resolvedInputs"]
+    assert fresh["runOpened"] is True
+    continuation = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
+        order_id="order-echo",
+    )
+    polled = ED.dispatch_poll(str(run_dir))
+    abandon_dir = str(tmp_path / "abandon-run")
+    _manual_open_review_run(tmp_path, abandon_dir)
+    abandoned = ED.dispatch_abandon(abandon_dir)
+    folded_run = str(tmp_path / "fold-run")
+    fold_runner = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    folded_first = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fold_runner,
+        build_view=_fake_build_view(tmp_path), run_dir=folded_run,
+        order_id="order-fold",
+    )
+    assert folded_first["terminal"] is True
+    folded_replay = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path), run_dir=folded_run, max_wait=0,
+        order_id="order-fold",
+    )
+    assert continuation["resolvedInputs"] == echo
+    assert polled["resolvedInputs"] == echo
+    assert abandoned["resolvedInputs"] == _opened_resolved_inputs(abandon_dir)
+    assert folded_replay["resolvedInputs"] == folded_first["resolvedInputs"]
+
+
+def test_resolved_inputs_poll_echo_matches_opened_snapshot_without_seat(tmp_path):
+    # axis: I2 — poll has no seat; echo still comes from the journal snapshot
+    run_dir = str(tmp_path / "poll-echo")
+    _manual_open_review_run(tmp_path, run_dir)
+    snapshot = _opened_resolved_inputs(run_dir)
+    polled = ED.dispatch_poll(run_dir)
+    assert polled["runOpened"] is True
+    assert polled["resolvedInputs"] == snapshot
+
+
+def test_review_continuation_different_seat_refuses(tmp_path):
+    # axis: I3 — immutable seat at open; disagreeing continuation refuses by name
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "seat-mismatch")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
+        order_id="order-seat",
+    )
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
+        order_id="order-seat",
+    )
+    assert res["detail"] == ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
+    assert res["attempts"] == 0
+
+
+def test_review_continuation_same_seat_proceeds(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "seat-match")
+    fake = FakeRunner([])
+    first = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
+        order_id="order-seat-ok",
+    )
+    second = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
+        order_id="order-seat-ok",
+    )
+    assert second.get("detail") != ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
+    assert second["resolvedInputs"] == first["resolvedInputs"]
+
+
+def test_pre_upgrade_run_opened_continuation_echoes_legacy_snapshot(tmp_path):
+    run_dir = str(tmp_path / "legacy")
+    os.makedirs(run_dir, exist_ok=True)
+    legacy_opened = {
+        "kind": "run-opened",
+        "runKind": ED.RUN_KIND_REVIEW,
+        "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW,
+        "orderId": "legacy-order",
+        "mode": "review",
+        "argv": ["codex", "exec"],
+        "cwd": str(tmp_path),
+        "timeout": ED.RETRY_MIN_TIMEOUT,
+        "retryTimeout": ED.RETRY_MIN_TIMEOUT,
+        "promptPath": os.path.join(run_dir, "prompt.txt"),
+        "progressPath": os.path.join(run_dir, "progress.jsonl"),
+        "repoRoot": str(tmp_path),
+        "at": 1.0,
+    }
+    ED._journal_append(run_dir, legacy_opened)
+    polled = ED.dispatch_poll(run_dir)
+    assert polled["runOpened"] is True
+    assert polled["resolvedInputsStatus"] == "pre-upgrade"
+    assert polled["resolvedInputs"]["engine"] == "codex"
+    assert polled["resolvedInputs"]["engineSource"] == "legacy-journal"
+
+
+def test_preflight_refusal_echoes_run_never_opened(tmp_path):
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
+        build_view=_never_build_view,
+    )
+    assert res["runOpened"] is False
+    assert "resolvedInputs" not in res
+
+
+def test_caller_timeout_effort_and_declared_none_sources(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "sources")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, max_wait=0,
+        order_id="order-sources", timeout=120,
+    )
+    snapshot = _opened_resolved_inputs(run_dir)
+    assert snapshot["timeout"] == 120
+    assert snapshot["timeoutSource"] == "caller"
+    assert snapshot["effortSource"] == "caller"
+    assert snapshot["model"] == "cursor-grok-4.6"
+
+
+# --- #1269 WO-B: allowlist hard shell (G1 entry gate + G2 spawn gate + R1) ----
+
+_DG = importlib.util.spec_from_file_location(
+    "dispatch_guard", os.path.join(_HERE, "..", "dispatch_guard.py"))
+dispatch_guard_mod = importlib.util.module_from_spec(_DG)
+_DG.loader.exec_module(dispatch_guard_mod)
+
+_OFF_ALLOWLIST_CODEX = "gpt-5.3-codex-high"
+_PARK_TAIL = (
+    "an unlisted model is a park, not a pick (#600). "
+    "Pick a listed model or amend lib/model_registry.py."
+)
+
+
+def _assert_allowlist_refusal(res, *, run_opened=False):
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res.get("runOpened") is run_opened
+    guard = res.get("allowlistGuard") or {}
+    reason = guard.get("reason") or res.get("detail") or ""
+    assert reason
+    assert guard.get("allowlist") or "allowlist" in reason
+    assert _PARK_TAIL in reason or "sanctioned model" in reason or "cannot be established" in reason
+
+
+def test_entry_allowlist_refuses_off_allowlist_review_library(tmp_path):
+    # axis: G1 — library dispatch_review refuses before run-open with allowlist named
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        seat=_codex_seat(model=_OFF_ALLOWLIST_CODEX),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view,
+    )
+    _assert_allowlist_refusal(res)
+    assert res["attempts"] == 0
+    assert res["runOpened"] is False
+    assert _OFF_ALLOWLIST_CODEX in res["detail"]
+
+
+def test_entry_allowlist_refuses_off_allowlist_review_cli(tmp_path):
+    # axis: G1 path 1 — dispatch-review CLI refuses with allowlist named
+    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    repo_root = _repo(tmp_path)
+    prompt_path = _valid_prompt(tmp_path)
+    proc = subprocess.run(
+        [
+            sys.executable, "-B", mod_path,
+            "dispatch-review",
+            "--seat", _seat_json("codex", _OFF_ALLOWLIST_CODEX, "high"),
+            "--prompt-path", prompt_path,
+            "--repo-root", repo_root,
+            "--max-wait", "0",
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    _assert_allowlist_refusal(payload)
+    assert _OFF_ALLOWLIST_CODEX in payload["detail"]
+
+
+def test_entry_allowlist_refuses_brief_check_cli(tmp_path):
+    # axis: G1 path 3 — dispatch-review --mode brief-check refuses off-allowlist
+    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    repo_root = _repo(tmp_path)
+    prompt_path = _valid_prompt(tmp_path)
+    proc = subprocess.run(
+        [
+            sys.executable, "-B", mod_path,
+            "dispatch-review",
+            "--seat", _seat_json("codex", _OFF_ALLOWLIST_CODEX, "high", "brief-check"),
+            "--prompt-path", prompt_path,
+            "--repo-root", repo_root,
+            "--mode", "brief-check",
+            "--max-wait", "0",
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    _assert_allowlist_refusal(payload)
+
+
+def test_spawn_gate_refuses_pre_upgrade_journal_without_resolved_inputs(tmp_path):
+    # axis: R1 path 9 — pre-upgrade run-opened without resolvedInputs refuses at G2
+    run_dir = str(tmp_path / "legacy-spawn")
+    os.makedirs(run_dir, exist_ok=True)
+    legacy_opened = {
+        "kind": "run-opened",
+        "runKind": ED.RUN_KIND_REVIEW,
+        "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW,
+        "orderId": "legacy-spawn",
+        "mode": "review",
+        "argv": ["codex", "exec"],
+        "cwd": str(tmp_path),
+        "timeout": ED.RETRY_MIN_TIMEOUT,
+        "retryTimeout": ED.RETRY_MIN_TIMEOUT,
+        "promptPath": os.path.join(run_dir, "prompt.txt"),
+        "progressPath": os.path.join(run_dir, "progress.jsonl"),
+        "repoRoot": str(tmp_path),
+        "at": 1.0,
+    }
+    ED._journal_append(run_dir, legacy_opened)
+    with open(os.path.join(run_dir, "prompt.txt"), "w", encoding="utf-8") as fh:
+        fh.write("prompt\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=FakeRunner([]))
+    assert ok is False
+    assert "resolvedInputs" in detail
+    assert "cannot be established" in detail
+
+
+def test_spawn_gate_refuses_continuation_with_off_allowlist_snapshot(tmp_path):
+    # axis: G2 path 6 — continuation spawn reads journal seat, not caller argv
+    run_dir = str(tmp_path / "cont-g2")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["resolvedInputs"]["model"] = _OFF_ALLOWLIST_CODEX
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=FakeRunner([]))
+    assert ok is False
+    assert _OFF_ALLOWLIST_CODEX in detail
+
+
+def test_spawn_gate_refuses_retry_with_off_allowlist_snapshot(tmp_path):
+    # axis: G2 path 7 — retry attempt re-validates journal seat before spawn
+    run_dir = str(tmp_path / "retry-g2")
+    _manual_open_review_run(tmp_path, run_dir)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1, "exit": 1, "timedOut": False,
+        "signal": None, "refusal": None, "at": time.time(),
+    })
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["resolvedInputs"]["model"] = _OFF_ALLOWLIST_CODEX
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ok, detail = ED._spawn_attempt(run_dir, state, 2, run_engine=FakeRunner([]))
+    assert ok is False
+    assert _OFF_ALLOWLIST_CODEX in detail
+
+
+def test_run_child_spawn_gate_refuses_off_allowlist_snapshot(tmp_path):
+    # axis: G2 path 8 — run-child re-entry validates journal seat before engine Popen
+    run_dir = str(tmp_path / "run-child-g2")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["resolvedInputs"]["model"] = _OFF_ALLOWLIST_CODEX
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1,
+        "childPid": os.getpid(), "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1,
+        "childPid": os.getpid(), "argv": ["codex"], "at": time.time(),
+    })
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended.get("exit") == 127
+    assert _OFF_ALLOWLIST_CODEX in (ended.get("refusal") or "")
+
+
+def _production_run_child_setup(tmp_path, run_dir, *, tamper_argv=None, tamper_snapshot=None):
+    """Open a review run and journal attempt-started for production _run_engine_files."""
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    if tamper_argv or tamper_snapshot:
+        for rec in records:
+            if rec.get("kind") != "run-opened":
+                continue
+            if tamper_argv is not None:
+                rec["argv"] = tamper_argv
+            if tamper_snapshot is not None:
+                tamper_snapshot(rec["resolvedInputs"])
+        path = ED._journal_path(run_dir)
+        with open(path, "w", encoding="utf-8") as fh:
+            for rec in records:
+                fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+        records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1,
+        "childPid": os.getpid(), "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1,
+        "childPid": os.getpid(), "argv": list(opened["argv"]), "at": time.time(),
+    })
+    return opened
+
+
+# --- #1269 WO-10: spawn gate argv coherence + guard-refusal disposition ----------
+
+
+def test_wo10_edge1_run_child_refuses_argv_snapshot_mismatch(tmp_path, monkeypatch):
+    # axis: allowlisted snapshot but stored argv names a different model — no spawn
+    run_dir = str(tmp_path / "wo10-edge1")
+    opened = _production_run_child_setup(
+        tmp_path, run_dir,
+        tamper_argv=["codex", "exec", "--sandbox", "read-only",
+                     "-m", _OFF_ALLOWLIST_CODEX, "-c", "model_reasoning_effort=high", "-"],
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text("#!/usr/bin/env python3\nimport sys; sys.exit(0)\n", encoding="utf-8")
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended.get("guardRefusal") is True
+    assert "does not match resolvedInputs snapshot" in (ended.get("refusal") or "")
+    assert _OFF_ALLOWLIST_CODEX in (ended.get("refusal") or "")
+    assert not any(r.get("kind") == "engine-started" for r in records)
+
+
+def test_wo10_edge2_injected_seam_refuses_argv_snapshot_mismatch(tmp_path):
+    # axis: injected execution seam applies the same argv coherence check
+    run_dir = str(tmp_path / "wo10-edge2")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["argv"] = [
+                "codex", "exec", "--sandbox", "read-only",
+                "-m", _OFF_ALLOWLIST_CODEX, "-c", "model_reasoning_effort=high", "-",
+            ]
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    assert ok is False
+    assert "does not match resolvedInputs snapshot" in detail
+    assert _OFF_ALLOWLIST_CODEX in detail
+    assert fake.calls == []
+
+
+def test_wo10_edge3_supervise_folds_guard_refusal_terminal_unrunnable_no_retry(tmp_path, monkeypatch):
+    # axis: off-allowlist snapshot via production run-child path — terminal unrunnable, no retry
+    run_dir = str(tmp_path / "wo10-edge3")
+    opened = _production_run_child_setup(
+        tmp_path, run_dir,
+        tamper_snapshot=lambda snap: snap.update({"model": _OFF_ALLOWLIST_CODEX}),
+    )
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended.get("guardRefusal") is True
+    assert _OFF_ALLOWLIST_CODEX in (ended.get("refusal") or "")
+    res = ED._supervise(
+        run_dir, run_kind=ED.RUN_KIND_REVIEW,
+        deadline=time.monotonic() + 5,
+    )
+    assert res["terminal"] is True
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["forfeited"] is False
+    assert res["attempts"] == 1
+    assert _OFF_ALLOWLIST_CODEX in res["detail"]
+    records, _ = ED._journal_read(run_dir)
+    started = [r for r in records if r.get("kind") == "attempt-started"]
+    assert len(started) == 1
+    assert not any(r.get("kind") == "attempt-started" and r.get("attempt") == 2 for r in records)
+
+
+def test_spawn_sandbox_role_kind_follows_run_kind_not_journal(tmp_path):
+    # axis: runKind review with journal roleKind build must not reach write-capable sandbox
+    run_dir = str(tmp_path / "spawn-sandbox-role-kind")
+    os.makedirs(run_dir, exist_ok=True)
+    seat = _codex_seat()
+    opened = {
+        "kind": "run-opened",
+        "runKind": ED.RUN_KIND_REVIEW,
+        "roleKind": "build",
+        "engine": "codex",
+        "argv": _codex_argv_for_run(seat, "review", run_dir),
+        "cwd": run_dir,
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    canonical, err = ED._canonical_spawn_argv(opened)
+    assert canonical is None
+    assert err is not None
+    assert "roleKind 'build'" in err
+    assert "runKind 'review'" in err
+    assert "only roleKind 'review' is accepted" in err
+    assert "workspace-write" not in err
+
+
+def test_wo10_edge4_corrupt_journal_spawn_guard_refusal_preserved(tmp_path):
+    # axis: corrupt journal at spawn keeps the named refusal and guardRefusal disposition
+    run_dir = str(tmp_path / "wo10-edge4")
+    opened = _production_run_child_setup(tmp_path, run_dir)
+    with open(ED._journal_path(run_dir), "ab") as fh:
+        fh.write(b"not-json\n")
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    records, corrupt = ED._journal_read(run_dir)
+    assert corrupt is True
+    ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended.get("guardRefusal") is True
+    assert "journal is corrupt" in (ended.get("refusal") or "")
+
+
+def test_wo10_edge5_run_child_coherent_argv_spawns_unchanged(tmp_path, monkeypatch):
+    # axis: coherent allowlisted run still spawns through production run-child path
+    run_dir = str(tmp_path / "wo10-edge5")
+    opened = _production_run_child_setup(tmp_path, run_dir)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stdout.write(%r)\n" % _VALID_FINDINGS_STDOUT,
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    records, _ = ED._journal_read(run_dir)
+    assert any(r.get("kind") == "engine-started" for r in records)
+    ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended.get("guardRefusal") is not True
+    assert ended.get("exit") == 0
+
+
+def test_cached_liveness_does_not_bypass_entry_allowlist(tmp_path, monkeypatch):
+    # axis: cached live verdict never satisfies allowlist — G1 still refuses off-allowlist
+    import liveness_cache as lc
+    cache_path = str(tmp_path / "liveness.json")
+    monkeypatch.setattr(lc, "receipt_path", lambda cwd=None, root=None: cache_path)
+    liveness = {
+        "claude": {"live": True, "cells": [], "models": {}},
+        "codex": {"live": True, "cells": [], "models": {}},
+        "cursor": {"live": True, "cells": [], "models": {}},
+    }
+    needed = {"claude": [], "codex": [[_OFF_ALLOWLIST_CODEX, "high"]], "cursor": []}
+    lc.write(liveness, needed, path=cache_path, now=1000.0)
+    assert lc.read(cache_path, now=1000.0) is not None
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        seat=_codex_seat(model=_OFF_ALLOWLIST_CODEX),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view,
+    )
+    _assert_allowlist_refusal(res)
+
+
+@pytest.mark.parametrize(
+    "ok_role, ok_vendor, ok_model, ok_effort, bad_role",
+    [
+        ("implementer", "cursor", "composer-2.5", None, "reviewer"),
+        ("reviewer", "codex", "gpt-5.6-terra", "high", "reviewer-deep"),
+        ("reviewer", "codex", "gpt-5.6-terra", "high", "brief-check"),
+        ("reviewer", "codex", "gpt-5.6-terra", "high", "brief-check"),
+    ],
+)
+def test_distinct_role_allowlists_refuse_cross_role_model(
+    tmp_path, ok_role, ok_vendor, ok_model, ok_effort, bad_role,
+):
+    # axis: role allowlists differ — on one role, off another; never a union or hard-coded role
+    ok_verdict = dispatch_guard_mod.validate(ok_role, ok_vendor, ok_model, ok_effort)
+    assert ok_verdict["ok"] is True
+    bad_verdict = dispatch_guard_mod.validate(bad_role, ok_vendor, ok_model, ok_effort)
+    assert bad_verdict["ok"] is False
+    repo_root = _repo(tmp_path)
+    seat = _seat(ok_vendor, ok_model, ok_effort, bad_role)
+    res = ED.dispatch_review(
+        seat=seat,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view,
+    )
+    _assert_allowlist_refusal(res)
+
+
+def test_entry_allowlist_malformed_guard_verdict_refuses(tmp_path, monkeypatch):
+    # axis: malformed guard verdict is a refusal, never proceed
+    def _empty_ok_verdict(*_a, **_k):
+        return {"ok": True, "reason": None, "allowlist": [], "allowlist_pairs": []}
+
+    monkeypatch.setattr(ED.seat_bundle.dispatch_allowlist, "validate", _empty_ok_verdict)
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view,
+    )
+    assert res["ok"] is False
+    assert "allowlist_pairs" in res["detail"] or "malformed verdict" in res["detail"]
+
+
+def test_g1_refusal_leaves_no_opened_run(tmp_path):
+    # axis: G1 refusal leaves no lease and no opened run
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "no-open")
+    res = ED.dispatch_review(
+        seat=_codex_seat(model=_OFF_ALLOWLIST_CODEX),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir,
+    )
+    _assert_allowlist_refusal(res)
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") == "run-opened" for r in records)
+
+
+def test_entry_allowlist_refusal_preserves_existing_run_provenance(tmp_path):
+    # axis: G1 refusal on continuation echoes journal provenance from active run
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "active-run")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(model=_OFF_ALLOWLIST_CODEX),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    _assert_allowlist_refusal(res, run_opened=True)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_old_head_continuation_preserves_caller_role_source(tmp_path):
+    # axis: opened runs with roleSource caller survive continuation through the chokepoint
+    run_dir = str(tmp_path / "old-head-cont")
+    repo_root = _repo(tmp_path)
+    legacy_snapshot = _spawn_gate_resolved_inputs(_codex_seat(), role_source="caller")
+    build_view = _fake_build_view(tmp_path)
+    view = build_view(os.path.realpath(repo_root))
+    cwd = os.path.realpath(view["path"])
+    built = EA.build_argv_result(_codex_seat(), "review", {"cwd": cwd})
+    os.makedirs(run_dir, exist_ok=True)
+    ED._journal_append(run_dir, {
+        "kind": "run-opened",
+        "runKind": ED.RUN_KIND_REVIEW,
+        "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW,
+        "orderId": "old-head",
+        "mode": "review",
+        "argv": built["argv"],
+        "cwd": cwd,
+        "timeout": ED.RETRY_MIN_TIMEOUT,
+        "retryTimeout": ED.RETRY_MIN_TIMEOUT,
+        "promptPath": os.path.join(run_dir, ED.PROMPT_NAME),
+        "progressPath": os.path.join(run_dir, "progress.jsonl"),
+        "viewPath": view["path"],
+        "viewMeta": view,
+        "repoRoot": os.path.realpath(repo_root),
+        "resolvedInputs": legacy_snapshot,
+        "at": time.time(),
+    })
+    with open(os.path.join(run_dir, ED.PROMPT_NAME), "w", encoding="utf-8") as fh:
+        fh.write("prompt\n")
+    continuation_seat = _codex_seat()
+    continuation_seat["roleSource"] = "seat"
+    res = ED.dispatch_review(
+        seat=continuation_seat,
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([]),
+        build_view=build_view,
+        run_dir=run_dir,
+        order_id="old-head",
+        max_wait=0,
+    )
+    assert res.get("detail") != ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["resolvedInputs"]["role"] == _REVIEW_ROLE
+    assert opened["resolvedInputs"]["roleSource"] == "caller"
+    poll = ED.dispatch_poll(run_dir)
+    assert poll["resolvedInputs"]["roleSource"] == "caller"
+
+
+# --- #1269 WO-8: provenance, corrupt-journal echo, CLI defaults ---------------
+
+
+def test_wo8_edge2_review_omitted_provenance_tracked_flags_defaulted(tmp_path):
+    # axis: omitted timeout/retry-timeout/max-wait/run-dir record defaulted or resolved
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        order_id="wo8-edge2",
+    )
+    run_dir = res["runDir"]
+    assert run_dir
+    snapshot = _opened_resolved_inputs(run_dir)
+    assert snapshot["timeoutSource"] == "default"
+    assert snapshot["retryTimeoutSource"] == "default"
+    assert snapshot["maxWaitSource"] == "default"
+    assert snapshot["runDirSource"] == "resolved"
+
+
+def test_wo8_edge3_review_explicit_provenance_tracked_flags_caller(tmp_path):
+    # axis: explicitly passed timeout/retry-timeout/max-wait/run-dir record caller
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "wo8-edge3")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        timeout=120,
+        retry_timeout=90,
+        max_wait=0,
+        order_id="wo8-edge3",
+    )
+    snapshot = _opened_resolved_inputs(run_dir)
+    assert snapshot["timeout"] == 120
+    assert snapshot["timeoutSource"] == "caller"
+    assert snapshot["retryTimeout"] == 90
+    assert snapshot["retryTimeoutSource"] == "caller"
+    assert snapshot["maxWaitSource"] == "caller"
+    assert snapshot["runDirSource"] == "caller"
+
+
+def test_wo8_edge4_corrupt_journal_without_opened_not_reported_opened(tmp_path):
+    # axis: corrupt journal with no valid run-opened must not claim runOpened true
+    run_dir = str(tmp_path / "wo8-corrupt-empty")
+    os.makedirs(run_dir, exist_ok=True)
+    path = ED._journal_path(run_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not-json\n")
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo["runOpened"] is False
+    assert echo["resolvedInputsStatus"] == "unverifiable"
+    assert "resolvedInputs" not in echo
+
+
+def test_wo8_edge5_corrupt_journal_with_opened_carries_snapshot_and_status(tmp_path):
+    # axis: corrupt journal with valid run-opened keeps snapshot and corruption status
+    run_dir = str(tmp_path / "wo8-corrupt-opened")
+    _manual_open_review_run(tmp_path, run_dir)
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    with open(ED._journal_path(run_dir), "ab") as fh:
+        fh.write(b"not-json\n")
+    records, corrupt = ED._journal_read(run_dir)
+    assert corrupt is True
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo["runOpened"] is True
+    assert echo["resolvedInputsStatus"] == "journal-corrupt"
+    assert echo["resolvedInputs"] == snapshot_before
+
+
+# --- #1269 WO-L2FIX / WO-CENSUS: behavioural entry-refusal reason census -------
+
+_DG = importlib.util.spec_from_file_location(
+    "dispatch_guard", os.path.join(_HERE, "..", "dispatch_guard.py"))
+DG = importlib.util.module_from_spec(_DG)
+_DG.loader.exec_module(DG)
+
+
+def _assert_dispatch_result_entry_refusal(result, producer, expected_entry_reason):
+    assert result.get("ok") is False, (producer, result)
+    reason = result.get("reason")
+    assert reason == ED.dispatch_outcome.REASON_UNRUNNABLE, (producer, reason, result)
+    entry_reason = result.get("entryReason")
+    assert isinstance(entry_reason, str), (producer, result)
+    assert entry_reason == expected_entry_reason, (
+        producer, expected_entry_reason, entry_reason, result,
+    )
+    assert entry_reason in ED.seat_bundle.ENTRY_REFUSAL_REASONS, (
+        producer, entry_reason, result,
+    )
+
+
+def _assert_cli_payload_entry_refusal(payload, producer, expected):
+    assert payload.get("ok") is False, (producer, payload)
+    token = payload["reason"]
+    assert isinstance(token, str), (producer, payload)
+    assert token == expected, (producer, expected, token, payload)
+
+
+def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, capsys):
+    """Behavioural census: entry producers emit declared outward refusal reasons."""
+    repo_root = _repo(tmp_path)
+    prompt = _valid_prompt(tmp_path)
+    run_dir = str(tmp_path / "census-open")
+    _manual_open_review_run(tmp_path, run_dir)
+    wt = _linked_worktree(tmp_path)
+    seat = _seat_json("codex", "gpt-5.6-sol", "high")
+    write_seat = _seat_json("codex", "gpt-5.6-sol", "high", _WRITE_ROLE)
+
+    _assert_dispatch_result_entry_refusal(
+        ED.dispatch_review("codex", prompt_path=prompt, repo_root=repo_root),
+        "dispatch-review-library-legacy",
+        "legacy-seat-args",
+    )
+    _assert_dispatch_result_entry_refusal(
+        ED.dispatch_review(
+            seat=_codex_seat(), prompt_path=prompt, repo_root=repo_root, prompt_pat="typo",
+        ),
+        "dispatch-review-library-unknown-kwargs",
+        "unknown-dispatch-kwargs",
+    )
+    _assert_dispatch_result_entry_refusal(
+        ED.dispatch_review(
+            seat=_codex_seat(), prompt_path=prompt, repo_root=repo_root, mode="not-a-mode",
+            run_engine=_never_call, build_view=_never_build_view,
+        ),
+        "dispatch-review-library-mode-invalid",
+        "mode-invalid",
+    )
+    _assert_dispatch_result_entry_refusal(
+        ED.dispatch_review(
+            seat={"vendor": "codex", "model": "gpt-5.6-sol", "effort": "high"},
+            prompt_path=prompt, repo_root=repo_root,
+            run_engine=_never_call, build_view=_never_build_view,
+        ),
+        "dispatch-review-library-seat-invalid",
+        "role-key-absent",
+    )
+
+    assert ED.main([
+        "dispatch-review", "--seat", seat,
+        "--prompt-path", prompt, "--repo-root", repo_root, "--run-dir", run_dir,
+        "--engine", "codex",
+    ]) == 1
+    _assert_dispatch_result_entry_refusal(
+        json.loads(capsys.readouterr().out.strip()),
+        "dispatch-review-cli-legacy",
+        "legacy-seat-args",
+    )
+
+    _assert_dispatch_result_entry_refusal(
+        ED.dispatch_write(prompt_path=prompt, cwd=wt, engine="cursor"),
+        "dispatch-write-library-legacy",
+        "legacy-seat-args",
+    )
+    prompt_missing = ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=str(tmp_path / "missing-write-prompt.txt"),
+        cwd=wt, run_dir=str(tmp_path / "write-run"), order_id="census",
+        run_engine=_never_call,
+    )
+    assert prompt_missing.get("ok") is False
+    assert prompt_missing["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert "entryReason" not in prompt_missing
+
+    assert ED.main([
+        "dispatch-write", "--seat", write_seat,
+        "--prompt-path", prompt, "--cwd", wt, "--run-dir", run_dir,
+        "--model", "gpt-5.6-sol",
+    ]) == 1
+    _assert_dispatch_result_entry_refusal(
+        json.loads(capsys.readouterr().out.strip()),
+        "dispatch-write-cli-legacy",
+        "legacy-seat-args",
+    )
+
+    assert DG.main(["check", "--seat", '{"vendor":"codex","model":"gpt-5.6-sol","effort":"high"}']) == 1
+    guard_out = json.loads(capsys.readouterr().out.splitlines()[0])
+    _assert_cli_payload_entry_refusal(guard_out, "guard-check-cli-seat-invalid", "role-key-absent")
+
+    assert DG.main(["check", "--seat", seat, "--role", _REVIEW_ROLE]) == 1
+    guard_legacy = json.loads(capsys.readouterr().out.strip())
+    _assert_cli_payload_entry_refusal(guard_legacy, "guard-check-cli-legacy", "legacy-seat-args")
+
+    assert EA.main([
+        "build-argv", "--seat", '{"vendor":"codex","model":"gpt-5.6-sol","effort":"high"}',
+        "--run-kind", "review",
+    ]) == 1
+    build_out = json.loads(capsys.readouterr().out.strip())
+    assert build_out["reason"] == "engine-config"
+    assert build_out["detail"] == "role-key-absent"
+
+    assert EA.main(["build-argv", "--seat", seat, "--run-kind", "review", "--role", "reviewer"]) == 1
+    build_legacy = json.loads(capsys.readouterr().out.strip())
+    _assert_cli_payload_entry_refusal(build_legacy, "build-argv-cli-legacy", "legacy-seat-args")
+
+
+def test_early_review_prompt_missing_preserves_opened_run_provenance(tmp_path):
+    run_dir = str(tmp_path / "early-prompt-review")
+    repo_root = _repo(tmp_path)
+    _manual_open_review_run(tmp_path, run_dir)
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=str(tmp_path / "missing-prompt.txt"),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+    )
+    assert res["detail"] == "prompt-missing"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_early_review_pr_body_unpaired_preserves_opened_run_provenance(tmp_path):
+    run_dir = str(tmp_path / "early-prbody-review")
+    repo_root = _repo(tmp_path)
+    _manual_open_review_run(tmp_path, run_dir)
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        pr_body_path=str(tmp_path / "pr.md"),
+    )
+    assert res["detail"] == "pr-body-args-unpaired"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_early_review_invalid_repo_root_preserves_opened_run_provenance(tmp_path):
+    run_dir = str(tmp_path / "early-repo-review")
+    _manual_open_review_run(tmp_path, run_dir)
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root="   ",
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+    )
+    assert res["detail"] == "repo-root-absent"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_early_write_prompt_missing_preserves_opened_run_provenance(tmp_path):
+    wt = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "early-prompt-write")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=_valid_prompt(tmp_path),
+        cwd=wt,
+        run_dir=run_dir,
+        order_id="early-write-open",
+        run_engine=fake,
+        max_wait=0,
+    )
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=str(tmp_path / "missing-write-prompt.txt"),
+        cwd=wt,
+        run_dir=run_dir,
+        run_engine=_never_call,
+    )
+    assert res["detail"] == "prompt-missing"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_entry_refusal_reason_census_provenance_by_declared_set(tmp_path):
+    """Every declared entry-refusal reason carries run provenance at the chokepoint."""
+    assert ED.seat_bundle.ENTRY_REASON_UNDECLARED in ED.seat_bundle.ENTRY_REFUSAL_REASONS
+
+    run_dir = str(tmp_path / "census-run")
+    _manual_open_review_run(tmp_path, run_dir)
+    run_dir_real = os.path.realpath(run_dir)
+    snapshot = _opened_resolved_inputs(run_dir)
+
+    for reason in sorted(ED.seat_bundle.ENTRY_REFUSAL_REASONS):
+        refusal = {"ok": False, "entryReason": reason, "detail": "census-probe"}
+
+        no_run = ED._entry_refusal_terminal(refusal, run_dir=None)
+        assert no_run["entryReason"] == reason
+        assert no_run["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+        assert no_run.get("runOpened") is False
+        assert no_run["runDir"] == ""
+        assert no_run.get("resolvedInputsStatus") is None
+        assert "resolvedInputs" not in no_run
+
+        with_run = ED._entry_refusal_terminal(refusal, run_dir=run_dir)
+        assert with_run["entryReason"] == reason
+        assert with_run["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+        assert with_run.get("runOpened") is True
+        assert with_run["runDir"] == run_dir_real
+        assert with_run.get("resolvedInputsStatus") is None
+        assert with_run["resolvedInputs"] == snapshot
+
+
+def test_entry_refusal_chokepoint_rejects_undeclared_reason(tmp_path):
+    """Undeclared entry-refusal reasons fail closed at both chokepoints."""
+    planted_reason = "planted-not-in-vocabulary"
+    refusal = {"ok": False, "entryReason": planted_reason, "detail": "census-probe"}
+
+    terminal = ED._entry_refusal_terminal(refusal, run_dir=None)
+    assert terminal["entryReason"] == ED.seat_bundle.ENTRY_REASON_UNDECLARED
+    assert terminal["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert planted_reason in terminal["detail"]
+    assert "declared vocabulary" in terminal["detail"]
+    assert terminal.get("runOpened") is False
+    assert terminal["runDir"] == ""
+
+    bundle = ED.seat_bundle._entry_refusal(planted_reason, "census-probe")
+    assert bundle["entryReason"] == ED.seat_bundle.ENTRY_REASON_UNDECLARED
+    assert "reason" not in bundle
+    assert planted_reason in bundle["detail"]
+
+    missing = ED._entry_refusal_terminal({"ok": False, "detail": "census-probe"}, run_dir=None)
+    assert missing["entryReason"] == ED.seat_bundle.ENTRY_REASON_UNDECLARED
+    assert missing["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+
+
+def test_entry_unknown_kwargs_refusal_preserves_existing_review_run_provenance(tmp_path):
+    # axis: I1 — non-allowlist entry refusal on continuation echoes journal provenance
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "kw-review")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        prompt_pat="typo",
+    )
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "unknown-dispatch-kwargs"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_entry_unknown_kwargs_refusal_preserves_existing_write_run_provenance(tmp_path):
+    # axis: I1 — dispatch_write entry refusal on continuation echoes journal provenance
+    wt = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "kw-write")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=_valid_prompt(tmp_path),
+        cwd=wt,
+        run_dir=run_dir,
+        order_id="kw-write-open",
+        run_engine=fake,
+        max_wait=0,
+    )
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=_valid_prompt(tmp_path),
+        cwd=wt,
+        run_dir=run_dir,
+        prompt_pat="typo",
+        run_engine=FakeRunner([]),
+    )
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "unknown-dispatch-kwargs"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_max_wait_refusal_preserves_existing_review_run_provenance(tmp_path):
+    # axis: I1 — out-of-range --max-wait on continuation echoes journal provenance
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "max-wait-review")
+    fake = FakeRunner([])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        max_wait=ED.MAX_SYNC_WAIT + 1,
+    )
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_max_wait_refusal_preserves_existing_write_run_provenance(tmp_path):
+    # axis: I1 — out-of-range --max-wait on write continuation echoes journal provenance
+    wt = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "max-wait-write")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=_valid_prompt(tmp_path),
+        cwd=wt,
+        run_dir=run_dir,
+        order_id="max-wait-write-open",
+        run_engine=fake,
+        max_wait=0,
+    )
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    res = ED.dispatch_write(
+        seat=_codex_seat(role=_WRITE_ROLE),
+        prompt_path=_valid_prompt(tmp_path),
+        cwd=wt,
+        run_dir=run_dir,
+        max_wait=ED.MAX_SYNC_WAIT + 1,
+        run_engine=FakeRunner([]),
+    )
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["resolvedInputs"] == snapshot_before
+
+
+def test_max_wait_refusal_fail_closed_without_opened_run(tmp_path):
+    # axis: I1 — out-of-range --max-wait with no opened run reports runOpened false
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        max_wait=ED.MAX_SYNC_WAIT + 1,
+    )
+    assert res.get("runOpened") is False
+    assert res["runDir"] == ""
+
+
+def test_continuation_brief_check_mode_on_review_run_refuses_with_provenance(tmp_path):
+    # axis: I2 — mode/role sentinel honoured; run-dir-mode-mismatch carries provenance
+    run_dir = str(tmp_path / "i2-run")
+    repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="review")
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        mode="brief-check",
+        max_wait=0,
+    )
+    assert res["detail"] == ED.MODE_REFUSAL_RUN_DIR_MISMATCH
+    assert res.get("detail") != "mode-role-mismatch"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert "resolvedInputs" in res
+
+
+def test_entry_refusal_terminal_fail_closed_fields_not_overridable():
+    # axis: chokepoint invariant fields win over producer-supplied values
+    with_defaults = ED._entry_refusal_terminal({"signal": "needs_context"})
+    assert with_defaults["ok"] is False
+    assert with_defaults["attempts"] == 0
+    assert with_defaults["forfeited"] is False
+    assert with_defaults["terminal"] is True
+
+    with_caller = ED._entry_refusal_terminal({
+        "ok": True,
+        "signal": "needs_context",
+        "attempts": 3,
+        "forfeited": True,
+        "terminal": False,
+    })
+    assert with_caller["ok"] is False
+    assert with_caller["attempts"] == 0
+    assert with_caller["forfeited"] is False
+    assert with_caller["terminal"] is True
+
+
+def test_entry_refusal_fail_closed_no_run_dir_supplied(tmp_path):
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        prompt_pat="typo",
+    )
+    assert res.get("runOpened") is False
+    assert res["runDir"] == ""
+
+
+def test_entry_refusal_fail_closed_run_dir_unopened(tmp_path):
+    run_dir = str(tmp_path / "unopened")
+    os.makedirs(run_dir, exist_ok=True)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        prompt_pat="typo",
+    )
+    assert res.get("runOpened") is False
+
+
+def test_entry_refusal_fail_closed_corrupt_journal(tmp_path):
+    run_dir = str(tmp_path / "corrupt-no-open")
+    os.makedirs(run_dir, exist_ok=True)
+    path = ED._journal_path(run_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not-json\n")
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        prompt_pat="typo",
+    )
+    assert res.get("runOpened") is False
+    assert res.get("resolvedInputsStatus") == "unverifiable"
+
+
+def test_entry_refusal_fail_closed_run_dir_missing(tmp_path):
+    run_dir = str(tmp_path / "does-not-exist")
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        prompt_pat="typo",
+    )
+    assert res.get("runOpened") is False
+
+
+def test_dispatch_review_engine_config_refusal_preserves_caller_run_dir(tmp_path, monkeypatch):
+    # axis: wo-INV2 — pre-open engine-config refusal echoes caller run_dir with runOpened false
+    run_dir = str(tmp_path / "engine-config-run")
+    os.makedirs(run_dir, exist_ok=True)
+    monkeypatch.setattr(
+        ED.engine_adapter,
+        "build_argv_result",
+        lambda *a, **k: {"argv": [], "reason": "unregistered-engine-model"},
+    )
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+    )
+    assert "engine-config:" in res["detail"]
+    assert res.get("runOpened") is False
+    assert res["runDir"] == os.path.realpath(run_dir)
+
+
+def test_dispatch_review_open_failure_preserves_caller_run_dir(tmp_path, monkeypatch):
+    # axis: wo-INV2 — not-ok_open branch echoes caller run_dir
+    run_dir = str(tmp_path / "open-fail-run")
+    os.makedirs(run_dir, exist_ok=True)
+    monkeypatch.setattr(ED, "_open_review_run", lambda *a, **k: (False, "journal-append-failed"))
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+    )
+    assert res.get("runOpened") is False
+    assert res["runDir"] == os.path.realpath(run_dir)
+
+
+def test_terminal_record_not_durable_preserves_run_dir(tmp_path):
+    # axis: wo-INV2 — non-entry terminal-record-not-durable echoes run_dir for re-invocation
+    run_dir = str(tmp_path / "not-durable-run")
+    os.makedirs(run_dir, exist_ok=True)
+    state = {"opened": {"argv": []}}
+    result = {"ok": True, "terminal": True, "attempts": 1}
+    res = ED._terminal_record_not_durable(run_dir, state, result)
+    assert res.get("runOpened") is False
+    assert res["runDir"] == os.path.realpath(run_dir)
+    assert res["detail"] == "terminal-record-not-durable"
+    assert res["terminal"] is False
+
+
+def test_main_dropped_flag_attached_run_dir_carries_provenance(capsys, tmp_path):
+    # axis: wo-INV2 — main() argv scan accepts --run-dir=<path> for dropped-flag refusal
+    run_dir = str(tmp_path / "attached-run")
+    _manual_open_review_run(tmp_path, run_dir)
+    argv = [
+        "dispatch-review",
+        "--role", _REVIEW_ROLE,
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--prompt-path", "p",
+        "--repo-root", "/tmp",
+        "--run-dir=" + run_dir,
+    ]
+    assert ED.main(argv) == 1
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["entryReason"] == "legacy-seat-args"
+    assert res.get("runOpened") is True
+    assert res["runDir"] == os.path.realpath(run_dir)
+
+
+# --- #1269 WO-SM2: journal-state discrimination for entry refusal ---------------
+
+def test_sm2_1269_edge_journal_absent(tmp_path):
+    # axis: absent journal is no run — runOpened false, no unverifiable status
+    run_dir = str(tmp_path / "absent")
+    os.makedirs(run_dir, exist_ok=True)
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo == {"runOpened": False}
+
+
+def test_sm2_1269_edge_journal_empty(tmp_path):
+    # axis: empty readable journal is no run
+    run_dir = str(tmp_path / "empty")
+    os.makedirs(run_dir, exist_ok=True)
+    path = ED._journal_path(run_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        pass
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo == {"runOpened": False}
+
+
+def test_sm2_1269_edge_journal_unreadable(tmp_path, monkeypatch):
+    # axis: OSError on journal read is unreadable provenance, not no-run
+    run_dir = str(tmp_path / "unreadable")
+    os.makedirs(run_dir, exist_ok=True)
+    path = ED._journal_path(run_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("{}\n")
+
+    real_open = open
+
+    def _raising_open(file, *args, **kwargs):
+        if os.path.realpath(file) == os.path.realpath(path) and "rb" in args:
+            raise OSError("permission denied")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", _raising_open)
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo["runOpened"] is False
+    assert echo["resolvedInputsStatus"] == "unverifiable"
+
+
+def test_sm2_1269_edge_corrupt_no_opened(tmp_path):
+    # axis: structurally corrupt journal without opened record is unreadable provenance
+    run_dir = str(tmp_path / "corrupt-no-open")
+    os.makedirs(run_dir, exist_ok=True)
+    path = ED._journal_path(run_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not-json\n")
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo["runOpened"] is False
+    assert echo["resolvedInputsStatus"] == "unverifiable"
+    assert "resolvedInputs" not in echo
+
+
+def test_sm2_1269_edge_corrupt_with_opened(tmp_path):
+    # axis: corrupt journal with readable opened record keeps snapshot and journal-corrupt
+    run_dir = str(tmp_path / "corrupt-opened")
+    _manual_open_review_run(tmp_path, run_dir)
+    snapshot_before = _opened_resolved_inputs(run_dir)
+    with open(ED._journal_path(run_dir), "ab") as fh:
+        fh.write(b"not-json\n")
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo["runOpened"] is True
+    assert echo["resolvedInputsStatus"] == "journal-corrupt"
+    assert echo["resolvedInputs"] == snapshot_before
+
+
+def test_sm2_1269_edge_no_run_dir_supplied():
+    # axis: no run_dir supplied is no run
+    out = {}
+    ED._attach_resolved_inputs_echo(out, run_dir=None)
+    assert out["runOpened"] is False
+    assert "resolvedInputsStatus" not in out
+
+
+def test_sm2_1269_edge_run_dir_missing(tmp_path):
+    # axis: non-existent run_dir is no run
+    run_dir = str(tmp_path / "does-not-exist")
+    echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+    assert echo == {"runOpened": False}
+
+
+def test_sm2_1269_unreadable_journal_preserves_run_dir_on_refusal(tmp_path):
+    # axis: entry refusal on unreadable journal keeps runDir and reports unverifiable
+    run_dir = str(tmp_path / "corrupt-refusal")
+    os.makedirs(run_dir, exist_ok=True)
+    path = ED._journal_path(run_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not-json\n")
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_never_call,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        prompt_pat="typo",
+    )
+    assert res.get("runOpened") is False
+    assert res.get("resolvedInputsStatus") == "unverifiable"
+    assert res["runDir"] == os.path.realpath(run_dir)
 
 
 # --- #1271 WO-L1-F: run_execution_record engagement.read round-trip ---

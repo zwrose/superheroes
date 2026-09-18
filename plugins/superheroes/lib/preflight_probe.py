@@ -33,6 +33,7 @@ import engine_pref            # noqa: E402
 import liveness_cache          # noqa: E402
 import model_registry          # noqa: E402
 import model_tier_overrides    # noqa: E402
+import seat_bundle             # noqa: E402
 
 DEFAULT_GH_ARGV = ("gh", "auth", "status")
 
@@ -415,8 +416,13 @@ def model_no_op_argv(engine, model, effort=None):
     unknown/unroutable (caller marks unavailable — never calls run)."""
     if engine in ("codex", "cursor"):
         effort = _probe_effort(engine, model, effort)
-        result = engine_adapter.build_argv_result(
-            engine, "review", effort, {"engine_model": model})
+        seat = {"vendor": engine, "model": model, "effort": effort}
+        parsed = seat_bundle.parse(json.dumps(seat))
+        # Role-agnostic model-config check — not a dispatch entry; no registry role is known here.
+        validated = seat_bundle.validate_effort_only(parsed)
+        if not validated.get("ok"):
+            return None
+        result = engine_adapter.build_argv_result(validated, "review", {})
         if result.get("reason") or not result.get("argv"):
             return None
         return tuple(result["argv"])
@@ -482,6 +488,18 @@ def composition_liveness(needed_configs, run=None):
     return result
 
 
+def _fresh_cache_provenance():
+    return {"servedFromCache": False, "probedAt": None, "remainingTtl": None}
+
+
+def _cached_cache_provenance(receipt, now):
+    return {
+        "servedFromCache": True,
+        "probedAt": receipt["probedAt"],
+        "remainingTtl": liveness_cache.remaining_ttl(receipt, now),
+    }
+
+
 def live_vendors_for_composition(
     configured_vendors,
     tiers=("reviewer-deep", "reviewer"),
@@ -499,10 +517,17 @@ def live_vendors_for_composition(
         rec = liveness_cache.read(cache_path, now=now)
         if rec is not None and liveness_cache.covers(rec.get("needed", {}), needed):
             live, live_cells, dead_notes = liveness_cache.live_from(rec["liveness"], needed)
+            remaining = liveness_cache.remaining_ttl(rec, now)
+            probed_at = rec["probedAt"]
             notes.append({
                 "constraint": "preflight-cache",
-                "reason": "reused liveness receipt (age %ds)" % int(now - rec["probedAt"]),
+                "reason": (
+                    "reused liveness receipt (age %ds)"
+                    % int(now - probed_at)
+                    + liveness_cache.cache_provenance_reason_suffix(probed_at, remaining)
+                ),
             })
+            liveness_cache.extend_notes_with_cache_provenance(dead_notes, rec, now)
             notes.extend(dead_notes)
             return (
                 live,
@@ -510,6 +535,7 @@ def live_vendors_for_composition(
                 rec["liveness"],
                 notes,
                 liveness_cache.LIVE_CELLS_SOURCE_PROBED,
+                _cached_cache_provenance(rec, now),
             )
 
     liveness = composition_liveness({**needed, "claude": []}, run)
@@ -525,7 +551,14 @@ def live_vendors_for_composition(
             })
     live, live_cells, dead_notes = liveness_cache.live_from(liveness, needed)
     notes.extend(dead_notes)
-    return (live, live_cells, liveness, notes, liveness_cache.LIVE_CELLS_SOURCE_PROBED)
+    return (
+        live,
+        live_cells,
+        liveness,
+        notes,
+        liveness_cache.LIVE_CELLS_SOURCE_PROBED,
+        _fresh_cache_provenance(),
+    )
 
 
 def configured_cross_vendor_engines(prefs):
@@ -568,11 +601,13 @@ def main(argv):
             needed_override = seat_map.reachable_configs(configured, pins)
         now = time.time()
         cache_path = liveness_cache.receipt_path(args.cwd)
-        live, live_cells, liveness, notes, _provenance = live_vendors_for_composition(
-            configured,
-            needed_override=needed_override,
-            cache_path=cache_path,
-            now=now,
+        live, live_cells, liveness, notes, _live_cells_source, cache_provenance = (
+            live_vendors_for_composition(
+                configured,
+                needed_override=needed_override,
+                cache_path=cache_path,
+                now=now,
+            )
         )
         if snap["readError"] is not None:
             notes.append({
@@ -583,6 +618,7 @@ def main(argv):
             "live": live,
             "liveCells": live_cells,
             "cachePath": cache_path,
+            "cacheProvenance": cache_provenance,
             "crossVendorEngines": configured,
             "notes": notes,
             "configRead": config_read_payload(snap, cwd=args.cwd),
