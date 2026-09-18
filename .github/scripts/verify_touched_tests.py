@@ -39,9 +39,6 @@ PYTEST_ARGS = ("-q", "-n", "auto", "-p", "no:cacheprovider")
 
 BASE_REF_CANDIDATES = ("origin/main", "main")
 
-_PATH_SEP_ALT = r"(?:/|['\"][ \t]*[,/][ \t]*['\"])"
-
-
 class GitError(RuntimeError):
     """A git invocation this script depends on failed."""
 
@@ -182,7 +179,7 @@ def _reference_patterns(changed_path, is_python):
         if len(suffix) < 2:
             continue
         escaped = [re.escape(part) for part in suffix]
-        patterns.append(re.compile(_PATH_SEP_ALT.join(escaped)))
+        patterns.append(re.compile("/".join(escaped)))
 
     return patterns
 

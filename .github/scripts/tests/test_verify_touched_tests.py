@@ -398,7 +398,7 @@ def test_reference_clause_quoted_dotted_negative(tmp_path):
 def test_reference_clause_basename_with_extension_selects(tmp_path):
     root = str(tmp_path)
     mod, test = _setup_mod_and_test(root, _LIB + "/store.py",
-                                    '"store.py"\n')
+                                    "# the helper lives in store.py\n")
     selected, *_ = _select(root, [mod])
     assert test in selected
 
@@ -411,7 +411,7 @@ def test_reference_clause_basename_without_extension_does_not_select(tmp_path):
     assert test not in selected
 
 
-def test_reference_clause_path_suffix_forward_slash_selects(tmp_path):
+def test_reference_clause_python_basename_in_path_literal_selects(tmp_path):
     root = str(tmp_path)
     _init_git(root)
     mod = _LIB + "/hooks/session_start.py"
@@ -422,7 +422,7 @@ def test_reference_clause_path_suffix_forward_slash_selects(tmp_path):
     assert test in selected
 
 
-def test_reference_clause_path_suffix_quote_joined_selects(tmp_path):
+def test_reference_clause_python_basename_in_join_selects(tmp_path):
     root = str(tmp_path)
     _init_git(root)
     mod = _LIB + "/hooks/session_start.py"
@@ -445,7 +445,7 @@ def test_reference_clause_path_suffix_negative(tmp_path):
     assert test not in selected
 
 
-def test_reference_clause_rubric_quote_joined_selects(tmp_path):
+def test_reference_clause_non_python_quoted_basename_selects(tmp_path):
     root = str(tmp_path)
     _init_git(root)
     mod = _LIB + "/rubric/covenant.md"
@@ -454,6 +454,28 @@ def test_reference_clause_rubric_quote_joined_selects(tmp_path):
     _touch(root, test, 'rubric", "covenant.md"\n')
     selected, *_ = _select(root, [mod])
     assert test in selected
+
+
+def test_reference_clause_path_suffix_non_python_full_path_selects(tmp_path):
+    root = str(tmp_path)
+    _init_git(root)
+    mod = "docs/superheroes/KEEP-OR-RETIRE.md"
+    test = _TESTS + "/test_keep_or_retire.py"
+    _touch(root, mod, "keep or retire\n")
+    _touch(root, test, '"docs/superheroes/KEEP-OR-RETIRE.md"\n')
+    selected, *_ = _select(root, [mod])
+    assert test in selected
+
+
+def test_reference_clause_path_suffix_non_python_full_path_negative(tmp_path):
+    root = str(tmp_path)
+    _init_git(root)
+    mod = "docs/superheroes/KEEP-OR-RETIRE.md"
+    test = _TESTS + "/test_keep_or_retire.py"
+    _touch(root, mod, "keep or retire\n")
+    _touch(root, test, '"docs/superheroes/OTHER-DOC.md"\n')
+    selected, *_ = _select(root, [mod])
+    assert test not in selected
 
 
 # ---------------------------------------------------- non-Python unreferenced
