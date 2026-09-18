@@ -721,9 +721,9 @@ the cost named — Recommendation: b — …. Empty sections stated empty, never
 
 **Residual disposition:** machinery: front door evidence bar (executed evidence on a live surface; dark and future surfaces fail; in-envelope variance is not defect evidence) → venue ladder once past the bar; product: owner ratification, same venue ladder (continue → fold → file, bundled by surface); decline with a revisit trigger when every venue fails the bar.
 **Call:** at a craft call the advisor executes and records for veto — the standing order is always on, at every hour, attended or not; at an owner call the owner's word via the collector; a filing whose item clears the evidence bar and grades P2 is the advisor's, and every other filing is an owner call; doubt upward.
-**Follow-up on live work:** same surface and below the material line → fold into the child; new
-surface → stack a layer; above the line, or a child past three lanes → file its own issue; the
-gardening record carries both counts.
+**Follow-up on live work:** first match decides — above the material line, or a child past three
+lanes → file its own issue; else a new surface → stack a layer; else same surface and below the
+line → fold into the child; the gardening record carries both counts.
 **Append-always at vet:** every owner call to the collector with door grading (machinery: band,
 evidence tier, resulting tier; product: classification and ratification) and venue on each append.
 **Registry:** `<!-- superheroes:revisit-registry -->` — one pinned comment, one line per declined
@@ -732,8 +732,10 @@ item.
 **Delivery:** chat prose only — never structured-question tools; stable item numbers and option letters
 (1 - a, 2 - b); batch 1 = blocks advisor next action (never new-issue filings), alone first; as soon
 as batch-1 rulings land, deliver batch 2 while executing what batch 1 unblocked alongside; batch 3
-last = the mergeable pull requests in merge order, each with its acceptances and its exact merge
-command; what it asks for is the owner's word, never a craft call; state empty batches plainly.
+last, assembled only once every batch-2 ruling has landed and what those rulings unblocked has been
+executed = the mergeable pull requests in merge order, each with its notable acceptances and its
+exact merge command; what it asks for is the owner's word, never a craft call; state empty batches
+plainly.
 **Recap:** every sitting opens or closes with the "what I decided for you" lines — one per craft
 call decided since the last sitting, each vetoable; a recap, not a batch.
 
