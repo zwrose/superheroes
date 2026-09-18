@@ -23,7 +23,6 @@ _PLUGIN_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 _PLUGIN_RUBRIC = os.path.join(_PLUGIN_ROOT, "rubric", "review-base.md")
 _CORE_UNRESOLVED = "(Core calibration not resolved for this project)"
 _LAYER_UNRESOLVED = "(Review-crew layer calibration not resolved for this project)"
-_ESCALATION = os.path.join(_PLUGIN_ROOT, "lib", "escalation_resolve.py")
 
 
 def _base_context(**over):
@@ -98,7 +97,6 @@ def _fixer_placeholders():
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "CWD": _REPO,
         "REPO_ROOT": shlex.quote(_REPO),
-        "ESCALATION_WRAPPER_PATH": shlex.quote(_ESCALATION),
         "VERIFY_COMMAND": "npm test",
         "ROUND": "2",
         "GATE_GUIDANCE": "No owner-gate guidance is attached to this batch.",
@@ -639,31 +637,6 @@ def test_shipped_resource_refusal_when_rubric_missing(monkeypatch):
     assert reason == "shipped-resource-missing:RUBRIC_PATH"
 
 
-def test_shipped_resource_refusal_when_quoted_escalation_path_missing(tmp_path, monkeypatch):
-    """Compare-path-forms probe — quoted emission must still refuse a missing shipped resource."""
-    import round_driver as RD
-    plugin_with_space = os.path.join(str(tmp_path), "plugin root")
-    missing = os.path.join(plugin_with_space, "lib", "escalation_resolve.py")
-    monkeypatch.setattr(RD, "_shipped_escalation_wrapper_path", lambda: missing)
-    ph = {"ESCALATION_WRAPPER_PATH": shlex.quote(missing), "RUBRIC_PATH": _PLUGIN_RUBRIC}
-    monkeypatch.setattr(RD, "_shipped_rubric_path", lambda: _PLUGIN_RUBRIC)
-    reason = RD._shipped_resource_refusal(ph)
-    assert reason == "shipped-resource-missing:ESCALATION_WRAPPER_PATH"
-
-
-def test_shipped_resource_refusal_when_quoted_escalation_path_present(tmp_path, monkeypatch):
-    import round_driver as RD
-    plugin_with_space = os.path.join(str(tmp_path), "plugin root")
-    present = os.path.join(plugin_with_space, "lib", "escalation_resolve.py")
-    os.makedirs(os.path.dirname(present), exist_ok=True)
-    with open(present, "w", encoding="utf-8") as fh:
-        fh.write("# probe\n")
-    monkeypatch.setattr(RD, "_shipped_escalation_wrapper_path", lambda: present)
-    ph = {"ESCALATION_WRAPPER_PATH": shlex.quote(present), "RUBRIC_PATH": _PLUGIN_RUBRIC}
-    monkeypatch.setattr(RD, "_shipped_rubric_path", lambda: _PLUGIN_RUBRIC)
-    assert RD._shipped_resource_refusal(ph) is None
-
-
 # --- FB-6: seat transport from seat_map compose (detector 1) -------------------
 
 
@@ -763,7 +736,17 @@ def test_fixer_order_shell_paths_are_quoted_for_metacharacters(tmp_path):
     assert reason is None
     assert "$(echo pwned)" in text  # repo root appears quoted in ## Input
     assert shlex.quote(repo) in text
-    assert "--stdin-path" in text
+
+
+def test_dispatch_fixer_render_has_no_file_scope_guard():
+    """#1299: fixer order must render without the retired wrapper or guard step."""
+    ctx = _GOLDEN_CONTEXTS[RP.P_FIXER]()
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None
+    assert "ESCALATION_WRAPPER_PATH" not in text
+    assert "Escalation guard" not in text
+    assert "file-scope guard" not in text
+    assert "--stdin-path" not in text
 
 
 def test_engine_panel_landing_block_uses_phase_stdout_contract():
@@ -1175,51 +1158,6 @@ def test_order_templates_shell_census_allows_ratified_angle_substitutions(tmp_pa
     assert violations == [], violations
 
 
-def test_fixer_escalation_wrapper_path_quoted_through_renderer(tmp_path, monkeypatch):
-    import round_driver as RD
-
-    plugin_with_space = os.path.join(str(tmp_path), "plugin root")
-    escalation = os.path.join(plugin_with_space, "lib", "escalation_resolve.py")
-    os.makedirs(os.path.dirname(escalation), exist_ok=True)
-    with open(escalation, "w", encoding="utf-8") as fh:
-        fh.write("# probe\n")
-    monkeypatch.setattr(RD, "_shipped_escalation_wrapper_path", lambda: escalation)
-    repo = str(tmp_path / "proj")
-    os.makedirs(repo)
-    session_dir = os.path.join(str(tmp_path), "session")
-    os.makedirs(session_dir)
-    state = {
-        "config": {"repoRoot": repo, "fixerVendor": "claude"},
-        "reviewedDiff": "diff --git a/f b/f\n",
-        "fixBatch": [],  # fixer-order render path requires a known batch
-    }
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
-    ph = RD._order_placeholders(
-        RP.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 2, paths, RD.CHANNEL_FILE,)
-    quoted_escalation = shlex.quote(escalation)
-    assert ph["ESCALATION_WRAPPER_PATH"] == quoted_escalation
-    assert quoted_escalation != escalation
-    ctx = _base_context(
-        host_seat=True,
-        landing_path=paths["bare_payload_path"],
-        repo_root=repo,
-        placeholders=ph,
-    )
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None
-    assert quoted_escalation in text
-    assert "python3 -B %s guard" % quoted_escalation in text
-    assert "python3 -B %s guard" % escalation not in text
-
-
 def test_fixer_profile_unresolvable_root_differs_from_resolved_absent(tmp_path, monkeypatch):
     import calibration_resolve as cr
     import model_tier_overrides as mto
@@ -1387,45 +1325,6 @@ def test_order_templates_shell_census_flags_injected_placeholder(tmp_path):
         fh.write("# probe\n`python3 -B {{PROBE_PLACEHOLDER}}`\n")
     violations = RO.scan_all_order_templates_shell_violations(root=str(tmp_path))
     assert any("dispatch-panel" in v and "PROBE_PLACEHOLDER" in v for v in violations)
-
-
-def test_fixer_guard_command_uses_stdin_not_shell_path_interpolation(tmp_path):
-    import round_driver as RD
-
-    repo = str(tmp_path / "proj" / "src" / "$(malicious).py")
-    os.makedirs(repo)
-    session_dir = os.path.join(str(tmp_path), "session")
-    os.makedirs(session_dir)
-    state = {
-        "config": {"repoRoot": repo, "fixerVendor": "claude"},
-        "reviewedDiff": "diff --git a/f b/f\n",
-        "fixBatch": [],  # fixer-order render path requires a known batch
-    }
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
-    ph = RD._order_placeholders(
-        RP.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 2, paths, RD.CHANNEL_FILE,)
-    ctx = _base_context(
-        host_seat=True,
-        landing_path=paths["bare_payload_path"],
-        repo_root=repo,
-        placeholders=ph,
-    )
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None
-    assert "--stdin-path" in text
-    assert 'guard --root' in text
-    assert '--path "' not in text
-    assert '<file>' not in text
-    # Prior shape would have interpolated branch-controlled paths into shell quotes:
-    assert '--path "<' not in text
 
 
 @pytest.mark.parametrize("reviewer_engine", ["codex", "cursor", "claude"])

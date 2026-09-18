@@ -10,9 +10,7 @@ roots, the distilled covenant (calibrated projects only), and a read-only plugin
 hygiene nudge when sibling installs hold stale markers.
 
 The slim set depends on the harness continuing to auto-load the project layer;
-that residual dependency is watched by ``lib/harness_probe.py`` (run it on harness
-upgrades) and a regression's fallback is restoring the dropped records (a one-commit
-revert).
+a regression's fallback is restoring the dropped records (a one-commit revert).
 
 Design contract (from the 2026-06-21 discovery-entry-path bootstrap design, an out-of-repo doc):
 

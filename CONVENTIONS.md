@@ -776,11 +776,11 @@ launches still refuse — see `lib/launch_ledger.py` for the authoritative seman
 every door fail closed with `fold-unknown-event:<kind>` until the ledger file is deleted (the path
 `ledger_path()` reports). The
 Showrunner advisor invokes the launcher
-per launch; the eight dispatch-preflight checks live in
+per launch; the dispatch-preflight checks live in
 `skills/showrunner/reference/dispatch-preflight.md` and the artifact, bound by a drift test — cite
 those homes, do not duplicate them here. The recovery half —
 adopt-rather-than-resume across instances or accounts, the unpushed-work sweep, transcript
-pinning, liveness reads, and quota-death suspicion — lives in `rubric/launch-doctrine.md` §
+pinning, and liveness reads — lives in `rubric/launch-doctrine.md` §
 Recovery, with the two session charters as enumerated copy-holders guarded by a drift test.
 
 **Sanitized review view (#684).** External **review** seats (codex/cursor via `dispatch-review`)
