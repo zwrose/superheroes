@@ -385,6 +385,13 @@ def _normalized_instance_path(path, home):
     return os.path.normpath(os.path.join(home_norm, expanded))
 
 
+def _claude_seat_pin_gate_applies(env=None):
+    """Instance-pin gate applies only on Claude-hosted seats (CLAUDE_PID present)."""
+    base = dict(env if env is not None else os.environ)
+    pid_raw = base.get("CLAUDE_PID")
+    return isinstance(pid_raw, str) and bool(pid_raw.strip())
+
+
 def seat_config_dir(env=None):
     """The calling seat's own Claude instance root, from its process snapshot. Never raises."""
     base = dict(env if env is not None else os.environ)
@@ -410,6 +417,9 @@ def seat_config_dir(env=None):
         return {"instance": None, "reason": "seat-not-claude"}
 
     seat_env = snapshot.get("env") or {}
+    snapshot_pid = seat_env.get("CLAUDE_PID")
+    if not isinstance(snapshot_pid, str) or snapshot_pid.strip() != pid_raw.strip():
+        return {"instance": None, "reason": "seat-pid-not-mine"}
     home = seat_env.get("HOME")
     if not isinstance(home, str) or not home.strip():
         return {"instance": None, "reason": "seat-snapshot-unreadable"}
@@ -1388,32 +1398,35 @@ def launch_build(
 
     worktree_path = build_worktree_path(repo_root, issue, launch_id, env=env)
     requested = spawn_config_dir(env=env, cwd=worktree_path)
-    seat = seat_config_dir(env=env)
     foreign_override = False
-    if seat["instance"] is None:
-        if not allow_foreign_instance:
-            return _fail(  # pre-reservation: instance pin gate before any reservation
-                "launch-seat-instance-undetermined",
-                seatInstance=None,
-                seatReason=seat["reason"],
-                requestedInstance=requested,
-                launchId=launch_id,
-                remedy=_INSTANCE_PIN_REMEDY,
-            )
-        foreign_override = True
-    elif requested is not None:
-        seat_norm = os.path.normpath(os.path.expanduser(seat["instance"]))
-        requested_norm = os.path.normpath(os.path.expanduser(requested))
-        if seat_norm != requested_norm:
+    if _claude_seat_pin_gate_applies(env=env):
+        seat = seat_config_dir(env=env)
+        if seat["instance"] is None:
             if not allow_foreign_instance:
                 return _fail(  # pre-reservation: instance pin gate before any reservation
-                    "launch-foreign-instance-pin",
-                    seatInstance=seat["instance"],
+                    "launch-seat-instance-undetermined",
+                    seatInstance=None,
+                    seatReason=seat["reason"],
                     requestedInstance=requested,
                     launchId=launch_id,
                     remedy=_INSTANCE_PIN_REMEDY,
                 )
             foreign_override = True
+        elif requested is not None:
+            seat_norm = os.path.normpath(os.path.expanduser(seat["instance"]))
+            requested_norm = os.path.normpath(os.path.expanduser(requested))
+            if seat_norm != requested_norm:
+                if not allow_foreign_instance:
+                    return _fail(  # pre-reservation: instance pin gate before any reservation
+                        "launch-foreign-instance-pin",
+                        seatInstance=seat["instance"],
+                        requestedInstance=requested,
+                        launchId=launch_id,
+                        remedy=_INSTANCE_PIN_REMEDY,
+                    )
+                foreign_override = True
+    else:
+        seat = {"instance": None, "reason": "seat-pid-absent"}
 
     preflight_result = walk_preflight(
         checks_input,

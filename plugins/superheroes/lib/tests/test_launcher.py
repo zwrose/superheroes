@@ -3776,11 +3776,14 @@ def test_cli_launch_generation_zero_refused_by_fold(tmp_path, monkeypatch):
     # axis: --generation 0 accepted by argparse but refused by validate_generation
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
+    child_env = os.environ.copy()
+    child_env.pop("CLAUDE_PID", None)
     proc = subprocess.run(
         _launch_cli_args(repo, tmp_path, slot="slot-a", generation=0),
         capture_output=True,
         text=True,
         check=False,
+        env=child_env,
     )
     assert proc.returncode != 0
     payload = json.loads(proc.stdout)
@@ -5334,7 +5337,7 @@ def test_seat_config_dir_defaults_to_home_claude_when_unpinned(
     payload = _build_kern_procargs2(
         "/usr/local/bin/claude",
         ["claude"],
-        ["HOME=/home/seat-user"],
+        ["HOME=/home/seat-user", "CLAUDE_PID=4242"],
     )
     monkeypatch.setenv("CLAUDE_PID", "4242")
     monkeypatch.setattr(L, "_read_kern_procargs2_darwin", lambda pid: payload)
@@ -5344,6 +5347,92 @@ def test_seat_config_dir_defaults_to_home_claude_when_unpinned(
         "instance": os.path.normpath("/home/seat-user/.claude"),
         "reason": None,
     }
+
+
+def test_seat_config_dir_resolves_absolute_configured_instance(
+    monkeypatch, unpatched_seat_config_dir,
+):
+    # axis: pinned absolute CLAUDE_CONFIG_DIR in the seat snapshot resolves to that path
+    payload = _build_kern_procargs2(
+        "/usr/local/bin/claude",
+        ["claude"],
+        [
+            "HOME=/home/seat-user",
+            "CLAUDE_CONFIG_DIR=/home/seat-user/.claude-two",
+            "CLAUDE_PID=4242",
+        ],
+    )
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    monkeypatch.setattr(L, "_read_kern_procargs2_darwin", lambda pid: payload)
+    monkeypatch.setattr(L.platform, "system", lambda: "Darwin")
+    result = L.seat_config_dir()
+    assert result == {
+        "instance": os.path.normpath("/home/seat-user/.claude-two"),
+        "reason": None,
+    }
+
+
+def test_seat_config_dir_resolves_relative_configured_instance(
+    monkeypatch, unpatched_seat_config_dir, tmp_path,
+):
+    # axis: pinned relative CLAUDE_CONFIG_DIR resolves against the seat snapshot HOME
+    home = str(tmp_path / "seat-home")
+    payload = _build_kern_procargs2(
+        "/usr/local/bin/claude",
+        ["claude"],
+        [
+            "HOME=%s" % home,
+            "CLAUDE_CONFIG_DIR=relative/config",
+            "CLAUDE_PID=4242",
+        ],
+    )
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    monkeypatch.setattr(L, "_read_kern_procargs2_darwin", lambda pid: payload)
+    monkeypatch.setattr(L.platform, "system", lambda: "Darwin")
+    result = L.seat_config_dir()
+    assert result == {
+        "instance": os.path.normpath(os.path.join(home, "relative/config")),
+        "reason": None,
+    }
+
+
+def test_seat_config_dir_unreadable_when_normalized_path_fails(
+    monkeypatch, unpatched_seat_config_dir,
+):
+    # axis: configured CLAUDE_CONFIG_DIR that cannot normalize is seat-snapshot-unreadable
+    payload = _build_kern_procargs2(
+        "/usr/local/bin/claude",
+        ["claude"],
+        [
+            "HOME=/home/seat-user",
+            "CLAUDE_CONFIG_DIR=relative/config",
+            "CLAUDE_PID=4242",
+        ],
+    )
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    monkeypatch.setattr(L, "_read_kern_procargs2_darwin", lambda pid: payload)
+    monkeypatch.setattr(L.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(L, "_normalized_instance_path", lambda path, home: None)
+    result = L.seat_config_dir()
+    assert result["instance"] is None
+    assert result["reason"] == "seat-snapshot-unreadable"
+
+
+def test_seat_config_dir_reports_seat_pid_not_mine_when_snapshot_pid_differs(
+    monkeypatch, unpatched_seat_config_dir,
+):
+    # axis: snapshot CLAUDE_PID must corroborate the inherited pid
+    payload = _build_kern_procargs2(
+        "/usr/local/bin/claude",
+        ["claude"],
+        ["HOME=/home/user", "CLAUDE_PID=9999"],
+    )
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    monkeypatch.setattr(L, "_read_kern_procargs2_darwin", lambda pid: payload)
+    monkeypatch.setattr(L.platform, "system", lambda: "Darwin")
+    result = L.seat_config_dir()
+    assert result["instance"] is None
+    assert result["reason"] == "seat-pid-not-mine"
 
 
 @pytest.mark.parametrize(
@@ -5379,7 +5468,7 @@ def test_seat_config_dir_reports_seat_not_claude_for_node_shape(monkeypatch, unp
     payload = _build_kern_procargs2(
         "/usr/bin/node",
         ["node", "/path/to/claude-wrapper.js", "claude"],
-        ["HOME=/home/user", "CLAUDE_CONFIG_DIR=/home/user/.claude"],
+        ["HOME=/home/user", "CLAUDE_CONFIG_DIR=/home/user/.claude", "CLAUDE_PID=4242"],
     )
     monkeypatch.setenv("CLAUDE_PID", "4242")
     monkeypatch.setattr(L, "_read_kern_procargs2_darwin", lambda pid: payload)
@@ -5417,6 +5506,7 @@ def test_launch_foreign_instance_pin_refuses_mismatch(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
     monkeypatch.setattr(
         L,
@@ -5442,6 +5532,7 @@ def test_launch_instance_pin_refusal_launches_nothing(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     wt_root = _worktree_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
     monkeypatch.setattr(
         L,
@@ -5475,9 +5566,94 @@ def test_launch_instance_pin_refusal_launches_nothing(tmp_path, monkeypatch):
     assert not any(r.get("launchId") == launch_id for r in records)
 
 
-def test_launch_relative_config_dir_match_proceeds(tmp_path, monkeypatch):
+def _seat_snapshot_for_worktree(worktree, home, config_dir, pid="4242"):
+    return {
+        "exec_path": "/usr/local/bin/claude",
+        "argv": ["claude"],
+        "env": {
+            "HOME": home,
+            "CLAUDE_CONFIG_DIR": config_dir,
+            "CLAUDE_PID": pid,
+        },
+    }
+
+
+def test_launch_relative_config_dir_match_proceeds(
+    tmp_path, monkeypatch, unpatched_seat_config_dir,
+):
     # axis: relative override resolves against the worktree and matches the seat — no refusal
+    worktree = str(tmp_path / "build-wt")
+    monkeypatch.setattr(
+        L,
+        "build_worktree_path",
+        lambda repo_root, issue, launch_id, env=None: worktree,
+    )
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relative/config")
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    monkeypatch.setattr(
+        L,
+        "_read_seat_snapshot",
+        lambda pid: _seat_snapshot_for_worktree(worktree, worktree, "relative/config"),
+    )
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _worktree_root(tmp_path, monkeypatch)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True, result
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_launch_relative_config_dir_mismatch_refuses(
+    tmp_path, monkeypatch, unpatched_seat_config_dir,
+):
+    # axis: relative requested pin against a different seat instance refuses before spawn
+    worktree = str(tmp_path / "build-wt")
+    monkeypatch.setattr(
+        L,
+        "build_worktree_path",
+        lambda repo_root, issue, launch_id, env=None: worktree,
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relative/config")
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    monkeypatch.setattr(
+        L,
+        "_read_seat_snapshot",
+        lambda pid: _seat_snapshot_for_worktree(
+            worktree, worktree, "/tmp/other-seat-instance",
+        ),
+    )
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _worktree_root(tmp_path, monkeypatch)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "launch-foreign-instance-pin"
+    assert result["seatInstance"] == os.path.normpath("/tmp/other-seat-instance")
+    assert result["requestedInstance"] == os.path.normpath(
+        os.path.join(worktree, "relative/config"),
+    )
+
+
+def test_launch_build_proceeds_without_claude_pid_on_non_claude_host(tmp_path, monkeypatch):
+    # axis: Codex-hosted showrunner has no CLAUDE_PID — the instance-pin gate is skipped
+    monkeypatch.delenv("CLAUDE_PID", raising=False)
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
@@ -5503,6 +5679,7 @@ def test_launch_relative_config_dir_match_proceeds(tmp_path, monkeypatch):
         {"instance": None, "reason": "seat-pid-absent"},
         {"instance": None, "reason": "seat-snapshot-unreadable"},
         {"instance": None, "reason": "seat-not-claude"},
+        {"instance": None, "reason": "seat-pid-not-mine"},
     ],
 )
 def test_launch_seat_undetermined_refuses(seat_result, tmp_path, monkeypatch):
@@ -5510,6 +5687,7 @@ def test_launch_seat_undetermined_refuses(seat_result, tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
     monkeypatch.setattr(L, "seat_config_dir", lambda env=None: dict(seat_result))
     result = L.launch_build(
@@ -5534,6 +5712,7 @@ def test_allow_foreign_instance_flag_permits_mismatch_and_records_override(
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
     monkeypatch.setattr(
         L,
@@ -5569,6 +5748,7 @@ def test_allow_foreign_instance_on_undetermined_seat_omits_seat_instance(
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
     monkeypatch.setattr(
         L,
@@ -5604,6 +5784,7 @@ def test_allow_foreign_instance_on_matching_launch_writes_no_override_field(
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/same-pin")
     monkeypatch.setattr(
         L,
@@ -5636,6 +5817,7 @@ def test_launch_proceeds_when_requested_config_dir_is_none(tmp_path, monkeypatch
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relative/only")
     monkeypatch.setattr(L, "build_worktree_path", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -5660,6 +5842,7 @@ def test_seat_instance_on_successful_reserved_record(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/same-pin")
     monkeypatch.setattr(
         L,
@@ -5693,6 +5876,7 @@ def test_seat_instance_on_accounting_reservation_after_preflight_refusal(
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/same-pin")
     monkeypatch.setattr(
         L,
@@ -5718,6 +5902,9 @@ def test_seat_instance_on_accounting_reservation_after_preflight_refusal(
 
 def test_cli_launch_parser_threads_allow_foreign_instance(tmp_path, monkeypatch):
     # axis: real launch parser accepts --allow-foreign-instance
+    import io
+    from contextlib import redirect_stdout
+
     repo = _init_repo(tmp_path / "repo")
     premise_path = tmp_path / "premise.json"
     checks_path = tmp_path / "checks.json"
@@ -5730,32 +5917,18 @@ def test_cli_launch_parser_threads_allow_foreign_instance(tmp_path, monkeypatch)
         return {"ok": True, "reason": None, "launchId": "launch-x"}
 
     monkeypatch.setattr(L, "launch_build", fake_launch)
-    parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers(dest="command", required=True)
-    la = sub.add_parser("launch")
-    la.add_argument("--repo-root", required=True)
-    la.add_argument("--issue", type=int, required=True)
-    la.add_argument("--premise", required=True)
-    la.add_argument("--checks", required=True)
-    la.add_argument("--log-dir", required=True)
-    la.add_argument("--model", default=None)
-    la.add_argument("--effort", default=None)
-    la.add_argument("--slot", default=None)
-    la.add_argument("--generation", type=int, default=None)
-    la.add_argument("--boundary", default=None)
-    la.add_argument(
-        "--allow-foreign-instance",
-        action="store_true",
-    )
-    la.set_defaults(func=L._cli_launch)
-    args = parser.parse_args([
+    base_args = [
         "launch",
         "--repo-root", repo,
         "--issue", "656",
         "--premise", str(premise_path),
         "--checks", str(checks_path),
         "--log-dir", str(tmp_path / "logs"),
-        "--allow-foreign-instance",
-    ])
-    args.func(args)
+    ]
+    with redirect_stdout(io.StringIO()):
+        assert L.main(base_args + ["--allow-foreign-instance"]) == 0
     assert seen["allow"] is True
+    seen.clear()
+    with redirect_stdout(io.StringIO()):
+        assert L.main(base_args) == 0
+    assert seen["allow"] is False
