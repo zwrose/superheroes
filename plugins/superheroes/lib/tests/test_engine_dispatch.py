@@ -242,42 +242,131 @@ def _repo(tmp_path, git_as_file=True):
     return str(root)
 
 
+def _legacy_investigated(obj):
+    investigated = obj.get("investigated") if isinstance(obj.get("investigated"), list) else []
+    return investigated or ["x.py"]
+
+
+def _legacy_overlay_findings(raw_list):
+    template_fs = _native_review_branch("findings")["findings"]
+    findings = []
+    for index, raw in enumerate(raw_list or []):
+        member = dict(template_fs[min(index, len(template_fs) - 1)])
+        if isinstance(raw, dict):
+            for key, val in raw.items():
+                if key == "message":
+                    member["body"] = val
+                elif key in member:
+                    member[key] = val
+        findings.append(member)
+    return findings
+
+
+def _legacy_overlay_verdicts(raw_list):
+    template_vs = _native_review_branch("verdicts")["verdicts"]
+    verdicts = []
+    for index, raw in enumerate(raw_list or []):
+        member = dict(template_vs[min(index, len(template_vs) - 1)])
+        if isinstance(raw, dict):
+            member.update(raw)
+        verdicts.append(member)
+    return verdicts
+
+
 def _legacy_stdout_to_native_review_branch(stdout):
     """Map legacy marker-channel stdout JSON into a native review branch envelope."""
-    obj = json.loads(stdout)
+    if not isinstance(stdout, str):
+        raise TypeError("stdout must be str")
+    stripped = stdout.strip()
+    if not stripped:
+        raise ValueError("empty-stdout")
+    if stripped == "not json":
+        raise ValueError("not-json")
+    try:
+        obj = json.loads(stripped)
+    except json.JSONDecodeError:
+        raise ValueError("not-json")
     if isinstance(obj, dict) and obj.get("resultKind") in ERC.REVIEW_RESULT_KINDS:
         return obj
-    investigated = obj.get("investigated") if isinstance(obj.get("investigated"), list) else []
-    if "findings" in obj:
-        return _native_review_branch("findings", findings=obj.get("findings"), investigated=investigated or ["x.py"])
-    if "verdicts" in obj:
-        verdicts = obj.get("verdicts") or []
-        if verdicts and isinstance(verdicts[0], dict) and not verdicts[0].get("reason"):
-            verdicts = [dict(verdicts[0], reason=verdicts[0].get("reason") or "ok")]
-        return _native_review_branch("verdicts", verdicts=verdicts, investigated=investigated or ["x.py"])
-    if "grouping" in obj:
-        return _native_review_branch("grouping", grouping=obj.get("grouping"), investigated=investigated or ["x.py"])
-    if all(key in obj for key in ("id", "ruling", "reason")):
-        contract, _ = PC.payload_contract(PC.P_AUDITS)
-        ruling = {
-            "id": obj.get("id"),
-            "ruling": obj.get("ruling"),
-            "reason": obj.get("reason"),
-        }
-        for opt in contract.get("optional") or ():
-            ruling[opt] = obj.get(opt) if opt in obj else None
-        return _native_review_branch("ruling", **ruling, investigated=investigated or ["x.py"])
-    return _native_review_branch("findings", findings=[], investigated=investigated or ["x.py"])
+    if not isinstance(obj, dict):
+        raise ValueError("unrecognized-object")
+    if "findings" in obj and "verdicts" in obj:
+        branch = _native_review_branch("findings")
+        branch["findings"] = _legacy_overlay_findings(obj.get("findings"))
+        branch["verdicts"] = _legacy_overlay_verdicts(obj.get("verdicts"))
+        return branch
+    matched = EA._recognised_review_kinds(obj)
+    if len(matched) != 1:
+        raise ValueError("unrecognized-object")
+    kind = matched[0]
+    investigated = _legacy_investigated(obj)
+    if kind == "findings":
+        if "findings" not in obj and "investigated" in obj:
+            return _native_review_branch("findings", findings=[], investigated=investigated)
+        return _native_review_branch(
+            "findings",
+            findings=_legacy_overlay_findings(obj.get("findings")),
+            investigated=investigated,
+        )
+    if kind == "verdicts":
+        return _native_review_branch(
+            "verdicts",
+            verdicts=_legacy_overlay_verdicts(obj.get("verdicts")),
+            investigated=investigated,
+        )
+    if kind == "grouping":
+        return _native_review_branch(
+            "grouping",
+            grouping=obj.get("grouping") or [],
+            investigated=investigated,
+        )
+    ruling = {
+        "id": obj.get("id"),
+        "ruling": obj.get("ruling"),
+        "reason": obj.get("reason"),
+    }
+    contract, _ = PC.payload_contract(PC.P_AUDITS)
+    for opt in contract.get("optional") or ():
+        ruling[opt] = obj.get(opt) if opt in obj else None
+    return _native_review_branch("ruling", investigated=investigated, **ruling)
 
 
 def _write_native_review_result(argv, stdout):
     if "-o" not in argv:
         return
     result_path = argv[argv.index("-o") + 1]
-    branch = _legacy_stdout_to_native_review_branch(stdout)
+    try:
+        branch = _legacy_stdout_to_native_review_branch(stdout)
+    except ValueError as exc:
+        code = str(exc)
+        if code == "not-json":
+            with open(result_path, "w", encoding="utf-8") as fh:
+                fh.write("not-json\n")
+            return
+        if code == "unrecognized-object":
+            with open(result_path, "w", encoding="utf-8") as fh:
+                json.dump({"result": "not-an-object"}, fh)
+                fh.write("\n")
+            return
+        if code == "empty-stdout":
+            return
+        raise
     with open(result_path, "w", encoding="utf-8") as fh:
         json.dump({"result": branch}, fh, separators=(",", ":"))
         fh.write("\n")
+
+
+def _sync_native_review_result_from_stdout(run_dir, stdout):
+    """Write the native result file from legacy stdout when the run is native-channel."""
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    opened = state.get("opened") or {}
+    if opened.get("channel") != ERC.CHANNEL_NATIVE:
+        return
+    native_path = opened.get("nativeResultPath")
+    if not native_path:
+        return
+    _write_native_review_result(["-o", native_path], stdout)
 
 
 class FakeRunner:
@@ -303,10 +392,7 @@ class FakeRunner:
         else:
             out = resp
         if isinstance(out, tuple) and out and isinstance(out[0], str):
-            try:
-                _write_native_review_result(argv, out[0])
-            except (json.JSONDecodeError, TypeError, ValueError, IndexError):
-                pass
+            _write_native_review_result(argv, out[0])
         return out
 
 
@@ -3516,6 +3602,7 @@ def _manual_two_attempt_review_poll_fixture(tmp_path, run_dir):
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write(_VALID_FINDINGS_STDOUT)
+    _sync_native_review_result_from_stdout(run_dir, _VALID_FINDINGS_STDOUT)
     ED._journal_append(run_dir, {
         "kind": "attempt-ended", "attempt": 1,
         "exit": 0, "timedOut": False, "refusal": None,
@@ -3534,6 +3621,7 @@ def _manual_running_attempt1_ended_attempt2_live(tmp_path, run_dir):
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write(_VALID_FINDINGS_STDOUT)
+    _sync_native_review_result_from_stdout(run_dir, _VALID_FINDINGS_STDOUT)
     ED._journal_append(run_dir, {
         "kind": "attempt-ended", "attempt": 1,
         "exit": 0, "timedOut": False, "refusal": None,
@@ -4268,14 +4356,7 @@ def _grade_state_with_view_meta(tmp_path, view_meta, *, omit_view_meta=False, ru
         fh.write(stdout)
     with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
         fh.write("")
-    opened = next(rec for rec in records if rec.get("kind") == "run-opened")
-    if opened.get("channel") == ERC.CHANNEL_NATIVE:
-        native_path = opened.get("nativeResultPath")
-        if native_path:
-            branch = _legacy_stdout_to_native_review_branch(stdout)
-            with open(native_path, "w", encoding="utf-8") as fh:
-                json.dump({"result": branch}, fh, separators=(",", ":"))
-                fh.write("\n")
+    _sync_native_review_result_from_stdout(run_dir, stdout)
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
@@ -4336,6 +4417,7 @@ def test_grade_review_view_meta_config_path_rejects_config_only_investigation(tm
     stdout = json.dumps({"findings": [], "investigated": [config_name]})
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
         fh.write(stdout)
+    _sync_native_review_result_from_stdout(run_dir, stdout)
     with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
         fh.write("")
     ED._journal_append(run_dir, {
@@ -8308,6 +8390,7 @@ def test_grade_review_pr_body_payload_without_investigation_forfeit(tmp_path):
     stdout = json.dumps({"findings": [{"id": "f1", "message": "issue"}]})
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
         fh.write(stdout)
+    _sync_native_review_result_from_stdout(run_dir, stdout)
     records, _ = ED._journal_read(run_dir)
     for rec in records:
         if rec.get("kind") == "run-opened":

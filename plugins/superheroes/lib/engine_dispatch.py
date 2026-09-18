@@ -3288,8 +3288,24 @@ def _finish_review_grade_from_parse(opened, cwd, engagement, res):
     assert False, "unreachable: vacuous and mismatch paths handled above"
 
 
-def _grade_native_review_attempt(opened, cwd, engagement, echo_nonce):
+def _native_review_forfeit_with_payload_shape(
+        engagement, detail, stdout, fed_prompt, echo_nonce, **extra):
+    """Native forfeit that mirrors marker-channel payloadShape attachment when stdout exists."""
+    engagement = _engagement_with_read(engagement)
+    result = _native_review_forfeit(engagement, detail, **extra)
+    if isinstance(stdout, str) and stdout.strip():
+        shape = engine_adapter.review_payload_shape(
+            stdout, fed_prompt, echo_nonce=echo_nonce)
+        if shape is not None:
+            result["payloadShape"] = shape
+    return result
+
+
+def _grade_native_review_attempt(
+        opened, cwd, engagement, echo_nonce, stdout=None, fed_prompt=None):
     """Grade a native-channel review attempt from the typed result file."""
+    engine = opened["engine"]
+    role_kind = opened.get("roleKind", RUN_KIND_REVIEW)
     loaded = _read_native_review_envelope(opened, engagement)
     if not isinstance(loaded, tuple):
         return loaded
@@ -3313,11 +3329,64 @@ def _grade_native_review_attempt(opened, cwd, engagement, echo_nonce):
         return _native_review_forfeit(engagement, "native-schema-unreadable")
     ok, validation_reason = engine_result_channel.validate(schema, envelope)
     if not ok:
-        return _native_review_forfeit(
+        return _native_review_forfeit_with_payload_shape(
             engagement,
             "native-result-schema-invalid",
+            stdout,
+            fed_prompt,
+            echo_nonce,
             validationReason=validation_reason,
         )
+    if isinstance(stdout, str) and stdout.strip():
+        norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+        if norm_strip["echoOnly"]:
+            return {
+                "forfeit": True,
+                "reason": dispatch_outcome.REASON_FORFEITED,
+                "engagement": _engagement_with_read(engagement),
+                "payloadShape": {
+                    "parsed": engine_adapter.SHAPE_PROMPT_ECHO_ONLY,
+                    "topLevelKeys": [],
+                    "keysTruncated": False,
+                },
+            }
+        diagnose_stdout = norm_strip["text"]
+        envelope_error = norm_strip["rawEnvelopeError"]
+        res = engine_adapter.parse_result(
+            engine, role_kind, stdout, raw_envelope_error=envelope_error,
+            echo_nonce=echo_nonce)
+        if not _parse_review_has_payload(res):
+            stripped_text = norm_strip["text"]
+            if stripped_text and stripped_text.strip():
+                diagnose_stdout = stripped_text
+            res = engine_adapter.parse_result(
+                engine, role_kind, stripped_text, raw_envelope_error=envelope_error,
+                echo_nonce=echo_nonce)
+        if not res.get("ok"):
+            engagement = _engagement_with_read(engagement)
+            result = {
+                "forfeit": True,
+                "reason": dispatch_outcome.REASON_FORFEITED,
+                "engagement": engagement,
+            }
+            shape = engine_adapter.review_payload_shape(
+                diagnose_stdout, fed_prompt, echo_nonce=echo_nonce)
+            if shape is not None:
+                result["payloadShape"] = shape
+            return result
+        if _review_parse_kind_invalid(res):
+            engagement = _engagement_with_read(engagement)
+            result = {
+                "forfeit": True,
+                "reason": dispatch_outcome.REASON_FORFEITED,
+                "engagement": engagement,
+            }
+            shape = engine_adapter.review_payload_shape(
+                diagnose_stdout, fed_prompt, echo_nonce=echo_nonce)
+            if shape is not None:
+                result["payloadShape"] = shape
+            return result
+        return _finish_review_grade_from_parse(opened, cwd, engagement, res)
     res = _scrub_native_review_branch(branch, echo_nonce)
     if not res.get("ok"):
         return _native_review_forfeit(engagement, "native-result-malformed")
@@ -3372,7 +3441,9 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     }
 
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
-        return _grade_native_review_attempt(opened, cwd, engagement, echo_nonce)
+        return _grade_native_review_attempt(
+            opened, cwd, engagement, echo_nonce, stdout=stdout, fed_prompt=fed_prompt,
+        )
 
     if not stdout and not os.path.exists(stdout_path):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
