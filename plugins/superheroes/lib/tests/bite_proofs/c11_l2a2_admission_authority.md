@@ -5,8 +5,11 @@ in its own build worktree. The detectors were implemented under **WO-2a2-A** (th
 predicate deletion, the schema pinning) and **WO-2a2-B** (per-attempt result files) by cursor /
 composer-2.5; every run below is the orchestrator's own.
 
-**Head these proofs were run on:** `e96aca2d` — this layer's code head. The only commits after it on
-this branch add prose records and change no code; if any later commit touches
+**Head these proofs were run on:** `df31ae5f` — this layer's code head. Every proof below was
+**re-run in full on this head** by the adopting orchestrator session (opus, medium) on 2026-09-18,
+because commit `661e3437` touched `engine_dispatch.py` after the first recording at `e96aca2d`. The
+raw red and green output quoted under each proof is from that re-run. The only commits after
+`df31ae5f` on this branch add prose records and change no code; if any later commit touches
 `engine_dispatch.py`, every proof here is re-run on that head and this line is updated.
 
 **Why this record exists.** [Layer 2 order, amendment 2](https://github.com/zwrose/superheroes/issues/1270#issuecomment-5731600264)
@@ -92,9 +95,17 @@ plugins/superheroes/lib/tests/test_engine_dispatch.py:10626: AssertionError
 
 ## BP-2a2-2 — the schema that graded is the schema that was sent
 
-- **axis:** if the schema file on disk is not byte-equal to what `declared_schema` re-derives, the
-  attempt refuses `native-schema-unreadable` — a result cannot be admitted against a schema the
-  shell did not declare.
+- **axis:** if the schema file on disk does not **parse to the same JSON value** as what
+  `declared_schema` re-derives, the attempt refuses `native-schema-unreadable` — a result cannot be
+  admitted against a schema the shell did not declare.
+
+  *Axis narrowed 2026-09-18, review round 1 (Minor, Test seat).* The earlier wording said
+  **byte-equal**, which the detector does not check and the production code does not do: the
+  comparison at `engine_dispatch.py`'s `_admit_native_review_result` is `json.load` on the file
+  against the re-derived object, so a schema re-serialized with different whitespace or key order
+  is admitted. That is deliberate — the pin is on the schema's *value*, not its bytes — but the
+  axis line must claim only what the detector bites on. What the proof below demonstrates is
+  rejection of a **semantically different** schema (`{}` substituted for the declared one).
 
 **neutralization** (`engine_dispatch.py`, `_admit_native_review_result`):
 ```python

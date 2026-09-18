@@ -7,8 +7,11 @@ stack by [Layer 2 order, amendment 2 § Ruling 3](https://github.com/zwrose/supe
 ("2c retires nothing it has not seen proven"). Every proof below is the orchestrator's own run —
 verification authority never delegates.
 
-**Head these proofs were run on:** `e96aca2d` — this layer's code head. The only commits after it on
-this branch add prose records and change no code; if any later commit touches
+**Head these proofs were run on:** `df31ae5f` — this layer's code head. Every proof below was
+**re-run in full on this head** by the adopting orchestrator session (opus, medium) on 2026-09-18,
+because commit `661e3437` touched `engine_dispatch.py` after the first recording at `e96aca2d`. The
+raw red and green output quoted under each proof is from that re-run. The only commits after
+`df31ae5f` on this branch add prose records and change no code; if any later commit touches
 `engine_dispatch.py`, every proof here is re-run on that head and this line is updated.
 
 **Method.** Each guarded element is neutralized on its own — the *thing the detector guards* is
