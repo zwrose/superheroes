@@ -3,17 +3,21 @@
 
 The four validators say nothing about the test suite, so a certified review loop's fix round
 could leave tests red and still report the verify gate green (observed three times on PR #1295).
-This script closes that: it resolves the test files a diff touched and runs pytest on exactly
-those, so a fix round that breaks a test it touched goes red.
+This script closes that: every changed file in the diff is either matched to the test files that
+reference it, refused with a named reason, or named on stdout as referenced by nothing — no
+changed file is silently dropped.
 
-Resolution, from the changed-file set:
-  * every changed ``.py`` file that lives under a ``tests/`` directory, and
-  * for every changed module directly under a mapped library root
-    (``plugins/superheroes/lib/``, ``eval/lib/``), that root's ``tests/test_<module>*.py``.
+Selection is computed from test files' own text on every run; there is no maintained list of
+modules, roots, or mappings. Direct references only — a test that reaches a changed module
+through another module is not selected. CI's full suite is the receipt for anything this gate
+does not run. The matcher deliberately over-selects for short, generic module names, because
+the fail direction is toward running more tests, never fewer. On a stacked branch the diff still
+includes the lower layers' files, so the selection is a superset.
 
 Fail direction, by construction:
-  * a changed mapped-root module with NO resolvable test file exits **non-zero** naming the
-    module — a mapping miss is loud, never a silent no-op;
+  * a still-present changed Python source file that NO test file references exits **non-zero**
+    naming the file — an unreferenced source is loud, never a silent no-op;
+  * a changed ``conftest.py`` exits **non-zero** with a tree-naming message;
   * a diff that changed no code exits **0** and says so;
   * otherwise the exit status is pytest's own.
 
@@ -22,18 +26,10 @@ Stdlib only; runs under the repo's `/usr/bin/python3` (3.9) as well as CI's 3.12
 from __future__ import annotations
 
 import argparse
-import glob
 import os
+import re
 import subprocess
 import sys
-
-# Mapped library roots: a changed module directly inside one of these resolves its test
-# siblings under that root's `tests/` directory. Adding a root here is the only edit needed
-# to extend the mapping.
-LIB_ROOTS = (
-    "plugins/superheroes/lib",
-    "eval/lib",
-)
 
 # CLAUDE.md pins these: Apple's python caches bytecode outside the tree, so a same-size,
 # same-second edit otherwise runs stale bytecode.
@@ -42,6 +38,8 @@ PYCACHE_PREFIX = "/private/tmp/superheroes-pyc"
 PYTEST_ARGS = ("-q", "-n", "auto", "-p", "no:cacheprovider")
 
 BASE_REF_CANDIDATES = ("origin/main", "main")
+
+_PATH_SEP_ALT = r"(?:/|['\"][ \t]*[,/][ \t]*['\"])"
 
 
 class GitError(RuntimeError):
@@ -108,61 +106,166 @@ def changed_paths(repo_root, *, base=None, diff_range=None):
     return sorted(paths)
 
 
-def _under_tests_tree(path):
-    return "tests" in path.split("/")[:-1]
+def _is_test_file(path):
+    if not path.endswith(".py"):
+        return False
+    parts = path.split("/")
+    if not parts[-1].startswith("test_"):
+        return False
+    return "tests" in parts[:-1]
 
 
-def mapped_module(path):
-    """(root, module-name) when ``path`` is a module directly under a mapped library root."""
-    if not path.endswith(".py") or _under_tests_tree(path):
+def _is_conftest(path):
+    return os.path.basename(path) == "conftest.py"
+
+
+def _is_tests_tree_helper(path):
+    if not path.endswith(".py"):
+        return False
+    parts = path.split("/")
+    if "tests" not in parts[:-1]:
+        return False
+    if parts[-1] == "conftest.py":
+        return False
+    if parts[-1].startswith("test_"):
+        return False
+    return True
+
+
+def _classify_path(path):
+    if _is_test_file(path):
+        return "test"
+    if _is_conftest(path):
+        return "conftest"
+    if _is_tests_tree_helper(path):
+        return "helper"
+    if path.endswith(".py"):
+        return "python"
+    return "non_python"
+
+
+def _all_test_files(repo_root):
+    return sorted(p for p in _git_paths(repo_root, "ls-files") if _is_test_file(p))
+
+
+def _read_test_text(repo_root, path):
+    try:
+        with open(os.path.join(repo_root, path), encoding="utf-8", errors="replace") as handle:
+            return handle.read()
+    except OSError:
         return None
-    directory, name = os.path.split(path)
-    if directory in LIB_ROOTS:
-        return directory, name[: -len(".py")]
-    return None
 
 
-def resolve_targets(repo_root, paths):
-    """(test_files, unresolved_modules, code_changed, retired_modules) for a changed-path set.
+def _reference_patterns(changed_path, is_python):
+    """Compiled patterns that select test files referencing ``changed_path``."""
+    patterns = []
+    basename = os.path.basename(changed_path)
+    segments = changed_path.split("/")
 
-    ``test_files`` are existing, repo-relative and sorted; ``unresolved_modules`` are mapped-root
-    modules that are still on disk and whose test siblings do not exist; ``code_changed`` says
-    whether the diff touched any ``.py`` file at all; ``retired_modules`` are mapped-root modules
-    the diff deleted along with their tests — reported, never a failure (see ``main``).
+    if is_python:
+        mod = basename[:-3]
+        patterns.append(re.compile(
+            r"^[ \t]*from[ \t]+" + re.escape(mod) + r"\b", re.MULTILINE))
+        patterns.append(re.compile(
+            r"^[ \t]*import[ \t]+(?:[^,\n#]*,\s*)*" + re.escape(mod) + r"\b",
+            re.MULTILINE))
+        patterns.append(re.compile(r'["\']' + re.escape(mod) + r'["\']'))
+        patterns.append(re.compile(r'["\']' + re.escape(mod) + r"\.[a-zA-Z_]"))
+        patterns.append(re.compile(re.escape(basename)))
+    else:
+        patterns.append(re.compile(r'["\']' + re.escape(basename) + r'["\']'))
+
+    for index in range(len(segments) - 1):
+        suffix = segments[index:]
+        if len(suffix) < 2:
+            continue
+        escaped = [re.escape(part) for part in suffix]
+        patterns.append(re.compile(_PATH_SEP_ALT.join(escaped)))
+
+    return patterns
+
+
+def _find_referencing_tests(changed_path, is_python, test_texts):
+    patterns = _reference_patterns(changed_path, is_python)
+    selected = set()
+    for test_path, text in test_texts.items():
+        if text is None:
+            continue
+        for pattern in patterns:
+            if pattern.search(text):
+                selected.add(test_path)
+                break
+    return selected
+
+
+def select_targets(repo_root, paths):
+    """Classify every changed path and resolve the test files to run.
+
+    Returns (selected_tests, conftest_refusals, no_reference_refusals, deleted_tests,
+    retired_python, unreferenced_non_python, code_changed).
     """
-    test_files = set()
-    unresolved = []
-    retired = []
+    selected_tests = set()
+    conftest_refusals = []
+    no_reference_refusals = []
+    deleted_tests = []
+    retired_python = []
+    unreferenced_non_python = []
     code_changed = False
+
+    all_tests = _all_test_files(repo_root)
+    test_texts = {path: _read_test_text(repo_root, path) for path in all_tests}
+
     for path in paths:
-        if not path.endswith(".py"):
+        exists = os.path.exists(os.path.join(repo_root, path))
+        shape = _classify_path(path)
+
+        if path.endswith(".py"):
+            code_changed = True
+
+        if shape == "test":
+            if exists:
+                selected_tests.add(path)
+            else:
+                deleted_tests.append(path)
             continue
-        code_changed = True
-        if _under_tests_tree(path):
-            if os.path.exists(os.path.join(repo_root, path)):
-                test_files.add(path)
+
+        if shape == "conftest":
+            conftest_refusals.append(path)
             continue
-        mapped = mapped_module(path)
-        if mapped is None:
+
+        if shape == "helper":
+            selected_tests.update(_find_referencing_tests(path, True, test_texts))
             continue
-        root, module = mapped
-        pattern = os.path.join(repo_root, root, "tests", "test_%s*.py" % module)
-        matches = sorted(
-            os.path.relpath(m, repo_root) for m in glob.glob(pattern) if os.path.isfile(m)
-        )
-        if matches:
-            # Surviving siblings are run whether the module was edited or DELETED — a test
-            # left behind by a deletion is exactly the one that should now be failing.
-            test_files.update(matches)
-        elif os.path.exists(os.path.join(repo_root, path)):
-            unresolved.append(path)
+
+        if shape == "python":
+            refs = _find_referencing_tests(path, True, test_texts)
+            if exists:
+                if refs:
+                    selected_tests.update(refs)
+                else:
+                    no_reference_refusals.append(path)
+            else:
+                if refs:
+                    selected_tests.update(refs)
+                else:
+                    retired_python.append(path)
+            continue
+
+        refs = _find_referencing_tests(path, False, test_texts)
+        if refs:
+            selected_tests.update(refs)
         else:
-            # The diff deleted the module and its tests together. Nothing is left to test, so
-            # this is not a mapping miss — failing here would redden every retirement commit
-            # (measured: 3c9bd58b, which retired two modules with their tests). It is still
-            # NAMED on stdout, so the resolution is readable rather than silent.
-            retired.append(path)
-    return sorted(test_files), sorted(unresolved), code_changed, sorted(retired)
+            unreferenced_non_python.append(path)
+
+    return (
+        sorted(selected_tests),
+        sorted(conftest_refusals),
+        sorted(no_reference_refusals),
+        sorted(deleted_tests),
+        sorted(retired_python),
+        sorted(unreferenced_non_python),
+        code_changed,
+    )
 
 
 def pytest_command(python, test_files):
@@ -200,19 +303,54 @@ def main(argv=None):
         sys.stderr.write("verify-touched-tests: %s\n" % exc)
         return 2
 
-    test_files, unresolved, code_changed, retired = resolve_targets(repo_root, paths)
+    (
+        test_files,
+        conftest_refusals,
+        no_reference_refusals,
+        deleted_tests,
+        retired_python,
+        unreferenced_non_python,
+        code_changed,
+    ) = select_targets(repo_root, paths)
 
-    if retired:
+    if deleted_tests:
         sys.stdout.write(
-            "verify-touched-tests: %d mapped module(s) deleted with their tests; nothing left "
-            "to run for them:\n%s" % (len(retired), "".join("  - %s\n" % m for m in retired)))
+            "verify-touched-tests: %d test file(s) deleted; not run:\n%s"
+            % (len(deleted_tests), "".join("  - %s\n" % p for p in deleted_tests)))
 
-    if unresolved:
+    if retired_python:
+        sys.stdout.write(
+            "verify-touched-tests: %d Python source file(s) deleted with no surviving "
+            "referencing tests; nothing left to run for them:\n%s"
+            % (len(retired_python), "".join("  - %s\n" % p for p in retired_python)))
+
+    if unreferenced_non_python:
+        sys.stdout.write(
+            "verify-touched-tests: %d path(s) referenced by nothing:\n%s"
+            % (len(unreferenced_non_python),
+               "".join("  - %s\n" % p for p in unreferenced_non_python)))
+
+    if conftest_refusals:
+        # axis: refusal fires on a changed conftest.py by path shape alone — not on whether
+        # any test resolves for it.
         sys.stderr.write(
-            "verify-touched-tests: no test file resolves for %d changed module(s):\n%s\n"
-            "Add tests/test_<module>.py beside the module, or the touched tests cannot be run.\n"
-            % (len(unresolved), "".join("  - %s\n" % m for m in unresolved))
-        )
+            "verify-touched-tests: a conftest.py changed; this gate cannot select for it:\n%s"
+            "A conftest change can affect every test in its tree. run that tree's suite "
+            "yourself;\nCI is the receipt.\n"
+            % ("".join("  - %s\n" % p for p in conftest_refusals)))
+
+    if no_reference_refusals:
+        # axis: refusal fires on a still-present Python source that NO test file references —
+        # not on absence of tests generally, and not on a deleted file.
+        sys.stderr.write(
+            "verify-touched-tests: no test file references %d changed Python source "
+            "file(s):\n%s\n"
+            "Add a test that imports or names the source, or run that module's suite "
+            "yourself; CI is the receipt.\n"
+            % (len(no_reference_refusals),
+               "".join("  - %s\n" % p for p in no_reference_refusals)))
+
+    if conftest_refusals or no_reference_refusals:
         return 1
 
     if not test_files:
@@ -221,7 +359,7 @@ def main(argv=None):
         else:
             sys.stdout.write(
                 "verify-touched-tests: code changed but no touched test files resolved "
-                "(nothing under a tests/ tree and no mapped-root module).\n")
+                "(no changed file selected any test).\n")
         return 0
 
     sys.stdout.write("verify-touched-tests: %d test file(s) resolved:\n%s"
