@@ -526,6 +526,23 @@ def test_validate_none_schema_refuses():
     assert "schema is None" in reason
 
 
+def test_native_schema_allows_scrub_finish_rejects_enum_injection_in_severity():
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW)
+    branch = _valid_review_branch("findings")
+    branch["findings"][0]["severity"] = "Critical (investigated)"
+    ok, _reason, detail = ERC._validate_with_detail(schema, _wrap_result(branch))
+    assert not ok
+    assert not ERC.native_schema_allows_scrub_finish(detail, branch=branch)
+
+
+def test_native_schema_allows_scrub_finish_accepts_wrong_result_kind():
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, expected_result_kind="findings")
+    branch = _valid_review_branch("verdicts")
+    ok, _reason, detail = ERC._validate_with_detail(schema, _wrap_result(branch))
+    assert not ok
+    assert ERC.native_schema_allows_scrub_finish(detail, branch=branch)
+
+
 def test_ruling_branch_fields_match_audits_binding():
     contract, reason = PC.payload_contract(PC.P_AUDITS)
     assert reason is None

@@ -3213,6 +3213,8 @@ def _scrub_native_review_branch(branch, echo_nonce):
     if kind == "findings":
         findings_list, findings_rejected = engine_adapter._scrub_findings(
             branch.get("findings") or [], echo_nonce=echo_nonce)
+        if engine_adapter._findings_reply_has_hollow_member(findings_rejected):
+            return {"ok": False, "reason": "unreadable"}
         res = {
             "ok": True,
             "resultKind": "findings",
@@ -3222,10 +3224,11 @@ def _scrub_native_review_branch(branch, echo_nonce):
         res = engine_adapter._attach_findings_parse_rejections(res, findings_rejected)
         return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
     if kind == "verdicts":
+        verdicts = _normalize_native_verdicts(branch.get("verdicts") or [])
         res = {
             "ok": True,
             "resultKind": "verdicts",
-            "verdicts": engine_adapter._scrub_verdicts(branch.get("verdicts") or []),
+            "verdicts": engine_adapter._scrub_verdicts(verdicts),
             "investigated": investigated,
         }
         return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
@@ -3238,14 +3241,36 @@ def _scrub_native_review_branch(branch, echo_nonce):
         }
         return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
     if kind == "ruling":
+        ruling_branch = _normalize_native_ruling_branch(branch)
         res = {
             "ok": True,
             "resultKind": "ruling",
-            "ruling": engine_adapter._scrub_ruling_object(branch),
+            "ruling": engine_adapter._scrub_ruling_object(ruling_branch),
             "investigated": investigated,
         }
         return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
     return {"ok": False, "reason": "unreadable"}
+
+
+def _omit_null_optional_fields(obj, optional_keys):
+    """Drop null-valued optional fields so payload_contracts sees absent, not null."""
+    if not isinstance(obj, dict):
+        return obj
+    out = dict(obj)
+    for key in optional_keys:
+        if out.get(key) is None:
+            out.pop(key, None)
+    return out
+
+
+def _normalize_native_verdicts(verdicts):
+    optional = ("reason", "severity", "evidence")
+    return [_omit_null_optional_fields(v, optional) for v in (verdicts or [])]
+
+
+def _normalize_native_ruling_branch(branch):
+    optional = ("newIssues", "evidence", "auditorVendor")
+    return _omit_null_optional_fields(branch, optional)
 
 
 def _finish_review_grade_from_parse(opened, cwd, engagement, res):
@@ -3332,25 +3357,6 @@ def _finish_review_grade_from_parse(opened, cwd, engagement, res):
     assert False, "unreachable: vacuous and mismatch paths handled above"
 
 
-def _native_schema_allows_scrub_finish(validation_reason):
-    """True when a schema failure is scrub-salvageable, not a structural null/type hole."""
-    if not validation_reason:
-        return False
-    if ".findings:" in validation_reason and "got NoneType" in validation_reason:
-        return False
-    if "investigated" in validation_reason:
-        return True
-    if ".findings[" in validation_reason and "expected type" in validation_reason:
-        return True
-    if "expected type" in validation_reason:
-        return False
-    if "resultKind" in validation_reason:
-        return True
-    if "anyOf failed" in validation_reason:
-        return True
-    return False
-
-
 def _native_review_forfeit_with_payload_shape(
         engagement, detail, stdout, fed_prompt, echo_nonce,
         envelope=None, branch=None, **extra):
@@ -3381,7 +3387,8 @@ def _grade_native_review_attempt(
             schema = json.load(fh)
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return _native_review_forfeit(engagement, "native-schema-unreadable")
-    ok, validation_reason = engine_result_channel.validate(schema, envelope)
+    ok, validation_reason, validation_detail = engine_result_channel._validate_with_detail(
+        schema, envelope)
     placeholder_shape = _native_branch_placeholder_shape(branch)
     if placeholder_shape is not None:
         return _native_review_forfeit(
@@ -3390,7 +3397,8 @@ def _grade_native_review_attempt(
     if ok and scrub_try.get("ok"):
         return _finish_review_grade_from_parse(opened, cwd, engagement, scrub_try)
     if not ok:
-        if scrub_try.get("ok") and _native_schema_allows_scrub_finish(validation_reason):
+        if scrub_try.get("ok") and engine_result_channel.native_schema_allows_scrub_finish(
+                validation_detail, branch=branch):
             return _finish_review_grade_from_parse(opened, cwd, engagement, scrub_try)
         return _native_review_forfeit_with_payload_shape(
             engagement,
@@ -4796,12 +4804,11 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     except OSError as exc:
         return False, "run-dir-setup-failed:%s" % type(exc).__name__
 
-    channel = engine_result_channel.channel_for(engine)
-    argv, native_err, native_schema_path, native_result_path = _open_native_channel_argv(
-        run_dir_real, engine, argv, RUN_KIND_WRITE,
-    )
-    if native_err:
-        return False, native_err
+    # Write grading still reads marker stdout until layer 2b; do not open native argv here.
+    channel = engine_result_channel.CHANNEL_MARKER
+    argv = list(argv)
+    native_schema_path = None
+    native_result_path = None
 
     record = {
         "kind": "run-opened",

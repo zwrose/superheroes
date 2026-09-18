@@ -243,8 +243,8 @@ def _repo(tmp_path, git_as_file=True):
 
 
 def _legacy_investigated(obj):
-    investigated = obj.get("investigated") if isinstance(obj.get("investigated"), list) else []
-    return investigated or ["x.py"]
+    value = obj.get("investigated")
+    return value if isinstance(value, list) else None
 
 
 def _legacy_overlay_findings(raw_list):
@@ -10427,6 +10427,15 @@ def test_grade_native_review_attempt_schema_invalid(tmp_path):
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "native-result-schema-invalid"
     assert grade.get("validationReason")
+
+
+def test_grade_native_review_attempt_schema_invalid_severity_enum_injection(tmp_path):
+    branch = _native_review_branch("findings")
+    branch["findings"][0]["severity"] = "Critical (investigated)"
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-schema-invalid"
 
 
 def test_grade_native_review_attempt_kind_before_validation(tmp_path):

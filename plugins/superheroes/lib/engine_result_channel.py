@@ -4,6 +4,7 @@ Pure + deterministic. Stdlib-only; never imports jsonschema at runtime.
 """
 from __future__ import annotations
 
+import engine_adapter
 import model_registry
 import payload_contracts
 import review_findings_schema
@@ -15,13 +16,14 @@ RUN_KIND_REVIEW = "review"
 RUN_KIND_WRITE = "write"
 
 # Align with engine_dispatch.MAX_STDOUT_CAPTURE (8 MiB): native results are structured JSON
-# written to a dedicated file; the same ceiling bounds runaway payloads without a second literal.
+# written to a dedicated file; the authoritative cap lives on engine_dispatch.MAX_STDOUT_CAPTURE.
 NATIVE_RESULT_MAX_BYTES = 8 * 1024 * 1024
 
 # Write tail signals graded by engine_adapter._grade_build_report_obj (CONVENTIONS §11).
-WRITE_SIGNAL_ENUM = ("ok", "plan_wrong", "needs_context")
+WRITE_SIGNAL_ENUM = engine_adapter.WRITE_SIGNAL_ENUM
 
-REVIEW_RESULT_KINDS = ("findings", "verdicts", "grouping", "ruling")
+# Consumers import engine_adapter.REVIEW_RESULT_KINDS — never restate the tuple (CONVENTIONS §11).
+REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
 
 _PAYLOAD_CONTAINER_KEYS = ("findings", "verdicts", "grouping")
 
@@ -171,15 +173,56 @@ def declared_schema(engine, run_kind, expected_result_kind=None):
     return schema
 
 
-def validate(schema, value):
-    """Validate value against schema. Returns (ok, reason). Never raises."""
+def _validate_with_detail(schema, value):
+    """Validate value against schema. Returns (ok, reason, failure_detail). Never raises."""
     if schema is None:
-        return False, "schema is None; marker-channel callers must not reach validate"
+        return False, "schema is None; marker-channel callers must not reach validate", None
     try:
         _validate(schema, value, "$")
-        return True, ""
+        return True, "", None
     except _ValidationError as exc:
-        return False, str(exc)
+        return False, str(exc), exc.to_detail()
+
+
+def validate(schema, value):
+    """Validate value against schema. Returns (ok, reason). Never raises."""
+    ok, reason, _detail = _validate_with_detail(schema, value)
+    return ok, reason
+
+
+def native_schema_allows_scrub_finish(failure_detail, branch=None):
+    """True when a schema failure is scrub-salvageable, keyed on path/kind not prose."""
+    if not failure_detail:
+        return False
+    kind = failure_detail.get("kind")
+    path = failure_detail.get("path") or ""
+    if kind == "enum-mismatch":
+        return path.endswith(".resultKind")
+    if kind == "type-mismatch":
+        if path.endswith(".findings"):
+            return False
+        if path.endswith(".investigated"):
+            return True
+        if ".findings[" in path:
+            return True
+        return False
+    if kind == "any-of-failed":
+        sub = failure_detail.get("sub_failures") or []
+        if not sub or not isinstance(branch, dict):
+            return False
+        result_kind = branch.get("resultKind")
+        if not isinstance(result_kind, str):
+            return False
+        try:
+            branch_index = REVIEW_RESULT_KINDS.index(result_kind)
+        except ValueError:
+            return False
+        prefix = "$.result.anyOf[%d]." % branch_index
+        relevant = [item for item in sub if (item.get("path") or "").startswith(prefix)]
+        if not relevant:
+            return False
+        return all(native_schema_allows_scrub_finish(item, branch=branch) for item in relevant)
+    return False
 
 
 def _sanitize_schema_node(node):
@@ -466,7 +509,20 @@ def _write_root_schema():
 
 
 class _ValidationError(Exception):
-    pass
+    def __init__(self, message, *, kind=None, path=None, got_type=None, sub_failures=None):
+        super().__init__(message)
+        self.kind = kind
+        self.path = path
+        self.got_type = got_type
+        self.sub_failures = sub_failures
+
+    def to_detail(self):
+        detail = {"kind": self.kind, "path": self.path}
+        if self.got_type is not None:
+            detail["got_type"] = self.got_type
+        if self.sub_failures is not None:
+            detail["sub_failures"] = self.sub_failures
+        return detail
 
 
 def _type_matches(type_spec, value):
@@ -489,36 +545,52 @@ def _type_matches(type_spec, value):
 
 def _validate(schema, value, path):
     if not isinstance(schema, dict):
-        raise _ValidationError("%s: schema must be an object" % path)
+        raise _ValidationError(
+            "%s: schema must be an object" % path,
+            kind="type-mismatch",
+            path=path,
+        )
     unknown = set(schema) - _ALLOWED_SCHEMA_KEYWORDS
     if unknown:
         raise _ValidationError(
             "%s: unknown schema keyword(s): %s"
-            % (path, ", ".join(sorted(unknown)))
+            % (path, ", ".join(sorted(unknown))),
+            kind="schema-error",
+            path=path,
         )
 
     if "anyOf" in schema:
         failures = []
+        failure_details = []
         for index, branch in enumerate(schema["anyOf"]):
             try:
                 _validate(branch, value, "%s.anyOf[%d]" % (path, index))
                 return
             except _ValidationError as exc:
                 failures.append(str(exc))
+                failure_details.append(exc.to_detail())
         raise _ValidationError(
             "%s: anyOf failed (%d branches): %s"
-            % (path, len(failures), "; ".join(failures))
+            % (path, len(failures), "; ".join(failures)),
+            kind="any-of-failed",
+            path=path,
+            sub_failures=failure_details,
         )
 
     if "type" in schema and not _type_matches(schema["type"], value):
         raise _ValidationError(
             "%s: expected type %r, got %s"
-            % (path, schema["type"], type(value).__name__)
+            % (path, schema["type"], type(value).__name__),
+            kind="type-mismatch",
+            path=path,
+            got_type=type(value).__name__,
         )
 
     if "enum" in schema and value not in schema["enum"]:
         raise _ValidationError(
-            "%s: value %r not in enum %r" % (path, value, schema["enum"])
+            "%s: value %r not in enum %r" % (path, value, schema["enum"]),
+            kind="enum-mismatch",
+            path=path,
         )
 
     if isinstance(value, dict):
@@ -528,11 +600,17 @@ def _validate(schema, value, path):
             if extra:
                 raise _ValidationError(
                     "%s: additional properties forbidden: %s"
-                    % (path, ", ".join(sorted(extra)))
+                    % (path, ", ".join(sorted(extra))),
+                    kind="additional-properties",
+                    path=path,
                 )
         for req in schema.get("required") or []:
             if req not in value:
-                raise _ValidationError("%s: missing required property %r" % (path, req))
+                raise _ValidationError(
+                    "%s: missing required property %r" % (path, req),
+                    kind="missing-required",
+                    path=path,
+                )
         props = schema.get("properties") or {}
         for key, subschema in props.items():
             if key in value:

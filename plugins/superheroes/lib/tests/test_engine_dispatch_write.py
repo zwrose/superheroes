@@ -873,14 +873,10 @@ def test_write_argv_shape_codex(tmp_path, monkeypatch):
     assert res["ok"] is True
     argv = fake.calls[0]["argv"]
     built = EA.build_argv_result(seat, "build", {"cwd": cwd_real})
-    schema_path = os.path.join(res["runDir"], ED.NATIVE_SCHEMA_NAME)
-    result_path = os.path.join(res["runDir"], ED.NATIVE_RESULT_NAME)
-    expected_argv = built["argv"] + ["--output-schema", schema_path, "-o", result_path]
-    assert argv == expected_argv
+    assert argv == built["argv"]
     assert argv == [
         "codex", "exec", "--sandbox", "workspace-write", "-m", argv[5],
         "-c", "model_reasoning_effort=high", "-C", cwd_real, "-",
-        "--output-schema", schema_path, "-o", result_path,
     ]
     assert "read-only" not in argv
     review_built = EA.build_argv_result(seat, "review", {"cwd": cwd_real})
@@ -2738,23 +2734,16 @@ def _write_opened_record(run_dir):
     return next(r for r in records if r.get("kind") == "run-opened")
 
 
-def test_codex_write_open_records_native_channel(tmp_path):
+def test_codex_write_open_records_marker_channel_until_native_write_grader(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir)
     opened = _write_opened_record(run_dir)
-    assert opened["channel"] == ERC.CHANNEL_NATIVE
-    schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
-    assert os.path.isfile(schema_path)
-    with open(schema_path, encoding="utf-8") as fh:
-        on_disk = json.load(fh)
-    assert on_disk == ERC.declared_schema("codex", ERC.RUN_KIND_WRITE)
+    assert opened["channel"] == ERC.CHANNEL_MARKER
+    assert not os.path.exists(os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME))
     built = EA.build_argv_result(_codex_seat(), "build", {"cwd": opened["cwd"]})
-    result_path = os.path.join(run_dir, ED.NATIVE_RESULT_NAME)
-    assert opened["argv"] == built["argv"] + [
-        "--output-schema", schema_path, "-o", result_path,
-    ]
+    assert opened["argv"] == built["argv"]
 
 
 def test_cursor_write_open_records_marker_channel_unchanged_argv(tmp_path):
@@ -2770,7 +2759,7 @@ def test_cursor_write_open_records_marker_channel_unchanged_argv(tmp_path):
     assert opened["argv"] == built["argv"]
 
 
-def test_codex_write_open_refuses_undeclarable_schema(tmp_path, monkeypatch):
+def test_codex_write_open_skips_native_schema_until_layer_2b(tmp_path, monkeypatch):
     def boom(*_args, **_kwargs):
         raise ValueError("schema broke")
 
@@ -2791,39 +2780,9 @@ def test_codex_write_open_refuses_undeclarable_schema(tmp_path, monkeypatch):
         worktree_baseline=baseline,
         progress_path=os.path.join(run_dir, "progress.jsonl"),
     )
-    assert not ok
-    assert detail == "native-schema-undeclarable"
+    assert ok
+    assert detail == ""
     records, _ = ED._journal_read(run_dir)
-    assert not any(r.get("kind") == "run-opened" for r in records)
-
-
-def test_codex_write_open_refuses_unwritable_schema(tmp_path, monkeypatch):
-    real_open = open
-    schema_name = ED.NATIVE_SCHEMA_NAME
-
-    def patched_open(path, *args, **kwargs):
-        if isinstance(path, str) and path.endswith(schema_name) and "w" in args:
-            raise OSError("simulated")
-        return real_open(path, *args, **kwargs)
-
-    monkeypatch.setattr("builtins.open", patched_open)
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir = str(tmp_path / "run")
-    baseline = ED._worktree_baseline(os.path.realpath(wt))
-    ok, detail = ED._open_write_run(
-        run_dir,
-        engine="codex",
-        argv=_codex_argv_for_run(_codex_seat(), "build", os.path.realpath(wt)),
-        cwd=os.path.realpath(wt),
-        timeout=ED.RETRY_MIN_TIMEOUT,
-        retry_timeout=ED.RETRY_MIN_TIMEOUT,
-        prompt_path=_prompt(tmp_path),
-        order_id="order-1",
-        base_sha="abc",
-        worktree_baseline=baseline,
-        progress_path=os.path.join(run_dir, "progress.jsonl"),
-    )
-    assert not ok
-    assert detail == "native-schema-unwritable"
-    records, _ = ED._journal_read(run_dir)
-    assert not any(r.get("kind") == "run-opened" for r in records)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["channel"] == ERC.CHANNEL_MARKER
+    assert "nativeSchemaPath" not in opened
