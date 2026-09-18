@@ -10,9 +10,21 @@ changed file is silently dropped.
 Selection is computed from test files' own text on every run; there is no maintained list of
 modules, roots, or mappings. Direct references only — a test that reaches a changed module
 through another module is not selected. CI's full suite is the receipt for anything this gate
-does not run. The matcher deliberately over-selects for short, generic module names, because
-the fail direction is toward running more tests, never fewer. On a stacked branch the diff still
-includes the lower layers' files, so the selection is a superset.
+does not run. On a stacked branch the diff still includes the lower layers' files, so the
+selection is a superset.
+
+Selection and coverage are split. **Selection** stays loose: every clause (import, quoted
+module literal, quoted dotted target, basename, path suffix) may add test files to the run,
+because the fail direction is toward running more tests, never fewer. **Coverage** — the fact
+that suppresses ``no_reference_refusals`` — is strict: only (a) an ``import``/``from``
+statement naming the module, or (b) a quoted literal whose *entire* content is the module
+name (the dynamic-loader idiom this repository uses: ``_load("round_driver")``,
+``__import__("mode_registry")``, ``import_module(...)``). Clause (b) is intentionally loose
+on the string boundary (any pair of quotes whose sole content is the module basename) but
+does not treat dotted targets such as ``"state.json"`` as coverage. A basename match, a
+path-suffix match, or a quoted dotted target may **select** but must never suppress the
+refusal; a still-present Python source (including tests-tree helpers) with selection matches
+but zero coverage matches is refused, naming the file.
 
 Fail direction, by construction:
   * a still-present changed Python source file that NO test file references exits **non-zero**
@@ -155,20 +167,29 @@ def _read_test_text(repo_root, path):
         return None
 
 
+def _coverage_patterns(changed_path, is_python):
+    """Strict patterns that prove a test covers ``changed_path`` (suppresses refusal)."""
+    if not is_python:
+        return []
+    basename = os.path.basename(changed_path)
+    mod = basename[:-3]
+    return [
+        re.compile(r"^[ \t]*from[ \t]+" + re.escape(mod) + r"\b", re.MULTILINE),
+        re.compile(
+            r"^[ \t]*import[ \t]+(?:[^,\n#]*,\s*)*" + re.escape(mod) + r"\b",
+            re.MULTILINE),
+        re.compile(r'["\']' + re.escape(mod) + r'["\']'),
+    ]
+
+
 def _reference_patterns(changed_path, is_python):
     """Compiled patterns that select test files referencing ``changed_path``."""
-    patterns = []
+    patterns = list(_coverage_patterns(changed_path, is_python))
     basename = os.path.basename(changed_path)
     segments = changed_path.split("/")
 
     if is_python:
         mod = basename[:-3]
-        patterns.append(re.compile(
-            r"^[ \t]*from[ \t]+" + re.escape(mod) + r"\b", re.MULTILINE))
-        patterns.append(re.compile(
-            r"^[ \t]*import[ \t]+(?:[^,\n#]*,\s*)*" + re.escape(mod) + r"\b",
-            re.MULTILINE))
-        patterns.append(re.compile(r'["\']' + re.escape(mod) + r'["\']'))
         patterns.append(re.compile(r'["\']' + re.escape(mod) + r"\.[a-zA-Z_]"))
         patterns.append(re.compile(re.escape(basename)))
     else:
@@ -184,8 +205,7 @@ def _reference_patterns(changed_path, is_python):
     return patterns
 
 
-def _find_referencing_tests(changed_path, is_python, test_texts):
-    patterns = _reference_patterns(changed_path, is_python)
+def _find_matching_tests(changed_path, is_python, test_texts, patterns):
     selected = set()
     for test_path, text in test_texts.items():
         if text is None:
@@ -195,6 +215,16 @@ def _find_referencing_tests(changed_path, is_python, test_texts):
                 selected.add(test_path)
                 break
     return selected
+
+
+def _find_referencing_tests(changed_path, is_python, test_texts):
+    return _find_matching_tests(
+        changed_path, is_python, test_texts, _reference_patterns(changed_path, is_python))
+
+
+def _find_covering_tests(changed_path, is_python, test_texts):
+    return _find_matching_tests(
+        changed_path, is_python, test_texts, _coverage_patterns(changed_path, is_python))
 
 
 def select_targets(repo_root, paths):
@@ -232,21 +262,15 @@ def select_targets(repo_root, paths):
             conftest_refusals.append(path)
             continue
 
-        if shape == "helper":
-            selected_tests.update(_find_referencing_tests(path, True, test_texts))
-            continue
-
-        if shape == "python":
-            refs = _find_referencing_tests(path, True, test_texts)
+        if shape in ("helper", "python"):
+            selection = _find_referencing_tests(path, True, test_texts)
+            coverage = _find_covering_tests(path, True, test_texts)
+            selected_tests.update(selection)
             if exists:
-                if refs:
-                    selected_tests.update(refs)
-                else:
+                if not coverage:
                     no_reference_refusals.append(path)
             else:
-                if refs:
-                    selected_tests.update(refs)
-                else:
+                if not coverage:
                     retired_python.append(path)
             continue
 

@@ -203,6 +203,31 @@ def test_tests_tree_helper_selects_referencing_tests_not_in_pytest_argv(tmp_path
     assert helper not in argv
 
 
+def test_present_unreferenced_tests_tree_helper_refuses_naming_the_file(
+        tmp_path, monkeypatch, capsys):
+    root = str(tmp_path)
+    _init_git(root)
+    helper = _TESTS + "/helpers.py"
+    _touch(root, helper, "HELPER = 1\n")
+    monkeypatch.setattr(V, "changed_paths", lambda *a, **k: [helper])
+    assert V.main(["--repo-root", root]) == 1
+    assert helper in capsys.readouterr().err
+
+
+def test_deleted_unreferenced_tests_tree_helper_named_retired_on_stdout(
+        tmp_path, monkeypatch, capsys):
+    root = str(tmp_path)
+    _init_git(root)
+    helper = _TESTS + "/helpers.py"
+    monkeypatch.setattr(V, "changed_paths", lambda *a, **k: [helper])
+    selected, _, no_ref, _, retired, _, code = _select(root, [helper])
+    assert (selected, no_ref, code) == ([], [], True)
+    assert retired == [helper]
+    assert V.main(["--repo-root", root]) == 0
+    out = capsys.readouterr().out
+    assert helper in out
+
+
 # ------------------------------------------------------- deleted python source
 
 
@@ -371,20 +396,22 @@ def test_reference_clause_quoted_module_name_negative(tmp_path):
     assert test not in selected
 
 
-def test_reference_clause_quoted_dotted_target_selects(tmp_path):
+def test_reference_clause_quoted_dotted_target_selects_but_not_coverage(tmp_path):
     root = str(tmp_path)
     mod, test = _setup_mod_and_test(root, _LIB + "/store.py",
                                     '"store.get_repo_root"\n')
-    selected, *_ = _select(root, [mod])
+    selected, _, no_ref, *_ = _select(root, [mod])
     assert test in selected
+    assert mod in no_ref
 
 
-def test_reference_clause_state_json_over_selects_intentionally(tmp_path):
+def test_reference_clause_state_json_selects_but_not_coverage(tmp_path):
     root = str(tmp_path)
     mod, test = _setup_mod_and_test(root, _LIB + "/state.py",
                                     '"state.json"\n')
-    selected, *_ = _select(root, [mod])
+    selected, _, no_ref, *_ = _select(root, [mod])
     assert test in selected
+    assert mod in no_ref
 
 
 def test_reference_clause_quoted_dotted_negative(tmp_path):
@@ -395,12 +422,13 @@ def test_reference_clause_quoted_dotted_negative(tmp_path):
     assert test not in selected
 
 
-def test_reference_clause_basename_with_extension_selects(tmp_path):
+def test_reference_clause_basename_with_extension_selects_but_not_coverage(tmp_path):
     root = str(tmp_path)
     mod, test = _setup_mod_and_test(root, _LIB + "/store.py",
                                     "# the helper lives in store.py\n")
-    selected, *_ = _select(root, [mod])
+    selected, _, no_ref, *_ = _select(root, [mod])
     assert test in selected
+    assert mod in no_ref
 
 
 def test_reference_clause_basename_without_extension_does_not_select(tmp_path):
