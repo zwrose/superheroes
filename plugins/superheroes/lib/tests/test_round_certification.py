@@ -831,6 +831,45 @@ def test_check_disposition_without_receipt_refuted_missing_reason_refuses(tmp_pa
     assert refusal["class"] == "disposition-without-receipt"
 
 
+def test_check_disposition_without_receipt_unknown_disposition_refuses(tmp_path):
+    session_dir = write_session(
+        tmp_path,
+        state={
+            "findings": [
+                {
+                    "id": "U1",
+                    "severity": "Important",
+                    "disposition": "maybe",
+                }
+            ]
+        },
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["artifact"] == "U1"
+    assert refusal["detail"] == "unknown disposition 'maybe'"
+
+
+def test_check_disposition_without_receipt_missing_disposition_refuses(tmp_path):
+    session_dir = write_session(
+        tmp_path,
+        state={
+            "findings": [
+                {
+                    "id": "N1",
+                    "severity": "Important",
+                }
+            ]
+        },
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["artifact"] == "N1"
+    assert refusal["detail"] == "finding has no disposition recorded"
+
+
 # --- totality tables ----------------------------------------------------------
 
 def test_verdict_totality_covers_certified_verdicts():
