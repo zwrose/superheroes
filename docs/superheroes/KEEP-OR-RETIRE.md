@@ -754,11 +754,37 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   at certification time.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
   `disposition-without-receipt` refusal class. On firing, a proposal to the owner at a gardening pass.
-- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Last demonstrated benefit.** unknown — it ships with this change. Its two disposition-class
+  guards carry a recorded bite-proof at
+  `plugins/superheroes/lib/tests/bite_proofs/disposition-class-guards.md` (three detectors, each
+  red → restore → green at the child's build head).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — disposition receipts on the certified head are receipts-before-claims
   regardless of model. No engine family applies.
+
+#### D29 — Disposition-class guard pinning tests
+
+- **Component.** `test_check_disposition_without_receipt_missing_disposition_refuses` and
+  `test_check_disposition_without_receipt_unknown_disposition_refuses` in
+  `test_round_certification.py`, together with the `detail` assertion added to
+  `test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions`
+  in `test_round_driver_integration.py` — they pin each of D22's two disposition-class guards to its
+  own line by asserting the refusal's `detail`, not only its shared `class` and `artifact`. They cost
+  two unit tests and one assertion.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing either test by
+  name as the thing that caught a removed or bypassed disposition-class guard. On firing, a proposal
+  to the owner at a gardening pass.
+- **Last demonstrated benefit.** Birth bite-proof recorded at
+  `plugins/superheroes/lib/tests/bite_proofs/disposition-class-guards.md`. The gap they close was a
+  measured one: before this change, neutralizing either guard left the other refusing with the same
+  class and artifact, so the seam test passed on a code path it was written to forbid.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — whether a guard is pinned to its own line is a property of the assertion,
+  not of model strength. No engine family applies. The C13 flip converts the seam test's refusal
+  assertion to a certifying one under R28's first clause; these two unit tests are unaffected by that
+  flip and stay.
 
 #### D23 — `build_interim_receipt`
 
