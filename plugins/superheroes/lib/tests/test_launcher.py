@@ -5418,21 +5418,27 @@ def test_seat_config_dir_unreadable_when_normalized_path_fails(
     assert result["reason"] == "seat-snapshot-unreadable"
 
 
-def test_seat_config_dir_reports_seat_pid_not_mine_when_snapshot_pid_differs(
+def test_seat_config_dir_resolves_when_snapshot_pid_differs_from_caller(
     monkeypatch, unpatched_seat_config_dir,
 ):
-    # axis: snapshot CLAUDE_PID must corroborate the inherited pid
+    # axis: exec-time snapshot CLAUDE_PID may differ from the caller's inherited pid
     payload = _build_kern_procargs2(
         "/usr/local/bin/claude",
         ["claude"],
-        ["HOME=/home/user", "CLAUDE_PID=9999"],
+        [
+            "HOME=/home/seat-user",
+            "CLAUDE_CONFIG_DIR=/home/seat-user/.claude-three",
+            "CLAUDE_PID=9999",
+        ],
     )
     monkeypatch.setenv("CLAUDE_PID", "4242")
     monkeypatch.setattr(L, "_read_kern_procargs2_darwin", lambda pid: payload)
     monkeypatch.setattr(L.platform, "system", lambda: "Darwin")
     result = L.seat_config_dir()
-    assert result["instance"] is None
-    assert result["reason"] == "seat-pid-not-mine"
+    assert result == {
+        "instance": os.path.normpath("/home/seat-user/.claude-three"),
+        "reason": None,
+    }
 
 
 @pytest.mark.parametrize(
@@ -5679,7 +5685,6 @@ def test_launch_build_proceeds_without_claude_pid_on_non_claude_host(tmp_path, m
         {"instance": None, "reason": "seat-pid-absent"},
         {"instance": None, "reason": "seat-snapshot-unreadable"},
         {"instance": None, "reason": "seat-not-claude"},
-        {"instance": None, "reason": "seat-pid-not-mine"},
     ],
 )
 def test_launch_seat_undetermined_refuses(seat_result, tmp_path, monkeypatch):

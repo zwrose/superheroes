@@ -417,9 +417,6 @@ def seat_config_dir(env=None):
         return {"instance": None, "reason": "seat-not-claude"}
 
     seat_env = snapshot.get("env") or {}
-    snapshot_pid = seat_env.get("CLAUDE_PID")
-    if not isinstance(snapshot_pid, str) or snapshot_pid.strip() != pid_raw.strip():
-        return {"instance": None, "reason": "seat-pid-not-mine"}
     home = seat_env.get("HOME")
     if not isinstance(home, str) or not home.strip():
         return {"instance": None, "reason": "seat-snapshot-unreadable"}
