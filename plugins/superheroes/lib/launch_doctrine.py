@@ -23,7 +23,6 @@ RULING_IDS = (
     "gated-strings",
 )
 PREFLIGHT_CHECKS = (
-    ("quota", "always"),
     ("engine-auth", "always"),
     ("base-state", "always"),
     ("disjoint-surfaces", "conditional"),

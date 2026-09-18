@@ -86,7 +86,6 @@ def _autouse_isolated_ledger_root(tmp_path, monkeypatch):
 
 def _all_checks(**overrides):
     base = {
-        "quota": {"state": "pass", "reason": ""},
         "engine-auth": {"state": "pass", "reason": ""},
         "base-state": {"state": "pass", "reason": ""},
         "disjoint-surfaces": {"state": "pass", "reason": ""},
@@ -140,7 +139,7 @@ def test_preflight_unknown_check(tmp_path):
 
 
 @pytest.mark.parametrize("missing", [
-    "quota", "engine-auth", "base-state", "disjoint-surfaces",
+    "engine-auth", "base-state", "disjoint-surfaces",
     "workspace-isolation", "owner-capability", "grant-state",
 ])
 def test_preflight_missing_check(tmp_path, missing):
@@ -165,10 +164,10 @@ def test_preflight_bad_state(tmp_path):
   # axis: preflight-bad-state
     repo = _init_repo(tmp_path / "repo")
     checks = _all_checks()
-    checks["quota"] = {"state": "maybe", "reason": ""}
+    checks["engine-auth"] = {"state": "maybe", "reason": ""}
     result = L.walk_preflight(checks, repo)
     assert result["ok"] is False
-    assert result["reason"] == "preflight-bad-state:quota"
+    assert result["reason"] == "preflight-bad-state:engine-auth"
 
 
 def test_preflight_na_without_reason(tmp_path):
@@ -185,10 +184,10 @@ def test_preflight_always_check_na(tmp_path):
   # axis: preflight-always-check-na
     repo = _init_repo(tmp_path / "repo")
     checks = _all_checks()
-    checks["quota"] = {"state": "na", "reason": "n/a"}
+    checks["engine-auth"] = {"state": "na", "reason": "n/a"}
     result = L.walk_preflight(checks, repo)
     assert result["ok"] is False
-    assert result["reason"] == "preflight-always-check-na:quota"
+    assert result["reason"] == "preflight-always-check-na:engine-auth"
 
 
 def test_preflight_failed_check(tmp_path):
@@ -2389,7 +2388,7 @@ def test_edge8_deadline_parks_if_spawned_refuses_if_not(tmp_path, monkeypatch):
 def test_edge9_duplicate_key_in_checks_json(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     checks_path = tmp_path / "checks-dup.json"
-    checks_path.write_text('{"quota": {"state": "pass", "reason": ""}, "quota": {"state": "fail", "reason": "x"}}')
+    checks_path.write_text('{"engine-auth": {"state": "pass", "reason": ""}, "engine-auth": {"state": "fail", "reason": "x"}}')
     proc = subprocess.run(
         [sys.executable, _MOD, "preflight", "--repo-root", repo, "--checks", str(checks_path)],
         capture_output=True,
