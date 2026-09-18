@@ -1816,6 +1816,160 @@ def test_hand_landed_journal_digest_mismatch_refuses(tmp_path):
     assert refusal["bindingFailure"] == "execution-evidence-binding-mismatch"
 
 
+def _hand_landed_findings_envelope(*, observation_overrides=None, evidence_overrides=None):
+    findings = [{"id": "f1", "severity": "Minor", "title": "t"}]
+    observation = {
+        "read": "engaged",
+        "source": "runner",
+        "telemetry": "tool-calls",
+        "stdoutBytes": 10,
+        "wallSeconds": 1.0,
+    }
+    if observation_overrides:
+        observation.update(observation_overrides)
+    evidence = _hand_landed_evidence_binding(
+        resultDigest=session_contract.payload_sha256(findings),
+        observation=observation,
+    )
+    if evidence_overrides:
+        evidence.update(evidence_overrides)
+    payload = {"findings": findings}
+    envelope = _hand_landed_envelope(evidence, payload)
+    journal_binding = {
+        field: evidence[field] for field in RC.EXECUTION_EVIDENCE_BINDING_FIELDS
+    }
+    return envelope, journal_binding
+
+
+def test_hand_landed_read_unknown_refuses_not_engaged():
+    envelope, journal_binding = _hand_landed_findings_envelope(
+        observation_overrides={"read": "unknown"},
+    )
+    ok, failure = RC._hand_landed_evidence_qualifies(
+        envelope, HEAD, journal_binding=journal_binding,
+        recorded_nonces={"hand-landed-nonce"},
+    )
+    assert ok is False
+    assert failure == "execution-evidence-not-engaged"
+
+
+def test_hand_landed_read_outside_enum_refuses_invalid():
+    envelope, journal_binding = _hand_landed_findings_envelope(
+        observation_overrides={"read": "disengaged"},
+    )
+    ok, failure = RC._hand_landed_evidence_qualifies(
+        envelope, HEAD, journal_binding=journal_binding,
+        recorded_nonces={"hand-landed-nonce"},
+    )
+    assert ok is False
+    assert failure == "execution-evidence-read-invalid"
+
+
+def test_hand_landed_unknown_observation_field_refuses():
+    envelope, journal_binding = _hand_landed_findings_envelope(
+        observation_overrides={"read": "engaged", "bogusField": True},
+    )
+    ok, failure = RC._hand_landed_evidence_qualifies(
+        envelope, HEAD, journal_binding=journal_binding,
+        recorded_nonces={"hand-landed-nonce"},
+    )
+    assert ok is False
+    assert failure == "execution-evidence-unknown-field"
+
+
+def test_hand_landed_read_engaged_qualifies():
+    envelope, journal_binding = _hand_landed_findings_envelope()
+    ok, failure = RC._hand_landed_evidence_qualifies(
+        envelope, HEAD, journal_binding=journal_binding,
+        recorded_nonces={"hand-landed-nonce"},
+    )
+    assert ok is True
+    assert failure is None
+
+
+def _minimal_orders_manifest(*, session_id="test-session-001", rnd=1, phase=RC.PANEL_PHASE, attempt=0):
+    return {
+        "schema": "orders-manifest/1",
+        "session": session_id,
+        "round": rnd,
+        "phase": phase,
+        "attempt": attempt,
+        "orders": "not-emitted",
+        "seats": {
+            "security-reviewer": {
+                "storeKey": "security-reviewer",
+                "seat": "security-reviewer",
+                "occurrence": 0,
+                "vendor": "claude",
+                "model": "sonnet",
+                "engine": "claude",
+                "resultContract": "seat-result/2",
+                "orderSha256": "a" * 64,
+                "orderPath": "/dev/null",
+                "envelopeStubPath": "/dev/null",
+            },
+        },
+    }
+
+
+def _write_orders_manifest(session_dir, manifest):
+    path = RC._orders_manifest_path(
+        session_dir, manifest["round"], manifest["phase"], manifest["attempt"])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    text = session_contract.canonical(manifest)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return session_contract.sha256_text(text)
+
+
+def _orders_emitted_journal_row(manifest_sha, *, phase=RC.PANEL_PHASE, rnd=1, attempt=0, cmd="advance"):
+    return {
+        "cmd": cmd,
+        "outcome": "orders-emitted",
+        "phase": phase,
+        "round": rnd,
+        "attempt": attempt,
+        "manifestSha256": manifest_sha,
+    }
+
+
+def test_roster_from_orders_emitted_derives_roster(tmp_path):
+    manifest = _minimal_orders_manifest()
+    manifest_sha = session_contract.sha256_text(session_contract.canonical(manifest))
+    session_dir = write_session(tmp_path, journal_lines=[])
+    _write_orders_manifest(session_dir, manifest)
+    event = _orders_emitted_journal_row(manifest_sha)
+    roster = RC._roster_from_orders_emitted(session_dir, event)
+    assert roster == [("security-reviewer", 0)]
+
+
+def test_journal_open_seats_orders_emitted_reports_open_seat(tmp_path):
+    manifest = _minimal_orders_manifest()
+    manifest_sha = session_contract.sha256_text(session_contract.canonical(manifest))
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=[_orders_emitted_journal_row(manifest_sha)],
+    )
+    _write_orders_manifest(session_dir, manifest)
+    journal, _ = RC._read_jsonl(os.path.join(session_dir, RC.JOURNAL_FILE), RC.JOURNAL_FILE)
+    unclosed = RC._journal_open_seats(journal, session_dir)
+    assert len(unclosed) == 1
+    key, _event = unclosed[0]
+    assert key == (RC.PANEL_PHASE, 1, 0, "security-reviewer", 0)
+
+
+# Silent empty roster on manifest sha mismatch — open question whether this should refuse.
+def test_roster_from_orders_emitted_manifest_sha_mismatch_yields_empty_roster(tmp_path):
+    manifest = _minimal_orders_manifest()
+    session_dir = write_session(tmp_path, journal_lines=[])
+    _write_orders_manifest(session_dir, manifest)
+    event = _orders_emitted_journal_row("b" * 64)
+    roster = RC._roster_from_orders_emitted(session_dir, event)
+    assert roster == []
+    unclosed = RC._journal_open_seats([event], session_dir)
+    assert unclosed == []
+
+
 # --- WO-L2-M: evidence qualifies by proof, never by default -------------------
 
 def test_dispatch_observed_missing_runner_nonce_refuses(tmp_path):
