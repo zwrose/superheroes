@@ -329,7 +329,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Retirement — `harness_probe`.** Retired `plugins/superheroes/lib/harness_probe.py` and its test
   module, including both tripwires — the native project-context check and the PreCompact
   `additionalContext` check. Condition met: the forward doctrine's FR-B6 sentence that `harness_probe`
-  retires or starts recording (it retires). Receipt: issue #1303.
+  retires or starts recording (it retires). Receipt: PR #1304 (issue #1303).
 
 #### B6 — File lock + store family
 
