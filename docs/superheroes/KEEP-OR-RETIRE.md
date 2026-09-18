@@ -152,17 +152,22 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 #### A1 — Owner-authority gate
 
-- **Component.** PreToolUse(Bash) gate and classifier that ask before enumerated owner-authority
-  actions on calibrated projects; it costs a stdin parse and command inspection on every Bash call.
+- **Component.** PreToolUse(Bash) gate and classifier that asked before enumerated owner-authority
+  actions on calibrated projects; it cost a stdin parse and command inspection on every Bash call.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing an
   owner-authority gate `ask` that blocked an unauthorized merge, release, force-push, default-branch
-  push, or workflow dispatch. On firing, a proposal to the owner at a gardening pass.
+  push, or workflow dispatch. On firing, a proposal to the owner at a gardening pass. **Retired —
+  condition moot.**
 - **Last demonstrated benefit.** Re-derived tool-to-subcommand matching to close a silent
-  classification bypass in workflow dispatch (#989).
+  classification bypass in workflow dispatch (#989). **False-positive specimen (issue #1264
+  retirement build, 2026-09-16):** during this build the gate refused a plain read-only `grep` census
+  command, classifying it as `run-workflow` because the pattern list it read contained those words.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural — implements the never-merge-on-agent-authority hard line; a zero citation
-  count means the floor is holding, not that the bypass class is gone.
+- **Decision.** retired — issue #1264 (C5 merge-gate retirement).
+- **Notes.** structural — implemented the never-merge-on-agent-authority hard line as a mechanical
+  tripwire; retired because merge approval now rests on the owner's scoped word plus advisor
+  discipline (`PHILOSOPHY.md` promise 1, showrunner charter merge duty) and the gate's
+  false-positive cost outweighed its remaining tripwire value.
 
 #### A2 — Worktree guard
 
@@ -243,12 +248,13 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Component.** Plugin-version skew detector appended to seat-map degradations; K2 retires it with
   trigger to rebuild at the front door when a real skew incident recurs.
 - **Condition.** Citation-based, 45 days: real skew-incident receipts (the K2 rebuild trigger). On
-  firing, a rebuild proposal to the owner at a gardening pass.
+  firing, a rebuild proposal to the owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — issue #1264 (C5 merge-gate retirement).
 - **Notes.** capability-gap — detection-only record with zero recorded firings; the motivating
-  incident (#675) predates the module and was fixed by other means.
+  incident (#675) predates the module and was fixed by other means. The K2 rebuild trigger survives
+  the retirement as a revisit-registry row on the standing collector.
 
 ### B. Launch & wave machinery
 
@@ -1027,6 +1033,26 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** capability-gap — a person could create two labels by hand; the helper exists so the
   routing vocabulary is present before the first issue is routed.
+
+#### S7 — Bite-proof pointer census
+
+- **Component.** Not a census row. The pointer census in
+  `plugins/superheroes/lib/tests/test_bite_proof_doctrine.py`: the hand-maintained
+  `_CONSUMER_ROSTER` of consumer sections with their `rubric/bite-proof.md` pointer counts, plus the
+  completeness walker that refuses any pointer-carrying section the roster does not name. It costs a
+  roster row every time a shipped surface gains a deliberate pointer at the bite-proof home.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the pointer
+  census catching a real drift — a rostered section that lost its pointer, a section that gained an
+  unrostered one, or a consumer section that moved. On zero citations for the full window, a
+  proposal to the owner at a gardening pass. A zero count reads as the roster holding rather than as
+  the census being idle: the walker's refusal is what keeps the roster from going stale unnoticed,
+  so its success is quiet by construction.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the one-home rule is what makes a second pointer a deliberate act, and
+  this census is what keeps that act from being absorbed silently; no change of host or model
+  removes the need.
 
 
 ## The workaround-marker inventory
