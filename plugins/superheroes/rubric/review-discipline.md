@@ -46,7 +46,8 @@ fixture), test modules and bite-proof records do not count. At **300** the build
 on the issue with a proposed cut line and continues. At **600** the builder stops and hands the call
 to the advisor, who rules continue, split or park and records the reason on the issue; that call is
 never the builder's to make alone and never the owner's. A split lands as native stack layers, each
-reviewable on its own, so no intermediate state reaches the trunk. The bars apply in every lane.
+reviewable on its own, so no intermediate state reaches the trunk. The bars apply in the full and
+light lanes; a micro change that approached them would already have left its ceiling.
 Where the call is in doubt, the preference is more, smaller PRs.
 
 **Micro skips preflight** because preflight proves tools before a session goes

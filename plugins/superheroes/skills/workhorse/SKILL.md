@@ -98,13 +98,17 @@ Stop and **move up to the full lane** when any of these is true (escalation is *
 never a self-declared downgrade):
 
 - The orchestrator **measures the working diff's non-test lines (additions plus deletions outside `tests/`) as it types**
-  and **escalates when that count crosses ~400** — a flat measured line, not an estimate (basis: `review-discipline.md` § Size);
-  the 300 report and the 600 stop of that section apply in this lane too.
+  and **escalates when that count crosses ~400** — a flat measured line, not an estimate (basis: `review-discipline.md` § Size).
 - It **spreads into surfaces the lane call did not anticipate**.
 - It turns out to **touch a quiet-failure path**.
 - It turns out to need something **irreversible or expensive** — a migration, a new dependency, an
   auth or data-model change, a new external contract. **These go to the owner before they are built,
   in any lane.**
+
+**Separately from escalation**, the two absolute bars of `review-discipline.md` § Size apply in this lane as in
+full, on their own basis (non-test lines added or modified; deletions, regenerated artifacts, tests and records
+excluded): at **300** report the count and a proposed cut on the issue and continue; at **600** stop and act on the
+advisor's recorded ruling — continue, split or park. Neither bar is an escalation trigger.
 
 **Escalation bridge (light → full).** When you escalate, **write the brief now** and **disclose
 that it was written late**, naming the trigger. Record already-typed work in the dispatch-provenance
