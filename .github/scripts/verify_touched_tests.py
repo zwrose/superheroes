@@ -145,7 +145,9 @@ def _classify_path(path):
 
 
 def _all_test_files(repo_root):
-    return sorted(p for p in _git_paths(repo_root, "ls-files") if _is_test_file(p))
+    paths = set(_git_paths(repo_root, "ls-files"))
+    paths |= set(_git_paths(repo_root, "ls-files", "--others", "--exclude-standard"))
+    return sorted(p for p in paths if _is_test_file(p))
 
 
 def _read_test_text(repo_root, path):
