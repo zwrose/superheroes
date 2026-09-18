@@ -394,7 +394,7 @@ before the siblings that build on it. **Crossing twice the size your brief estim
 lines (additions plus deletions outside `tests/`) is itself the tripwire** — disclose it mid-build and offer a split,
 rather than letting the overrun surface at handback. Two absolute bars ride beside it, counted over non-test lines
 added or modified (deletions, regenerated artifacts, tests and records excluded): at **300**, report the count and a
-proposed cut on the issue and continue; at **600**, stop and hand the split-or-park call to the advisor — never yours
+proposed cut on the issue and continue; at **600**, stop and hand the call to the advisor, who rules continue, split or park — never yours
 alone and never the owner's — and resume on the advisor's recorded ruling (`review-discipline.md` § Size). **Gates and enforcement:** any work order that
 adds a **gate, hook, or enforcement mechanism** names, in the brief before code, the ratified
 precondition that unlocks it and the evidence that it is met — in every project. When the project

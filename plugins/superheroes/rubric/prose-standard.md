@@ -218,8 +218,9 @@ its accounts, its epic's work items). A reader outside the project has none of t
 cannot use it. A reader inside it finds the record where it lives: the PR body that landed the
 text, the spec's amendments log, and the ledger. The reason behind a counter-default rule may stay
 beside the rule, because the reason helps every reader. Where the rule was decided may not.
-Code comments and docstrings are outside this rule: they face the maintainer, not the reader of
-the shipped surface, and may name the work item that motivated a line.
+Code comments and docstrings are outside this rule entirely: they face the maintainer, not the
+reader of the shipped surface, so an issue or PR number in a comment or docstring is not
+provenance and nothing sweeps the existing ones.
 
 ## Rationale, prohibitions, and claims
 
