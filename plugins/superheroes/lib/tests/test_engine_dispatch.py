@@ -5818,7 +5818,7 @@ def test_dispatch_review_expected_result_kind_pin_refuses_mismatch(tmp_path):
         build_view=_fake_build_view(tmp_path), expected_result_kind="findings",
     )
     assert res["ok"] is False
-    assert res.get("detail") == "native-result-schema-invalid"
+    assert res.get("detail") == ED.RESULT_KIND_MISMATCH_DETAIL
 
 
 def test_dispatch_review_expected_result_kind_pin_accepts_match(tmp_path):
@@ -10438,13 +10438,26 @@ def test_grade_native_review_attempt_schema_invalid_severity_enum_injection(tmp_
     assert grade.get("detail") == "native-result-schema-invalid"
 
 
-def test_grade_native_review_attempt_pinned_schema_rejects_wrong_kind(tmp_path):
+def test_grade_native_review_attempt_kind_before_validation(tmp_path):
     branch = _native_review_branch("verdicts")
     run_dir, state = _native_review_grade_state(
         tmp_path, branch, expected_result_kind="findings",
     )
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
+    assert grade.get("detail") == ED.RESULT_KIND_MISMATCH_DETAIL
+    assert grade.get("detail") != "native-result-schema-invalid"
+
+
+def test_grade_native_review_attempt_unrecognised_kind_not_kind_mismatch(tmp_path):
+    branch = _native_review_branch("findings")
+    branch["resultKind"] = "summary"
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, expected_result_kind="findings",
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") != ED.RESULT_KIND_MISMATCH_DETAIL
     assert grade.get("detail") == "native-result-schema-invalid"
 
 

@@ -3247,9 +3247,23 @@ def _admit_native_review_result(opened, engagement, echo_nonce):
         return loaded
     envelope, branch = loaded
 
+    expected_result_kind = opened.get("expectedResultKind")
+    branch_kind = branch.get("resultKind")
+    if (expected_result_kind in REVIEW_RESULT_KINDS
+            and branch_kind in REVIEW_RESULT_KINDS
+            and branch_kind != expected_result_kind):
+        has_payload, payload = _review_result_payload(branch, branch_kind)
+        engagement = _engagement_with_read(
+            engagement, result_kind=branch_kind, items=payload if has_payload else [])
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": RESULT_KIND_MISMATCH_DETAIL,
+            "engagement": engagement,
+        }
+
     engine = opened["engine"]
     run_kind = opened.get("roleKind", RUN_KIND_REVIEW)
-    expected_result_kind = opened.get("expectedResultKind")
     schema_path = opened.get("nativeSchemaPath")
     if not schema_path or not os.path.isfile(schema_path) or os.path.islink(schema_path):
         return _native_review_forfeit(engagement, "native-schema-unreadable")
