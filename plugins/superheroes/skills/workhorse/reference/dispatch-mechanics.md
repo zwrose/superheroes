@@ -9,7 +9,8 @@
 7. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
 8. [Supervised write dispatch](#supervised-write-dispatch)
 9. [Declared items](#declared-items)
-10. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
+10. [Refusal streak — shell health](#refusal-streak--shell-health)
+11. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
 
 ---
 
@@ -190,7 +191,8 @@ slice (12–45 s is the measured range above).
 The sanctioned way to dispatch a long-running **external reviewer** seat is `dispatch-review`. The
 seat's delivery contract is in `rubric/review-base.md` ("Findings output format"); `auto-fix-loop.md`
 documents the runner's result mechanics — read both before authoring seat prompts; this subsection is
-the at-dispatch-time summary only.
+the at-dispatch-time summary only. For the full CLI argument surface, read
+`skills/workhorse/reference/dispatch-entry.md`.
 
 ### Findings-only review prompts
 
@@ -307,21 +309,16 @@ interval (10 s), not to the byte. **`signalSource`** — the runner terminates t
 every path, so without this field a runner-inflicted `SIGTERM` (`runner-timeout`) is indistinguishable
 from an engine crash (`engine`).
 
-**Ledger receipt** — every terminal fold appends `result["ledger"]`: `written`, `path`, `why`. The row
-records `reason`, per-attempt telemetry, `stages`, `engagement`, `evidence` (stdout/stderr/journal
-paths, plus stand-down records — `stoodDownCount`, `stoodDown`, `stoodDownTruncated` — the
-orphan-child events a supervisor death between spawn and journal append produces, capped at 20
-entries with the cap stated on the row), `attribution` (caller-error, our-transport-contract,
-our-environment, engine-side, unknown —
-a forfeit is presumed self-inflicted until attributed; **unknown is a queue, not a bucket**), and
-`salvage` when detected. The ledger is a **record, never a control input** — nothing reads it to
-decide what a dispatch does. Read standing accounting via
-`python3 -B "$ROOT_DIR/lib/forfeit_ledger.py" report --repo-root <repo-root>`.
+**Entry refusals** — terminal, not-run outcomes: the dispatch never ran and the result is final.
+They carry `reason: unrunnable` plus an additive `entryReason` naming which entry check refused,
+from the shell's closed entry vocabulary, with `entry-reason-undeclared` as that key's fall-back
+when a refusal's own token was outside the declared entry vocabulary. The producer's own reason
+is preserved in `detail`.
 
-**Engaged vs delivered are two variables** — `stages.engaged` and `stages.delivered` are recorded
-separately on every row. A seat can burn hundreds of thousands of tokens, reach real findings in its
-stdout, and deliver nothing gradeable through our transport (`stages.engaged: true`,
-`stages.delivered: false`). Other terminal reasons: `forfeited`, `vacuous`, `unrunnable`.
+**Engaged vs delivered are two variables** — a seat can burn hundreds of thousands of tokens, reach
+real findings in its stdout, and deliver nothing gradeable through our transport (engaged but not
+delivered). Other terminal outcome reasons: `forfeited`, `vacuous`, `forfeit-with-engaged-artifact`,
+and `unrunnable`.
 
 ### Brief-check dispatch (`--mode brief-check`)
 
@@ -332,16 +329,29 @@ the runner itself is unavailable** (disclosed degradation in the PR body, never 
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+# Resolve brief-check cell from dispatch calibration + registry matrix (model/effort)
+read -r BRIEF_ENGINE BRIEF_ENGINE_MODEL BRIEF_EFFORT <<<"$(python3 -B -c "
+import sys
+sys.path.insert(0, sys.argv[1] + '/lib')
+import model_registry as mr
+import preflight_probe as pp
+row = next(r for r in pp.dispatch_calibration() if r.get('role') == 'brief-check')
+cell = mr.matrix_config('brief-check', row['engine'])
+model, effort = cell
+effort_s = '' if effort is None else effort
+print(row['engine'], model, effort_s)
+" "$ROOT_DIR")"
+if [ -z "${BRIEF_EFFORT}" ]; then BRIEF_EFFORT_JSON=null; else BRIEF_EFFORT_JSON="\"$BRIEF_EFFORT\""; fi
+BRIEF_SEAT='{"vendor":"'"$BRIEF_ENGINE"'","model":"'"$BRIEF_ENGINE_MODEL"'","effort":'"$BRIEF_EFFORT_JSON"',"role":"brief-check"}'
 # $BRIEF_PATH is reviewer instructions + the brief — it is fed verbatim as the whole prompt, so
 # the standing lens below must be inside it (see "The standing lens", after this recipe)
 # Keep $BRIEF_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
-# Gate first — thread model_id / effort from the JSON
-python3 -B "$ROOT_DIR/lib/dispatch_guard.py" check \
-  --role brief-check --vendor "$BRIEF_ENGINE" --model "$BRIEF_MODEL"
+# Gate first — four-key seat carries role inside --seat
+python3 -B "$ROOT_DIR/lib/dispatch_guard.py" check --seat "$BRIEF_SEAT"
 # LAUNCH — fresh --run-dir outside the repo; no --diff-base
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
   --mode brief-check \
-  --engine "$BRIEF_ENGINE" --engine-model "$BRIEF_ENGINE_MODEL" --effort "$BRIEF_EFFORT" \
+  --seat "$BRIEF_SEAT" \
   --prompt-path "$BRIEF_PATH" --repo-root "$REPO_ROOT" \
   --order-id "$ORDER_ID" \
   --run-dir "$RUN_DIR" --max-wait 12 \
@@ -349,12 +359,14 @@ python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 # CONTINUATION — re-invoke while .terminal is false
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
   --mode brief-check \
-  --engine "$BRIEF_ENGINE" --engine-model "$BRIEF_ENGINE_MODEL" --effort "$BRIEF_EFFORT" \
+  --seat "$BRIEF_SEAT" \
   --prompt-path "$BRIEF_PATH" --repo-root "$REPO_ROOT" \
   --order-id "$ORDER_ID" \
   --run-dir "$RUN_DIR" --max-wait 540 \
   --progress-file "$BRIEF_PROGRESS"
 ```
+
+For the full `dispatch-review` argument surface, read `skills/workhorse/reference/dispatch-entry.md`.
 
 Continuation rules — full contract in `auto-fix-loop.md`: omitting `--mode` inherits the opened mode;
 supplying a disagreeing `--mode` is `run-dir-mode-mismatch`, `attempts: 0`. Explicit
@@ -404,20 +416,36 @@ time would have cost minutes.
 
 ## Supervised write dispatch
 
-The sanctioned way to dispatch a long-running **external implementer** is the supervised runner:
+The sanctioned way to dispatch a long-running **external implementer** is the supervised runner. For
+the full CLI argument surface, read `skills/workhorse/reference/dispatch-entry.md`.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+# Resolve implementer cell from dispatch calibration + registry (honor configured model pin)
+read -r IMPL_ENGINE IMPL_ENGINE_MODEL IMPL_EFFORT <<<"$(python3 -B -c "
+import sys
+sys.path.insert(0, sys.argv[1] + '/lib')
+import model_registry as mr
+import preflight_probe as pp
+row = next(r for r in pp.dispatch_calibration() if r.get('role') == 'implementer')
+resolved = mr.resolve_dispatch('implementer', row['engine'], row['model'])
+model = resolved['model_id']
+effort = resolved['effort']
+effort_s = '' if effort is None else effort
+print(row['engine'], model, effort_s)
+" "$ROOT_DIR")"
+if [ -z "${IMPL_EFFORT}" ]; then IMPL_EFFORT_JSON=null; else IMPL_EFFORT_JSON="\"$IMPL_EFFORT\""; fi
+IMPL_SEAT='{"vendor":"'"$IMPL_ENGINE"'","model":"'"$IMPL_ENGINE_MODEL"'","effort":'"$IMPL_EFFORT_JSON"',"role":"implementer"}'
 # LAUNCH — first call on a fresh --run-dir; on dispatch-write --max-wait is also the git-preflight
 # timeout, so size this slice to the repository's preflight cost, not just rotation headroom
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
-  --engine "$IMPL_ENGINE" --engine-model "$IMPL_ENGINE_MODEL" \
+  --seat "$IMPL_SEAT" \
   --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
   --expect-item "<path-from-order>" \
   --run-dir "$RUN_DIR" --max-wait 45
 # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
-  --engine "$IMPL_ENGINE" --engine-model "$IMPL_ENGINE_MODEL" \
+  --seat "$IMPL_SEAT" \
   --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
   --expect-item "<path-from-order>" \
   --run-dir "$RUN_DIR" --max-wait 540
@@ -432,23 +460,19 @@ may be another session's settings.
 ### Declared items
 
 Repeat `--expect-item` for every file the order must deliver (or use `--expect-items-file` instead).
+See `skills/workhorse/reference/dispatch-entry.md` for every flag on `dispatch-write`.
 
-`$IMPL_ENGINE` and `$IMPL_ENGINE_MODEL` come from the project's dispatch calibration for the
-**implementer** role. `--effort` is **optional** on `dispatch-write` because a registry model may
-legitimately carry no effort, while it stays **required** on `dispatch-review`; an engine/model that
-*does* need an effort still fails closed without one (`engine-config:invalid-model-effort`,
-`attempts: 0`, no spawn, no lease). Re-invoke the **originating verb**
-(`dispatch-write`, never `dispatch-poll`) with the same `--run-dir` and `--max-wait 540` while
-`.terminal` is false. A non-terminal `{"reason": "running", "terminal": false}` is **not** a forfeit.
-`dispatch-poll` is observational and never spawns; `dispatch-abandon` abandons a run directory. Every
-result carries `terminal`, `argv` (the exact spawned command), and `runDir`. Omitting `--max-wait`
-loops until terminal in 540 s slices (below the 600 s foreground-conversion boundary on harness
-2.1.219). The runner owns the bound — its per-attempt timeout, journal, and bounded slice — so **do
-not compose a separate per-dispatch watchdog** on top of it. **`cwd` must be a linked build worktree**
-— a primary checkout is refused (`cwd-primary-checkout`) — which is exactly why this is the workhorse's
-implementer path and not review-code's in-place fixer path. `BASH_MAX_TIMEOUT_MS` is a **headless-launch
-premise field owned by [#656](https://github.com/zwrose/superheroes/issues/656)**; this change sets it
-nowhere.
+`$IMPL_ENGINE`, `$IMPL_ENGINE_MODEL`, and `$IMPL_EFFORT` come from the project's dispatch
+calibration for the **implementer** role and the registry matrix cell for that engine — never
+hardcode effort to one vendor's shape. Re-invoke the **originating verb** (`dispatch-write`, never `dispatch-poll`)
+with the same `--run-dir` and `--max-wait 540` while `.terminal` is false. A non-terminal
+`{"reason": "running", "terminal": false}` is **not** a forfeit. `dispatch-poll` is observational
+and never spawns; `dispatch-abandon` abandons a run directory. Omitting `--max-wait` loops until
+terminal in 540 s slices (below the 600 s foreground-conversion boundary on harness 2.1.219). The
+runner owns the bound — its per-attempt timeout, journal, and bounded slice — so **do not compose a
+separate per-dispatch watchdog** on top of it. **`cwd` must be a linked build worktree** — a primary
+checkout is refused (`cwd-primary-checkout`) — which is exactly why this is the workhorse's
+implementer path and not review-code's in-place fixer path.
 
 ### Write-report contract
 
@@ -539,6 +563,17 @@ something went wrong. The block never affects `ok`, `terminal`, or `reason`.
 | write run, either snapshot indeterminate | `{"status": "indeterminate", "reason": "<why>"}` |
 | **preflight-terminal** result (refused before the run opened, never reaches fold) | **key absent** — there was no run to observe |
 | review run | **key absent** |
+
+## Refusal streak — shell health
+
+Three refusal round-trips in a row on one caller's dispatch invocations is the shell's health
+condition. A refusal that cost the caller a round counts, and a refusing continuation call counts too.
+You observe the streak at a vet or a consuming project reports it. The streak **proposes** at the
+next gardening pass and never executes anything. There is no counter, no instrument, and no journal
+field — this is a sentence people read, not machinery.
+
+Read the streak honestly. The streak is the observation. "The shell is bouncing callers" is the
+inferred cause. "One caller's bad script" is the alternative reading that sits beside it.
 
 ## Engine forfeits and order shape
 

@@ -1,0 +1,1148 @@
+"""Single entry for reading and validating a dispatch seat bundle (#1269).
+
+A caller supplies a four-key JSON seat ``{vendor, model, effort, role}`` at dispatch
+entry. Downstream code receives the validated bundle intact; no function re-assembles
+scalars or resolves role outside ``resolve_entry``.
+"""
+from __future__ import annotations
+
+import inspect
+import json
+import os
+
+import dispatch_allowlist
+import model_registry
+
+_BUILD_ARGV_RUN_KINDS = frozenset({"review", "build", "fix"})
+_DROPPED_FLAGS = ("--engine", "--model", "--effort", "--engine-model", "--vendor", "--role")
+_LEGACY_KEYWORDS = frozenset({"engine", "model", "effort", "engine_model", "role"})
+_MODE_BRIEF_CHECK = "brief-check"
+_PARK_TAIL = (
+    "an unlisted model is a park, not a pick (#600). "
+    "Pick a listed model or amend lib/model_registry.py."
+)
+
+
+def _signature_accepted_params(func) -> str:
+    params = []
+    for name, param in inspect.signature(func).parameters.items():
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+        if name in ("args", "kwargs"):
+            continue
+        params.append(name)
+    return ", ".join(params)
+
+
+def _dispatch_review_accepted() -> str:
+    import engine_dispatch  # noqa: WPS433 — lazy: avoid import cycle at module load
+
+    return _signature_accepted_params(engine_dispatch.dispatch_review)
+
+
+def _dispatch_write_accepted() -> str:
+    import engine_dispatch  # noqa: WPS433 — lazy: avoid import cycle at module load
+
+    return _signature_accepted_params(engine_dispatch.dispatch_write)
+
+_SEAT_JSON_SHAPE = (
+    'JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, '
+    '"role": "<role>"} (the effort key is required; its value may be null; role is '
+    "required and must not be null)"
+)
+_ACCEPTED_SEAT = _SEAT_JSON_SHAPE
+_ENTRY_VERBS = frozenset({
+    "dispatch-review", "dispatch-write", "build-argv", "guard-check",
+})
+_SEAT_KEYS = frozenset({"vendor", "model", "effort", "role"})
+_LEGACY_SEAT_JSON_KEYS = frozenset({"engine", "engine_model"})
+
+ENTRY_REASON_UNDECLARED = "entry-reason-undeclared"
+
+"""Closed vocabulary of outward entry-refusal entryReason tokens (#1269).
+
+Every refusal the dispatch shell emits at entry must use a member of this set.
+The entry chokepoints refuse any entryReason outside it with ENTRY_REASON_UNDECLARED.
+"""
+ENTRY_REFUSAL_REASONS = frozenset({
+    "allowlist-malformed",
+    "allowlist-raised",
+    "allowlist-refused",
+    "effort-invalid",
+    "effort-key-absent",
+    "effort-token-conflict",
+    "expected-result-kind-invalid",
+    ENTRY_REASON_UNDECLARED,
+    "internal-error",
+    "invalid-model-effort",
+    "legacy-seat-args",
+    "max-wait-out-of-range",
+    "mode-invalid",
+    "mode-role-mismatch",
+    "model-ambiguous",
+    "model-invalid",
+    "model-key-absent",
+    "model-required",
+    "seat-extra-keys",
+    "role-key-absent",
+    "role-null",
+    "run-kind-role-mismatch",
+    "run-kind-unclassified",
+    "seat-empty",
+    "seat-not-object",
+    "seat-token-dropped",
+    "seat-unparseable",
+    "token-unresolvable",
+    "undispatchable-vendor",
+    "unknown-dispatch-kwargs",
+    "unknown-model",
+    "unknown-role",
+    "unknown-vendor",
+    "unknown-verb",
+    "vendor-hint-mismatch",
+    "vendor-invalid",
+    "verb-role-mismatch",
+})
+
+
+def _format_valid(values: tuple[str, ...]) -> str:
+    return ", ".join(values)
+
+
+def accepted_seat_detail() -> str:
+    return f"pass --seat as {_ACCEPTED_SEAT}"
+
+
+def accepted_role_detail() -> str:
+    roles = _format_valid(model_registry.roles())
+    return f'role must be a member of the seat JSON "role" key; valid roles: {roles}'
+
+
+def legacy_refusal(*, dropped_flags: tuple[str, ...] | None = None) -> dict:
+    """Structured refusal for dropped CLI flags or legacy library call shapes."""
+    parts = [
+        "dispatch seat must be supplied as a whole via --seat;",
+        accepted_seat_detail() + ".",
+    ]
+    if dropped_flags:
+        flags = ", ".join(sorted(set(dropped_flags)))
+        role_note = ""
+        if "--role" in dropped_flags:
+            role_note = " (role now travels inside --seat)"
+        parts.insert(
+            0,
+            f"removed flag(s) {flags} are no longer accepted "
+            f"(vendor and role now live inside the --seat bundle, not separate flags)"
+            f"{role_note};",
+        )
+    return {
+        "ok": False,
+        "entryReason": "legacy-seat-args",
+        "detail": " ".join(parts),
+    }
+
+
+def scan_dropped_flags(argv: list[str]) -> list[str]:
+    """Return dropped legacy flags present in argv (both spellings)."""
+    found: list[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        matched = None
+        for flag in _DROPPED_FLAGS:
+            if arg == flag:
+                matched = flag
+                break
+            prefix = flag + "="
+            if arg.startswith(prefix):
+                matched = flag
+                break
+        if matched is not None:
+            if matched not in found:
+                found.append(matched)
+            if arg == matched and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                i += 2
+                continue
+        i += 1
+    return found
+
+
+def legacy_call_detected(args: tuple, kwargs: dict) -> bool:
+    if args:
+        return True
+    return bool(_LEGACY_KEYWORDS & kwargs.keys())
+
+
+def unknown_kwargs_detected(kwargs: dict) -> tuple[str, ...]:
+    if not kwargs:
+        return ()
+    return tuple(sorted(kwargs.keys()))
+
+
+def unknown_kwargs_refusal(unknown_keys: tuple[str, ...], *, accepted_params: str) -> dict:
+    keys = ", ".join(unknown_keys)
+    return {
+        "ok": False,
+        "entryReason": "unknown-dispatch-kwargs",
+        "detail": (
+            f"unknown keyword argument(s) {keys}; "
+            f"accepted parameters: {accepted_params}; "
+            f"{accepted_seat_detail()}; {accepted_role_detail()}."
+        ),
+    }
+
+
+def dispatch_review_accepted_params() -> str:
+    return _dispatch_review_accepted()
+
+
+def dispatch_write_accepted_params() -> str:
+    return _dispatch_write_accepted()
+
+
+def _normalize_effort(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return stripped.casefold().replace("_", "-")
+
+
+def _match_effort(value: str | None, allowed: tuple[str, ...]) -> str | None:
+    if not allowed:
+        return None
+    norm = _normalize_effort(value)
+    if norm is None:
+        return None
+    for candidate in allowed:
+        if _normalize_effort(candidate) == norm:
+            return candidate
+    return None
+
+
+def _cross_vendor_effort_hint(effort: str) -> str | None:
+    norm = _normalize_effort(effort)
+    if norm is None:
+        return None
+    hits: list[str] = []
+    for vendor in model_registry.vendors():
+        for allowed in model_registry.effort_enum(vendor):
+            if _normalize_effort(allowed) == norm:
+                hits.append(vendor)
+                break
+    if len(hits) == 1:
+        return f"effort {effort!r} is valid for vendor {hits[0]!r}, not for this model"
+    if len(hits) > 1:
+        return (
+            f"effort {effort!r} is valid for vendors "
+            f"{_format_valid(tuple(hits))}, not for this model"
+        )
+    return None
+
+
+def _model_allowed_efforts(vendor: str, model_id: str) -> tuple[str, ...] | None:
+    if not model_registry.is_registered(vendor, model_id):
+        return None
+    return model_registry.allowed_efforts(vendor, model_id)
+
+
+def _parse_json(raw: str) -> dict:
+    try:
+        obj = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {
+            "ok": False,
+            "reason": "seat-unparseable",
+            "detail": (
+                f"seat value is neither valid JSON nor a composed token; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    if not isinstance(obj, dict):
+        return {
+            "ok": False,
+            "reason": "seat-not-object",
+            "detail": f"seat JSON must be an object; accepted: {_ACCEPTED_SEAT}",
+        }
+    if "effort" not in obj:
+        return {
+            "ok": False,
+            "reason": "effort-key-absent",
+            "detail": (
+                'JSON seat must include the "effort" key (value may be null); '
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    vendor = obj.get("vendor")
+    if not isinstance(vendor, str) or not vendor.strip():
+        valid = _format_valid(model_registry.vendors())
+        return {
+            "ok": False,
+            "reason": "vendor-invalid",
+            "detail": (
+                f"seat vendor must be a non-empty string registered in model_registry; "
+                f"valid vendors: {valid}; accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    vendor = vendor.strip()
+    if vendor not in model_registry.vendors():
+        valid = _format_valid(model_registry.vendors())
+        return {
+            "ok": False,
+            "reason": "unknown-vendor",
+            "detail": (
+                f"unknown vendor {vendor!r}; valid vendors: {valid}; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    model = obj.get("model")
+    if model is not None and not isinstance(model, str):
+        return {
+            "ok": False,
+            "reason": "model-invalid",
+            "detail": (
+                f"seat model must be a string or null; accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    effort = obj.get("effort")
+    if effort is not None and not isinstance(effort, str):
+        return {
+            "ok": False,
+            "reason": "effort-invalid",
+            "detail": (
+                f"seat effort must be a string or null; accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    if isinstance(effort, str) and not effort.strip():
+        effort = None
+    return {
+        "ok": True,
+        "vendor": vendor,
+        "model": model,
+        "effort": effort,
+        "source": "json",
+    }
+
+
+def _parse_token(raw: str, *, vendor_hint: str | None) -> dict:
+    text = raw.strip()
+    if ":" not in text:
+        return {
+            "ok": False,
+            "reason": "seat-unparseable",
+            "detail": (
+                f"seat value is neither valid JSON nor a composed token; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    vendor, token = text.split(":", 1)
+    vendor = vendor.strip()
+    token = token.strip()
+    if vendor_hint is not None and vendor != vendor_hint:
+        return {
+            "ok": False,
+            "reason": "vendor-hint-mismatch",
+            "detail": (
+                f"composed token vendor {vendor!r} does not match hint {vendor_hint!r}; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    if vendor not in model_registry.vendors():
+        valid = _format_valid(model_registry.vendors())
+        return {
+            "ok": False,
+            "reason": "unknown-vendor",
+            "detail": (
+                f"unknown vendor {vendor!r}; valid vendors: {valid}; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+    parsed = model_registry.parse_dispatch_token(vendor, token)
+    if parsed is None:
+        return {
+            "ok": False,
+            "reason": "token-unresolvable",
+            "detail": (
+                f"composed token {token!r} is not self-contained for vendor {vendor!r}; "
+                f"use JSON seat form {_SEAT_JSON_SHAPE} for this vendor"
+            ),
+        }
+    model_id, effort = parsed
+    return {
+        "ok": True,
+        "vendor": vendor,
+        "model": model_id,
+        "effort": effort,
+        "source": "token",
+    }
+
+
+def parse(raw, *, vendor_hint=None) -> dict:
+    if not isinstance(raw, str) or not raw.strip():
+        return {
+            "ok": False,
+            "reason": "seat-empty",
+            "detail": f"seat value must be non-empty; accepted: {_ACCEPTED_SEAT}",
+        }
+    text = raw.strip()
+    if text.startswith("{"):
+        return _parse_json(text)
+    return _parse_token(text, vendor_hint=vendor_hint)
+
+
+_EFFORT_SOURCE_CANONICAL = frozenset({"caller", "default", "resolved"})
+
+_EFFORT_SOURCE_MAP = {
+    model_registry.EFFORT_SOURCE_SEAT_DEFAULT: "default",
+    model_registry.EFFORT_SOURCE_GIVEN: "caller",
+    model_registry.EFFORT_SOURCE_TOKEN_ENCODED: "resolved",
+    model_registry.EFFORT_SOURCE_RESOLVED_UNIQUE: "resolved",
+    model_registry.EFFORT_SOURCE_RESOLVED_LOWEST_RUNG: "resolved",
+}
+
+assert set(_EFFORT_SOURCE_MAP.keys()) == model_registry.EFFORT_SOURCES
+
+_MODE_ROLE_CHECK_SKIP = object()
+
+
+def _map_effort_source(registry_source: str) -> str:
+    return _EFFORT_SOURCE_MAP[registry_source]
+
+
+def _model_source_from_resolution(parsed_model, registry_effort_source: str) -> str:
+    if parsed_model is not None:
+        return "caller"
+    if registry_effort_source == "seat-default":
+        return "seat-default"
+    return "resolved"
+
+
+def _ambiguous_null_model_refusal(
+    role: str, vendor: str, effort: str, models: tuple[str, ...],
+) -> dict:
+    names = _format_valid(models)
+    return _entry_refusal(
+        "model-ambiguous",
+        (
+            f"model is required — effort {effort!r} matches multiple models on the "
+            f"{role}/{vendor} allowlist: {names}; pass an explicit model id in "
+            f"{_ACCEPTED_SEAT}"
+        ),
+    )
+
+
+def _allowlist_tokens(vendor: str, pairs: list[tuple[str, str | None]]) -> list[str]:
+    tokens: list[str] = []
+    for model_id, effort in pairs:
+        tok = model_registry.dispatch_token(vendor, model_id, effort)
+        if tok is not None:
+            tokens.append(tok)
+    return sorted(set(tokens))
+
+
+def _resolve_dispatch_refusal(
+    resolved: dict, *, role: str, vendor: str,
+) -> dict:
+    reason = resolved.get("reason") or "allowlist-refused"
+    candidates = resolved.get("candidates") or []
+    if candidates:
+        reason = f"{reason} — {_PARK_TAIL}"
+    detail = reason
+    if candidates:
+        pairs_text = ", ".join("(%s, %s)" % (m, e) for m, e in candidates)
+        detail = f"{reason}; sanctioned pairs: {pairs_text}"
+    refusal = _entry_refusal("allowlist-refused", detail)
+    if candidates:
+        refusal["allowlistVerdict"] = {
+            "ok": False,
+            "role": role,
+            "vendor": vendor,
+            "model_id": None,
+            "effort": None,
+            "dispatch_token": None,
+            "effort_source": None,
+            "resolved_model": None,
+            "allowlist": _allowlist_tokens(vendor, candidates),
+            "allowlist_pairs": [[m, e] for m, e in candidates],
+            "reason": detail,
+        }
+    return refusal
+
+
+def _resolve_entry_model_effort(parsed: dict, role: str) -> dict:
+    """Resolve nullable model/effort through the registry allowlist before allowlist consult."""
+    vendor = parsed["vendor"]
+    parsed_model = parsed.get("model")
+    model = parsed_model
+    effort = parsed.get("effort")
+
+    if model is not None and not isinstance(model, str):
+        return _entry_refusal(
+            "model-invalid",
+            f"seat model must be a string or null; accepted: {_ACCEPTED_SEAT}",
+        )
+    if effort is not None and not isinstance(effort, str):
+        return _entry_refusal(
+            "effort-invalid",
+            f"seat effort must be a string or null; accepted: {_ACCEPTED_SEAT}",
+        )
+
+    pairs = model_registry.allowlist(role, vendor)
+    if model is None and effort is not None and pairs:
+        matching = [
+            pair
+            for pair in pairs
+            if pair[1] is not None and _match_effort(effort, (pair[1],)) is not None
+        ]
+        distinct = sorted({pair[0] for pair in matching})
+        if len(distinct) > 1:
+            return _ambiguous_null_model_refusal(role, vendor, effort, tuple(distinct))
+        if len(distinct) == 0:
+            return _resolve_dispatch_refusal(
+                {
+                    "ok": False,
+                    "reason": (
+                        f"effort {effort!r} is not on the {role}/{vendor} allowlist"
+                    ),
+                    "candidates": list(pairs),
+                },
+                role=role,
+                vendor=vendor,
+            )
+        model = distinct[0]
+        for pair in matching:
+            if pair[0] == model:
+                effort = pair[1]
+                break
+
+    if isinstance(model, str) and model and effort is not None:
+        model_efforts = tuple(p[1] for p in pairs if p[0] == model and p[1] is not None)
+        if model_efforts:
+            matched = _match_effort(effort, model_efforts)
+            if matched is not None:
+                effort = matched
+
+    resolved = model_registry.resolve_dispatch(role, vendor, model, effort)
+    if not resolved.get("ok"):
+        if isinstance(model, str) and model:
+            allowed = _model_allowed_efforts(vendor, model)
+            if allowed is not None and not allowed:
+                if effort is not None:
+                    return _entry_refusal(
+                        "invalid-model-effort",
+                        (
+                            f"model {model!r} declares an empty effort set — only null effort "
+                            f"is accepted; got {effort!r}; accepted efforts for this model: (none)"
+                        ),
+                    )
+            elif allowed and effort is not None:
+                if _match_effort(effort, allowed) is None:
+                    allowed_text = _format_valid(allowed) if allowed else "(none)"
+                    detail = (
+                        f"effort {effort!r} is not valid for model {model!r}; "
+                        f"accepted efforts for this model: {allowed_text}"
+                    )
+                    hint = _cross_vendor_effort_hint(effort)
+                    if hint:
+                        detail = f"{detail}; {hint}"
+                    return _entry_refusal("invalid-model-effort", detail)
+        fail_reason = resolved.get("reason") or ""
+        if "conflicts with" in fail_reason and "dispatch token" in fail_reason:
+            detail = fail_reason.replace(
+                "conflicts with the effort", "conflicts with effort",
+            )
+            return _entry_refusal(
+                "effort-token-conflict",
+                f"{detail}; accepted: {_ACCEPTED_SEAT}",
+            )
+        return _resolve_dispatch_refusal(resolved, role=role, vendor=vendor)
+
+    model_id = resolved["model_id"]
+    effort_val = resolved["effort"]
+    reg_effort_source = resolved["effort_source"]
+    effort_source = _map_effort_source(reg_effort_source)
+    model_source = _model_source_from_resolution(parsed_model, reg_effort_source)
+    allowed = _model_allowed_efforts(vendor, model_id)
+    if (
+        allowed is not None
+        and not allowed
+        and effort_val is None
+        and reg_effort_source != "seat-default"
+        and model is not None
+    ):
+        effort_source = "caller"
+
+    out = dict(parsed)
+    out.update({
+        "ok": True,
+        "vendor": vendor,
+        "model": model_id,
+        "effort": effort_val,
+        "role": role,
+        "modelSource": model_source,
+        "effortSource": effort_source,
+    })
+    return out
+
+
+def _validate_model_effort(bundle: dict) -> dict:
+    vendor = bundle["vendor"]
+    model_id = bundle.get("model")
+    effort = bundle.get("effort")
+    source = bundle.get("source")
+
+    if not isinstance(model_id, str) or not model_id:
+        return {
+            "ok": False,
+            "reason": "model-required",
+            "detail": (
+                "seat model must be a registry model id; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+
+    if not model_registry.is_registered(vendor, model_id):
+        parsed = model_registry.parse_dispatch_token(vendor, model_id)
+        if parsed is None:
+            out = dict(bundle)
+            out.update({
+                "ok": True,
+                "vendor": vendor,
+                "model": model_id,
+                "effort": effort,
+                "effortSource": "caller",
+            })
+            return out
+        model_id, tok_effort = parsed
+        if tok_effort is not None and effort is not None and tok_effort != effort:
+            return {
+                "ok": False,
+                "reason": "effort-token-conflict",
+                "detail": (
+                    f"effort {effort!r} conflicts with effort {tok_effort!r} "
+                    f"encoded in model token {bundle.get('model')!r}; "
+                    f"accepted: {_ACCEPTED_SEAT}"
+                ),
+            }
+        if effort is None and tok_effort is not None:
+            effort = tok_effort
+
+    allowed = _model_allowed_efforts(vendor, model_id)
+    if allowed is None:
+        return {
+            "ok": False,
+            "reason": "unknown-model",
+            "detail": (
+                f"model {model_id!r} is not registered for vendor {vendor!r}; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        }
+
+    effort_source = "caller"
+    if not allowed:
+        if effort is not None:
+            return {
+                "ok": False,
+                "reason": "invalid-model-effort",
+                "detail": (
+                    f"model {model_id!r} declares an empty effort set — only null effort "
+                    f"is accepted; got {effort!r}; accepted efforts for this model: (none)"
+                ),
+            }
+        effort_source = "caller"
+    else:
+        matched = _match_effort(effort, allowed)
+        if matched is None:
+            allowed_text = _format_valid(allowed) if allowed else "(none)"
+            detail = (
+                f"effort {effort!r} is not valid for model {model_id!r}; "
+                f"accepted efforts for this model: {allowed_text}"
+            )
+            hint = _cross_vendor_effort_hint(effort) if isinstance(effort, str) else None
+            if hint:
+                detail = f"{detail}; {hint}"
+            return {
+                "ok": False,
+                "reason": "invalid-model-effort",
+                "detail": detail,
+            }
+        if effort is None:
+            if len(allowed) == 1:
+                matched = allowed[0]
+                effort_source = "resolved"
+            else:
+                return {
+                    "ok": False,
+                    "reason": "invalid-model-effort",
+                    "detail": (
+                        f"effort is required for model {model_id!r}; "
+                        f"accepted efforts for this model: {_format_valid(allowed)}"
+                    ),
+                }
+        elif source == "token" and bundle.get("effort") is None:
+            effort_source = "resolved"
+        else:
+            effort_source = "caller"
+        effort = matched
+
+    out = dict(bundle)
+    out.update({
+        "ok": True,
+        "vendor": vendor,
+        "model": model_id,
+        "effort": effort,
+        "effortSource": effort_source,
+    })
+    return out
+
+
+def validate(bundle: dict, role: str) -> dict:
+    if not bundle.get("ok"):
+        return bundle
+    if not isinstance(role, str) or role not in model_registry.roles():
+        valid = _format_valid(model_registry.roles())
+        return {
+            "ok": False,
+            "reason": "unknown-role",
+            "detail": (
+                f"unknown role {role!r}; valid roles: {valid}; {accepted_role_detail()}"
+            ),
+        }
+    checked = _validate_model_effort(bundle)
+    if not checked.get("ok"):
+        return checked
+    return checked
+
+
+def validate_effort_only(bundle: dict) -> dict:
+    """Model-level effort validation without registry role allowlist (build-argv entry)."""
+    if not bundle.get("ok"):
+        return bundle
+    return _validate_model_effort(bundle)
+
+
+def _entry_refusal(entry_reason: str, detail: str) -> dict:
+    if entry_reason not in ENTRY_REFUSAL_REASONS:
+        vocabulary = ", ".join(sorted(ENTRY_REFUSAL_REASONS))
+        return {
+            "ok": False,
+            "entryReason": ENTRY_REASON_UNDECLARED,
+            "detail": (
+                f"entry refusal reason {entry_reason!r} is not in the declared vocabulary "
+                f"({vocabulary})"
+            ),
+        }
+    return {"ok": False, "entryReason": entry_reason, "detail": detail}
+
+
+def _seat_extra_keys_refusal(obj: dict) -> dict | None:
+    extra = set(obj.keys()) - _SEAT_KEYS
+    if not extra:
+        return None
+    legacy = sorted(k for k in extra if k in _LEGACY_SEAT_JSON_KEYS)
+    if legacy:
+        keys = ", ".join(legacy)
+        return _entry_refusal(
+            "legacy-seat-args",
+            (
+                f"legacy seat JSON key(s) {keys} are no longer accepted; "
+                f"pass --seat as {_ACCEPTED_SEAT}"
+            ),
+        )
+    unknown = ", ".join(sorted(extra))
+    return _entry_refusal(
+        "seat-extra-keys",
+        (
+            f"unknown seat JSON key(s) {unknown}; "
+            "accepted keys: vendor, model, effort, role; "
+            f"accepted: {_ACCEPTED_SEAT}"
+        ),
+    )
+
+
+def _parse_entry_dict(obj: dict) -> dict:
+    if not isinstance(obj, dict):
+        return _entry_refusal(
+            "seat-not-object",
+            f"seat JSON must be an object; accepted: {_ACCEPTED_SEAT}",
+        )
+    extra_refusal = _seat_extra_keys_refusal(obj)
+    if extra_refusal is not None:
+        return extra_refusal
+    if "model" not in obj:
+        return _entry_refusal(
+            "model-key-absent",
+            (
+                'JSON seat must include the "model" key (value may be null); '
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        )
+    if "effort" not in obj:
+        return _entry_refusal(
+            "effort-key-absent",
+            (
+                'JSON seat must include the "effort" key (value may be null); '
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        )
+    if "role" not in obj:
+        return _entry_refusal(
+            "role-key-absent",
+            (
+                'JSON seat must include the "role" key; '
+                f"accepted: {_ACCEPTED_SEAT}; {accepted_role_detail()}"
+            ),
+        )
+    role = obj.get("role")
+    if role is None:
+        return _entry_refusal(
+            "role-null",
+            (
+                'JSON seat "role" must not be null; '
+                f"accepted: {_ACCEPTED_SEAT}; {accepted_role_detail()}"
+            ),
+        )
+    if not isinstance(role, str) or role not in model_registry.roles():
+        valid = _format_valid(model_registry.roles())
+        return _entry_refusal(
+            "unknown-role",
+            (
+                f"unknown role {role!r}; valid roles: {valid}; "
+                f"accepted: {_ACCEPTED_SEAT}; {accepted_role_detail()}"
+            ),
+        )
+    vendor = obj.get("vendor")
+    if not isinstance(vendor, str) or not vendor.strip():
+        valid = _format_valid(model_registry.vendors())
+        return _entry_refusal(
+            "vendor-invalid",
+            (
+                f"seat vendor must be a non-empty string registered in model_registry; "
+                f"valid vendors: {valid}; accepted: {_ACCEPTED_SEAT}"
+            ),
+        )
+    vendor = vendor.strip()
+    if vendor not in model_registry.vendors():
+        valid = _format_valid(model_registry.vendors())
+        return _entry_refusal(
+            "unknown-vendor",
+            (
+                f"unknown vendor {vendor!r}; valid vendors: {valid}; "
+                f"accepted: {_ACCEPTED_SEAT}"
+            ),
+        )
+    model = obj.get("model")
+    if model is not None and not isinstance(model, str):
+        return _entry_refusal(
+            "model-invalid",
+            f"seat model must be a string or null; accepted: {_ACCEPTED_SEAT}",
+        )
+    effort = obj.get("effort")
+    if effort is not None and not isinstance(effort, str):
+        return _entry_refusal(
+            "effort-invalid",
+            f"seat effort must be a string or null; accepted: {_ACCEPTED_SEAT}",
+        )
+    if isinstance(effort, str) and not effort.strip():
+        effort = None
+    return {
+        "ok": True,
+        "vendor": vendor,
+        "model": model,
+        "effort": effort,
+        "role": role,
+        "source": "json",
+    }
+
+
+def _parse_entry_raw(seat_raw) -> dict:
+    if isinstance(seat_raw, dict):
+        return _parse_entry_dict(seat_raw)
+    if not isinstance(seat_raw, str) or not seat_raw.strip():
+        return _entry_refusal(
+            "seat-empty",
+            f"seat value must be non-empty; accepted: {_ACCEPTED_SEAT}",
+        )
+    text = seat_raw.strip()
+    if text.startswith("{"):
+        try:
+            obj = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return _entry_refusal(
+                "seat-unparseable",
+                (
+                    f"seat value is not valid JSON; accepted: {_ACCEPTED_SEAT}"
+                ),
+            )
+        return _parse_entry_dict(obj)
+    return _entry_refusal(
+        "seat-token-dropped",
+        (
+            "bare composed-token --seat form is no longer accepted because it cannot "
+            f"carry a role; pass --seat as {_ACCEPTED_SEAT}"
+        ),
+    )
+
+
+def _mode_role_coherence_refusal(role: str) -> dict:
+    return _entry_refusal(
+        "mode-role-mismatch",
+        (
+            f"--mode {_MODE_BRIEF_CHECK} requires seat role 'brief-check'; "
+            f"got role {role!r}; accepted: {_ACCEPTED_SEAT}; "
+            f'{accepted_role_detail()}'
+        ),
+    )
+
+
+def _brief_check_role_mode_refusal(effective_mode: str) -> dict:
+    return _entry_refusal(
+        "mode-role-mismatch",
+        (
+            f"seat role 'brief-check' requires --mode {_MODE_BRIEF_CHECK}; "
+            f"got mode {effective_mode!r}; accepted: {_ACCEPTED_SEAT}; "
+            f'{accepted_role_detail()}'
+        ),
+    )
+
+
+def dispatch_review_mode_for_role_check(mode: str | None, run_dir) -> object | str | None:
+    """Continuation-aware effective mode for post-allowlist role coherence."""
+    if run_dir is None:
+        return None
+    import engine_dispatch as ed  # noqa: WPS433 — lazy: journal peek only on dispatch-review
+
+    try:
+        run_dir_real = os.path.realpath(run_dir)
+    except OSError:
+        return None
+    records, _corrupt = ed._journal_read(run_dir_real)
+    opened = ed._journal_state(records).get("opened")
+    if opened is None:
+        return None
+    journal_mode = opened.get("mode") or ed.sanitized_view.MODE_REVIEW
+    if mode is None:
+        return journal_mode
+    if mode != journal_mode:
+        return _MODE_ROLE_CHECK_SKIP
+    return mode
+
+
+def _dispatch_review_mode_role_refusal(
+    role: str,
+    *,
+    mode: str | None,
+    mode_for_role_check,
+) -> dict | None:
+    """Post-allowlist brief-check mode/role coherence for dispatch-review."""
+    if mode_for_role_check is _MODE_ROLE_CHECK_SKIP:
+        return None
+    effective = (
+        mode_for_role_check
+        if mode_for_role_check is not None
+        else (mode if mode is not None else "review")
+    )
+    if effective == _MODE_BRIEF_CHECK and role != "brief-check":
+        return _mode_role_coherence_refusal(role)
+    if role == "brief-check" and effective != _MODE_BRIEF_CHECK:
+        return _brief_check_role_mode_refusal(effective)
+    return None
+
+
+def run_kind_for_role(role: str) -> str | None:
+    """Derive build-argv sandbox run kind from a registry role's read_write classification."""
+    rw = model_registry.role_read_write(role)
+    if rw == "read":
+        return "review"
+    if rw == "write":
+        kind = model_registry.engine_pref_role_kind(role)
+        if kind in _BUILD_ARGV_RUN_KINDS:
+            return kind
+        return "build"
+    return None
+
+
+def _run_kind_unclassified_refusal(role: str) -> dict:
+    return _entry_refusal(
+        "run-kind-unclassified",
+        (
+            f"role {role!r} has no read_write classification; "
+            f"build-argv requires a read or write role; accepted: {_ACCEPTED_SEAT}; "
+            f"{accepted_role_detail()}"
+        ),
+    )
+
+
+def build_argv_run_kind_mismatch_refusal(
+    role: str, *, supplied: str, accepted: str,
+) -> dict:
+    return _entry_refusal(
+        "run-kind-role-mismatch",
+        (
+            f"--run-kind {supplied!r} disagrees with seat role {role!r} "
+            f"(read_write={model_registry.role_read_write(role)!r}); "
+            f"accepted run kind for this role: {accepted!r}; "
+            f"accepted: {_ACCEPTED_SEAT}; {accepted_role_detail()}"
+        ),
+    )
+
+
+def _verb_role_coherence_refusal(role: str, *, verb: str) -> dict | None:
+    rw = model_registry.role_read_write(role)
+    if verb in ("dispatch-review", "dispatch-write") and rw is None:
+        return _entry_refusal(
+            "verb-role-mismatch",
+            (
+                f"role {role!r} has no read_write classification; "
+                f"{verb} requires a classified read or write role; "
+                f"accepted: {_ACCEPTED_SEAT}; {accepted_role_detail()}"
+            ),
+        )
+    if verb == "dispatch-write" and rw == "read":
+        detail = (
+            f"role {role!r} is read-only (read_write=read); "
+            f"dispatch-write requires a write role; accepted: {_ACCEPTED_SEAT}; "
+            f"{accepted_role_detail()}"
+        )
+    elif verb == "dispatch-review" and rw == "write":
+        detail = (
+            f"role {role!r} is write-only (read_write=write); "
+            f"dispatch-review requires a read role; accepted: {_ACCEPTED_SEAT}; "
+            f"{accepted_role_detail()}"
+        )
+    else:
+        return None
+    return _entry_refusal("verb-role-mismatch", detail)
+
+
+def _malformed_allowlist_verdict_detail(role: str, vendor: str) -> str:
+    return (
+        "allowlist guard returned malformed verdict — expected dispatch_guard.validate("
+        f"{role!r}, {vendor!r}, model, effort) to return ok, reason, allowlist, and "
+        "allowlist_pairs naming the sanctioned model allowlist for this role and vendor, "
+        "with echoed role, vendor, model_id (or resolved_model), effort, and a non-empty "
+        "allowlist_pairs containing the resolved (model, effort) pair; "
+        "fix the seat or re-run dispatch_guard check"
+    )
+
+
+def _normalize_allowlist_verdict(verdict, *, role: str, vendor: str, model: str, effort):
+    malformed = _malformed_allowlist_verdict_detail(role, vendor)
+    if not isinstance(verdict, dict):
+        return _entry_refusal("allowlist-malformed", malformed)
+    if verdict.get("ok") is not True:
+        reason = verdict.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return _entry_refusal("allowlist-malformed", malformed)
+        return {
+            "ok": False,
+            "entryReason": "allowlist-refused",
+            "detail": reason,
+            "allowlistVerdict": verdict,
+        }
+    if verdict.get("role") != role or verdict.get("vendor") != vendor:
+        return _entry_refusal("allowlist-malformed", malformed)
+    resolved_model = verdict.get("model_id")
+    if resolved_model is None:
+        resolved_model = verdict.get("resolved_model")
+    if resolved_model is None or verdict.get("effort") != effort:
+        return _entry_refusal("allowlist-malformed", malformed)
+    pairs = verdict.get("allowlist_pairs")
+    if not isinstance(pairs, (list, tuple)) or not pairs:
+        return _entry_refusal("allowlist-malformed", malformed)
+    normalized_pairs = []
+    for pair in pairs:
+        if (
+            isinstance(pair, (list, tuple))
+            and len(pair) == 2
+        ):
+            normalized_pairs.append((pair[0], pair[1]))
+    if (model, effort) not in normalized_pairs:
+        return _entry_refusal("allowlist-malformed", malformed)
+    return {"ok": True, "allowlistVerdict": verdict}
+
+
+def _dispatch_adapter_vendors():
+    import engine_adapter  # noqa: WPS433 — lazy: argv-capable vendor roster lives in adapter
+
+    return engine_adapter._BUILD_ARGV_VENDORS
+
+
+def _undispatchable_vendor_refusal(vendor: str, *, verb: str) -> dict:
+    valid = _format_valid(_dispatch_adapter_vendors())
+    return _entry_refusal(
+        "undispatchable-vendor",
+        (
+            f"vendor {vendor!r} has no engine adapter for {verb}; "
+            f"valid dispatch vendors: {valid}; accepted: {_ACCEPTED_SEAT}"
+        ),
+    )
+
+
+def resolve_entry(
+    seat_raw, *, verb, mode=None, mode_for_role_check=None,
+) -> dict:
+    """Single chokepoint for dispatch entry seat resolution (#1269 WO-1)."""
+    if verb not in _ENTRY_VERBS:
+        return _entry_refusal(
+            "unknown-verb",
+            f"unknown resolve_entry verb {verb!r}; accepted verbs: "
+            f"{_format_valid(tuple(sorted(_ENTRY_VERBS)))}",
+        )
+    parsed = _parse_entry_raw(seat_raw)
+    if not parsed.get("ok"):
+        return parsed
+    role = parsed["role"]
+    if verb in ("dispatch-review", "dispatch-write"):
+        verb_refusal = _verb_role_coherence_refusal(role, verb=verb)
+        if verb_refusal is not None:
+            return verb_refusal
+    if verb == "build-argv" and run_kind_for_role(role) is None:
+        return _run_kind_unclassified_refusal(role)
+    checked = _resolve_entry_model_effort(parsed, role)
+    if not checked.get("ok"):
+        return checked
+    vendor = checked["vendor"]
+    model = checked["model"]
+    effort = checked.get("effort")
+    if verb in ("dispatch-review", "dispatch-write"):
+        if vendor not in _dispatch_adapter_vendors():
+            return _undispatchable_vendor_refusal(vendor, verb=verb)
+    if verb == "dispatch-review":
+        mode_refusal = _dispatch_review_mode_role_refusal(
+            role, mode=mode, mode_for_role_check=mode_for_role_check,
+        )
+        if mode_refusal is not None:
+            return mode_refusal
+    try:
+        verdict = dispatch_allowlist.validate(role, vendor, model, effort)
+    except Exception:
+        return _entry_refusal(
+            "allowlist-raised",
+            "allowlist guard raised unexpectedly",
+        )
+    normalized = _normalize_allowlist_verdict(
+        verdict, role=role, vendor=vendor, model=model, effort=effort,
+    )
+    if not normalized.get("ok"):
+        return normalized
+    effort_source = checked.get("effortSource", "caller")
+    allowlist_verdict = dict(normalized["allowlistVerdict"])
+    allowlist_verdict["effort_source"] = effort_source
+    return {
+        "ok": True,
+        "vendor": vendor,
+        "model": model,
+        "effort": effort,
+        "role": role,
+        "modelSource": checked.get("modelSource", "caller"),
+        "effortSource": effort_source,
+        "roleSource": "seat",
+        "allowlistVerdict": allowlist_verdict,
+    }

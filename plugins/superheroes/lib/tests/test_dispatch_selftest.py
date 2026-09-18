@@ -134,8 +134,10 @@ def test_cursor_build_argv_refuses_third_party_model_ids():
     import engine_adapter as ea
 
     for model_id in ("opus-5", "gpt-5.6-sol"):
-        res = ea.build_argv_result("cursor", "build", "high", {"engine_model": model_id})
-        assert res == {"argv": [], "reason": "unregistered-engine-model"}, model_id
+        seat = {"vendor": "cursor", "model": model_id, "effort": "high"}
+        res = ea.build_argv_result(seat, "build", {})
+        assert res["reason"] == "unregistered-engine-model", model_id
+        assert res["argv"] == []
 
 
 _READ_ERROR = "core-md-unreadable: boom"
