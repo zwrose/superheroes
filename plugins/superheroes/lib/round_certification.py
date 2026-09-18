@@ -594,24 +594,52 @@ def _orders_manifest_path(session_dir, rnd, phase, attempt):
                         "manifest.a%d.json" % attempt)
 
 
-def _roster_from_orders_emitted(session_dir, event):
+def _orders_emitted_roster_or_refusal(session_dir, event):
+    """Return (roster, None) when authenticated, or (None, refusal) when unusable."""
     manifest_sha = event.get("manifestSha256")
-    if not isinstance(manifest_sha, str) or not manifest_sha:
-        return []
     phase = event.get("phase")
     rnd = event.get("round")
     attempt = event.get("attempt")
+
+    def _manifest_artifact():
+        if phase is not None and rnd is not None and attempt is not None:
+            return _orders_manifest_path(session_dir, rnd, phase, attempt)
+        return JOURNAL_FILE
+
+    if not isinstance(manifest_sha, str) or not manifest_sha:
+        return None, _refusal(
+            "unfetched-findings",
+            _manifest_artifact(),
+            "orders-emitted event lacks manifestSha256 integrity field",
+        )
     if phase is None or rnd is None or attempt is None:
-        return []
-    manifest = _read_json(_orders_manifest_path(session_dir, rnd, phase, attempt))
+        return None, _refusal(
+            "unfetched-findings",
+            JOURNAL_FILE,
+            "orders-emitted event lacks round binding fields",
+        )
+    manifest_path = _orders_manifest_path(session_dir, rnd, phase, attempt)
+    manifest = _read_json(manifest_path)
     if not isinstance(manifest, dict):
-        return []
+        return None, _refusal(
+            "unfetched-findings",
+            manifest_path,
+            "orders manifest unreadable or malformed",
+        )
     computed_sha = session_contract.sha256_text(session_contract.canonical(manifest))
     if computed_sha != manifest_sha:
-        return []
+        return None, _refusal(
+            "unfetched-findings",
+            manifest_path,
+            "orders manifest sha256 does not match event manifestSha256",
+        )
     seats = manifest.get("seats")
     if not isinstance(seats, dict):
-        return []
+        return None, _refusal(
+            "unfetched-findings",
+            manifest_path,
+            "orders manifest seats field is not an object",
+        )
     roster = []
     for entry in seats.values():
         if not isinstance(entry, dict):
@@ -623,11 +651,22 @@ def _roster_from_orders_emitted(session_dir, event):
         if isinstance(occurrence, bool) or not isinstance(occurrence, int) or occurrence < 0:
             occurrence = 0
         roster.append((seat, occurrence))
+    return roster, None
+
+
+def _roster_from_orders_emitted(session_dir, event):
+    roster, refusal = _orders_emitted_roster_or_refusal(session_dir, event)
+    if refusal is not None:
+        return None
     return roster
 
 
 def _journal_open_seats(journal, session_dir=None):
-    """Seats opened by advance/next for a dispatch phase but never recorded — incomplete journal."""
+    """Seats opened by advance/next for a dispatch phase but never recorded — incomplete journal.
+
+    Returns (unclosed, refusal). refusal is set when an orders-emitted roster cannot be
+    authenticated.
+    """
     opened = {}
     closed = set()
     for event in journal:
@@ -639,7 +678,10 @@ def _journal_open_seats(journal, session_dir=None):
         seat = event.get("seat")
         if (cmd in ("next", "advance") and outcome == "orders-emitted"
                 and session_dir is not None):
-            for sk, occ in _roster_from_orders_emitted(session_dir, event):
+            roster, refusal = _orders_emitted_roster_or_refusal(session_dir, event)
+            if refusal is not None:
+                return None, refusal
+            for sk, occ in roster:
                 opened[(phase, rnd, attempt, sk, occ)] = event
         if cmd in ("next", "advance") and outcome in ("emitted", "pending", "opened"):
             roster = event.get("roster") or event.get("seats")
@@ -671,7 +713,7 @@ def _journal_open_seats(journal, session_dir=None):
     for key, event in opened.items():
         if key not in closed:
             unclosed.append((key, event))
-    return unclosed
+    return unclosed, None
 
 
 def _certified_head_sha(ctx):
@@ -1151,7 +1193,9 @@ def check_same_family_seat(ctx):
 def check_unfetched_findings(ctx):
     session_dir = ctx["session_dir"]
     journal = ctx["journal"]
-    unclosed = _journal_open_seats(journal, session_dir)
+    unclosed, roster_refusal = _journal_open_seats(journal, session_dir)
+    if roster_refusal is not None:
+        return roster_refusal
     if unclosed:
         key, event = unclosed[0]
         seat = key[3]
