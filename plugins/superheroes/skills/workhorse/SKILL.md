@@ -392,7 +392,10 @@ When the work is a family of parallel siblings, **one concern per PR** — one l
 lens-family work — and any **shared shell or contract seam lands first, as its own small PR**,
 before the siblings that build on it. **Crossing twice the size your brief estimated in non-test changed
 lines (additions plus deletions outside `tests/`) is itself the tripwire** — disclose it mid-build and offer a split,
-rather than letting the overrun surface at handback. **Gates and enforcement:** any work order that
+rather than letting the overrun surface at handback. Two absolute bars ride beside it, counted over non-test lines
+added or modified (deletions, regenerated artifacts, tests and records excluded): at **300**, report the count and a
+proposed cut on the issue and continue; at **600**, stop and hand the split-or-park call to the advisor — never yours
+alone and never the owner's — and resume on the advisor's recorded ruling (`review-discipline.md` § Size). **Gates and enforcement:** any work order that
 adds a **gate, hook, or enforcement mechanism** names, in the brief before code, the ratified
 precondition that unlocks it and the evidence that it is met — in every project. When the project
 being built is the superheroes source repository itself, cite the entry and unlock condition in the
@@ -627,7 +630,7 @@ then carries its own provenance through any number of session deaths.
 A dispatched order's premises — the base commit, "main will not move", the sequencing you assumed —
 bind **you, the dispatcher**. When the world moves under a live order, amend the order; an
 implementer that parks on a stale premise did the right thing. When you are about to dispatch a
-**third** rework of the same surface in one build, **do not dispatch it**: **a third rework of the same surface is the tripwire**, so the fourth patch on
+**third** rework of the same surface in one build (mechanical fixes the certified loop applies inside its own rounds do not count — the loop's round cap bounds them), **do not dispatch it**: **a third rework of the same surface is the tripwire**, so the fourth patch on
 that surface never happens. On a lane you can affirmatively call converged, **stopping and handing the design signal up satisfies it**: refuse the fourth patch, name the seam problem in the handback, and
 ship remaining minors as disclosed follow-ups; the handback must **state that the third-rework
 tripwire fired** and name the seam problem. Where you cannot say with confidence that the lane has
