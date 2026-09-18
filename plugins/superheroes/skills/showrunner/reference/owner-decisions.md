@@ -638,8 +638,11 @@ exact merge command**. It comes last for a reason an earlier slot cannot fix —
 routinely sends a vetted pull request back**, so a click list assembled any earlier names pull
 requests that are no longer mergeable, and the owner is left working out which lines still stand.
 **The list is delivered, not requested**: an owner who has to ask for the merge commands by hand is
-doing assembly the advisor was already positioned to do. **The click itself stays the owner's** —
-see [What batch-1 execution may and may not do](#what-batch-1-execution-may-and-may-not-do).
+doing assembly the advisor was already positioned to do. **What batch 3 asks for is the owner's
+word**, not a craft call the advisor takes on their behalf — who then runs the command, and under
+what preconditions, is the release-and-merge duty's business and is not decided here; see
+[What batch-1 execution may and may not do](#what-batch-1-execution-may-and-may-not-do), which
+reserves merge, release, publish, and force-push from anything execution does on a ruling.
 
 **Every sitting opens or closes with the "what I decided for you" recap.** One line per craft call
 the advisor has decided under the standing order since the last sitting — **what it was, what was
@@ -730,7 +733,7 @@ item.
 (1 - a, 2 - b); batch 1 = blocks advisor next action (never new-issue filings), alone first; as soon
 as batch-1 rulings land, deliver batch 2 while executing what batch 1 unblocked alongside; batch 3
 last = the mergeable pull requests in merge order, each with its acceptances and its exact merge
-command, the click still the owner's; state empty batches plainly.
+command; what it asks for is the owner's word, never a craft call; state empty batches plainly.
 **Recap:** every sitting opens or closes with the "what I decided for you" lines — one per craft
 call decided since the last sitting, each vetoable; a recap, not a batch.
 

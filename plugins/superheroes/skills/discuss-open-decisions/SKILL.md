@@ -78,7 +78,7 @@ When a batch-2 ruling closes or declines a collector-backed item, strike it from
 
 Only once every batch-2 ruling has landed **and** what those rulings unblocked has been executed in Step 7 — a batch-2 ruling routinely sends a vetted PR back, so a list assembled before that execution can name a PR that is no longer mergeable. That is why this batch is assembled last rather than earlier.
 
-Deliver per `## Delivery mechanics`: the mergeable PRs in merge order, each with the notable acceptances it carries and its exact merge command. The click stays the owner's.
+Deliver per `## Delivery mechanics`: the mergeable PRs in merge order, each with the notable acceptances it carries and its exact merge command. What this batch asks for is the owner's word — merge, release, publish, and force-push stay outside what you execute on a ruling, per `## What batch-1 execution may and may not do`.
 
 ## Step 9 — Close with the recap
 
@@ -97,5 +97,5 @@ Close the sitting with the "what I decided for you" recap per `## Delivery mecha
 | "The numbers live in the chat — I'll remember" | see Step 4 |
 | "I'll draft the click list up front so it's ready" | see `## Delivery mechanics` — a batch-2 ruling routinely sends a vetted PR back; batch 3 is assembled after Step 7, not before. |
 | "The owner can ask for the merge commands if they want them" | see `## Delivery mechanics` — batch 3 is delivered, not requested. |
-| "I decided those myself, so there's nothing to report" | see `## Craft calls and owner calls` and `## Delivery mechanics` — the standing order is always on **because** every call it covers is recapped for veto. |
+| "I decided those myself, so there's nothing to report" | see `## Craft calls and owner calls` and `## Delivery mechanics` |
 | "I'll append follow-ups to the collector — the owner can review them later" | see `## The front door`, `## The venue ladder`, showrunner duty 4, and `skills/showrunner/reference/owner-decisions.md` — every owner call is appended **before** it is proposed in this session's delivery message and discussed now. |
