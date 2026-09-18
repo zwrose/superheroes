@@ -55,8 +55,10 @@ in `escalation.py` (paired with this rubric as `loop_state.py` is paired with `r
 - irreversible git/infra: push to a protected branch, force-push / history-rewrite, merge, deploy
 - crosses a trust boundary (runs external/untrusted code) or degrades security/observability
 - changes public-facing behavior / shared resources others depend on
-- modifies the safety machinery itself at runtime (the escalation rubric, the floor, the
-  loop-enforcement state)
+- modifies its own control system at runtime — mutating the live escalation rubric, the floor, or
+  the loop-enforcement state that is currently governing the run. An ordered source edit in a build
+  worktree, under a ratified issue or a work order, is **not** this: the boundary is live control
+  state mid-run, not the files a build changes.
 
 **Global invariant (above the list):** the agent may **never** grant itself authority or bypass a
 gate. Skipping or auto-resolving its own GATE is self-granting and is forbidden.

@@ -30,13 +30,6 @@ artifact. **Prose-driven review** on the read-only path (`--review-only`) is a d
 lane with its own receipt obligation — see `rubric/review-discipline.md` § Prose-driven review; it
 is not governed by this loop contract.
 
-The review auto-fixer's file-scope guard answers `{"allow": false}` for
-`lib/round_driver.py` because the driver is **safety machinery**
-(`lib/escalation.py:92-126` — the safety-machinery set, which names `round_driver.py` explicitly
-with the `#507` reason), so a review of the driver's own source **escalates those findings to the
-orchestrator as implementer work instead of self-fixing** — that is **intended**, not a gap: a
-fixer that could edit the loop's own driver could edit away the guard that constrains it.
-
 Degraded / single-vendor environments stay **on** the mandated path: the same driver, the same
 journal, and `independence: "degraded"` stamps on audit targets and the terminal certification
 shape — never a silent off-ramp.

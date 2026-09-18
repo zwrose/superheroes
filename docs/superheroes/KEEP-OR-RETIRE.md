@@ -520,7 +520,9 @@ The list's units are the census rows, and each entry is keyed to its census id.
   two-to-three-round convergence (the assessment record, keeps receipts).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** structural — stuck-loop detection guards loop integrity independent of vendor.
+- **Notes.** structural — stuck-loop detection guards loop integrity independent of vendor. The
+  fixer file-scope guard that used to ride on `escalation.py` / `escalation_resolve.py` is retired;
+  receipt: <PR-LINK>; condition: owner's ruling.
 
 #### D6 — Handback gate
 

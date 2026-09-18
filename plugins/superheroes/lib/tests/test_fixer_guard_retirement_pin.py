@@ -2,7 +2,8 @@
 
 Bites on: code surfaces this order owns — the escalation module must not expose the
 guard machinery, and the rendered dispatch-fixer order must not cite the wrapper or
-guard step.
+guard step — plus prose surfaces: retired vocabulary absent and the owner-authority-gate
+family rule re-homed in review-discipline.md.
 """
 import os
 
@@ -15,6 +16,15 @@ _PLUGIN_ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
 _SESSION = "/tmp/superheroes-session-1299-pin"
 _REPO = "/home/user/proj"
 _PLUGIN_RUBRIC = os.path.join(_PLUGIN_ROOT, "rubric", "review-base.md")
+_REVIEW_DISCIPLINE = os.path.join(_PLUGIN_ROOT, "rubric", "review-discipline.md")
+_AUTO_FIX_LOOP = os.path.join(
+    _PLUGIN_ROOT, "skills", "review-code", "reference", "auto-fix-loop.md"
+)
+
+
+def _read(path):
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
 
 
 def test_escalation_module_has_no_file_scope_guard():
@@ -56,3 +66,21 @@ def test_dispatch_fixer_order_has_no_guard_instruction():
     assert "ESCALATION_WRAPPER_PATH" not in text
     assert "Escalation guard" not in text
     assert "file-scope guard" not in text
+
+
+def test_review_discipline_retired_guard_vocabulary_absent():
+    text = _read(_REVIEW_DISCIPLINE)
+    assert "### The safety-machinery route" not in text
+    assert "safety machinery" not in text
+
+
+def test_auto_fix_loop_retired_guard_vocabulary_absent():
+    text = _read(_AUTO_FIX_LOOP)
+    assert "safety machinery" not in text
+    assert "file-scope guard" not in text
+
+
+def test_review_discipline_owner_authority_gate_family_survives():
+    text = _read(_REVIEW_DISCIPLINE)
+    assert "### The owner-authority-gate family — the owner's word, per change" in text
+    assert "owner's word first, per change" in text
