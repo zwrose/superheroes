@@ -56,9 +56,12 @@ in `escalation.py` (paired with this rubric as `loop_state.py` is paired with `r
 - crosses a trust boundary (runs external/untrusted code) or degrades security/observability
 - changes public-facing behavior / shared resources others depend on
 - modifies its own control system at runtime — mutating the live escalation rubric, the floor, or
-  the loop-enforcement state that is currently governing the run. An ordered source edit in a build
-  worktree, under a ratified issue or a work order, is **not** this: the boundary is live control
-  state mid-run, not the files a build changes.
+  the loop-enforcement state that this run is currently executing under: control material the run
+  has loaded and will re-read or re-invoke before it finishes. Only edits whose effect is deferred
+  to a later run — taken up only after this run ends or from a fresh checkout — are outside this
+  item; an edit the current run will itself re-load stays on the floor. The loop driver resolves its
+  resource root from its own module path and is re-invoked from disk each phase, so a mid-run edit
+  to loop source or rubric in the build worktree changes what the same run loads on its next phase.
 
 **Global invariant (above the list):** the agent may **never** grant itself authority or bypass a
 gate. Skipping or auto-resolving its own GATE is self-granting and is forbidden.
