@@ -63,6 +63,18 @@ quiet week.
 **State grounds per item, not once per batch.** A single preamble that says "these are all taste
 calls" does not substitute for naming the ground on each item.
 
+**The advisor derives the grading, and never inherits it.** An item's tier, and whether it is a
+craft call or an owner call, is the advisor's own read of the ratified text — this filter, the two
+tests it cites, and the project's
+[material-consequence](../../../rubric/glossary.md#material-consequence) line — applied to the item
+in front of them. How the item was **framed by whoever raised it** — a builder's follow-up line, a
+reviewer's severity word, an issue title that calls something a decision — is **input to that read,
+never the grading itself**. A grading inherited from the raiser is how a craft call arrives at the
+owner dressed as a product call, and how a real trade arrives filed as a minor note; in both
+directions the owner pays for someone else's framing. The framing is still worth reading: it is
+evidence about the item, and where it disagrees with the advisor's own read, saying so in the item's
+*why it is yours* is more useful to the owner than a silent re-grade.
+
 ## The per-item spine
 
 Five parts, in this order, on every item that passes the filter:
@@ -307,6 +319,19 @@ declined with a trigger by default.
    alone, so the owner can see exactly which machinery entered waves through adoption rather than
    through the dial.
 7. **Mid-build improvisation stays forbidden**, exactly as it is today.
+8. **Fold, stack, or file — the three dispositions for a follow-up on live work.** A follow-up that
+   lands on the **same surface** as a live child and sits **below** the
+   [material consequence](../../../rubric/glossary.md#material-consequence) line **folds into that
+   child**, by the authorization path items 2 through 4 already set and never as a widening after
+   the word. A follow-up on a **new surface stacks as its own layer** — a sibling that builds on the
+   child rather than scope poured into it, because a new surface is new review, new lane call, and
+   new risk whatever its size. A follow-up **above the material line**, and **any child that has
+   already run more than three lanes**, is **filed as its own issue**: above the line it is the
+   owner's call by definition, and past three lanes the child has stopped being one piece of work
+   and is absorbing a queue. **Both thresholds are read from a number, not from memory** — the
+   [gardening record](#the-gardening-record) carries the follow-ups counted per merged pull request
+   and the lanes counted per child, so "how many lanes has this one had" is looked up rather than
+   recalled, which is exactly the question a session mid-lane answers wrongly.
 
 ## The reader clause
 
@@ -355,6 +380,18 @@ explicitly droppable, never a ticket.
 Venue-1 continuations and craft declines are craft calls. The advisor executes and records for veto.
 Venue-2 scope changes, product declines (any decline that trades away something a product reading
 could want), and items whose door grading is uncertain are owner calls.
+
+**The standing order is always on.** The advisor decides craft calls itself **at every hour**,
+whether or not the owner is reachable. **There is no overnight mode and no daytime mode**: the
+owner's presence governs **when a decision is discussed**, never **whose decision it is**. Saving
+craft calls for the hours the owner is awake is the waste this contract exists to remove — it turns
+every one of them into an interruption the owner did not need, and it stalls work that was never
+theirs to unblock. What keeps an always-on standing order honest is that nothing decided under it is
+hidden: each craft call is recorded where the owner can read it, and each sitting carries the recap
+that puts those records in front of them line by line, any of which they can reverse (see
+[Delivery mechanics](#delivery-mechanics)). An advisor unsure whether an item is a craft call has
+not met the standing order's condition at all — doubt resolves upward, exactly as it does when the
+owner is sitting right here.
 
 **Every owner call is appended to the collector at vet time, unconditionally, so the collector is the complete register by construction; owner attendance governs only when discussion happens — attended, the item is proposed in the vet-delivery message and may be struck minutes after it was appended; absent, it awaits the batch.**
 
@@ -501,6 +538,23 @@ advisor run together to keep calibration honest.
    also records **the latest mutation run's survivors and kills per test file the run covered**. **A
    file no run covered reads as unmeasured for mutation, never as no kills**.
 
+**Memory gardening at the pass.** The advisor's durable memory is the one instrument in this
+contract that nobody else can read, so it is gardened where everything else is — at the pass, and
+never on its own schedule. Three things, and the duties above are untouched by them; this is a
+standing rule of the pass, not an eighth duty.
+
+- **A rule a plugin user would need leaves memory for a plugin surface.** Memory reaches one advisor
+  on one machine; a skill, a charter, or a rubric reaches everyone who installs the plugin. A
+  user-relevant rule kept in memory is shipped to nobody, and it reads as covered because the one
+  session that remembers it keeps honouring it. Memory may keep a recall copy — never the only copy.
+- **The pass re-reads every memory entry older than the last doctrine change.** A doctrine change is
+  what silently stales an entry: the entry stays true about a surface that no longer exists, and
+  nothing about the entry itself says so. Re-reading them against the current text is what turns a
+  stale entry into a corrected or deleted one instead of a confidently wrong recall.
+- **Every memory write lands its index line.** An entry the index does not name is an entry no
+  session will recall, which is the same outcome as never having written it — with the cost already
+  paid.
+
 - **The pass's output is batched words for the owner, delivered in the walk itself.**
 - **The decisions-asked count, and the baseline the forward share is read against, come from the
   project's own record**, its configuration profile and its gardening records, **never from a founding
@@ -522,6 +576,10 @@ advisor run together to keep calibration honest.
 - **the latest mutation results**: survivors and kills per test file the run covered (unmeasured
   where no run covered the file);
 - **the lists**: the folded-in items, and the declines with their triggers;
+- **the two fold counts**: follow-ups per merged pull request, and lanes per child — the numbers the
+  fold, stack, or file rule is read against;
+- **the memory gardening done**: entries moved out to a plugin surface, entries re-read against the
+  last doctrine change, and any index lines repaired;
 - the workaround-marker state;
 - the guardian staleness read and any pending triage;
 - the open questions the passes carry until settled;
@@ -564,8 +622,26 @@ and **explicitly excludes new-issue filings, which are never blocking**. **Batch
 alongside** the owner's batch-2 rulings, not ahead of them. That overlap is why the split exists at
 all, bounded by the section below.
 
+**Batch 3 is the click list, and it comes last.** Once batch-2 rulings have landed and what they
+unblocked has been executed, the walk ends with a third batch: **the pull requests that are ready to
+merge, in merge order**, each carrying **the notable acceptances it commits the owner to** and **the
+exact merge command**. It comes last for a reason an earlier slot cannot fix — **a batch-2 ruling
+routinely sends a vetted pull request back**, so a click list assembled any earlier names pull
+requests that are no longer mergeable, and the owner is left working out which lines still stand.
+**The list is delivered, not requested**: an owner who has to ask for the merge commands by hand is
+doing assembly the advisor was already positioned to do. **The click itself stays the owner's** —
+see [What batch-1 execution may and may not do](#what-batch-1-execution-may-and-may-not-do).
+
+**Every sitting opens or closes with the "what I decided for you" recap.** One line per craft call
+the advisor has decided under the standing order since the last sitting — **what it was, what was
+decided, and where the determination is recorded**. **Every line is vetoable on the spot**, and the
+recap exists to make that veto cheap: a decision the owner can only reach by opening artifacts is
+one they will not in practice review. **It is a recap, not a batch** — nothing in it waits on a
+word, and an item that needs one is not delivered here in place of the filter and the spine.
+
 **State an empty batch plainly** — so the owner can tell "nothing is waiting on you" from "the sweep
-failed."
+failed." The same holds for an empty batch 3 and an empty recap: nothing mergeable, and nothing
+decided for the owner this window, are each a fact worth stating rather than a blank space.
 
 ## Formatting — one block per spine section
 
@@ -624,14 +700,18 @@ or reports the malformed region, rather than deleting anything.
 
 **Filter (duty 5):** each item names why it is the owner's (taste, trade, or commitment). Filtered,
 never swallowed — separate short list before batch 1 with a one-line reason each; grounds per item,
-not per batch.
+not per batch. Tier and craft-or-owner grading are derived by the advisor from the ratified text —
+whoever raised the item framed it, and that framing is input, never the grading.
 
 **Spine per item:** (1) why it is yours, (2) context — rule without another artifact, (3) options with
 consequences (lettered a, b, c…), (4) cost of inaction, (5) recommendation by key, with the why and
 the cost named — Recommendation: b — …. Empty sections stated empty, never dropped.
 
 **Residual disposition:** machinery: front door evidence bar (executed evidence on a live surface; dark and future surfaces fail; in-envelope variance is not defect evidence) → venue ladder once past the bar; product: owner ratification, same venue ladder (continue → fold → file, bundled by surface); decline with a revisit trigger when every venue fails the bar.
-**Call:** at a craft call the advisor executes and records for veto; at an owner call the owner's word via the collector; a filing whose item clears the evidence bar and grades P2 is the advisor's, and every other filing is an owner call; doubt upward.
+**Call:** at a craft call the advisor executes and records for veto — the standing order is always on, at every hour, attended or not; at an owner call the owner's word via the collector; a filing whose item clears the evidence bar and grades P2 is the advisor's, and every other filing is an owner call; doubt upward.
+**Follow-up on live work:** same surface and below the material line → fold into the child; new
+surface → stack a layer; above the line, or a child past three lanes → file its own issue; the
+gardening record carries both counts.
 **Append-always at vet:** every owner call to the collector with door grading (machinery: band,
 evidence tier, resulting tier; product: classification and ratification) and venue on each append.
 **Registry:** `<!-- superheroes:revisit-registry -->` — one pinned comment, one line per declined
@@ -639,8 +719,11 @@ item.
 
 **Delivery:** chat prose only — never structured-question tools; stable item numbers and option letters
 (1 - a, 2 - b); batch 1 = blocks advisor next action (never new-issue filings), alone first; as soon
-as batch-1 rulings land, deliver batch 2 while executing what batch 1 unblocked alongside; state empty
-batches plainly.
+as batch-1 rulings land, deliver batch 2 while executing what batch 1 unblocked alongside; batch 3
+last = the mergeable pull requests in merge order, each with its acceptances and its exact merge
+command, the click still the owner's; state empty batches plainly.
+**Recap:** every sitting opens or closes with the "what I decided for you" lines — one per craft
+call decided since the last sitting, each vetoable; a recap, not a batch.
 
 **Formatting:** one block per spine section — never one run-on paragraph.
 <!-- /superheroes:owner-decisions-contract -->

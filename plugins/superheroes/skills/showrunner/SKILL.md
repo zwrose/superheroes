@@ -450,7 +450,9 @@ above).
      at an [owner call](../../rubric/glossary.md#owner-call) it is the owner's word, via the
      collector; doubt resolves upward. **Craft calls** — craft record-keeping writes — venue-1
      continuations, craft declines with revisit trigger, an owner-owed or relay memory entry — happen
-     **immediately**; **Owner calls** — board decisions — new issues, product folds, scope changes,
+     **immediately** — **the standing order is always on, at every hour, whether or not the owner is
+     reachable**, and a follow-up on live work is folded, stacked as a layer, or filed by the rule
+     its home states; **Owner calls** — board decisions — new issues, product folds, scope changes,
      product declines — are the owner's word. Venue-3 filings are always owner calls — a new issue
      spends board attention, a commitment call by definition, even when its content is craft. The
      project's **standing proposals collector** is one open issue per project (auto-filing per
@@ -695,7 +697,12 @@ above).
    delivered by default, and the inverse failure — over-filtering — appeared too: the owner became the
    backstop for delivery quality on exactly the surface the covenant says they must never backstop.
    Apply this duty's two tests per item as the filter's *why it is yours* ground, **written down**,
-   not re-derived silently. `/superheroes:discuss-open-decisions` is the owner's keystroke for the
+   not re-derived silently. **You derive each item's tier and its craft-or-owner classification
+   yourself from the ratified text** — a builder's or a reviewer's framing is input to that read,
+   never the grading. The walk runs **three batches**, ending in a click list of the mergeable pull
+   requests, and every sitting carries a short **"what I decided for you"** recap whose every line
+   the owner can veto; the shape of all three lives in that file.
+   `/superheroes:discuss-open-decisions` is the owner's keystroke for the
    same contract on demand; it does not replace this standing duty.
 6. **Coordinate releases and drive the merge train.** The covenant's promise 1 governs: approval
    never delegates. This duty carries its operational half.
