@@ -68,7 +68,12 @@ sequence of heads in this build, and what was proven at each:
 | `87eb6cfb` | the write-side detector | E1, E2, E3a, E3b (original) |
 | `cfa317b3` | the started-gate | E4 (first), and E1, E2, E3a, E3b re-proven |
 | `87e9300d` | the `except` revert; one fixture rewritten | E4 (re-proven against the rewritten fixture) |
-| **`538ccea7`** | **the final head** | **E1, E2, E3a, E3b re-proven again** |
+| **`538ccea7`** | **the last head that changes any code** | **E1, E2, E3a, E3b re-proven again** |
+
+The branch's tip is `2291445d`, one commit later; that commit edits this record and the keep-or-retire
+entry and **nothing else** (`git diff --name-only 538ccea7 2291445d` returns two `.md` paths), so
+every guarded element and every detector is byte-identical between `538ccea7` and the tip and the
+reds above describe the shipped code exactly.
 
 Each row is a genuine neutralize → red → restore cycle, not a green run inherited from the row above.
 The final row exists because the confirmation round's corrective touched `_with_run_fields` itself —
