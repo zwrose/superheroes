@@ -2360,10 +2360,17 @@ def _with_run_fields(result, *, run_dir, argv, snapshot=None):
         run_dir_real = os.path.realpath(run_dir) if run_dir else ""
         if run_dir_real and os.path.isdir(run_dir_real):
             records, _corrupt = _journal_read(run_dir_real)
-            spawned = (_journal_state(records).get("spawned") or {})
-            if spawned:
-                resolved_argv = list(spawned[max(spawned)])
-    except Exception:
+            folded = _journal_state(records)
+            spawned = folded.get("spawned") or {}
+            attempts = folded.get("attempts") or {}
+            # axis: reported argv comes only from an attempt that actually reached the engine.
+            started = [
+                att for att in spawned
+                if attempts.get(att, {}).get("enginePgid") is not None
+            ]
+            if started:
+                resolved_argv = list(spawned[max(started)])
+    except (OSError, ValueError, TypeError, KeyError):
         pass
     out["argv"] = resolved_argv
     if "terminal" not in out:

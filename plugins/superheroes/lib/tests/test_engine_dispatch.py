@@ -3034,6 +3034,101 @@ def test_run_engine_files_spawn_argv_append_failure_refuses_before_spawn(tmp_pat
     assert ended.get("refusal") == "journal-append-failed"
 
 
+def test_with_run_fields_argv_falls_back_when_spawn_failed_before_engine_started(
+    tmp_path, monkeypatch,
+):
+    """Result argv is canonical when spawnArgv was recorded but Popen failed."""
+    # axis: spawnArgv without engine-started must not become the reported argv.
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    canonical_argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    monkeypatch.setenv("PATH", "/nonexistent")
+    ED._run_engine_files(
+        run_dir, 1, canonical_argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    launching = next(
+        r for r in records
+        if r.get("kind") == "engine-launching" and r.get("attempt") == 1 and "spawnArgv" in r
+    )
+    assert [r for r in records if r.get("kind") == "engine-started"] == []
+    assert launching["spawnArgv"] != canonical_argv
+    res = ED._with_run_fields(
+        {"ok": False, "terminal": True}, run_dir=run_dir, argv=canonical_argv,
+    )
+    assert res["argv"] == canonical_argv
+
+
+def test_with_run_fields_argv_ignores_later_unstarted_attempt_spawn_argv(tmp_path):
+    """Higher attempt spawnArgv does not win when that attempt never reached the engine."""
+    # axis: max(spawned) must not beat a lower attempt that actually engine-started.
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    canonical_argv = ["codex", "exec", "canonical"]
+    attempt1_spawn_argv = ["codex", "exec", "attempt-1-spawn"]
+    attempt2_spawn_argv = ["codex", "exec", "attempt-2-refused"]
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+        "roleKind": "build", "orderId": "x", "argv": canonical_argv,
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": os.path.join(run_dir, "prompt.txt"), "viewPath": None,
+        "baseSha": "abc", "supervisorPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "spawnArgv": attempt1_spawn_argv,
+        "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-started", "attempt": 1, "enginePgid": 424242, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 2, "spawnArgv": attempt2_spawn_argv,
+        "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 2, "refusal": "journal-append-failed",
+        "at": time.time(),
+    })
+    res = ED._with_run_fields(
+        {"ok": False, "terminal": True}, run_dir=run_dir, argv=canonical_argv,
+    )
+    assert res["argv"] == attempt1_spawn_argv
+
+
+def test_dispatch_review_result_argv_matches_started_attempt_spawn_argv(tmp_path):
+    """Result argv is the spawn argv of an attempt that reached the engine."""
+    # axis: an engine-started attempt's journaled spawnArgv is reported on the result.
+    repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view, run_dir=run_dir,
+    )
+    assert res["ok"] is True
+    assert fake.calls, "spawn seam never reached"
+    spawn_argv = fake.calls[0]["argv"]
+    records, _ = ED._journal_read(run_dir)
+    launching = next(
+        r for r in records
+        if r.get("kind") == "engine-launching" and r.get("attempt") == 1 and "spawnArgv" in r
+    )
+    assert launching["spawnArgv"] == spawn_argv
+    assert res["argv"] == spawn_argv
+
+
 def test_run_engine_files_journal_append_failed_omits_timing_keys(tmp_path, monkeypatch):
     """E2: journal-append-failed path must not invent wallSeconds/stdoutBytes."""
     run_dir = str(tmp_path / "run")

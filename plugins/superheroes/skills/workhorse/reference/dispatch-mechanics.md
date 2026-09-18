@@ -303,8 +303,9 @@ the artifact yourself (`requiresManualRead: true`, `excerpt` is a scrubbed point
 | `dispatchPath` | Which spawn path ran (`subprocess` vs injected seam) |
 
 The spawned command is on the result as top-level **`argv`**. That field reports the argv of the
-last attempt that actually reached the engine; an attempt refused by the spawn gate before
-invocation does not contribute. When no attempt reached the engine, the field carries the
+last attempt that actually reached the engine; an attempt that did not reach the engine —
+whether refused by the spawn gate before invocation or because spawn itself failed — does not
+contribute. When no attempt reached the engine, the field carries the
 canonical argv the run was opened with. **Silence against the cap** carries the most diagnostic weight: killed at the cap while
 `silenceSeconds` is small (output was still moving) means *our cap was short*; killed after long
 silence is a genuine stall. `lastActivityAt` and `silenceSeconds` are accurate to the runner's poll
