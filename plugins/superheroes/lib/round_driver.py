@@ -2031,18 +2031,19 @@ def _canary_by_dim(live):
 def _canary_dims_for_status(live, by_vendor, status):
     """Dimensions with ``status`` in the canary plan; vendor fallback when byDim is unreadable."""
     by_dim = _canary_by_dim(live)
-    if by_dim:
-        return sorted(
-            dim for dim, st in by_dim.items()
-            if isinstance(dim, str) and st == status
-        )
-    out = []
+    vendor_dims = []
     for info in (by_vendor or {}).values():
         if not isinstance(info, dict) or info.get("status") != status:
             continue
         seats = info.get("seats") if isinstance(info.get("seats"), list) else []
-        out.extend(d for d in seats if isinstance(d, str))
-    return sorted(set(out))
+        vendor_dims.extend(d for d in seats if isinstance(d, str))
+    if by_dim:
+        from_dim = {
+            dim for dim, st in by_dim.items()
+            if isinstance(dim, str) and st == status
+        }
+        return sorted(from_dim | set(vendor_dims))
+    return sorted(set(vendor_dims))
 
 
 def _normalize_canary_probes(canary_raw):

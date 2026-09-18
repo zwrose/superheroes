@@ -140,7 +140,7 @@ class _ParamUnsetType:
     __slots__ = ()
 
     def __repr__(self) -> str:
-        return "none"
+        return "<_PARAM_UNSET>"
 
 
 _PARAM_UNSET = _ParamUnsetType()

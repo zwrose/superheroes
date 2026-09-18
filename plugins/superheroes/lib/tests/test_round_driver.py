@@ -6590,6 +6590,19 @@ def test_canary_dims_for_status_reads_by_dim_when_present():
     ]
 
 
+def test_canary_dims_for_status_unions_vendor_when_by_dim_omits_dimension():
+    live = {
+        "byDim": {"code-reviewer": "dead"},
+        "byVendor": {
+            "codex": {"status": "dead", "seats": ["code-reviewer", "security-reviewer"]},
+        },
+    }
+    assert RD._canary_dims_for_status(live, live["byVendor"], "dead") == [
+        "code-reviewer",
+        "security-reviewer",
+    ]
+
+
 def test_canary_by_dim_agrees_with_by_vendor_for_dimension_keyed_statuses():
     dims = list(RD.DIMENSIONS)
     seat_map = _seat_map_vendors({d: "claude" for d in dims})

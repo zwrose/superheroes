@@ -55,18 +55,18 @@ def test_we511_shape_parks():
     assert result["resolved_model"] is None
 
 
-def test_listed_models_pass():
-    r1 = DG.validate("implementer", "cursor", "composer-2.5")
-    assert r1["ok"] is True
-    assert r1["resolved_model"] == "composer-2.5"
-
-    r2 = DG.validate("implementer", "cursor", "cursor-grok-4.6-xhigh")
-    assert r2["ok"] is True
-    assert r2["resolved_model"] == "cursor-grok-4.6-xhigh"
-
-    r3 = DG.validate("implementer", "codex", "gpt-5.6-terra")
-    assert r3["ok"] is True
-    assert r3["resolved_model"] == "gpt-5.6-terra"
+@pytest.mark.parametrize(
+    "vendor,model,expected",
+    [
+        ("cursor", "composer-2.5", "composer-2.5"),
+        ("cursor", "cursor-grok-4.6-xhigh", "cursor-grok-4.6-xhigh"),
+        ("codex", "gpt-5.6-terra", "gpt-5.6-terra"),
+    ],
+)
+def test_listed_models_pass(vendor, model, expected):
+    result = DG.validate("implementer", vendor, model)
+    assert result["ok"] is True
+    assert result["resolved_model"] == expected
 
 
 def test_registry_model_id_form_passes():
@@ -146,29 +146,41 @@ def test_allowlist_is_derived_not_shadowed_source_scan():
         )
 
 
-def test_cli_park_exits_1_and_names_allowlist(capsys):
-    rc = DG.main([
-        "check",
-        "--seat",
-        json.dumps({"vendor": "cursor", "model": "gpt-5.3-codex-high", "effort": None, "role": "implementer"}),
-    ])
-    captured = capsys.readouterr()
-    assert rc == 1
-    payload = json.loads(captured.out)
+def test_cli_park_exits_1_and_names_allowlist():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            _MOD,
+            "check",
+            "--seat",
+            json.dumps({"vendor": "cursor", "model": "gpt-5.3-codex-high", "effort": None, "role": "implementer"}),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
     assert payload["ok"] is False
     assert "composer-2.5" in payload["allowlist"]
-    assert captured.err.strip()
+    assert proc.stderr.strip()
 
 
-def test_cli_pass_exits_0(capsys):
-    rc = DG.main([
-        "check",
-        "--seat",
-        json.dumps({"vendor": "cursor", "model": "composer-2.5", "effort": None, "role": "implementer"}),
-    ])
-    captured = capsys.readouterr()
-    assert rc == 0
-    payload = json.loads(captured.out)
+def test_cli_pass_exits_0():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            _MOD,
+            "check",
+            "--seat",
+            json.dumps({"vendor": "cursor", "model": "composer-2.5", "effort": None, "role": "implementer"}),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
     assert payload["ok"] is True
     assert payload["resolved_model"]
 

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Validate a workhorse engine dispatch's effective model against the registry allowlist.
 
-This module is the MODEL-authority gate: it checks whether the effective ``--model`` is on the
-seat's registry allowlist. For codex, model reasoning effort is validated separately and
-fail-loud at the real dispatch boundary (``engine_adapter.build_argv`` →
-``model_registry.validate_config``) before dispatch; ``--effort`` here is used to resolve
-effort-qualified dispatch tokens and the registry-model-id ``is_allowed`` path, and this gate does not
-re-police codex effort.
+This module is the MODEL-authority gate: it checks whether the effective model (from the
+seat bundle's ``model`` key) is on the seat's registry allowlist. For codex, model reasoning
+effort is validated separately and fail-loud at the real dispatch boundary
+(``engine_adapter.build_argv`` → ``model_registry.validate_config``) before dispatch; the
+seat's ``effort`` key is used to resolve effort-qualified dispatch tokens and the
+registry-model-id ``is_allowed`` path, and this gate does not re-police codex effort.
+
+The CLI accepts a single ``--seat`` argument: a JSON seat bundle with ``vendor``, ``model``,
+``effort``, and ``role`` keys.
 
 On success the JSON payload exposes the structured triple (``model_id``, ``effort``,
 ``dispatch_token``) plus ``effort_source``; ``resolved_model`` remains the composed dispatch

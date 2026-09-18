@@ -701,24 +701,6 @@ def _validate_model_effort(bundle: dict) -> dict:
     return out
 
 
-def validate(bundle: dict, role: str) -> dict:
-    if not bundle.get("ok"):
-        return bundle
-    if not isinstance(role, str) or role not in model_registry.roles():
-        valid = _format_valid(model_registry.roles())
-        return {
-            "ok": False,
-            "reason": "unknown-role",
-            "detail": (
-                f"unknown role {role!r}; valid roles: {valid}; {accepted_role_detail()}"
-            ),
-        }
-    checked = _validate_model_effort(bundle)
-    if not checked.get("ok"):
-        return checked
-    return checked
-
-
 def validate_effort_only(bundle: dict) -> dict:
     """Model-level effort validation without registry role allowlist (build-argv entry)."""
     if not bundle.get("ok"):
@@ -808,11 +790,10 @@ def _parse_entry_dict(obj: dict) -> dict:
             ),
         )
     if not isinstance(role, str) or role not in model_registry.roles():
-        valid = _format_valid(model_registry.roles())
         return _entry_refusal(
             "unknown-role",
             (
-                f"unknown role {role!r}; valid roles: {valid}; "
+                f"unknown role {role!r}; "
                 f"accepted: {_ACCEPTED_SEAT}; {accepted_role_detail()}"
             ),
         )

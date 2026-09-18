@@ -151,10 +151,16 @@ def test_dispatch_review_main_forwards_mode_kwarg(tmp_path, monkeypatch, capsys)
     capsys.readouterr()
 
 
-def test_role_rejects_valid_vendor_name():
+def test_role_rejects_valid_vendor_name(capsys):
     seat = _seat_json("cursor", "composer-2.5", None, "claude")
     rc = DG.main(["check", "--seat", seat])
+    captured = capsys.readouterr()
     assert rc == 1
+    payload = json.loads(captured.out)
+    assert payload["ok"] is False
+    assert payload["reason"] == "unknown-role"
+    assert "unknown role 'claude'" in payload["seat_detail"]
+    assert "valid roles:" in payload["seat_detail"]
 
 
 def test_model_slot_rejects_valid_role_name():
