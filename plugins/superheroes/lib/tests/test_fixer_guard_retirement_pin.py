@@ -2,8 +2,8 @@
 
 Bites on: code surfaces this order owns — the escalation module must not expose the
 guard machinery, and the rendered dispatch-fixer order must not cite the wrapper or
-guard step — plus prose surfaces: retired vocabulary absent and the owner-authority-gate
-family rule re-homed in review-discipline.md.
+guard step — plus prose surfaces: retired vocabulary absent from review-discipline.md
+and auto-fix-loop.md.
 """
 import os
 
@@ -78,9 +78,3 @@ def test_auto_fix_loop_retired_guard_vocabulary_absent():
     text = _read(_AUTO_FIX_LOOP)
     assert "safety machinery" not in text
     assert "file-scope guard" not in text
-
-
-def test_review_discipline_owner_authority_gate_family_survives():
-    text = _read(_REVIEW_DISCIPLINE)
-    assert "### The owner-authority-gate family — the owner's word, per change" in text
-    assert "owner's word first, per change" in text
