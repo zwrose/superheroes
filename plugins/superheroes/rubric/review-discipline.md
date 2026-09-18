@@ -46,8 +46,8 @@ fixture), test modules and bite-proof records do not count. At **300** the build
 on the issue with a proposed cut line and continues. At **600** the builder stops and hands the call
 to the advisor, who rules continue, split or park and records the reason on the issue; that call is
 never the builder's to make alone and never the owner's. A split lands as native stack layers, each
-reviewable on its own, so no intermediate state reaches the trunk. Where the call is in doubt, the
-preference is more, smaller PRs.
+reviewable on its own, so no intermediate state reaches the trunk. The bars apply in every lane.
+Where the call is in doubt, the preference is more, smaller PRs.
 
 **Micro skips preflight** because preflight proves tools before a session goes
 *autonomous*, and micro never does — it runs inside a long-lived advisor session with
@@ -323,7 +323,8 @@ keeps meaning: you name what you are shipping with, not pretend the bar was met 
 After two reworks of the same surface in one build, **a third rework of the same surface is the tripwire**: that third rework is not dispatched, so the fourth patch on that surface never happens.
 The count is of reworks the orchestrator dispatches against a surface. A mechanical fix the
 certified loop applies inside its own rounds is not a rework for this count — the loop's round cap
-bounds those — so a loop re-dispatching a mechanical fix does not trip it; a design signal does.
+bounds those — so a loop re-dispatching a mechanical fix adds nothing to the count, and a rework
+the orchestrator dispatches against the surface adds one.
 What the tripwire demands is that the design signal is named, not that the build goes idle. On a
 lane the builder can affirmatively call converged, **stopping and handing the design signal up satisfies it** — refuse the fourth patch, name what the seam problem looks like in the handback, and
 ship the remaining minors as disclosed follow-ups; the handback must **state that the third-rework

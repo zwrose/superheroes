@@ -98,7 +98,8 @@ Stop and **move up to the full lane** when any of these is true (escalation is *
 never a self-declared downgrade):
 
 - The orchestrator **measures the working diff's non-test lines (additions plus deletions outside `tests/`) as it types**
-  and **escalates when that count crosses ~400** — a flat measured line, not an estimate (basis: `review-discipline.md` § Size).
+  and **escalates when that count crosses ~400** — a flat measured line, not an estimate (basis: `review-discipline.md` § Size);
+  the 300 report and the 600 stop of that section apply in this lane too.
 - It **spreads into surfaces the lane call did not anticipate**.
 - It turns out to **touch a quiet-failure path**.
 - It turns out to need something **irreversible or expensive** — a migration, a new dependency, an
@@ -395,7 +396,7 @@ lines (additions plus deletions outside `tests/`) is itself the tripwire** — d
 rather than letting the overrun surface at handback. Two absolute bars ride beside it, counted over non-test lines
 added or modified (deletions, regenerated artifacts, tests and records excluded): at **300**, report the count and a
 proposed cut on the issue and continue; at **600**, stop and hand the call to the advisor, who rules continue, split or park — never yours
-alone and never the owner's — and resume on the advisor's recorded ruling (`review-discipline.md` § Size). **Gates and enforcement:** any work order that
+alone and never the owner's — and act on the advisor's recorded ruling (`review-discipline.md` § Size). **Gates and enforcement:** any work order that
 adds a **gate, hook, or enforcement mechanism** names, in the brief before code, the ratified
 precondition that unlocks it and the evidence that it is met — in every project. When the project
 being built is the superheroes source repository itself, cite the entry and unlock condition in the
