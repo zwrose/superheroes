@@ -1205,27 +1205,6 @@ The list's units are the census rows, and each entry is keyed to its census id.
   `skills/discuss-open-decisions/SKILL.md` migrated in WO-B (`0ca6f4f1`), emptying
   `_TIER_VOCAB_NOT_YET_MIGRATED` on the merged head of issue #1287.
 
-#### S14 — Fixer file-scope guard retirement pin
-
-- **Component.** The fixer file-scope guard retirement pin in
-  `plugins/superheroes/lib/tests/test_fixer_guard_retirement_pin.py`: three legs. The first refuses
-  `SAFETY_MACHINERY` / `is_safety_machinery` on `escalation.py`. The second renders the fixer order
-  through `round_driver._build_order_render_context` and fails when the order cites the retired
-  wrapper or guard vocabulary. The third reads the closed `_RETIRED_VOCAB_SURFACES` enumeration and
-  fails when retired guard vocabulary reappears in `rubric/review-discipline.md` or
-  `skills/review-code/reference/auto-fix-loop.md`. It costs one module import, one round-driver
-  render, and one read per enumerated prose surface per suite run.
-- **Condition.** Catch-based, 45 days: real catches — retired guard machinery or vocabulary
-  reappearing on a guarded surface and being caught by this pin rather than in review. On firing, a
-  proposal to the owner at a gardening pass. A zero count means the retirement is holding, which is
-  the expected steady state, not evidence the pin should go.
-- **Last demonstrated benefit.** Issue #1299 retired the fixer file-scope guard; without this pin the
-  guard machinery or its vocabulary could return silently on the surfaces this change set owns.
-- **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural — a closed code/prose retirement pin over the #1299 surfaces with the fixer
-  order leg routed through the same round-driver construction path the loop uses before dispatch.
-
 
 ## The workaround-marker inventory
 
