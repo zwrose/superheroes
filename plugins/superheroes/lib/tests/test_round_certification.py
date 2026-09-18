@@ -1972,22 +1972,113 @@ def test_journal_open_seats_orders_emitted_reports_open_seat(tmp_path):
     )
     _write_orders_manifest(session_dir, manifest)
     journal, _ = RC._read_jsonl(os.path.join(session_dir, RC.JOURNAL_FILE), RC.JOURNAL_FILE)
-    unclosed = RC._journal_open_seats(journal, session_dir)
+    unclosed, refusal = RC._journal_open_seats(journal, session_dir)
+    assert refusal is None
     assert len(unclosed) == 1
     key, _event = unclosed[0]
     assert key == (RC.PANEL_PHASE, 1, 0, "security-reviewer", 0)
 
 
-# Silent empty roster on manifest sha mismatch — open question whether this should refuse.
-def test_roster_from_orders_emitted_manifest_sha_mismatch_yields_empty_roster(tmp_path):
+def test_roster_from_orders_emitted_manifest_sha_mismatch_returns_none(tmp_path):
     manifest = _minimal_orders_manifest()
     session_dir = write_session(tmp_path, journal_lines=[])
     _write_orders_manifest(session_dir, manifest)
     event = _orders_emitted_journal_row("b" * 64)
     roster = RC._roster_from_orders_emitted(session_dir, event)
+    assert roster is None
+    unclosed, refusal = RC._journal_open_seats([event], session_dir)
+    assert unclosed is None
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == RC._orders_manifest_path(
+        session_dir, 1, RC.PANEL_PHASE, 0)
+    assert "sha256" in refusal["detail"]
+
+
+def test_check_unfetched_findings_orders_emitted_manifest_sha_mismatch_refuses(tmp_path):
+    manifest = _minimal_orders_manifest()
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=[_orders_emitted_journal_row("b" * 64)],
+    )
+    _write_orders_manifest(session_dir, manifest)
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_unfetched_findings(ctx)
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == RC._orders_manifest_path(
+        session_dir, 1, RC.PANEL_PHASE, 0)
+    assert "sha256" in refusal["detail"]
+
+
+def test_check_unfetched_findings_orders_emitted_missing_manifest_sha_refuses(tmp_path):
+    manifest = _minimal_orders_manifest()
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=[{
+            "cmd": "advance",
+            "outcome": "orders-emitted",
+            "phase": RC.PANEL_PHASE,
+            "round": 1,
+            "attempt": 0,
+        }],
+    )
+    _write_orders_manifest(session_dir, manifest)
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_unfetched_findings(ctx)
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == RC._orders_manifest_path(
+        session_dir, 1, RC.PANEL_PHASE, 0)
+    assert refusal["detail"] == (
+        "orders-emitted event lacks manifestSha256 integrity field")
+
+
+def test_check_unfetched_findings_orders_emitted_unreadable_manifest_refuses(tmp_path):
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=[_orders_emitted_journal_row("a" * 64)],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_unfetched_findings(ctx)
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == RC._orders_manifest_path(
+        session_dir, 1, RC.PANEL_PHASE, 0)
+    assert refusal["detail"] == "orders manifest unreadable or malformed"
+
+
+def test_check_unfetched_findings_orders_emitted_seats_not_dict_refuses(tmp_path):
+    manifest = _minimal_orders_manifest()
+    manifest["seats"] = []
+    manifest_sha = session_contract.sha256_text(session_contract.canonical(manifest))
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=[_orders_emitted_journal_row(manifest_sha)],
+    )
+    _write_orders_manifest(session_dir, manifest)
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_unfetched_findings(ctx)
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == RC._orders_manifest_path(
+        session_dir, 1, RC.PANEL_PHASE, 0)
+    assert refusal["detail"] == "orders manifest seats field is not an object"
+
+
+def test_roster_from_orders_emitted_authenticated_empty_seats_yields_empty_roster(tmp_path):
+    manifest = _minimal_orders_manifest()
+    manifest["seats"] = {}
+    manifest_sha = session_contract.sha256_text(session_contract.canonical(manifest))
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=[_orders_emitted_journal_row(manifest_sha)],
+    )
+    _write_orders_manifest(session_dir, manifest)
+    event = _orders_emitted_journal_row(manifest_sha)
+    roster = RC._roster_from_orders_emitted(session_dir, event)
     assert roster == []
-    unclosed = RC._journal_open_seats([event], session_dir)
+    unclosed, refusal = RC._journal_open_seats(
+        [_orders_emitted_journal_row(manifest_sha)], session_dir)
+    assert refusal is None
     assert unclosed == []
+    ctx, _ = RC._load_context(session_dir)
+    assert RC.check_unfetched_findings(ctx) is None
 
 
 # --- WO-L2-M: evidence qualifies by proof, never by default -------------------
