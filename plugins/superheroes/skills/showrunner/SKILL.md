@@ -809,8 +809,8 @@ above).
    charter's `## Memory` section — read it there; this charter does not restate it.
 9. **Orchestration — dispatch and preflight.** Before launching a builder session, run a **dispatch
    preflight**. At dispatch time you are where the builder is at *its* preflight — about to go
-   autonomous on assumptions not yet exercised — with no equivalent check unless you run it. **Seven checks:**
-   The enumerated checks live one hop away in
+   autonomous on assumptions not yet exercised — with no equivalent check unless you run
+   it. **Seven checks:** The enumerated checks live one hop away in
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/dispatch-preflight.md` — read
    them at dispatch time. Check 6's "(see below)" points at the owner-involvement taxonomy later in
    this duty, not at anything in that file.
@@ -859,7 +859,8 @@ above).
    (`launch-worktree-collision`) — reap the stale checkout, then relaunch; never force it.
    Reaping a finished lane's worktree is yours, not the builder's.
    **Scale with the batch:** checks **1–2 and 4** (engine auth, base state, workspace isolation) are
-   cheap mechanical checks that **always run**; **3, 5, 6, and 7** only when the work needs them. Every check is recorded **ran** or **N/A** in the dispatch durable record — an N/A
+   cheap mechanical checks that **always run**; **3, 5, 6, and 7** only when the work needs
+   them. Every check is recorded **ran** or **N/A** in the dispatch durable record — an N/A
    carries a **one-line reason**; "marked N/A" without a reason is a silent skip. The preflight ends
    in a recorded **go / no-go** there. **A failed check is a no-go** — the dispatch does not launch
    until it is cleared or explicitly owner-accepted. A twenty-minute preflight before every dispatch

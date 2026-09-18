@@ -2307,9 +2307,9 @@ def test_showrunner_preflight_count_prose_matches_home():
         % (eight_word, check_count)
     )
 
-    ninth_match = re.search(r"not a ([a-z]+) check\b", duty, re.IGNORECASE)
+    ninth_match = re.search(r"not an? ([a-z]+) check\b", duty, re.IGNORECASE)
     assert ninth_match, (
-        "showrunner/SKILL.md duty 9 missing 'not a <ordinal> check' prose (moved or reworded?)"
+        "showrunner/SKILL.md duty 9 missing 'not a/an <ordinal> check' prose (moved or reworded?)"
     )
     ninth_word = ninth_match.group(1).lower()
     assert ninth_word in _ORDINAL_WORDS, (
