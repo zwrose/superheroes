@@ -2370,7 +2370,7 @@ def _with_run_fields(result, *, run_dir, argv, snapshot=None):
             ]
             if started:
                 resolved_argv = list(spawned[max(started)])
-    except (OSError, ValueError, TypeError, KeyError):
+    except Exception:
         pass
     out["argv"] = resolved_argv
     if "terminal" not in out:

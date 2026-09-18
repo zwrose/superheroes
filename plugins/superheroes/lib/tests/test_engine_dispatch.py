@@ -3091,11 +3091,18 @@ def test_with_run_fields_argv_ignores_later_unstarted_attempt_spawn_argv(tmp_pat
         "kind": "engine-started", "attempt": 1, "enginePgid": 424242, "at": time.time(),
     })
     ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "signal": None, "refusal": None,
+        "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 2, "spawnArgv": attempt2_spawn_argv,
         "at": time.time(),
     })
     ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 2, "refusal": "journal-append-failed",
+        "kind": "attempt-ended", "attempt": 2,
+        "exit": 127, "timedOut": False, "signal": None,
+        "refusal": "spawn-failed: [Errno 2] No such file or directory: 'codex'",
         "at": time.time(),
     })
     res = ED._with_run_fields(
