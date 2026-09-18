@@ -100,10 +100,10 @@ def changed_paths(repo_root, *, base=None, diff_range=None):
     round's edits are uncommitted, and they are exactly what this gate exists to see.
     """
     if diff_range:
-        return sorted(set(_git_paths(repo_root, "diff", "--name-only", diff_range)))
+        return sorted(set(_git_paths(repo_root, "diff", "--name-only", "--no-renames", diff_range)))
     base_ref = resolve_base(repo_root, base)
     merge_base = _git(repo_root, "merge-base", base_ref, "HEAD").strip()
-    paths = set(_git_paths(repo_root, "diff", "--name-only", merge_base))
+    paths = set(_git_paths(repo_root, "diff", "--name-only", "--no-renames", merge_base))
     paths |= set(_git_paths(repo_root, "ls-files", "--others", "--exclude-standard"))
     return sorted(paths)
 

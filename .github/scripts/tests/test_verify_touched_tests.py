@@ -257,6 +257,26 @@ def test_range_mode_compares_commits_only(repo):
     assert paths == ["committed.py"]
 
 
+def test_rename_keeps_the_pre_image_so_surviving_tests_still_run(repo):
+    # git reports only the post-image for a detected rename. Moving a mapped module out of its
+    # root would then hide the surviving test that imports it — red, and never run.
+    _touch(repo, "plugins/superheroes/lib/foo.py", "VALUE = 1\n" * 40)
+    _touch(repo, "plugins/superheroes/lib/tests/test_foo.py")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "module and its test")
+    os.makedirs(os.path.join(repo, "plugins/superheroes/lib/sub"), exist_ok=True)
+    os.rename(os.path.join(repo, "plugins/superheroes/lib/foo.py"),
+              os.path.join(repo, "plugins/superheroes/lib/sub/foo.py"))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "move it out of the mapped root")
+
+    paths = V.changed_paths(repo, base="main~1")
+    assert "plugins/superheroes/lib/foo.py" in paths      # the pre-image survives the listing
+    files, unresolved, _ = V.resolve_targets(repo, paths)
+    assert "plugins/superheroes/lib/tests/test_foo.py" in files
+    assert unresolved == []
+
+
 def test_non_ascii_path_survives_gits_default_quoting(repo):
     # With core.quotePath (git's default) a non-ASCII path comes back C-quoted and stops
     # ending in ".py"; the resolver would then read the diff as touching no code and exit 0.
