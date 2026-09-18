@@ -145,8 +145,8 @@ RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 # is SHAPE-AMBIGUOUS after #681 — a genuine pre-#681 v3 state and a post-#681 state carrying the v4
 # shape under the old number are indistinguishable on disk — so a migration would have to guess which
 # one it is holding. The residual is disclosed rather than fixed.
-STATE_SCHEMA_VERSION = 4
-SUPPORTED_STATE_VERSIONS = (2, 3, 4)
+STATE_SCHEMA_VERSION = 5
+SUPPORTED_STATE_VERSIONS = (2, 3, 4, 5)
 
 # The receipt VERSION derives from the STATE's version: a v2 state terminates to
 # `receipt-certified/2` (today's shape, byte-for-byte unchanged — no key added), a v3 state to
@@ -730,6 +730,10 @@ def _state_version(state):
     if isinstance(version, bool) or not isinstance(version, int):
         return None
     return version if version in SUPPORTED_STATE_VERSIONS else None
+
+
+def _seat_result_schema(state):
+    return round_records.seat_result_schema_for_state_version(_state_version(state))
 
 
 def _receipt_version(state):
@@ -5588,6 +5592,11 @@ def _envelope_with_head_diff(session_dir, envelope, content, rnd, phase, seat_ke
     final["landedPayloadSha256"] = envelope.get("payloadSha256")
     final["payload"] = payload
     final["payloadSha256"] = round_records.payload_sha256(payload)
+    if final.get("schema") == round_records.SEAT_RESULT_SCHEMA_V2:
+        # Recompute envelopeSha256 so the stored envelope stays self-consistent after the
+        # payload rewrite; otherwise validate_landing rejects it as envelope-torn.
+        final["envelopeSha256"] = round_records.envelope_sha256(payload,
+                                                                final.get("executionEvidence"))
     return diff_path, content.encode("utf-8"), final, final["payloadSha256"]
 
 
@@ -6538,10 +6547,13 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
 
 
 def _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence, row,
-                          manifest_sha, order_sha):
-    """`seat-result/1` header fields knowable at emission — NOT `recordedAt` / `payloadSha256`."""
+                          manifest_sha, order_sha, state):
+    """Seat-result header fields knowable at emission — NOT `recordedAt` / `payloadSha256`."""
+    schema = _seat_result_schema(state)
+    if schema is None:
+        raise ValueError("unknown-state-version")
     header = {
-        "schema": round_records.SEAT_RESULT_SCHEMA,
+        "schema": schema,
         "session": _meta_session_id(session_dir),
         "round": rnd,
         "phase": phase,
@@ -6555,6 +6567,8 @@ def _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence
     }
     if occurrence:
         header["occurrence"] = occurrence
+    if schema == round_records.SEAT_RESULT_SCHEMA_V2:
+        header["provenance"] = round_records.PROVENANCE_DISPATCH_OBSERVED
     return header
 
 
@@ -6687,7 +6701,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             "vendor": row["vendor"],
             "model": row["model"],
             "engine": row["engine"],
-            "resultContract": round_records.SEAT_RESULT_SCHEMA,
+            "resultContract": _seat_result_schema(state),
             "orderSha256": order_sha,
             "orderPath": paths["order_path"],
             "envelopeStubPath": paths["envelope_stub_path"],
@@ -6724,7 +6738,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             c.add_replace_file(order_path, order_bytes)
             # Projection of the anchor, never the authority — ingestion validates the mirrored hash.
             stub = _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence,
-                                         row, manifest_sha, order_sha)
+                                         row, manifest_sha, order_sha, state)
             c.add_replace_file(stub_path, round_records.canonical(stub).encode("utf-8"))
         c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
@@ -6821,10 +6835,22 @@ def _seat_slot_records(session_dir, rnd, phase, attempt, roster):
     return out
 
 
+def _journal_revision_fields(envelope):
+    """The revision identity a `recorded` row carries: the payload hash (kept, never removed —
+    FR-D5) and the ENVELOPE's own CAS token, which is what `reconcile` compares. Every site that
+    journals a stored envelope's revision splats this; a site that journals a revision without it
+    is the defect this helper exists to make impossible. Takes an ENVELOPE — a reconcile entry is
+    not an envelope and must not be passed here."""
+    if not isinstance(envelope, dict):
+        return {"payloadSha256": None, "casToken": None}
+    return {"payloadSha256": envelope.get("payloadSha256"),
+            "casToken": round_records.envelope_cas_token(envelope)}
+
+
 def _journal_record_identities(session_dir, rnd, phase):
     """Every record identity this session's journal logged for a phase — `reconcile`'s view of the
-    LOG half of the two-commit window. The latest `payloadSha256` per slot rides with each identity
-    so a supersede whose journal append never landed still reconciles."""
+    LOG half of the two-commit window. The latest payload hash and CAS token per slot ride with
+    each identity so a supersede whose journal append never landed still reconciles."""
     latest = {}
     for event in read_journal(session_dir):
         if event.get("phase") != phase or event.get("round") != rnd:
@@ -6844,6 +6870,8 @@ def _journal_record_identities(session_dir, rnd, phase):
         entry = dict(ident)
         if "payloadSha256" in event:
             entry["payloadSha256"] = event.get("payloadSha256")
+        if "casToken" in event:
+            entry["casToken"] = event.get("casToken")
         latest[key] = entry
     return list(latest.values())
 
@@ -6863,16 +6891,25 @@ def _seat_for_record_identity(session_dir, ident):
 
 
 def _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt, occurrence=0):
-    """(envelope, err) for a landed seat file — full envelope or bare host payload. Never raises."""
+    """(envelope, err, landing_replace_path) for a landed seat file — full envelope or bare host
+    payload. ``landing_replace_path`` is the envelope file to rewrite when evidence stamping applies;
+    ``None`` when the slot is bare-payload shaped and must stay single-file. Never raises."""
     try:
         skey = round_records.storage_key(seat_key, occurrence)
     except ValueError as exc:
-        return None, str(exc)
+        return None, str(exc), None
     envelope, refusal = round_records._read_landing_envelope(
         session_dir, rnd, phase, skey, attempt, occurrence)
     if refusal is not None:
-        return None, refusal.get("reason")
-    return envelope, None
+        return None, refusal.get("reason"), None
+    landing_replace_path = None
+    # landing_replace_path follows the resolver's shape marker, not a second filesystem probe.
+    if envelope.get("payloadHashSource") != "driver-computed":
+        try:
+            landing_replace_path = round_records.landing_path(session_dir, rnd, phase, skey, attempt)
+        except ValueError:
+            pass
+    return envelope, None, landing_replace_path
 
 
 def _preflight_payload_fault(phase, envelope, seat_key):
@@ -6880,7 +6917,7 @@ def _preflight_payload_fault(phase, envelope, seat_key):
     None. Only seat-result landings are checked — missing envelopes have no payload contract."""
     if not isinstance(envelope, dict):
         return None
-    if envelope.get("schema") != round_records.SEAT_RESULT_SCHEMA:
+    if envelope.get("schema") not in round_records.SEAT_RESULT_SCHEMAS:
         return None
     return _adapters().payload_fault(phase, envelope.get("payload"), seat_key,
                                      record_boundary=True)
@@ -6937,7 +6974,7 @@ def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurr
         c.add_replace_file(diff_path, diff_bytes)
         c.add_replace_file(spath, round_records.canonical(final).encode("utf-8"))
         if journal_entry is not None:
-            journal_entry["payloadSha256"] = payload_sha
+            journal_entry.update(_journal_revision_fields(final))
             c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
@@ -7039,7 +7076,8 @@ def _roster_of(session_dir, state, cmd, phase, rnd, attempt):
 
 
 def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, expect_sha256=None,
-                      sweep=False, occurrence=0, expect_round=None, expect_phase=None):
+                      sweep=False, occurrence=0, expect_round=None, expect_phase=None,
+                      evidence_run_dir=None):
     """Ingest ONE landed seat envelope (or, with `sweep`, every unclaimed landing) into the durable
     store, and journal the outcome carrying its `payloadSha256`.
 
@@ -7061,14 +7099,36 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
                                              supersede=supersede, expect_sha256=expect_sha256,
                                              sweep=sweep, occurrence=occurrence,
                                              expect_round=expect_round,
-                                             expect_phase=expect_phase)
+                                             expect_phase=expect_phase,
+                                             evidence_run_dir=evidence_run_dir)
     except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "record-result", held)
 
 
+def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
+    """Bind runner telemetry to the driver's order hash. Returns (envelope, refusal_reason, extra)."""
+    if not evidence_run_dir:
+        return None, None, {}
+    import engine_dispatch
+    record, err = engine_dispatch.run_execution_record(evidence_run_dir)
+    if err is not None:
+        return None, "evidence-run-dir-unreadable", {"detail": err}
+    prompt_sha = record.get("orderPromptSha256")
+    order_sha = envelope.get("orderSha256")
+    # Absent order-prompt hash cannot prove the binding — refuse rather than compare promptSha256.
+    if not isinstance(prompt_sha, str) or not prompt_sha or prompt_sha != order_sha:
+        return None, "evidence-order-mismatch", {"orderPromptSha256": prompt_sha,
+                                                 "orderSha256": order_sha}
+    evidence = {key: record[key] for key in round_records.EXECUTION_EVIDENCE_FIELDS}
+    out = dict(envelope)
+    out["executionEvidence"] = evidence
+    out["envelopeSha256"] = round_records.envelope_sha256(out.get("payload"), evidence)
+    return out, None, {}
+
+
 def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=False,
                               expect_sha256=None, sweep=False, occurrence=0,
-                              expect_round=None, expect_phase=None):
+                              expect_round=None, expect_phase=None, evidence_run_dir=None):
     state, refusal = _load_driver_state(session_dir, "record-result")
     if refusal is not None:
         return refusal
@@ -7093,6 +7153,12 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     if refusal is not None:
         return refusal
     anchor = _orders_anchor(state, session_dir, rnd, phase, cur_attempt)
+    if sweep and evidence_run_dir:
+        # A sweep spans every seat — one run directory cannot bind evidence for all of them.
+        return _refuse_cmd(session_dir, "record-result", "sweep-evidence-unsupported",
+                           phase=phase, rnd=rnd, attempt=cur_attempt,
+                           detail=("--sweep cannot take --evidence-run-dir: evidence binds one "
+                                   "seat's order hash; a sweep covers the whole roster."))
     if sweep and (supersede or expect_sha256 is not None):
         recovery = []
         for seat_key, occurrence in round_records.roster_slots(roster):
@@ -7118,8 +7184,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                              "command cannot be issued until the record is readable"),
                 })
                 continue
-            envelope, landing_err = _read_landing_envelope(session_dir, rnd, phase, seat_key,
-                                                           cur_attempt, occurrence)
+            envelope, landing_err, _ = _read_landing_envelope(session_dir, rnd, phase, seat_key,
+                                                             cur_attempt, occurrence)
             if landing_err is not None:
                 # Only `landing-missing` means there is genuinely nothing landed. EVERY other
                 # refusal — including one a future reason introduces — means a landing IS present
@@ -7164,10 +7230,28 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         return _sweep_record(session_dir, state, "record-result", phase, rnd, cur_attempt, roster,
                              anchor, expect_round=expect_round, expect_phase=expect_phase)
 
+    seat_schema = _seat_result_schema(state)
+    if seat_schema is None:
+        return _refuse_cmd(session_dir, "record-result", "state-version-unsupported", phase=phase,
+                           rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence))
+
     # Validate BEFORE storing: a refusal must leave nothing behind.
+    landing_replace_path = None
+    assembled = None
     if isinstance(seat, str) and seat in roster:
-        envelope, _lerr = _read_landing_envelope(session_dir, rnd, phase, seat, cur_attempt,
-                                                 occurrence)
+        envelope, _lerr, landing_replace_path = _read_landing_envelope(
+            session_dir, rnd, phase, seat, cur_attempt, occurrence)
+        if _lerr is not None:
+            return _refuse_cmd(session_dir, "record-result", _lerr, phase=phase, rnd=rnd,
+                               attempt=cur_attempt, seat=_slot_label(seat, occurrence))
+        if (seat_schema == round_records.SEAT_RESULT_SCHEMA_V2 and isinstance(envelope, dict)
+                and envelope.get("provenance") == round_records.PROVENANCE_DISPATCH_OBSERVED):
+            assembled, ev_reason, ev_extra = _assemble_dispatch_evidence(
+                session_dir, envelope, evidence_run_dir)
+            if ev_reason is not None:
+                return _refuse_cmd(session_dir, "record-result", ev_reason, phase=phase,
+                                   rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
+                                   **ev_extra)
         fault = _preflight_payload_fault(phase, envelope, seat)
         if fault:
             return _refuse_cmd(session_dir, "record-result", "payload-fault", phase=phase,
@@ -7183,10 +7267,11 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                                        attempt=cur_attempt, seat=seat, headDiffPath=head_path)
     else:
         head_content = None
-
     plan, landing_refusal = round_records.validate_landing(
         session_dir, rnd, phase, seat, cur_attempt, current_attempt=cur_attempt, roster=roster,
-        supersede=supersede, expect_sha256=expect_sha256, anchor=anchor, occurrence=occurrence)
+        supersede=supersede, expect_sha256=expect_sha256, anchor=anchor, occurrence=occurrence,
+        seat_result_schema=seat_schema,
+        envelope_override=assembled)
     if landing_refusal is not None:
         return _refuse_cmd(session_dir, "record-result", landing_refusal.get("reason"), phase=phase,
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
@@ -7200,12 +7285,21 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
             session_dir, envelope, head_content, rnd, phase, seat, cur_attempt, occurrence)
     journal_entry = _journal_entry_for_commit(
         session_dir, "record-result", "recorded", phase=phase, round=rnd, attempt=cur_attempt,
-        seat=seat, occurrence=occurrence, payloadSha256=payload_sha,
+        seat=seat, occurrence=occurrence, **_journal_revision_fields(envelope),
         superseded=bool(plan["superseded"]), headDiffStorePath=head_store_path,
+        provenance=envelope.get("provenance") if isinstance(envelope, dict) else None,
+        envelopeSha256=envelope.get("envelopeSha256") if isinstance(envelope, dict) else None,
+        executionEvidencePresent=(isinstance(envelope, dict)
+                                  and "executionEvidence" in envelope),
         **_journal_addressing_fields(expect_round, expect_phase),
         **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     try:
         c = round_commit.begin(session_dir, "record-ingest")
+        # Stamp the landing file only when read from the full-envelope slot — bare-payload slots
+        # stay single-file; the stamped envelope is written to the store copy alone.
+        if landing_replace_path is not None and assembled is not None:
+            c.add_replace_file(landing_replace_path,
+                                round_records.canonical(assembled).encode("utf-8"))
         c.add_replace_file(plan["storePath"], round_records.canonical(envelope).encode("utf-8"))
         if head_store_path is not None:
             c.add_replace_file(head_store_path, head_diff_bytes)
@@ -7214,8 +7308,10 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     except round_commit.CommitRefused as exc:
         return _commit_refused_response(session_dir, "record-result", exc, phase=phase, rnd=rnd,
                                       attempt=cur_attempt, seat=_slot_label(seat, occurrence))
+    cas_token = round_records.envelope_cas_token(envelope)
     return {"ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
             "occurrence": occurrence, "payloadSha256": payload_sha,
+            "casToken": cas_token,
             "superseded": bool(plan["superseded"]),
             "storePath": plan["storePath"], "headDiffStorePath": head_store_path}
 
@@ -7266,14 +7362,19 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
             bare_path is not None and os.path.exists(bare_path))
         if not has_landing or os.path.exists(spath):
             continue
-        envelope, _lerr = _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt,
-                                                 occurrence)
+        envelope, _lerr, _ = _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt,
+                                                    occurrence)
         fault = _preflight_payload_fault(phase, envelope, seat_key)
         if fault:
             return _refuse_cmd(session_dir, cmd, "payload-fault", phase=phase, rnd=rnd,
                                attempt=attempt, seat=seat_key, detail=fault)
+    seat_schema = _seat_result_schema(state)
+    if seat_schema is None:
+        return _refuse_cmd(session_dir, cmd, "state-version-unsupported", phase=phase, rnd=rnd,
+                           attempt=attempt)
     results = round_records.sweep_landing(session_dir, rnd, phase, current_attempt=attempt,
-                                          roster=roster, anchor=anchor)
+                                          roster=roster, anchor=anchor,
+                                          seat_result_schema=seat_schema)
     recorded = []
     stale_strays = []
     for result in results:
@@ -7335,8 +7436,15 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                 payload_sha = rehashed or payload_sha
                 head_diff_journaled = True
         if not head_diff_journaled:
+            skey = round_records.storage_key(seat, occurrence)
+            spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
+            stored_envelope, read_err = round_records.read_json(spath)
+            if read_err is None and isinstance(stored_envelope, dict):
+                revision_fields = _journal_revision_fields(stored_envelope)
+            else:
+                revision_fields = {"payloadSha256": payload_sha}
             _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
-                           seat=seat, occurrence=occurrence, payloadSha256=payload_sha,
+                           seat=seat, occurrence=occurrence, **revision_fields,
                            **_journal_addressing_fields(expect_round, expect_phase),
                            **_journal_identity_fields(phase, seat, occurrence, attempt))
         recorded.append(_slot_label(seat, occurrence))
@@ -7405,10 +7513,15 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
         except OSError as exc:
             return _refuse_cmd(session_dir, "record-missing", "evidence-unreadable", phase=phase,
                                rnd=rnd, attempt=cur_attempt, seat=seat, detail=str(exc))
+    seat_schema = _seat_result_schema(state)
+    if seat_schema is None:
+        return _refuse_cmd(session_dir, "record-missing", "state-version-unsupported", phase=phase,
+                           rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence))
     if not isinstance(seat, str) or seat not in roster:
         # Let the ingest layer own the enumerated `unknown-seat` refusal rather than respelling it.
         out = round_records.ingest_landing(session_dir, rnd, phase, seat, cur_attempt,
-                                           current_attempt=cur_attempt, roster=roster)
+                                           current_attempt=cur_attempt, roster=roster,
+                                           seat_result_schema=seat_schema)
         return _refuse_cmd(session_dir, "record-missing", out.get("reason"), phase=phase, rnd=rnd,
                            attempt=cur_attempt, seat=seat, detail=out.get("message"))
     slots = roster.count(seat)
@@ -7451,7 +7564,7 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
     round_records.atomic_write_json(lpath, envelope)
     out = round_records.ingest_landing(session_dir, rnd, phase, seat, cur_attempt,
                                        current_attempt=cur_attempt, roster=roster, anchor=anchor,
-                                       occurrence=occurrence)
+                                       occurrence=occurrence, seat_result_schema=seat_schema)
     if not out.get("ok"):
         return _refuse_cmd(session_dir, "record-missing", out.get("reason"), phase=phase, rnd=rnd,
                            attempt=cur_attempt, seat=_slot_label(seat, occurrence),
@@ -7919,8 +8032,11 @@ def _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt, se
     # One home for the vendor fact. For an orchestrator-fulfilled phase this resolves to None —
     # no seat was dispatched — and None is the honest record; naming a vendor would invent one.
     row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending, repo_root)
-    return {
-        "schema": round_records.SEAT_RESULT_SCHEMA,
+    schema = _seat_result_schema(state)
+    if schema is None:
+        raise ValueError("unknown-state-version")
+    envelope = {
+        "schema": schema,
         "session": session_id,
         "round": rnd,
         "phase": phase,
@@ -7937,6 +8053,10 @@ def _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt, se
         "payload": payload,
         "fulfilledBy": "orchestrator",
     }
+    if schema == round_records.SEAT_RESULT_SCHEMA_V2:
+        envelope["provenance"] = round_records.PROVENANCE_ORCHESTRATOR_FULFILLED
+        envelope["envelopeSha256"] = round_records.envelope_sha256(payload, None)
+    return envelope
 
 
 def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt, config,
@@ -8037,7 +8157,7 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
         "journal": _journal_entry_for_commit(
             session_dir, "advance", "recorded", phase=phase, round=rnd, attempt=attempt,
             seat=seat_key, occurrence=occurrence,
-            payloadSha256=envelope["payloadSha256"], superseded=False,
+            **_journal_revision_fields(envelope), superseded=False,
             **_journal_identity_fields(phase, seat_key, occurrence, attempt)),
     }
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), payload,
@@ -8147,11 +8267,12 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
         ident = entry.get("recordIdentity")
         if not isinstance(ident, dict) and slot is not None:
             ident = round_records.record_identity(phase, slot[0], slot[1], entry.get("attempt"))
+        # Reconcile entry, not an envelope — casToken is already resolved on the entry.
         _journal_event(session_dir, "advance", "recorded", phase=phase, round=rnd,
                        attempt=entry.get("attempt"), seat=slot[0] if slot else None,
                        occurrence=slot[1] if slot else None,
-                       payloadSha256=entry.get("payloadSha256"), reappended=True,
-                       recordIdentity=ident)
+                       payloadSha256=entry.get("payloadSha256"), casToken=entry.get("casToken"),
+                       reappended=True, recordIdentity=ident)
     orphans = rec.get("journalOrphan") or []
     if orphans:
         seats = sorted(set(_seat_for_record_identity(session_dir, ident) or str(ident)
@@ -8798,6 +8919,10 @@ def build_parser():
                               help="expected pending round; when supplied, a mismatch refuses")
     cli_contract.add_argument(pr, "--phase", contract="free-text", default=None,
                               help="expected pending phase; when supplied, a mismatch refuses")
+    cli_contract.add_argument(pr, "--evidence-run-dir", contract="free-text", default=None,
+                              dest="evidence_run_dir",
+                              help="runner run directory whose journal supplies execution evidence "
+                                   "for a dispatch-observed landing under state schema v5")
 
     pm = sub.add_parser("record-missing")
     cli_contract.add_argument(pm, "--session-dir", contract="existing-directory", required=True)
@@ -8990,7 +9115,8 @@ def _dispatch(args):
         out = cmd_record_result(args.session_dir, args.seat, attempt=args.attempt,
                                 supersede=args.supersede, expect_sha256=args.expect_sha256,
                                 sweep=args.sweep, occurrence=args.occurrence,
-                                expect_round=args.round, expect_phase=args.phase)
+                                expect_round=args.round, expect_phase=args.phase,
+                                evidence_run_dir=args.evidence_run_dir)
     elif args.cmd == "record-missing":
         out = cmd_record_missing(args.session_dir, args.seat, args.attempt, args.reason,
                                  evidence_path=args.evidence, occurrence=args.occurrence,

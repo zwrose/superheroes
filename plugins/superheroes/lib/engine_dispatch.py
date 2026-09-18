@@ -2876,12 +2876,25 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
     return True, ""
 
 
-def _engagement_with_read(engagement, *, result_kind=None, items=None, investigated=None):
-    """Attach engagement.read from observed attempt evidence. Never raises."""
-    read_input = {"investigated": investigated, "engagement": engagement}
+def _engagement_telemetry(tool_calls):
+    """Derive engagement.telemetry from runner-observed toolCalls only. Never raises."""
+    try:
+        if isinstance(tool_calls, bool):
+            return "none"
+        if isinstance(tool_calls, (int, float)):
+            return "tool-calls"
+    except Exception:
+        pass
+    return "none"
+
+
+def _engagement_with_read(engagement, *, result_kind=None, items=None):
+    """Attach engagement.read and telemetry from observed attempt evidence. Never raises."""
+    read_input = {"engagement": engagement}
     if items is not None and result_kind in REVIEW_RESULT_KINDS:
         read_input[result_kind] = items
     out = dict(engagement)
+    out["telemetry"] = _engagement_telemetry(engagement.get("toolCalls"))
     out["read"] = engine_adapter.engagement_read(read_input)
     return out
 
@@ -2935,6 +2948,105 @@ def _parse_review_has_payload(res):
 def _review_parse_kind_invalid(res):
     """True when parse claims ok but resultKind is missing or outside the two-name enum."""
     return res.get("ok") and res.get("resultKind") not in REVIEW_RESULT_KINDS
+
+
+def _generated_artifacts_from_view_meta(view_meta):
+    """Collect generated artifact paths from view metadata. Never raises."""
+    generated = ()
+    if isinstance(view_meta, dict):
+        diff_path = view_meta.get("diffPath")
+        if isinstance(diff_path, str) and diff_path:
+            generated = (diff_path,)
+        pr_body_path = view_meta.get("prBodyPath")
+        if isinstance(pr_body_path, str) and pr_body_path:
+            generated = generated + (pr_body_path,)
+        config_diff_path = view_meta.get("configDiffPath")
+        if isinstance(config_diff_path, str) and config_diff_path:
+            generated = generated + (config_diff_path,)
+    return generated
+
+
+def _review_attempt_engagement(
+    engine, stdout, stderr_tail, elapsed, stdout_bytes,
+    *,
+    engagement=None,
+    res=None,
+    cwd="",
+    view_meta=None,
+    role_kind=None,
+    fed_prompt="",
+    echo_nonce=None,
+):
+    """Shared engine signals and engagement.read grading decision. Never raises.
+
+    Stream-only: pass only stream args; returns the five-key engagement dict.
+    Grade path: pass ``engagement`` and ``res``; returns
+    ``(stamped_or_none, accepted, spot_rejected, has_payload, payload, kind)``.
+    Observation path: pass stream args plus ``role_kind``, ``fed_prompt``, ``echo_nonce``,
+    ``cwd``, and ``view_meta``; returns completed engagement including ``read``.
+    """
+    if engagement is None:
+        if engine == "codex":
+            tokens = engine_adapter.codex_tokens_used(stderr_tail)
+            tool_calls = None
+            source = "codex-stderr" if tokens is not None else "none"
+        elif engine == "cursor":
+            tokens = None
+            tool_calls = engine_adapter.cursor_tool_calls(stdout)
+            source = "cursor-stream" if tool_calls is not None else "none"
+        else:
+            tokens = None
+            tool_calls = None
+            source = "none"
+        engagement = {
+            "tokens": tokens,
+            "toolCalls": tool_calls,
+            "stdoutBytes": stdout_bytes,
+            "wallSeconds": elapsed,
+            "source": source,
+            "telemetry": _engagement_telemetry(tool_calls),
+        }
+
+    if res is not None:
+        kind = res["resultKind"]
+        has_payload, payload = _review_result_payload(res, kind)
+        _, accepted, spot_rejected = engine_adapter.spot_check_investigated(
+            res.get("investigated"), cwd,
+            generated_artifacts=_generated_artifacts_from_view_meta(view_meta))
+        # axis: engagement read grades registered payload and runner toolCalls only
+        stamped = None
+        if has_payload:
+            stamped = _engagement_with_read(
+                engagement, result_kind=kind, items=payload)
+        return stamped, accepted, spot_rejected, has_payload, payload, kind
+
+    if role_kind is not None:
+        try:
+            norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+            if not norm_strip.get("echoOnly"):
+                envelope_error = norm_strip["rawEnvelopeError"]
+                parse_res = engine_adapter.parse_result(
+                    engine, role_kind, stdout, raw_envelope_error=envelope_error,
+                    echo_nonce=echo_nonce)
+                if not _parse_review_has_payload(parse_res):
+                    stripped_text = norm_strip["text"]
+                    if stripped_text and stripped_text.strip():
+                        parse_res = engine_adapter.parse_result(
+                            engine, role_kind, stripped_text,
+                            raw_envelope_error=envelope_error, echo_nonce=echo_nonce)
+                if parse_res.get("ok") and not _review_parse_kind_invalid(parse_res):
+                    stamped, _accepted, _spot_rejected, _has_payload, _payload, _kind = (
+                        _review_attempt_engagement(
+                            engine, stdout, stderr_tail, elapsed, stdout_bytes,
+                            engagement=engagement, res=parse_res, cwd=cwd,
+                            view_meta=view_meta))
+                    if stamped is not None:
+                        return stamped
+        except Exception:
+            pass
+        return _engagement_with_read(engagement)
+
+    return engagement
 
 
 def _build_running_graded(run_dir_real, state):
@@ -3014,25 +3126,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
 
     elapsed = ended.get("wallSeconds", 0)
     stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
-    if engine == "codex":
-        tokens = engine_adapter.codex_tokens_used(stderr_tail)
-        tool_calls = None
-        source = "codex-stderr" if tokens is not None else "none"
-    elif engine == "cursor":
-        tokens = None
-        tool_calls = engine_adapter.cursor_tool_calls(stdout)
-        source = "cursor-stream" if tool_calls is not None else "none"
-    else:
-        tokens = None
-        tool_calls = None
-        source = "none"
-    engagement = {
-        "tokens": tokens,
-        "toolCalls": tool_calls,
-        "stdoutBytes": stdout_bytes,
-        "wallSeconds": elapsed,
-        "source": source,
-    }
+    engagement = _review_attempt_engagement(
+        engine, stdout, stderr_tail, elapsed, stdout_bytes)
 
     norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
     prompt_echo_only = norm_strip["echoOnly"]
@@ -3088,29 +3183,17 @@ def _grade_review_attempt(run_dir_real, state, attempt):
             result["payloadShape"] = shape
         return result
 
-    kind = res["resultKind"]
-    has_payload, payload = _review_result_payload(res, kind)
-
     view_meta = opened.get("viewMeta")
-    generated = ()
-    if isinstance(view_meta, dict):
-        diff_path = view_meta.get("diffPath")
-        if isinstance(diff_path, str) and diff_path:
-            generated = (diff_path,)
-        pr_body_path = view_meta.get("prBodyPath")
-        if isinstance(pr_body_path, str) and pr_body_path:
-            generated = generated + (pr_body_path,)
-        config_diff_path = view_meta.get("configDiffPath")
-        if isinstance(config_diff_path, str) and config_diff_path:
-            generated = generated + (config_diff_path,)
-    _, accepted, spot_rejected = engine_adapter.spot_check_investigated(
-        res.get("investigated"), cwd, generated_artifacts=generated)
+    stamped, accepted, spot_rejected, has_payload, payload, kind = (
+        _review_attempt_engagement(
+            engine, stdout, stderr_tail, elapsed, stdout_bytes,
+            engagement=engagement, res=res, cwd=cwd, view_meta=view_meta))
     rejected_records, rejected_reasons = _merge_investigated_rejections(res, spot_rejected)
     findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
     findings_rejected_reasons = list(res.get("findingsRejected") or [])
 
     if not _parse_review_has_payload(res) and not accepted:
-        engagement = _engagement_with_read(engagement, result_kind=kind, items=[], investigated=None)
+        engagement = _engagement_with_read(engagement, result_kind=kind, items=[])
         return {
             "forfeit": True,
             "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
@@ -3146,8 +3229,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         }
 
     if has_payload:
-        engagement = _engagement_with_read(engagement, result_kind=kind, items=payload)
-        result = {"ok": True, "resultKind": kind, kind: payload, "engagement": engagement}
+        result = {"ok": True, "resultKind": kind, kind: payload, "engagement": stamped}
         if accepted:
             result["investigated"] = accepted
         return _attach_review_rejection_fields(
@@ -3159,9 +3241,12 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         )
 
     if accepted:
-        engagement = _engagement_with_read(
-            engagement, result_kind=kind, items=[], investigated=accepted)
-        result = {"ok": True, "resultKind": kind, kind: [], "investigated": accepted, "engagement": engagement}
+        engagement_stamped = stamped if stamped is not None else _engagement_with_read(
+            engagement, result_kind=kind, items=[])
+        result = {
+            "ok": True, "resultKind": kind, kind: [], "investigated": accepted,
+            "engagement": engagement_stamped,
+        }
         return _attach_review_rejection_fields(
             result,
             rejected_records=rejected_records,
@@ -3799,7 +3884,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                      prompt_path, view_path, view_meta, fed_prompt, order_id,
                      progress_path, repo_root=None, mode="review",
                      expected_result_kind=None, pr_body_source_path=None,
-                     echo_nonce=None, resolved_inputs=None):
+                     echo_nonce=None, base_prompt=None, resolved_inputs=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -3807,10 +3892,13 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         with open(os.path.join(run_dir_real, "journal-root.txt"), "w", encoding="utf-8") as fh:
             fh.write(journal_root + "\n")
         dest_prompt = os.path.join(run_dir_real, PROMPT_NAME)
-        with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
-            base = src.read()
+        # One read per run: hash the bytes the caller already read, or read once here.
+        if base_prompt is None:
+            with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
+                base_prompt = src.read()
+        base_prompt_sha256 = hashlib.sha256(base_prompt.encode("utf-8")).hexdigest()
         with open(dest_prompt, "w", encoding="utf-8") as dst:
-            dst.write(fed_prompt if fed_prompt else base)
+            dst.write(fed_prompt if fed_prompt else base_prompt)
         if progress_path:
             try:
                 open(progress_path, "a").close()
@@ -3836,6 +3924,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "viewMeta": view_meta,
         "baseSha": view_meta.get("headSha"),
         "fedPrompt": fed_prompt,
+        "basePromptSha256": base_prompt_sha256,
         "repoRoot": repo_root_real,
         "repoId": repo_id,
         "supervisorPid": os.getpid(),
@@ -4263,7 +4352,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 repo_root=repo_detail, mode=resolved_mode["mode"],
                 expected_result_kind=expected_result_kind,
                 pr_body_source_path=os.path.realpath(pr_body_path) if pr_body_set else None,
-                echo_nonce=echo_nonce,
+                echo_nonce=echo_nonce, base_prompt=base_prompt,
                 resolved_inputs=resolved_inputs,
             )
             if not ok_open:
@@ -4348,6 +4437,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         dest_prompt = os.path.join(run_dir_real, PROMPT_NAME)
         with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
             base = src.read()
+        base_prompt_sha256 = hashlib.sha256(base.encode("utf-8")).hexdigest()
         if base and not base.endswith("\n"):
             content = base + "\n" + engine_adapter.WRITE_REPORT_CONTRACT
         else:
@@ -4374,6 +4464,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "retryTimeout": retry_timeout,
         "promptPath": os.path.join(run_dir_real, PROMPT_NAME),
         "fedPrompt": content,
+        "basePromptSha256": base_prompt_sha256,
         "progressPath": progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
         "viewPath": None,
         "baseSha": base_sha,
@@ -4828,6 +4919,87 @@ def _poll_projection(state):
         return dict(base, terminal=False, state="abandon-requested")
     alive, _who = _run_live_evidence(state)
     return dict(base, terminal=False, state="running" if alive else "idle")
+
+
+def _observation_from_attempt(run_dir_real, state, attempt):
+    """Engagement summary for one completed attempt. Never raises."""
+    opened = state.get("opened") or {}
+    engine = opened.get("engine")
+    slot = (state.get("attempts") or {}).get(attempt) or {}
+    ended = slot.get("ended") or {}
+    stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+    stderr_path = os.path.join(run_dir_real, "attempt-%d.stderr" % attempt)
+    try:
+        with open(stderr_path, encoding="utf-8", errors="ignore") as fh:
+            stderr_tail = fh.read()
+    except OSError:
+        stderr_tail = ended.get("stderrTail", "")
+    stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+    elapsed = ended.get("wallSeconds", 0)
+    stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
+    return _review_attempt_engagement(
+        engine, stdout, stderr_tail, elapsed, stdout_bytes,
+        role_kind=opened.get("roleKind", RUN_KIND_REVIEW),
+        fed_prompt=opened.get("fedPrompt", ""),
+        echo_nonce=review_findings_schema.effective_nonce(opened.get("echoNonce")),
+        cwd=opened.get("cwd", ""),
+        view_meta=opened.get("viewMeta"),
+    )
+
+
+def run_execution_record(run_dir):
+    """The runner's own record of a completed dispatch, for a consumer that must prove the act
+    happened. Returns (record, error). Never raises, never writes, never spawns."""
+    try:
+        ok, detail = _validate_run_dir(run_dir)
+        if not ok:
+            return None, detail
+        run_dir_real = detail
+        records, interior_corrupt = _journal_read(run_dir_real)
+        if interior_corrupt:
+            return None, "journal-corrupt"
+        state = _journal_state(records)
+        opened = state.get("opened")
+        if not isinstance(opened, dict):
+            return None, "run-not-opened"
+        attempts = state.get("attempts") or {}
+        completed = sorted(att for att in attempts if (attempts[att].get("ended") is not None))
+        if not completed:
+            return None, "no-completed-attempt"
+        attempt = completed[-1]
+        engine = opened.get("engine")
+        if not isinstance(engine, str) or not engine:
+            return None, "engine-missing"
+        echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
+        if not echo_nonce:
+            return None, "runner-nonce-missing"
+        journal_path = _journal_path(run_dir_real)
+        try:
+            with open(journal_path, "rb") as fh:
+                journal_bytes = fh.read()
+        except OSError:
+            return None, "journal-unreadable"
+        record_digest = hashlib.sha256(journal_bytes).hexdigest()
+        prompt_path = opened.get("promptPath") or os.path.join(run_dir_real, PROMPT_NAME)
+        try:
+            with open(prompt_path, "rb") as fh:
+                prompt_bytes = fh.read()
+        except OSError:
+            return None, "prompt-unreadable"
+        prompt_sha256 = hashlib.sha256(prompt_bytes).hexdigest()
+        observation = _observation_from_attempt(run_dir_real, state, attempt)
+        if not isinstance(observation, dict):
+            return None, "observation-unavailable"
+        return {
+            "source": engine,
+            "runnerNonce": echo_nonce,
+            "recordDigest": record_digest,
+            "observation": observation,
+            "promptSha256": prompt_sha256,
+            "orderPromptSha256": opened.get("basePromptSha256"),
+        }, None
+    except Exception:
+        return None, "internal-error"
 
 
 def dispatch_poll(run_dir):

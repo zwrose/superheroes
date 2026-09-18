@@ -9762,3 +9762,487 @@ def test_sm2_1269_unreadable_journal_preserves_run_dir_on_refusal(tmp_path):
     assert res.get("resolvedInputsStatus") == "unverifiable"
     assert res["runDir"] == os.path.realpath(run_dir)
 
+
+# --- #1271 WO-L1-F: run_execution_record engagement.read round-trip ---
+
+
+def _execution_record_completed_attempt(
+    tmp_path, run_dir, *, stdout, stderr="", engine="codex", ended_overrides=None,
+    echo_nonce="execution-record-nonce", write_stdout=True, already_opened=False,
+):
+    """One completed review attempt on disk for run_execution_record round-trips."""
+    if already_opened:
+        repo_root, view = None, None
+    else:
+        repo_root, view = _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["echoNonce"] = echo_nonce
+            if engine != "codex":
+                rec["engine"] = engine
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    if write_stdout:
+        with open(stdout_path, "w", encoding="utf-8") as fh:
+            fh.write(stdout)
+    with open(stderr_path, "w", encoding="utf-8") as fh:
+        fh.write(stderr)
+    ended = {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "signal": None,
+        "refusal": None, "at": time.time(),
+        "wallSeconds": 1.0, "stdoutBytes": len(stdout) if write_stdout else 0,
+    }
+    if ended_overrides:
+        ended.update(ended_overrides)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, ended)
+    return repo_root, view
+
+
+def test_run_execution_record_codex_engaged_by_payload(tmp_path):
+    """Round-trip: codex stdout with non-empty registered review payload stamps engaged."""
+    run_dir = str(tmp_path / "codex-engaged-payload")
+    _execution_record_completed_attempt(tmp_path, run_dir, stdout=_VALID_FINDINGS_STDOUT)
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "engaged"
+
+
+def test_run_execution_record_codex_investigated_disclosure_stamps_unknown_read(tmp_path):
+    """Round-trip: codex empty payload with accepted investigated paths stamps unknown read."""
+    run_dir = str(tmp_path / "codex-investigated-disclosure")
+    rel = "src/main.py"
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, rel)
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    _execution_record_completed_attempt(
+        tmp_path, run_dir, stdout=json.dumps({"findings": [], "investigated": [rel]}),
+    )
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "unknown"
+
+
+def test_observation_from_attempt_investigated_threading_raise_vs_unknown(tmp_path, monkeypatch):
+    """Distinguish spot_check raise (unknown) from honest investigated paths (still unknown)."""
+    run_dir = str(tmp_path / "codex-spot-check-threading")
+    rel = "src/main.py"
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, rel)
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    _execution_record_completed_attempt(
+        tmp_path, run_dir, stdout=json.dumps({"findings": [], "investigated": [rel]}),
+    )
+
+    def _raise_spot_check(*_args, **_kwargs):
+        raise RuntimeError("spot-check failed")
+
+    monkeypatch.setattr(ED.engine_adapter, "spot_check_investigated", _raise_spot_check)
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "unknown"
+
+    monkeypatch.undo()
+    record2, error2 = ED.run_execution_record(run_dir)
+    assert error2 is None
+    assert isinstance(record2, dict)
+    assert record2["observation"]["read"] == "unknown"
+
+
+def test_grade_review_attempt_investigated_disclosure_stamps_unknown_read(tmp_path):
+    """Grading path: empty findings with accepted investigated paths stamps unknown read."""
+    run_dir = str(tmp_path / "grade-investigated-unknown-read")
+    repo_root = _repo(tmp_path)
+    rel = "src/main.py"
+    real_file = os.path.join(repo_root, rel)
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    stdout = json.dumps({"findings": [], "investigated": [rel]})
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade["engagement"]["read"] == "unknown"
+    assert grade["investigated"] == [rel]
+
+
+def test_grade_and_observation_agree_on_engagement(tmp_path):
+    # axis: dispatch grading and execution-record observation grade one attempt identically
+    def _assert_agree(run_dir, state):
+        grade = ED._grade_review_attempt(run_dir, state, 1)
+        observation = ED._observation_from_attempt(run_dir, state, 1)
+        grade_eng = grade["engagement"]
+        for key in ("read", "source", "tokens", "toolCalls", "telemetry"):
+            assert grade_eng[key] == observation[key]
+
+    repo_root = _repo(tmp_path)
+    rel = "src/main.py"
+    real_file = os.path.join(repo_root, rel)
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+
+    investigated_stdout = json.dumps({"findings": [], "investigated": [rel]})
+    run_dir_investigated = str(tmp_path / "agree-investigated")
+    os.makedirs(run_dir_investigated, exist_ok=True)
+    with open(os.path.join(run_dir_investigated, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(investigated_stdout)
+    state_investigated = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(investigated_stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    _assert_agree(run_dir_investigated, state_investigated)
+
+    cursor_stream = "\n".join([
+        '{"type":"tool_call","call_id":"c1","subtype":"started"}',
+    ])
+    run_dir_cursor = str(tmp_path / "agree-cursor")
+    os.makedirs(run_dir_cursor, exist_ok=True)
+    with open(os.path.join(run_dir_cursor, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(cursor_stream)
+    state_cursor = {
+        "opened": {
+            "engine": "cursor",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(cursor_stream), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    _assert_agree(run_dir_cursor, state_cursor)
+
+    run_dir_unparseable = str(tmp_path / "agree-unparseable")
+    os.makedirs(run_dir_unparseable, exist_ok=True)
+    with open(os.path.join(run_dir_unparseable, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write("not json at all\n")
+    state_unparseable = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": 15, "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    _assert_agree(run_dir_unparseable, state_unparseable)
+
+
+def test_engagement_with_read_signature_has_no_investigated_parameter():
+    path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_engagement_with_read":
+            names = [a.arg for a in node.args.args] + [a.arg for a in node.args.kwonlyargs]
+            assert "investigated" not in names
+            return
+    raise AssertionError("_engagement_with_read not found")
+
+
+def test_engagement_with_read_call_sites_pass_no_investigated_keyword():
+    path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    call_sites = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "_engagement_with_read":
+            call_sites.append(node)
+        elif isinstance(func, ast.Attribute) and func.attr == "_engagement_with_read":
+            call_sites.append(node)
+    assert len(call_sites) >= 9
+    for call in call_sites:
+        for kw in call.keywords:
+            assert kw.arg != "investigated", "investigated= at line %d" % call.lineno
+
+
+def test_graded_review_attempt_spot_check_lists_unchanged(tmp_path):
+    repo_root = _repo(tmp_path)
+    good = "good.py"
+    with open(os.path.join(repo_root, good), "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    stdout = json.dumps({"findings": [], "investigated": [good, "missing.py", "/abs/path"]})
+    run_dir = str(tmp_path / "spot-check-lists")
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade["investigated"] == [good]
+    assert "missing" in grade["investigatedRejected"]
+    assert "absolute" in grade["investigatedRejected"]
+
+
+def test_codex_engagement_construction_carries_telemetry_none():
+    engagement = ED._review_attempt_engagement("codex", "", "", 1.0, 100)
+    assert engagement["telemetry"] == "none"
+
+
+def test_cursor_engagement_construction_carries_telemetry_tool_calls():
+    stream = '{"type":"tool_call","call_id":"c1","subtype":"started"}\n'
+    engagement = ED._review_attempt_engagement("cursor", stream, "", 1.0, len(stream))
+    assert engagement["telemetry"] == "tool-calls"
+
+
+def test_payloadless_accepted_investigated_still_lands_engagement_read_unknown(tmp_path):
+    """Known I1 boundary: accepted investigated still gates vacuity, not engagement.read."""
+    run_dir = str(tmp_path / "i1-boundary-accepted-investigated")
+    repo_root = _repo(tmp_path)
+    rel = "src/main.py"
+    real_file = os.path.join(repo_root, rel)
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    stdout = json.dumps({"findings": [], "investigated": [rel]})
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("forfeit") is not True
+    assert grade.get("reason") != ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
+    assert grade["engagement"]["read"] == "unknown"
+    assert grade["investigated"] == [rel]
+
+
+def test_grade_review_attempt_engaged_by_nonempty_payload_without_investigated(tmp_path):
+    """Non-regression: non-empty payload with no accepted paths stays engaged."""
+    run_dir = str(tmp_path / "grade-payload-only")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_VALID_FINDINGS_STDOUT)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(_VALID_FINDINGS_STDOUT), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade["engagement"]["read"] == "engaged"
+    assert "investigated" not in grade
+
+
+def test_grade_review_attempt_vacuous_without_investigated_stamps_unknown(tmp_path):
+    """Non-regression: vacuous empty findings with no accepted paths stays unknown."""
+    run_dir = str(tmp_path / "grade-vacuous-unknown")
+    repo_root = _repo(tmp_path)
+    stdout = json.dumps({"findings": []})
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
+    assert grade["engagement"]["read"] == "unknown"
+
+
+def test_run_execution_record_codex_vacuous_prompt_echo(tmp_path):
+    """Round-trip: codex prompt-echo-only stdout stamps unknown."""
+    run_dir = str(tmp_path / "codex-vacuous-echo")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    fed = next(r["fedPrompt"] for r in records if r.get("kind") == "run-opened")
+    _execution_record_completed_attempt(
+        tmp_path, run_dir, stdout=fed, already_opened=True,
+    )
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "unknown"
+
+
+def test_run_execution_record_codex_vacuous_empty_payload(tmp_path):
+    """Round-trip: codex empty findings with no investigated paths stamps unknown."""
+    run_dir = str(tmp_path / "codex-vacuous-empty")
+    _execution_record_completed_attempt(
+        tmp_path, run_dir, stdout=json.dumps({"findings": []}),
+    )
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "unknown"
+
+
+def test_run_execution_record_codex_unparseable_stdout(tmp_path):
+    """Round-trip: codex unparseable stdout stamps unknown without raising."""
+    run_dir = str(tmp_path / "codex-unparseable")
+    _execution_record_completed_attempt(tmp_path, run_dir, stdout="not json at all\n")
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "unknown"
+
+
+def test_run_execution_record_cursor_tool_calls_engaged(tmp_path):
+    """Round-trip: cursor toolCalls >= 1 stamps engaged."""
+    run_dir = str(tmp_path / "cursor-tool-calls")
+    stream = "\n".join([
+        '{"type":"tool_call","call_id":"c1","subtype":"started"}',
+    ])
+    _execution_record_completed_attempt(
+        tmp_path, run_dir, stdout=stream, engine="cursor",
+    )
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "engaged"
+    assert record["observation"]["toolCalls"] == 1
+    assert record["observation"]["telemetry"] == "tool-calls"
+
+
+def test_run_execution_record_codex_tokens_alone_never_engaged(tmp_path):
+    """Round-trip: codex high tokens/wall/stdout without action evidence stamps unknown."""
+    run_dir = str(tmp_path / "codex-tokens-alone")
+    stderr_tail = "log line\ntokens used\n23,000\n"
+    _execution_record_completed_attempt(
+        tmp_path, run_dir,
+        stdout=json.dumps({"findings": []}),
+        stderr=stderr_tail,
+        ended_overrides={"wallSeconds": 99999.0, "stdoutBytes": 999999},
+    )
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["observation"]["read"] == "unknown"
+    assert record["observation"]["tokens"] == 23000
+    assert record["observation"]["wallSeconds"] == 99999.0
+    assert record["observation"]["stdoutBytes"] == 999999
+
+
+def test_run_execution_record_missing_stdout_never_raises(tmp_path):
+    """Round-trip: missing stdout still returns record or refusal without raising."""
+    run_dir = str(tmp_path / "missing-stdout")
+    _execution_record_completed_attempt(
+        tmp_path, run_dir, stdout="", write_stdout=False,
+    )
+    record, error = ED.run_execution_record(run_dir)
+    if record is None:
+        assert isinstance(error, str)
+    else:
+        assert error is None
+        assert isinstance(record["observation"], dict)
+

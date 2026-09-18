@@ -252,6 +252,25 @@ def _anchor_hashes(session_dir, rnd, phase, attempt, seat, occurrence=0):
     return anchor["manifestSha256"], (anchor.get("orders") or {}).get(skey, RR.NOT_EMITTED)
 
 
+def _execution_evidence(**over):
+    evidence = {
+        "source": "runner",
+        "runnerNonce": "nonce-1",
+        "recordDigest": "digest-1",
+        "observation": {
+            "tokens": None,
+            "toolCalls": None,
+            "stdoutBytes": 0,
+            "wallSeconds": 0.0,
+            "source": "none",
+            "read": "unknown",
+            "telemetry": "none",
+        },
+    }
+    evidence.update(over)
+    return evidence
+
+
 def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, **over):
     pend = pend or _pending(session_dir)
     # The default payload is SEAT-SPECIFIC on purpose: two seats sharing one payload would share a
@@ -261,8 +280,11 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, *
                "verificationReceipt": {"ran": True}} if payload is None else payload
     manifest_sha, order_sha = _anchor_hashes(session_dir, pend["round"], pend["phase"],
                                              pend["attempt"], seat, occurrence=occurrence)
+    schema = RR.seat_result_schema_for_state_version(_state(session_dir).get("schemaVersion"))
+    if schema is None:
+        schema = RR.SEAT_RESULT_SCHEMA
     env = {
-        "schema": RR.SEAT_RESULT_SCHEMA,
+        "schema": schema,
         "session": _session_id(session_dir),
         "round": pend["round"],
         "phase": pend["phase"],
@@ -277,9 +299,16 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, *
         "payloadSha256": RR.payload_sha256(payload),
         "payload": payload,
     }
+    if schema == RR.SEAT_RESULT_SCHEMA_V2:
+        evidence = _execution_evidence()
+        env["executionEvidence"] = evidence
+        env["provenance"] = RR.PROVENANCE_HAND_LANDED
+        env["envelopeSha256"] = RR.envelope_sha256(payload, evidence)
     if occurrence:
         env["occurrence"] = occurrence
     env.update(over)
+    if schema == RR.SEAT_RESULT_SCHEMA_V2 and "executionEvidence" in over:
+        env["envelopeSha256"] = RR.envelope_sha256(payload, env["executionEvidence"])
     return env
 
 
@@ -692,6 +721,7 @@ def test_record_result_refuses_when_no_phase_is_pending(tmp_path, adapters):
 def test_record_result_supersede_is_a_compare_and_swap(tmp_path, adapters):
     d = _session(tmp_path)
     first = _land_and_record(d, "code-reviewer")
+    assert "casToken" in first and first["casToken"]
     # a second ingest without --supersede is refused: the record is immutable
     _land(d, "code-reviewer", payload={"findings": ["x"]})
     assert RD.cmd_record_result(d, "code-reviewer")["reason"] == "store-exists"
@@ -701,8 +731,19 @@ def test_record_result_supersede_is_a_compare_and_swap(tmp_path, adapters):
                                 expect_sha256="dead")["reason"] == "cas-mismatch"
     # A/B: the CAS with the RIGHT expectation succeeds
     out = RD.cmd_record_result(d, "code-reviewer", supersede=True,
-                               expect_sha256=first["payloadSha256"])
+                               expect_sha256=first["casToken"])
     assert out["ok"] is True and out["superseded"] is True
+    assert "casToken" in out and out["casToken"]
+    stored, err = RR.read_json(out["storePath"])
+    assert err is None
+    assert out["casToken"] == RR.envelope_cas_token(stored)
+    # Round trip: the token a successful record hands back is the token that supersedes it.
+    _land(d, "code-reviewer", payload={"findings": ["round-trip"], "confidence": "high",
+                                       "seat": "code-reviewer",
+                                       "verificationReceipt": {"ran": True}})
+    round_trip = RD.cmd_record_result(d, "code-reviewer", supersede=True,
+                                      expect_sha256=out["casToken"])
+    assert round_trip["ok"] is True and round_trip["superseded"] is True
 
 
 def test_advance_after_supersede_does_not_journal_orphan(tmp_path, adapters):
@@ -710,12 +751,17 @@ def test_advance_after_supersede_does_not_journal_orphan(tmp_path, adapters):
     slot identity — the same pending phase must advance cleanly."""
     d = _session(tmp_path)
     first = _land_and_record(d, "code-reviewer")
+    assert "casToken" in first and first["casToken"]
     replacement = {"findings": ["replaced"], "confidence": "high", "seat": "code-reviewer",
                    "verificationReceipt": {"ran": True}}
     _land(d, "code-reviewer", payload=replacement)
     out = RD.cmd_record_result(d, "code-reviewer", supersede=True,
-                               expect_sha256=first["payloadSha256"])
+                               expect_sha256=first["casToken"])
     assert out["ok"] is True and out["superseded"] is True
+    assert "casToken" in out and out["casToken"]
+    stored, err = RR.read_json(out["storePath"])
+    assert err is None
+    assert out["casToken"] == RR.envelope_cas_token(stored)
     for seat in RD.DIMENSIONS:
         if seat == "code-reviewer":
             continue
@@ -945,6 +991,126 @@ def test_fixer_head_diff_refuses_at_record_time(tmp_path, adapters, head_path, l
     assert not os.path.exists(spath)
 
 
+def test_every_recorded_row_carries_the_stored_envelopes_cas_token(tmp_path, adapters):
+    """Enumerate the emitted journal — not source call sites — so late subscript assignment inside
+    `_store_head_diff` cannot hide a missing casToken.
+
+    axis: every `recorded` journal row that carries a revision also carries the stored envelope's
+    CAS token, checked over the emitted journal rather than over source call sites."""
+    d = _session(tmp_path)
+    assert _state(d).get("schemaVersion") == RD.STATE_SCHEMA_VERSION
+    seats = list(RD.DIMENSIONS)
+    pend = _pending(d)
+    assert RD.cmd_record_missing(d, seats[0], pend["attempt"], "forfeit")["ok"] is True
+    for seat in seats[1:-1]:
+        _land_and_record(d, seat)
+    _land(d, seats[-1])
+    assert RD.cmd_record_result(d, sweep=True)["ok"] is True
+    assert _advance(d, tmp_path)["ok"] is True
+    state = _state(d)
+    state["step"] = RD.P_FIXER
+    state["pending"] = {"action": RD.P_FIXER, "round": 1, "phase": RD.P_FIXER, "attempt": 0,
+                        "payload": {}}
+    RD.save_state(d, state)
+    head_path = str(tmp_path / "head.diff")
+    with open(head_path, "w", encoding="utf-8") as fh:
+        fh.write("diff --git a/f.py b/f.py\n+fixed\n")
+    _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path})
+    assert RD.cmd_record_result(d, "dispatch-fixer")["ok"] is True
+    recorded = _outcomes(d, "recorded")
+    assert len(recorded) >= len(seats)
+    checked = 0
+    for event in recorded:
+        if "payloadSha256" not in event or event["payloadSha256"] is None:
+            continue
+        checked += 1
+        assert "casToken" in event
+        rnd = event.get("round", 1)
+        phase = event["phase"]
+        seat = event["seat"]
+        occurrence = event.get("occurrence", 0)
+        attempt = event["attempt"]
+        spath = RR.store_path(d, rnd, phase, RR.storage_key(seat, occurrence), attempt)
+        stored, err = RR.read_json(spath)
+        assert err is None
+        assert event["casToken"] == RR.envelope_cas_token(stored)
+    assert checked >= len(seats)
+    # axis: seat-missing recorded rows without a revision token still match MISSING_CAS_TOKEN in store
+    no_revision = [event for event in recorded
+                   if "payloadSha256" not in event or event["payloadSha256"] is None]
+    assert no_revision
+    for event in no_revision:
+        rnd = event.get("round", 1)
+        phase = event["phase"]
+        seat = event["seat"]
+        occurrence = event.get("occurrence", 0)
+        attempt = event["attempt"]
+        spath = RR.store_path(d, rnd, phase, RR.storage_key(seat, occurrence), attempt)
+        stored, err = RR.read_json(spath)
+        assert err is None
+        assert stored["schema"] == RR.SEAT_MISSING_SCHEMA
+        assert RR.envelope_cas_token(stored) == RR.MISSING_CAS_TOKEN
+        assert RR.envelope_cas_token(stored) == "seat-missing/1"
+        assert "casToken" not in event or event["casToken"] == RR.MISSING_CAS_TOKEN
+        if "casToken" in event:
+            assert event["casToken"] == "seat-missing/1"
+
+
+def test_head_diff_rewrite_keeps_v2_envelope_self_consistent(tmp_path, adapters):
+    # axis: after a head-diff payload rewrite, a seat-result/2 envelopeSha256 still identifies its
+    # (payload, evidence) pair so validate_landing does not re-refuse it as envelope-torn
+    d = _fixer_session(tmp_path, adapters)
+    head_path = str(tmp_path / "head.diff")
+    diff_content = "diff --git a/f.py b/f.py\n+fixed\n"
+    with open(head_path, "w", encoding="utf-8") as fh:
+        fh.write(diff_content)
+    env = _result_envelope(d, "dispatch-fixer",
+                           payload={"fixes": [], "headDiffPath": head_path})
+    pend = _pending(d)
+    _path, _content, final, _sha = RD._envelope_with_head_diff(
+        d, env, diff_content, pend["round"], pend["phase"], "dispatch-fixer",
+        pend["attempt"], 0)
+    assert final["schema"] == RR.SEAT_RESULT_SCHEMA_V2
+    assert final["envelopeSha256"] == RR.envelope_sha256(
+        final["payload"], final.get("executionEvidence"))
+    plan, refusal = RR.validate_landing(
+        d, pend["round"], pend["phase"], "dispatch-fixer", pend["attempt"],
+        current_attempt=pend["attempt"], roster=["dispatch-fixer"],
+        seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2, envelope_override=final)
+    assert refusal is None and plan is not None
+    tampered = dict(final)
+    tampered["envelopeSha256"] = "0" * 64
+    plan, refusal = RR.validate_landing(
+        d, pend["round"], pend["phase"], "dispatch-fixer", pend["attempt"],
+        current_attempt=pend["attempt"], roster=["dispatch-fixer"],
+        seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2, envelope_override=tampered)
+    assert plan is None and refusal["reason"] == "envelope-torn"
+    _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path})
+    out = RD.cmd_record_result(d, "dispatch-fixer")
+    assert out["ok"] is True
+    stored, err = RR.read_json(out["storePath"])
+    assert err is None
+    assert stored["envelopeSha256"] == RR.envelope_sha256(
+        stored["payload"], stored.get("executionEvidence"))
+
+
+def test_head_diff_rewrite_does_not_add_envelope_sha256_to_v1_envelope(tmp_path, adapters):
+    # axis: the head-diff recompute is confined to seat-result/2 and does not add envelopeSha256 to
+    # a v1 envelope
+    d = _session(tmp_path)
+    pend = _pending(d)
+    payload = {"fixes": [], "headDiffPath": str(tmp_path / "head.diff")}
+    env = _result_envelope(d, "dispatch-fixer", payload=payload, schema=RR.SEAT_RESULT_SCHEMA)
+    env.pop("executionEvidence", None)
+    env.pop("provenance", None)
+    env.pop("envelopeSha256", None)
+    _path, _content, final, _sha = RD._envelope_with_head_diff(
+        d, env, "diff --git a/f.py b/f.py\n+fixed\n",
+        pend["round"], pend["phase"], "dispatch-fixer", pend["attempt"], 0)
+    assert final.get("schema") == RR.SEAT_RESULT_SCHEMA
+    assert "envelopeSha256" not in final
+
+
 def test_record_result_without_a_seat_refuses_unless_sweeping(tmp_path, adapters):
     d = _session(tmp_path)
     _land(d, "code-reviewer")
@@ -975,7 +1141,7 @@ def test_record_result_sweep_supersede_refuses_by_name(tmp_path, adapters):
                                         "seat": "code-reviewer",
                                         "verificationReceipt": {"ran": True}})
     out = RD.cmd_record_result(d, sweep=True, supersede=True,
-                               expect_sha256=first["payloadSha256"])
+                               expect_sha256=first["casToken"])
     assert out["ok"] is False and out["reason"] == "sweep-supersede-unsupported"
 
 
@@ -1306,7 +1472,10 @@ def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path,
     assert supersede_out["ok"] is True and supersede_out["superseded"] is True
     stored_result, err = RR.read_json(spath)
     assert err is None
-    assert stored_result["schema"] == RR.SEAT_RESULT_SCHEMA
+    expected_schema = RR.seat_result_schema_for_state_version(_state(d).get("schemaVersion"))
+    if expected_schema is None:
+        expected_schema = RR.SEAT_RESULT_SCHEMA
+    assert stored_result["schema"] == expected_schema
     assert stored_result["payload"]["verdicts"][0]["verdict"] == "CONFIRMED"
 
     # axis: fold applies CONFIRMED from superseded seat-result, not PLAUSIBLE from silent cluster
@@ -1576,7 +1745,10 @@ def test_orchestrator_fulfilled_fold_writes_the_durable_seat_record(tmp_path, ad
 
     record, err = RR.read_json(_verify_store_path(d))
     assert err is None, err
-    assert record["schema"] == RR.SEAT_RESULT_SCHEMA
+    expected_schema = RR.seat_result_schema_for_state_version(_state(d).get("schemaVersion"))
+    if expected_schema is None:
+        expected_schema = RR.SEAT_RESULT_SCHEMA
+    assert record["schema"] == expected_schema
     assert record["phase"] == RD.P_VERIFY and record["seat"] == "verify"
     assert record["round"] == 1 and record["attempt"] == 0 and record["occurrence"] == 0
     assert record["payload"] == {"result": "pass"}
@@ -3335,7 +3507,9 @@ def test_death_between_ingest_and_journal_append(tmp_path, adapters):
     # ingest WITHOUT the journal half — the kill lands between the two commits
     anchor = RD._orders_anchor(_state(d), d, 1, RD.P_PANEL, 0)
     ingested = RR.ingest_landing(d, 1, RD.P_PANEL, "test-reviewer", 0, current_attempt=0,
-                                 roster=list(RD.DIMENSIONS), anchor=anchor)
+                                 roster=list(RD.DIMENSIONS), anchor=anchor,
+                                 seat_result_schema=RR.seat_result_schema_for_state_version(
+                                     _state(d).get("schemaVersion")))
     assert ingested["ok"] is True
     before = open(ingested["storePath"], "rb").read()
     assert not [e for e in _outcomes(d, "recorded") if e["seat"] == "test-reviewer"]
