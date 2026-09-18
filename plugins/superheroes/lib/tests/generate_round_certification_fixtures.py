@@ -18,19 +18,20 @@ if _LIB not in sys.path:
 import record_paths
 import round_certification as RC
 import round_driver as RD
+import round_phases
 import round_records as RR
 import session_contract
 
 GENERATED_ROOT = os.path.join(_HERE, "fixtures", "round_certification_generated")
-META_FILE = "meta.json"
-STATE_FILE = "loop-state.json"
-JOURNAL_FILE = "driver-journal.jsonl"
-HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
+META_FILE = session_contract.META_FILE
+STATE_FILE = session_contract.STATE_FILE
+JOURNAL_FILE = session_contract.JOURNAL_FILE
+HEAD_CONTENT_BLOBS_FILE = session_contract.HEAD_CONTENT_BLOBS_FILE
 SESSION_ID = "test-session-001"
 HEAD_SHA = "a" * 40
 RECORDED_AT = "2026-01-01T00:00:00"
 PANEL_PHASE = RC.PANEL_PHASE
-AUDIT_PHASE = "dispatch-audits"
+AUDIT_PHASE = round_phases.P_AUDITS
 SIXTEEN_AUDIT_SEATS = tuple("audit-target-%02d" % i for i in range(16))
 ANCHOR_SHA = "feb91032a2cb2106f089a25063b8178527ae4359f5412ccf549e9d2f98f28ce9"
 
