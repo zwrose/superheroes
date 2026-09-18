@@ -8569,6 +8569,30 @@ def test_dispatch_poll_cli_exits_0(tmp_path, capsys):
     assert res["reason"] == ED.dispatch_outcome.REASON_RUNNING
 
 
+def test_dispatch_poll_cli_run_dir_symlink_refused_exits_1(tmp_path, capsys):
+    real_dir = tmp_path / "real-run"
+    real_dir.mkdir()
+    symlink = tmp_path / "run-link"
+    symlink.symlink_to(real_dir)
+    rc = ED.main(["dispatch-poll", "--run-dir", str(symlink)])
+    assert rc == 1
+    result = json.loads(capsys.readouterr().out.strip())
+    assert result["ok"] is False
+    assert result["detail"] == "run-dir-is-symlink"
+
+
+def test_dispatch_abandon_cli_run_dir_symlink_refused_exits_1(tmp_path, capsys):
+    real_dir = tmp_path / "real-run"
+    real_dir.mkdir()
+    symlink = tmp_path / "run-link"
+    symlink.symlink_to(real_dir)
+    rc = ED.main(["dispatch-abandon", "--run-dir", str(symlink)])
+    assert rc == 1
+    result = json.loads(capsys.readouterr().out.strip())
+    assert result["ok"] is False
+    assert result["detail"] == "run-dir-is-symlink"
+
+
 def test_dispatch_abandon_cli_exits_0_despite_unrunnable_json(tmp_path, capsys):
     run_dir = str(tmp_path / "run-abandon-cli")
     _manual_open_review_run(tmp_path, run_dir)

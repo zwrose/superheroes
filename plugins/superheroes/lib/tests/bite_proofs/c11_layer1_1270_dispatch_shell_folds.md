@@ -350,3 +350,74 @@ empty. **Raw green** (the three canary nodes together):
 ...                                                                      [100%]
 3 passed in 0.88s
 ```
+
+---
+
+## WO-6 — `dispatch-poll` / `dispatch-abandon` refusal exit paths (two elements)
+
+**Axis, both:** *a poll or abandon that refused must not read as success by exit code.* Each element
+is neutralized by restoring the hardcoded `CLASSIFICATION_RESULT` for **that one verb** in
+`main()`, discarding the classification returned by the internal impl.
+
+### BP-6.1 — `dispatch_poll`'s refusal exit path
+
+**Neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `main`'s `dispatch-poll` branch):
+
+```python
+         elif args.cmd == "dispatch-poll":
+             res, classification = _dispatch_poll_impl(args.run_dir)
++            classification = dispatch_outcome.CLASSIFICATION_RESULT
+```
+
+**Node:** `plugins/superheroes/lib/tests/test_engine_dispatch.py::test_dispatch_poll_cli_run_dir_symlink_refused_exits_1`
+
+**Raw red:**
+
+```
+E       assert 0 == 1
+plugins/superheroes/lib/tests/test_engine_dispatch.py:8578: AssertionError
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_dispatch_poll_cli_run_dir_symlink_refused_exits_1
+1 failed in 0.60s
+```
+
+**Restore:** inverse edit — delete the `classification = dispatch_outcome.CLASSIFICATION_RESULT`
+line. **Restore receipt:**
+
+```python
+        elif args.cmd == "dispatch-poll":
+            res, classification = _dispatch_poll_impl(args.run_dir)
+```
+
+**Raw green:** `1 passed in 0.52s`
+
+### BP-6.2 — `dispatch_abandon`'s refusal exit path
+
+**Neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `main`'s `dispatch-abandon`
+branch):
+
+```python
+         elif args.cmd == "dispatch-abandon":
+             res, classification = _dispatch_abandon_impl(args.run_dir)
++            classification = dispatch_outcome.CLASSIFICATION_RESULT
+```
+
+**Node:** `plugins/superheroes/lib/tests/test_engine_dispatch.py::test_dispatch_abandon_cli_run_dir_symlink_refused_exits_1`
+
+**Raw red:**
+
+```
+E       assert 0 == 1
+plugins/superheroes/lib/tests/test_engine_dispatch.py:8590: AssertionError
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_dispatch_abandon_cli_run_dir_symlink_refused_exits_1
+1 failed in 0.67s
+```
+
+**Restore:** inverse edit — delete the `classification = dispatch_outcome.CLASSIFICATION_RESULT`
+line. **Restore receipt:**
+
+```python
+        elif args.cmd == "dispatch-abandon":
+            res, classification = _dispatch_abandon_impl(args.run_dir)
+```
+
+**Raw green:** `1 passed in 0.53s`
