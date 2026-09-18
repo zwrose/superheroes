@@ -309,3 +309,48 @@ def ensure_project_store(cwd, root=None):
         return d
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def calibration_state(cwd, root=None):
+    """Tri-state, strictly READ-ONLY calibration probe: 'calibrated' / 'uncalibrated' /
+    'indeterminate'.
+
+    Mirrors lib/session_context.py's covenant probe but is TRI-STATE: a safety floor must tell an
+    ABSENT calibration (a plain non-superheroes project) apart from a corrupt/errored one, so it
+    can fail closed (→ deny) on the latter without silencing the floor on the former.
+
+    NEVER calls resolve() — that can backfill-WRITE the registry, and a probe must not mutate
+    project state."""
+    # A returned dict → calibrated. A RAISE (e.g. UnknownSchemaVersion on a newer schema) or any
+    # other exception → indeterminate (fail-closed).
+    try:
+        rec = read_registry(cwd, root)
+    except Exception:
+        return "indeterminate"
+    if rec is not None:
+        return "calibrated"
+
+    # read_registry returned None: either no file, or a file that yielded None
+    # (corrupt/invalid/inaccessible). Distinguish the two by whether the registry FILE exists —
+    # via os.lstat, NOT os.path.exists. os.path.exists follows symlinks and swallows permission/
+    # loop errors, so a dangling or inaccessible registry.json would read as "absent" and could
+    # silently drop the floor to uncalibrated on a calibrated project. os.lstat raises
+    # FileNotFoundError ONLY for a genuinely absent path; a dangling symlink lstat-SUCCEEDS
+    # (present → indeterminate), and any other error (permission, loop) → indeterminate.
+    try:
+        os.lstat(registry_path(cwd, root))
+        file_present = True
+    except FileNotFoundError:
+        file_present = False
+    except Exception:
+        return "indeterminate"
+    if file_present:
+        # File present but read_registry could not validate it → corrupt/invalid/inaccessible.
+        return "indeterminate"
+
+    # No registry file: fall back to hero-evidence.
+    try:
+        verdict = evidence_verdict(hero_evidence(cwd, root))
+    except Exception:
+        return "indeterminate"
+    return "uncalibrated" if verdict == "none" else "calibrated"

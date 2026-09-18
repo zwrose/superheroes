@@ -694,8 +694,7 @@ result also refuses (fail-closed). The fixer never pushes/merges/deploys (those 
 **Where those findings go next.** A refusal here means this loop **cannot converge on that surface** —
 that is the guard's designed bound, not a defect, an engine failure, or an escalation trigger. The
 route from the refusal to a fix — ordered implementer work orders on advisor or builder authority
-with loud disclosure, the owner's word required only for the owner-authority-gate family, and the
-park branch scoped to that family — is
+with loud disclosure — is
 `rubric/review-discipline.md` § *The safety-machinery route — the guard refuses the fixer*. Follow it
 rather than re-deriving it; do not retry the fixer, and never narrow the guard to converge a round.
 
@@ -856,9 +855,7 @@ carries `{vendor, model, effort, tier, family, source}`:
   panel buys its independence from anthropic/openai instead; where
   none is live, the seat still fills with the maker family and the map records a disclosed
   `same-family` degradation, which rides the certification shape (`-degraded`) alongside
-  `independenceDegraded`, `baseDegraded`, and disclosed `plugin-version-skew` (semantics-divergent
-  or evidence-unreadable across `lib/model_registry.py`, `lib/seat_map.py`, and `lib/version_skew.py`
-  against the superheroes source repo — detection only, not a version-string compare). The `verify()` result (the #547c
+  `independenceDegraded` and `baseDegraded`. The `verify()` result (the #547c
   maker-family-vs-seat check) now separates a **violation** (maker family seated when an
   alternative was reachable) from that unavoidable **degradation**; unusable liveness evidence
   fails closed to violation. Every degradation / unhonorable-pin fallback is recorded in the
