@@ -28,7 +28,9 @@ not listed in the table below is the same as the **full** lane.
 
 **Size counts non-test lines.** Every size figure in this document and in the charters — the
 lane row above, the light lane's measured escalation line, the micro ceiling, and the
-"twice the brief's estimate" scope tripwire — is read over **non-test changed lines**:
+"twice the brief's estimate" scope tripwire — is read over **non-test changed lines**
+(the two absolute bars in the next paragraph are the one exception: they count added or
+modified lines only, as stated there):
 additions plus deletions in every file *outside* a `tests/` directory (docs, skill and
 rubric prose, and code all count; test modules and their fixtures do not). Test volume
 scales with rigour here — bite-proofs, truth tables, censuses, drift tests — and a size
@@ -37,6 +39,16 @@ the wrong pressure. Test volume that signals a *design* problem is the third-rew
 tripwire's and the vet's to catch, not the lane line's. Estimates carry both numbers
 (behaviour + test lines) so the tripwire and the estimate share a basis (owner-ruled
 2026-08-16).
+
+**Two absolute bars stand beside the relative tripwire**, counted over non-test lines **added or
+modified** — pure deletions, regenerated artifacts (a generated reference doc, a regenerated
+fixture), test modules and bite-proof records do not count. At **300** the builder reports the count
+on the issue with a proposed cut line and continues. At **600** the builder stops and hands the call
+to the advisor, who rules continue, split or park and records the reason on the issue; that call is
+never the builder's to make alone and never the owner's. A split lands as native stack layers, each
+reviewable on its own, so no intermediate state reaches the trunk. The bars apply in the full and
+light lanes; a micro change that approached them would already have left its ceiling.
+Where the call is in doubt, the preference is more, smaller PRs.
 
 **Micro skips preflight** because preflight proves tools before a session goes
 *autonomous*, and micro never does — it runs inside a long-lived advisor session with
@@ -310,6 +322,10 @@ keeps meaning: you name what you are shipping with, not pretend the bar was met 
 ### The third-rework tripwire
 
 After two reworks of the same surface in one build, **a third rework of the same surface is the tripwire**: that third rework is not dispatched, so the fourth patch on that surface never happens.
+The count is of reworks the orchestrator dispatches against a surface. A mechanical fix the
+certified loop applies inside its own rounds is not a rework for this count — the loop's round cap
+bounds those — so a loop re-dispatching a mechanical fix adds nothing to the count, and a rework
+the orchestrator dispatches against the surface adds one.
 What the tripwire demands is that the design signal is named, not that the build goes idle. On a
 lane the builder can affirmatively call converged, **stopping and handing the design signal up satisfies it** — refuse the fourth patch, name what the seam problem looks like in the handback, and
 ship the remaining minors as disclosed follow-ups; the handback must **state that the third-rework
