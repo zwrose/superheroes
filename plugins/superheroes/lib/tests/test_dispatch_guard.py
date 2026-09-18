@@ -146,41 +146,29 @@ def test_allowlist_is_derived_not_shadowed_source_scan():
         )
 
 
-def test_cli_park_exits_1_and_names_allowlist():
-    proc = subprocess.run(
-        [
-            sys.executable,
-            _MOD,
-            "check",
-            "--seat",
-            json.dumps({"vendor": "cursor", "model": "gpt-5.3-codex-high", "effort": None, "role": "implementer"}),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode == 1
-    payload = json.loads(proc.stdout)
+def test_cli_park_exits_1_and_names_allowlist(capsys):
+    rc = DG.main([
+        "check",
+        "--seat",
+        json.dumps({"vendor": "cursor", "model": "gpt-5.3-codex-high", "effort": None, "role": "implementer"}),
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    payload = json.loads(captured.out)
     assert payload["ok"] is False
     assert "composer-2.5" in payload["allowlist"]
-    assert proc.stderr.strip()
+    assert captured.err.strip()
 
 
-def test_cli_pass_exits_0():
-    proc = subprocess.run(
-        [
-            sys.executable,
-            _MOD,
-            "check",
-            "--seat",
-            json.dumps({"vendor": "cursor", "model": "composer-2.5", "effort": None, "role": "implementer"}),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode == 0
-    payload = json.loads(proc.stdout)
+def test_cli_pass_exits_0(capsys):
+    rc = DG.main([
+        "check",
+        "--seat",
+        json.dumps({"vendor": "cursor", "model": "composer-2.5", "effort": None, "role": "implementer"}),
+    ])
+    captured = capsys.readouterr()
+    assert rc == 0
+    payload = json.loads(captured.out)
     assert payload["ok"] is True
     assert payload["resolved_model"]
 

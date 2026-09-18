@@ -955,7 +955,7 @@ def test_dispatch_write_cli_effort_key_absent_refuses(tmp_path, capsys):
         "--max-wait", "0",
     ]
     code = ED.main(argv)
-    assert code == 0
+    assert code == 1
     res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert res["ok"] is False
     assert res["terminal"] is True
@@ -1251,7 +1251,7 @@ def test_write_cli_out_of_range_max_wait_prints_named_refusal(tmp_path, capsys):
         "--run-dir", run_dir,
         "--max-wait", str(ED.MAX_SYNC_WAIT + 1),
     ]
-    assert ED.main(argv) == 0
+    assert ED.main(argv) == 1
     res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert res["ok"] is False
     assert res["terminal"] is True
@@ -2606,7 +2606,15 @@ def test_dispatch_write_cli_terminal_forfeit_exits_0(tmp_path, monkeypatch, caps
                 fh.write("x")
             return "", True, 0, ""
 
-    monkeypatch.setattr(ED, "_run_engine", DirtyTimeoutRunner())
+    fake = DirtyTimeoutRunner()
+    real_supervise = ED._supervise
+
+    def _supervise_with_fake(run_dir_real, *, run_kind, deadline, run_engine=None):
+        return real_supervise(
+            run_dir_real, run_kind=run_kind, deadline=deadline, run_engine=fake,
+        )
+
+    monkeypatch.setattr(ED, "_supervise", _supervise_with_fake)
     rc = ED.main([
         "dispatch-write",
         "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),

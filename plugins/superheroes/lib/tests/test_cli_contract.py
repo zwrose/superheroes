@@ -118,7 +118,7 @@ def test_dispatch_review_run_dir_symlink_refused_through_cli(tmp_path, capsys):
         "--repo-root", str(repo),
         "--run-dir", str(symlink),
     ])
-    assert rc == 0
+    assert rc == 1
     result = json.loads(capsys.readouterr().out.strip())
     assert result["ok"] is False
     assert result["detail"] == "run-dir-is-symlink"
@@ -146,7 +146,7 @@ def test_dispatch_review_main_forwards_mode_kwarg(tmp_path, monkeypatch, capsys)
         "--repo-root", str(repo),
         "--mode", "brief-check",
     ])
-    assert rc == 0
+    assert rc == 1
     assert captured.get("mode") == "brief-check"
     capsys.readouterr()
 

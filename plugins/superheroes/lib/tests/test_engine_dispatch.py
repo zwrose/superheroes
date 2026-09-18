@@ -4322,7 +4322,7 @@ def test_main_dispatch_review_diff_base_cli_wiring(tmp_path, monkeypatch, capsys
         "--repo-root", repo_root,
         "--diff-base", "REF",
     ])
-    assert rc == 0
+    assert rc == 1
     json.loads(capsys.readouterr().out.strip())
     assert captured.get("diff_base") == "REF"
 

@@ -84,7 +84,7 @@ def test_entry_clis_route_through_chokepoint_and_expose_seat_flag(cli_module, su
         payload = json.loads(out.splitlines()[0])
         assert payload["reason"] == "chokepoint-sentinel"
     else:
-        assert rc == 0
+        assert rc == 1
         result = json.loads(out.splitlines()[-1])
         assert result["detail"] == "sentinel"
 

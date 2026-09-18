@@ -190,7 +190,9 @@ def test_build_argv_cli(capsys):
     rc = EA.main(["build-argv", "--seat", _seat_json("codex", "gpt-5.6-terra", "high", "implementer"),
                   "--run-kind", "build", "--cwd", "/wt"])
     out = json.loads(capsys.readouterr().out)
-    assert rc == 0 and out[0] == "codex" and "workspace-write" in out
+    assert rc == 0
+    assert isinstance(out, list)
+    assert out[0] == "codex" and "workspace-write" in out
     assert out[out.index("-m") + 1] == "gpt-5.6-terra"
 
 
