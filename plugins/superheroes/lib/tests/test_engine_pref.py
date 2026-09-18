@@ -616,6 +616,11 @@ MR = _load_module("model_registry.py", "model_registry")
 DG = _load_module("dispatch_guard.py", "dispatch_guard")
 EA = _load_module("engine_adapter.py", "engine_adapter")
 
+
+def _seat(vendor, model, effort):
+    return {"vendor": vendor, "model": model, "effort": effort}
+
+
 _CALIBRATION_TIERS = {
     "implementer": "sonnet",
     "pilot": "sonnet",
@@ -829,13 +834,10 @@ def _expected_build_argv_model(role, vendor, tier, prefs, cell):
             _mid, tok_effort = parsed
             if tok_effort is not None:
                 effort = tok_effort
-    if vendor == "cursor" and cell == EA._CURSOR_MODEL:
-        opts = {}
-    elif vendor == "cursor":
-        opts = {"engine_model": cell}
-    else:
-        opts = {"model": tier}
-    res = EA.build_argv_result(vendor, role_kind, effort, opts)
+        if cell == EA._CURSOR_MODEL:
+            effort = None
+    seat = _seat(vendor, cell, effort)
+    res = EA.build_argv_result(seat, role_kind, {})
     assert res.get("reason") is None, res
     return _argv_dispatch_model(vendor, res["argv"])
 
@@ -981,17 +983,16 @@ def _third_party_engine_model_ids_from_registry():
 @pytest.mark.parametrize("engine_model", _third_party_engine_model_ids_from_registry())
 def test_build_argv_result_cursor_refuses_third_party_engine_model(engine_model):
     """#650: third-party registry ids must not be accepted as cursor engine_model pins."""
-    res = EA.build_argv_result("cursor", "build", "high", {"engine_model": engine_model})
-    assert res == {"argv": [], "reason": "unregistered-engine-model"}
+    res = EA.build_argv_result(_seat("cursor", engine_model, "high"), "build", {})
+    assert res["argv"] == []
+    assert res["reason"] == "unregistered-engine-model"
 
 
 def test_build_argv_result_cursor_accepts_first_party_engine_model_pin():
-    res = EA.build_argv_result(
-        "cursor", "review", None, {"engine_model": "composer-2.5"})
+    res = EA.build_argv_result(_seat("cursor", "composer-2.5", None), "review", {})
     assert res["reason"] is None
     assert res["argv"][res["argv"].index("--model") + 1] == "composer-2.5"
-    grok = EA.build_argv_result(
-        "cursor", "review", "xhigh", {"engine_model": "cursor-grok-4.6"})
+    grok = EA.build_argv_result(_seat("cursor", "cursor-grok-4.6", "xhigh"), "review", {})
     assert grok["reason"] is None
     assert grok["argv"][grok["argv"].index("--model") + 1] == "cursor-grok-4.6-xhigh"
 
