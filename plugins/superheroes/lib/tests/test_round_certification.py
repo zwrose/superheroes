@@ -1842,49 +1842,69 @@ def _hand_landed_findings_envelope(*, observation_overrides=None, evidence_overr
 
 
 def test_hand_landed_read_unknown_refuses_not_engaged():
-    envelope, journal_binding = _hand_landed_findings_envelope(
+    envelope, _journal_binding = _hand_landed_findings_envelope(
         observation_overrides={"read": "unknown"},
     )
-    ok, failure = RC._hand_landed_evidence_qualifies(
-        envelope, HEAD, journal_binding=journal_binding,
-        recorded_nonces={"hand-landed-nonce"},
-    )
+    ok, failure = RC._hand_landed_read_qualifies(envelope["executionEvidence"])
     assert ok is False
     assert failure == "execution-evidence-not-engaged"
 
 
 def test_hand_landed_read_outside_enum_refuses_invalid():
-    envelope, journal_binding = _hand_landed_findings_envelope(
+    envelope, _journal_binding = _hand_landed_findings_envelope(
         observation_overrides={"read": "disengaged"},
     )
-    ok, failure = RC._hand_landed_evidence_qualifies(
-        envelope, HEAD, journal_binding=journal_binding,
-        recorded_nonces={"hand-landed-nonce"},
-    )
+    ok, failure = RC._hand_landed_read_qualifies(envelope["executionEvidence"])
     assert ok is False
     assert failure == "execution-evidence-read-invalid"
 
 
 def test_hand_landed_unknown_observation_field_refuses():
-    envelope, journal_binding = _hand_landed_findings_envelope(
+    envelope, _journal_binding = _hand_landed_findings_envelope(
         observation_overrides={"read": "engaged", "bogusField": True},
     )
-    ok, failure = RC._hand_landed_evidence_qualifies(
-        envelope, HEAD, journal_binding=journal_binding,
-        recorded_nonces={"hand-landed-nonce"},
-    )
+    ok, failure = RC._hand_landed_read_qualifies(envelope["executionEvidence"])
     assert ok is False
     assert failure == "execution-evidence-unknown-field"
 
 
 def test_hand_landed_read_engaged_qualifies():
-    envelope, journal_binding = _hand_landed_findings_envelope()
-    ok, failure = RC._hand_landed_evidence_qualifies(
-        envelope, HEAD, journal_binding=journal_binding,
-        recorded_nonces={"hand-landed-nonce"},
-    )
+    envelope, _journal_binding = _hand_landed_findings_envelope()
+    ok, failure = RC._hand_landed_read_qualifies(envelope["executionEvidence"])
     assert ok is True
     assert failure is None
+
+
+def test_check_hand_landed_read_engaged_unknown_read_refuses(tmp_path):
+    evidence = _hand_landed_evidence_binding(
+        observation={
+            "read": "unknown",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+        },
+    )
+    payload_sha = DEFAULT_PANEL_PAYLOAD_SHA
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=[
+            _hand_landed_binding_journal_row("code-reviewer", payload_sha, evidence)
+        ],
+        envelopes=[
+            {
+                "seat": "code-reviewer",
+                "payloadSha256": payload_sha,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "executionEvidence": evidence,
+            }
+        ],
+    )
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_hand_landed_read_engaged(ctx)
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-not-engaged"
 
 
 def _minimal_orders_manifest(*, session_id="test-session-001", rnd=1, phase=RC.PANEL_PHASE, attempt=0):
