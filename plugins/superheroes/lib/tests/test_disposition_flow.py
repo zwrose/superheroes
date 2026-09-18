@@ -1,9 +1,11 @@
 """Cross-doc disposition-flow structural guards (issue #1113).
 
-Enforces: pinned section headings; retired vocabulary and owner-rejected terms absent;
-retired tier vocabulary absent from shipped doctrine surfaces minus a named not-yet-migrated set;
+Enforces: pinned owner-decisions section headings cited by live consumers;
+retired vocabulary and owner-rejected terms absent;
+retired tier vocabulary absent from shipped doctrine surfaces;
+retired gate heading and phrase absent from shipped markdown minus closed exclusions;
 registry marker home;
-discuss-open-decisions cites the owner-decisions canonical home path.
+discuss-open-decisions cites the owner-decisions canonical home path and append-before-propose ordering.
 """
 # What this file guards and does not guard (issue #1113).
 #
@@ -14,8 +16,11 @@ discuss-open-decisions cites the owner-decisions canonical home path.
 # Prose MEANING, Contents parity, table shape, and ordering beyond presence are
 # guarded by review, not by CI. No negation heuristics, no paragraph heuristics,
 # no structural parsers beyond heading-line membership checks.
-# The retired tier vocabulary census walks _TOUCHED_FILES plus issue-contract, minus
-# _TIER_VOCAB_NOT_YET_MIGRATED — no tree walk.
+# The retired tier vocabulary census walks _TIER_VOCAB_CENSUS_SURFACES minus
+# _TIER_VOCAB_NOT_YET_MIGRATED (empty — every surface is censused).
+# The retired gate census walks every shipped *.md under the plugin root minus
+# _RETIRED_GATE_WALK_EXCLUSIONS: lib/tests/ (fixtures and bite-proof records)
+# and CHANGELOG.md (generated release history).
 import os
 import re
 
@@ -40,6 +45,28 @@ _RETIRED_TIER_LITERALS = (
     "Tier-2",
 )
 
+_RETIRED_GATE_HEADING = "## The worth-it gate and the venue ladder"
+_RETIRED_GATE_PHRASE = "worth-it gate"
+_RETIRED_GATE_LITERALS = (
+    _RETIRED_GATE_HEADING,
+    _RETIRED_GATE_PHRASE,
+)
+
+_RETIRED_DOOR_GRADING_LITERALS = (
+    "gate verdict",
+)
+
+_APPEND_BEFORE_PROPOSE_PINNED_CLAUSES = (
+    "append it to the collector immediately",
+    "every owner call is appended",
+)
+
+# Closed exclusion set for the retired-gate markdown walk — nothing else.
+_RETIRED_GATE_WALK_EXCLUSIONS = (
+    os.path.join("lib", "tests"),  # test fixtures and bite-proof records
+    "CHANGELOG.md",  # generated release history
+)
+
 _OWNER_REJECTED_LITERALS = ("knob-polish",)
 
 _TOUCHED_FILES = (
@@ -60,19 +87,21 @@ _RETIRED_VOCAB_FILES = (
 # Surfaces the module already reads for disposition-flow guards, plus issue-contract.
 _TIER_VOCAB_CENSUS_SURFACES = _TOUCHED_FILES + (_ISSUE_CONTRACT,)
 
-# Surfaces still on the retired tier names; they leave this tuple when their text migrates.
-_TIER_VOCAB_NOT_YET_MIGRATED = (
-    _OWNER_DECISIONS,
-    _DISCUSS_OPEN,
-)
+# Surfaces still on the retired tier names; empty — every census surface has migrated.
+_TIER_VOCAB_NOT_YET_MIGRATED = ()
 
-_DISCUSS_OPEN_APPEND_BEFORE_PROPOSE = (
-    "**before** it is proposed in this session's delivery message"
-)
-
+# Headings of owner-decisions.md cited by exact text in live shipped consumers.
 _PINNED_OWNER_DECISIONS_HEADINGS = (
-    "## The worth-it gate and the venue ladder",
+    "## The filter — what is the owner's, and on what grounds",
+    "## The per-item spine",
+    "## The front door",
+    "## The venue ladder",
     "## The revisit-trigger registry",
+    "## Delivery mechanics",
+    "## Formatting — one block per spine section",
+    "## Where the items come from, and the bound on that sweep",
+    "## What batch-1 execution may and may not do",
+    "## The collector preamble — canonical snippet",
 )
 
 _PINNED_REVIEW_DISCIPLINE_HEADINGS = (
@@ -85,6 +114,71 @@ def _read_plugin(rel):
     path = rel if os.path.isabs(rel) else os.path.join(_PLUGIN_ROOT, rel)
     with open(path, encoding="utf-8") as fh:
         return fh.read()
+
+
+def _normalize_prose(text):
+    text = re.sub(r"\*+", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip().lower()
+
+
+def _assert_append_before_propose_ordering(text):
+    # axis: each pinned ordering clause — not a document-wide single match.
+    normalized = _normalize_prose(text)
+    matched = 0
+    for marker in _APPEND_BEFORE_PROPOSE_PINNED_CLAUSES:
+        idx = normalized.find(marker)
+        if idx == -1:
+            continue
+        proposed = "proposed in this session's delivery message"
+        end = normalized.find(proposed, idx)
+        if end == -1:
+            continue
+        end += len(proposed)
+        clause = normalized[idx:end]
+        if re.search(
+            r"append(?:ed)?\b[^.]*?after\b[^.]*?proposed",
+            clause,
+        ):
+            raise AssertionError(
+                "%s: append-after-propose in pinned ordering clause"
+                % _DISCUSS_OPEN
+            )
+        if not re.search(
+            r"append(?:ed)?\b[^.]*?before\b[^.]*?proposed",
+            clause,
+        ):
+            raise AssertionError(
+                "%s: append-before-propose ordering missing in pinned clause"
+                % _DISCUSS_OPEN
+            )
+        matched += 1
+    if matched < len(_APPEND_BEFORE_PROPOSE_PINNED_CLAUSES):
+        raise AssertionError(
+            "%s: expected %d pinned append-before-propose clauses, found %d"
+            % (
+                _DISCUSS_OPEN,
+                len(_APPEND_BEFORE_PROPOSE_PINNED_CLAUSES),
+                matched,
+            )
+        )
+
+
+def _retired_gate_walk_excluded(rel):
+    rel_norm = rel.replace(os.sep, "/")
+    if rel_norm == _RETIRED_GATE_WALK_EXCLUSIONS[1]:
+        return True
+    prefix = _RETIRED_GATE_WALK_EXCLUSIONS[0].replace(os.sep, "/") + "/"
+    return rel_norm.startswith(prefix)
+
+
+def _iter_shipped_markdown_files():
+    for dirpath, _dirnames, filenames in os.walk(_PLUGIN_ROOT):
+        for filename in filenames:
+            if not filename.endswith(".md"):
+                continue
+            full = os.path.join(dirpath, filename)
+            yield os.path.relpath(full, _PLUGIN_ROOT)
 
 
 def _expect_error(fn, exc_type, *, match):
@@ -155,6 +249,36 @@ def _assert_retired_tier_literals_absent(texts=None):
                 )
 
 
+def _assert_retired_gate_literals_absent(texts=None):
+    # axis: presence of a retired gate literal in shipped markdown — tree walk minus exclusions.
+    if texts is None:
+        texts = {}
+        for rel in _iter_shipped_markdown_files():
+            if _retired_gate_walk_excluded(rel):
+                continue
+            texts[rel] = _read_plugin(rel)
+    for rel, text in texts.items():
+        if _retired_gate_walk_excluded(rel):
+            continue
+        for literal in _RETIRED_GATE_LITERALS:
+            if literal in text:
+                raise AssertionError(
+                    "%s: retired gate literal %r present" % (rel, literal)
+                )
+
+
+def _assert_retired_door_grading_literals_absent(texts=None):
+    if texts is None:
+        texts = {rel: _read_plugin(rel) for rel in _TOUCHED_FILES}
+    for rel in _TOUCHED_FILES:
+        text = texts[rel]
+        for literal in _RETIRED_DOOR_GRADING_LITERALS:
+            if literal in text:
+                raise AssertionError(
+                    "%s: retired door-grading literal %r present" % (rel, literal)
+                )
+
+
 def _assert_discuss_open_holder_pins(texts=None):
     if texts is None:
         texts = {
@@ -175,11 +299,7 @@ def _assert_discuss_open_holder_pins(texts=None):
         raise AssertionError(
             "%s: canonical home %r not cited" % (_DISCUSS_OPEN, _OWNER_DECISIONS)
         )
-    if _DISCUSS_OPEN_APPEND_BEFORE_PROPOSE not in text:
-        raise AssertionError(
-            "%s: append-before-propose pin %r missing"
-            % (_DISCUSS_OPEN, _DISCUSS_OPEN_APPEND_BEFORE_PROPOSE)
-        )
+    _assert_append_before_propose_ordering(text)
 
 
 def _assert_owner_rejected_terms_absent(texts=None):
@@ -235,6 +355,14 @@ def test_retired_tier_literals_absent():
     _assert_retired_tier_literals_absent()
 
 
+def test_retired_gate_literals_absent():
+    _assert_retired_gate_literals_absent()
+
+
+def test_retired_door_grading_literals_absent():
+    _assert_retired_door_grading_literals_absent()
+
+
 def test_discuss_open_holder_pins():
     _assert_discuss_open_holder_pins()
 
@@ -252,16 +380,14 @@ def test_registry_marker_has_exactly_one_home():
 
 def test_negative_pinned_heading_renamed():
     synthetic = "\n".join(
-        (
-            "## The worth-it gate and the venue ladder",
-            "## The revisit-trigger registry (old)",
-        )
+        h if h != "## The revisit-trigger registry" else "## The revisit trigger registry"
+        for h in _PINNED_OWNER_DECISIONS_HEADINGS
     )
     review_disc = "\n".join(_PINNED_REVIEW_DISCIPLINE_HEADINGS)
     texts = {_OWNER_DECISIONS: synthetic, _REVIEW_DISCIPLINE: review_disc}
     _expect_assertion_error(
         lambda: _assert_pinned_headings_present(texts),
-        match=r"owner-decisions\.md: pinned heading missing: '## The revisit-trigger registry'",
+        match=r"pinned heading missing: '## The revisit-trigger registry'",
     )
 
 
@@ -280,6 +406,14 @@ def test_negative_retired_tier_literal_inserted():
     _expect_assertion_error(
         lambda: _assert_retired_tier_literals_absent(texts),
         match=r"vet-receipt\.md: retired tier literal 'Tier 2' present",
+    )
+
+
+def test_negative_retired_gate_literal_inserted():
+    texts = {"skills/showrunner/SKILL.md": _RETIRED_GATE_HEADING}
+    _expect_assertion_error(
+        lambda: _assert_retired_gate_literals_absent(texts),
+        match=r"retired gate literal .* present",
     )
 
 
@@ -306,13 +440,72 @@ def test_negative_discuss_open_missing_home():
 def test_negative_discuss_open_missing_append_before_propose():
     texts = {
         _DISCUSS_OPEN: (
-            "See %s for the worth-it gate." % _OWNER_DECISIONS
+            "See %s for the front door. Proposed in this session's delivery message, "
+            "then appended to the collector."
+            % _OWNER_DECISIONS
         ),
         _OWNER_DECISIONS: "\n".join(_PINNED_OWNER_DECISIONS_HEADINGS),
     }
     _expect_assertion_error(
         lambda: _assert_discuss_open_holder_pins(texts),
-        match="append-before-propose pin",
+        match="pinned append-before-propose",
+    )
+
+
+def test_negative_discuss_open_inverted_append_before_propose_one_clause():
+    base = _read_plugin(_DISCUSS_OPEN)
+    lines = base.splitlines()
+    inverted = []
+    for i, line in enumerate(lines, 1):
+        if i == 47:
+            inverted.append(line.replace("**before**", "**after**"))
+        else:
+            inverted.append(line)
+    texts = {
+        _DISCUSS_OPEN: "\n".join(inverted),
+        _OWNER_DECISIONS: "\n".join(_PINNED_OWNER_DECISIONS_HEADINGS),
+    }
+    _expect_assertion_error(
+        lambda: _assert_discuss_open_holder_pins(texts),
+        match="append-after-propose in pinned ordering clause",
+    )
+
+
+def test_negative_discuss_open_append_before_propose_reflowed_passes():
+    texts = {
+        _DISCUSS_OPEN: (
+            "See %s. For each owner call, append it to the collector immediately, "
+            "before it is proposed in this session's delivery message. Every owner call is "
+            "appended to the collector\n"
+            "before it is proposed in this session's delivery message."
+            % _OWNER_DECISIONS
+        ),
+        _OWNER_DECISIONS: "\n".join(_PINNED_OWNER_DECISIONS_HEADINGS),
+    }
+    _assert_discuss_open_holder_pins(texts)
+
+
+def test_negative_discuss_open_inverted_append_before_propose():
+    texts = {
+        _DISCUSS_OPEN: (
+            "See %s. Every owner call is appended to the collector "
+            "after it is proposed in this session's delivery message."
+            % _OWNER_DECISIONS
+        ),
+        _OWNER_DECISIONS: "\n".join(_PINNED_OWNER_DECISIONS_HEADINGS),
+    }
+    _expect_assertion_error(
+        lambda: _assert_discuss_open_holder_pins(texts),
+        match="append-after-propose in pinned ordering clause",
+    )
+
+
+def test_negative_retired_door_grading_literal_inserted():
+    texts = {rel: "" for rel in _TOUCHED_FILES}
+    texts[_VET_RECEIPT] = "Each append carries its gate verdict and its venue."
+    _expect_assertion_error(
+        lambda: _assert_retired_door_grading_literals_absent(texts),
+        match=r"retired door-grading literal 'gate verdict' present",
     )
 
 
