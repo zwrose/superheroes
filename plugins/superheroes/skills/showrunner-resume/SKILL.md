@@ -20,7 +20,7 @@ It reads durable state and **never asks the owner to paste anything**.
 
 ## Step 1 — load the charter
 
-Load the showrunner charter itself (`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/SKILL.md`) so this seat is the advisor before it acts as one.
+Load the showrunner charter itself (`skills/showrunner/SKILL.md` under this plugin's root) so this seat is the advisor before it acts as one.
 
 ## Step 2 — pin the instance you are running in
 

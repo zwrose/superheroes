@@ -46,7 +46,7 @@ When a loop cannot be confirmed stopped, name it in step 5 as unresolved. Do not
 
 ## Step 4 — freshen the resume point
 
-**If** this session keeps a resume point at the top of its ledger, bring it up to date and confirm it reflects current reality. **If** it does not keep one, say so plainly and continue. **Do not invent a storage format, path, or filename** — this is the same resume point, found the same way, that `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/checkpoint/SKILL.md` freshens.
+**If** this session keeps a resume point at the top of its ledger, bring it up to date and confirm it reflects current reality. **If** it does not keep one, say so plainly and continue. **Do not invent a storage format, path, or filename** — this is the same resume point, found the same way, that `skills/checkpoint/SKILL.md` under this plugin's root freshens.
 
 ## Step 5 — say "ready"
 
@@ -55,7 +55,7 @@ The closing output is one short block that states **ready** and, in the same blo
 ### Worked example (three lanes, one unresolved)
 
 ```text
-Ready. Lanes #412 and #415 parked — park records on their issues, heartbeats terminal, ledger outcomes recorded. Lane #418 unresolved: no host channel to reach its builder; park not requested. Watch loops for batch wave-handoff-a stopped. Builders on #412 and #415 left running under the other account; step 2 was no (account not going dark).
+Ready. Account going dark — lanes #412 and #415 parked: park records on their issues, heartbeats terminal, ledger outcomes recorded. Lane #418 unresolved: no host channel to reach its builder; park not requested. Watch loops for batch wave-handoff-a stopped.
 ```
 
 ## No paste block
