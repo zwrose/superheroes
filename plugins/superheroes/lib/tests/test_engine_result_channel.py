@@ -531,3 +531,29 @@ def test_ruling_branch_fields_match_audits_binding():
     assert reason is None
     expected = list(contract.get("required") or []) + list(contract.get("optional") or ())
     assert ERC._ruling_branch_fields() == expected
+
+
+def test_review_result_contract_from_schema_names_root_result_envelope():
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW)
+    contract = ERC.review_result_contract_from_schema(schema)
+    assert "single `result` property" in contract
+    assert "`resultKind`" in contract
+    assert "`investigated`" in contract
+    for kind in ERC.REVIEW_RESULT_KINDS:
+        assert "`%s`" % kind in contract
+
+
+def test_review_result_contract_from_schema_derives_kind_list_from_schema():
+    schema = ERC.declared_schema(
+        "codex", ERC.RUN_KIND_REVIEW, expected_result_kind="verdicts",
+    )
+    contract = ERC.review_result_contract_from_schema(schema)
+    assert "`verdicts`" in contract
+    assert "`findings`" not in contract.split("`verdicts`", 1)[0]
+
+
+def test_review_result_contract_from_schema_lists_active_payload_properties():
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, expected_result_kind="ruling")
+    contract = ERC.review_result_contract_from_schema(schema)
+    for field in ERC._ruling_branch_fields():
+        assert "`%s`" % field in contract

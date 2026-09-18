@@ -541,3 +541,141 @@ def _validate(schema, value, path):
         item_schema = schema["items"]
         for index, item in enumerate(value):
             _validate(item_schema, item, "%s[%d]" % (path, index))
+
+
+def _schema_result_branches(result_schema):
+    """Return the declared review branch schemas under ``result``. Never raises."""
+    if not isinstance(result_schema, dict):
+        return []
+    if "anyOf" in result_schema:
+        branches = result_schema.get("anyOf")
+        return list(branches) if isinstance(branches, list) else []
+    return [result_schema]
+
+
+def _schema_branch_kind(branch):
+    """Return the single ``resultKind`` enum value for a branch schema. Never raises."""
+    if not isinstance(branch, dict):
+        return None
+    props = branch.get("properties") or {}
+    rk = props.get("resultKind") or {}
+    enum = rk.get("enum") or []
+    if enum and isinstance(enum[0], str):
+        return enum[0]
+    return None
+
+
+def _schema_property_is_null_only(subschema):
+    if not isinstance(subschema, dict):
+        return False
+    type_spec = subschema.get("type")
+    if type_spec == "null":
+        return True
+    if isinstance(type_spec, list) and type_spec == ["null"]:
+        return True
+    return False
+
+
+def _schema_branch_active_payload_keys(branch):
+    """Payload property names populated on this branch (not the null-only slots). Never raises."""
+    if not isinstance(branch, dict):
+        return []
+    props = branch.get("properties") or {}
+    active = []
+    for key, subschema in props.items():
+        if key in ("resultKind", "investigated"):
+            continue
+        if _schema_property_is_null_only(subschema):
+            continue
+        active.append(key)
+    return active
+
+
+def native_review_payload_shape(detail, envelope=None, branch=None):
+    """Derive payloadShape for a native-channel review forfeit from the result file state.
+
+    Returns {"parsed", "topLevelKeys", "keysTruncated"} or None when no diagnostic applies.
+    Never raises. Marker tokens are the engine_adapter SHAPE_* home — imported lazily so this
+    module stays free of engine_adapter at import time.
+    """
+    import engine_adapter as ea  # noqa: PLC0415 — lazy: avoids import cycle with engine_dispatch
+
+    if detail in ("native-result-missing",):
+        return {
+            "parsed": ea.SHAPE_EMPTY_STDOUT,
+            "topLevelKeys": [],
+            "keysTruncated": False,
+        }
+    if detail in ("native-result-malformed",):
+        return {
+            "parsed": ea.SHAPE_NO_PARSEABLE_JSON,
+            "topLevelKeys": [],
+            "keysTruncated": False,
+        }
+    if detail in ("native-result-schema-invalid", "native-result-malformed-branch"):
+        if isinstance(branch, dict):
+            matched = ea._recognised_review_kinds(branch)
+            top_keys, keys_truncated = ea._bound_top_level_keys(branch)
+            if len(matched) > 1:
+                return {
+                    "parsed": ea.SHAPE_OBJECT_BOTH_PAYLOAD_KEYS,
+                    "topLevelKeys": top_keys,
+                    "keysTruncated": keys_truncated,
+                }
+            return {
+                "parsed": ea.SHAPE_OBJECT_WITHOUT_FINDINGS,
+                "topLevelKeys": top_keys,
+                "keysTruncated": keys_truncated,
+            }
+        if isinstance(envelope, dict):
+            top_keys, keys_truncated = ea._bound_top_level_keys(envelope)
+            return {
+                "parsed": ea.SHAPE_OBJECT_WITHOUT_FINDINGS,
+                "topLevelKeys": top_keys,
+                "keysTruncated": keys_truncated,
+            }
+        return {
+            "parsed": ea.SHAPE_OBJECT_WITHOUT_FINDINGS,
+            "topLevelKeys": [],
+            "keysTruncated": False,
+        }
+    return None
+
+
+def review_result_contract_from_schema(schema):
+    """Derive native-channel review prompt contract prose from a declared schema dict."""
+    if not isinstance(schema, dict):
+        return ""
+    result_schema = (schema.get("properties") or {}).get("result")
+    branches = _schema_result_branches(result_schema)
+    kinds = []
+    for branch in branches:
+        kind = _schema_branch_kind(branch)
+        if kind is not None:
+            kinds.append(kind)
+    if not kinds:
+        return ""
+    kind_list = ", ".join("`%s`" % k for k in kinds)
+    lines = [
+        "Review result contract (your graded result file must match the declared schema):",
+        "Write a JSON object whose root has exactly one property `result` wrapping the graded branch.",
+        "The declared envelope is a root object whose single `result` property holds the branch.",
+        "`resultKind` on that branch names which result kind this run carries (%s)."
+        % kind_list,
+        "Every other payload property on the branch must be JSON null — only the named kind's "
+        "payload may be populated.",
+        "`investigated` lists the repository paths you actually read while forming this result.",
+    ]
+    for branch in branches:
+        kind = _schema_branch_kind(branch)
+        if kind is None:
+            continue
+        active = _schema_branch_active_payload_keys(branch)
+        if not active:
+            continue
+        prop_list = ", ".join("`%s`" % k for k in active)
+        lines.append(
+            "  - `%s`: populate %s; set every other payload property to null."
+            % (kind, prop_list)
+        )
+    return "\n".join(lines) + "\n"
