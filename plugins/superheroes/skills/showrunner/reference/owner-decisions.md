@@ -328,10 +328,12 @@ declined with a trigger by default.
    new risk whatever its size. A follow-up **above the material line**, and **any child that has
    already run more than three lanes**, is **filed as its own issue**: above the line it is the
    owner's call by definition, and past three lanes the child has stopped being one piece of work
-   and is absorbing a queue. **Both thresholds are read from a number, not from memory** — the
-   [gardening record](#the-gardening-record) carries the follow-ups counted per merged pull request
-   and the lanes counted per child, so "how many lanes has this one had" is looked up rather than
-   recalled, which is exactly the question a session mid-lane answers wrongly.
+   and is absorbing a queue. **The counts come from the record, not from memory.** The
+   [gardening record](#the-gardening-record) carries **lanes per child**, which is what makes "more
+   than three lanes" a number to look up rather than the question a session mid-lane answers from
+   recall; and it carries **follow-ups per merged pull request**, which is what makes a surface
+   quietly accumulating follow-ups visible at the pass. The material line stays a judgment, not a
+   count — nothing here turns it into one.
 
 ## The reader clause
 

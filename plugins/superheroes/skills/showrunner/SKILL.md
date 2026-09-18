@@ -450,9 +450,10 @@ above).
      at an [owner call](../../rubric/glossary.md#owner-call) it is the owner's word, via the
      collector; doubt resolves upward. **Craft calls** — craft record-keeping writes — venue-1
      continuations, craft declines with revisit trigger, an owner-owed or relay memory entry — happen
-     **immediately** — **the standing order is always on, at every hour, whether or not the owner is
-     reachable**, and a follow-up on live work is folded, stacked as a layer, or filed by the rule
-     its home states; **Owner calls** — board decisions — new issues, product folds, scope changes,
+     **immediately**, under a standing order whose hours and whose fold, stack, or file disposition
+     for a follow-up on live work are stated in
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`;
+     **Owner calls** — board decisions — new issues, product folds, scope changes,
      product declines — are the owner's word. Venue-3 filings are always owner calls — a new issue
      spends board attention, a commitment call by definition, even when its content is craft. The
      project's **standing proposals collector** is one open issue per project (auto-filing per
@@ -697,11 +698,10 @@ above).
    delivered by default, and the inverse failure — over-filtering — appeared too: the owner became the
    backstop for delivery quality on exactly the surface the covenant says they must never backstop.
    Apply this duty's two tests per item as the filter's *why it is yours* ground, **written down**,
-   not re-derived silently. **You derive each item's tier and its craft-or-owner classification
-   yourself from the ratified text** — a builder's or a reviewer's framing is input to that read,
-   never the grading. The walk runs **three batches**, ending in a click list of the mergeable pull
-   requests, and every sitting carries a short **"what I decided for you"** recap whose every line
-   the owner can veto; the shape of all three lives in that file.
+   not re-derived silently. Three further shapes are that file's, not this one's: **how you derive
+   an item's tier and its craft-or-owner classification** rather than inheriting it, **the batches
+   the walk runs and what the last of them carries**, and **the recap each sitting carries for the
+   owner**.
    `/superheroes:discuss-open-decisions` is the owner's keystroke for the
    same contract on demand; it does not replace this standing duty.
 6. **Coordinate releases and drive the merge train.** The covenant's promise 1 governs: approval

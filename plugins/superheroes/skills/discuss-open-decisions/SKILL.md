@@ -70,13 +70,13 @@ Deliver batch 2 as soon as batch-1 rulings land — batch-1 execution runs along
 
 Execute what batch 1 unblocked per `## What batch-1 execution may and may not do` while the owner rules on batch 2; receipt what you executed, in plain language.
 
-Record each batch-2 ruling to the durable artifact as it lands.
+Record each batch-2 ruling to the durable artifact as it lands, then execute what **that** ruling unblocked — under the same section — before this step is done.
 
 When a batch-2 ruling closes or declines a collector-backed item, strike it from the collector per showrunner duty 4.
 
 ## Step 8 — Deliver batch 3, the click list
 
-Only after batch-2 rulings have landed and Step 7's execution is done — a batch-2 ruling routinely sends a vetted PR back, and that is why this batch is assembled last rather than earlier.
+Only once every batch-2 ruling has landed **and** what those rulings unblocked has been executed in Step 7 — a batch-2 ruling routinely sends a vetted PR back, so a list assembled before that execution can name a PR that is no longer mergeable. That is why this batch is assembled last rather than earlier.
 
 Deliver per `## Delivery mechanics`: the mergeable PRs in merge order, each with the notable acceptances it carries and its exact merge command. The click stays the owner's.
 
