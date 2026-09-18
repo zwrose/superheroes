@@ -1,5 +1,10 @@
 # WO-B2 (#1270 L2a) bite-proof — codex's native review grading path
 
+**Superseded (layer 2a2):** The salvage predicate `native_schema_allows_scrub_finish` and the
+`_scrub_native_review_branch` retry branch it proved were deleted when the declared schema became
+the one admission authority. The proofs below record behaviour **as it stood at 2a's head**; live
+guarded elements are now listed in `c11_l2a2_admission_authority.md`.
+
 **Provenance:** produced by the layer-2a orchestrator session (opus, medium) in its own build
 worktree. The detectors themselves were implemented by cursor / composer-2.5 under WO-B1/WO-B2 on
 the adopted head `7630d6dd`; this record is the verification receipt the orchestrator re-ran

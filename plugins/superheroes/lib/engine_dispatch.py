@@ -3237,7 +3237,7 @@ def _native_review_parser_refusal_forfeit(engagement, envelope, branch):
         return _native_review_forfeit(
             engagement, "native-result-malformed", payload_shape=placeholder_shape)
     shape = engine_result_channel.native_review_payload_shape(
-        "native-result-malformed", envelope=envelope, branch=branch)
+        "native-result-malformed-branch", envelope=envelope, branch=branch)
     return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
 
 

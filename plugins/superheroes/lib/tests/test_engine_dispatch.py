@@ -10685,132 +10685,20 @@ def test_admit_native_review_stdout_cannot_rescue_semantic_refusal(tmp_path):
     assert grade.get("detail") == "native-result-malformed"
 
 
-# --- #1270 WO-2a2-B: one native result file per attempt ----
-
-
-def _native_two_attempt_spawn_fixture(tmp_path, run_dir):
-    """Open a native review run and end attempt 1 so attempt 2 can spawn."""
-    _manual_open_review_run(tmp_path, run_dir)
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
-        "exit": 0, "timedOut": False, "refusal": None, "at": time.time(),
-    })
-    records, _ = ED._journal_read(run_dir)
-    return ED._journal_state(records)
-
-
-def test_native_result_paths_differ_per_attempt_and_attempt1_preserved(tmp_path):
-    run_dir = str(tmp_path / "run")
-    state = _native_two_attempt_spawn_fixture(tmp_path, run_dir)
-    path1 = ED._native_result_path(run_dir, 1)
-    path2 = ED._native_result_path(run_dir, 2)
-    assert path1 != path2
-    assert path1 == os.path.join(run_dir, "native-result-1.json")
-    assert path2 == os.path.join(run_dir, "native-result-2.json")
-    with open(path1, "w", encoding="utf-8") as fh:
-        fh.write('{"attempt": 1}\n')
-    before = open(path1, encoding="utf-8").read()
-
-    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
-        idx = argv.index("-o")
-        assert argv[idx + 1] == path2
-        with open(path2, "w", encoding="utf-8") as fh:
-            fh.write('{"attempt": 2}\n')
-        return ("", False, 0, "")
-
-    ok, detail = ED._spawn_attempt(run_dir, state, 2, run_engine=runner)
-    assert ok, detail
-    assert open(path1, encoding="utf-8").read() == before
-    assert os.path.isfile(path2)
-
-
-def test_grade_attempt2_does_not_read_attempt1_stale_result(tmp_path):
-    run_dir = str(tmp_path / "run")
-    branch = _native_review_branch("findings")
-    run_dir, state = _native_review_grade_state(tmp_path, branch, attempt=1)
-    attempt1_path = ED._native_result_path(run_dir, 1)
-    assert os.path.isfile(attempt1_path)
-    state["attempts"][2] = {
-        "ended": {
-            "exit": 0,
-            "timedOut": False,
-            "refusal": None,
-            "stdoutBytes": 0,
-            "wallSeconds": 1.0,
-        },
-    }
-    grade = ED._grade_review_attempt(run_dir, state, 2)
-    assert grade.get("forfeit") is True
-    assert grade.get("detail") == "native-result-missing"
-
-
-def test_native_spawn_injected_seam_appends_attempt_o(tmp_path):
-    run_dir = str(tmp_path / "run")
-    state = _native_two_attempt_spawn_fixture(tmp_path, run_dir)
-    captured = []
-
-    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
-        captured.append(list(argv))
-        return ("", False, 0, "")
-
-    ok, detail = ED._spawn_attempt(run_dir, state, 2, run_engine=runner)
-    assert ok, detail
-    assert captured[0][-2:] == ["-o", ED._native_result_path(run_dir, 2)]
-
-
-def test_native_spawn_production_path_appends_attempt_o(tmp_path, monkeypatch):
-    run_dir = str(tmp_path / "run")
-    opened = _production_run_child_setup(tmp_path, run_dir)
-    captured = []
-
-    def fake_popen(argv, **kwargs):
-        captured.append(list(argv))
-
-        class _Proc:
-            pid = 4242
-            returncode = 0
-
-            def poll(self):
-                return 0
-
-            def wait(self, timeout=None):
-                return 0
-
-        return _Proc()
-
-    monkeypatch.setattr(ED.subprocess, "Popen", fake_popen)
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
-    ED._run_engine_files(
-        run_dir, 1, opened["argv"], opened["cwd"],
-        opened["promptPath"], stdout_path, stderr_path,
-        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+def test_admit_native_review_parser_refusal_forfeit_payload_shape_describes_branch(tmp_path):
+    branch = _native_review_branch("verdicts")
+    branch["verdicts"][0]["reason"] = None
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, expected_result_kind="verdicts",
     )
-    assert captured[0][-2:] == ["-o", ED._native_result_path(run_dir, 1)]
-
-
-def test_native_spawn_g2_still_refuses_argv_snapshot_mismatch(tmp_path):
-    run_dir = str(tmp_path / "wo2a2b-g2")
-    _manual_open_review_run(tmp_path, run_dir)
-    records, _ = ED._journal_read(run_dir)
-    for rec in records:
-        if rec.get("kind") == "run-opened":
-            rec["argv"] = [
-                "codex", "exec", "--sandbox", "read-only",
-                "-m", _OFF_ALLOWLIST_CODEX, "-c", "model_reasoning_effort=high", "-",
-            ]
-    path = ED._journal_path(run_dir)
-    with open(path, "w", encoding="utf-8") as fh:
-        for rec in records:
-            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
-    fake = FakeRunner([])
-    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
-    assert ok is False
-    assert "does not match resolvedInputs snapshot" in detail
-    assert _OFF_ALLOWLIST_CODEX in detail
-    assert fake.calls == []
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-malformed"
+    shape = grade.get("payloadShape")
+    assert shape is not None
+    assert shape["parsed"] != EA.SHAPE_NO_PARSEABLE_JSON
+    assert shape["topLevelKeys"]
+    assert "resultKind" in shape["topLevelKeys"]
 
 
 # --- #1270 WO-2a2-B: one native result file per attempt ----

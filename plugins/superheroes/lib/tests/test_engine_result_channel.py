@@ -527,12 +527,7 @@ def test_validate_none_schema_refuses():
 
 
 def test_ruling_new_issues_detailed_entry_validates_and_survives_grading(tmp_path):
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "engine_dispatch", os.path.join(_LIB, "engine_dispatch.py"))
-    ed = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(ed)
+    ed = _load("engine_dispatch")
 
     new_issue = _example_finding_member()
     new_issue["title"] = "Detailed new issue from audit"
@@ -565,7 +560,6 @@ def test_ruling_new_issues_detailed_entry_validates_and_survives_grading(tmp_pat
         "fedPrompt": "",
         "channel": ERC.CHANNEL_NATIVE,
         "nativeSchemaPath": schema_path,
-        "nativeResultPath": result_path,
         "expectedResultKind": "ruling",
     }
     state = {
