@@ -58,6 +58,18 @@ def _git(repo_root, *args):
     return proc.stdout
 
 
+def _git_paths(repo_root, *args):
+    """Paths from a NUL-delimited git listing.
+
+    `-z` is not cosmetic: with git's default ``core.quotePath``, a path holding a non-ASCII
+    character comes back C-quoted (``"plugins/.../test_caf\\303\\251.py"``), which no longer
+    ends in ``.py`` — the resolver would read the diff as touching no code and exit 0. A path
+    holding a newline would split into two bogus entries for the same reason.
+    """
+    out = _git(repo_root, *(args + ("-z",)))
+    return [p for p in out.split("\0") if p]
+
+
 def _rev_exists(repo_root, ref):
     proc = subprocess.run(
         ("git", "-C", repo_root, "rev-parse", "--verify", "--quiet", ref + "^{commit}"),
@@ -88,13 +100,12 @@ def changed_paths(repo_root, *, base=None, diff_range=None):
     round's edits are uncommitted, and they are exactly what this gate exists to see.
     """
     if diff_range:
-        out = _git(repo_root, "diff", "--name-only", diff_range)
-        return sorted({line for line in out.splitlines() if line.strip()})
+        return sorted(set(_git_paths(repo_root, "diff", "--name-only", diff_range)))
     base_ref = resolve_base(repo_root, base)
     merge_base = _git(repo_root, "merge-base", base_ref, "HEAD").strip()
-    paths = set(_git(repo_root, "diff", "--name-only", merge_base).splitlines())
-    paths |= set(_git(repo_root, "ls-files", "--others", "--exclude-standard").splitlines())
-    return sorted({p for p in paths if p.strip()})
+    paths = set(_git_paths(repo_root, "diff", "--name-only", merge_base))
+    paths |= set(_git_paths(repo_root, "ls-files", "--others", "--exclude-standard"))
+    return sorted(paths)
 
 
 def _under_tests_tree(path):
@@ -132,19 +143,19 @@ def resolve_targets(repo_root, paths):
         mapped = mapped_module(path)
         if mapped is None:
             continue
-        if not os.path.exists(os.path.join(repo_root, path)):
-            # The diff DELETED the module. There is no module left to test, so it carries no
-            # test obligation — a deletion must never read as a mapping miss.
-            continue
         root, module = mapped
         pattern = os.path.join(repo_root, root, "tests", "test_%s*.py" % module)
         matches = sorted(
             os.path.relpath(m, repo_root) for m in glob.glob(pattern) if os.path.isfile(m)
         )
         if matches:
+            # Surviving siblings are run whether the module was edited or DELETED — a test
+            # left behind by a deletion is exactly the one that should now be failing.
             test_files.update(matches)
-        else:
+        elif os.path.exists(os.path.join(repo_root, path)):
             unresolved.append(path)
+        # else: the diff deleted the module and its tests together. Nothing is left to test,
+        # so it carries no obligation — a retirement must never read as a mapping miss.
     return sorted(test_files), sorted(unresolved), code_changed
 
 

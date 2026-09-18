@@ -88,11 +88,22 @@ def test_deleted_test_file_is_not_handed_to_pytest(tmp_path):
     assert code is True
 
 
-def test_deleted_mapped_module_is_not_a_mapping_miss(tmp_path):
+def test_deleted_module_with_its_tests_gone_too_is_not_a_mapping_miss(tmp_path):
     # A retirement commit deletes the module and its tests together; that is not a miss.
     files, unresolved, code = V.resolve_targets(
         str(tmp_path), ["plugins/superheroes/lib/retired.py"])
     assert (files, unresolved, code) == ([], [], True)
+
+
+def test_deleted_module_still_runs_its_surviving_tests(tmp_path):
+    # The surviving test is the one that should now fail (it imports a module that is gone);
+    # exempting the deletion outright would let that failure pass unseen.
+    root = str(tmp_path)
+    _touch(root, "eval/lib/tests/test_skills.py")
+    files, unresolved, code = V.resolve_targets(root, ["eval/lib/skills.py"])
+    assert files == ["eval/lib/tests/test_skills.py"]
+    assert unresolved == []
+    assert code is True
 
 
 def test_unmapped_module_with_no_test_is_not_unresolved(tmp_path):
@@ -244,6 +255,27 @@ def test_range_mode_compares_commits_only(repo):
     _touch(repo, "untracked.py")
     paths = V.changed_paths(repo, diff_range="main~1..main")
     assert paths == ["committed.py"]
+
+
+def test_non_ascii_path_survives_gits_default_quoting(repo):
+    # With core.quotePath (git's default) a non-ASCII path comes back C-quoted and stops
+    # ending in ".py"; the resolver would then read the diff as touching no code and exit 0.
+    _git(repo, "config", "core.quotePath", "true")
+    _touch(repo, "plugins/superheroes/lib/tests/test_café.py")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "non-ascii test file")
+    paths = V.changed_paths(repo, base="main~1")
+    assert "plugins/superheroes/lib/tests/test_café.py" in paths
+    files, unresolved, code = V.resolve_targets(repo, paths)
+    assert files == ["plugins/superheroes/lib/tests/test_café.py"]
+    assert (unresolved, code) == ([], True)
+
+
+def test_path_containing_a_newline_stays_one_path(repo):
+    _touch(repo, "plugins/superheroes/lib/tests/test_odd\nname.py")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "newline in a path")
+    assert "plugins/superheroes/lib/tests/test_odd\nname.py" in V.changed_paths(repo, base="main~1")
 
 
 def test_missing_base_ref_raises(repo):
