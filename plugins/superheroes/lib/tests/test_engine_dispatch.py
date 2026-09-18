@@ -10453,6 +10453,7 @@ def test_grade_native_review_attempt_kind_before_validation(tmp_path):
 
 
 def test_grade_native_review_attempt_unrecognised_kind_not_kind_mismatch(tmp_path):
+    # axis: unrecognised resultKind forfeits schema-invalid, not RESULT_KIND_MISMATCH_DETAIL
     branch = _native_review_branch("findings")
     branch["resultKind"] = "summary"
     run_dir, state = _native_review_grade_state(
@@ -10610,6 +10611,7 @@ def _native_findings_branch_from_example(example_obj):
 
 
 def test_admit_native_review_schema_invalid_mistyped_investigated_forfeits(tmp_path):
+    # axis: mistyped investigated member → native-result-schema-invalid forfeit
     branch = _native_review_branch("findings")
     branch["investigated"] = ["path/to/file.py", 42]
     run_dir, state = _native_review_grade_state(tmp_path, branch)
@@ -10619,6 +10621,7 @@ def test_admit_native_review_schema_invalid_mistyped_investigated_forfeits(tmp_p
 
 
 def test_admit_native_review_schema_invalid_mistyped_finding_member_forfeits(tmp_path):
+    # axis: mistyped finding member type → native-result-schema-invalid forfeit
     branch = _native_review_branch("findings")
     branch["findings"][0]["line"] = "not-an-integer"
     run_dir, state = _native_review_grade_state(tmp_path, branch)
@@ -10628,6 +10631,7 @@ def test_admit_native_review_schema_invalid_mistyped_finding_member_forfeits(tmp
 
 
 def test_admit_native_review_nonce_echo_validates_then_refuses(tmp_path):
+    # axis: schema-valid nonce echo still forfeits at grade as native-result-malformed
     echo_nonce = "wo-2a2-a-nonce"
     example = RFS.example_findings_object(echo_nonce)
     branch = _native_findings_branch_from_example(example)
@@ -10644,6 +10648,9 @@ def test_admit_native_review_nonce_echo_validates_then_refuses(tmp_path):
 
 
 def test_admit_native_review_semantic_guards_use_adapter_not_scrub_branch(tmp_path):
+    # axis: admission path no longer exposes _scrub_native_review_branch
+    # axis: hollow finding (whitespace-only substance keys) → native-result-malformed
+    # axis: placeholder template id → native-result-malformed
     assert not hasattr(ED, "_scrub_native_review_branch")
     hollow = _native_review_branch("findings")
     for key in RFS.SUBSTANCE_KEYS_CANONICAL:
@@ -10661,6 +10668,7 @@ def test_admit_native_review_semantic_guards_use_adapter_not_scrub_branch(tmp_pa
 
 
 def test_admit_native_review_schema_substitution_refuses(tmp_path):
+    # axis: schema file substituted with empty object → native-schema-unreadable
     branch = _native_review_branch("findings")
     branch["findings"] = None
     run_dir, state = _native_review_grade_state(tmp_path, branch)
@@ -10673,6 +10681,7 @@ def test_admit_native_review_schema_substitution_refuses(tmp_path):
 
 
 def test_admit_native_review_stdout_cannot_rescue_semantic_refusal(tmp_path):
+    # axis: valid stdout cannot override hollow-finding semantic refusal
     hollow = _native_review_branch("findings")
     for key in RFS.SUBSTANCE_KEYS_CANONICAL:
         hollow["findings"][0][key] = "   "
@@ -10686,6 +10695,7 @@ def test_admit_native_review_stdout_cannot_rescue_semantic_refusal(tmp_path):
 
 
 def test_admit_native_review_parser_refusal_forfeit_payload_shape_describes_branch(tmp_path):
+    # axis: parser refusal forfeit carries payloadShape describing parsed branch
     branch = _native_review_branch("verdicts")
     branch["verdicts"][0]["reason"] = None
     run_dir, state = _native_review_grade_state(
@@ -10716,6 +10726,7 @@ def _native_two_attempt_spawn_fixture(tmp_path, run_dir):
 
 
 def test_native_result_paths_differ_per_attempt_and_attempt1_preserved(tmp_path):
+    # axis: per-attempt native result paths differ; attempt-1 file preserved on attempt-2 spawn
     run_dir = str(tmp_path / "run")
     state = _native_two_attempt_spawn_fixture(tmp_path, run_dir)
     path1 = ED._native_result_path(run_dir, 1)
@@ -10741,6 +10752,7 @@ def test_native_result_paths_differ_per_attempt_and_attempt1_preserved(tmp_path)
 
 
 def test_grade_attempt2_does_not_read_attempt1_stale_result(tmp_path):
+    # axis: grading attempt 2 reads attempt-2 path only, not attempt-1 stale result
     run_dir = str(tmp_path / "run")
     branch = _native_review_branch("findings")
     run_dir, state = _native_review_grade_state(tmp_path, branch, attempt=1)
@@ -10761,6 +10773,7 @@ def test_grade_attempt2_does_not_read_attempt1_stale_result(tmp_path):
 
 
 def test_native_spawn_injected_seam_appends_attempt_o(tmp_path):
+    # axis: injected spawn seam appends -o with per-attempt native result path
     run_dir = str(tmp_path / "run")
     state = _native_two_attempt_spawn_fixture(tmp_path, run_dir)
     captured = []
@@ -10775,6 +10788,7 @@ def test_native_spawn_injected_seam_appends_attempt_o(tmp_path):
 
 
 def test_native_spawn_production_path_appends_attempt_o(tmp_path, monkeypatch):
+    # axis: production run-child path appends -o with per-attempt native result path
     run_dir = str(tmp_path / "run")
     opened = _production_run_child_setup(tmp_path, run_dir)
     captured = []
@@ -10806,6 +10820,7 @@ def test_native_spawn_production_path_appends_attempt_o(tmp_path, monkeypatch):
 
 
 def test_native_spawn_g2_still_refuses_argv_snapshot_mismatch(tmp_path):
+    # axis: G2 argv coherence still refuses snapshot mismatch after per-attempt -o
     run_dir = str(tmp_path / "wo2a2b-g2")
     _manual_open_review_run(tmp_path, run_dir)
     records, _ = ED._journal_read(run_dir)

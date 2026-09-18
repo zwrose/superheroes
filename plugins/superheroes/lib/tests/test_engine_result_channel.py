@@ -527,6 +527,7 @@ def test_validate_none_schema_refuses():
 
 
 def test_ruling_new_issues_detailed_entry_validates_and_survives_grading(tmp_path):
+    # axis: ruling newIssues with detailed entry validates and survives native grading
     ed = _load("engine_dispatch")
 
     new_issue = _example_finding_member()
@@ -606,7 +607,7 @@ def test_review_result_contract_from_schema_lists_active_payload_properties():
 
 
 def test_engine_output_byte_cap_single_home():
-    """Drift guard: ENGINE_OUTPUT_MAX_BYTES is the one literal home for the 8 MiB cap."""
+    # axis: ENGINE_OUTPUT_MAX_BYTES is the single literal home for the 8 MiB cap
     home = EA.ENGINE_OUTPUT_MAX_BYTES
     ed = _load("engine_dispatch")
     assert ERC.NATIVE_RESULT_MAX_BYTES == home
