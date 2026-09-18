@@ -14,7 +14,6 @@ import liveness_cache
 import round_driver as RD
 import seat_map
 import seat_map_receipts as SMR
-import version_skew
 
 _FORBIDDEN_UPWARD_IMPORTS = frozenset({
     "round_driver",
@@ -42,54 +41,6 @@ def test_seat_map_receipts_never_imports_upward_modules():
         elif isinstance(node, ast.ImportFrom):
             if node.module in _FORBIDDEN_UPWARD_IMPORTS:
                 raise AssertionError("forbidden import from %r" % node.module)
-
-
-def test_unknown_skew_status_without_degradation_degrades():
-    """axis: unknown pluginVersionSkew.status degrades even without an explicit degradation row."""
-    state = {
-        "seatMapReceipts": [{
-            "round": "1",
-            "map": {
-                "seats": {"a": {"vendor": "codex"}},
-                "pluginVersionSkew": {"status": "bogus-status"},
-            },
-        }],
-        "rounds": {},
-    }
-    records = SMR.skew_records(state)
-    assert len(records) == 1
-    assert version_skew.appends_degradation(records[0]["status"])
-    assert "bogus-status" in records[0]["reason"]
-    assert RD._skew_degraded(state) is True
-
-
-def test_recognized_degrading_skew_no_synthetic_duplicate():
-    """axis: explicit degrading row is not duplicated by the unknown-status synthetic path."""
-    row = {
-        "constraint": version_skew.CONSTRAINT,
-        "status": version_skew.STATUS_CHECKED_DEGRADED,
-        "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
-        "reason": "explicit",
-        "inspectedRoot": "/tmp/repo",
-    }
-    state = {
-        "seatMapReceipts": [{
-            "round": "1",
-            "map": {
-                "seats": {"a": {"vendor": "codex"}},
-                "degradations": [row],
-                "pluginVersionSkew": {
-                    "status": version_skew.STATUS_CHECKED_DEGRADED,
-                    "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
-                    "inspectedRoot": "/tmp/repo",
-                },
-            },
-        }],
-        "rounds": {},
-    }
-    records = SMR.skew_records(state)
-    assert len(records) == 1
-    assert records[0]["reason"] == "explicit"
 
 
 def test_emit_receipt_seat_map_violations_union_survives_clean_round():

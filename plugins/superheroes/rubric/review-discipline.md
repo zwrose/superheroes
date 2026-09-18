@@ -427,6 +427,9 @@ guard working as designed, and it is not evidence of engine fragility, a bad ord
 defect. Retrying the fixer, re-dispatching at a higher rung, or reading the stall as an escalation
 trigger are all wrong reads of the same event.
 
+**Every path in `lib/escalation.py`'s `SAFETY_MACHINERY` set is refused the same way** —
+including `hooks/hooks.json` and `lib/mode_registry.py`.
+
 **Narrowing the guard to converge a loop is never the route.** `escalation-base.md` carries the
 invariant above its own floor — *"the agent may never grant itself authority or bypass a gate.
 Skipping or auto-resolving its own GATE is self-granting and is forbidden"* — and it applies with
@@ -437,8 +440,7 @@ guards, including the guard that would catch the relaxation.
 as builder-dispatched work, in this shape:
 
 - **One order per finding cluster** — clustered by the surface and the contract the findings share,
-  not one order per finding. The first execution below sent six findings as **one** ordered round
-  against two files holding two sides of one contract.
+  not one order per finding — even when several findings share one contract across two files.
 - **The order carries the finding text**, so the implementer fixes a stated defect rather than
   re-deriving it from the file.
 - **The orchestrator verifies independently**, re-running every receipt itself, exactly as it does
@@ -459,59 +461,17 @@ dispositions table, and never auto-fixed either, **because the guard refuses the
 severity**. A non-blocking finding is never the reason a build reaches into safety machinery it was
 not sent to touch.
 
-**The one exception — the owner-authority-gate family.** Three files carry the mechanical
-never-merge floor, and a round touching any of them **still needs the owner's word first, per
-change**, scoped to the findings' own surfaces and nothing wider — never a standing licence:
-
-- `hooks/owner_authority_gate.py` (the PreToolUse gate hook)
-- `lib/owner_authority.py` (its classifier core)
-- `reference/owner-authority-allowlist.md` (its allowlist reference)
-
-**The family is not the whole gate.** The three files above need the owner's word per change; other
-components the gate's verdict depends on — `hooks/hooks.json` and `lib/mode_registry.py` — the guard
-in `lib/escalation.py`'s `SAFETY_MACHINERY` refuses, but an ordered round touching them needs **no**
-owner pre-authorization. `hooks/hooks.json` is deliberately not a family member: it registers many
-hooks, and making it one would extend owner pre-authorization to every unrelated hook change.
-
-This family is the mechanical never-merge floor, so a round that could edit it on its own authority
-could edit away the control that keeps the merge click the owner's.
-
-**Classification fails closed.** Before the round, put each finding's surface in exactly one of three
-classes — ordinary, safety machinery, owner-authority-gate family. **A surface you cannot confidently
-classify is treated as gate family** — a path that does not resolve, a renamed file, a dependency you
-have not checked — **which means it needs the owner's word first — and parks when that word is unavailable**.
-That fail direction is deliberate: when classification is uncertain, the route waits rather than granting
-authority by mistake.
-
-**When the owner's word is unavailable at the gate family, park.** A headless or owner-absent build
-that reaches blocking findings in the owner-authority-gate family **parks with receipts** — what the
-panel found, that the guard refused the fixer, and that the remaining findings need the owner's word.
-It does not narrow the guard, does not type the fix to get moving, and does not hand back claiming
-convergence it did not reach. A builder cannot lift its own park; resumption is the owner's or the
-advisor's call. **Outside the gate family there is nothing to wait for**: the ordered round goes out
-with its disclosure.
+**Classification fails closed.** Before the round, put each finding's surface in exactly one of two
+classes — ordinary or safety machinery. **A surface you cannot confidently classify is treated as
+safety machinery** — a path that does not resolve, a renamed file, a dependency you have not checked —
+**which means the guard refuses the fixer and the round goes out ordered with its disclosure rather
+than auto-fixed**. That fail direction is deliberate: when classification is uncertain, the route
+takes the stricter class rather than granting authority by mistake.
 
 **This is not the runtime self-modification floor.** `escalation-base.md`'s hard floor — *"modifies
 the safety machinery itself at runtime"* — is about **a run altering its own control system
 mid-flight**, and this route leaves it untouched. An ordered implementer edit in a build worktree,
 under a ratified issue or an ordered round, is not that; the two floors **do not overlap**.
-
-**Evidence — the route was executed twice before it was written down.** On #1109, **round 2**'s
-five-seat panel left six Important findings in `engine_adapter.py` / `engine_dispatch.py`, verified
-the guard's refusal directly, and **parked** rather than improvising ([park
-comment](https://github.com/zwrose/superheroes/issues/1109#issuecomment-5390550698)); the owner then
-authorized ordered implementer work orders — *"the guard's sanctioned path; the auto-fix loop remains
-forbidden on this surface"* — scoped to exactly those six findings' surfaces ([item-78
-authorization](https://github.com/zwrose/superheroes/issues/1109#issuecomment-5390711707)). **Round
-4** executed that route again under the **same scoped authorization, carried forward unchanged**
-across an intervening session death — a scoped authorization survives across rounds on the findings'
-own surfaces, which is precisely what keeps it different from a licence to edit safety machinery at
-large — and converged; its build record
-on [PR #1120](https://github.com/zwrose/superheroes/pull/1120) is what asked for the route to be
-written down (*Follow-ups for the advisor*, item 9). Two executions, both successful, neither
-reconstructable from the plugin surfaces at the time. The owner pre-authorization this paragraph
-records was the rule **at the time** and is **retired for everything outside the
-owner-authority-gate family** by the 2026-08-25 ruling — historical evidence, not current procedure.
 
 ## Machinery, homes, and what a review may ask for
 

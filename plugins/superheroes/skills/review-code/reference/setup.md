@@ -128,13 +128,6 @@ PINS_ARGS=()
 SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --repo-root "$REPO_ROOT" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to the host model"}]}')
 ```
 
-The compose receipt always carries `pluginVersionSkew` — `{"status", "detail", "inspectedRoot"}`
-with `status` one of `checked-clean`, `checked-degraded`, or `not-checked` — so a receipt
-distinguishes "checked, clean" from "never checked"; only `checked-degraded` appends a disclosed
-`plugin-version-skew` record to `degradations` (detection only, never blocks). The skew
-comparison reads the repository root resolved at Setup (`$REPO_ROOT`), not ambient cwd, and
-`pluginVersionSkew.inspectedRoot` names which tree was actually compared.
-
 When dispatching specialists, map each panel seat's **tier** to a model — `reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the auto-fix loop's per-round schedule is driver-owned; see `round-driver.md`). Triage subagents use `model: $MECH_MODEL`; the fixer uses `model: $FIXER_MODEL` (the `code-fixer` tier, #510). An empty value means "inherit the session model" — omit the `model` arg in that case.
 
 **Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. Read the working tree (default root, `.`). Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:

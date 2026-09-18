@@ -1033,8 +1033,8 @@ def classify(command, cwd):
     """('deny'|'allow', reason) for a candidate Bash command. Fails closed on errors."""
     try:
         try:
-            import owner_authority
-            state = owner_authority.calibration_state(cwd)
+            import mode_registry
+            state = mode_registry.calibration_state(cwd)
         except Exception:
             state = "indeterminate"
         if state == "uncalibrated":

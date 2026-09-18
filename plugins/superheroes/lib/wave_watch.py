@@ -146,7 +146,7 @@ _GIT_SCRUB_VARS = (
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_CEILING_DIRECTORIES",
     # The child here is `gh`, not `git`: GH_REPO overrides repository resolution
-    # outright (reference/owner-authority-allowlist.md documents this), and the
+    # overrides repository resolution outright, and the
     # GIT_CONFIG family can inject a remote.origin.url override — either would
     # silently point the PR poll at a different repository. GH_TOKEN and
     # GH_CONFIG_DIR stay intact (auth); GH_HOST is deliberately left alone
