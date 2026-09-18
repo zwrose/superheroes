@@ -343,10 +343,31 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+> # Per external seat — the orchestrator sets these before this recipe runs:
+> #   $SEAT_KEY       roster seat key (e.g. code-reviewer) — indexes $SEAT_MAP.seats
+> #   $SEAT_PROMPT    emitted order path for this seat
+> #   $RUN_DIR        fresh run directory (created by first dispatch-review)
+> #   $SEAT_PROGRESS  progress file outside $RUN_DIR
+> case "$SEAT_KEY" in ""|null)
+>   echo "dispatch-review: SEAT_KEY unset — cannot resolve seat map entry (fail closed)." >&2; exit 1;; esac
+> SEAT_CELL=$(printf '%s' "$SEAT_MAP" | jq -c ".seats[\"$SEAT_KEY\"] // empty")
+> case "$SEAT_CELL" in ""|null)
+>   echo "dispatch-review: seat map has no entry for SEAT_KEY=$SEAT_KEY (fail closed)." >&2; exit 1;; esac
+> SEAT_VENDOR=$(printf '%s' "$SEAT_CELL" | jq -r '.vendor // empty')
+> SEAT_ENGINE_MODEL=$(printf '%s' "$SEAT_CELL" | jq -r '.model // empty')
+> SEAT_TIER=$(printf '%s' "$SEAT_CELL" | jq -r '.tier // empty')
+> SEAT_EFFORT=$(printf '%s' "$SEAT_CELL" | jq -r '.effort // empty')
+> if [ -z "$SEAT_VENDOR" ] || [ "$SEAT_VENDOR" = "null" ] || \
+>    [ -z "$SEAT_ENGINE_MODEL" ] || [ "$SEAT_ENGINE_MODEL" = "null" ] || \
+>    [ -z "$SEAT_TIER" ] || [ "$SEAT_TIER" = "null" ]; then
+>   echo "dispatch-review: seat map entry for SEAT_KEY=$SEAT_KEY is malformed (fail closed)." >&2; exit 1
+> fi
+> if [ "$SEAT_EFFORT" = "null" ]; then SEAT_EFFORT_JSON=null; else SEAT_EFFORT_JSON="\"$SEAT_EFFORT\""; fi
+> SEAT_JSON='{"vendor":"'"$SEAT_VENDOR"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":'"$SEAT_EFFORT_JSON"',"role":"'"$SEAT_TIER"'"}'
 > # Keep $SEAT_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
 > # LAUNCH — first call on each --run-dir: short positive slice (see dispatch-mechanics.md)
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
->   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
+>   --seat "$SEAT_JSON" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
 >   --expected-result-kind findings \
@@ -354,7 +375,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
->   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
+>   --seat "$SEAT_JSON" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
 >   --expected-result-kind findings \
@@ -362,25 +383,13 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > ```
 >
-> `$SEAT_ENGINE_MODEL` is the seat's **registry id** and `$SEAT_EFFORT` its effort — **both are
-> required by this runner**; `engine_dispatch` takes `--effort` as a required flag on
-> `dispatch-review`. Every review seat the seat map assigns on cursor carries a real effort, so this
-> is not a limitation in practice.
+> For the full `dispatch-review` argument surface, read
+> `skills/workhorse/reference/dispatch-entry.md`.
 >
 > Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. The
 > seat **may and should** read files and run read-only commands inside the sanitized view to ground
-> its findings (`--repo-root` on the CLI still names the **source** repository; the runner builds the
-> view itself). An unresolvable `--repo-root` is refused by **argparse before any JSON is emitted**
-> (exit 2) — missing, empty, not a directory, or not a git repository. `--diff-base` makes staging the diff **machinery** — the runner stages the change as
-> `SUPERHEROES_REVIEW_DIFF.patch` inside the view so the seat can read it without git history.
-> The value must be the **pinned base commit object id** the round diff was computed against — not a
-> symbolic ref like `origin/main`, which can drift mid-loop and stage a patch that disagrees with the
-> round diff. This is now **mechanized**: anything that is not a 40-/64-hex commit object id is refused
-> before any repository-local git command runs. An unset shell variable expands to `--diff-base ""`,
-> which the runner refuses as
-> `sanitized-view-diff-base-unresolved` with `attempts: 0` — empty is not the same as omitted.
-> Inlining the diff in the seat prompt remains available and is still reasonable for a small diff,
-> but it is no longer the only way a seat gets the change. Repo access is no longer forbidden.
+> its findings. Inlining the diff in the seat prompt remains available and is still reasonable for a
+> small diff, but it is no longer the only way a seat gets the change.
 >
 > **Host grants (subcommand granularity).** The owner may adopt these grant strings at subcommand
 > granularity (the band states them; it never writes the owner's settings):
@@ -408,9 +417,12 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > path is **unchanged** and is **not** a consumer of the write verb. Do not imply otherwise.
 >
 > **Cross-vendor control probe (#668).** For each **distinct cross-vendor vendor** among the
-> panel's seats that ran with zero findings on that vendor's seat(s), run the planted-defect control
-> probe **once per such vendor** before treating those seats as clean. Use that vendor's own seat
-> model and effort from the seat map. A seat whose registry config is **effort-less** — one the model
+> panel's seats that **ran** with zero findings on that vendor's seat(s), run the planted-defect
+> control probe **once per such vendor** before treating those seats as clean. Select and
+> deduplicate canaries using the same effective-vendor rule as `round_driver.canary_liveness` —
+> trusted `ranManifest` first, configured vendor otherwise — and resolve that effective vendor's
+> model and effort for the seat tier before probing. Exclude seats whose status is not `run`. A seat
+> whose registry config is **effort-less** — one the model
 > registry records with no effort at all — is expressed by **omitting `--effort`** (#963), never by an
 > effort string: `probe`'s `--effort` is optional and defaults to `None`, the registry's own value.
 > Passing an empty `--effort ""` is not the same thing and still refuses at
@@ -418,15 +430,94 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+> # $PANEL_SEATS — folded per-dimension panel payloads keyed by seat name (the `seats` object you
+> # submit on `dispatch-panel`). $PANEL_SEAT_STATUS — per-dimension status map (`run` / `missing` /
+> # etc.) for the same round. $RAN_MANIFEST — trusted `{<dim>: <vendor>}` record of which vendor
+> # produced each seat's folded findings (omit or `{}` when none fell open). One representative seat
+> # per effective cross-vendor vendor that ran with zero usable findings (dict members only — mirrors
+> # `round_driver._usable_findings`).
+> RAN_MANIFEST_JSON="${RAN_MANIFEST:-}"
+> if [ -z "$RAN_MANIFEST_JSON" ]; then RAN_MANIFEST_JSON="{}"; fi
+> PANEL_SEAT_STATUS_JSON="${PANEL_SEAT_STATUS:-}"
+> if [ -z "$PANEL_SEAT_STATUS_JSON" ]; then PANEL_SEAT_STATUS_JSON="{}"; fi
+> CANARY_PLANS=()
+> while IFS= read -r plan; do CANARY_PLANS+=("$plan"); done < <(python3 -B -c "
+> import json, sys
+> sys.path.insert(0, sys.argv[1] + '/lib')
+> import model_registry
+> PANEL_VENDORS = tuple(model_registry.VENDORS)
+> seat_map = json.loads(sys.argv[2])
+> panel = json.loads(sys.argv[3])
+> ran_manifest = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
+> seat_status = json.loads(sys.argv[5]) if len(sys.argv) > 5 else {}
+> seats = seat_map.get('seats') or {}
+> manifest = ran_manifest if isinstance(ran_manifest, dict) else {}
+> status = seat_status if isinstance(seat_status, dict) else {}
+>
+> def configured_vendor(dim):
+>     cell = seats.get(dim)
+>     vendor = cell.get('vendor') if isinstance(cell, dict) else None
+>     return vendor if isinstance(vendor, str) and vendor in PANEL_VENDORS else None
+>
+> def effective_vendor(dim):
+>     ran = manifest.get(dim)
+>     if isinstance(ran, str) and ran in PANEL_VENDORS:
+>         return ran
+>     return configured_vendor(dim)
+>
+> def resolve_probe_config(dim, vendor):
+>     cell = seats.get(dim)
+>     if not isinstance(cell, dict):
+>         return None
+>     tier = cell.get('tier')
+>     if not isinstance(tier, str):
+>         return None
+>     matrix = model_registry.matrix_config(tier, vendor)
+>     if matrix is None:
+>         return None
+>     model, effort = matrix
+>     return {'key': dim, 'vendor': vendor, 'model': model,
+>             'tier': tier, 'effort': effort}
+>
+> seen = set()
+> plans = []
+> for key in status:
+>     if status.get(key) != 'run':
+>         continue
+>     payload = panel.get(key)
+>     if not isinstance(payload, dict):
+>         continue
+>     findings = payload.get('findings')
+>     if not isinstance(findings, list):
+>         findings = []
+>     if any(isinstance(f, dict) for f in findings):
+>         continue
+>     vendor = effective_vendor(key)
+>     if vendor in (None, 'claude'):
+>         continue
+>     if vendor in seen:
+>         continue
+>     cfg = resolve_probe_config(key, vendor)
+>     if not cfg or not cfg.get('model') or not cfg.get('tier'):
+>         continue
+>     seen.add(vendor)
+>     plans.append(cfg)
+> for plan in plans:
+>     print(json.dumps(plan))
+> " "$ROOT_DIR" "$SEAT_MAP" "$PANEL_SEATS" "$RAN_MANIFEST_JSON" "$PANEL_SEAT_STATUS_JSON")
 > CANARY_RESULTS=()
-> for VENDOR in "${CROSS_VENDOR_VENDORS[@]}"; do
->   SEAT_ENGINE_MODEL="${SEAT_MODEL_BY_VENDOR[${VENDOR}]}"
->   SEAT_EFFORT="${SEAT_EFFORT_BY_VENDOR[${VENDOR}]}"
+> for CANARY_PLAN in "${CANARY_PLANS[@]}"; do
+>   CANARY_SEAT_KEY=$(printf '%s' "$CANARY_PLAN" | jq -r '.key')
+>   CANARY_VENDOR=$(printf '%s' "$CANARY_PLAN" | jq -r '.vendor')
+>   CANARY_ENGINE_MODEL=$(printf '%s' "$CANARY_PLAN" | jq -r '.model')
+>   CANARY_TIER=$(printf '%s' "$CANARY_PLAN" | jq -r '.tier')
+>   CANARY_EFFORT=$(printf '%s' "$CANARY_PLAN" | jq -r '.effort')
 >   EFFORT_ARGS=()
->   if [ -n "${SEAT_EFFORT}" ]; then EFFORT_ARGS=(--effort "${SEAT_EFFORT}"); fi
+>   if [ "$CANARY_EFFORT" != "null" ]; then EFFORT_ARGS=(--effort "${CANARY_EFFORT}"); fi
 >   CANARY_RESULTS+=("$(
 >     python3 -B "${ROOT_DIR}/lib/seat_canary.py" probe \
->       --engine "${VENDOR}" --engine-model "${SEAT_ENGINE_MODEL}" "${EFFORT_ARGS[@]}" \
+>       --seat-key "${CANARY_SEAT_KEY}" --tier "${CANARY_TIER}" \
+>       --engine "${CANARY_VENDOR}" --engine-model "${CANARY_ENGINE_MODEL}" "${EFFORT_ARGS[@]}" \
 >       --repo-root "${REPO_ROOT}"
 >   )")
 > done
@@ -705,17 +796,16 @@ carries `{vendor, model, effort, tier, family, source}`:
 
 - **Read the seat's assignment** from `$SEAT_MAP.seats[<reviewer-name>]`. Dispatch a `claude`
   seat as the named subagent with `model: <seat>.model`; dispatch a `codex`/`cursor` seat through
-  `engine_adapter.py` (read-only sandbox), threading the seat's **registry id** as `engine_model`
-  and its **effort** as `--effort` — never the hard-coded composer default. `build-argv` also
-  accepts the **composed dispatch token** that joins registry id and effort, and resolves it
-  identically, but an effort that **contradicts** a composed token is refused rather than
-  silently resolved either way. A `--model` value that is not a native Claude tier short name
-  (`haiku`/`sonnet`/`opus`/`fable`) is **refused by name** (`unknown-claude-tier`) instead of
-  silently falling back to composer. A refused dispatch surfaces
-  `detail: "engine-config:<reason>"` with one of `unknown-engine`, `unknown-claude-tier`,
-  `fable-unrunnable`, `unregistered-engine-model`, `engine-model-effort-conflict`,
-  `invalid-model-effort`, `untokenizable` — so the panel's degradation disclosure names **what**
-  died. The persona and `$RUBRIC` are identical across engines; the only per-seat difference is
+  `engine_adapter.py` (read-only sandbox), building a four-key `--seat` JSON from the entry —
+  `vendor`, `model`, and `effort` carry over, and `role` is the entry's `tier` — leaving `family`
+  and `source` as the driver bookkeeping that never travels in the seat — never
+  the hard-coded composer default. The seat's **registry id** rides in `model`; its **effort** in
+  `effort`. `build-argv` also accepts the **composed dispatch token** in `model`, and resolves it
+  identically, but an `effort` that **contradicts** a composed token is refused rather than
+  silently resolved either way. A refused dispatch surfaces
+  `detail: "engine-config:<reason>"` (see the engine-config refusal tokens section of
+  `skills/workhorse/reference/dispatch-entry.md`) — so the panel's
+  degradation disclosure names **what** died. The persona and `$RUBRIC` are identical across engines; the only per-seat difference is
   the dispatch target.
 - **The grounding seat** (`$SEAT_MAP.seats["grounding-seat"]`) is *assigned* a vendor by the seat map
   — chosen to be independent of both the author (code) and narrative (PR text) families — and that
