@@ -196,6 +196,7 @@ def certify(session_dir):
         check_same_family_seat,
         check_disposition_without_receipt,
         check_evidence_head_bound,
+        check_hand_landed_read_engaged,
     ):
         refusal = check(ctx)
         if refusal is not None:
@@ -878,6 +879,12 @@ def _hand_landed_evidence_qualifies(
         computed = session_contract.payload_sha256(payload[result_kind])
         if result_digest != computed:
             return False, "execution-evidence-result-mismatch"
+    return True, None
+
+
+def _hand_landed_read_qualifies(evidence):
+    if not isinstance(evidence, dict):
+        return False, "execution-evidence-absent"
     read = _execution_evidence_read_value(evidence)
     if read not in EXECUTION_EVIDENCE_READ_VALUES:
         return False, "execution-evidence-read-invalid"
@@ -1388,8 +1395,35 @@ def check_disposition_without_receipt(ctx):
     return None
 
 
+def check_hand_landed_read_engaged(ctx):
+    """After disposition and head-bound checks — read engagement cannot preempt them."""
+    session_dir = ctx["session_dir"]
+    for seat_entry in _collect_seats(ctx):
+        if seat_entry.get("provenance") != PROVENANCE_HAND_LANDED:
+            continue
+        env, path = _load_envelope(
+            session_dir,
+            seat_entry["round"],
+            seat_entry["phase"],
+            seat_entry["seat"],
+            seat_entry["attempt"],
+            seat_entry.get("occurrence", 0),
+        )
+        if env is None:
+            continue
+        ok, binding = _hand_landed_read_qualifies(env.get("executionEvidence"))
+        if not ok:
+            return _refusal(
+                "unrun-review",
+                path,
+                "hand-landed seat lacks qualifying execution-evidence read engagement",
+                binding_failure=binding,
+            )
+    return None
+
+
 def check_evidence_head_bound(ctx):
-    """Last check certify() runs — after check_disposition_without_receipt.
+    """Before hand-landed read engagement — disposition refusals keep their own class.
 
     Disposition, follow-up, and base-guard refusals keep their own classes rather than
     being preempted by a head refusal.
