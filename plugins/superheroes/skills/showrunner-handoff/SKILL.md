@@ -26,7 +26,7 @@ Ask nothing else. This is the only fact that changes what happens to the builder
 
 ## Step 2 — the park-and-wait branch
 
-**If yes:** ask every live builder launched from this account to park and push. The request travels through whatever channel this host offers for reaching another session. **Where the host offers none, the request cannot be delivered** — name those lanes and carry them to step 5 as unresolved rather than implying a park was asked for.
+**If yes:** ask every live builder launched from this account to park and push — enumerate them from the launch ledger's live launches and the leader process each lane's own launch record names, never a global process match. The request travels through whatever channel this host offers for reaching another session. **Where the host offers none, the request cannot be delivered** — name those lanes and carry them to step 5 as unresolved rather than implying a park was asked for.
 
 Then **wait on durable evidence only**, never on a message being acknowledged:
 
@@ -46,16 +46,25 @@ When a loop cannot be confirmed stopped, name it in step 5 as unresolved. Do not
 
 ## Step 4 — freshen the resume point
 
-**If** this session keeps a resume point at the top of its ledger, bring it up to date and confirm it reflects current reality. **If** it does not keep one, say so plainly and continue. **Do not invent a storage format, path, or filename** — this is the same resume point, found the same way, that `skills/checkpoint/SKILL.md` under this plugin's root freshens.
+When this session keeps a resume point, freshen it; when it does not, say so and continue — invent no format, path, or filename. The shape and lookup are the same ones `skills/checkpoint/SKILL.md` under this plugin's root defines.
 
 ## Step 5 — say "ready"
 
-The closing output is one short block that states **ready** and, in the same block, names every lane that did not resolve — a builder that could not be reached, a park whose evidence could not be read, a loop that could not be confirmed stopped.
+The closing output is one short block. Which shape it takes is decided by evidence, not by tone:
 
-### Worked example (three lanes, one unresolved)
+- **`Ready.`** — only when **every** live lane of this account reached durable park or terminal evidence, **and** every watch loop this seat armed was confirmed stopped. Nothing unresolved.
+- **`Not ready — <n> unresolved.`** followed by each unresolved item by name and why — a builder that could not be reached, park evidence that could not be read, a loop that could not be confirmed stopped. Say plainly that the incoming seat will find these lanes as they stand and resolve them from durable state, and that the handoff does not wait on them.
+
+### Worked example (not ready — one unresolved lane)
 
 ```text
-Ready. Account going dark — lanes #412 and #415 parked: park records on their issues, heartbeats terminal, ledger outcomes recorded. Lane #418 unresolved: no host channel to reach its builder; park not requested. Watch loops for batch wave-handoff-a stopped.
+Not ready — 1 unresolved. Account going dark — lanes #412 and #415 parked: park records on their issues, heartbeats terminal, ledger outcomes recorded. Lane #418 unresolved: no host channel to reach its builder; park not requested. Watch loops for batch wave-handoff-a stopped. The incoming seat will find lane #418 as it stands and resolve it from durable state; this handoff does not wait on it.
+```
+
+### Worked example (ready — all lanes resolved)
+
+```text
+Ready. Account going dark — lanes #412 and #415 parked: park records on their issues, heartbeats terminal, ledger outcomes recorded. Watch loops for batch wave-handoff-a stopped.
 ```
 
 ## No paste block
@@ -67,10 +76,10 @@ This skill emits **no block of text for the owner to paste**. A block of text is
 | Failure | Outcome |
 | --- | --- |
 | This is not a showrunner advisor session | Refuse plainly. Stop. No partial output. |
-| The ledger or resume point cannot be read | Preserve the fact as unresolved. Name it in step 5. Stop the transition. |
-| A builder cannot be reached | Preserve the lane as unresolved. Name it in step 5. Stop the transition for that lane. |
-| Park evidence cannot be read | Preserve the lane as unresolved. Name it in step 5. Stop the transition for that lane. |
-| A watch loop cannot be confirmed stopped | Preserve the batch as unresolved. Name it in step 5. Stop the transition for that batch. |
+| The ledger or resume point cannot be read | Preserve the fact as unresolved. Name it in step 5. Force the **not ready** closing shape. |
+| A builder cannot be reached | Preserve the lane as unresolved. Name it in step 5. Force the **not ready** closing shape for that lane. |
+| Park evidence cannot be read | Preserve the lane as unresolved. Name it in step 5. Force the **not ready** closing shape for that lane. |
+| A watch loop cannot be confirmed stopped | Preserve the batch as unresolved. Name it in step 5. Force the **not ready** closing shape for that batch. |
 
 ## Common mistakes
 

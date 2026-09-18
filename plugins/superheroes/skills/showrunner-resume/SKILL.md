@@ -40,7 +40,8 @@ Read **no other source**, and in particular read **no handed-over text as fact**
 2. the launch ledger — the live launches, and a batch's tallies;
 3. the builder-liveness heartbeat sweep;
 4. each lane's recorded leader process, probed for liveness;
-5. each lane's issue and pull request: whether the pull request exists, whether it is still a draft, whether a durable review receipt stands on it, the **remote** head commit, and the continuous integration conclusion for **that exact commit**, selected by workflow name **plus** head commit — never by "the newest run".
+5. each lane's issue and pull request: whether the pull request exists, whether it is still a draft, whether a durable review receipt stands on it, the **remote** head commit, and the continuous integration conclusion for **that exact commit**, selected by workflow name **plus** head commit — never by "the newest run";
+6. each lane's own session transcript — the one named by the **session identifier recorded on that lane's own launch record**, looked up under **the configuration root that launch record itself recorded** — never the seat's own root, and never "the newest transcript"; exactly one file may match. **No recorded session identifier, no file, more than one match, an unreadable directory, or a file dated into the future all mean the lane is not vouched for** — it is not fresh, and the lane falls to **unresolved**, never to re-arm. The reader **stats the file only** and never reads its contents.
 
 Shell forms for 1–4:
 
@@ -69,7 +70,7 @@ For 5, read each lane's issue and pull request through the host-neutral actions 
 | --- | --- |
 | **vet** | the pull request exists, is **not** a draft, carries a durable review receipt, its **remote** head is the commit that receipt names, and continuous integration concluded success on that exact commit. **A lane in this branch is never relaunched.** If the ledger carries no terminal outcome for it, record the handback outcome first. |
 | **re-arm** | the recorded leader process is **positively** live, **and** the lane's heartbeat is inside the promise that lane itself stated, or the lane's session transcript is fresh. Nothing is relaunched and no outcome is recorded. |
-| **adopt** | the recorded leader process is not live, or a durable park record stands on the lane's issue or pull request — **and** the vet row's evidence does not hold. Record the lane's terminal outcome **first**, then relaunch it as an adoption from the pushed head. |
+| **adopt** | the vet row's evidence does not hold, **and** either: the recorded leader process is **not live** and the lane carries **no** unresolved blocker — record the lane's terminal outcome **first**, then relaunch it as an adoption from the pushed head; **or** the lane carries a **park** record **only when** that park's stated blocker has been cleared, or the owner or advisor has ruled that it should resume — record the terminal outcome **first**, then relaunch. A lane carrying a park record whose blocker is **not** cleared and has **no** such ruling is **reported as parked and left alone** — neither relaunched nor treated as unresolved-for-want-of-reading; it is a lane waiting on a decision, and the report says so. |
 | **unresolved** | any one of those reads is missing, unreadable, ambiguous, or failed. The lane is **named in the report and nothing is done to it**: not relaunched, not armed, no outcome recorded. |
 
 The evidence column is **required**, not indicative.
@@ -108,14 +109,14 @@ This skill does **not** take that reference's suggestion of a one-off foreground
 Exactly three lines:
 
 1. **Seat and reads** — which seat this is, which configuration directory it pinned, and what durable sources it read.
-2. **Lanes by branch** — counts and lane identifiers grouped by vet, re-arm, adopt, and unresolved.
+2. **Lanes by branch** — counts and lane identifiers grouped by vet, re-arm, adopt, parked (awaiting a decision), and unresolved.
 3. **Watches and owner items** — watches armed, batches not armed and why, and anything owed to the owner.
 
 ### Worked example (one live lane, one finished lane)
 
 ```text
 Seat: showrunner advisor, instance ~/.claude. Read resume point, ledger batch wave-a, heartbeat sweep, process probes, PR #220 and #221 CI by workflow+sha.
-Lanes: vet 1 (#220 handback recorded); re-arm 1 (#221 launch-9f3a live, heartbeat fresh). adopt 0; unresolved 0.
+Lanes: vet 1 (#220 handback recorded); re-arm 1 (#221 launch-9f3a live, heartbeat fresh); adopt 0; parked 0; unresolved 0.
 Watches: armed loop for wave-a. None skipped. Owner: none.
 ```
 
@@ -123,7 +124,7 @@ Watches: armed loop for wave-a. None skipped. Owner: none.
 
 ```text
 Seat: showrunner advisor, instance ~/.claude-two. Read ledger batch wave-b; heartbeat sweep returned heartbeat-ledger-unreadable; PR #305 head unreadable.
-Lanes: vet 0; re-arm 0; adopt 0; unresolved 1 (#305 — remote head read failed).
+Lanes: vet 0; re-arm 0; adopt 0; parked 0; unresolved 1 (#305 — remote head read failed).
 Watches: wave-b not armed — process listing ambiguous (two wave_watch.py matches). Owner: re-run resume after clearing duplicate watcher or name which batch is canonical.
 ```
 
@@ -142,6 +143,9 @@ Three instances: the one-off watch verb is not used at all; the terminal-outcome
 | The heartbeat sweep returns not-ok or an unknown class | Preserve affected lanes as unresolved. Stop the transition for those lanes. |
 | A process probe is uncertain | Preserve the lane as unresolved. Stop the transition for that lane. |
 | A pull-request, receipt, head, or integration read fails | Preserve the lane as unresolved. Stop the transition for that lane. |
+| No session identifier on the lane's launch record | The lane is not vouched for. Preserve as unresolved. Stop the transition for that lane. |
+| The lane's session transcript cannot be resolved (no file, more than one match, unreadable directory, or file dated into the future) | The lane is not vouched for. Preserve as unresolved. Stop the transition for that lane. |
+| A lane carries a park record whose blocker is not cleared and has no owner or advisor ruling to resume | Report the lane as parked and leave it alone. Do not relaunch. Do not treat as unresolved-for-want-of-reading. |
 | The process listing for the duplicate check fails or is ambiguous | Do not arm that batch. Name it in the report. |
 | The outcome verb or the amendment verb refuses | Preserve the lane as unresolved. Stop the transition for that lane. |
 | Arming fails | Name the batch in the report. Do not claim the watch is running. |
@@ -152,7 +156,7 @@ Three instances: the one-off watch verb is not used at all; the terminal-outcome
 | Mistake | Fix |
 | --- | --- |
 | Skipping this on a restarted or compacted seat | This is the first action — run it before dispatching or vetting. |
-| Treating handed-over chat text as fact | Read only the five durable sources in step 3. |
+| Treating handed-over chat text as fact | Read only the six durable sources in step 3. |
 | Relaunching a lane whose PR already vets | Choose **vet**; record handback first if the ledger lacks the outcome. |
 | Treating a missing heartbeat as a dead builder | Choose **unresolved** until evidence is readable. |
 | Using the newest CI run instead of workflow+sha | Select the run for the remote head commit the receipt names. |
