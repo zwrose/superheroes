@@ -59,17 +59,24 @@ worktree of its own** (`/private/tmp/wh1271a17-bp` for this round), never in a t
 seat was reading. Every detector ran **unedited**. No redaction was needed: no secrets, tokens,
 private URLs, or PII appear in any capture.
 
-**Every proof was re-run on the final head.** E1, E2, E3a and E3b were not carried forward on their
-original receipts — each was neutralized again and shown red again at `cfa317b3`, the head that
-carries the started-gate, because narrowing a detector can silently stale an older proof. Their raw
-reds at that head are recorded in their own sections below under *Re-run at the final head*.
+**Every proof is re-proven, red, at the final head — and the heads are named individually rather
+than summarized**, because an older red is not evidence about a head that moved under it. The
+sequence of heads in this build, and what was proven at each:
 
-Proof head for E1–E3b's original run: `87eb6cfbe6dbb67079f6403bfd4dfb7d34c611eb`.
-Proof head for E4's first run and for E1–E3b's re-runs: `cfa317b3afd1e3cfb290a475edaa28a1a1f18868`.
-**E4 was then proven a second time at `87e9300dd77bd46554f3df4a14634fc75c27a491`** — the head after
-the confirmation round's corrective — because that corrective rewrote one of E4's own fixtures. A
-detector whose fixture changed is not covered by a proof taken before the change; that re-run is
-recorded in E4's own section.
+| Head | What it added | Proofs taken red there |
+|---|---|---|
+| `87eb6cfb` | the write-side detector | E1, E2, E3a, E3b (original) |
+| `cfa317b3` | the started-gate | E4 (first), and E1, E2, E3a, E3b re-proven |
+| `87e9300d` | the `except` revert; one fixture rewritten | E4 (re-proven against the rewritten fixture) |
+| **`538ccea7`** | **the final head** | **E1, E2, E3a, E3b re-proven again** |
+
+Each row is a genuine neutralize → red → restore cycle, not a green run inherited from the row above.
+The final row exists because the confirmation round's corrective touched `_with_run_fields` itself —
+the guarded reader — so reds taken before it no longer describe the shipped function. The `538ccea7`
+reds are recorded in E1, E2, E3a and E3b's own sections below, under *Re-proof at the final head*;
+E4's `87e9300d` re-proof is in its own section, and E4 is unaffected by the `except` revert (the
+revert is outside its neutralized element, and its two detectors are re-run green at `538ccea7` in
+the closing block).
 
 ---
 
@@ -114,8 +121,8 @@ argv, which is missing the per-attempt codex flags the engine actually received.
 
 **Restore.** The exact inverse edit, restoring the two-line call and dropping `recorded = True`.
 
-**Re-run at the final head (`cfa317b3`).** The same neutralization, applied again in the detached
-probe worktree, red again on the same axis:
+**Re-proof at `cfa317b3`.** The same neutralization, applied again in the detached probe worktree,
+red again on the same axis:
 
 ```
         # argv[0] is PATH-resolved in the child; tail must match the journaled argv exactly.
@@ -128,6 +135,16 @@ E         Left contains 3 more items, first extra item: '--output-last-message'
 
 plugins/superheroes/lib/tests/test_engine_dispatch_e2e.py:381: AssertionError
 1 failed in 2.15s
+```
+
+**Re-proof at the final head (`538ccea7`).** Same neutralization once more, in a fresh detached probe
+worktree pinned to the final head, red again:
+
+```
+E         Use -v to get more diff
+
+plugins/superheroes/lib/tests/test_engine_dispatch_e2e.py:381: AssertionError
+1 failed in 2.92s
 ```
 
 **Restore receipt.**
@@ -198,8 +215,8 @@ $ git status --porcelain plugins/superheroes/lib/engine_dispatch.py
 1 passed in 0.74s
 ```
 
-**Re-run at the final head (`cfa317b3`).** Same neutralization, red again on the same axis, with the
-restore of E1's site verified first (`git diff --stat` showed exactly the seam's own changed lines):
+**Re-proof at `cfa317b3`.** Same neutralization, red again on the same axis, with the restore of E1's
+site verified first (`git diff --stat` showed exactly the seam's own changed lines):
 
 ```
         launching = [
@@ -212,6 +229,16 @@ E        +  where 0 = len([])
 
 plugins/superheroes/lib/tests/test_engine_dispatch.py:2970: AssertionError
 1 failed in 1.31s
+```
+
+**Re-proof at the final head (`538ccea7`).** Same neutralization, red again, the seam recording
+nothing:
+
+```
+E        +  where 0 = len([])
+
+plugins/superheroes/lib/tests/test_engine_dispatch.py:2970: AssertionError
+1 failed in 3.41s
 ```
 
 ---
@@ -261,8 +288,8 @@ $ git diff --stat
  1 file changed, 1 insertion(+), 1 deletion(-)
 ```
 
-**Re-run at the final head (`cfa317b3`).** Same neutralization (`if not recorded:` → `if False:`),
-red again in its strongest form — the fake engine ran and wrote its marker:
+**Re-proof at `cfa317b3`.** Same neutralization (`if not recorded:` → `if False:`), red again in its
+strongest form — the fake engine ran and wrote its marker:
 
 ```
             os.path.join(run_dir, "progress.jsonl"),
@@ -273,6 +300,16 @@ E        +  where True = <function exists at 0x1018958b0>('.../test_run_engine_f
 
 plugins/superheroes/lib/tests/test_engine_dispatch.py:3031: AssertionError
 1 failed in 4.76s
+```
+
+**Re-proof at the final head (`538ccea7`).** Same neutralization, red again on the marker assertion —
+the guard disabled, the fake engine ran:
+
+```
+E        +      where <module 'posixpath' ...> = os.path
+
+plugins/superheroes/lib/tests/test_engine_dispatch.py:3031: AssertionError
+1 failed in 5.96s
 ```
 
 ---
@@ -325,8 +362,8 @@ $ git rev-parse HEAD
 No residue: every neutralized surface is byte-identical to the committed head, and nothing could not
 be reverted.
 
-**Re-run at the final head (`cfa317b3`).** Same neutralization, red again on the refusal axis — the
-seam's engine callable invoked once where the guarantee is zero:
+**Re-proof at `cfa317b3`.** Same neutralization, red again on the refusal axis — the seam's engine
+callable invoked once where the guarantee is zero:
 
 ```
             run_engine=counting_never_call,
@@ -337,6 +374,25 @@ E       assert 1 == 0
 
 plugins/superheroes/lib/tests/test_engine_dispatch.py:2999: AssertionError
 1 failed in 3.01s
+```
+
+**Re-proof at the final head (`538ccea7`).** Same neutralization, red again, one invocation where the
+guarantee is zero:
+
+```
+E       assert 1 == 0
+
+plugins/superheroes/lib/tests/test_engine_dispatch.py:2999: AssertionError
+1 failed in 2.57s
+```
+
+**Whole-tree restore after the final-head round**, taken once after the last of the four:
+
+```
+$ git status --porcelain
+(no output)
+$ git rev-parse HEAD
+538ccea77548d4e926a28883903c1b4ed6200811
 ```
 
 ---
@@ -468,13 +524,14 @@ the confirmation round and both were checked by execution.
 
 ## All proofs green on the final head
 
-All seven detectors, every element's, green together at `87e9300d` with the whole tree restored:
+All seven detectors, every element's, green together at the final head `538ccea7`, whole tree
+restored:
 
 ```
 $ git status --porcelain
 (no output)
 $ git rev-parse HEAD
-87e9300dd77bd46554f3df4a14634fc75c27a491
+538ccea77548d4e926a28883903c1b4ed6200811
 $ /usr/bin/python3 -B -X pycache_prefix=... -m pytest \
     test_engine_dispatch_e2e.py::test_e2e_review_real_path_terminal_success \
     test_engine_dispatch.py::test_injected_seam_journals_spawn_argv_for_the_attempt \
@@ -484,7 +541,7 @@ $ /usr/bin/python3 -B -X pycache_prefix=... -m pytest \
     test_engine_dispatch.py::test_with_run_fields_argv_ignores_later_unstarted_attempt_spawn_argv \
     test_engine_dispatch.py::test_dispatch_review_result_argv_matches_started_attempt_spawn_argv -q
 .......                                                                  [100%]
-7 passed in 2.61s
+7 passed in 5.79s
 ```
 
 ## Keep-or-retire

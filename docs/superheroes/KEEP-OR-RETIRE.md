@@ -919,7 +919,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   merge review, where two independent review seats found the reader reporting the argv of an attempt
   that never reached the engine. The gate was added in response and is proven as E4. Before that, the
   birth bite-proof at `plugins/superheroes/lib/tests/bite_proofs/spawned-argv-record.md` (now four
-  guarded elements, six proofs, each red → restore → green, all re-run on the final head).
+  guarded elements, six proofs, each red → restore → green; the record names the head each red was
+  taken at rather than claiming one head for all of them).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — an audit record that can silently go missing is not an audit record;
