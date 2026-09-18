@@ -5,6 +5,12 @@ worktree. The detectors themselves were implemented by cursor / composer-2.5 und
 the adopted head `7630d6dd`; this record is the verification receipt the orchestrator re-ran
 itself, per the charter's rule that verification authority never delegates.
 
+**Head these proofs were run on:** `8202570e` — the layer's final head, after the review loop's
+fix rounds. An earlier copy of this record quoted the pre-fix call shapes
+(`engine_result_channel.validate(...)` and `_native_schema_allows_scrub_finish(validation_reason)`);
+the review's confirmation panel caught that staleness, and **all six proofs below were then re-run
+from scratch on `8202570e`** — these are those runs, not the earlier ones.
+
 **Method.** Each guarded element is neutralized on its own — the *thing the detector guards* is
 disabled, never the detector — with a targeted edit applied through the host's edit action and
 reverted by the exact inverse edit. Every command selects its test by **exact test name**, never
@@ -38,11 +44,12 @@ Common command prefix:
 
 **neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_grade_native_review_attempt`):
 ```python
-    engine_result_channel.validate(schema, envelope)
-    ok, validation_reason = True, None  # bite-proof neutralization BP-B2-1
+    engine_result_channel._validate_with_detail(schema, envelope)
+    ok, validation_reason, validation_detail = True, None, None  # bite-proof BP-B2-1
 ```
-(replaces `ok, validation_reason = engine_result_channel.validate(schema, envelope)`; the validator
-still runs, its verdict is discarded — the exact "ignored at the call site" shape)
+(replaces the three-tuple call
+`ok, validation_reason, validation_detail = engine_result_channel._validate_with_detail(schema, envelope)`;
+the validator still runs, its verdict is discarded — the exact "ignored at the call site" shape)
 
 **command:** `…::test_grade_native_review_attempt_schema_invalid -q`
 
@@ -65,18 +72,19 @@ E        +  where None = <built-in method get of dict object at 0x109565b00>('de
 plugins/superheroes/lib/tests/test_engine_dispatch.py:10428: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_grade_native_review_attempt_schema_invalid
-1 failed in 1.08s
+1 failed in 0.75s
 ```
 
 **restore** (inverse edit):
 ```python
-    ok, validation_reason = engine_result_channel.validate(schema, envelope)
+    ok, validation_reason, validation_detail = engine_result_channel._validate_with_detail(
+        schema, envelope)
 ```
 
 **raw green** (exit 0, tree clean):
 ```
 .                                                                        [100%]
-1 passed in 0.98s
+1 passed in 0.61s
 ```
 
 ---
@@ -116,7 +124,7 @@ E       AssertionError: assert 'native-result-malformed' == 'native-result-overs
 plugins/superheroes/lib/tests/test_engine_dispatch.py:10389: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_grade_native_review_attempt_result_oversized
-1 failed in 3.62s
+1 failed in 1.65s
 ```
 
 **restore** (inverse edits, both legs):
@@ -131,7 +139,7 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_grade_native_
 **raw green** (exit 0, tree clean):
 ```
 .                                                                        [100%]
-1 passed in 1.12s
+1 passed in 0.93s
 ```
 
 ---
@@ -164,7 +172,7 @@ E       AssertionError: assert 'native-result-schema-invalid' == 'native-result-
 plugins/superheroes/lib/tests/test_engine_dispatch.py:10398: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_grade_native_review_attempt_result_malformed_json
-1 failed in 1.45s
+1 failed in 1.58s
 ```
 
 **restore** (inverse edit):
@@ -177,7 +185,7 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_grade_native_
 **raw green** (exit 0, tree clean):
 ```
 .                                                                        [100%]
-1 passed in 1.32s
+1 passed in 1.00s
 ```
 
 ---
@@ -211,7 +219,7 @@ E           n: Bearer sk-EXAMPLEfakenotarealsecret0", "suggestion": "example", �
 plugins/superheroes/lib/tests/test_engine_dispatch.py:10469: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_grade_native_review_attempt_scrubs_secret_from_result_and_journal
-1 failed in 1.21s
+1 failed in 3.17s
 ```
 
 **restore** (inverse edit):
@@ -223,7 +231,7 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_grade_native_
 **raw green** (exit 0, tree clean):
 ```
 .                                                                        [100%]
-1 passed in 4.16s
+1 passed in 4.44s
 ```
 
 ---
@@ -237,8 +245,9 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_grade_native_
 ```python
         if False:  # bite-proof neutralization BP-B2-5 (validation decides before kind)
 ```
-(replaces `if scrub_try.get("ok") and _native_schema_allows_scrub_finish(validation_reason):` — the
-step that lets a recognised wrong kind reach the kind check instead of being swallowed by the
+(replaces
+`if scrub_try.get("ok") and engine_result_channel.native_schema_allows_scrub_finish(validation_detail, branch=branch):`
+— the step that lets a recognised wrong kind reach the kind check instead of being swallowed by the
 schema verdict; disabling it is exactly the two steps swapped)
 
 **command:** `…::test_grade_native_review_attempt_kind_before_validation -q`
@@ -255,18 +264,19 @@ E       AssertionError: assert 'native-result-schema-invalid' == 'result-kind-mi
 plugins/superheroes/lib/tests/test_engine_dispatch.py:10439: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_grade_native_review_attempt_kind_before_validation
-1 failed in 5.46s
+1 failed in 3.88s
 ```
 
 **restore** (inverse edit):
 ```python
-        if scrub_try.get("ok") and _native_schema_allows_scrub_finish(validation_reason):
+        if scrub_try.get("ok") and engine_result_channel.native_schema_allows_scrub_finish(
+                validation_detail, branch=branch):
 ```
 
 **raw green** (exit 0, tree clean):
 ```
 .                                                                        [100%]
-1 passed in 1.98s
+1 passed in 3.76s
 ```
 
 ---
@@ -306,7 +316,7 @@ E       AssertionError: marker parser must not run on native review grade
 plugins/superheroes/lib/tests/test_engine_dispatch.py:10518: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_grade_native_review_attempt_marker_salvage_path_not_reached
-1 failed in 2.95s
+1 failed in 4.50s
 ```
 
 **restore** (inverse edit):
@@ -318,7 +328,7 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_grade_native_
 **raw green** (exit 0, tree clean — `git status --porcelain` and `git diff --stat` both empty):
 ```
 .                                                                        [100%]
-1 passed in 1.95s
+1 passed in 1.82s
 ```
 
 ---
