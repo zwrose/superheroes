@@ -591,6 +591,57 @@ def _schema_branch_active_payload_keys(branch):
     return active
 
 
+def native_review_payload_shape(detail, envelope=None, branch=None):
+    """Derive payloadShape for a native-channel review forfeit from the result file state.
+
+    Returns {"parsed", "topLevelKeys", "keysTruncated"} or None when no diagnostic applies.
+    Never raises. Marker tokens are the engine_adapter SHAPE_* home — imported lazily so this
+    module stays free of engine_adapter at import time.
+    """
+    import engine_adapter as ea  # noqa: PLC0415 — lazy: avoids import cycle with engine_dispatch
+
+    if detail in ("native-result-missing",):
+        return {
+            "parsed": ea.SHAPE_EMPTY_STDOUT,
+            "topLevelKeys": [],
+            "keysTruncated": False,
+        }
+    if detail in ("native-result-malformed",):
+        return {
+            "parsed": ea.SHAPE_NO_PARSEABLE_JSON,
+            "topLevelKeys": [],
+            "keysTruncated": False,
+        }
+    if detail in ("native-result-schema-invalid", "native-result-malformed-branch"):
+        if isinstance(branch, dict):
+            matched = ea._recognised_review_kinds(branch)
+            top_keys, keys_truncated = ea._bound_top_level_keys(branch)
+            if len(matched) > 1:
+                return {
+                    "parsed": ea.SHAPE_OBJECT_BOTH_PAYLOAD_KEYS,
+                    "topLevelKeys": top_keys,
+                    "keysTruncated": keys_truncated,
+                }
+            return {
+                "parsed": ea.SHAPE_OBJECT_WITHOUT_FINDINGS,
+                "topLevelKeys": top_keys,
+                "keysTruncated": keys_truncated,
+            }
+        if isinstance(envelope, dict):
+            top_keys, keys_truncated = ea._bound_top_level_keys(envelope)
+            return {
+                "parsed": ea.SHAPE_OBJECT_WITHOUT_FINDINGS,
+                "topLevelKeys": top_keys,
+                "keysTruncated": keys_truncated,
+            }
+        return {
+            "parsed": ea.SHAPE_OBJECT_WITHOUT_FINDINGS,
+            "topLevelKeys": [],
+            "keysTruncated": False,
+        }
+    return None
+
+
 def review_result_contract_from_schema(schema):
     """Derive native-channel review prompt contract prose from a declared schema dict."""
     if not isinstance(schema, dict):

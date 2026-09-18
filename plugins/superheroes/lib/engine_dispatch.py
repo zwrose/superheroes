@@ -3107,14 +3107,16 @@ def _non_terminal_running_result(result, run_dir_real, state):
     return out
 
 
-def _native_review_forfeit(engagement, detail, **extra):
+def _native_review_forfeit(engagement, detail, *, payload_shape=None, **extra):
     """Structured forfeit for native-channel review grading. Never raises."""
     result = {
         "forfeit": True,
         "reason": dispatch_outcome.REASON_FORFEITED,
         "detail": detail,
-        "engagement": engagement,
+        "engagement": _engagement_with_read(engagement),
     }
+    if payload_shape is not None:
+        result["payloadShape"] = payload_shape
     result.update(extra)
     return result
 
@@ -3136,35 +3138,77 @@ def _read_native_review_envelope(opened, engagement):
     """Load and unwrap a native review result envelope. Returns (envelope, branch) or a forfeit."""
     result_path = opened.get("nativeResultPath")
     if not _native_result_path_is_regular_file(result_path):
-        return _native_review_forfeit(engagement, "native-result-missing")
+        shape = engine_result_channel.native_review_payload_shape("native-result-missing")
+        return _native_review_forfeit(engagement, "native-result-missing", payload_shape=shape)
     try:
         st = os.stat(result_path, follow_symlinks=False)
     except OSError:
-        return _native_review_forfeit(engagement, "native-result-missing")
+        shape = engine_result_channel.native_review_payload_shape("native-result-missing")
+        return _native_review_forfeit(engagement, "native-result-missing", payload_shape=shape)
     if st.st_size > engine_result_channel.NATIVE_RESULT_MAX_BYTES:
         return _native_review_forfeit(engagement, "native-result-oversized")
     try:
         with open(result_path, "rb") as fh:
             raw = fh.read(engine_result_channel.NATIVE_RESULT_MAX_BYTES + 1)
     except OSError:
-        return _native_review_forfeit(engagement, "native-result-missing")
+        shape = engine_result_channel.native_review_payload_shape("native-result-missing")
+        return _native_review_forfeit(engagement, "native-result-missing", payload_shape=shape)
     if len(raw) > engine_result_channel.NATIVE_RESULT_MAX_BYTES:
         return _native_review_forfeit(engagement, "native-result-oversized")
     try:
         envelope = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
-        return _native_review_forfeit(engagement, "native-result-malformed")
+        shape = engine_result_channel.native_review_payload_shape("native-result-malformed")
+        return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
     if not isinstance(envelope, dict) or "result" not in envelope:
-        return _native_review_forfeit(engagement, "native-result-malformed")
+        shape = engine_result_channel.native_review_payload_shape(
+            "native-result-malformed", envelope=envelope if isinstance(envelope, dict) else None)
+        return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
     branch = envelope["result"]
     if not isinstance(branch, dict):
-        return _native_review_forfeit(engagement, "native-result-malformed")
+        shape = engine_result_channel.native_review_payload_shape(
+            "native-result-malformed-branch", envelope=envelope, branch=branch)
+        return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
     return envelope, branch
+
+
+def _native_branch_placeholder_shape(branch):
+    """Return placeholder-literal payloadShape when a native branch carries template literals."""
+    if not isinstance(branch, dict):
+        return None
+    kind = branch.get("resultKind")
+    if kind == "findings":
+        items = branch.get("findings")
+        if items is not None and engine_adapter._review_items_have_placeholder_literal(items):
+            return {
+                "parsed": engine_adapter.SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
+                "topLevelKeys": [],
+                "keysTruncated": False,
+            }
+    if kind == "verdicts":
+        items = branch.get("verdicts")
+        if items is not None and engine_adapter._review_items_have_placeholder_literal(items):
+            return {
+                "parsed": engine_adapter.SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
+                "topLevelKeys": [],
+                "keysTruncated": False,
+            }
+    return None
 
 
 def _scrub_native_review_branch(branch, echo_nonce):
     """Scrub a schema-validated native review branch via existing scrub entry points."""
     kind = branch.get("resultKind")
+    if kind == "findings":
+        raw_findings = branch.get("findings")
+        if raw_findings is not None and engine_adapter._review_items_have_placeholder_literal(
+                raw_findings):
+            return {"ok": False, "reason": "unreadable"}
+    if kind == "verdicts":
+        raw_verdicts = branch.get("verdicts")
+        if raw_verdicts is not None and engine_adapter._review_items_have_placeholder_literal(
+                raw_verdicts):
+            return {"ok": False, "reason": "unreadable"}
     investigated, inv_rejected = engine_adapter._scrub_investigated(branch.get("investigated"))
     if kind == "findings":
         findings_list, findings_rejected = engine_adapter._scrub_findings(
@@ -3288,16 +3332,35 @@ def _finish_review_grade_from_parse(opened, cwd, engagement, res):
     assert False, "unreachable: vacuous and mismatch paths handled above"
 
 
+def _native_schema_allows_scrub_finish(validation_reason):
+    """True when a schema failure is scrub-salvageable, not a structural null/type hole."""
+    if not validation_reason:
+        return False
+    if ".findings:" in validation_reason and "got NoneType" in validation_reason:
+        return False
+    if "investigated" in validation_reason:
+        return True
+    if ".findings[" in validation_reason and "expected type" in validation_reason:
+        return True
+    if "expected type" in validation_reason:
+        return False
+    if "resultKind" in validation_reason:
+        return True
+    if "anyOf failed" in validation_reason:
+        return True
+    return False
+
+
 def _native_review_forfeit_with_payload_shape(
-        engagement, detail, stdout, fed_prompt, echo_nonce, **extra):
-    """Native forfeit that mirrors marker-channel payloadShape attachment when stdout exists."""
-    engagement = _engagement_with_read(engagement)
-    result = _native_review_forfeit(engagement, detail, **extra)
-    if isinstance(stdout, str) and stdout.strip():
+        engagement, detail, stdout, fed_prompt, echo_nonce,
+        envelope=None, branch=None, **extra):
+    """Native forfeit that mirrors marker-channel payloadShape attachment."""
+    shape = engine_result_channel.native_review_payload_shape(
+        detail, envelope=envelope, branch=branch)
+    if shape is None and isinstance(stdout, str) and stdout.strip():
         shape = engine_adapter.review_payload_shape(
             stdout, fed_prompt, echo_nonce=echo_nonce)
-        if shape is not None:
-            result["payloadShape"] = shape
+    result = _native_review_forfeit(engagement, detail, payload_shape=shape, **extra)
     return result
 
 
@@ -3310,15 +3373,6 @@ def _grade_native_review_attempt(
     if not isinstance(loaded, tuple):
         return loaded
     envelope, branch = loaded
-    kind = branch.get("resultKind")
-    expected_kind = opened.get("expectedResultKind")
-    if (
-        kind in REVIEW_RESULT_KINDS
-        and expected_kind in REVIEW_RESULT_KINDS
-        and kind != expected_kind
-    ):
-        engagement = _engagement_with_read(engagement)
-        return _native_review_forfeit(engagement, RESULT_KIND_MISMATCH_DETAIL)
     schema_path = opened.get("nativeSchemaPath")
     if not schema_path or not os.path.isfile(schema_path) or os.path.islink(schema_path):
         return _native_review_forfeit(engagement, "native-schema-unreadable")
@@ -3328,15 +3382,28 @@ def _grade_native_review_attempt(
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return _native_review_forfeit(engagement, "native-schema-unreadable")
     ok, validation_reason = engine_result_channel.validate(schema, envelope)
+    placeholder_shape = _native_branch_placeholder_shape(branch)
+    if placeholder_shape is not None:
+        return _native_review_forfeit(
+            engagement, "native-result-malformed", payload_shape=placeholder_shape)
+    scrub_try = _scrub_native_review_branch(branch, echo_nonce)
+    if ok and scrub_try.get("ok"):
+        return _finish_review_grade_from_parse(opened, cwd, engagement, scrub_try)
     if not ok:
+        if scrub_try.get("ok") and _native_schema_allows_scrub_finish(validation_reason):
+            return _finish_review_grade_from_parse(opened, cwd, engagement, scrub_try)
         return _native_review_forfeit_with_payload_shape(
             engagement,
             "native-result-schema-invalid",
             stdout,
             fed_prompt,
             echo_nonce,
+            envelope=envelope,
+            branch=branch,
             validationReason=validation_reason,
         )
+    if scrub_try.get("ok"):
+        return _finish_review_grade_from_parse(opened, cwd, engagement, scrub_try)
     if isinstance(stdout, str) and stdout.strip():
         norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
         if norm_strip["echoOnly"]:
@@ -3387,10 +3454,7 @@ def _grade_native_review_attempt(
                 result["payloadShape"] = shape
             return result
         return _finish_review_grade_from_parse(opened, cwd, engagement, res)
-    res = _scrub_native_review_branch(branch, echo_nonce)
-    if not res.get("ok"):
-        return _native_review_forfeit(engagement, "native-result-malformed")
-    return _finish_review_grade_from_parse(opened, cwd, engagement, res)
+    return _native_review_forfeit(engagement, "native-result-malformed")
 
 
 def _grade_review_attempt(run_dir_real, state, attempt):
@@ -4557,10 +4621,9 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 fed_prompt += _prompt_section_sep + engine_result_channel.review_result_contract_from_schema(
                     native_schema,
                 )
-            else:
-                fed_prompt += _prompt_section_sep + engine_adapter.REVIEW_RESULT_CONTRACT(
-                    expected_result_kind,
-                )
+            fed_prompt += _prompt_section_sep + engine_adapter.REVIEW_RESULT_CONTRACT(
+                expected_result_kind,
+            )
 
             if run_dir_real is None:
                 run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")

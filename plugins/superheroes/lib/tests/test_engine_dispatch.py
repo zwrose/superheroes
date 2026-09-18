@@ -251,13 +251,15 @@ def _legacy_overlay_findings(raw_list):
     template_fs = _native_review_branch("findings")["findings"]
     findings = []
     for index, raw in enumerate(raw_list or []):
+        if not isinstance(raw, dict):
+            findings.append(raw)
+            continue
         member = dict(template_fs[min(index, len(template_fs) - 1)])
-        if isinstance(raw, dict):
-            for key, val in raw.items():
-                if key == "message":
-                    member["body"] = val
-                elif key in member:
-                    member[key] = val
+        for key, val in raw.items():
+            if key == "message":
+                member["body"] = val
+            elif key in member:
+                member[key] = val
         findings.append(member)
     return findings
 
@@ -291,10 +293,7 @@ def _legacy_stdout_to_native_review_branch(stdout):
     if not isinstance(obj, dict):
         raise ValueError("unrecognized-object")
     if "findings" in obj and "verdicts" in obj:
-        branch = _native_review_branch("findings")
-        branch["findings"] = _legacy_overlay_findings(obj.get("findings"))
-        branch["verdicts"] = _legacy_overlay_verdicts(obj.get("verdicts"))
-        return branch
+        raise ValueError("ambiguous-both-keys")
     matched = EA._recognised_review_kinds(obj)
     if len(matched) != 1:
         raise ValueError("unrecognized-object")
@@ -315,9 +314,10 @@ def _legacy_stdout_to_native_review_branch(stdout):
             investigated=investigated,
         )
     if kind == "grouping":
+        grouping_val = obj.get("grouping") if "grouping" in obj else []
         return _native_review_branch(
             "grouping",
-            grouping=obj.get("grouping") or [],
+            grouping=grouping_val,
             investigated=investigated,
         )
     ruling = {
@@ -345,7 +345,12 @@ def _write_native_review_result(argv, stdout):
             return
         if code == "unrecognized-object":
             with open(result_path, "w", encoding="utf-8") as fh:
-                json.dump({"result": "not-an-object"}, fh)
+                json.dump({"result": json.loads(stdout.strip())}, fh)
+                fh.write("\n")
+            return
+        if code == "ambiguous-both-keys":
+            with open(result_path, "w", encoding="utf-8") as fh:
+                json.dump({"result": json.loads(stdout.strip())}, fh)
                 fh.write("\n")
             return
         if code == "empty-stdout":
@@ -827,11 +832,12 @@ def test_nonzero_exit_with_parseable_stdout_rejected(tmp_path):
 
 
 def test_noisy_but_valid_output_accepted(tmp_path):
+    # stdout noise tolerance is a marker-channel claim — native results arrive via file.
     repo_root = _repo(tmp_path)
     noisy = "bootstrap noise\nsession start\n" + _VALID_FINDINGS_STDOUT
     fake = FakeRunner([(noisy, False, 0, "")])
     res = ED.dispatch_review(
-        seat=_codex_seat(),
+        seat=_reviewer_cursor_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -842,15 +848,21 @@ def test_liveness_heartbeats(tmp_path, monkeypatch):
     repo_root = _repo(tmp_path)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.1)
     progress_path = str(tmp_path / "progress.jsonl")
-    findings_json = json.dumps({"findings": [{"id": "hb1", "message": "heartbeat ok"}]})
+    branch = _native_review_branch("findings")
+    branch["findings"][0]["id"] = "hb1"
+    branch["findings"][0]["body"] = "heartbeat ok"
+    native_payload = json.dumps(_wrap_native_review_result(branch))
     script = (
-        "import time,sys; "
-        "sys.stdout.write(%r); sys.stdout.flush(); time.sleep(0.6)" % findings_json
+        "import json,sys,time; "
+        "result_path=sys.argv[1]; "
+        "open(result_path,'w',encoding='utf-8').write(%r); "
+        "time.sleep(0.6)" % native_payload
     )
 
     def real_run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
         return ED._run_engine(
-            ["python3", "-c", script], prompt_bytes, timeout, progress_cb, cwd,
+            ["python3", "-c", script, result_path], prompt_bytes, timeout, progress_cb, cwd,
         )
 
     res = ED.dispatch_review(
@@ -3424,9 +3436,10 @@ def test_dispatch_review_verdicts_terminal_carries_result_kind(tmp_path):
     )
     assert res["ok"] is True
     assert res["resultKind"] == "verdicts"
-    assert res["verdicts"] == [{
-        "id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test",
-    }]
+    verdict = res["verdicts"][0]
+    assert verdict["id"] == "v1"
+    assert verdict["verdict"] == "CONFIRMED"
+    assert verdict["reason"] == "reproduced in test"
     assert "findings" not in res
 
 
@@ -3571,11 +3584,10 @@ def test_dispatch_review_ruling_terminal_carries_payload(tmp_path):
     )
     assert res["ok"] is True
     assert res["resultKind"] == "ruling"
-    assert res["ruling"] == {
-        "id": "f1",
-        "ruling": "discharged",
-        "reason": "resolved in diff",
-    }
+    ruling = res["ruling"]
+    assert ruling["id"] == "f1"
+    assert ruling["ruling"] == "discharged"
+    assert ruling["reason"] == "resolved in diff"
     assert "id" not in res
     assert "reason" not in res
 
@@ -3652,8 +3664,7 @@ def test_dispatch_poll_running_graded_attempt1_ended_attempt2_live(tmp_path):
     assert graded[0]["attempt"] == 1
     assert graded[0]["resultKind"] == "findings"
     member = graded[0]["findings"][0]
-    # WO-B additive normalization: original synonym key survives; canonical body is added.
-    assert member["message"] == "issue found"
+    # Native graded tail carries canonical body; marker synonym keys are not echoed on file channel.
     assert member["body"] == "issue found"
 
 
@@ -10532,10 +10543,12 @@ def test_codex_review_open_appends_native_schema_contract(tmp_path):
     opened = next(r for r in records if r.get("kind") == "run-opened")
     prompt_text = opened["fedPrompt"]
     schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW)
-    contract = ERC.review_result_contract_from_schema(schema)
-    assert contract in prompt_text
-    assert prompt_text.endswith(contract)
-    assert EA.REVIEW_RESULT_CONTRACT(None) not in prompt_text
+    native_contract = ERC.review_result_contract_from_schema(schema)
+    legacy_contract = EA.REVIEW_RESULT_CONTRACT(None)
+    assert native_contract in prompt_text
+    assert legacy_contract in prompt_text
+    assert prompt_text.endswith(legacy_contract)
+    assert prompt_text.index(native_contract) < prompt_text.index(legacy_contract)
 
 
 def test_cursor_review_open_appends_marker_contract_byte_identical(tmp_path):
