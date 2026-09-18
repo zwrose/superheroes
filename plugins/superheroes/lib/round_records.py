@@ -36,14 +36,28 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import model_registry  # noqa: E402
+import record_paths  # noqa: E402
 import round_phases  # noqa: E402
+import session_contract  # noqa: E402
 
 # =============================================================================================
 # schema constants
 # =============================================================================================
 
 SEAT_RESULT_SCHEMA = "seat-result/1"
-SEAT_MISSING_SCHEMA = "seat-missing/1"
+SEAT_RESULT_SCHEMA_V2 = "seat-result/2"
+SEAT_RESULT_SCHEMAS = (SEAT_RESULT_SCHEMA, SEAT_RESULT_SCHEMA_V2)
+SEAT_MISSING_SCHEMA = session_contract.SEAT_MISSING_SCHEMA
+
+SEAT_RESULT_SCHEMA_BY_STATE_VERSION = {2: SEAT_RESULT_SCHEMA, 3: SEAT_RESULT_SCHEMA,
+                                       4: SEAT_RESULT_SCHEMA, 5: SEAT_RESULT_SCHEMA_V2}
+
+
+def seat_result_schema_for_state_version(version):
+    """The one decode. Returns the schema literal, or None for a version this build does not know."""
+    if isinstance(version, bool) or not isinstance(version, int):
+        return None
+    return SEAT_RESULT_SCHEMA_BY_STATE_VERSION.get(version)
 SIDECAR_SCHEMA = "handback-sidecar/1"
 
 # The seat-result envelope's declared fields. `payload` carries the seat's artifact; the store
@@ -51,6 +65,30 @@ SIDECAR_SCHEMA = "handback-sidecar/1"
 SEAT_RESULT_FIELDS = ("schema", "session", "round", "phase", "seat", "attempt", "vendor",
                       "model", "dispatchRef", "orderSha256", "manifestSha256", "recordedAt",
                       "payloadSha256", "payload")
+SEAT_RESULT_V2_FIELDS = SEAT_RESULT_FIELDS + ("executionEvidence", "provenance",
+                                              "envelopeSha256")
+PROVENANCE_DISPATCH_OBSERVED = "dispatch-observed"
+PROVENANCE_HAND_LANDED = "hand-landed"
+PROVENANCE_ORCHESTRATOR_FULFILLED = "orchestrator-fulfilled"
+SEAT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED,
+                   PROVENANCE_ORCHESTRATOR_FULFILLED)
+EVIDENCE_BEARING_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
+EXECUTION_EVIDENCE_FIELDS = ("source", "runnerNonce", "recordDigest", "resultDigest", "resultKind",
+                             "observation")
+EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
+    ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry"))
+EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
+EXECUTION_EVIDENCE_READ_VALUES = frozenset(("engaged", "unknown"))
+_EXECUTION_EVIDENCE_POINTER_KEYS = frozenset(
+    ("path", "file", "filePath", "ref", "href", "uri", "url", "evidencePath"))
+_EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK = {
+    "source": lambda value: isinstance(value, str) and value,
+    "runnerNonce": lambda value: isinstance(value, str) and value,
+    "recordDigest": lambda value: isinstance(value, str) and value,
+    "resultDigest": lambda value: isinstance(value, str) and value,
+    "resultKind": lambda value: isinstance(value, str) and value,
+    "observation": lambda value: isinstance(value, dict),
+}
 # A seat-missing envelope records a seat that produced NO artifact. Same envelope minus the
 # payload pair, plus a `reason` from MISSING_REASONS and an optional free-text `evidence`.
 SEAT_MISSING_FIELDS = ("schema", "session", "round", "phase", "seat", "attempt", "vendor",
@@ -67,11 +105,11 @@ SIDECAR_FIELDS = ("schema", "repoId", "branch", "headSha", "baseRef", "baseSha",
 # against; an envelope claiming REAL hashes with no anchor is `manifest-anchor-unanchored`.
 NOT_EMITTED = "not-emitted"
 
-META_FILE = "meta.json"
+META_FILE = session_contract.META_FILE
 LOCK_FILE = "session.lock"
 # Orchestrator-written files live in the `_` namespace inside the landing area; a seat key may
 # therefore never begin with `_` (`storage_key` refuses one).
-RESERVED_PREFIX = "_"
+RESERVED_PREFIX = record_paths.RESERVED_PREFIX
 DISPATCH_MANIFEST_STEM = "_dispatch"
 CANARY_DIRNAME = "_canary"
 # The panel phase directory name — imported from the shared phase constants module.
@@ -85,28 +123,31 @@ MISSING_CAS_TOKEN = SEAT_MISSING_SCHEMA
 # errnos are swallowed. Anything else propagates — a durability failure must not go quiet.
 _FSYNC_DIR_TOLERATED = (errno.EINVAL, errno.ENOTSUP, errno.EPERM)
 
-_SLUG_MAX = 40
-_SHA_PREFIX = 16
-_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-_NON_SLUG = re.compile(r"[^a-z0-9]+")
+storage_key = record_paths.storage_key
+store_path = record_paths.store_path
+store_dir = record_paths.store_dir
+round_dir = record_paths.round_dir
+_guard_within = record_paths._guard_within
+_require_token = record_paths._require_token
+_require_index = record_paths._require_index
+_seat_filename = record_paths._seat_filename
+_KEY_RE = record_paths._KEY_RE
 
 
 # =============================================================================================
-# canonical json + hashing (same shape as round_driver._canonical/_sha256 — see module docstring)
+# canonical json + hashing (one home in session_contract — see module docstring)
 # =============================================================================================
 
-def canonical(obj):
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+canonical = session_contract.canonical
+sha256_text = session_contract.sha256_text
+payload_sha256 = session_contract.payload_sha256
 
 
-def sha256_text(text):
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def payload_sha256(payload):
-    """The hash the torn-write detector compares against: sha256 over the payload's canonical
-    JSON, so a re-serialization with different key order or spacing still matches."""
-    return sha256_text(canonical(payload))
+def envelope_sha256(payload, execution_evidence):
+    """Content binding for a seat-result/2 envelope: one hash over the payload and the execution
+    evidence together, so real evidence from one act can never be re-paired with different
+    content."""
+    return sha256_text(canonical({"payload": payload, "executionEvidence": execution_evidence}))
 
 
 def envelope_cas_token(envelope):
@@ -115,7 +156,9 @@ def envelope_cas_token(envelope):
     if not isinstance(envelope, dict):
         return None
     schema = envelope.get("schema")
-    if schema == SEAT_RESULT_SCHEMA:
+    if schema in SEAT_RESULT_SCHEMAS:
+        if schema == SEAT_RESULT_SCHEMA_V2:
+            return envelope.get("envelopeSha256")
         return envelope.get("payloadSha256")
     if schema == SEAT_MISSING_SCHEMA:
         return MISSING_CAS_TOKEN
@@ -174,47 +217,6 @@ def _now_iso():
     return datetime.datetime.now().replace(microsecond=0).isoformat()
 
 
-# =============================================================================================
-# storage keys — roster keys are NOT safe filenames
-# =============================================================================================
-
-def storage_key(seat_key, occurrence=0):
-    """Map a roster seat key onto a filename-safe, collision-resistant storage key.
-
-    Roster keys are not filenames: a verifier cluster key is `src/a/b.py:3` and an audit target
-    id is `src/a/b.py::some-title@L5` (or `...#1` when occurrence-suffixed) — both carry `/` and
-    `:`, and two DISTINCT audit targets can legitimately share one roster seat key (hence
-    `occurrence`). The key is `<slug>-<sha16>`: the slug is for
-    a human reading `ls`, the sha16 is what actually carries identity, so two seat keys that
-    collapse onto the same truncated slug still get different keys.
-
-    Fail-closed: a non-`str`/empty `seat_key` and a `_`-prefixed one (the reserved orchestrator
-    namespace) raise `ValueError`; a `seat_key` whose slug normalizes away entirely falls back
-    to `seat-<sha16>` rather than an empty or `-`-only name; a non-int / negative `occurrence`
-    raises `ValueError`. The result always matches `^[a-z0-9][a-z0-9-]*$`, so it can carry
-    neither a path separator nor `..` nor a leading `_`.
-    """
-    if not isinstance(seat_key, str) or not seat_key:
-        raise ValueError("seat_key must be a non-empty str, got %r" % (seat_key,))
-    if seat_key.startswith(RESERVED_PREFIX):
-        raise ValueError("seat_key may not start with %r (reserved namespace): %r"
-                         % (RESERVED_PREFIX, seat_key))
-    if isinstance(occurrence, bool) or not isinstance(occurrence, int) or occurrence < 0:
-        raise ValueError("occurrence must be a non-negative int, got %r" % (occurrence,))
-    digest = sha256_text(seat_key)[:_SHA_PREFIX]
-    slug = _NON_SLUG.sub("-", seat_key.lower()).strip("-")[:_SLUG_MAX].strip("-")
-    key = ("%s-%s" % (slug, digest)) if slug else ("seat-%s" % digest)
-    if occurrence:
-        key = "%s-o%d" % (key, occurrence)
-    if not _KEY_RE.match(key):
-        # Belt-and-braces: the slug path above cannot produce this, but a key that failed the
-        # shape is never returned — fall back to the hash-only form.
-        key = "seat-%s" % digest
-        if occurrence:
-            key = "%s-o%d" % (key, occurrence)
-    return key
-
-
 def roster_slots(roster):
     """[(seat_key, occurrence)] — a roster expanded so a REPEATED key stays addressable.
 
@@ -241,107 +243,58 @@ def roster_slots(roster):
 # paths — every builder is fenced inside the session dir
 # =============================================================================================
 
-def _require_token(name, value):
-    """A path component supplied by a caller: non-empty str, no separator, no `..`, no NUL."""
-    if not isinstance(value, str) or not value:
-        raise ValueError("%s must be a non-empty str, got %r" % (name, value))
-    if value in (".", "..") or "/" in value or "\\" in value or "\x00" in value:
-        raise ValueError("%s is not a safe path component: %r" % (name, value))
-    return value
-
-
-def _require_index(name, value):
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError("%s must be a non-negative int, got %r" % (name, value))
-    return value
-
-
-def _guard_within(session_dir, path):
-    """Refuse a built path that escapes the session dir.
-
-    Containment is decided on `realpath` of the candidate — a symlink component that resolves
-    outside the session dir must refuse even when the unresolved `abspath` sits lexically under the
-    session root. The session root itself is `realpath(session_dir)` so a caller's spelling of the
-    session prefix (macOS `/tmp` vs `/private/tmp`) does not false-refuse legitimate joins. The
-    RETURNED path is the un-resolved join, so a caller's paths stay in the spelling it handed in."""
-    if not isinstance(session_dir, str) or not session_dir:
-        raise ValueError("session_dir must be a non-empty str, got %r" % (session_dir,))
-    root = os.path.realpath(session_dir)
-    candidate = os.path.abspath(path)
-    resolved = os.path.realpath(candidate)
-    try:
-        common = os.path.commonpath([root, resolved])
-    except ValueError:  # different drives / mixed absolute-relative
-        raise ValueError("path escapes the session dir: %r" % (path,))
-    if common != root or resolved == root:
-        raise ValueError("path escapes the session dir: %r" % (path,))
-    return path
-
-
-def round_dir(session_dir, rnd):
-    _require_index("rnd", rnd)
-    return _guard_within(session_dir, os.path.join(session_dir, "round-%d" % rnd))
-
-
 def landing_dir(session_dir, rnd, phase):
-    _require_token("phase", phase)
-    return _guard_within(session_dir,
-                         os.path.join(round_dir(session_dir, rnd), "landing", phase))
-
-
-def store_dir(session_dir, rnd, phase):
-    _require_token("phase", phase)
-    return _guard_within(session_dir,
-                         os.path.join(round_dir(session_dir, rnd), "seats", phase))
-
-
-def _seat_filename(skey, attempt):
-    _require_token("skey", skey)
-    _require_index("attempt", attempt)
-    return "%s.a%d.json" % (skey, attempt)
+    record_paths._require_token("phase", phase)
+    return record_paths._guard_within(session_dir,
+                                      os.path.join(record_paths.round_dir(session_dir, rnd),
+                                                   "landing", phase))
 
 
 def landing_path(session_dir, rnd, phase, skey, attempt):
-    return _guard_within(session_dir, os.path.join(landing_dir(session_dir, rnd, phase),
-                                                   _seat_filename(skey, attempt)))
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(landing_dir(session_dir, rnd, phase),
+                     record_paths._seat_filename(skey, attempt)))
 
 
 def bare_payload_path(session_dir, rnd, phase, skey, attempt):
     """Host-seat payload-only landing slot — sibling to the full-envelope `landing_path`."""
-    _require_token("skey", skey)
-    _require_index("attempt", attempt)
-    return _guard_within(session_dir, os.path.join(landing_dir(session_dir, rnd, phase),
-                                                   "%s.a%d.payload.json" % (skey, attempt)))
+    record_paths._require_token("skey", skey)
+    record_paths._require_index("attempt", attempt)
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(landing_dir(session_dir, rnd, phase),
+                     "%s.a%d.payload.json" % (skey, attempt)))
 
 
 def order_prompt_path(session_dir, rnd, phase, skey, attempt):
     """`<session>/round-<N>/orders/<phase>/<skey>.a<K>.md` — fenced inside the session dir."""
-    _require_token("phase", phase)
-    _require_index("attempt", attempt)
-    return _guard_within(session_dir, os.path.join(round_dir(session_dir, rnd), "orders", phase,
-                                                   "%s.a%d.md" % (skey, attempt)))
+    record_paths._require_token("phase", phase)
+    record_paths._require_index("attempt", attempt)
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(record_paths.round_dir(session_dir, rnd), "orders", phase,
+                     "%s.a%d.md" % (skey, attempt)))
 
 
 def envelope_stub_path(session_dir, rnd, phase, skey, attempt):
     """Per-slot `seat-result/1` header stub emitted at order time — a projection of the anchor."""
-    _require_token("phase", phase)
-    _require_index("attempt", attempt)
-    return _guard_within(session_dir, os.path.join(round_dir(session_dir, rnd), "orders", phase,
-                                                   "%s.a%d.envelope.json" % (skey, attempt)))
-
-
-def store_path(session_dir, rnd, phase, skey, attempt):
-    return _guard_within(session_dir, os.path.join(store_dir(session_dir, rnd, phase),
-                                                   _seat_filename(skey, attempt)))
+    record_paths._require_token("phase", phase)
+    record_paths._require_index("attempt", attempt)
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(record_paths.round_dir(session_dir, rnd), "orders", phase,
+                     "%s.a%d.envelope.json" % (skey, attempt)))
 
 
 def dispatch_manifest_path(session_dir, rnd, phase, attempt):
     """The ORCHESTRATOR-written per-attempt dispatch manifest: `{seatKey: {vendor, model,
     engine}}`. It lives in the reserved `_` namespace so no seat key can ever address it."""
-    _require_index("attempt", attempt)
+    record_paths._require_index("attempt", attempt)
     name = "%s.a%d.json" % (DISPATCH_MANIFEST_STEM, attempt)
-    return _guard_within(session_dir,
-                         os.path.join(landing_dir(session_dir, rnd, phase), name))
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(landing_dir(session_dir, rnd, phase), name))
 
 
 def canary_path(session_dir, rnd, vendor, attempt):
@@ -349,18 +302,20 @@ def canary_path(session_dir, rnd, vendor, attempt):
     if vendor not in model_registry.VENDORS:
         raise ValueError("unknown vendor %r (expected one of %s)"
                          % (vendor, ", ".join(sorted(model_registry.VENDORS))))
-    _require_index("attempt", attempt)
-    return _guard_within(session_dir, os.path.join(
-        landing_dir(session_dir, rnd, _PANEL_PHASE_DIRNAME), CANARY_DIRNAME,
-        "%s.a%d.json" % (vendor, attempt)))
+    record_paths._require_index("attempt", attempt)
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(
+            landing_dir(session_dir, rnd, _PANEL_PHASE_DIRNAME), CANARY_DIRNAME,
+            "%s.a%d.json" % (vendor, attempt)))
 
 
 def session_lock_path(session_dir):
-    return _guard_within(session_dir, os.path.join(session_dir, LOCK_FILE))
+    return record_paths._guard_within(session_dir, os.path.join(session_dir, LOCK_FILE))
 
 
 def meta_path(session_dir):
-    return _guard_within(session_dir, os.path.join(session_dir, META_FILE))
+    return record_paths._guard_within(session_dir, os.path.join(session_dir, META_FILE))
 
 
 # =============================================================================================
@@ -493,7 +448,83 @@ def _anchor_check(envelope, seat_key, anchor, occurrence=0):
 
 
 def _is_seat_result_envelope(obj):
-    return isinstance(obj, dict) and obj.get("schema") == SEAT_RESULT_SCHEMA
+    return isinstance(obj, dict) and obj.get("schema") in SEAT_RESULT_SCHEMAS
+
+
+def _execution_evidence_has_pointer(value):
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key in _EXECUTION_EVIDENCE_POINTER_KEYS:
+                return True
+            if _execution_evidence_has_pointer(nested):
+                return True
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            if _execution_evidence_has_pointer(item):
+                return True
+    return False
+
+
+def _validate_execution_evidence(evidence):
+    if not isinstance(evidence, dict):
+        return ("execution-evidence-malformed", {})
+    extra_top = set(evidence.keys()) - set(EXECUTION_EVIDENCE_FIELDS)
+    if extra_top:
+        return ("execution-evidence-unknown-field", {
+            "field": sorted(extra_top)[0],
+            "location": "executionEvidence",
+        })
+    for field in EXECUTION_EVIDENCE_FIELDS:
+        if field not in evidence:
+            return ("execution-evidence-malformed", {})
+    for field in EXECUTION_EVIDENCE_FIELDS:
+        if field not in _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK:
+            return ("execution-evidence-malformed", {})
+        if not _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK[field](evidence[field]):
+            return ("execution-evidence-malformed", {})
+    observation = evidence["observation"]
+    if _execution_evidence_has_pointer(evidence):
+        return ("execution-evidence-not-inline", {})
+    extra_obs = set(observation.keys()) - EXECUTION_EVIDENCE_OBSERVATION_FIELDS
+    if extra_obs:
+        return ("execution-evidence-unknown-field", {
+            "field": sorted(extra_obs)[0],
+            "location": "observation",
+        })
+    telemetry = observation.get("telemetry")
+    if telemetry not in EXECUTION_EVIDENCE_TELEMETRY_VALUES:
+        return ("execution-evidence-malformed", {})
+    if set(observation.keys()) != EXECUTION_EVIDENCE_OBSERVATION_FIELDS:
+        return ("execution-evidence-malformed", {})
+    tokens = observation.get("tokens")
+    if tokens is not None and (not isinstance(tokens, int) or isinstance(tokens, bool) or tokens < 0):
+        return ("execution-evidence-malformed", {})
+    tool_calls = observation.get("toolCalls")
+    if (tool_calls is not None
+            and (not isinstance(tool_calls, int) or isinstance(tool_calls, bool) or tool_calls < 0)):
+        return ("execution-evidence-malformed", {})
+    stdout_bytes = observation.get("stdoutBytes")
+    if (not isinstance(stdout_bytes, int) or isinstance(stdout_bytes, bool) or stdout_bytes < 0):
+        return ("execution-evidence-malformed", {})
+    wall_seconds = observation.get("wallSeconds")
+    if (not isinstance(wall_seconds, (int, float)) or isinstance(wall_seconds, bool)
+            or wall_seconds < 0):
+        return ("execution-evidence-malformed", {})
+    obs_source = observation.get("source")
+    if not isinstance(obs_source, str) or not obs_source:
+        return ("execution-evidence-malformed", {})
+    read = observation.get("read")
+    if read not in EXECUTION_EVIDENCE_READ_VALUES:
+        return ("execution-evidence-malformed", {})
+    return None
+
+
+def _expected_seat_result_schema(seat_result_schema):
+    if seat_result_schema is None or seat_result_schema == SEAT_RESULT_SCHEMA:
+        return SEAT_RESULT_SCHEMA
+    if seat_result_schema == SEAT_RESULT_SCHEMA_V2:
+        return SEAT_RESULT_SCHEMA_V2
+    return None
 
 
 def _wrap_bare_payload(stub, payload, occurrence):
@@ -510,6 +541,9 @@ def _wrap_bare_payload(stub, payload, occurrence):
     envelope["payloadSha256"] = payload_sha256(payload)
     envelope["recordedAt"] = _now_iso()
     envelope["payloadHashSource"] = "driver-computed"
+    if envelope.get("schema") == SEAT_RESULT_SCHEMA_V2:
+        evidence = envelope.get("executionEvidence")
+        envelope["envelopeSha256"] = envelope_sha256(payload, evidence)
     return envelope
 
 
@@ -583,8 +617,13 @@ def _probe_store_entry(spath):
 
 
 def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
-                     supersede=False, expect_sha256=None, anchor=None, occurrence=0):
+                     supersede=False, expect_sha256=None, anchor=None, occurrence=0,
+                     seat_result_schema=None, envelope_override=None):
     """Every check `ingest_landing` performs, with NO write.
+
+    When ``envelope_override`` is a dict, that dict is validated in place of reading the
+    landing file; all checks are unchanged and nothing is written. The default ``None`` reads
+    the landing file exactly as before.
 
     Returns (plan, refusal). Exactly one is None.
       plan = {"storePath": <abs>, "envelope": <the normalized envelope dict to write>,
@@ -623,10 +662,16 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
         reason = "bad-argument" if "non-negative int" in str(exc) else "invalid-path"
         return None, _refuse(reason, message=str(exc))
 
-    envelope, landing_refusal = _read_landing_envelope(session_dir, rnd, phase, skey, attempt,
-                                                       occurrence)
-    if landing_refusal is not None:
-        return None, landing_refusal
+    if envelope_override is None:
+        envelope, landing_refusal = _read_landing_envelope(session_dir, rnd, phase, skey, attempt,
+                                                           occurrence)
+        if landing_refusal is not None:
+            return None, landing_refusal
+    elif isinstance(envelope_override, dict):
+        envelope = envelope_override
+    else:
+        return None, _refuse("bad-argument",
+                             message="envelope_override must be a dict or None")
 
     if envelope.get("attempt") != attempt:
         return None, _refuse("attempt-mismatch", envelopeAttempt=envelope.get("attempt"),
@@ -647,13 +692,42 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
     if envelope.get("seat") != seat_key:
         return None, _refuse("seat-mismatch", addressedSeat=seat_key, envelopeSeat=envelope.get("seat"))
 
+    expected_schema = _expected_seat_result_schema(seat_result_schema)
+    if expected_schema is None:
+        return None, _refuse("bad-argument",
+                             message="seat_result_schema %r is not a supported seat-result schema"
+                                     % (seat_result_schema,))
+
     schema = envelope.get("schema")
     stored_sha = None
-    if schema == SEAT_RESULT_SCHEMA:
+    if schema in SEAT_RESULT_SCHEMAS:
+        if schema != expected_schema:
+            return None, _refuse("schema-version-mismatch", schema=schema,
+                                 expectedSchema=expected_schema)
         stored_sha = payload_sha256(envelope.get("payload"))
         if stored_sha != envelope.get("payloadSha256"):
             return None, _refuse("landing-torn", computed=stored_sha,
                                  declared=envelope.get("payloadSha256"), landingPath=lpath)
+        if schema == SEAT_RESULT_SCHEMA_V2:
+            provenance = envelope.get("provenance")
+            if provenance not in SEAT_PROVENANCE:
+                return None, _refuse("provenance-unknown", provenance=provenance)
+            evidence_present = "executionEvidence" in envelope
+            if evidence_present:
+                if provenance == PROVENANCE_ORCHESTRATOR_FULFILLED:
+                    return None, _refuse("execution-evidence-unexpected")
+                evidence_result = _validate_execution_evidence(envelope["executionEvidence"])
+                if evidence_result is not None:
+                    reason, extra = evidence_result
+                    return None, _refuse(reason, **extra)
+                evidence = envelope["executionEvidence"]
+            else:
+                evidence = None
+            computed_envelope_sha = envelope_sha256(envelope.get("payload"), evidence)
+            declared_envelope_sha = envelope.get("envelopeSha256")
+            if declared_envelope_sha != computed_envelope_sha:
+                return None, _refuse("envelope-torn", computed=computed_envelope_sha,
+                                     declared=declared_envelope_sha, landingPath=lpath)
     elif schema == SEAT_MISSING_SCHEMA:
         if envelope.get("reason") not in MISSING_REASONS:
             return None, _refuse("missing-reason",
@@ -695,7 +769,8 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
 
 
 def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
-                   supersede=False, expect_sha256=None, anchor=None, occurrence=0):
+                   supersede=False, expect_sha256=None, anchor=None, occurrence=0,
+                   seat_result_schema=None):
     """Ingest ONE landed seat envelope into the durable store. Never raises on bad input.
 
     Returns `{"ok": True, "storePath", "payloadSha256", "superseded"}` or a refusal
@@ -728,7 +803,8 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
     plan, refusal = validate_landing(session_dir, rnd, phase, seat_key, attempt,
                                      current_attempt=current_attempt, roster=roster,
                                      supersede=supersede, expect_sha256=expect_sha256,
-                                     anchor=anchor, occurrence=occurrence)
+                                     anchor=anchor, occurrence=occurrence,
+                                     seat_result_schema=seat_result_schema)
     if refusal is not None:
         return refusal
     atomic_write_json(plan["storePath"], plan["envelope"])
@@ -738,7 +814,8 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
             "occurrence": plan["occurrence"]}
 
 
-def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=None):
+def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=None,
+                  seat_result_schema=None):
     """Ingest every unclaimed landing file for `phase` at `current_attempt`.
 
     Idempotent by construction: a seat already in the store is reported `already-stored` with
@@ -798,7 +875,7 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
                 continue
         out = ingest_landing(session_dir, rnd, phase, seat_key, current_attempt,
                              current_attempt=current_attempt, roster=roster, anchor=anchor,
-                             occurrence=occurrence)
+                             occurrence=occurrence, seat_result_schema=seat_result_schema)
         out.setdefault("seatKey", seat_key)
         out.setdefault("storageKey", skey)
         out.setdefault("occurrence", occurrence)
@@ -885,10 +962,12 @@ def reconcile(session_dir, rnd, phase, journal_identities):
         the ONE machinery-failure class here: the log claims a record that does not exist on disk.
         The caller turns it into a refusal naming the seat; nothing here deletes or invents a file.
 
-    Record identity is `(phase, seat, occurrence, attempt)` — NOT the payload hash alone. Payload
-    hashes ride the journal as the revision token: a supersede writes a new store file into the SAME
-    slot, so reconcile must reappend when the store's current token differs from the latest token the
-    journal recorded for that slot.
+    Record identity is `(phase, seat, occurrence, attempt)` — NOT the payload hash alone. The CAS
+    token rides the journal as the revision token; reconcile resolves journal-side casToken,
+    payloadSha256-for-v1, or a one-shot reappend for pre-transition v2 rows against the store's
+    envelope_cas_token. A supersede writes a new store file into the SAME slot, so reconcile must
+    reappend when the store's current token differs from the latest token the journal recorded for
+    that slot.
     """
     identities = []
     for ident in (journal_identities or []):
@@ -896,14 +975,12 @@ def reconcile(session_dir, rnd, phase, journal_identities):
         if key is not None:
             identities.append(ident)
     journal_keys = set()
-    journal_tokens = {}
+    journal_idents = {}
     for ident in identities:
         key = _identity_key_from_mapping(ident, default_phase=phase)
         if key is not None:
             journal_keys.add(key)
-            token = ident.get("payloadSha256")
-            if token is not None:
-                journal_tokens[key] = token
+            journal_idents[key] = ident
     try:
         ldir = landing_dir(session_dir, rnd, phase)
         sdir = store_dir(session_dir, rnd, phase)
@@ -925,18 +1002,29 @@ def reconcile(session_dir, rnd, phase, journal_identities):
         obj, err = read_json(entry["path"])
         sha = obj.get("payloadSha256") if (err is None and isinstance(obj, dict)) else None
         entry["payloadSha256"] = sha
+        store_token = envelope_cas_token(obj) if (err is None and isinstance(obj, dict)) else None
+        entry["casToken"] = store_token
         if err is None and isinstance(obj, dict):
             key = _identity_key_from_mapping(
                 record_identity(phase, obj.get("seat"), obj.get("occurrence", 0), obj.get("attempt")))
             if key is not None:
                 store_keys.add(key)
                 entry["recordIdentity"] = record_identity(*key)
-                store_token = envelope_cas_token(obj)
-                journaled = journal_tokens.get(key)
                 if key not in journal_keys:
                     reappend.append(entry)
-                elif journaled is not None and store_token is not None and journaled != store_token:
-                    reappend.append(entry)
+                else:
+                    ident = journal_idents.get(key)
+                    journaled_cas = ident.get("casToken") if ident else None
+                    if journaled_cas is not None:
+                        if store_token is not None and journaled_cas != store_token:
+                            reappend.append(entry)
+                    elif obj.get("schema") == SEAT_RESULT_SCHEMA_V2:
+                        reappend.append(entry)
+                    else:
+                        journaled_payload = ident.get("payloadSha256") if ident else None
+                        if (journaled_payload is not None and store_token is not None
+                                and journaled_payload != store_token):
+                            reappend.append(entry)
     orphans = [ident for ident in identities
                if _identity_key_from_mapping(ident, default_phase=phase) not in store_keys]
     return {"ingestNow": ingest_now, "reappend": reappend, "journalOrphan": orphans}

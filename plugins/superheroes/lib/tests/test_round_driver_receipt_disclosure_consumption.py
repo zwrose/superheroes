@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """#1195-A — build_receipt reads per-round disclosure channels through the shared selection rule."""
 import ast
+import inspect
 import os
 import sys
 
@@ -11,6 +12,7 @@ _LIB = os.path.dirname(_HERE)
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import receipt_disclosures  # noqa: E402
 import round_driver  # noqa: E402
 
 _INVARIANT_A = (
@@ -22,6 +24,34 @@ _INVARIANT_B = (
     "Building a terminal receipt never raises on a malformed per-round disclosure channel: "
     "helper-reached channel readers must tolerate non-list values structurally."
 )
+
+
+def _symbol_label(obj):
+    return getattr(obj, "__qualname__", repr(obj))
+
+
+def _function_source(fn):
+    label = _symbol_label(fn)
+    path = inspect.getsourcefile(fn)
+    if path is None:
+        pytest.fail("cannot resolve source file for symbol %s" % label)
+    try:
+        return inspect.getsource(fn)
+    except OSError as exc:
+        pytest.fail("cannot read source for %s (%s): %s" % (label, path, exc))
+
+
+def _function_ast(fn):
+    label = _symbol_label(fn)
+    source = _function_source(fn)
+    tree = ast.parse(source)
+    fn_node = next(
+        (node for node in ast.walk(tree)
+         if isinstance(node, ast.FunctionDef) and node.name == fn.__name__),
+        None)
+    if fn_node is None:
+        pytest.fail("symbol %s has no function definition in its resolved source" % label)
+    return fn_node
 
 
 def _minimal_state(round_entry=None, schema_version=3):
@@ -173,15 +203,10 @@ def _is_state_rounds_rkey_subscript(node):
     return True
 
 
-def _build_receipt_rrec_binding_sites():
-    source = open(
-        os.path.join(_LIB, "round_driver.py"), encoding="utf-8").read()
-    tree = ast.parse(source)
-    fn = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "build_receipt")
+def _function_rrec_binding_sites(fn):
+    fn_node = _function_ast(fn)
     sites = []
-    for node in ast.walk(fn):
+    for node in ast.walk(fn_node):
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == "rrec":
@@ -204,8 +229,10 @@ def _rrec_binding_initializer(site):
 
 
 def test_e8_build_receipt_round_entry_name_is_never_rebound():
-    """E8 — rrec in build_receipt is bound exactly once to state[\"rounds\"][rkey]."""
-    sites = _build_receipt_rrec_binding_sites()
+    """E8 — rrec in the receipt build path is bound exactly once to state[\"rounds\"][rkey]."""
+    sites = []
+    for fn in (round_driver.build_receipt, receipt_disclosures.build_degraded_prose):
+        sites.extend(_function_rrec_binding_sites(fn))
     msg = (
         "%s A shadowed rrec makes every non-channel round-entry read return None silently on "
         "the certification receipt." % _INVARIANT_E8
@@ -250,14 +277,9 @@ def test_e6_well_formed_violations_pin_exact_prose():
 # --- E7: helper census (invariant B) ---
 
 
-def _helper_channel_read_is_list_guarded(fn_name, channel):
-    source = open(
-        os.path.join(_LIB, "round_driver.py"), encoding="utf-8").read()
-    tree = ast.parse(source)
-    fn = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == fn_name)
-    for node in ast.walk(fn):
+def _helper_channel_read_is_list_guarded(fn, channel):
+    fn_node = _function_ast(fn)
+    for node in ast.walk(fn_node):
         if not isinstance(node, ast.For):
             continue
         iter_expr = node.iter
@@ -271,7 +293,7 @@ def _helper_channel_read_is_list_guarded(fn_name, channel):
         if not isinstance(call.args[0], ast.Constant) or call.args[0].value != channel:
             continue
         return False
-    for node in ast.walk(fn):
+    for node in ast.walk(fn_node):
         if not isinstance(node, ast.If):
             continue
         test = node.test
@@ -289,7 +311,7 @@ def _helper_channel_read_is_list_guarded(fn_name, channel):
         if not isinstance(call.args[1], ast.Name) or call.args[1].id != "list":
             continue
         var_name = call.args[0].id
-        for assign in ast.walk(fn):
+        for assign in ast.walk(fn_node):
             if not isinstance(assign, ast.Assign):
                 continue
             if len(assign.targets) != 1:
@@ -312,9 +334,10 @@ def _helper_channel_read_is_list_guarded(fn_name, channel):
 
 
 def test_e7_helper_channel_reads_guarded_by_isinstance_list():
-    """E7 — _seat_map_violations guards channel reads with isinstance(..., list)."""
-    assert _helper_channel_read_is_list_guarded("_seat_map_violations", "seatMapViolations"), (
-        "%s _seat_map_violations must not iterate a bare rec.get(seatMapViolations) or []"
+    """E7 — seat_map_violations guards channel reads with isinstance(..., list)."""
+    assert _helper_channel_read_is_list_guarded(
+        receipt_disclosures.seat_map_violations, "seatMapViolations"), (
+        "%s seat_map_violations must not iterate a bare rec.get(seatMapViolations) or []"
         % _INVARIANT_B)
 
 

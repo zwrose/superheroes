@@ -204,7 +204,9 @@ def test_driver_records_ingest_boundary_accepts_driver_landings(panel_ready):
         out = round_records.ingest_landing(
             panel_ready, vals["rnd"], vals["phase"], seat, vals["attempt"],
             current_attempt=vals["attempt"], roster=vals["roster"], anchor=vals["anchor"],
-            occurrence=occurrence)
+            occurrence=occurrence,
+            seat_result_schema=round_records.seat_result_schema_for_state_version(
+                vals["state"].get("schemaVersion")))
         assert out.get("ok") or out.get("reason") == "store-exists", out
 
 

@@ -90,7 +90,10 @@ step and hash. An exact duplicate `submit` (same phase/attempt/artifact) returns
 
 Persist state under `$SESSION_DIR/loop-state.json`. Append every `next`/`submit` to
 `$SESSION_DIR/driver-journal.jsonl` (the `scriptRan` evidence). On `terminal`, the driver writes
-`$SESSION_DIR/round-receipt.json` — validate with `round_driver.validate_receipt`.
+`$SESSION_DIR/round-receipt.json` — validate with `round_driver.validate_receipt` — and atomically
+writes one certification artifact beside it: `certification-receipt.json` on success or
+`certification-refusal.json` on refusal. Today's `round-receipt.json` and its `validate_receipt`
+gate are unchanged; the certification artifact is separate machinery.
 
 ## checkpoint
 
@@ -304,7 +307,7 @@ with the slot label(s) — the records are deliberately ignored, not silently dr
 | --- | --- | --- |
 | Dispatch manifest | `$SESSION_DIR/round-N/landing/P/_dispatch.aK.json` | **Orchestrator** — never written by the driver; read only by `advance` on **seat** phases. Top-level JSON keyed by the **exact roster seat key**; each value requires non-empty `vendor` (`model` / `engine` are optional, descriptive, neither validated nor trusted — `round_adapters._trusted_vendors` reads only `vendor`). **Orchestrator-fulfilled phases** (`run-verify`) emit no manifest — `advance` folds from the host bare payload instead. **Absence on a seat phase:** the manifest key is omitted, the adapter discloses `dispatchManifestUnavailable`, and on `dispatch-audits` a clearing ruling (`discharged` / `discharged-but-new-issue`) is **not authenticated** — fails closed to `not-discharged` + `unauthenticated`, which can drive the audit stall and `advance-stall-park`. Check this file first on an unexplained fix-audit stall. |
 | Canary probe | `$SESSION_DIR/round-N/landing/dispatch-panel/_canary/vendor.aK.json` | **Orchestrator** (`seat_canary.py probe`) — panel phase only. Carries the cross-vendor control-probe result `advance` folds as `canaryResult`. **Absence:** no canary evidence; when every cross-vendor seat that ran returned zero findings, the round records `canaryUnverified` instead of `canaryVerified`. A probe with outcome `plant-undetected` records `canaryPlantUndetected` instead of `canaryVerified`. |
-| Seat store | `$SESSION_DIR/round-N/seats/P/skey.aK.json` | **`record-result`** / **`record-missing`** / `advance`'s sweep — the durable `seat-result/1` or `seat-missing/1` envelope for one roster slot. **Absence:** the slot is incomplete; `advance` refuses **`incomplete-roster`** until every slot has a store record or a missing envelope. |
+| Seat store | `$SESSION_DIR/round-N/seats/P/skey.aK.json` | **`record-result`** / **`record-missing`** / `advance`'s sweep — the durable `seat-result/1` or `seat-result/2` (state v5) or `seat-missing/1` envelope for one roster slot. **Absence:** the slot is incomplete; `advance` refuses **`incomplete-roster`** until every slot has a store record or a missing envelope. |
 | Head-diff store | `$SESSION_DIR/round-N/seats/P/skey.aK.headdiff` | **`record-result`** on the fixer phase — the driver-owned post-fix diff blob referenced by the stored envelope's `headDiffStorePath`. **Absence:** fixer fold treats the changed surface as unknown (full panel on the next round), never a silent scoped skip. |
 
 ## Emitted orders
@@ -312,9 +315,10 @@ with the slot label(s) — the records are deliberately ignored, not silently dr
 Every `next` whose `phase` starts with `dispatch-` emits, atomically in one `orders-emit` commit:
 
 - one **order file** per roster slot (`round_orders.render_order` over `rubric/orders/<phase>.md`);
-- one **envelope stub** per slot (`seat-result/1` header fields knowable at emission — session,
-  round, phase, seat, attempt, vendor, model, `dispatchRef`, `orderSha256`, `manifestSha256` — but
-  not `recordedAt` / `payloadSha256`);
+- one **envelope stub** per slot (the schema follows the session's state version: `seat-result/1`
+  at state v2–v4, `seat-result/2` at state v5 — header fields knowable at emission: session, round,
+  phase, seat, attempt, vendor, model, `dispatchRef`, `orderSha256`, `manifestSha256`, and at v5
+  `provenance`; never `recordedAt`, `payloadSha256`, `executionEvidence`, or `envelopeSha256`);
 - an **orders manifest** listing every slot's `orderPath`, `envelopeStubPath`, and hashes.
 
 Paths (round `N`, phase `P`, attempt `K`, storage key `skey`):
@@ -329,8 +333,8 @@ Paths (round `N`, phase `P`, attempt `K`, storage key `skey`):
 
 | Seat kind | Landing path | What the seat writes |
 | --- | --- | --- |
-| **Engine** (`codex`/`cursor`) | `.../landing/P/skey.aK.json` | **Orchestrator** writes the full `seat-result/1` envelope (stub header + payload) from the folded `dispatch-review` stdout result; the engine seat emits JSON on stdout only |
-| **Host** (`claude` native subagent) | `.../landing/P/skey.aK.payload.json` | Payload only; driver wraps with the stub at ingest |
+| **Engine** (`codex`/`cursor`) | `.../landing/P/skey.aK.json` | **Orchestrator** writes the full seat-result envelope (stub header + payload; schema from state version) from the folded `dispatch-review` stdout result; the engine seat emits JSON on stdout only. **Codex** dispatches run with `--json` and `--output-last-message`; engagement is read from codex's own event stream (`source: "codex-events"`), and the findings payload comes from the last-message file with the last `agent_message` item as fallback. A stream that does not parse records `telemetry: "none"`, and a seat whose engagement does not read `engaged` does not qualify. At state v5 the stub carries `provenance: dispatch-observed`; `record-result --evidence-run-dir` may stamp `executionEvidence` and compute `envelopeSha256` before ingest. |
+| **Host** (`claude` native subagent) | `.../landing/P/skey.aK.payload.json` | Payload only; driver wraps with the stub at ingest. At state v5 the wrapped envelope is `seat-result/2` with `provenance: dispatch-observed`; when execution evidence is stamped, the bare-payload landing stays single-file and the stamped envelope is written to the durable store copy only. |
 
 Both shapes present → `landing-ambiguous`. The order's landing block names the paths; seats copy
 stub header fields verbatim and never recompute hashes.
@@ -389,6 +393,22 @@ below when landing a `dispatch-review` stdout result):
 | `recordedAt` | ISO-8601 timestamp when the envelope was stamped |
 | `payloadSha256` | SHA-256 over the canonical JSON of `payload`; an envelope **without** this field, or with a hash that does not match `payload`, is refused **`landing-torn`** at ingest |
 | `payload` | The seat's artifact (JSON object) |
+
+**`seat-result/2` envelope fields** (state v5 — extends `seat-result/1` with provenance binding and
+optional execution evidence; the orchestrator or driver must supply every field below when landing or
+ingesting):
+
+| Field | Carries |
+| --- | --- |
+| `schema` | Literal `seat-result/2` |
+| `executionEvidence` | Optional runner telemetry block (`source`, `runnerNonce`, `recordDigest`, `observation`) stamped by `record-result --evidence-run-dir` for `dispatch-observed` seats |
+| `provenance` | One of `dispatch-observed`, `hand-landed`, `orchestrator-fulfilled` — required at v2; emission stubs for dispatch phases carry `dispatch-observed` |
+| `envelopeSha256` | SHA-256 over canonical `{"payload": <payload>, "executionEvidence": <evidence-or-null>}`; required at ingest — an absent or mismatched value is refused **`envelope-torn`** |
+
+All other fields match `seat-result/1`. The emission stub never carries `recordedAt`, `payloadSha256`,
+`executionEvidence`, or `envelopeSha256` — the orchestrator stamps `recordedAt` and `payloadSha256`
+when landing, and `record-result` computes `envelopeSha256` (and may add `executionEvidence`) at
+ingest.
 
 The **`seat-missing/1`** shape is deliberately different: it records a seat that produced no artifact
 and carries **no** `payload` or `payloadSha256` — instead `reason` (one of `forfeit`, `timeout`,
@@ -690,11 +710,51 @@ When the driver cannot continue — a refusal, a park, `journal-fault-unrecordab
 or any other halt — park citing the blocker and never hand-drive the remainder; `rubric/review-discipline.md`
 is the home for the driver-or-park valve.
 
+**Certification artifacts (`certification-receipt.json` / `certification-refusal.json`).** At
+terminal, `_finalize_receipt` calls `round_certification.certify` after `round-receipt.json` is
+written. The writer's only input is the journal on disk (`driver-journal.jsonl`, `loop-state.json`,
+and the per-seat envelopes the journal reconciles) — it imports nothing from the driver. On success
+it atomically writes `certification-receipt.json`; on refusal it writes `certification-refusal.json`
+naming one of the four escape classes (`unrun-review`, `same-family-seat`, `unfetched-findings`,
+`disposition-without-receipt`) and the artifact that failed. A post-shrink escape in any of those
+four classes is filed as a **misses-log entry on the collector's pinned comment**, so the
+keep-or-retire list reads catches and escapes together.
+
+**Writer fault (non-escape).** A crash inside `certify` or a write failure is **not** one of the
+four escape classes. On the CLI path the driver maps those to `certification-refusal.json` with
+`class: "unfetched-findings"` and `bindingFailure: "writer-exception"` or `"writer-empty"`. On the
+library `run_loop` path the return carries `class: "writer-fault"` instead, kept apart so the four
+real refusal classes stay trustworthy and the misses log is not inflated by internal crashes. See
+`skills/review-code/reference/certification-surface.md` for the full writer contract.
+
+The certification receipt is a **superset** of today's `round-receipt.json` fields, plus:
+
+- `terminalState` — `certified`, `cap`, or `cannot-certify`
+- `terminalCause` — for a non-certified terminal, a loop reason from the closed set (`latch`,
+  `resume`, `state hash`, `detector`, `fixer cycle`) or a non-loop reason (`budget`, `open findings`);
+  `null` when `terminalState` is `certified`
+- `seats` — each recorded seat with `provenance` in its own field (`dispatch-observed` or
+  `hand-landed`), kept separate from the certification shape
+- `disclosures` — `importantOutOfScope`: every Important finding that took an out-of-scope
+  disposition with a valid follow-up
+- `provenanceLabels` — which receipt keys are derived from the journal vs maker-authored
+
+`certificationShape` is the **single field that deliberately differs** from what
+`build_receipt` would write for the same session: **any** hand-landed seat forces
+`audited-chain`, never `full-panel-confirmed` (and any `full-panel*` shape in state is downgraded
+the same way). Before certification, the writer runs the four escape-class checks over loop state,
+including **disposition without a receipt on the head** — every finding must carry a disposition
+and, for `fixed`, a verification receipt on the certified head; Important out-of-scope deferrals
+surface in `disclosures`, not as silent clean.
+
 **Receipt (`round-receipt.json`).** Required keys (shape-checked by `validate_receipt`, fail-closed):
 
-- `schemaVersion` — `2`, `3` or `4` (`validate_receipt` accepts all). It is the **state's** version,
+- `schemaVersion` — `2`, `3`, `4`, or `5` (`validate_receipt` accepts all). It is the **state's** version,
   not a constant: a session bootstrapped at v2 still terminates to a v2 receipt, while a fresh session
-  (`STATE_SCHEMA_VERSION` = 4) emits 4.
+  (`STATE_SCHEMA_VERSION` = 5) emits 5. State v5 lands `seat-result/2` envelopes carrying `provenance`
+  (required) and `executionEvidence` (optional), bound together by `envelopeSha256`; sessions at v2–v4
+  continue to land `seat-result/1`. No stored state field is removed at the bump, so in-flight lanes
+  complete on their recorded version.
 - `verdict` — `converged`, `halted`, `held`, `stalled`, `cannot-certify`, `capped-with-open-critical`, …
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
@@ -836,3 +896,34 @@ Layer 1 (`run_loop`) is the one-entrypoint loop orchestration with injectable se
 Layer 2 (`next`/`submit`) is the state machine between orchestrator dispatches. Parity is locked
 by the goldens in `test_round_driver.py` and the PARITY receipt in `test_retry_budget_parity.py`.
 Treat `round_driver.py` as the contract of record.
+
+**`run_loop` return contract.** `run_loop` keeps its non-certifying job for consumers that use it
+as a library loop — it still drives the scripted seam path end-to-end and returns the loop's
+terminal state in memory. Its **certification answer is always the writer's refusal terminal** —
+class `unrun-review`, artifact `driver-journal.jsonl` — carrying the loop observables
+(`loopTerminal`, `loopCertificationShape`, `loopRounds`). **Never a certified receipt, and never a
+fallback.** A library `run_loop` persists no per-seat evidence, so there is nothing to certify; any
+certified receipts it used to return were minted over synthesized journal rows. Callers that
+previously read `receipt["verdict"]` on the return must discriminate on shape: a refusal carries
+`class` and **no** `verdict` key; `loopTerminal` states what the loop reached and asserts nothing
+about certification.
+
+**Leaf modules (`record_paths`, `receipt_disclosures`).** Pure vocabulary and path helpers live in
+two leaf modules neither the driver nor the writer owns:
+
+- `receipt_disclosures` — disclosure-channel registry, per-round selection rule, degraded-prose
+  collector, and certification-shape inputs. Both `round_driver` and `round_certification` import
+  and re-export its `__all__` names as aliases (same function objects — drift-tested by
+  `test_receipt_disclosures_home.py`).
+- `record_paths` — `storage_key` and `store_path` for seat envelope filenames. `round_records` and
+  `round_certification` import from here; the writer may not import the driver's state machine.
+
+The writer must not import the driver; a drift-tested copy in either consumer is not a second home.
+Shared pure functions live in the leaf module both import.
+
+**Which builder produces which artifact.** `round_certification.certify` (the receipt writer,
+journal-only input) produces `certification-receipt.json` or `certification-refusal.json`.
+`build_receipt` produces `round-receipt.json` at terminal. `build_interim_receipt` is the loop's
+progress artifact on the CLI `checkpoint` path and the durable-record `advance` path — it is
+**not** a certification. The live writer contract is declared in
+`skills/review-code/reference/certification-surface.md`.
