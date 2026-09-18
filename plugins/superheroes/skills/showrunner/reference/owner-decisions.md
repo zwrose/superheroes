@@ -319,16 +319,17 @@ declined with a trigger by default.
    alone, so the owner can see exactly which machinery entered waves through adoption rather than
    through the dial.
 7. **Mid-build improvisation stays forbidden**, exactly as it is today.
-8. **Fold, stack, or file — the three dispositions for a follow-up on live work.** A follow-up that
-   lands on the **same surface** as a live child and sits **below** the
-   [material consequence](../../../rubric/glossary.md#material-consequence) line **folds into that
-   child**, by the authorization path items 2 through 4 already set and never as a widening after
-   the word. A follow-up on a **new surface stacks as its own layer** — a sibling that builds on the
-   child rather than scope poured into it, because a new surface is new review, new lane call, and
-   new risk whatever its size. A follow-up **above the material line**, and **any child that has
-   already run more than three lanes**, is **filed as its own issue**: above the line it is the
-   owner's call by definition, and past three lanes the child has stopped being one piece of work
-   and is absorbing a queue. **The counts come from the record, not from memory.** The
+8. **Fold, stack, or file — the three dispositions for a follow-up on live work.** The conditions
+   overlap, so they are read **in this order, and the first one that holds decides**.
+   **File it as its own issue** when the follow-up is **above** the
+   [material consequence](../../../rubric/glossary.md#material-consequence) line, or when the child
+   it would land on **has already run more than three lanes** — above the line it is the owner's
+   call by definition, and past three lanes the child has stopped being one piece of work and is
+   absorbing a queue. Otherwise, **stack it as its own layer** when it lands on a **new surface** —
+   a sibling that builds on the child rather than scope poured into it, because a new surface is new
+   review, new lane call, and new risk whatever its size. Otherwise it is on the **same surface** and
+   below the line, and it **folds into that child**, by the authorization path items 2 through 4
+   already set and never as a widening after the word. **The counts come from the record, not from memory.** The
    [gardening record](#the-gardening-record) carries **lanes per child**, which is what makes "more
    than three lanes" a number to look up rather than the question a session mid-lane answers from
    recall; and it carries **follow-ups per merged pull request**, which is what makes a surface
@@ -548,14 +549,20 @@ standing rule of the pass, not an eighth duty.
 - **A rule a plugin user would need leaves memory for a plugin surface.** Memory reaches one advisor
   on one machine; a skill, a charter, or a rubric reaches everyone who installs the plugin. A
   user-relevant rule kept in memory is shipped to nobody, and it reads as covered because the one
-  session that remembers it keeps honouring it. Memory may keep a recall copy — never the only copy.
+  session that remembers it keeps honouring it. The move itself is **work, and it enters through the
+  door** like any other item; memory keeps a recall copy until the surface ships, and afterwards may
+  keep one — never the only copy.
 - **The pass re-reads every memory entry older than the last doctrine change.** A doctrine change is
   what silently stales an entry: the entry stays true about a surface that no longer exists, and
-  nothing about the entry itself says so. Re-reading them against the current text is what turns a
-  stale entry into a corrected or deleted one instead of a confidently wrong recall.
+  nothing about the entry itself says so. Re-reading them against the current text is what surfaces a
+  stale entry instead of leaving it to be recalled confidently and wrongly. **The re-read is the
+  advisor's; the rewrite is gated** — a correction or deletion that changes what an entry means is a
+  **substantive memory rewrite**, which the charter's memory duty puts at the owner's gate, so the
+  pass **proposes** those and the owner rules on them in the walk the pass already rides.
 - **Every memory write lands its index line.** An entry the index does not name is an entry no
   session will recall, which is the same outcome as never having written it — with the cost already
-  paid.
+  paid. **Repairing a missing index line is not a substantive rewrite** — the entry's meaning is
+  untouched — so it is the advisor's to fix on the spot, and it is recorded like any other craft call.
 
 - **The pass's output is batched words for the owner, delivered in the walk itself.**
 - **The decisions-asked count, and the baseline the forward share is read against, come from the
