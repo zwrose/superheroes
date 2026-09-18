@@ -899,6 +899,25 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   shrink certification coverage without disclosure; refusing by construction is load-bearing
   regardless of host. No engine family applies.
 
+#### D31 — Fail-closed spawned-argv journal record
+
+- **Component.** `engine_dispatch._derive_and_record_spawn_argv` — journals the exact argv handed
+  to the engine on each attempt that reaches post-derivation launch, and refuses the attempt when
+  that journal append fails; it costs one journal append per engine invocation on both the real
+  subprocess spawn path and the injected `run_engine` seam.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
+  `journal-append-failed` refusal on the spawned-argv record path, or a dispatch result whose
+  top-level `argv` disagreed with the engine that actually ran. On firing, a proposal to the
+  owner at a gardening pass.
+- **Last demonstrated benefit.** Birth bite-proof recorded at
+  `plugins/superheroes/lib/tests/bite_proofs/spawned-argv-record.md` (three guarded elements,
+  each red → restore → green).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — an audit record that can silently go missing is not an audit record;
+  fail-closed append before engine invocation is load-bearing regardless of host. Applies to all
+  engine families.
+
 #### D13 — The order-bound evidence channel
 
 - **Component.** The `--evidence-run-dir` stamping path in `round_driver._assemble_dispatch_evidence`

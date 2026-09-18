@@ -1738,14 +1738,14 @@ def test_is_codex_event_stream_recognizes_telemetry():
 
 
 def test_build_argv_result_codex_omits_json_flags():
-    r = EA.build_argv_result("codex", "review", "high", {})
+    r = EA.build_argv_result(_seat("codex", "gpt-5.6-sol", "high"), "review", {})
     assert r["reason"] is None
     assert "--json" not in r["argv"]
     assert "--output-last-message" not in r["argv"]
 
 
 def test_build_argv_result_cursor_argv_unchanged():
-    base = EA.build_argv_result("cursor", "review", "high", {})
+    base = EA.build_argv_result(_seat("cursor", "cursor-grok-4.6", "xhigh"), "review", {})
     assert base["reason"] is None
     assert "--json" not in base["argv"]
 

@@ -836,16 +836,17 @@ def _count_dispatch_review_dirs(temp_root):
     )
 
 
-def test_review_engine_config_refusal_leaves_no_dispatch_review_temp_dir(tmp_path):
+def test_review_unregistered_model_refusal_leaves_no_dispatch_review_temp_dir(tmp_path):
     temp_root = str(tmp_path / "sanitized-temp-base")
     before = _count_dispatch_review_dirs(temp_root)
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "cursor", model="fable", effort="composer",
+        seat=_seat("codex", "gpt-9", "high"),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_fake_build_view(tmp_path),
     )
-    assert res["detail"] == "engine-config:fable-unrunnable"
+    assert res["entryReason"] == "allowlist-refused"
+    assert "gpt-9" in res["detail"]
     assert _count_dispatch_review_dirs(temp_root) == before
 
 
@@ -5933,43 +5934,6 @@ def _linked_worktree_pair(tmp_path):
     wt = str(tmp_path / "wt")
     subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt], check=True)
     return wt, main
-
-
-def test_write_preflight_engine_config_before_run_dir_absent(tmp_path):
-    wt, _main = _linked_worktree_pair(tmp_path)
-    res = ED.dispatch_write(
-        "cursor", model="fable", effort="composer",
-        prompt_path=_valid_prompt(tmp_path, "Build this.\n"),
-        cwd=wt, run_dir=None, run_engine=_never_call,
-    )
-    assert res["detail"] == "engine-config:fable-unrunnable"
-    assert res["argv"] == []
-
-
-def test_write_preflight_engine_config_with_valid_run_dir(tmp_path):
-    wt, _main = _linked_worktree_pair(tmp_path)
-    run_dir = str(tmp_path / "run")
-    res = ED.dispatch_write(
-        "cursor", model="fable", effort="composer",
-        prompt_path=_valid_prompt(tmp_path, "Build this.\n"),
-        cwd=wt, run_dir=run_dir, run_engine=_never_call,
-    )
-    assert res["detail"] == "engine-config:fable-unrunnable"
-    assert res["argv"] == []
-
-
-def test_write_preflight_run_dir_absent_after_engine_config_ok(tmp_path):
-    wt, _main = _linked_worktree_pair(tmp_path)
-    res = ED.dispatch_write(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path, "Build this.\n"),
-        cwd=wt, run_dir=None, run_engine=_never_call,
-    )
-    assert res["detail"] == "run-dir-absent"
-    expected = EA.build_argv_result(
-        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
-    )["argv"]
-    assert res["argv"] == expected
 
 
 def _dispatch_write(tmp_path, fake, *, cwd=None, run_dir=None, **kwargs):

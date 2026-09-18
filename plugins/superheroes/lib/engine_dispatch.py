@@ -823,6 +823,7 @@ def _journal_state(records):
         "abandoned": None,
         "abandonRequested": False,
         "launching": {},
+        "spawned": {},
         "stoodDown": [],
     }
     for rec in records:
@@ -842,6 +843,8 @@ def _journal_state(records):
             att = rec.get("attempt")
             if att is not None:
                 state["launching"][att] = rec
+                if "spawnArgv" in rec:
+                    state["spawned"][att] = list(rec["spawnArgv"])
         elif kind == "engine-started":
             att = rec.get("attempt")
             if att is not None:
@@ -2352,7 +2355,17 @@ def _with_run_fields(result, *, run_dir, argv, snapshot=None):
     out = dict(result)
     out.pop("ledger", None)
     out["runDir"] = run_dir
-    out["argv"] = list(argv or [])
+    resolved_argv = list(argv or [])
+    try:
+        run_dir_real = os.path.realpath(run_dir) if run_dir else ""
+        if run_dir_real and os.path.isdir(run_dir_real):
+            records, _corrupt = _journal_read(run_dir_real)
+            spawned = (_journal_state(records).get("spawned") or {})
+            if spawned:
+                resolved_argv = list(spawned[max(spawned)])
+    except Exception:
+        pass
+    out["argv"] = resolved_argv
     if "terminal" not in out:
         out["terminal"] = out.get("reason") != dispatch_outcome.REASON_RUNNING
     return _attach_resolved_inputs_echo(out, run_dir=run_dir, snapshot=snapshot)
@@ -2621,8 +2634,15 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     if coherence_err:
         _journal_spawn_guard_refusal(run_dir_real, attempt, coherence_err)
         return
-    argv = _argv_for_attempt(
-        spawn_argv, run_dir_real, attempt, opened.get("engine"))
+    argv, recorded = _derive_and_record_spawn_argv(
+        run_dir_real, attempt, spawn_argv, opened.get("engine"))
+    if not recorded:
+        _journal_append(run_dir_real, {
+            "kind": "attempt-ended", "attempt": attempt,
+            "exit": 127, "timedOut": False, "signal": None,
+            "refusal": "journal-append-failed", "at": time.time(),
+        })
+        return
     dispatch_path = _dispatch_path_from_opened(opened)
     try:
         prompt_bytes = os.path.getsize(prompt_path)
@@ -2768,8 +2788,10 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     spawn_argv, coherence_err = _spawn_argv_coherence(opened, opened.get("argv"))
     if coherence_err:
         return False, coherence_err
-    argv = _argv_for_attempt(
-        spawn_argv, run_dir_real, attempt, opened.get("engine"))
+    argv, recorded = _derive_and_record_spawn_argv(
+        run_dir_real, attempt, spawn_argv, opened.get("engine"))
+    if not recorded:
+        return False, "journal-append-failed"
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, attempt)
     prompt_path = opened["promptPath"]
@@ -2905,6 +2927,17 @@ def _argv_for_attempt(argv, run_dir_real, attempt, engine):
     if argv and argv[-1] == "-":
         return argv[:-1] + flags + ["-"]
     return argv + flags
+
+
+def _derive_and_record_spawn_argv(run_dir_real, attempt, argv, engine):
+    """Derive per-attempt argv and journal the exact spawn argv. Returns (argv, ok)."""
+    spawn_argv = _argv_for_attempt(argv, run_dir_real, attempt, engine)
+    ok = _journal_append(run_dir_real, {
+        "kind": "engine-launching", "attempt": attempt,
+        "spawnArgv": list(spawn_argv),
+        "childPid": os.getpid(), "at": time.time(),
+    })
+    return spawn_argv, ok
 
 
 def _review_stdout_for_parse(engine, stdout, run_dir_real, attempt):
