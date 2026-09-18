@@ -22,7 +22,7 @@ This skill is deliberately not the only path. The showrunner advisor delivers ow
 
 Read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md` from disk — first action, every invocation.
 
-When this session is not already running the showrunner charter, also read duty 4 in `skills/showrunner/SKILL.md`.
+When this session is not already running the showrunner charter, also read duties 4 and 5 in `skills/showrunner/SKILL.md` — duty 4 for the collector this skill sweeps and strikes, duty 5 for the two tests the contract's filter cites.
 
 This skill executes the contract at delivery time rather than carrying it.
 
