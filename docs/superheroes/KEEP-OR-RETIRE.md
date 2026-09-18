@@ -514,7 +514,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — stuck-loop detection guards loop integrity independent of vendor. The
   fixer file-scope guard that used to ride on `escalation.py` / `escalation_resolve.py` is retired;
-  receipt: <PR-LINK>; condition: owner's ruling.
+  receipt: https://github.com/zwrose/superheroes/pull/1305; condition: owner's ruling.
 
 #### D6 — Handback gate
 
