@@ -9,6 +9,18 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Dispatch-shell exit codes
+
+A dispatch-shell command-line entry point exits **1** when it refuses (returns without doing the
+work it was asked to do), **0** otherwise; argparse's own argument errors remain exit **2**. Exit
+**0** still never means success — the JSON `ok`/`terminal` fields stay authoritative.
+
+**Consumer-visible change:** `dispatch-review` / `dispatch-write` refusals now exit **1** where they
+previously exited **0**. A successful `dispatch-poll` / `dispatch-abandon` still exits **0** even
+when its JSON carries `reason: unrunnable` (for example after abandon). `dispatch_guard check` and
+`engine_adapter build-argv` exit-code behavior is unchanged from the C10 correction documented
+below.
+
 ### Dispatch CLI arguments
 
 On `engine_dispatch dispatch-review`, `engine_dispatch dispatch-write`, `dispatch_guard check`,

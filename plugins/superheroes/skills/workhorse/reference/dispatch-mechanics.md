@@ -20,7 +20,9 @@ Read this at dispatch time, before you invoke a long dispatch. **Channel and wai
 A long-running external dispatch the builder invokes directly from a headless session is **awaited
 in-turn** through the **authorized entrypoint** (`dispatch-review` / `dispatch-write` with
 `--max-wait`, re-invoked on the same `--run-dir` until its structured result is terminal) — never an
-external `setsid`/`nohup` wrapper or an exit-code sentinel. Harness-tracked background-and-poll is
+external `setsid`/`nohup` wrapper or an exit-code sentinel. A dispatch-shell entry point exits **1**
+when it refuses (returns without doing the work it was asked to do), **0** otherwise; exit **0** still
+never means success — the JSON `ok`/`terminal` fields stay authoritative. Harness-tracked background-and-poll is
 **not** the normal path for those dispatches — tracked background work dies when the turn ends. The
 **native-shape contract** (files not pipes, `--max-wait` slices with non-terminal `running`,
 originating-verb continuation, structured terminal result as the only completion signal,

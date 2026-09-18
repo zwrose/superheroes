@@ -27,6 +27,7 @@ if _LIB_DIR not in sys.path:
 
 import cli_contract as cc  # noqa: E402
 import dispatch_allowlist  # noqa: E402
+import dispatch_outcome  # noqa: E402
 import seat_bundle  # noqa: E402
 
 validate = dispatch_allowlist.validate
@@ -39,7 +40,8 @@ def _cli_check(args: argparse.Namespace) -> int:
         if isinstance(allowlist_verdict, dict):
             print(json.dumps(allowlist_verdict))
             print(allowlist_verdict.get("reason") or resolved.get("detail"), file=sys.stderr)
-            return 1
+            return dispatch_outcome.exit_code(
+                dispatch_outcome.classify_payload(allowlist_verdict))
         payload = {
             "ok": False,
             "role": None,
@@ -56,14 +58,14 @@ def _cli_check(args: argparse.Namespace) -> int:
         }
         print(json.dumps(payload))
         print(resolved.get("detail") or resolved.get("entryReason"), file=sys.stderr)
-        return 1
+        return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
     result = dict(resolved["allowlistVerdict"])
     result["effort_source"] = resolved["effortSource"]
     print(json.dumps(result))
     if not result["ok"]:
         print(result["reason"], file=sys.stderr)
-        return 1
-    return 0
+        return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(result))
+    return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(result))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         print(json.dumps(payload))
         print(refusal["detail"], file=sys.stderr)
-        return 1
+        return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
     args = build_parser().parse_args(argv)
     return args.func(args)
 

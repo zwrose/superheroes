@@ -2571,7 +2571,7 @@ def test_entry_allowlist_refuses_off_allowlist_write_cli(tmp_path):
         ],
         capture_output=True, text=True, check=False,
     )
-    assert proc.returncode == 0
+    assert proc.returncode == 1
     payload = json.loads(proc.stdout)
     _assert_allowlist_refusal(payload)
     assert _OFF_ALLOWLIST_CODEX in payload["detail"]
@@ -2594,6 +2594,31 @@ def test_write_g1_refusal_leaves_no_lease_or_opened_run(tmp_path):
     assert not any(r.get("kind") == "run-opened" for r in records)
     lease_path = ED._worktree_lease_path(os.path.realpath(wt))
     assert not os.path.exists(lease_path)
+
+
+def test_dispatch_write_cli_terminal_forfeit_exits_0(tmp_path, monkeypatch, capsys):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-forfeit-cli")
+
+    class DirtyTimeoutRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            with open(os.path.join(cwd, "dirty.txt"), "w", encoding="utf-8") as fh:
+                fh.write("x")
+            return "", True, 0, ""
+
+    monkeypatch.setattr(ED, "_run_engine", DirtyTimeoutRunner())
+    rc = ED.main([
+        "dispatch-write",
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--prompt-path", _prompt(tmp_path),
+        "--cwd", wt,
+        "--run-dir", run_dir,
+        "--max-wait", "120",
+    ])
+    assert rc == 0
+    res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert res["terminal"] is True
+    assert res["forfeited"] is True
 
 
 # --- #1269 WO-8: provenance truthfulness on write path ------------------------

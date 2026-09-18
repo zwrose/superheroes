@@ -8514,7 +8514,7 @@ def test_entry_allowlist_refuses_off_allowlist_review_cli(tmp_path):
         ],
         capture_output=True, text=True, check=False,
     )
-    assert proc.returncode == 0
+    assert proc.returncode == 1
     payload = json.loads(proc.stdout)
     _assert_allowlist_refusal(payload)
     assert _OFF_ALLOWLIST_CODEX in payload["detail"]
@@ -8537,9 +8537,47 @@ def test_entry_allowlist_refuses_brief_check_cli(tmp_path):
         ],
         capture_output=True, text=True, check=False,
     )
-    assert proc.returncode == 0
+    assert proc.returncode == 1
     payload = json.loads(proc.stdout)
     _assert_allowlist_refusal(payload)
+
+
+def test_dispatch_review_cli_non_terminal_running_exits_0(tmp_path, monkeypatch, capsys):
+    run_dir = str(tmp_path / "run-running-cli")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    _running_slice_capture(monkeypatch)
+    rc = ED.main([
+        "dispatch-review",
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--prompt-path", _valid_prompt(tmp_path),
+        "--repo-root", repo_root,
+        "--run-dir", run_dir,
+        "--max-wait", "1",
+    ])
+    assert rc == 0
+    res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert res["terminal"] is False
+    assert res["reason"] == ED.dispatch_outcome.REASON_RUNNING
+
+
+def test_dispatch_poll_cli_exits_0(tmp_path, capsys):
+    run_dir = str(tmp_path / "run-poll-cli")
+    _manual_open_review_run(tmp_path, run_dir)
+    rc = ED.main(["dispatch-poll", "--run-dir", run_dir])
+    assert rc == 0
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res["reason"] == ED.dispatch_outcome.REASON_RUNNING
+
+
+def test_dispatch_abandon_cli_exits_0_despite_unrunnable_json(tmp_path, capsys):
+    run_dir = str(tmp_path / "run-abandon-cli")
+    _manual_open_review_run(tmp_path, run_dir)
+    rc = ED.main(["dispatch-abandon", "--run-dir", run_dir])
+    assert rc == 0
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res["terminal"] is True
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["detail"] == "run-abandoned"
 
 
 def test_spawn_gate_refuses_pre_upgrade_journal_without_resolved_inputs(tmp_path):

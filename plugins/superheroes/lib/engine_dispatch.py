@@ -5096,39 +5096,46 @@ def main(argv):
             run_dir=run_dir,
         )
         sys.stdout.write(json.dumps(refusal) + "\n")
-        return 1
-    args = build_parser().parse_args(argv)
-    if args.cmd == "dispatch-review":
-        res = dispatch_review(seat=args.seat,
-                              prompt_path=args.prompt_path,
-                              repo_root=args.repo_root,
-                              timeout=args.timeout, retry_timeout=args.retry_timeout,
-                              progress_path=args.progress_file, run_dir=args.run_dir,
-                              max_wait=args.max_wait, order_id=args.order_id,
-                              diff_base=args.diff_base, mode=args.mode,
-                              expected_result_kind=args.expected_result_kind,
-                              pr_body_path=args.pr_body_path, session_dir=args.session_dir)
-    elif args.cmd == "dispatch-write":
-        res = dispatch_write(seat=args.seat,
-                             prompt_path=args.prompt_path,
-                             cwd=args.cwd, order_id=args.order_id, base_sha=args.base_sha,
-                             run_dir=args.run_dir, timeout=args.timeout,
-                             retry_timeout=args.retry_timeout, max_wait=args.max_wait,
-                             progress_path=args.progress_file,
-                             expected_items=args.expect_item,
-                             expected_items_file=args.expect_items_file)
-    elif args.cmd == "dispatch-poll":
-        res = dispatch_poll(args.run_dir)
-    elif args.cmd == "dispatch-abandon":
-        res = dispatch_abandon(args.run_dir)
-    elif args.cmd == "run-child":
-        raise SystemExit(_run_child_main(os.path.realpath(args.run_dir)))
+        classification = dispatch_outcome.CLASSIFICATION_REFUSAL
     else:
-        res = {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-               "detail": "unknown-command", "attempts": 0, "forfeited": False,
-               "runDir": "", "argv": []}
-    sys.stdout.write(json.dumps(res) + "\n")
-    return 0
+        args = build_parser().parse_args(argv)
+        if args.cmd == "dispatch-review":
+            res = dispatch_review(seat=args.seat,
+                                  prompt_path=args.prompt_path,
+                                  repo_root=args.repo_root,
+                                  timeout=args.timeout, retry_timeout=args.retry_timeout,
+                                  progress_path=args.progress_file, run_dir=args.run_dir,
+                                  max_wait=args.max_wait, order_id=args.order_id,
+                                  diff_base=args.diff_base, mode=args.mode,
+                                  expected_result_kind=args.expected_result_kind,
+                                  pr_body_path=args.pr_body_path, session_dir=args.session_dir)
+            classification = dispatch_outcome.classify_dispatch_result(res)
+        elif args.cmd == "dispatch-write":
+            res = dispatch_write(seat=args.seat,
+                                 prompt_path=args.prompt_path,
+                                 cwd=args.cwd, order_id=args.order_id, base_sha=args.base_sha,
+                                 run_dir=args.run_dir, timeout=args.timeout,
+                                 retry_timeout=args.retry_timeout, max_wait=args.max_wait,
+                                 progress_path=args.progress_file,
+                                 expected_items=args.expect_item,
+                                 expected_items_file=args.expect_items_file)
+            classification = dispatch_outcome.classify_dispatch_result(res)
+        elif args.cmd == "dispatch-poll":
+            res = dispatch_poll(args.run_dir)
+            classification = dispatch_outcome.CLASSIFICATION_RESULT
+        elif args.cmd == "dispatch-abandon":
+            res = dispatch_abandon(args.run_dir)
+            # Successful abandon mints terminal+unrunnable; the command did what was asked.
+            classification = dispatch_outcome.CLASSIFICATION_RESULT
+        elif args.cmd == "run-child":
+            raise SystemExit(_run_child_main(os.path.realpath(args.run_dir)))
+        else:
+            res = {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                   "detail": "unknown-command", "attempts": 0, "forfeited": False,
+                   "runDir": "", "argv": []}
+            classification = dispatch_outcome.CLASSIFICATION_REFUSAL
+        sys.stdout.write(json.dumps(res) + "\n")
+    return dispatch_outcome.exit_code(classification)
 
 
 if __name__ == "__main__":
