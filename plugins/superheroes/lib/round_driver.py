@@ -5724,10 +5724,6 @@ def _shipped_rubric_path():
     return os.path.join(_plugin_resource_root(), "rubric", "review-base.md")
 
 
-def _shipped_escalation_wrapper_path():
-    return os.path.join(_plugin_resource_root(), "lib", "escalation_resolve.py")
-
-
 def _normalize_focus_notes(value):
     if value is None:
         return ""
@@ -6002,7 +5998,6 @@ def _shipped_resource_refusal(placeholders):
         return None
     checks = (
         ("RUBRIC_PATH", _shipped_rubric_path()),
-        ("ESCALATION_WRAPPER_PATH", _shipped_escalation_wrapper_path()),
     )
     for name, expected in checks:
         emitted = placeholders.get(name)
@@ -6074,7 +6069,6 @@ ORDER_READABLE_FILE_INPUTS = frozenset({
 })
 ORDER_SHIPPED_RESOURCE_INPUTS = frozenset({
     "RUBRIC_PATH",
-    "ESCALATION_WRAPPER_PATH",
 })
 # Seat/orchestrator output paths — cited but not required to exist before dispatch.
 ORDER_OUTPUT_PLACEHOLDERS = frozenset({
@@ -6486,7 +6480,6 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "RUBRIC_PATH": rubric_path,
             "CWD": repo_root,
             "REPO_ROOT": _shell_quote_path(repo_root),
-            "ESCALATION_WRAPPER_PATH": _shell_quote_path(_shipped_escalation_wrapper_path()),
             "VERIFY_COMMAND": cfg.get("verifyCommand") or "none",
             "ROUND": str(rnd),
             "GATE_GUIDANCE": _gate_guidance_block(guidance_entries),

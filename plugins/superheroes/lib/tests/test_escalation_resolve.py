@@ -2,8 +2,6 @@
 import importlib.util
 import json
 import os
-import sys
-import io
 
 import pytest
 
@@ -41,18 +39,9 @@ def test_classify_resolves_in_repo(capsys):
     assert rc == 0 and out["on_floor"] is True and out["degraded"] is False
 
 
-def test_guard_refuses_band_safety_file_in_repo(capsys):
-    # a real superheroes safety file, in-repo (dogfood) -> refused, not degraded
-    rc, out = _run(capsys, "guard", "--root", _REPO_ROOT,
-                   "--path", os.path.join(_REPO_ROOT, "plugins/superheroes/lib/loop_state.py"))
-    assert rc == 0 and out["allow"] is False and out["degraded"] is False
-
-
-def test_guard_allows_ordinary_file_in_repo(capsys):
-    # decisions.py is NOT in the safety set -> allowed
-    rc, out = _run(capsys, "guard", "--root", _REPO_ROOT,
-                   "--path", os.path.join(_REPO_ROOT, "plugins/superheroes/lib/decisions.py"))
-    assert rc == 0 and out["allow"] is True and out["degraded"] is False
+def test_guard_subcommand_retired():
+    with pytest.raises(SystemExit):
+        ER.main(["escalation_resolve.py", "guard", "--root", _REPO_ROOT, "--path", "x"])
 
 
 def test_rubric_resolves_in_repo(capsys):
@@ -74,7 +63,7 @@ def test_rubric_resolves_under_plugin_root_without_repo_root(capsys):
 # --- fail-closed: the core raises -> the wrapper holds the conservative posture ---
 # Equivalence note: the old "lib-unresolvable -> conservative" tests are removed (the lib is
 # always resolvable in one tree). The core-error branch below preserves the SAME conservative
-# posture (route->gate, classify->on_floor True, guard->allow False), now via the direct seam.
+# posture (route->gate, classify->on_floor True), now via the direct seam.
 
 def _boom(*a, **k):
     raise RuntimeError("core blew up")
@@ -92,163 +81,6 @@ def test_classify_core_error_fails_closed_to_on_floor(capsys, monkeypatch):
     monkeypatch.setattr(ER.escalation, "classify_floor", _boom)
     rc, out = _run(capsys, "classify", "--root", _REPO_ROOT, "--action", "rename a local variable")
     assert rc == 0 and out["on_floor"] is True and out["degraded"] is True
-
-
-def test_guard_core_error_fails_closed_to_refuse(capsys, monkeypatch):
-    monkeypatch.setattr(ER.escalation, "is_safety_machinery", _boom)
-    rc, out = _run(capsys, "guard", "--root", _REPO_ROOT, "--path", "src/feature.py")
-    assert rc == 0 and out["allow"] is False and out["degraded"] is True
-
-
-def _stdin_guard(capsys, payload, *args):
-    old_stdin = sys.stdin
-    try:
-        sys.stdin = io.StringIO(payload)
-        return _run(capsys, "guard", *args)
-    finally:
-        sys.stdin = old_stdin
-
-
-def _stdin_guard_rc(payload, *args):
-    old_stdin = sys.stdin
-    try:
-        sys.stdin = io.StringIO(payload)
-        return ER.main(["escalation_resolve.py", "guard", *args])
-    finally:
-        sys.stdin = old_stdin
-
-
-def test_guard_stdin_path_reads_path(capsys):
-    path = os.path.join(_REPO_ROOT, "plugins/superheroes/lib/decisions.py")
-    rc, out = _stdin_guard(capsys, path, "--root", _REPO_ROOT, "--stdin-path")
-    assert rc == 0 and out["allow"] is True and out["degraded"] is False
-
-
-def test_guard_stdin_path_empty_fails(capsys):
-    old_stdin = sys.stdin
-    try:
-        sys.stdin = io.StringIO("")
-        rc = ER.main(["escalation_resolve.py", "guard", "--root", _REPO_ROOT, "--stdin-path"])
-    finally:
-        sys.stdin = old_stdin
-    assert rc == 2
-
-
-def test_guard_path_and_stdin_path_mutually_exclusive():
-    rc = ER.main(["escalation_resolve.py", "guard", "--root", _REPO_ROOT,
-                  "--path", "x", "--stdin-path"])
-    assert rc == 2
-
-
-_GUARD_REFUSAL_CASES = [
-    ("empty-stdin", "", ("--root", _REPO_ROOT, "--stdin-path")),
-    ("embedded-newline", "/a/b.py\n/c/d.py", ("--root", _REPO_ROOT, "--stdin-path")),
-    ("surrounding-whitespace", " /a/b.py ", ("--root", _REPO_ROOT, "--stdin-path")),
-    ("embedded-nul", "/a/b.py\0", ("--root", _REPO_ROOT, "--stdin-path")),
-    ("both-modes", "/a/b.py", ("--root", _REPO_ROOT, "--path", "x", "--stdin-path")),
-]
-
-
-@pytest.mark.parametrize("case,payload,args",
-                         _GUARD_REFUSAL_CASES,
-                         ids=[c[0] for c in _GUARD_REFUSAL_CASES])
-def test_guard_refusal_still_emits_a_fail_closed_verdict(capsys, case, payload, args):
-    """Every guard refusal carries `allow`/`degraded`, not just a nonzero status.
-
-    The shipped fixer order states its rule as "if `allow` is false (or `degraded` is
-    true), DO NOT edit that file". A refusal that emits no verdict leaves that rule
-    unevaluable at exactly the moments it matters most.
-    """
-    rc, out = _stdin_guard(capsys, payload, *args)
-    assert rc == 2, case
-    assert out["allow"] is False, case
-    assert out["degraded"] is True, case
-    assert out["refusal"], case
-
-
-def test_guard_stdin_path_with_metacharacters(capsys, tmp_path):
-    nasty = str(tmp_path / "src" / "$(echo pwned).py")
-    os.makedirs(os.path.dirname(nasty), exist_ok=True)
-    with open(nasty, "w", encoding="utf-8") as fh:
-        fh.write("# probe\n")
-    rc, out = _stdin_guard(capsys, nasty, "--stdin-path")
-    assert rc == 0 and out["allow"] is True
-
-
-def test_guard_stdin_path_refuses_embedded_newline(capsys, monkeypatch):
-    safety = os.path.join(_REPO_ROOT, "plugins/superheroes/lib/round_driver.py")
-    stdin_payload = "safe.py\n" + safety
-    validated = []
-    real = ER.escalation.is_safety_machinery
-
-    def record(path, band_roots):
-        validated.append(path)
-        return real(path, band_roots)
-
-    monkeypatch.setattr(ER.escalation, "is_safety_machinery", record)
-    rc = _stdin_guard_rc(stdin_payload, "--root", _REPO_ROOT, "--stdin-path")
-    assert rc == 2
-    assert validated == []
-
-
-def test_guard_stdin_path_refuses_leading_trailing_whitespace(capsys, monkeypatch):
-    path = os.path.join(_REPO_ROOT, "plugins/superheroes/lib/decisions.py")
-    validated = []
-    real = ER.escalation.is_safety_machinery
-
-    def record(path, band_roots):
-        validated.append(path)
-        return real(path, band_roots)
-
-    monkeypatch.setattr(ER.escalation, "is_safety_machinery", record)
-    rc = _stdin_guard_rc(" " + path + " ", "--root", _REPO_ROOT, "--stdin-path")
-    assert rc == 2
-    assert validated == []
-
-
-def test_guard_stdin_path_refuses_two_records(capsys, monkeypatch):
-    path1 = os.path.join(_REPO_ROOT, "plugins/superheroes/lib/decisions.py")
-    path2 = os.path.join(_REPO_ROOT, "plugins/superheroes/lib/loop_state.py")
-    validated = []
-    real = ER.escalation.is_safety_machinery
-
-    def record(path, band_roots):
-        validated.append(path)
-        return real(path, band_roots)
-
-    monkeypatch.setattr(ER.escalation, "is_safety_machinery", record)
-    rc = _stdin_guard_rc(path1 + "\n" + path2, "--root", _REPO_ROOT, "--stdin-path")
-    assert rc == 2
-    assert validated == []
-
-
-def test_guard_stdin_path_refuses_nul(capsys, monkeypatch):
-    path = os.path.join(_REPO_ROOT, "plugins/superheroes/lib/decisions.py")
-    validated = []
-    real = ER.escalation.is_safety_machinery
-
-    def record(path, band_roots):
-        validated.append(path)
-        return real(path, band_roots)
-
-    monkeypatch.setattr(ER.escalation, "is_safety_machinery", record)
-    rc = _stdin_guard_rc(path + "\0", "--root", _REPO_ROOT, "--stdin-path")
-    assert rc == 2
-    assert validated == []
-
-
-def test_guard_stdin_path_validates_exact_path(capsys, monkeypatch):
-    path = os.path.join(_REPO_ROOT, "plugins/superheroes/lib/decisions.py")
-    validated = []
-    real = ER.escalation.is_safety_machinery
-
-    def record(path, band_roots):
-        validated.append(path)
-        return real(path, band_roots)
-
-    monkeypatch.setattr(ER.escalation, "is_safety_machinery", record)
-    rc, out = _stdin_guard(capsys, path, "--root", _REPO_ROOT, "--stdin-path")
-    assert rc == 0 and out["allow"] is True and validated == [path]
 
 
 def test_rubric_absent_fails_closed(capsys, tmp_path, monkeypatch):
