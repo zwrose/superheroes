@@ -531,7 +531,7 @@ def test_dispatch_review_codex_json_wiring_grades_last_message(tmp_path):
 
     fake = FakeRunner([respond])
     res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
+        seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=build_view, run_dir=run_dir,
     )
