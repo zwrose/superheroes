@@ -776,7 +776,7 @@ launches still refuse — see `lib/launch_ledger.py` for the authoritative seman
 every door fail closed with `fold-unknown-event:<kind>` until the ledger file is deleted (the path
 `ledger_path()` reports). The
 Showrunner advisor invokes the launcher
-per launch; the seven dispatch-preflight checks live in
+per launch; the dispatch-preflight checks live in
 `skills/showrunner/reference/dispatch-preflight.md` and the artifact, bound by a drift test — cite
 those homes, do not duplicate them here. The recovery half —
 adopt-rather-than-resume across instances or accounts, the unpushed-work sweep, transcript
