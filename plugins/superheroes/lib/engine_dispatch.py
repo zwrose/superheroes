@@ -3107,110 +3107,105 @@ def _non_terminal_running_result(result, run_dir_real, state):
     return out
 
 
-def _grade_review_attempt(run_dir_real, state, attempt):
-    """Grade a completed review attempt from durable stdout files."""
-    opened = state["opened"]
-    engine = opened["engine"]
-    role_kind = opened.get("roleKind", RUN_KIND_REVIEW)
-    cwd = opened["cwd"]
-    fed_prompt = opened.get("fedPrompt", "")
-    echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
-    slot = state["attempts"][attempt]
-    ended = slot.get("ended") or {}
-    stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
-    stderr_path = os.path.join(run_dir_real, "attempt-%d.stderr" % attempt)
-
-    if ended.get("guardRefusal"):
-        return _grade_spawn_guard_refusal(ended)
-    if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
-        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
-
-    stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
-    if not stdout and not os.path.exists(stdout_path):
-        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
-
-    try:
-        with open(stderr_path, encoding="utf-8", errors="ignore") as fh:
-            stderr_tail = fh.read()
-    except OSError:
-        stderr_tail = ended.get("stderrTail", "")
-
-    elapsed = ended.get("wallSeconds", 0)
-    stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
-    if engine == "codex":
-        tokens = engine_adapter.codex_tokens_used(stderr_tail)
-        tool_calls = None
-        source = "codex-stderr" if tokens is not None else "none"
-    elif engine == "cursor":
-        tokens = None
-        tool_calls = engine_adapter.cursor_tool_calls(stdout)
-        source = "cursor-stream" if tool_calls is not None else "none"
-    else:
-        tokens = None
-        tool_calls = None
-        source = "none"
-    engagement = {
-        "tokens": tokens,
-        "toolCalls": tool_calls,
-        "stdoutBytes": stdout_bytes,
-        "wallSeconds": elapsed,
-        "source": source,
+def _native_review_forfeit(engagement, detail, **extra):
+    """Structured forfeit for native-channel review grading. Never raises."""
+    result = {
+        "forfeit": True,
+        "reason": dispatch_outcome.REASON_FORFEITED,
+        "detail": detail,
+        "engagement": engagement,
     }
+    result.update(extra)
+    return result
 
-    norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
-    prompt_echo_only = norm_strip["echoOnly"]
-    diagnose_stdout = norm_strip["text"]
-    envelope_error = norm_strip["rawEnvelopeError"]
 
-    if prompt_echo_only:
-        # axis: echo-only stdout must forfeit before parse accepts embedded example JSON (#1145 WO-C)
-        engagement = _engagement_with_read(engagement)
-        return {
-            "forfeit": True,
-            "reason": dispatch_outcome.REASON_FORFEITED,
-            "engagement": engagement,
-            "payloadShape": {
-                "parsed": engine_adapter.SHAPE_PROMPT_ECHO_ONLY,
-                "topLevelKeys": [],
-                "keysTruncated": False,
-            },
+def _native_result_path_is_regular_file(path):
+    """True when path is a regular file, not absent and not a symlink. Never raises."""
+    if not path or not isinstance(path, str):
+        return False
+    try:
+        if os.path.islink(path):
+            return False
+        st = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode)
+
+
+def _read_native_review_envelope(opened, engagement):
+    """Load and unwrap a native review result envelope. Returns (envelope, branch) or a forfeit."""
+    result_path = opened.get("nativeResultPath")
+    if not _native_result_path_is_regular_file(result_path):
+        return _native_review_forfeit(engagement, "native-result-missing")
+    try:
+        st = os.stat(result_path, follow_symlinks=False)
+    except OSError:
+        return _native_review_forfeit(engagement, "native-result-missing")
+    if st.st_size > engine_result_channel.NATIVE_RESULT_MAX_BYTES:
+        return _native_review_forfeit(engagement, "native-result-oversized")
+    try:
+        with open(result_path, "rb") as fh:
+            raw = fh.read(engine_result_channel.NATIVE_RESULT_MAX_BYTES + 1)
+    except OSError:
+        return _native_review_forfeit(engagement, "native-result-missing")
+    if len(raw) > engine_result_channel.NATIVE_RESULT_MAX_BYTES:
+        return _native_review_forfeit(engagement, "native-result-oversized")
+    try:
+        envelope = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return _native_review_forfeit(engagement, "native-result-malformed")
+    if not isinstance(envelope, dict) or "result" not in envelope:
+        return _native_review_forfeit(engagement, "native-result-malformed")
+    branch = envelope["result"]
+    if not isinstance(branch, dict):
+        return _native_review_forfeit(engagement, "native-result-malformed")
+    return envelope, branch
+
+
+def _scrub_native_review_branch(branch, echo_nonce):
+    """Scrub a schema-validated native review branch via existing scrub entry points."""
+    kind = branch.get("resultKind")
+    investigated, inv_rejected = engine_adapter._scrub_investigated(branch.get("investigated"))
+    if kind == "findings":
+        findings_list, findings_rejected = engine_adapter._scrub_findings(
+            branch.get("findings") or [], echo_nonce=echo_nonce)
+        res = {
+            "ok": True,
+            "resultKind": "findings",
+            "findings": findings_list,
+            "investigated": investigated,
         }
+        res = engine_adapter._attach_findings_parse_rejections(res, findings_rejected)
+        return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
+    if kind == "verdicts":
+        res = {
+            "ok": True,
+            "resultKind": "verdicts",
+            "verdicts": engine_adapter._scrub_verdicts(branch.get("verdicts") or []),
+            "investigated": investigated,
+        }
+        return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
+    if kind == "grouping":
+        res = {
+            "ok": True,
+            "resultKind": "grouping",
+            "grouping": engine_adapter._scrub_grouping(branch.get("grouping")),
+            "investigated": investigated,
+        }
+        return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
+    if kind == "ruling":
+        res = {
+            "ok": True,
+            "resultKind": "ruling",
+            "ruling": engine_adapter._scrub_ruling_object(branch),
+            "investigated": investigated,
+        }
+        return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
+    return {"ok": False, "reason": "unreadable"}
 
-    res = engine_adapter.parse_result(
-        engine, role_kind, stdout, raw_envelope_error=envelope_error,
-        echo_nonce=echo_nonce)
-    if not _parse_review_has_payload(res):
-        stripped_text = norm_strip["text"]
-        if stripped_text and stripped_text.strip():
-            diagnose_stdout = stripped_text
-        res = engine_adapter.parse_result(
-            engine, role_kind, stripped_text, raw_envelope_error=envelope_error,
-            echo_nonce=echo_nonce)
-    if not res.get("ok"):
-        engagement = _engagement_with_read(engagement)
-        result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
-        if prompt_echo_only:
-            result["payloadShape"] = {
-                "parsed": engine_adapter.SHAPE_PROMPT_ECHO_ONLY,
-                "topLevelKeys": [],
-                "keysTruncated": False,
-            }
-        else:
-            shape = engine_adapter.review_payload_shape(
-                diagnose_stdout, fed_prompt, echo_nonce=echo_nonce)
-            if shape is not None:
-                result["payloadShape"] = shape
-        return result
 
-    if _review_parse_kind_invalid(res):
-        engagement = _engagement_with_read(engagement)
-        result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
-        shape = engine_adapter.review_payload_shape(
-            diagnose_stdout, fed_prompt, echo_nonce=echo_nonce)
-        if shape is not None:
-            result["payloadShape"] = shape
-        return result
-
+def _finish_review_grade_from_parse(opened, cwd, engagement, res):
+    """Shared tail after a review parse result (marker stdout or native typed file)."""
     kind = res["resultKind"]
     has_payload, payload = _review_result_payload(res, kind)
 
@@ -3291,6 +3286,152 @@ def _grade_review_attempt(run_dir_real, state, attempt):
             rejected_reasons=rejected_reasons,
         )
     assert False, "unreachable: vacuous and mismatch paths handled above"
+
+
+def _grade_native_review_attempt(opened, cwd, engagement, echo_nonce):
+    """Grade a native-channel review attempt from the typed result file."""
+    loaded = _read_native_review_envelope(opened, engagement)
+    if not isinstance(loaded, tuple):
+        return loaded
+    envelope, branch = loaded
+    kind = branch.get("resultKind")
+    expected_kind = opened.get("expectedResultKind")
+    if (
+        kind in REVIEW_RESULT_KINDS
+        and expected_kind in REVIEW_RESULT_KINDS
+        and kind != expected_kind
+    ):
+        engagement = _engagement_with_read(engagement)
+        return _native_review_forfeit(engagement, RESULT_KIND_MISMATCH_DETAIL)
+    schema_path = opened.get("nativeSchemaPath")
+    if not schema_path or not os.path.isfile(schema_path) or os.path.islink(schema_path):
+        return _native_review_forfeit(engagement, "native-schema-unreadable")
+    try:
+        with open(schema_path, encoding="utf-8") as fh:
+            schema = json.load(fh)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return _native_review_forfeit(engagement, "native-schema-unreadable")
+    ok, validation_reason = engine_result_channel.validate(schema, envelope)
+    if not ok:
+        return _native_review_forfeit(
+            engagement,
+            "native-result-schema-invalid",
+            validationReason=validation_reason,
+        )
+    res = _scrub_native_review_branch(branch, echo_nonce)
+    if not res.get("ok"):
+        return _native_review_forfeit(engagement, "native-result-malformed")
+    return _finish_review_grade_from_parse(opened, cwd, engagement, res)
+
+
+def _grade_review_attempt(run_dir_real, state, attempt):
+    """Grade a completed review attempt from durable stdout files."""
+    opened = state["opened"]
+    engine = opened["engine"]
+    role_kind = opened.get("roleKind", RUN_KIND_REVIEW)
+    cwd = opened["cwd"]
+    fed_prompt = opened.get("fedPrompt", "")
+    echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
+    slot = state["attempts"][attempt]
+    ended = slot.get("ended") or {}
+    stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+    stderr_path = os.path.join(run_dir_real, "attempt-%d.stderr" % attempt)
+
+    if ended.get("guardRefusal"):
+        return _grade_spawn_guard_refusal(ended)
+    if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
+
+    try:
+        with open(stderr_path, encoding="utf-8", errors="ignore") as fh:
+            stderr_tail = fh.read()
+    except OSError:
+        stderr_tail = ended.get("stderrTail", "")
+
+    stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+    elapsed = ended.get("wallSeconds", 0)
+    stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
+    if engine == "codex":
+        tokens = engine_adapter.codex_tokens_used(stderr_tail)
+        tool_calls = None
+        source = "codex-stderr" if tokens is not None else "none"
+    elif engine == "cursor":
+        tokens = None
+        tool_calls = engine_adapter.cursor_tool_calls(stdout)
+        source = "cursor-stream" if tool_calls is not None else "none"
+    else:
+        tokens = None
+        tool_calls = None
+        source = "none"
+    engagement = {
+        "tokens": tokens,
+        "toolCalls": tool_calls,
+        "stdoutBytes": stdout_bytes,
+        "wallSeconds": elapsed,
+        "source": source,
+    }
+
+    if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
+        return _grade_native_review_attempt(opened, cwd, engagement, echo_nonce)
+
+    if not stdout and not os.path.exists(stdout_path):
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
+
+    norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+    prompt_echo_only = norm_strip["echoOnly"]
+    diagnose_stdout = norm_strip["text"]
+    envelope_error = norm_strip["rawEnvelopeError"]
+
+    if prompt_echo_only:
+        # axis: echo-only stdout must forfeit before parse accepts embedded example JSON (#1145 WO-C)
+        engagement = _engagement_with_read(engagement)
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "engagement": engagement,
+            "payloadShape": {
+                "parsed": engine_adapter.SHAPE_PROMPT_ECHO_ONLY,
+                "topLevelKeys": [],
+                "keysTruncated": False,
+            },
+        }
+
+    res = engine_adapter.parse_result(
+        engine, role_kind, stdout, raw_envelope_error=envelope_error,
+        echo_nonce=echo_nonce)
+    if not _parse_review_has_payload(res):
+        stripped_text = norm_strip["text"]
+        if stripped_text and stripped_text.strip():
+            diagnose_stdout = stripped_text
+        res = engine_adapter.parse_result(
+            engine, role_kind, stripped_text, raw_envelope_error=envelope_error,
+            echo_nonce=echo_nonce)
+    if not res.get("ok"):
+        engagement = _engagement_with_read(engagement)
+        result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
+        if prompt_echo_only:
+            result["payloadShape"] = {
+                "parsed": engine_adapter.SHAPE_PROMPT_ECHO_ONLY,
+                "topLevelKeys": [],
+                "keysTruncated": False,
+            }
+        else:
+            shape = engine_adapter.review_payload_shape(
+                diagnose_stdout, fed_prompt, echo_nonce=echo_nonce)
+            if shape is not None:
+                result["payloadShape"] = shape
+        return result
+
+    if _review_parse_kind_invalid(res):
+        engagement = _engagement_with_read(engagement)
+        result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
+        shape = engine_adapter.review_payload_shape(
+            diagnose_stdout, fed_prompt, echo_nonce=echo_nonce)
+        if shape is not None:
+            result["payloadShape"] = shape
+        return result
+
+    return _finish_review_grade_from_parse(opened, cwd, engagement, res)
 
 
 def _grade_write_attempt(run_dir_real, state, attempt):
@@ -4338,7 +4479,17 @@ def _dispatch_review_impl(seat, *, prompt_path,
             _prompt_section_sep = "\n\n"
             if expected_result_kind == "findings":
                 fed_prompt += _prompt_section_sep + review_findings_schema.example_prompt_block(echo_nonce)
-            fed_prompt += _prompt_section_sep + engine_adapter.REVIEW_RESULT_CONTRACT(expected_result_kind)
+            if engine_result_channel.channel_for(engine) == engine_result_channel.CHANNEL_NATIVE:
+                native_schema = engine_result_channel.declared_schema(
+                    engine, RUN_KIND_REVIEW, expected_result_kind,
+                )
+                fed_prompt += _prompt_section_sep + engine_result_channel.review_result_contract_from_schema(
+                    native_schema,
+                )
+            else:
+                fed_prompt += _prompt_section_sep + engine_adapter.REVIEW_RESULT_CONTRACT(
+                    expected_result_kind,
+                )
 
             if run_dir_real is None:
                 run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
