@@ -201,7 +201,7 @@ def native_schema_allows_scrub_finish(failure_detail, branch=None):
     if kind == "type-mismatch":
         if path.endswith(".findings"):
             return False
-        if path.endswith(".investigated"):
+        if ".investigated" in path:
             return True
         if ".findings[" in path:
             return True
