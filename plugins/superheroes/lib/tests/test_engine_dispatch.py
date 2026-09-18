@@ -10438,6 +10438,18 @@ def test_grade_native_review_attempt_schema_invalid_severity_enum_injection(tmp_
     assert grade.get("detail") == "native-result-schema-invalid"
 
 
+def test_scrub_native_review_branch_all_findings_rejected_is_unreadable():
+    branch = {
+        "resultKind": "findings",
+        "findings": [42],
+        "investigated": ["real.py"],
+    }
+    assert ED._scrub_native_review_branch(branch, "test-echo-nonce") == {
+        "ok": False,
+        "reason": "unreadable",
+    }
+
+
 def test_grade_native_review_attempt_kind_before_validation(tmp_path):
     branch = _native_review_branch("verdicts")
     run_dir, state = _native_review_grade_state(

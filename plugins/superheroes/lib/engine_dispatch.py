@@ -3215,6 +3215,8 @@ def _scrub_native_review_branch(branch, echo_nonce):
             branch.get("findings") or [], echo_nonce=echo_nonce)
         if engine_adapter._findings_reply_has_hollow_member(findings_rejected):
             return {"ok": False, "reason": "unreadable"}
+        if raw_findings and not findings_list:
+            return {"ok": False, "reason": "unreadable"}
         res = {
             "ok": True,
             "resultKind": "findings",
