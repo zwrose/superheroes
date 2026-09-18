@@ -42,8 +42,11 @@ def _run_cli(*args):
 
 
 def test_cli_guard_subcommand_rejected():
-    rc, _out, _err = _run_cli("guard", "--path", "/tmp/x.py")
-    assert rc != 0
+    rc, out, err = _run_cli("guard", "--path", "/tmp/x.py")
+    assert rc == 2
+    assert "invalid choice" in err
+    assert "guard" in err
+    assert out == ""
 
 
 # --- route() truth table ---
