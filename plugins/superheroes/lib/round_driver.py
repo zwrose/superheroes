@@ -257,7 +257,6 @@ _canary_failed_shape = receipt_disclosures.canary_failed_shape
 _canary_verified_shape = receipt_disclosures.canary_verified_shape
 _adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
 _order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
-_plugin_version_skew_shape = receipt_disclosures.plugin_version_skew_shape
 build_degraded_prose = receipt_disclosures.build_degraded_prose
 degraded = receipt_disclosures.degraded
 base_degraded = receipt_disclosures.base_degraded
@@ -266,9 +265,6 @@ maker_author_family = receipt_disclosures.maker_author_family
 same_family_seats = receipt_disclosures.same_family_seats
 same_family_seats_for_receipt = receipt_disclosures.same_family_seats_for_receipt
 same_family_degraded = receipt_disclosures.same_family_degraded
-skew_record_identity = receipt_disclosures.skew_record_identity
-skew_records = receipt_disclosures.skew_records
-skew_degraded = receipt_disclosures.skew_degraded
 seat_map_violations = receipt_disclosures.seat_map_violations
 seat_map_violated = receipt_disclosures.seat_map_violated
 seat_map_violation_breach_prose = receipt_disclosures.seat_map_violation_breach_prose
@@ -286,14 +282,12 @@ canary_failed_shape = receipt_disclosures.canary_failed_shape
 canary_verified_shape = receipt_disclosures.canary_verified_shape
 adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
 order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
-plugin_version_skew_shape = receipt_disclosures.plugin_version_skew_shape
 DISCLOSE_ON_PRESENCE = receipt_disclosures.DISCLOSE_ON_PRESENCE
 _degraded = degraded
 _base_degraded = base_degraded
 _driver_author_family = author_family
 _same_family_seats = same_family_seats
 _same_family_degraded = same_family_degraded
-_skew_degraded = skew_degraded
 _seat_map_violated = seat_map_violated
 _seat_map_violation_breach_prose = seat_map_violation_breach_prose
 _seat_pin_excused_seats = seat_pin_excused_seats
@@ -875,10 +869,6 @@ _emit_receipt_seat_map = seat_map_receipts.emit_receipt_seat_map
 _sm_unjudgeable_receipts = seat_map_receipts.unjudgeable_receipts
 _sm_unjudgeable_run_level_disclosure = seat_map_receipts.unjudgeable_run_level_disclosure
 _sm_round_governing_unjudgeable = seat_map_receipts.round_governing_unjudgeable
-
-
-def _skew_records(state):
-    return skew_records(state)
 
 
 def _seat_map_violations(state):

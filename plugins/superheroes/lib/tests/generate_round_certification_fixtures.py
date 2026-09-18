@@ -188,7 +188,6 @@ def _minimal_terminal_state():
             "fullPanel": True,
             "independence": "independent",
             "base": "fetched",
-            "pluginVersionSkew": "not-checked",
             "shapeDrivers": [],
         },
         "findings": [
@@ -467,7 +466,6 @@ def build_seat_map_degradations():
             "fullPanel": True,
             "independence": "degraded",
             "base": "degraded",
-            "pluginVersionSkew": "not-checked",
             "shapeDrivers": [],
         },
     })
@@ -523,7 +521,6 @@ def build_capped_terminal():
                 "fullPanel": True,
                 "independence": "independent",
                 "base": "fetched",
-                "pluginVersionSkew": "not-checked",
                 "shapeDrivers": [],
             },
             "rounds": {
@@ -558,7 +555,6 @@ def build_halted_terminal():
                 "fullPanel": False,
                 "independence": "independent",
                 "base": "fetched",
-                "pluginVersionSkew": "not-checked",
                 "shapeDrivers": [],
             },
             "rounds": {
@@ -758,7 +754,6 @@ def build_case06_mixed_panel():
                 "fullPanel": True,
                 "independence": "independent",
                 "base": "fetched",
-                "pluginVersionSkew": "not-checked",
                 "shapeDrivers": [],
             }
         },
@@ -803,7 +798,6 @@ def build_specimen_must_certify_sixteen_seat_audit():
                 "fullPanel": True,
                 "independence": "independent",
                 "base": "fetched",
-                "pluginVersionSkew": "not-checked",
                 "shapeDrivers": [],
             }
         },
