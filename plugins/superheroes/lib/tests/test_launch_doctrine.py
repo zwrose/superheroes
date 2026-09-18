@@ -247,8 +247,8 @@ def test_doctrine_ruling_invariant_missing():
 def test_doctrine_check_mismatch():
     text = _mutate_once(
         _read_doctrine(),
-        "- `quota` (always) — Account headroom — not measured; records pass on the auth exercise only",
-        "- `quota` (conditional) — Account headroom — not measured; records pass on the auth exercise only",
+        "- `engine-auth` (always) — Engine and CLI authentication",
+        "- `engine-auth` (conditional) — Engine and CLI authentication",
     )
     result = LD.parse(text)
     assert result["ok"] is False
@@ -292,8 +292,8 @@ def test_charter_duplicate_block():
 def test_charter_malformed_line():
     text = _mutate_once(
         _read_charter(),
-        "**Account headroom — not measured; records pass on the auth exercise only** (`quota`, always) —",
-        "**Account headroom — not measured; records pass on the auth exercise only** (quota, always) —",
+        "**Engine and CLI authentication** (`engine-auth`, always) — relaunch practice, not policy, until this makes it policy.",
+        "**Engine and CLI authentication** (engine-auth, always) — relaunch practice, not policy, until this makes it policy.",
     )
     result = LD.charter_checks(text)
     assert result["ok"] is False
@@ -401,8 +401,8 @@ def test_charter_and_artifact_agree():
     assert charter["ok"] is True
     charter_tuple = tuple((c["id"], c["class"], c["text"]) for c in charter["checks"])
 
-    assert len(artifact_tuple) == 8
-    assert len(charter_tuple) == 8
+    assert len(artifact_tuple) == 7
+    assert len(charter_tuple) == 7
     assert artifact_tuple == charter_tuple
 
     stripped = charter_text.replace("<!-- launch-doctrine:preflight-charter:begin -->", "")

@@ -104,7 +104,7 @@ def _outcome(launch_id, outcome="handback", evidence="done"):
     }
 
 
-def _refused(launch_id, stage="preflight", reason="quota"):
+def _refused(launch_id, stage="preflight", reason="engine-auth"):
     return {
         "event": "refused",
         "launchId": launch_id,

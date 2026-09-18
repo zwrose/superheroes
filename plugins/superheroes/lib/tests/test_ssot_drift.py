@@ -2233,7 +2233,7 @@ def _preflight_check_ids_from_home():
 
 
 def test_dispatch_preflight_charter_single_home_guard():
-    """§11: dispatch-preflight.md is the single home for the eight enumerated preflight checks.
+    """§11: dispatch-preflight.md is the single home for the seven enumerated preflight checks.
 
     showrunner/SKILL.md must point at the home (at least one check id) and must not carry a stale
     pasted enumeration or ids outside the home set.
@@ -2262,7 +2262,7 @@ def test_dispatch_preflight_charter_single_home_guard():
 
 def test_preflight_enum_item_all_marker_forms():
     """Each accepted CommonMark list marker must match a pasted charter enumeration row."""
-    body = "**Account** (`quota`, always)"
+    body = "**Engine** (`engine-auth`, always)"
     cases = (
         "1. " + body,
         "1) " + body,
@@ -2276,7 +2276,7 @@ def test_preflight_enum_item_all_marker_forms():
 
 def test_preflight_enum_form_ids_catches_stale_inline_citation():
     """axis: enum_form_ids — inline (`id`, always|conditional) prose outside the home set must fail."""
-    home_ids = {"quota", "real-id"}
+    home_ids = {"engine-auth", "real-id"}
     charter = "Duty text cites (`phantom-id`, always) without pasting the enumeration."
     enum_form_ids = set(re.findall(r"\(`([^`]+)`,\s*(?:always|conditional)\)", charter))
     stale = enum_form_ids - home_ids

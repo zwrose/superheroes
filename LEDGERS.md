@@ -406,7 +406,7 @@ proposal §1–§2, R4; charter channel-conditioned text carries §1's receipt).
 **Ruled:** existing doctrine — never go autonomous on an assumption you have not exercised — applied
 one layer up at advisor dispatch. The preflight **must scale with the batch**: cheap mechanical
 checks always; expensive ones only when the work needs them, with **explicit N/A rather than silent
-skipping**. The eight checks are enumerated in `skills/showrunner/reference/dispatch-preflight.md`
+skipping**. The seven checks are enumerated in `skills/showrunner/reference/dispatch-preflight.md`
 (the ratified proposal lists
 the corpus failures behind each). **Grant scope:** a grant bounded by a fuzzy noun is real looseness;
 scope is stated as **enumerated PRs, a time box, or a count**, with **release PRs excluded and
