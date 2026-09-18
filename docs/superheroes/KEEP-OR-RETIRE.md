@@ -881,6 +881,24 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** structural — binding evidence to a head is a property of how evidence is bound, not of
   model strength. No engine family applies.
 
+#### D30 — Orders-manifest seat-entry roster refusal
+
+- **Component.** `round_certification._orders_emitted_roster_or_refusal` — refuses when a
+  hash-authenticated orders manifest holds any unusable `seats` entry (non-object entry, missing or
+  empty `seat`, or a present but non-negative-int `occurrence`); it costs one manifest read and one
+  pass over the `seats` mapping per orders-emitted roster derivation.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
+  `unfetched-findings` refusal class on an orders-manifest seat-entry detail string. On firing, a
+  proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Birth bite-proof recorded at
+  `plugins/superheroes/lib/tests/bite_proofs/orders-roster-entry-refusal.md` (three guarded edges,
+  each red → restore → green).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a producer defect that silently narrows the opened-seat roster would
+  shrink certification coverage without disclosure; refusing by construction is load-bearing
+  regardless of host. No engine family applies.
+
 #### D13 — The order-bound evidence channel
 
 - **Component.** The `--evidence-run-dir` stamping path in `round_driver._assemble_dispatch_evidence`

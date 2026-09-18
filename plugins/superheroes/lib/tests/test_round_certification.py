@@ -2061,6 +2061,88 @@ def test_check_unfetched_findings_orders_emitted_seats_not_dict_refuses(tmp_path
     assert refusal["detail"] == "orders manifest seats field is not an object"
 
 
+def test_orders_emitted_roster_refuses_non_object_seat_entry(tmp_path):
+    manifest = _minimal_orders_manifest()
+    manifest["seats"] = {"bad-entry": "not-an-object"}
+    manifest_sha = session_contract.sha256_text(session_contract.canonical(manifest))
+    session_dir = write_session(tmp_path, journal_lines=[])
+    _write_orders_manifest(session_dir, manifest)
+    event = _orders_emitted_journal_row(manifest_sha)
+    manifest_path = RC._orders_manifest_path(
+        session_dir, 1, RC.PANEL_PHASE, 0)
+    roster, refusal = RC._orders_emitted_roster_or_refusal(session_dir, event)
+    assert roster is None
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == manifest_path
+    assert refusal["detail"] == (
+        "orders manifest seat entry 'bad-entry' is not an object")
+
+
+def test_orders_emitted_roster_refuses_unusable_seat_field(tmp_path):
+    manifest = _minimal_orders_manifest()
+    manifest["seats"] = {
+        "bad-seat": {
+            "storeKey": "bad-seat",
+            "seat": "",
+            "occurrence": 0,
+            "vendor": "claude",
+            "model": "sonnet",
+            "engine": "claude",
+            "resultContract": "seat-result/2",
+            "orderSha256": "a" * 64,
+            "orderPath": "/dev/null",
+            "envelopeStubPath": "/dev/null",
+        },
+    }
+    manifest_sha = session_contract.sha256_text(session_contract.canonical(manifest))
+    session_dir = write_session(tmp_path, journal_lines=[])
+    _write_orders_manifest(session_dir, manifest)
+    event = _orders_emitted_journal_row(manifest_sha)
+    manifest_path = RC._orders_manifest_path(
+        session_dir, 1, RC.PANEL_PHASE, 0)
+    roster, refusal = RC._orders_emitted_roster_or_refusal(session_dir, event)
+    assert roster is None
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == manifest_path
+    assert refusal["detail"] == (
+        "orders manifest seat entry 'bad-seat' has unusable seat field")
+
+
+def test_orders_emitted_roster_refuses_unusable_occurrence(tmp_path):
+    manifest = _minimal_orders_manifest()
+    manifest["seats"]["security-reviewer"]["occurrence"] = -1
+    manifest_sha = session_contract.sha256_text(session_contract.canonical(manifest))
+    session_dir = write_session(tmp_path, journal_lines=[])
+    _write_orders_manifest(session_dir, manifest)
+    event = _orders_emitted_journal_row(manifest_sha)
+    manifest_path = RC._orders_manifest_path(
+        session_dir, 1, RC.PANEL_PHASE, 0)
+    roster, refusal = RC._orders_emitted_roster_or_refusal(session_dir, event)
+    assert roster is None
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == manifest_path
+    assert refusal["detail"] == (
+        "orders manifest seat entry 'security-reviewer' has unusable occurrence")
+
+
+def test_check_unfetched_findings_orders_emitted_unusable_seat_entry_refuses(tmp_path):
+    manifest = _minimal_orders_manifest()
+    manifest["seats"] = {"bad-entry": []}
+    manifest_sha = session_contract.sha256_text(session_contract.canonical(manifest))
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=[_orders_emitted_journal_row(manifest_sha)],
+    )
+    _write_orders_manifest(session_dir, manifest)
+    ctx, _ = RC._load_context(session_dir)
+    refusal = RC.check_unfetched_findings(ctx)
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["artifact"] == RC._orders_manifest_path(
+        session_dir, 1, RC.PANEL_PHASE, 0)
+    assert refusal["detail"] == (
+        "orders manifest seat entry 'bad-entry' is not an object")
+
+
 def test_roster_from_orders_emitted_authenticated_empty_seats_yields_empty_roster(tmp_path):
     manifest = _minimal_orders_manifest()
     manifest["seats"] = {}
