@@ -132,6 +132,10 @@ def resolve_targets(repo_root, paths):
         mapped = mapped_module(path)
         if mapped is None:
             continue
+        if not os.path.exists(os.path.join(repo_root, path)):
+            # The diff DELETED the module. There is no module left to test, so it carries no
+            # test obligation — a deletion must never read as a mapping miss.
+            continue
         root, module = mapped
         pattern = os.path.join(repo_root, root, "tests", "test_%s*.py" % module)
         matches = sorted(

@@ -88,6 +88,13 @@ def test_deleted_test_file_is_not_handed_to_pytest(tmp_path):
     assert code is True
 
 
+def test_deleted_mapped_module_is_not_a_mapping_miss(tmp_path):
+    # A retirement commit deletes the module and its tests together; that is not a miss.
+    files, unresolved, code = V.resolve_targets(
+        str(tmp_path), ["plugins/superheroes/lib/retired.py"])
+    assert (files, unresolved, code) == ([], [], True)
+
+
 def test_unmapped_module_with_no_test_is_not_unresolved(tmp_path):
     # Only the mapped library roots carry the module -> test obligation.
     files, unresolved, code = V.resolve_targets(str(tmp_path), [".github/scripts/whatever.py"])
