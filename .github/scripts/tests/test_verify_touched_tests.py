@@ -286,6 +286,35 @@ def test_unreferenced_python_source_exits_non_zero_naming_the_file(
     assert rel in capsys.readouterr().err
 
 
+def test_source_referenced_by_nothing_at_all_is_refused(tmp_path, monkeypatch, capsys):
+    root = str(tmp_path)
+    _init_git(root)
+    rel = _LIB + "/silent.py"
+    _touch(root, rel)
+    _, _, no_ref, *_ = _select(root, [rel])
+    assert rel in no_ref
+    monkeypatch.setattr(V, "changed_paths", lambda *a, **k: [rel])
+    assert V.main(["--repo-root", root]) == 1
+    assert rel in capsys.readouterr().err
+
+
+def test_path_spelled_python_source_is_selected_and_therefore_not_refused(
+        tmp_path, monkeypatch, capsys):
+    root = str(tmp_path)
+    _init_git(root)
+    mod = _LIB + "/hooks/session_start.py"
+    test = _TESTS + "/test_session.py"
+    _touch(root, mod)
+    _touch(root, test,
+           'os.path.join(_PLUGIN, "hooks", "session_start.py")\n')
+    selected, _, no_ref, *_ = _select(root, [mod])
+    assert test in selected
+    assert mod not in no_ref
+    monkeypatch.setattr(V, "changed_paths", lambda *a, **k: [mod])
+    assert V.main(["--repo-root", root, "--list-only"]) == 0
+    assert mod not in capsys.readouterr().err
+
+
 # --------------------------------------------------------- no code changed
 
 
@@ -337,7 +366,12 @@ def test_unresolvable_base_ref_exits_two(tmp_path, monkeypatch, capsys):
 
 
 def test_base_ref_fallback_order_origin_main_then_main(repo):
-    # Repo has only main; resolve_base with no explicit base picks main.
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    assert V.resolve_base(repo) == "origin/main"
+    # With only main (no origin/main), fall back to main.
+    subprocess.run(
+        ("git", "-C", repo, "update-ref", "-d", "refs/remotes/origin/main"),
+        check=True, capture_output=True, text=True)
     assert V.resolve_base(repo) == "main"
 
 
@@ -378,6 +412,10 @@ def test_reference_clause_comment_only_does_not_select(tmp_path):
                                     "# round_driver is mentioned here only\n")
     selected, *_ = _select(root, [mod])
     assert test not in selected
+    # Positive control: real import must select when the clause set is intact.
+    _touch(root, test, "from round_driver import x\n")
+    selected, *_ = _select(root, [mod])
+    assert test in selected
 
 
 def test_reference_clause_quoted_module_name_selects(tmp_path):
@@ -396,22 +434,23 @@ def test_reference_clause_quoted_module_name_negative(tmp_path):
     assert test not in selected
 
 
-def test_reference_clause_quoted_dotted_target_selects_but_not_coverage(tmp_path):
+def test_reference_clause_quoted_dotted_target_selects(tmp_path):
     root = str(tmp_path)
     mod, test = _setup_mod_and_test(root, _LIB + "/store.py",
                                     '"store.get_repo_root"\n')
     selected, _, no_ref, *_ = _select(root, [mod])
     assert test in selected
-    assert mod in no_ref
+    assert mod not in no_ref
 
 
-def test_reference_clause_state_json_selects_but_not_coverage(tmp_path):
+def test_reference_clause_state_json_over_selects_intentionally(tmp_path):
     root = str(tmp_path)
     mod, test = _setup_mod_and_test(root, _LIB + "/state.py",
                                     '"state.json"\n')
     selected, _, no_ref, *_ = _select(root, [mod])
     assert test in selected
-    assert mod in no_ref
+    assert mod not in no_ref
+    # Over-selection is deliberate; its only cost is time.
 
 
 def test_reference_clause_quoted_dotted_negative(tmp_path):
@@ -422,13 +461,13 @@ def test_reference_clause_quoted_dotted_negative(tmp_path):
     assert test not in selected
 
 
-def test_reference_clause_basename_with_extension_selects_but_not_coverage(tmp_path):
+def test_reference_clause_basename_with_extension_selects(tmp_path):
     root = str(tmp_path)
     mod, test = _setup_mod_and_test(root, _LIB + "/store.py",
                                     "# the helper lives in store.py\n")
     selected, _, no_ref, *_ = _select(root, [mod])
     assert test in selected
-    assert mod in no_ref
+    assert mod not in no_ref
 
 
 def test_reference_clause_basename_without_extension_does_not_select(tmp_path):

@@ -13,22 +13,20 @@ through another module is not selected. CI's full suite is the receipt for anyth
 does not run. On a stacked branch the diff still includes the lower layers' files, so the
 selection is a superset.
 
-Selection and coverage are split. **Selection** stays loose: every clause (import, quoted
-module literal, quoted dotted target, basename, path suffix) may add test files to the run,
-because the fail direction is toward running more tests, never fewer. **Coverage** — the fact
-that suppresses ``no_reference_refusals`` — is strict: only (a) an ``import``/``from``
-statement naming the module, or (b) a quoted literal whose *entire* content is the module
-name (the dynamic-loader idiom this repository uses: ``_load("round_driver")``,
-``__import__("mode_registry")``, ``import_module(...)``). Clause (b) is intentionally loose
-on the string boundary (any pair of quotes whose sole content is the module basename) but
-does not treat dotted targets such as ``"state.json"`` as coverage. A basename match, a
-path-suffix match, or a quoted dotted target may **select** but must never suppress the
-refusal; a still-present Python source (including tests-tree helpers) with selection matches
-but zero coverage matches is refused, naming the file.
+A non-empty selection is not evidence the changed file is tested. The gate claims only that
+these test files mention the changed file and were run. Whether a module is adequately tested
+is review's question and CI's, never this gate's. The refusal exists for one purpose: a
+changed source file that nothing at all mentions cannot pass silently with no test run.
+
+Selection errs toward running more tests. That is the safe direction and its only cost is
+time. There is no cap on selection size. A selection too large for the verify gate's time
+bound times out, which the verify gate reports as ``timeout`` — distinct from pass and from
+fail.
 
 Fail direction, by construction:
-  * a still-present changed Python source file that NO test file references exits **non-zero**
-    naming the file — an unreferenced source is loud, never a silent no-op;
+  * a still-present changed Python source file no test file references — i.e. whose selection
+    is empty — exits **non-zero** naming the file — an unreferenced source is loud, never a
+    silent no-op;
   * a changed ``conftest.py`` exits **non-zero** with a tree-naming message;
   * a diff that changed no code exits **0** and says so;
   * otherwise the exit status is pytest's own.
@@ -167,31 +165,23 @@ def _read_test_text(repo_root, path):
         return None
 
 
-def _coverage_patterns(changed_path, is_python):
-    """Strict patterns that prove a test covers ``changed_path`` (suppresses refusal)."""
-    if not is_python:
-        return []
-    basename = os.path.basename(changed_path)
-    mod = basename[:-3]
-    return [
-        re.compile(r"^[ \t]*from[ \t]+" + re.escape(mod) + r"\b", re.MULTILINE),
-        re.compile(
-            r"^[ \t]*import[ \t]+(?:[^,\n#]*,\s*)*" + re.escape(mod) + r"\b",
-            re.MULTILINE),
-        re.compile(r'["\']' + re.escape(mod) + r'["\']'),
-    ]
-
-
 def _reference_patterns(changed_path, is_python):
     """Compiled patterns that select test files referencing ``changed_path``."""
-    patterns = list(_coverage_patterns(changed_path, is_python))
+    patterns = []
     basename = os.path.basename(changed_path)
     segments = changed_path.split("/")
 
     if is_python:
         mod = basename[:-3]
-        patterns.append(re.compile(r'["\']' + re.escape(mod) + r"\.[a-zA-Z_]"))
-        patterns.append(re.compile(re.escape(basename)))
+        patterns.extend([
+            re.compile(r"^[ \t]*from[ \t]+" + re.escape(mod) + r"\b", re.MULTILINE),
+            re.compile(
+                r"^[ \t]*import[ \t]+(?:[^,\n#]*,\s*)*" + re.escape(mod) + r"\b",
+                re.MULTILINE),
+            re.compile(r'["\']' + re.escape(mod) + r'["\']'),
+            re.compile(r'["\']' + re.escape(mod) + r"\.[a-zA-Z_]"),
+            re.compile(re.escape(basename)),
+        ])
     else:
         patterns.append(re.compile(r'["\']' + re.escape(basename) + r'["\']'))
 
@@ -205,8 +195,9 @@ def _reference_patterns(changed_path, is_python):
     return patterns
 
 
-def _find_matching_tests(changed_path, is_python, test_texts, patterns):
+def _find_referencing_tests(changed_path, is_python, test_texts):
     selected = set()
+    patterns = _reference_patterns(changed_path, is_python)
     for test_path, text in test_texts.items():
         if text is None:
             continue
@@ -215,16 +206,6 @@ def _find_matching_tests(changed_path, is_python, test_texts, patterns):
                 selected.add(test_path)
                 break
     return selected
-
-
-def _find_referencing_tests(changed_path, is_python, test_texts):
-    return _find_matching_tests(
-        changed_path, is_python, test_texts, _reference_patterns(changed_path, is_python))
-
-
-def _find_covering_tests(changed_path, is_python, test_texts):
-    return _find_matching_tests(
-        changed_path, is_python, test_texts, _coverage_patterns(changed_path, is_python))
 
 
 def select_targets(repo_root, paths):
@@ -264,14 +245,11 @@ def select_targets(repo_root, paths):
 
         if shape in ("helper", "python"):
             selection = _find_referencing_tests(path, True, test_texts)
-            coverage = _find_covering_tests(path, True, test_texts)
             selected_tests.update(selection)
-            if exists:
-                if not coverage:
-                    no_reference_refusals.append(path)
-            else:
-                if not coverage:
-                    retired_python.append(path)
+            if exists and not selection:
+                no_reference_refusals.append(path)
+            elif not exists and not selection:
+                retired_python.append(path)
             continue
 
         refs = _find_referencing_tests(path, False, test_texts)
