@@ -38,7 +38,8 @@ workhorse charter §7 — not restated here. Mechanics by dispatch kind:
   ending**. Give the dispatch that room by invoking through **`dispatch-review`/`dispatch-write
   --max-wait`** (≤ 540 s) and **re-invoking the originating verb on the same `--run-dir` until
   terminal** — never by trying to raise a foreground timeout, by wrapping in `setsid`/`nohup`, or by
-  harness-tracked background-and-poll (tracked background dies when the turn ends). Redirect its
+  harness-tracked background-and-poll (tracked background dies when the turn ends). On
+  **`dispatch-write`**, an abbreviated `--base-sha` refuses with nothing opened. Redirect its
   output to a **file, never a pipe or `| tail`** — pipes die with the reader and make a stall look
   like progress. Watch that
   **output/transcript file growing as your primary stall signal**: a growing file is live; use the

@@ -9800,3 +9800,46 @@ def test_sm2_1269_unreadable_journal_preserves_run_dir_on_refusal(tmp_path):
     assert res.get("resolvedInputsStatus") == "unverifiable"
     assert res["runDir"] == os.path.realpath(run_dir)
 
+
+# --- #1270 WO-3: marker-guard detail on review path --------------------------------
+
+
+def _undeclared_marker_guard_detail(field, marker, source_markers):
+    vocabulary = ", ".join(sorted(source_markers))
+    return (
+        "resolvedInputs field %r source marker %r is not declared; accepted: %s"
+        % (field, marker, vocabulary)
+    )
+
+
+def test_dispatch_review_undeclared_marker_detail_surfaces_guard_message(tmp_path, monkeypatch):
+    shrunk = frozenset(
+        m for m in ED.resolved_inputs_vocab.SOURCE_MARKERS
+        if m != ED.resolved_inputs_vocab.CALLER
+    )
+    monkeypatch.setattr(ED.resolved_inputs_vocab, "SOURCE_MARKERS", shrunk)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "review-marker-guard")
+    result = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+        order_id="order-1",
+    )
+    expected_detail = _undeclared_marker_guard_detail(
+        "engine", ED.resolved_inputs_vocab.CALLER, shrunk,
+    )
+    assert result.get("ok") is False
+    assert result.get("terminal") is True
+    assert result.get("reason") == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert result.get("entryReason") == "internal-error"
+    assert result.get("detail") == expected_detail
+    assert "engine" in result.get("detail")
+    assert ED.resolved_inputs_vocab.CALLER in result.get("detail")
+    assert "accepted:" in result.get("detail")
+    assert result.get("runOpened") is False
+

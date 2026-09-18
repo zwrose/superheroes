@@ -377,15 +377,23 @@ def _resolve_engine_model_pin(vendor, model_id, claude_tier):
 def resolve_engine_model(seat, _run_kind, opts):
     """Return (engine_model, source) for the resolved engine-model pin (#1269 WO-A2).
 
-    Derives from ``_resolve_engine_model_pin`` — the same ladder ``build_argv_result`` uses."""
+    Derives from ``_resolve_engine_model_pin`` — the same ladder ``build_argv_result`` uses —
+    then maps pin provenance to ``resolvedInputs`` source markers (#1270 WO-3)."""
     opts = opts or {}
     vendor = seat.get("vendor")
     model_id = seat.get("model")
     claude_tier = opts.get("model")
-    engine_model, source, _reason, _detail = _resolve_engine_model_pin(
+    engine_model, pin_source, _reason, _detail = _resolve_engine_model_pin(
         vendor, model_id, claude_tier,
     )
-    return engine_model, source
+    if pin_source == resolved_inputs_vocab.DECLARED_NONE:
+        return engine_model, resolved_inputs_vocab.DECLARED_NONE
+    if pin_source == resolved_inputs_vocab.DEFAULT:
+        return engine_model, resolved_inputs_vocab.DEFAULT
+    if pin_source == resolved_inputs_vocab.RESOLVED:
+        return engine_model, resolved_inputs_vocab.RESOLVED
+    # Identity resolution — engine model unchanged from the seat pin; pass upstream marker.
+    return engine_model, seat.get("modelSource", resolved_inputs_vocab.CALLER)
 
 
 def build_argv_result(seat, role_kind, opts):

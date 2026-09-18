@@ -592,6 +592,38 @@ def _put_resolved(snapshot, name, value, source):
     snapshot[name + "Source"] = source
 
 
+def _undeclared_source_marker_entry_refusal(exc):
+    """Map ``UndeclaredSourceMarker`` to a structured entry refusal (#1270 WO-3)."""
+    message = str(exc)
+    if not message:
+        message = "resolvedInputs source marker is not declared"
+    return {
+        "ok": False,
+        "entryReason": "internal-error",
+        "detail": message,
+    }
+
+
+def _entry_refusal_for_undeclared_source_marker(
+    exc,
+    *,
+    run_dir=None,
+    mode=None,
+    repo_root=None,
+    engine=None,
+    run_kind=RUN_KIND_REVIEW,
+):
+    """Single construction for marker-guard refusals on both dispatch verbs (#1270 WO-3)."""
+    return _entry_refusal_terminal(
+        _undeclared_source_marker_entry_refusal(exc),
+        run_dir=run_dir,
+        mode=mode,
+        repo_root=repo_root,
+        engine=engine,
+        run_kind=run_kind,
+    )
+
+
 def _synthesize_legacy_resolved_inputs(opened):
     """Best-effort snapshot from a pre-upgrade run-opened record (#1269 WO-A2 I4)."""
     snapshot = {}
@@ -690,10 +722,10 @@ def _build_resolved_inputs(
         snapshot, "effort", seat.get("effort"),
         seat.get("effortSource", resolved_inputs_vocab.CALLER),
     )
-    engine_model, _engine_model_source = engine_adapter.resolve_engine_model(
+    engine_model, engine_model_source = engine_adapter.resolve_engine_model(
         seat, role_kind, engine_model_opts,
     )
-    _put_resolved(snapshot, "engineModel", engine_model, model_source)
+    _put_resolved(snapshot, "engineModel", engine_model, engine_model_source)
     _put_resolved(
         snapshot, "role", seat.get("role"),
         seat.get("roleSource", resolved_inputs_vocab.SEAT),
@@ -3958,6 +3990,12 @@ def dispatch_review(*args, seat=None, prompt_path=None,
         stamped = dict(result)
         stamped["mode"] = resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW)
         return stamped
+    except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
+        return _entry_refusal_for_undeclared_source_marker(
+            exc,
+            run_dir=run_dir,
+            mode=resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW),
+        )
     except Exception as exc:
         return _entry_refusal_terminal(
             {"ok": False, "entryReason": "internal-error",
@@ -4319,6 +4357,15 @@ def _dispatch_review_impl(seat, *, prompt_path,
             if max_wait is not None:
                 return result
             time.sleep(SUPERVISOR_POLL_INTERVAL)
+    except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
+        return _entry_refusal_for_undeclared_source_marker(
+            exc,
+            run_dir=run_dir or run_dir_real or "",
+            mode=resolved_mode["mode"],
+            repo_root=repo_detail,
+            engine=engine,
+            run_kind=RUN_KIND_REVIEW,
+        )
     except Exception as exc:
         err = _with_run_fields(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
@@ -4462,6 +4509,12 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
             run_dir_supplied=run_dir_supplied, max_wait=max_wait,
             max_wait_source=max_wait_source, expected_items=expected_items,
             expected_items_file=expected_items_file,
+        )
+    except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
+        return _entry_refusal_for_undeclared_source_marker(
+            exc,
+            run_dir=run_dir,
+            run_kind=RUN_KIND_WRITE,
         )
     except Exception as exc:
         return _entry_refusal_terminal(

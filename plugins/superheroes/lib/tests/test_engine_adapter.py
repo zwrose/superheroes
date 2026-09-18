@@ -784,6 +784,7 @@ def test_build_argv_cli_missing_role_key_refused(capsys):
 
 
 def test_resolve_engine_model_pin_matches_build_argv_result_ladder():
+    riv = EA.resolved_inputs_vocab
     samples = [
         ("codex", "gpt-5.6-sol", "high", {}, "review"),
         ("codex", "gpt-5.6-sol", "high", {"model": "opus"}, "review"),
@@ -799,7 +800,11 @@ def test_resolve_engine_model_pin_matches_build_argv_result_ladder():
         pin, pin_source, refusal, _detail = EA._resolve_engine_model_pin(
             vendor, model, opts.get("model"),
         )
-        assert (resolved_model, source) == (pin, pin_source)
+        assert resolved_model == pin
+        if pin_source == riv.CALLER:
+            assert source == seat.get("modelSource", riv.CALLER)
+        else:
+            assert source == pin_source
         argv_res = EA.build_argv_result(seat, run_kind, opts)
         if refusal is None and argv_res["reason"] is None:
             if vendor == "codex":
@@ -807,6 +812,43 @@ def test_resolve_engine_model_pin_matches_build_argv_result_ladder():
             elif vendor == "cursor" and resolved_model:
                 model_tok = argv_res["argv"][argv_res["argv"].index("--model") + 1]
                 assert model_tok.startswith(resolved_model.split("-")[0]) or resolved_model in model_tok
+
+
+def test_resolve_engine_model_identity_passes_seat_model_source():
+    riv = EA.resolved_inputs_vocab
+    seat = {
+        "vendor": "codex",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "modelSource": riv.SEAT_DEFAULT,
+    }
+    engine_model, source = EA.resolve_engine_model(seat, "review", {})
+    assert engine_model == "gpt-5.6-sol"
+    assert source == riv.SEAT_DEFAULT
+
+
+def test_resolve_engine_model_transformed_pin_is_resolved():
+    riv = EA.resolved_inputs_vocab
+    seat = {"vendor": "cursor", "model": "cursor-grok-4.6-xhigh", "effort": None}
+    engine_model, source = EA.resolve_engine_model(seat, "build", {})
+    assert engine_model == "cursor-grok-4.6"
+    assert source == riv.RESOLVED
+
+
+def test_resolve_engine_model_defaulted_null_cursor_model_is_default():
+    riv = EA.resolved_inputs_vocab
+    seat = {"vendor": "cursor", "model": None, "effort": None}
+    engine_model, source = EA.resolve_engine_model(seat, "build", {})
+    assert engine_model == "composer-2.5"
+    assert source == riv.DEFAULT
+
+
+def test_resolve_engine_model_unknown_vendor_is_declared_none():
+    riv = EA.resolved_inputs_vocab
+    seat = {"vendor": "bogus", "model": None, "effort": "high"}
+    engine_model, source = EA.resolve_engine_model(seat, "review", {})
+    assert engine_model is None
+    assert source == riv.DECLARED_NONE
 
 
 def test_engine_reviewer_stdout_contract_is_stated_in_dispatch_reference():

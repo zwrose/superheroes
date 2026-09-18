@@ -150,7 +150,9 @@ def _render_envelope() -> list[str]:
         "- The run-directory layout (prompt, progress, stdout, stderr, terminal marker).",
         "- The parse, scrub, and forfeit-grading boundary (engine stdout is evidence; the runner "
         "grades and folds).",
-        "- The allowlist gate (`dispatch_guard.py check`) on every dispatch path.",
+        "- The allowlist gate (`seat_bundle.resolve_entry` → `dispatch_allowlist.validate`) on every "
+        "dispatch path; `dispatch_guard.py check` is the manual CLI over the same allowlist "
+        "(reached via `guard-check`).",
         "- Every terminal result carries `ok`, `terminal`, `runDir`, and `argv`.",
         "",
         "### Declared soft (each bound read from code at generation time)",
@@ -274,8 +276,15 @@ def generate(*, check_contracts: bool = True) -> str:
         "",
         "# Dispatch entry reference",
         "",
-        "Generated from the dispatch shell's argparse declarations. To refresh after an argument "
-        "change, run:",
+        "Generated from four inputs — regenerate with the command below after any change to any one:",
+        "",
+        "1. The argparse declarations of the three dispatch CLIs (`engine_dispatch.py`, "
+        "`engine_adapter.py`, `dispatch_guard.py`).",
+        "2. `resolved_inputs_vocab.SOURCE_MARKERS` (resolvedInputs source markers).",
+        "3. `seat_bundle.ENTRY_REFUSAL_REASONS` (entry-refusal reasons).",
+        "4. `engine_adapter.BUILD_ARGV_REFUSAL_TOKENS` (engine-config refusal tokens).",
+        "",
+        "To refresh after any of the above changes, run:",
         "",
         "    %s" % _REGEN_CMD,
         "",

@@ -2650,3 +2650,72 @@ def test_wo8_edge1_cursor_implementer_null_model_snapshot_sources(tmp_path):
     assert snapshot["modelSource"] == "seat-default"
     assert snapshot["engineModel"] == "composer-2.5"
     assert snapshot["engineModelSource"] == "seat-default"
+
+
+# --- #1270 WO-3: engineModelSource provenance and marker-guard detail ----------------
+
+
+def _undeclared_marker_guard_detail(field, marker, source_markers):
+    vocabulary = ", ".join(sorted(source_markers))
+    return (
+        "resolvedInputs field %r source marker %r is not declared; accepted: %s"
+        % (field, marker, vocabulary)
+    )
+
+
+def test_engine_model_source_caller_supplied_vs_registry_resolved_differ(tmp_path):
+    wt, main = _linked_worktree(tmp_path)
+    wt2 = str(tmp_path / "wt2")
+    _git(main, "worktree", "add", "-q", wt2)
+    fake = FakeRunner([])
+    caller_run = str(tmp_path / "caller-model")
+    _dispatch_write(
+        tmp_path,
+        fake,
+        cwd=wt,
+        run_dir=caller_run,
+        seat=_seat("codex", "gpt-5.6-sol", "high"),
+        max_wait=0,
+    )
+    caller_snapshot = _write_opened_resolved_inputs(caller_run)
+    assert caller_snapshot["engineModelSource"] == "caller"
+
+    defaulted_run = str(tmp_path / "defaulted-model")
+    _dispatch_write(
+        tmp_path,
+        fake,
+        cwd=wt2,
+        run_dir=defaulted_run,
+        seat=_seat_json("cursor", None, None),
+        max_wait=0,
+    )
+    defaulted_snapshot = _write_opened_resolved_inputs(defaulted_run)
+    assert defaulted_snapshot["engineModelSource"] == "seat-default"
+    assert caller_snapshot["engineModelSource"] != defaulted_snapshot["engineModelSource"]
+
+
+def test_dispatch_write_undeclared_marker_detail_surfaces_guard_message(tmp_path, monkeypatch):
+    shrunk = frozenset(m for m in ED.resolved_inputs_vocab.SOURCE_MARKERS if m != ED.resolved_inputs_vocab.CALLER)
+    monkeypatch.setattr(ED.resolved_inputs_vocab, "SOURCE_MARKERS", shrunk)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-marker-guard")
+    result = ED.dispatch_write(
+        seat=_codex_seat(),
+        cwd=wt,
+        run_dir=run_dir,
+        prompt_path=_prompt(tmp_path),
+        run_engine=FakeRunner([]),
+        max_wait=0,
+    )
+    expected_detail = _undeclared_marker_guard_detail(
+        "engine", ED.resolved_inputs_vocab.CALLER, shrunk,
+    )
+    assert result.get("ok") is False
+    assert result.get("terminal") is True
+    assert result.get("reason") == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert result.get("entryReason") == "internal-error"
+    assert result.get("detail") == expected_detail
+    assert "engine" in result.get("detail")
+    assert ED.resolved_inputs_vocab.CALLER in result.get("detail")
+    assert "accepted:" in result.get("detail")
+    assert result.get("runOpened") is False
