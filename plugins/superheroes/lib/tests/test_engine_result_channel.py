@@ -547,7 +547,7 @@ def test_ruling_new_issues_detailed_entry_validates_and_survives_grading(tmp_pat
     repo_root = os.path.join(_HERE, "..", "..", "..")
     os.makedirs(run_dir, exist_ok=True)
     schema_path = os.path.join(run_dir, ed.NATIVE_SCHEMA_NAME)
-    result_path = os.path.join(run_dir, ed.NATIVE_RESULT_NAME)
+    result_path = ed._native_result_path(run_dir, 1)
     with open(schema_path, "w", encoding="utf-8") as fh:
         json.dump(schema, fh, separators=(",", ":"))
         fh.write("\n")
