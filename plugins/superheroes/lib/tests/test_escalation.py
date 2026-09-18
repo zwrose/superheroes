@@ -27,6 +27,25 @@ def _axes(**kw):
     return base
 
 
+# --- file-scope guard retirement (#1299) ---------------------------------------
+
+
+def test_file_scope_guard_retired_from_module():
+    assert not hasattr(ESC, "SAFETY_MACHINERY")
+    assert not hasattr(ESC, "is_safety_machinery")
+
+
+def _run_cli(*args):
+    proc = subprocess.run([sys.executable, _MODULE_PATH, *args],
+                          capture_output=True, text=True)
+    return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+
+def test_cli_guard_subcommand_rejected():
+    rc, _out, _err = _run_cli("guard", "--path", "/tmp/x.py")
+    assert rc != 0
+
+
 # --- route() truth table ---
 def test_on_floor_short_circuits_to_gate():
     # on_floor wins regardless of every other axis (the floor is step 1, unconditional)
@@ -95,95 +114,6 @@ def test_classify_floor_passes_ordinary_descriptors(descriptor):
     assert ESC.classify_floor(descriptor) is False
 
 
-# --- safety-machinery set + fixer file-scope guard ---
-def test_safety_machinery_set_members_are_pinned():
-    # The set is the single source of truth (§4 bound-2): the names whose edit could disable a
-    # floor/gate/halt/escalation guarantee. Pin membership so the guard and the eval fixture
-    # can't drift. escalation_resolve.py — the wrapper that OWNS the fail-closed verdict — is
-    # included (review caught its omission: without it a fixer could neuter the guard).
-    assert set(ESC.SAFETY_MACHINERY) == {
-        "escalation.py", "escalation_resolve.py", "loop_state.py", "circuit_breaker.py",
-        "gate_write.py", "definition_doc.py",
-        "model_tier.py", "model_registry.py",
-        "engine_pref.py", "seat_map.py", "dispatch_guard.py", "engine_dispatch.py", "seat_canary.py",
-        "engine_adapter.py",
-        "hooks.json",
-        "session_start.py",
-        "session_mode.py", "version_skew.py",
-        "escalation-base.md", "review-base.md",
-        # shared review-and-fix loop (#104): deciders, durable record, and the orchestration shell
-        "panel_tally.py", "loop_synthesis.py", "verification.py", "round_phases.py",
-        "payload_contracts.py", "round_adapters.py", "verify_gate.py",
-        "review_result.py", "round_driver.py", "audits.py", "delta_surface.py",
-        # the two owner-named-risk gates + their hook wrappers (collector #695 item 55)
-        "worktree_guard.py", "owner_authority.py", "mode_registry.py",
-        "worktree_guard_gate.py", "owner_authority_gate.py",
-        "owner-authority-allowlist.md",  # named owner-authority-gate-family member — fixer must refuse or the carve-out is decorative on this member
-    }
-
-def _band_file(tmp_path, sub, name):
-    p = tmp_path / "plugins" / "superheroes" / sub / name
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("x", encoding="utf-8")
-    return p
-
-# Files that live under hooks/ in the merged superheroes tree (not lib/)
-_HOOKS_FILES = {"hooks.json", "session_start.py", "worktree_guard_gate.py", "owner_authority_gate.py"}
-
-def test_is_safety_machinery_engine_pref_and_seat_map(tmp_path):
-    band_root = str(tmp_path / "plugins" / "superheroes")
-    for name in ("engine_pref.py", "seat_map.py"):
-        p = _band_file(tmp_path, "lib", name)
-        assert ESC.is_safety_machinery(str(p), [band_root]) is True, name
-
-
-# Bite axis: is_safety_machinery must refuse every surviving SAFETY_MACHINERY member under a band root (not tuple size/membership — the pin test covers that).
-def test_guard_refuses_each_safety_file_under_a_band_root(tmp_path):
-    band_root = str(tmp_path / "plugins" / "superheroes")
-    for name in ESC.SAFETY_MACHINERY:
-        if name in _HOOKS_FILES:
-            sub = "hooks"
-        elif name.endswith(".md"):
-            sub = "rubric"
-        else:
-            sub = "lib"
-        p = _band_file(tmp_path, sub, name)
-        assert ESC.is_safety_machinery(str(p), [band_root]) is True, name
-
-def test_guard_allows_ordinary_source(tmp_path):
-    roots = [str(tmp_path / "plugins" / "superheroes")]
-    p = tmp_path / "src" / "feature.py"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("x", encoding="utf-8")
-    assert ESC.is_safety_machinery(str(p), roots) is False
-
-def test_guard_allows_same_basename_outside_band_roots(tmp_path):
-    # The false-positive fix (review): a target repo legitimately containing loop_state.py
-    # OUTSIDE the band's plugin tree must NOT be refused — basename alone is not enough.
-    roots = [str(tmp_path / "plugins" / "superheroes")]
-    p = tmp_path / "their_app" / "loop_state.py"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("x", encoding="utf-8")
-    assert ESC.is_safety_machinery(str(p), roots) is False
-
-def test_guard_resists_symlink_evasion(tmp_path):
-    real = _band_file(tmp_path, "lib", "loop_state.py")
-    link = tmp_path / "alias.py"
-    os.symlink(str(real), str(link))
-    roots = [str(tmp_path / "plugins" / "superheroes")]
-    # matched by the RESOLVED real path (basename + under a band root), not the link name
-    assert ESC.is_safety_machinery(str(link), roots) is True
-
-def test_guard_fails_closed_without_band_roots(tmp_path):
-    p = _band_file(tmp_path, "lib", "loop_state.py")
-    assert ESC.is_safety_machinery(str(p), None) is True   # can't anchor -> protect
-
-
-def _run_cli(*args):
-    proc = subprocess.run([sys.executable, _MODULE_PATH, *args],
-                          capture_output=True, text=True)
-    return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
-
 def test_cli_route_emits_json():
     rc, out, _ = _run_cli("route", "--on-floor", "false", "--ground-truth-locus", "owner",
                           "--owner-weighable", "true", "--reversible", "true",
@@ -199,10 +129,3 @@ def test_cli_route_on_floor_gates():
 def test_cli_classify_emits_json():
     rc, out, _ = _run_cli("classify", "--action", "git push origin main")
     assert rc == 0 and json.loads(out)["on_floor"] is True
-
-def test_cli_guard_refuses_safety_file(tmp_path):
-    p = tmp_path / "plugins" / "superheroes" / "lib" / "loop_state.py"
-    p.parent.mkdir(parents=True, exist_ok=True); p.write_text("x", encoding="utf-8")
-    rc, out, _ = _run_cli("guard", "--path", str(p),
-                          "--band-root", str(tmp_path / "plugins" / "superheroes"))
-    assert rc == 0 and json.loads(out)["allow"] is False

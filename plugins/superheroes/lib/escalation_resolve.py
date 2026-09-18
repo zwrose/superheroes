@@ -27,33 +27,6 @@ def _say(detail):
     sys.stderr.write(detail + "\n")
 
 
-def _guard_refusal(detail):
-    """Refuse a guard call the way this module refuses everything else — with a verdict.
-
-    The shipped fixer order keys its rule on `allow` / `degraded`; an exit carrying neither
-    leaves that rule unevaluable, so every guard refusal emits the conservative verdict on
-    stdout alongside the nonzero status. Same direction as `_safe`: refuse, never proceed.
-    """
-    _say(detail)
-    sys.stdout.write(json.dumps(
-        {"allow": False, "degraded": True, "refusal": detail}) + "\n")
-    return 2
-
-
-def _parse_stdin_path(raw):
-    """Read one absolute path from stdin for guard --stdin-path.
-
-    The entire stdin payload is the path — no line framing, no silent strip.
-    """
-    if not raw:
-        return None, "guard --stdin-path: empty stdin"
-    if "\n" in raw or "\0" in raw:
-        return None, "guard --stdin-path: path contains newline or NUL"
-    if raw != raw.strip():
-        return None, "guard --stdin-path: path has leading or trailing whitespace"
-    return raw, None
-
-
 def _safe(fn, conservative, **kw):
     """Call the core directly; on ANY error return the conservative fail-closed default.
 
@@ -63,21 +36,6 @@ def _safe(fn, conservative, **kw):
         return fn(**kw), False
     except Exception:
         return conservative, True
-
-
-def _band_roots(root):
-    """Resolved plugin roots to anchor the canonical-path guard against: this (single)
-    superheroes install, and — when --root is given (dogfood / in-repo) — the in-repo plugin
-    dir. The guard refuses a safety-named file under ANY of them, so a like-named file in the
-    target repo (outside these roots) is NOT falsely refused. The three per-plugin roots
-    collapsed to the one merged plugin root when the band consolidated into one plugin.
-    """
-    roots = [_PLUGIN_ROOT]
-    if root:
-        cand = os.path.join(root, "plugins", "superheroes")
-        if os.path.isdir(cand):
-            roots.append(cand)
-    return roots
 
 
 def _resolve_rubric(root):
@@ -105,11 +63,6 @@ def _build_parser():
               "--reversible", "--confidence"):
         r.add_argument(f, required=True)
     c = sub.add_parser("classify"); add_root(c); c.add_argument("--action", required=True)
-    g = sub.add_parser("guard"); add_root(g)
-    g.add_argument("--path", default=None,
-                   help="absolute file path (mutually exclusive with --stdin-path)")
-    g.add_argument("--stdin-path", action="store_true",
-                   help="read one absolute file path from stdin (entire payload, no framing)")
     rb = sub.add_parser("rubric"); add_root(rb)
     return ap
 
@@ -152,22 +105,6 @@ def main(argv):
         sys.stdout.write(json.dumps({"on_floor": on_floor, "degraded": degraded}) + "\n")
         return 0
 
-    if args.cmd == "guard":
-        if bool(args.stdin_path) == bool(args.path):
-            return _guard_refusal("guard requires exactly one of --path or --stdin-path")
-        if args.stdin_path:
-            raw = sys.stdin.read()
-            path, err = _parse_stdin_path(raw)
-            if err:
-                return _guard_refusal(err)
-        else:
-            path = args.path
-        # conservative=True (treat as safety machinery -> refuse) on any core error.
-        safety, degraded = _safe(escalation.is_safety_machinery, True,
-                                 path=path, band_roots=_band_roots(args.root))
-        allow = not safety   # fail closed: error -> safety True -> allow False (refuse)
-        sys.stdout.write(json.dumps({"allow": allow, "degraded": degraded}) + "\n")
-        return 0
     return 2
 
 
