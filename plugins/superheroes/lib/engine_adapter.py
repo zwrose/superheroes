@@ -46,6 +46,7 @@ REVIEW_RESULT_KINDS = ("findings", "verdicts", "grouping", "ruling")
 
 # Write tail signals graded by _grade_build_report_obj (CONVENTIONS §11).
 WRITE_SIGNAL_ENUM = ("ok", "plan_wrong", "needs_context")
+WRITE_SIGNAL_OK, WRITE_SIGNAL_PLAN_WRONG, WRITE_SIGNAL_NEEDS_CONTEXT = WRITE_SIGNAL_ENUM
 
 # Rubric severity tiers — re-export from review_findings_schema (single home; #1145).
 REVIEW_SEVERITY_TIERS = review_findings_schema.SEVERITY_TIERS
@@ -112,6 +113,10 @@ _CURSOR_MODEL = model_registry.dispatch_token("cursor", "composer-2.5")
 # re-read in FULL, so the bound never changes the result — it only avoids loading a small file's
 # worth extra in the common case. 512 KB comfortably exceeds any real findings payload.
 MAX_STDOUT_TAIL_BYTES = 512 * 1024
+
+# Single home for the engine-output byte cap. engine_dispatch.MAX_STDOUT_CAPTURE and
+# engine_result_channel.NATIVE_RESULT_MAX_BYTES both read this — never restate the literal.
+ENGINE_OUTPUT_MAX_BYTES = 8 * 1024 * 1024
 
 # #668: runner stdout capture keeps only the tail (MAX_STDOUT_CAPTURE in engine_dispatch); a large
 # echoed prompt can arrive truncated while the trailing shape-contract example survives.
@@ -609,9 +614,10 @@ def _grade_build_report_obj(obj):
     evidence = {"testFailed": bool(ev.get("testFailed")),
                 "testPassed": bool(ev.get("testPassed"))}
     if obj.get("ok") is not True:
-        sig = "plan_wrong" if obj.get("signal") == "plan_wrong" else "needs_context"
+        sig = (WRITE_SIGNAL_PLAN_WRONG if obj.get("signal") == WRITE_SIGNAL_PLAN_WRONG
+               else WRITE_SIGNAL_NEEDS_CONTEXT)
         return {"ok": False, "signal": sig, "reason": sig, "evidence": evidence}
-    return {"ok": True, "signal": "ok", "evidence": evidence}
+    return {"ok": True, "signal": WRITE_SIGNAL_OK, "evidence": evidence}
 
 
 def grade_write_report(engine, role_kind, stdout, fed_prompt):

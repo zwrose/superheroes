@@ -15,9 +15,9 @@ CHANNEL_MARKER = "marker"
 RUN_KIND_REVIEW = "review"
 RUN_KIND_WRITE = "write"
 
-# Align with engine_dispatch.MAX_STDOUT_CAPTURE (8 MiB): native results are structured JSON
-# written to a dedicated file; the authoritative cap lives on engine_dispatch.MAX_STDOUT_CAPTURE.
-NATIVE_RESULT_MAX_BYTES = 8 * 1024 * 1024
+# Native results are structured JSON written to a dedicated file; the authoritative cap lives on
+# engine_adapter.ENGINE_OUTPUT_MAX_BYTES (engine_dispatch.MAX_STDOUT_CAPTURE reads the same home).
+NATIVE_RESULT_MAX_BYTES = engine_adapter.ENGINE_OUTPUT_MAX_BYTES
 
 # Write tail signals graded by engine_adapter._grade_build_report_obj (CONVENTIONS §11).
 WRITE_SIGNAL_ENUM = engine_adapter.WRITE_SIGNAL_ENUM

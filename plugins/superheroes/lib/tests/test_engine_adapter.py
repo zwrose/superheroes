@@ -3971,3 +3971,18 @@ def test_parse_result_review_ruling_valid_id_still_parses():
     assert res["ok"] is True
     assert res["resultKind"] == "ruling"
     assert res["ruling"]["id"] == "f1"
+
+
+@pytest.mark.parametrize(
+    "obj,expected_signal",
+    [
+        ({"ok": True}, EA.WRITE_SIGNAL_OK),
+        ({"ok": False, "signal": EA.WRITE_SIGNAL_PLAN_WRONG}, EA.WRITE_SIGNAL_PLAN_WRONG),
+        ({"ok": False, "signal": "unrecognised"}, EA.WRITE_SIGNAL_NEEDS_CONTEXT),
+    ],
+)
+def test_grade_build_report_obj_signals_read_write_signal_enum(obj, expected_signal):
+    """Every signal _grade_build_report_obj emits is a member of WRITE_SIGNAL_ENUM."""
+    graded = EA._grade_build_report_obj(obj)
+    assert graded["signal"] in EA.WRITE_SIGNAL_ENUM
+    assert graded["signal"] == expected_signal
