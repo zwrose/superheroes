@@ -688,11 +688,10 @@ collector entry where it has one.
 
 Executing what a ruling unblocked is **advisor-side work only**: writes, filings, routings, board
 wiring, dispatches. It **never** includes the acts the covenant's first promise and showrunner duty
-6 reserve — **merge, release, publish, force-push**. **A ruling on a decision is never the word
-for any of the four.** Each happens only on the word the covenant's first promise and showrunner
-duty 6 require for that act, and only the way they say. Read `rubric/covenant.md` and duty 6 in
-`skills/showrunner/SKILL.md` for who executes each one, on what word, under which preconditions,
-and how it is reported, rather than restating any of it here.
+6 reserve — **merge, release, publish, force-push**. **A ruling on a decision never
+authorizes any of the four.** Who may do each one, and on what authority, is the covenant's first
+promise and showrunner duty 6 to say, and they say it differently for each act: read
+`rubric/covenant.md` and duty 6 in `skills/showrunner/SKILL.md` rather than a restatement here.
 
 ## The collector preamble — canonical snippet
 
