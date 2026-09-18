@@ -5523,7 +5523,8 @@ def _terminal_receipt_gate(session_dir, state):
         fault = _verify_terminal_receipt(session_dir)
     else:
         fault = _finalize_receipt(session_dir, state)
-        state["_receiptFinalized"] = True
+        if fault is None or "certification" not in fault:
+            state["_receiptFinalized"] = True
     state["_receiptFault"] = fault or None
     save_state(session_dir, state)
     return fault
@@ -7580,7 +7581,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
             spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
             stored_envelope, read_err = round_records.read_json(spath)
             if read_err is None and isinstance(stored_envelope, dict):
-                revision_fields = _journal_revision_fields(stored_envelope)
+                revision_fields = _journal_stored_revision(stored_envelope)
             else:
                 revision_fields = {"payloadSha256": payload_sha}
             _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
@@ -8297,7 +8298,7 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
         "journal": _journal_entry_for_commit(
             session_dir, "advance", "recorded", phase=phase, round=rnd, attempt=attempt,
             seat=seat_key, occurrence=occurrence,
-            **_journal_revision_fields(envelope), superseded=False,
+            **_journal_stored_revision(envelope), superseded=False,
             **_journal_identity_fields(phase, seat_key, occurrence, attempt)),
     }
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), payload,

@@ -1135,6 +1135,29 @@ def test_record_result_sweep_ingests_every_unclaimed_landing(tmp_path, adapters)
     assert len(_outcomes(d, "recorded")) == len(RD.DIMENSIONS)
 
 
+def test_sweep_recorded_journal_carries_stored_envelope_revision_identity(tmp_path, adapters):
+    """#1271 WO-A12-G finding 2: sweep must journal the stored envelope's complete revision
+    identity — provenance and execution-evidence markers — not the revision triple alone."""
+    d = _session(tmp_path)
+    seat = "code-reviewer"
+    evidence = _execution_evidence(runnerNonce="nonce-sweep")
+    _land(d, seat, provenance=RR.PROVENANCE_DISPATCH_OBSERVED, executionEvidence=evidence)
+    out = RD.cmd_record_result(d, sweep=True)
+    assert out["ok"], out
+    recorded = [e for e in _outcomes(d, "recorded") if e.get("seat") == seat]
+    assert recorded
+    row = recorded[-1]
+    pend = _pending(d)
+    spath = RR.store_path(d, pend["round"], pend["phase"],
+                          RR.storage_key(seat), pend["attempt"])
+    stored, err = RR.read_json(spath)
+    assert err is None
+    assert row["provenance"] == stored.get("provenance")
+    assert row["envelopeSha256"] == stored.get("envelopeSha256")
+    assert row["executionEvidencePresent"] == ("executionEvidence" in stored)
+    assert row["executionEvidencePresent"] is True
+
+
 def test_record_result_sweep_supersede_refuses_by_name(tmp_path, adapters):
     """T1 — `--sweep --supersede` must refuse `sweep-supersede-unsupported`, not false-success."""
     d = _session(tmp_path)
@@ -1762,6 +1785,24 @@ def test_orchestrator_fulfilled_fold_writes_the_durable_seat_record(tmp_path, ad
     assert record["fulfilledBy"] == "orchestrator"
     # reconstructed from the record alone
     assert record["payload"]["result"] == "pass"
+
+
+def test_orchestrator_fulfilled_recorded_journal_carries_stored_envelope_revision_identity(
+        tmp_path, adapters):
+    """#1271 WO-A12-G finding 2: orchestrator-fulfilled advance must journal the stored envelope's
+    complete revision identity — provenance and execution-evidence markers — not the triple alone."""
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "pass"})
+    assert _advance(d, tmp_path)["ok"]
+    recorded = [e for e in _outcomes(d, "recorded") if e.get("seat") == "verify"]
+    assert recorded
+    row = recorded[-1]
+    stored, err = RR.read_json(_verify_store_path(d))
+    assert err is None
+    assert row.get("provenance") == stored.get("provenance")
+    assert row.get("envelopeSha256") == stored.get("envelopeSha256")
+    assert row.get("executionEvidencePresent") == ("executionEvidence" in stored)
 
 
 def test_orchestrator_fulfilled_fold_writes_record_and_receipt_on_a_terminal_verify(

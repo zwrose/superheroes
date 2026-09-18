@@ -8379,3 +8379,24 @@ def test_write_certification_artifacts_refusal_write_failure_returns_fault(tmp_p
     assert fault is not None
     assert "certification refusal artifact write failed" in fault
     assert "park" in fault
+
+
+def test_terminal_receipt_gate_certification_write_failure_not_laundered_on_replay(tmp_path):
+    """#1271 WO-A12-G finding 1: a certification-artifact write fault must not set
+    `_receiptFinalized` — a replay must re-attempt (or refuse), never return ok over a missing
+    certification artifact."""
+    session_dir = _certification_refusal_session(tmp_path)
+    os.makedirs(os.path.join(session_dir, RD.CERTIFICATION_REFUSAL_FILE))
+    ok, state = RD.load_state(session_dir)
+    assert ok, state
+    RD._journal_append(session_dir, {"cmd": "submit", "phase": RD.P_PANEL, "round": 1,
+                                     "attempt": 0})
+    fault1 = RD._terminal_receipt_gate(session_dir, state)
+    assert fault1 is not None
+    assert "certification refusal artifact write failed" in fault1
+    ok, state_after = RD.load_state(session_dir)
+    assert ok, state_after
+    assert not state_after.get("_receiptFinalized")
+    fault2 = RD._terminal_receipt_gate(session_dir, state_after)
+    assert fault2 is not None
+    assert "certification refusal artifact write failed" in fault2
