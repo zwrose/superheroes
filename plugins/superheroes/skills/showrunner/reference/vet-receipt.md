@@ -77,7 +77,7 @@ shape is wrong and the thinking wins.
 7. **Dispositions — completed, and pending.** **Completed first**, because that is the primary path:
    this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Then the
    **pending** set under `<!-- superheroes:pending-proposals -->` — only what genuinely could not
-   close in this session. Every Tier-2 item is appended to the collector at vet time,
+   close in this session. Every owner call is appended to the collector at vet time,
    unconditionally, so the collector is the complete register by construction; owner attendance
    governs only when discussion happens — attended, the item is proposed in the vet-delivery message
    and may be struck minutes after it was appended; absent, it awaits the batch. The receipt
@@ -128,7 +128,7 @@ are never holding the inventory in working memory.
 Where the last open child closes without a PR there is no vet receipt to ride; the receipt
 reaches the owner by the no-PR presentation rule in `skills/showrunner/reference/closure.md`.
 
-Every Tier-2 item is appended before this receipt posts; the collector-escalation row is the tripwire
+Every owner call is appended before this receipt posts; the collector-escalation row is the tripwire
 when items still live only in receipts or age without owner batch — **not** a substitute for the
 append-always rule at attended vets. Each pending item's **proposing ordinal** is what makes its age
 inspectable — a subtraction against this vet's ordinal, not a count of anything — so the escalation
