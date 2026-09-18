@@ -334,11 +334,7 @@ def _helper_channel_read_is_list_guarded(fn, channel):
 
 
 def test_e7_helper_channel_reads_guarded_by_isinstance_list():
-    """E7 — skew_records and seat_map_violations guard channel reads with isinstance(..., list)."""
-    assert _helper_channel_read_is_list_guarded(
-        receipt_disclosures.skew_records, "pluginVersionSkew"), (
-        "%s skew_records must not iterate a bare rec.get(pluginVersionSkew) or []"
-        % _INVARIANT_B)
+    """E7 — seat_map_violations guards channel reads with isinstance(..., list)."""
     assert _helper_channel_read_is_list_guarded(
         receipt_disclosures.seat_map_violations, "seatMapViolations"), (
         "%s seat_map_violations must not iterate a bare rec.get(seatMapViolations) or []"

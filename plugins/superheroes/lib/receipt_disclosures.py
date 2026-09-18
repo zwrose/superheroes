@@ -2,7 +2,6 @@
 """Disclosure-channel vocabulary, selection rule, and degraded-prose collector — leaf module."""
 import model_registry
 import seat_map_receipts
-import version_skew
 
 RECEIPT_FORM_CERTIFIED = "certified"
 RECEIPT_FORM_ATTESTED = "attested"
@@ -69,17 +68,6 @@ def order_vendor_provenance_gaps_shape(value):
     return True
 
 
-def plugin_version_skew_shape(value):
-    if not dict_list(value):
-        return False
-    for row in value:
-        if row.get("constraint") != version_skew.CONSTRAINT:
-            return False
-        if not isinstance(row.get("status"), str):
-            return False
-    return True
-
-
 def normalize_adapter_provenance(prov):
     if not isinstance(prov, dict):
         return {}
@@ -99,7 +87,6 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "seatMapUnavailable": str_list,
     "seatMapUnjudgeable": str_list,
     "seatMapViolations": dict_list,
-    "pluginVersionSkew": plugin_version_skew_shape,
     "vacuousSeats": str_list,
     "engagedArtifactSeats": str_list,
     "canaryUnverified": str_list,
@@ -211,50 +198,6 @@ def same_family_degraded(state):
     return bool(same_family_seats(state))
 
 
-def skew_record_identity(row):
-    return seat_map_receipts._skew_record_identity(row)
-
-
-def skew_records(state):
-    seen = set()
-    merged = []
-    for rec in (state.get("rounds") or {}).values():
-        if not isinstance(rec, dict):
-            continue
-        skew = rec.get("pluginVersionSkew")
-        if not isinstance(skew, list):
-            continue
-        for row in skew:
-            key = skew_record_identity(row)
-            if key is None:
-                continue
-            if not version_skew.appends_degradation(row.get("status")):
-                continue
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(row)
-    for row in seat_map_receipts.skew_records(state):
-        key = skew_record_identity(row)
-        if key is None or key in seen:
-            continue
-        seen.add(key)
-        merged.append(row)
-    merged.sort(
-        key=lambda item: (
-            str(item.get("constraint", "")),
-            str(item.get("status", "")),
-            str(item.get("detail", "")),
-            str(item.get("inspectedRoot", "")),
-        ),
-    )
-    return merged
-
-
-def skew_degraded(state):
-    return bool(skew_records(state))
-
-
 def seat_map_violations(state):
     seen = set()
     merged = []
@@ -341,21 +284,6 @@ def build_degraded_prose(state, form):
             "panel independence: seat(s) %s were filled with the MAKER's own model family — no "
             "alternative family was live; disclosed by the seat map and named in the certification "
             "shape" % ", ".join(same_family_seats(state)))
-    if skew_degraded(state):
-        _skew_reasons = []
-        for rec in skew_records(state):
-            reason = rec.get("reason")
-            if isinstance(reason, str) and reason:
-                _skew_reasons.append(reason)
-        if _skew_reasons:
-            degraded_out.append(
-                "%s; disclosed by the seat map and named in the certification shape"
-                % "; ".join(_skew_reasons))
-        else:
-            degraded_out.append(
-                "plugin-version-skew: the review ran under a plugin/repository semantics skew "
-                "but no usable reason text was recorded; disclosed by the seat map and named in "
-                "the certification shape")
     _pin_seats = seat_pin_excused_seats(state)
     if _pin_seats:
         degraded_out.append(
@@ -615,7 +543,6 @@ __all__ = (
     "canary_verified_shape",
     "adapter_provenance_shape",
     "order_vendor_provenance_gaps_shape",
-    "plugin_version_skew_shape",
     "normalize_adapter_provenance",
     "declared_disclosures",
     "round_entry_key_declared",
@@ -628,9 +555,6 @@ __all__ = (
     "same_family_seats",
     "same_family_seats_for_receipt",
     "same_family_degraded",
-    "skew_record_identity",
-    "skew_records",
-    "skew_degraded",
     "seat_map_violations",
     "seat_map_violated",
     "seat_map_violation_breach_prose",

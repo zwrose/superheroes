@@ -100,7 +100,6 @@ def parity_hand_landed_shape(tmp_path):
                 "fullPanel": True,
                 "independence": "independent",
                 "base": "fetched",
-                "pluginVersionSkew": "not-checked",
                 "shapeDrivers": [],
             },
             "rounds": {

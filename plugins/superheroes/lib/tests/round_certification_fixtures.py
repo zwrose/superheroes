@@ -132,7 +132,6 @@ def _minimal_terminal_state():
             "fullPanel": True,
             "independence": "independent",
             "base": "fetched",
-            "pluginVersionSkew": "not-checked",
             "shapeDrivers": [],
         },
         "findings": [
