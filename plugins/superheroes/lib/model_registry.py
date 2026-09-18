@@ -309,6 +309,11 @@ def _allowed_efforts(vendor: str, model_id: str) -> tuple[str, ...] | None:
     return _EFFORT_ENUM.get(vendor, ())
 
 
+def allowed_efforts(vendor: str, model_id: str) -> tuple[str, ...] | None:
+    """Public accessor for per-model effort constraints."""
+    return _allowed_efforts(vendor, model_id)
+
+
 def dispatch_token(vendor: str, model_id: str, effort: str | None = None) -> str | None:
     if not is_registered(vendor, model_id):
         return None
@@ -490,6 +495,13 @@ def engine_pref_key(role: str) -> str | None:
     return meta["engine_pref_key"] if meta else None
 
 
+def role_read_write(role: str) -> str | None:
+    meta = _ROLE_META.get(role)
+    if not meta:
+        return None
+    return meta.get("read_write")
+
+
 def engine_pref_role_kind(role: str) -> str | None:
     """Codex effort / argv role_kind for a model-tier dispatch role.
 
@@ -649,6 +661,21 @@ def _resolve_dispatch_success(
     }
 
 
+EFFORT_SOURCE_SEAT_DEFAULT = "seat-default"
+EFFORT_SOURCE_GIVEN = "given"
+EFFORT_SOURCE_TOKEN_ENCODED = "token-encoded"
+EFFORT_SOURCE_RESOLVED_UNIQUE = "resolved-unique"
+EFFORT_SOURCE_RESOLVED_LOWEST_RUNG = "resolved-lowest-rung"
+
+EFFORT_SOURCES = frozenset({
+    EFFORT_SOURCE_SEAT_DEFAULT,
+    EFFORT_SOURCE_GIVEN,
+    EFFORT_SOURCE_TOKEN_ENCODED,
+    EFFORT_SOURCE_RESOLVED_UNIQUE,
+    EFFORT_SOURCE_RESOLVED_LOWEST_RUNG,
+})
+
+
 def resolve_dispatch(
     role: str,
     vendor: str,
@@ -702,7 +729,7 @@ def resolve_dispatch(
                     pairs,
                 )
             model_id, eff = cell
-            effort_source = "seat-default"
+            effort_source = EFFORT_SOURCE_SEAT_DEFAULT
             return _resolve_dispatch_success(
                 vendor, model_id, eff, effort_source, pairs
             )
@@ -751,13 +778,13 @@ def resolve_dispatch(
 
     model_id, eff = cands[0]
     if effort is not None:
-        effort_source = "given"
+        effort_source = EFFORT_SOURCE_GIVEN
     elif token_effort is not None:
-        effort_source = "token-encoded"
+        effort_source = EFFORT_SOURCE_TOKEN_ENCODED
     elif len(cands) == 1:
-        effort_source = "resolved-unique"
+        effort_source = EFFORT_SOURCE_RESOLVED_UNIQUE
     else:
-        effort_source = "resolved-lowest-rung"
+        effort_source = EFFORT_SOURCE_RESOLVED_LOWEST_RUNG
 
     return _resolve_dispatch_success(
         vendor, model_id, eff, effort_source, pairs

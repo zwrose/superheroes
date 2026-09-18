@@ -17,8 +17,11 @@ import round_adapters  # noqa: E402
 # Adding a name here is a deliberate layering decision. The six names deleted in #1123 WO-A
 # (`round_adapters`, `round_records`, `verification`, `circuit_breaker`, `panel_tally`,
 # `loop_state`) plus `review_result` must never return.
+# `dispatch_allowlist` loads because the allowlist is consulted at the entry chokepoint
+# (`seat_bundle.resolve_entry`), so any dispatch entry imports it.
 _ENGINE_ADAPTER_LIB_CLOSURE = frozenset({
     "audits",
+    "dispatch_allowlist",
     "dispatch_outcome",
     "engine_adapter",
     "finding_identity",
@@ -26,9 +29,11 @@ _ENGINE_ADAPTER_LIB_CLOSURE = frozenset({
     "payload_contracts",
     "pr_comment",
     "readout",
+    "resolved_inputs_vocab",
     "review_findings_schema",
     "review_memory",
     "round_phases",
+    "seat_bundle",
 })
 
 _REEXPORT_NAMES = (

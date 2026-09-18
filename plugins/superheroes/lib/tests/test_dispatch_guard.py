@@ -152,12 +152,8 @@ def test_cli_park_exits_1_and_names_allowlist():
             sys.executable,
             _MOD,
             "check",
-            "--role",
-            "implementer",
-            "--vendor",
-            "cursor",
-            "--model",
-            "gpt-5.3-codex-high",
+            "--seat",
+            json.dumps({"vendor": "cursor", "model": "gpt-5.3-codex-high", "effort": None, "role": "implementer"}),
         ],
         capture_output=True,
         text=True,
@@ -176,12 +172,8 @@ def test_cli_pass_exits_0():
             sys.executable,
             _MOD,
             "check",
-            "--role",
-            "implementer",
-            "--vendor",
-            "cursor",
-            "--model",
-            "composer-2.5",
+            "--seat",
+            json.dumps({"vendor": "cursor", "model": "composer-2.5", "effort": None, "role": "implementer"}),
         ],
         capture_output=True,
         text=True,
@@ -191,6 +183,28 @@ def test_cli_pass_exits_0():
     payload = json.loads(proc.stdout)
     assert payload["ok"] is True
     assert payload["resolved_model"]
+
+
+def test_dispatch_guard_check_refuses_off_allowlist_for_implementer():
+    # axis: G1 path 5 — dispatch_guard check refuses off-allowlist and names allowlist
+    proc = subprocess.run(
+        [
+            sys.executable,
+            _MOD,
+            "check",
+            "--seat",
+            json.dumps({"vendor": "cursor", "model": "gpt-5.3-codex-high", "effort": None, "role": "implementer"}),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert "composer-2.5" in payload["allowlist"]
+    assert _PARK_TAIL in payload["reason"]
+    assert proc.stderr.strip()
 
 
 def _assert_success_triple(payload):
@@ -357,8 +371,161 @@ def test_fail_closed_edge_10_model_none_seat_default():
     assert result["effort_source"] == "seat-default"
 
 
+def test_edge1_null_model_cursor_implementer_resolves_via_cli():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            _MOD,
+            "check",
+            "--seat",
+            json.dumps({
+                "vendor": "cursor",
+                "model": None,
+                "effort": None,
+                "role": "implementer",
+            }),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["model_id"] == "composer-2.5"
+    assert payload["resolved_model"] == "composer-2.5"
+
+
+def test_edge2_null_effort_codex_reviewer_resolves_via_cli():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            _MOD,
+            "check",
+            "--seat",
+            json.dumps({
+                "vendor": "codex",
+                "model": "gpt-5.6-sol",
+                "effort": None,
+                "role": "reviewer",
+            }),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["model_id"] == "gpt-5.6-sol"
+    assert payload["effort"] == "high"
+    assert payload["resolved_model"]
+
+
+def test_cli_effort_source_matches_seat_snapshot_not_registry_given():
+    seat = {"vendor": "codex", "model": "gpt-5.6-sol", "effort": None, "role": "reviewer"}
+    spec = importlib.util.spec_from_file_location(
+        "seat_bundle_cli_test", os.path.join(_HERE, "..", "seat_bundle.py"),
+    )
+    sb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sb)
+    snapshot = sb.resolve_entry(json.dumps(seat), verb="guard-check")
+    proc = subprocess.run(
+        [sys.executable, _MOD, "check", "--seat", json.dumps(seat)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert payload["effort_source"] == snapshot["effortSource"]
+    assert payload["effort_source"] == "resolved"
+    assert payload["effort_source"] != "given"
+
+
+def test_edge3_null_model_ambiguous_effort_refuses_via_cli():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            _MOD,
+            "check",
+            "--seat",
+            json.dumps({
+                "vendor": "codex",
+                "model": None,
+                "effort": "high",
+                "role": "reviewer",
+            }),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "model-ambiguous"
+    assert "gpt-5.6-terra" in payload["seat_detail"]
+    assert "gpt-5.6-sol" in payload["seat_detail"]
+
+
 def test_fail_closed_edge_11_override_only_fable():
     result = DG.validate("implementer", "claude", "fable")
     assert result["ok"] is False
     assert result["resolved_model"] is None
     assert _PARK_TAIL in result["reason"]
+
+
+def test_wo8_edge6_dispatch_guard_and_seat_bundle_import_without_cycle():
+    lib_dir = os.path.join(_HERE, "..")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = lib_dir
+    for mod in ("dispatch_guard", "seat_bundle"):
+        cp = subprocess.run(
+            [sys.executable, "-c", f"import {mod}"],
+            cwd=lib_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert cp.returncode == 0, cp.stderr
+    for first, second in (("dispatch_guard", "seat_bundle"), ("seat_bundle", "dispatch_guard")):
+        cp = subprocess.run(
+            [sys.executable, "-c", f"import {first}; import {second}"],
+            cwd=lib_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert cp.returncode == 0, cp.stderr
+
+
+def test_wo8_edge7_dispatch_guard_check_valid_and_off_allowlist_unchanged():
+    # axis: documented CLI check command keeps success and refusal text
+    lib_dir = os.path.join(_HERE, "..")
+    mod_path = os.path.join(lib_dir, "dispatch_guard.py")
+    valid = subprocess.run(
+        [sys.executable, "-B", mod_path, "check", "--seat",
+         json.dumps({"vendor": "cursor", "model": "composer-2.5", "effort": None,
+                     "role": "implementer"})],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert valid.returncode == 0
+    payload = json.loads(valid.stdout)
+    assert payload["ok"] is True
+    assert payload["resolved_model"] == "composer-2.5"
+    off = subprocess.run(
+        [sys.executable, "-B", mod_path, "check", "--seat",
+         json.dumps({"vendor": "cursor", "model": "gpt-5.3-codex-high", "effort": None,
+                     "role": "implementer"})],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert off.returncode == 1
+    off_payload = json.loads(off.stdout)
+    assert off_payload["ok"] is False
+    assert "gpt-5.3-codex-high" in off_payload["reason"]
+    assert _PARK_TAIL in off.stderr

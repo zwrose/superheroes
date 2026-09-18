@@ -53,6 +53,30 @@ UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
 DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
 
+# Tiers _backfill's primary rotation tries after the seat's configured tier (#1269).
+_BACKFILL_DOWNGRADE_TO = "reviewer"
+# Tiers _backfill's claude-only fallback rotation tries (#1269).
+_BACKFILL_CLAUDE_ROTATION = (STRONG_TIER_REQUIRED, _BACKFILL_DOWNGRADE_TO)
+
+
+def _backfill_rotation_tiers(primary_tier: str) -> tuple[str, ...]:
+    """Tiers ``_backfill`` tries in order: configured tier, then reviewer."""
+    return (primary_tier, _BACKFILL_DOWNGRADE_TO)
+
+
+def _backfill_emittable_tiers(primary_tier: str) -> frozenset[str]:
+    """Every tier ``_backfill`` may record — primary rotation, claude fallback, terminal."""
+    return frozenset(_backfill_rotation_tiers(primary_tier)) | frozenset(_BACKFILL_CLAUDE_ROTATION)
+
+
+def accepted_tiers_for_seat(seat: str, tier_by_seat: dict[str, str] | None = None) -> frozenset[str]:
+    """Every tier seat_map.build may record for ``seat`` — default, override, and backfill."""
+    tiers_map = dict(DEFAULT_TIER_BY_SEAT)
+    if tier_by_seat:
+        tiers_map.update(tier_by_seat)
+    primary = tiers_map.get(seat, "reviewer")
+    return _backfill_emittable_tiers(primary)
+
 ALT_LIVE = "alternative-live"
 ALT_NONE = "no-alternative-live"
 ALT_UNUSABLE = "evidence-unusable"
@@ -488,7 +512,7 @@ def build(
 
     def _backfill(seat: str) -> dict:
         tier = _tier_for(seat)
-        for try_tier in (tier, "reviewer"):
+        for try_tier in _backfill_rotation_tiers(tier):
             for vendor in seating_vendors:
                 cfg = _resolve_at_tier(seat, vendor, try_tier)
                 if cfg is not None:
@@ -497,7 +521,7 @@ def build(
                     if try_tier != tier:
                         cfg["tier"] = try_tier
                     return cfg
-        for try_tier in ("reviewer-deep", "reviewer"):
+        for try_tier in _BACKFILL_CLAUDE_ROTATION:
             cfg = _resolve_at_tier(seat, "claude", try_tier)
             if cfg is not None:
                 cfg = dict(cfg)
@@ -1167,7 +1191,7 @@ def main(argv):
             configured = [e for e in args.configured_engines.split(",") if e]
             needed_override = reachable_configs(configured, pins) if pins else None
             liveness_pin_scoped = needed_override is not None
-            live, live_cells, _liveness, notes, live_cells_source = (
+            live, live_cells, _liveness, notes, live_cells_source, _cache_provenance = (
                 preflight_probe.live_vendors_for_composition(
                     configured,
                     needed_override=needed_override,
