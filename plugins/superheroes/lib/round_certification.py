@@ -72,6 +72,8 @@ REFUSAL_CLASSES = frozenset(
 PANEL_PHASE = session_contract.PANEL_PHASE
 
 SEAT_MISSING_SCHEMA = session_contract.SEAT_MISSING_SCHEMA
+SEAT_RESULT_SCHEMA_V2 = "seat-result/2"
+ORDERS_DIRNAME = "orders"
 
 BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND = "execution-evidence-head-unbound"
 BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE = "certified-head-unresolvable"
@@ -88,6 +90,7 @@ receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 maker_author_family = receipt_disclosures.maker_author_family
 storage_key = record_paths.storage_key
 store_path = record_paths.store_path
+round_dir = record_paths.round_dir
 _round_entry_key_allowed = round_entry_key_allowed
 _receipt_round_disclosures = receipt_round_disclosures
 _declared_disclosures = declared_disclosures
@@ -470,17 +473,7 @@ def _seat_family(seat, cfg):
     return model_registry.family_for("reviewer", vendor)
 
 
-def _seat_map_receipts(state):
-    receipts = []
-    legacy = state.get("seatMap")
-    if isinstance(legacy, dict) and legacy:
-        receipts.append({"round": "legacy", "map": legacy})
-    raw = state.get("seatMapReceipts")
-    if isinstance(raw, list):
-        for entry in raw:
-            if isinstance(entry, dict) and isinstance(entry.get("map"), dict):
-                receipts.append(entry)
-    return receipts
+_seat_map_receipts = seat_map_receipts.receipts
 
 
 def _effective_seat_map(state):
@@ -588,13 +581,51 @@ def _journal_recorded_identities(journal):
             "event": event,
             "ident": ident,
             "payloadSha256": event.get("payloadSha256"),
+            "casToken": event.get("casToken"),
             "provenance": event.get("provenance"),
             "executionEvidence": event.get("executionEvidence"),
         }
     return latest
 
 
-def _journal_open_seats(journal):
+def _orders_manifest_path(session_dir, rnd, phase, attempt):
+    return os.path.join(round_dir(session_dir, rnd), ORDERS_DIRNAME, phase,
+                        "manifest.a%d.json" % attempt)
+
+
+def _roster_from_orders_emitted(session_dir, event):
+    manifest_sha = event.get("manifestSha256")
+    if not isinstance(manifest_sha, str) or not manifest_sha:
+        return []
+    phase = event.get("phase")
+    rnd = event.get("round")
+    attempt = event.get("attempt")
+    if phase is None or rnd is None or attempt is None:
+        return []
+    manifest = _read_json(_orders_manifest_path(session_dir, rnd, phase, attempt))
+    if not isinstance(manifest, dict):
+        return []
+    computed_sha = session_contract.sha256_text(session_contract.canonical(manifest))
+    if computed_sha != manifest_sha:
+        return []
+    seats = manifest.get("seats")
+    if not isinstance(seats, dict):
+        return []
+    roster = []
+    for entry in seats.values():
+        if not isinstance(entry, dict):
+            continue
+        seat = entry.get("seat")
+        if not isinstance(seat, str) or not seat:
+            continue
+        occurrence = entry.get("occurrence", 0)
+        if isinstance(occurrence, bool) or not isinstance(occurrence, int) or occurrence < 0:
+            occurrence = 0
+        roster.append((seat, occurrence))
+    return roster
+
+
+def _journal_open_seats(journal, session_dir=None):
     """Seats opened by advance/next for a dispatch phase but never recorded — incomplete journal."""
     opened = {}
     closed = set()
@@ -605,6 +636,10 @@ def _journal_open_seats(journal):
         rnd = event.get("round")
         attempt = event.get("attempt")
         seat = event.get("seat")
+        if (cmd in ("next", "advance") and outcome == "orders-emitted"
+                and session_dir is not None):
+            for sk, occ in _roster_from_orders_emitted(session_dir, event):
+                opened[(phase, rnd, attempt, sk, occ)] = event
         if cmd in ("next", "advance") and outcome in ("emitted", "pending", "opened"):
             roster = event.get("roster") or event.get("seats")
             if isinstance(roster, list):
@@ -843,7 +878,25 @@ def _hand_landed_evidence_qualifies(
         computed = session_contract.payload_sha256(payload[result_kind])
         if result_digest != computed:
             return False, "execution-evidence-result-mismatch"
+    read = _execution_evidence_read_value(evidence)
+    if read not in EXECUTION_EVIDENCE_READ_VALUES:
+        return False, "execution-evidence-read-invalid"
+    if read != "engaged":
+        return False, "execution-evidence-not-engaged"
+    observation = evidence.get("observation")
+    if isinstance(observation, dict):
+        extra_obs = set(observation.keys()) - EXECUTION_EVIDENCE_OBSERVATION_FIELDS
+        if extra_obs:
+            return False, "execution-evidence-unknown-field"
     return True, None
+
+
+def _envelope_sha256(payload, execution_evidence):
+    return session_contract.sha256_text(
+        session_contract.canonical(
+            {"payload": payload, "executionEvidence": execution_evidence}
+        )
+    )
 
 
 def _read_head_content_blobs(session_dir):
@@ -1091,7 +1144,7 @@ def check_same_family_seat(ctx):
 def check_unfetched_findings(ctx):
     session_dir = ctx["session_dir"]
     journal = ctx["journal"]
-    unclosed = _journal_open_seats(journal)
+    unclosed = _journal_open_seats(journal, session_dir)
     if unclosed:
         key, event = unclosed[0]
         seat = key[3]
@@ -1168,6 +1221,41 @@ def check_unfetched_findings(ctx):
                 "journal payload hash disagrees with landed envelope content",
                 binding_failure="journal-envelope-mismatch",
             )
+        if env.get("schema") == SEAT_RESULT_SCHEMA_V2:
+            declared_envelope = env.get("envelopeSha256")
+            journaled_cas = ident.get("casToken")
+            if not isinstance(declared_envelope, str) or not declared_envelope:
+                return _refusal(
+                    "unfetched-findings",
+                    path,
+                    "landed envelope lacks envelopeSha256 integrity field",
+                )
+            try:
+                computed_envelope = _envelope_sha256(
+                    env.get("payload"), env.get("executionEvidence")
+                )
+            except (TypeError, ValueError):
+                return _refusal(
+                    "unfetched-findings",
+                    path,
+                    "landed envelope is not hashable for envelope integrity reconciliation",
+                )
+            if computed_envelope != declared_envelope:
+                return _refusal(
+                    "unfetched-findings",
+                    path,
+                    "landed envelope envelopeSha256 does not match envelope content",
+                    binding_failure="journal-envelope-mismatch",
+                )
+            journaled_cas = ident.get("casToken")
+            if isinstance(journaled_cas, str) and journaled_cas:
+                if computed_envelope != journaled_cas:
+                    return _refusal(
+                        "unfetched-findings",
+                        path,
+                        "journal casToken disagrees with landed envelope revision",
+                        binding_failure="journal-envelope-mismatch",
+                    )
     return None
 
 
