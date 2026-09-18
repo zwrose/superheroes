@@ -1,7 +1,7 @@
 # Launch doctrine
 
 This document is the standing doctrine for headless builder launches and recovery: the eight rulings
-a dispatch must carry verbatim, the eight-check dispatch preflight every launch records before it
+a dispatch must carry verbatim, the seven-check dispatch preflight every launch records before it
 goes autonomous, and the recovery doctrine for taking over a build that stopped. Advisors read it
 for intent; `lib/launch_doctrine.py` parses the two marked blocks below fail-closed — not the
 recovery prose. A whole-file SHA-256 digest of this artifact is still recorded on every dispatch
@@ -27,7 +27,6 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 <!-- launch-doctrine:rulings:end -->
 
 <!-- launch-doctrine:preflight:begin -->
-- `quota` (always) — Account headroom — not measured; records pass on the auth exercise only
 - `engine-auth` (always) — Engine and CLI authentication
 - `base-state` (always) — Base state matches the premise
 - `disjoint-surfaces` (conditional) — Overlap with a live lane recorded, with its landing order
@@ -192,11 +191,3 @@ empty or unchanging log says nothing about whether the session is working. **Nev
 by a global process match**: a `pgrep` on an engine's name catches long-lived daemons and, under
 parallel load, sibling sessions' dispatches — poll the thing you own (your own output file, your own
 recorded pid, your own task id).
-
-### Suspect quota before you suspect a defect
-
-An **unexplained early exit** — a session that stops with no park, no handback, and no error that
-explains it — is checked against **the account the builder was burning** before it is treated as a
-defect in the work. A cross-instance launch makes this easy to miss: the recovering session cannot
-feel the builder's quota pressure, and a cheap probe that passes on that account is **not proof of
-deep headroom**. Rule out the limit first.

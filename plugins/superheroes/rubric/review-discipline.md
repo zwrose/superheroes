@@ -28,7 +28,9 @@ not listed in the table below is the same as the **full** lane.
 
 **Size counts non-test lines.** Every size figure in this document and in the charters — the
 lane row above, the light lane's measured escalation line, the micro ceiling, and the
-"twice the brief's estimate" scope tripwire — is read over **non-test changed lines**:
+"twice the brief's estimate" scope tripwire — is read over **non-test changed lines**
+(the two absolute bars in the next paragraph are the one exception: they count added or
+modified lines only, as stated there):
 additions plus deletions in every file *outside* a `tests/` directory (docs, skill and
 rubric prose, and code all count; test modules and their fixtures do not). Test volume
 scales with rigour here — bite-proofs, truth tables, censuses, drift tests — and a size
@@ -37,6 +39,16 @@ the wrong pressure. Test volume that signals a *design* problem is the third-rew
 tripwire's and the vet's to catch, not the lane line's. Estimates carry both numbers
 (behaviour + test lines) so the tripwire and the estimate share a basis (owner-ruled
 2026-08-16).
+
+**Two absolute bars stand beside the relative tripwire**, counted over non-test lines **added or
+modified** — pure deletions, regenerated artifacts (a generated reference doc, a regenerated
+fixture), test modules and bite-proof records do not count. At **300** the builder reports the count
+on the issue with a proposed cut line and continues. At **600** the builder stops and hands the call
+to the advisor, who rules continue, split or park and records the reason on the issue; that call is
+never the builder's to make alone and never the owner's. A split lands as native stack layers, each
+reviewable on its own, so no intermediate state reaches the trunk. The bars apply in the full and
+light lanes; a micro change that approached them would already have left its ceiling.
+Where the call is in doubt, the preference is more, smaller PRs.
 
 **Micro skips preflight** because preflight proves tools before a session goes
 *autonomous*, and micro never does — it runs inside a long-lived advisor session with
@@ -310,6 +322,10 @@ keeps meaning: you name what you are shipping with, not pretend the bar was met 
 ### The third-rework tripwire
 
 After two reworks of the same surface in one build, **a third rework of the same surface is the tripwire**: that third rework is not dispatched, so the fourth patch on that surface never happens.
+The count is of reworks the orchestrator dispatches against a surface. A mechanical fix the
+certified loop applies inside its own rounds is not a rework for this count — the loop's round cap
+bounds those — so a loop re-dispatching a mechanical fix adds nothing to the count, and a rework
+the orchestrator dispatches against the surface adds one.
 What the tripwire demands is that the design signal is named, not that the build goes idle. On a
 lane the builder can affirmatively call converged, **stopping and handing the design signal up satisfies it** — refuse the fourth patch, name what the seam problem looks like in the handback, and
 ship the remaining minors as disclosed follow-ups; the handback must **state that the third-rework
@@ -404,74 +420,6 @@ for. You are not dodging a finding when you cite the ruling; you are applying a 
 
 **Named-failure-first:** no new prose guard ships without a **field failure it would have caught**,
 named in its issue. A guard with no named failure is speculation dressed as automation.
-
-### The safety-machinery route — the guard refuses the fixer
-
-Some of this plugin's own files are **safety machinery**. Two files own that fact between them, and
-this section quotes them rather than explaining them: `lib/escalation.py` owns the set, its
-inclusion criterion — *"any module whose edit could disable a floor / gate / halt / escalation
-guarantee"* — and the membership test; `skills/review-code/reference/auto-fix-loop.md` owns the
-refusal the auto-fix loop's fixer hits on one of them — *"If `allow` is false, the fixer MUST NOT
-edit that file"*. **Read those two for the mechanism; it is deliberately not restated here, so this
-section cannot drift from the guard it describes.** What this section owns is only **what happens to
-the findings afterwards** — the part that lived in session memory and issue history until it was
-written down here, so that each new session re-derived it at the cost of a panel plus a fixer round.
-
-**What the refusal means, and what it does not.** The guard bars the **automated fixer**, not the
-change. Safety machinery is edited all the time — under a ratified issue, by a builder or an
-implementer under a work order, reviewed like anything else. What may never happen is the review
-loop reaching into a guard **on its own authority** mid-round. So when a panel finds real defects in
-safety machinery, the fixer is forbidden to act on them, and `review-code`'s auto-fix loop **cannot
-converge on that surface — ever**. A loop that stalls there has hit its bound, not a bug: that is the
-guard working as designed, and it is not evidence of engine fragility, a bad order, or a transport
-defect. Retrying the fixer, re-dispatching at a higher rung, or reading the stall as an escalation
-trigger are all wrong reads of the same event.
-
-**Every path in `lib/escalation.py`'s `SAFETY_MACHINERY` set is refused the same way** —
-including `hooks/hooks.json` and `lib/mode_registry.py`.
-
-**Narrowing the guard to converge a loop is never the route.** `escalation-base.md` carries the
-invariant above its own floor — *"the agent may never grant itself authority or bypass a gate.
-Skipping or auto-resolving its own GATE is self-granting and is forbidden"* — and it applies with
-full force to a session that would relax the very control keeping autonomous agents out of the
-guards, including the guard that would catch the relaxation.
-
-**The sanctioned path is ordered implementer work orders.** The findings leave the loop and come back
-as builder-dispatched work, in this shape:
-
-- **One order per finding cluster** — clustered by the surface and the contract the findings share,
-  not one order per finding — even when several findings share one contract across two files.
-- **The order carries the finding text**, so the implementer fixes a stated defect rather than
-  re-deriving it from the file.
-- **The orchestrator verifies independently**, re-running every receipt itself, exactly as it does
-  for any implementer work order — and re-review below, the full local gates, and CI all still
-  apply unchanged. Nothing about the refusal lowers that bar or shifts any part of it onto the
-  loop; how the loop's own stages behave around an escalated finding is the driver's business
-  (`skills/review-code/reference/round-driver.md`), not this route's.
-- **Re-review is unchanged** — the fixed surface goes back through the review loop like any other
-  fix, and the loop's convergence bar and the third-rework tripwire both still bind.
-
-**Blocking findings go out on advisor or builder authority.** For a Critical or Important finding on
-safety machinery, the ordered implementer round goes out **on the advisor's or the builder's own
-authority**; **the owner's mandatory touchpoint is the merge click**, not a per-change
-pre-authorization. What that authority costs is **loud disclosure**: **the work order says the round
-touches safety machinery and names the files**, and the PR body says the same where the owner reads
-it. **Non-blocking** findings on the same surface are **disclosed residuals** — recorded in the
-dispositions table, and never auto-fixed either, **because the guard refuses the fixer at every
-severity**. A non-blocking finding is never the reason a build reaches into safety machinery it was
-not sent to touch.
-
-**Classification fails closed.** Before the round, put each finding's surface in exactly one of two
-classes — ordinary or safety machinery. **A surface you cannot confidently classify is treated as
-safety machinery** — a path that does not resolve, a renamed file, a dependency you have not checked —
-**which means the guard refuses the fixer and the round goes out ordered with its disclosure rather
-than auto-fixed**. That fail direction is deliberate: when classification is uncertain, the route
-takes the stricter class rather than granting authority by mistake.
-
-**This is not the runtime self-modification floor.** `escalation-base.md`'s hard floor — *"modifies
-the safety machinery itself at runtime"* — is about **a run altering its own control system
-mid-flight**, and this route leaves it untouched. An ordered implementer edit in a build worktree,
-under a ratified issue or an ordered round, is not that; the two floors **do not overlap**.
 
 ## Machinery, homes, and what a review may ask for
 

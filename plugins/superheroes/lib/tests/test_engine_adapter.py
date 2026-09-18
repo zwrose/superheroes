@@ -3429,7 +3429,7 @@ def test_sanitized_view_receipt_binds_producer_diff_keys(tmp_path):
 # re-export identity test at `test_payload_contracts_layering.py` covers payload-contract names,
 # not this one), so a future re-split would go unflagged here. If one is wanted, the pin belongs at
 # the definition as an identity assertion, not as this value comparison. The single definition
-# lives in `round_phases.py`, which is itself pinned in `escalation.SAFETY_MACHINERY`.
+# lives in `round_phases.py`, the protected contract surface for verifier verdicts.
 
 
 def _review_base_template_literals():

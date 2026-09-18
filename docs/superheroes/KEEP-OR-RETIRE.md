@@ -326,12 +326,11 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 #### B5 — Environment probes
 
 - **Component.** Scaffold probes that detect harness and worktree environment faults before
-  dispatch; the row covers `harness_probe`, `sibling_worktree_probe`, and `hostinfo`, which differ
-  in wiring and retirement posture.
+  dispatch; the row covers `sibling_worktree_probe` and `hostinfo`, which differ in wiring and
+  retirement posture.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite the
   probe rule's substance for `sibling_worktree_probe`. On firing, a proposal to the owner at a
-  gardening pass. `hostinfo` has no separate condition; `harness_probe` is retired and is not
-  counted.
+  gardening pass. `hostinfo` has no separate condition.
 - **Last demonstrated benefit.** `sibling_worktree_probe` guards false worktree-dirtied forfeits
   with a wired reader on every terminal dispatch fold (wired reader, zero recorded catches).
 - **Consumer evidence.** unmeasured.
@@ -339,6 +338,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** harness-limit for `sibling_worktree_probe` — the host offers no native
   worktree-liveness signal; structural for `hostinfo` — load-bearing file-lock consumer with a real
   defect class behind it.
+- **Retirement — `harness_probe`.** Retired `plugins/superheroes/lib/harness_probe.py` and its test
+  module, including both tripwires — the native project-context check and the PreCompact
+  `additionalContext` check. Condition met: the forward doctrine's FR-B6 sentence that `harness_probe`
+  retires or starts recording (it retires). Receipt: PR #1304 (issue #1303).
 
 #### B6 — File lock + store family
 
@@ -524,7 +527,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   two-to-three-round convergence (the assessment record, keeps receipts).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** structural — stuck-loop detection guards loop integrity independent of vendor.
+- **Notes.** structural — stuck-loop detection guards loop integrity independent of vendor. The
+  fixer file-scope guard that used to ride on `escalation.py` / `escalation_resolve.py` is retired;
+  receipt: https://github.com/zwrose/superheroes/pull/1305; condition: owner's ruling.
 
 #### D6 — Handback gate
 
@@ -1672,9 +1677,6 @@ file, returns exactly that set.
   configuration items has shipped; then the version is raised with the new literal pinned in the
   tests rather than referenced from the constant. (Lands with the configuration-items child; the
   tree carries this marker once that child merges.)
-- `plugins/superheroes/lib/harness_probe.py` — tripwire that native project-context injection still
-  holds on every spawn path. **delete-when:** every spawn path is confirmed and recorded without
-  this probe, or the probe retires.
 - `plugins/superheroes/lib/hostinfo.py` — OS-specific boot-id reads to corroborate a recorded pid
   belongs to this boot. **delete-when:** the host exposes a stable per-boot identity without
   OS-specific parsing.
