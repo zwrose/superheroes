@@ -2637,6 +2637,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     argv, recorded = _derive_and_record_spawn_argv(
         run_dir_real, attempt, spawn_argv, opened.get("engine"))
     if not recorded:
+        # axis: spawnArgv append failed — engine not invoked, attempt ends journal-append-failed.
         _journal_append(run_dir_real, {
             "kind": "attempt-ended", "attempt": attempt,
             "exit": 127, "timedOut": False, "signal": None,
@@ -2791,6 +2792,7 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     argv, recorded = _derive_and_record_spawn_argv(
         run_dir_real, attempt, spawn_argv, opened.get("engine"))
     if not recorded:
+        # axis: spawnArgv append failed — run_engine not invoked, attempt ends journal-append-failed.
         return False, "journal-append-failed"
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, attempt)
@@ -2931,6 +2933,7 @@ def _argv_for_attempt(argv, run_dir_real, attempt, engine):
 
 def _derive_and_record_spawn_argv(run_dir_real, attempt, argv, engine):
     """Derive per-attempt argv and journal the exact spawn argv. Returns (argv, ok)."""
+    # axis: journaled spawnArgv is the argv handed to the engine; append is fail-closed.
     spawn_argv = _argv_for_attempt(argv, run_dir_real, attempt, engine)
     ok = _journal_append(run_dir_real, {
         "kind": "engine-launching", "attempt": attempt,

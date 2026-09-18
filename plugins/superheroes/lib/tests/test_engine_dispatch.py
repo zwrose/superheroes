@@ -2949,6 +2949,91 @@ def test_run_engine_files_spawn_failure_omits_timing_keys(tmp_path, monkeypatch)
     assert ended.get("refusal", "").startswith("spawn-failed:")
 
 
+def test_injected_seam_journals_spawn_argv_for_the_attempt(tmp_path):
+    """E2: injected run_engine seam journals spawnArgv matching the argv it receives."""
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir,
+    )
+    assert fake.calls, "injected run_engine seam never reached"
+    received_argv = fake.calls[0]["argv"]
+    records, _ = ED._journal_read(run_dir)
+    launching = [
+        r for r in records
+        if r.get("kind") == "engine-launching" and r.get("attempt") == 1 and "spawnArgv" in r
+    ]
+    assert len(launching) == 1
+    assert launching[0]["spawnArgv"] == received_argv
+
+
+def test_injected_seam_append_failure_refuses_before_invoking_engine(tmp_path, monkeypatch):
+    """E3: spawnArgv append failure on the injected seam refuses before run_engine runs."""
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    calls = {"n": 0}
+
+    def counting_never_call(*_args, **_kwargs):
+        calls["n"] += 1
+        raise AssertionError("run_engine should not be called")
+
+    real_append = ED._journal_append
+
+    def fail_spawn_argv(run_dir_real, record):
+        if "spawnArgv" in record:
+            return False
+        return real_append(run_dir_real, record)
+
+    monkeypatch.setattr(ED, "_journal_append", fail_spawn_argv)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+        run_engine=counting_never_call,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir,
+    )
+    assert calls["n"] == 0
+    assert res.get("detail") == "journal-append-failed"
+
+
+def test_run_engine_files_spawn_argv_append_failure_refuses_before_spawn(tmp_path, monkeypatch):
+    """E3: spawnArgv append failure on the real spawn path refuses before the engine runs."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    marker_path = str(tmp_path / "engine-ran.marker")
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    script = "open(%r, 'w').write('ran')\n" % marker_path
+    _install_fake_codex(monkeypatch, tmp_path, script)
+    real_append = ED._journal_append
+
+    def fail_spawn_argv(run_dir_real, record):
+        if "spawnArgv" in record:
+            return False
+        return real_append(run_dir_real, record)
+
+    monkeypatch.setattr(ED, "_journal_append", fail_spawn_argv)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert not os.path.exists(marker_path)
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert ended.get("refusal") == "journal-append-failed"
+
+
 def test_run_engine_files_journal_append_failed_omits_timing_keys(tmp_path, monkeypatch):
     """E2: journal-append-failed path must not invent wallSeconds/stdoutBytes."""
     run_dir = str(tmp_path / "run")
