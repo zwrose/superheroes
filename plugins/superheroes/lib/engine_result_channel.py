@@ -190,41 +190,6 @@ def validate(schema, value):
     return ok, reason
 
 
-def native_schema_allows_scrub_finish(failure_detail, branch=None):
-    """True when a schema failure is scrub-salvageable, keyed on path/kind not prose."""
-    if not failure_detail:
-        return False
-    kind = failure_detail.get("kind")
-    path = failure_detail.get("path") or ""
-    if kind == "enum-mismatch":
-        return path.endswith(".resultKind")
-    if kind == "type-mismatch":
-        if path.endswith(".findings"):
-            return False
-        if ".investigated" in path:
-            return True
-        if ".findings[" in path:
-            return True
-        return False
-    if kind == "any-of-failed":
-        sub = failure_detail.get("sub_failures") or []
-        if not sub or not isinstance(branch, dict):
-            return False
-        result_kind = branch.get("resultKind")
-        if not isinstance(result_kind, str):
-            return False
-        try:
-            branch_index = REVIEW_RESULT_KINDS.index(result_kind)
-        except ValueError:
-            return False
-        prefix = "$.result.anyOf[%d]." % branch_index
-        relevant = [item for item in sub if (item.get("path") or "").startswith(prefix)]
-        if not relevant:
-            return False
-        return all(native_schema_allows_scrub_finish(item, branch=branch) for item in relevant)
-    return False
-
-
 def _sanitize_schema_node(node):
     """Keep only keywords our validator implements (drops description, etc.)."""
     if not isinstance(node, dict):
@@ -426,8 +391,14 @@ def _branch_payload_schema(kind):
         optional = set(contract.get("optional") or ())
         properties = {}
         for field in ordered:
-            properties[field] = _top_level_field_schema(
-                contract, field, result_kind=kind, optional_fields=optional)
+            if field == "newIssues":
+                properties[field] = _nullable_type_schema({
+                    "type": "array",
+                    "items": _finding_member_schema(),
+                })
+            else:
+                properties[field] = _top_level_field_schema(
+                    contract, field, result_kind=kind, optional_fields=optional)
         return {
             "type": "object",
             "additionalProperties": False,

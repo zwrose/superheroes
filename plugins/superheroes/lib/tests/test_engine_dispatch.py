@@ -1190,7 +1190,7 @@ def test_dispatch_mixed_findings_propagates_rejected_records(tmp_path):
     stdout = json.dumps({"findings": [42, {"id": "f1", "message": "issue found"}]})
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        seat=_codex_seat(),
+        seat=_reviewer_cursor_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1356,7 +1356,7 @@ def test_dispatch_findings_with_wholly_rejected_investigated_still_succeeds(tmp_
     })
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        seat=_codex_seat(),
+        seat=_reviewer_cursor_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -5818,7 +5818,7 @@ def test_dispatch_review_expected_result_kind_pin_refuses_mismatch(tmp_path):
         build_view=_fake_build_view(tmp_path), expected_result_kind="findings",
     )
     assert res["ok"] is False
-    assert res.get("detail") == ED.RESULT_KIND_MISMATCH_DETAIL
+    assert res.get("detail") == "native-result-schema-invalid"
 
 
 def test_dispatch_review_expected_result_kind_pin_accepts_match(tmp_path):
@@ -5839,7 +5839,7 @@ def test_dispatch_review_expected_result_kind_pin_vacuous_not_masked(tmp_path):
     empty = json.dumps({"findings": []})
     fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
     res = ED.dispatch_review(
-        seat=_codex_seat(),
+        seat=_reviewer_cursor_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), expected_result_kind="verdicts",
     )
@@ -10438,27 +10438,14 @@ def test_grade_native_review_attempt_schema_invalid_severity_enum_injection(tmp_
     assert grade.get("detail") == "native-result-schema-invalid"
 
 
-def test_scrub_native_review_branch_all_findings_rejected_is_unreadable():
-    branch = {
-        "resultKind": "findings",
-        "findings": [42],
-        "investigated": ["real.py"],
-    }
-    assert ED._scrub_native_review_branch(branch, "test-echo-nonce") == {
-        "ok": False,
-        "reason": "unreadable",
-    }
-
-
-def test_grade_native_review_attempt_kind_before_validation(tmp_path):
+def test_grade_native_review_attempt_pinned_schema_rejects_wrong_kind(tmp_path):
     branch = _native_review_branch("verdicts")
     run_dir, state = _native_review_grade_state(
         tmp_path, branch, expected_result_kind="findings",
     )
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
-    assert grade.get("detail") == ED.RESULT_KIND_MISMATCH_DETAIL
-    assert grade.get("detail") != "native-result-schema-invalid"
+    assert grade.get("detail") == "native-result-schema-invalid"
 
 
 def test_grade_native_review_attempt_scrubs_secret_from_result_and_journal(tmp_path):
@@ -10594,4 +10581,90 @@ def test_cursor_review_open_appends_marker_contract_byte_identical(tmp_path):
     assert ERC.review_result_contract_from_schema(
         ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW),
     ) not in prompt_text
+
+
+# --- #1270 WO-2a2-A: the one admission authority ----
+
+
+def _native_findings_branch_from_example(example_obj):
+    branch = _native_review_branch("findings")
+    branch["findings"] = example_obj["findings"]
+    branch["investigated"] = example_obj["investigated"]
+    return branch
+
+
+def test_admit_native_review_schema_invalid_mistyped_investigated_forfeits(tmp_path):
+    branch = _native_review_branch("findings")
+    branch["investigated"] = ["path/to/file.py", 42]
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-schema-invalid"
+
+
+def test_admit_native_review_schema_invalid_mistyped_finding_member_forfeits(tmp_path):
+    branch = _native_review_branch("findings")
+    branch["findings"][0]["line"] = "not-an-integer"
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-schema-invalid"
+
+
+def test_admit_native_review_nonce_echo_validates_then_refuses(tmp_path):
+    echo_nonce = "wo-2a2-a-nonce"
+    example = RFS.example_findings_object(echo_nonce)
+    branch = _native_findings_branch_from_example(example)
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, "findings")
+    ok, reason = ERC.validate(schema, _wrap_native_review_result(branch))
+    assert ok, reason
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, expected_result_kind="findings",
+    )
+    state["opened"]["echoNonce"] = echo_nonce
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-malformed"
+
+
+def test_admit_native_review_semantic_guards_use_adapter_not_scrub_branch(tmp_path):
+    assert not hasattr(ED, "_scrub_native_review_branch")
+    hollow = _native_review_branch("findings")
+    for key in RFS.SUBSTANCE_KEYS_CANONICAL:
+        hollow["findings"][0][key] = "   "
+    run_dir, state = _native_review_grade_state(tmp_path, hollow)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-malformed"
+    placeholder = _native_review_branch("findings")
+    placeholder["findings"][0]["id"] = EA.REVIEW_BASE_TEMPLATE_ID
+    run_dir2, state2 = _native_review_grade_state(tmp_path, placeholder)
+    grade2 = ED._grade_review_attempt(run_dir2, state2, 1)
+    assert grade2.get("forfeit") is True
+    assert grade2.get("detail") == "native-result-malformed"
+
+
+def test_admit_native_review_schema_substitution_refuses(tmp_path):
+    branch = _native_review_branch("findings")
+    branch["findings"] = None
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    schema_path = state["opened"]["nativeSchemaPath"]
+    with open(schema_path, "w", encoding="utf-8") as fh:
+        json.dump({}, fh)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-schema-unreadable"
+
+
+def test_admit_native_review_stdout_cannot_rescue_semantic_refusal(tmp_path):
+    hollow = _native_review_branch("findings")
+    for key in RFS.SUBSTANCE_KEYS_CANONICAL:
+        hollow["findings"][0][key] = "   "
+    run_dir, state = _native_review_grade_state(
+        tmp_path, hollow, stdout=_VALID_FINDINGS_STDOUT,
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("ok") is not True
+    assert grade.get("detail") == "native-result-malformed"
 

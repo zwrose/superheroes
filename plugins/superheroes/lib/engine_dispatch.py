@@ -3196,64 +3196,6 @@ def _native_branch_placeholder_shape(branch):
     return None
 
 
-def _scrub_native_review_branch(branch, echo_nonce):
-    """Scrub a schema-validated native review branch via existing scrub entry points."""
-    kind = branch.get("resultKind")
-    if kind == "findings":
-        raw_findings = branch.get("findings")
-        if raw_findings is not None and engine_adapter._review_items_have_placeholder_literal(
-                raw_findings):
-            return {"ok": False, "reason": "unreadable"}
-    if kind == "verdicts":
-        raw_verdicts = branch.get("verdicts")
-        if raw_verdicts is not None and engine_adapter._review_items_have_placeholder_literal(
-                raw_verdicts):
-            return {"ok": False, "reason": "unreadable"}
-    investigated, inv_rejected = engine_adapter._scrub_investigated(branch.get("investigated"))
-    if kind == "findings":
-        findings_list, findings_rejected = engine_adapter._scrub_findings(
-            branch.get("findings") or [], echo_nonce=echo_nonce)
-        if engine_adapter._findings_reply_has_hollow_member(findings_rejected):
-            return {"ok": False, "reason": "unreadable"}
-        if raw_findings and not findings_list:
-            return {"ok": False, "reason": "unreadable"}
-        res = {
-            "ok": True,
-            "resultKind": "findings",
-            "findings": findings_list,
-            "investigated": investigated,
-        }
-        res = engine_adapter._attach_findings_parse_rejections(res, findings_rejected)
-        return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
-    if kind == "verdicts":
-        verdicts = _normalize_native_verdicts(branch.get("verdicts") or [])
-        res = {
-            "ok": True,
-            "resultKind": "verdicts",
-            "verdicts": engine_adapter._scrub_verdicts(verdicts),
-            "investigated": investigated,
-        }
-        return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
-    if kind == "grouping":
-        res = {
-            "ok": True,
-            "resultKind": "grouping",
-            "grouping": engine_adapter._scrub_grouping(branch.get("grouping")),
-            "investigated": investigated,
-        }
-        return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
-    if kind == "ruling":
-        ruling_branch = _normalize_native_ruling_branch(branch)
-        res = {
-            "ok": True,
-            "resultKind": "ruling",
-            "ruling": engine_adapter._scrub_ruling_object(ruling_branch),
-            "investigated": investigated,
-        }
-        return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
-    return {"ok": False, "reason": "unreadable"}
-
-
 def _omit_null_optional_fields(obj, optional_keys):
     """Drop null-valued optional fields so payload_contracts sees absent, not null."""
     if not isinstance(obj, dict):
@@ -3273,6 +3215,86 @@ def _normalize_native_verdicts(verdicts):
 def _normalize_native_ruling_branch(branch):
     optional = ("newIssues", "evidence", "auditorVendor")
     return _omit_null_optional_fields(branch, optional)
+
+
+def _normalize_native_review_branch_for_parser(branch):
+    """Drop null optional slots the native schema requires but adapter parsers read as absent."""
+    kind = branch.get("resultKind")
+    if kind == "verdicts":
+        normalized = dict(branch)
+        normalized["verdicts"] = _normalize_native_verdicts(branch.get("verdicts") or [])
+        return normalized
+    if kind == "ruling":
+        return _normalize_native_ruling_branch(branch)
+    return branch
+
+
+def _native_review_parser_refusal_forfeit(engagement, envelope, branch):
+    """Forfeit a schema-valid native branch the adapter parser refused. Never raises."""
+    placeholder_shape = _native_branch_placeholder_shape(branch)
+    if placeholder_shape is not None:
+        return _native_review_forfeit(
+            engagement, "native-result-malformed", payload_shape=placeholder_shape)
+    shape = engine_result_channel.native_review_payload_shape(
+        "native-result-malformed", envelope=envelope, branch=branch)
+    return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
+
+
+def _admit_native_review_result(opened, engagement, echo_nonce):
+    """Single admission authority for codex's native review channel. Never raises."""
+    loaded = _read_native_review_envelope(opened, engagement)
+    if not isinstance(loaded, tuple):
+        return loaded
+    envelope, branch = loaded
+
+    engine = opened["engine"]
+    run_kind = opened.get("roleKind", RUN_KIND_REVIEW)
+    expected_result_kind = opened.get("expectedResultKind")
+    schema_path = opened.get("nativeSchemaPath")
+    if not schema_path or not os.path.isfile(schema_path) or os.path.islink(schema_path):
+        return _native_review_forfeit(engagement, "native-schema-unreadable")
+    try:
+        declared = engine_result_channel.declared_schema(
+            engine, run_kind, expected_result_kind)
+    except Exception:
+        return _native_review_forfeit(engagement, "native-schema-unreadable")
+    try:
+        with open(schema_path, encoding="utf-8") as fh:
+            on_disk = json.load(fh)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return _native_review_forfeit(engagement, "native-schema-unreadable")
+    if on_disk != declared:
+        return _native_review_forfeit(engagement, "native-schema-unreadable")
+
+    ok, validation_reason, _validation_detail = engine_result_channel._validate_with_detail(
+        declared, envelope)
+    if not ok:
+        return _native_review_forfeit_with_payload_shape(
+            engagement,
+            "native-result-schema-invalid",
+            None,
+            None,
+            echo_nonce,
+            envelope=envelope,
+            branch=branch,
+            validationReason=validation_reason,
+        )
+
+    kind = branch.get("resultKind")
+    parser = engine_adapter._REVIEW_CONTRACT_PARSERS.get(kind)
+    if parser is None:
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+    normalized = _normalize_native_review_branch_for_parser(branch)
+    try:
+        if kind == "findings":
+            parsed = parser(normalized, None, echo_nonce=echo_nonce)
+        else:
+            parsed = parser(normalized, None)
+    except Exception:
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+    if not parsed.get("ok"):
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+    return parsed
 
 
 def _finish_review_grade_from_parse(opened, cwd, engagement, res):
@@ -3372,99 +3394,12 @@ def _native_review_forfeit_with_payload_shape(
     return result
 
 
-def _grade_native_review_attempt(
-        opened, cwd, engagement, echo_nonce, stdout=None, fed_prompt=None):
+def _grade_native_review_attempt(opened, cwd, engagement, echo_nonce):
     """Grade a native-channel review attempt from the typed result file."""
-    engine = opened["engine"]
-    role_kind = opened.get("roleKind", RUN_KIND_REVIEW)
-    loaded = _read_native_review_envelope(opened, engagement)
-    if not isinstance(loaded, tuple):
-        return loaded
-    envelope, branch = loaded
-    schema_path = opened.get("nativeSchemaPath")
-    if not schema_path or not os.path.isfile(schema_path) or os.path.islink(schema_path):
-        return _native_review_forfeit(engagement, "native-schema-unreadable")
-    try:
-        with open(schema_path, encoding="utf-8") as fh:
-            schema = json.load(fh)
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return _native_review_forfeit(engagement, "native-schema-unreadable")
-    ok, validation_reason, validation_detail = engine_result_channel._validate_with_detail(
-        schema, envelope)
-    placeholder_shape = _native_branch_placeholder_shape(branch)
-    if placeholder_shape is not None:
-        return _native_review_forfeit(
-            engagement, "native-result-malformed", payload_shape=placeholder_shape)
-    scrub_try = _scrub_native_review_branch(branch, echo_nonce)
-    if ok and scrub_try.get("ok"):
-        return _finish_review_grade_from_parse(opened, cwd, engagement, scrub_try)
-    if not ok:
-        if scrub_try.get("ok") and engine_result_channel.native_schema_allows_scrub_finish(
-                validation_detail, branch=branch):
-            return _finish_review_grade_from_parse(opened, cwd, engagement, scrub_try)
-        return _native_review_forfeit_with_payload_shape(
-            engagement,
-            "native-result-schema-invalid",
-            stdout,
-            fed_prompt,
-            echo_nonce,
-            envelope=envelope,
-            branch=branch,
-            validationReason=validation_reason,
-        )
-    if scrub_try.get("ok"):
-        return _finish_review_grade_from_parse(opened, cwd, engagement, scrub_try)
-    if isinstance(stdout, str) and stdout.strip():
-        norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
-        if norm_strip["echoOnly"]:
-            return {
-                "forfeit": True,
-                "reason": dispatch_outcome.REASON_FORFEITED,
-                "engagement": _engagement_with_read(engagement),
-                "payloadShape": {
-                    "parsed": engine_adapter.SHAPE_PROMPT_ECHO_ONLY,
-                    "topLevelKeys": [],
-                    "keysTruncated": False,
-                },
-            }
-        diagnose_stdout = norm_strip["text"]
-        envelope_error = norm_strip["rawEnvelopeError"]
-        res = engine_adapter.parse_result(
-            engine, role_kind, stdout, raw_envelope_error=envelope_error,
-            echo_nonce=echo_nonce)
-        if not _parse_review_has_payload(res):
-            stripped_text = norm_strip["text"]
-            if stripped_text and stripped_text.strip():
-                diagnose_stdout = stripped_text
-            res = engine_adapter.parse_result(
-                engine, role_kind, stripped_text, raw_envelope_error=envelope_error,
-                echo_nonce=echo_nonce)
-        if not res.get("ok"):
-            engagement = _engagement_with_read(engagement)
-            result = {
-                "forfeit": True,
-                "reason": dispatch_outcome.REASON_FORFEITED,
-                "engagement": engagement,
-            }
-            shape = engine_adapter.review_payload_shape(
-                diagnose_stdout, fed_prompt, echo_nonce=echo_nonce)
-            if shape is not None:
-                result["payloadShape"] = shape
-            return result
-        if _review_parse_kind_invalid(res):
-            engagement = _engagement_with_read(engagement)
-            result = {
-                "forfeit": True,
-                "reason": dispatch_outcome.REASON_FORFEITED,
-                "engagement": engagement,
-            }
-            shape = engine_adapter.review_payload_shape(
-                diagnose_stdout, fed_prompt, echo_nonce=echo_nonce)
-            if shape is not None:
-                result["payloadShape"] = shape
-            return result
-        return _finish_review_grade_from_parse(opened, cwd, engagement, res)
-    return _native_review_forfeit(engagement, "native-result-malformed")
+    admitted = _admit_native_review_result(opened, engagement, echo_nonce)
+    if admitted.get("forfeit"):
+        return admitted
+    return _finish_review_grade_from_parse(opened, cwd, engagement, admitted)
 
 
 def _grade_review_attempt(run_dir_real, state, attempt):
@@ -3515,9 +3450,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     }
 
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
-        return _grade_native_review_attempt(
-            opened, cwd, engagement, echo_nonce, stdout=stdout, fed_prompt=fed_prompt,
-        )
+        return _grade_native_review_attempt(opened, cwd, engagement, echo_nonce)
 
     if not stdout and not os.path.exists(stdout_path):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
