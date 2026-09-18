@@ -11,10 +11,7 @@ primitives, the second against its own unlock conditions, and **the project's re
 registry** — the pinned comment on the standing-proposals collector issue — checking each declined item's revisit trigger
 against what has since happened, the same way it walks §2's entries against their unlock
 conditions (canonical home:
-`plugins/superheroes/skills/showrunner/reference/owner-decisions.md`); when the harness has been
-upgraded since the previous pass, the pass also runs
-`plugins/superheroes/lib/harness_probe.py` so the native project-context tripwire (#629)
-has an owner and a cadence instead of sitting unplayed. Changes land by PR. An entry
+`plugins/superheroes/skills/showrunner/reference/owner-decisions.md`). Changes land by PR. An entry
 nobody has re-checked in months is just drift with a paper trail.
 
 ## 1. Bespoke-vs-platform ledger
@@ -406,7 +403,7 @@ proposal §1–§2, R4; charter channel-conditioned text carries §1's receipt).
 **Ruled:** existing doctrine — never go autonomous on an assumption you have not exercised — applied
 one layer up at advisor dispatch. The preflight **must scale with the batch**: cheap mechanical
 checks always; expensive ones only when the work needs them, with **explicit N/A rather than silent
-skipping**. The eight checks are enumerated in `skills/showrunner/reference/dispatch-preflight.md`
+skipping**. The checks are enumerated in `skills/showrunner/reference/dispatch-preflight.md`
 (the ratified proposal lists
 the corpus failures behind each). **Grant scope:** a grant bounded by a fuzzy noun is real looseness;
 scope is stated as **enumerated PRs, a time box, or a count**, with **release PRs excluded and
