@@ -609,3 +609,12 @@ def test_review_result_contract_from_schema_lists_active_payload_properties():
     contract = ERC.review_result_contract_from_schema(schema)
     for field in ERC._ruling_branch_fields():
         assert "`%s`" % field in contract
+
+
+def test_engine_output_byte_cap_single_home():
+    """Drift guard: ENGINE_OUTPUT_MAX_BYTES is the one literal home for the 8 MiB cap."""
+    home = EA.ENGINE_OUTPUT_MAX_BYTES
+    ed = _load("engine_dispatch")
+    assert ERC.NATIVE_RESULT_MAX_BYTES == home
+    assert ed.MAX_STDOUT_CAPTURE == home
+    assert home == 8 * 1024 * 1024

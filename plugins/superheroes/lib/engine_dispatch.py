@@ -122,7 +122,7 @@ ITEM_EVIDENCE_CAUSE_STATUS_FAILED = "status-failed"
 BASE_SHA_UNRESOLVABLE = "base-sha-unresolvable"
 HEARTBEAT_INTERVAL = 10     # DoD 4: seconds between liveness heartbeats (time-based, not output-based)
 _STDERR_TAIL = 4096
-MAX_STDOUT_CAPTURE = 8 * 1024 * 1024   # keep only the last 8 MB of engine stdout — the result JSON
+MAX_STDOUT_CAPTURE = engine_adapter.ENGINE_OUTPUT_MAX_BYTES   # keep only the last 8 MB of engine stdout — the result JSON
 # is at the TAIL (parse_result reads the tail), and an unbounded read would let a runaway engine OOM
 # the runner before it can return the structured forfeit that triggers the host-model fall-open (#563).
 MAX_STDERR_CAPTURE = 64 * 1024
