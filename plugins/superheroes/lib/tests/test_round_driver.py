@@ -8381,6 +8381,35 @@ def test_write_certification_artifacts_refusal_write_failure_returns_fault(tmp_p
     assert "park" in fault
 
 
+def test_write_certification_artifacts_fault_strings_match_terminal_receipt_gate_coupling(
+        tmp_path, monkeypatch):
+    """_terminal_receipt_gate distinguishes certification-write faults from every other fault by
+    matching the substring 'certification' in the fault string (_receiptFinalized is set only when
+    fault is None or 'certification' not in fault). A reworded message here would silently re-open
+    the replay fall-open over a missing certification artifact."""
+    _COUPLING_SUBSTRING = "certification"
+
+    # Census of every non-None return from _write_certification_artifacts — only one path exists:
+    # OSError when atomic_write_bytes cannot write certification-refusal.json. Use a clean OSError
+    # detail (no path/filename) so the tripwire targets the message template, not the artifact name.
+    session_dir = _certification_refusal_session(tmp_path)
+
+    def _fail_refusal_write(path, data):
+        if RD.CERTIFICATION_REFUSAL_FILE in os.path.basename(path):
+            raise OSError("simulated refusal write failure")
+        raise AssertionError("unexpected write: %s" % path)
+
+    monkeypatch.setattr(RD.round_commit, "atomic_write_bytes", _fail_refusal_write)
+    refusal_write_fault = RD._write_certification_artifacts(session_dir)
+    assert refusal_write_fault is not None
+
+    faults = [refusal_write_fault]
+    for fault in faults:
+        assert _COUPLING_SUBSTRING in fault, (
+            "fault missing substring %r required by _terminal_receipt_gate: %s"
+            % (_COUPLING_SUBSTRING, fault))
+
+
 def test_terminal_receipt_gate_certification_write_failure_not_laundered_on_replay(tmp_path):
     """#1271 WO-A12-G finding 1: a certification-artifact write fault must not set
     `_receiptFinalized` — a replay must re-attempt (or refuse), never return ok over a missing
