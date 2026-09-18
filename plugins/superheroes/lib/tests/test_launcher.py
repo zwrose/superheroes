@@ -3801,6 +3801,7 @@ def test_cli_launch_boundary_happy_path_forwards(tmp_path, monkeypatch):
         slot="slot-a",
         generation=1,
         boundary=str(boundary_path),
+        allow_foreign_instance=False,
     )
     result = L._cli_launch(args)
     assert result["reason"] == "injected-stop"
@@ -4843,6 +4844,406 @@ def test_cli_launch_stdout_carries_the_overlap_warning(tmp_path, monkeypatch):
         ])
     assert exit_code == 0
     assert json.loads(buf.getvalue())["warnings"] == warnings
+
+
+# --- foreign-instance pin gate (issue #1311) ---------------------------------
+
+
+def _instance_pin_launch_files(tmp_path, repo):
+    checks_path = tmp_path / "checks.json"
+    premise_path = tmp_path / "premise.json"
+    log_dir = tmp_path / "logs"
+    _write_json(checks_path, _all_checks())
+    _write_json(premise_path, _valid_premise(repo))
+    return checks_path, premise_path, log_dir
+
+
+def test_cli_launch_foreign_instance_pin_refuses(tmp_path, monkeypatch):
+    # axis: CLI refuses when seat config root differs from the effective child pin
+    import io
+    from contextlib import redirect_stdout
+
+    repo = _init_repo(tmp_path / "repo")
+    _worktree_root(tmp_path, monkeypatch)
+    checks_path, premise_path, log_dir = _instance_pin_launch_files(tmp_path, repo)
+    seat_root = str(tmp_path / "seat-claude")
+    child_root = str(tmp_path / "child-claude")
+    monkeypatch.setenv(L.CONFIG_DIR_ENV, child_root)
+    monkeypatch.setattr(
+        L, "seat_config_dir", lambda **kw: (seat_root, "resolved"),
+    )
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        exit_code = L.main([
+            "launch",
+            "--repo-root", repo,
+            "--issue", "656",
+            "--premise", str(premise_path),
+            "--checks", str(checks_path),
+            "--log-dir", str(log_dir),
+        ])
+    assert exit_code == 1
+    payload = json.loads(buf.getvalue())
+    assert payload["reason"] == "foreign-instance-pin"
+    assert payload["seatConfigDir"] == seat_root
+    assert payload["pinnedConfigDir"] == child_root
+
+
+def test_cli_launch_foreign_instance_pin_writes_nothing(tmp_path, monkeypatch):
+    # axis: instance-pin refusal creates no ledger record and no build worktree
+    import io
+    from contextlib import redirect_stdout
+
+    repo = _init_repo(tmp_path / "repo")
+    wt_root = _worktree_root(tmp_path, monkeypatch)
+    checks_path, premise_path, log_dir = _instance_pin_launch_files(tmp_path, repo)
+    seat_root = str(tmp_path / "seat-claude")
+    child_root = str(tmp_path / "child-claude")
+    monkeypatch.setenv(L.CONFIG_DIR_ENV, child_root)
+    monkeypatch.setattr(
+        L, "seat_config_dir", lambda **kw: (seat_root, "resolved"),
+    )
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        exit_code = L.main([
+            "launch",
+            "--repo-root", repo,
+            "--issue", "656",
+            "--premise", str(premise_path),
+            "--checks", str(checks_path),
+            "--log-dir", str(log_dir),
+        ])
+    assert exit_code == 1
+    assert not any(
+        r.get("event") == "reserved" for r in ll.read(repo)["records"]
+    )
+    assert not os.path.exists(wt_root) or not any(os.scandir(wt_root))
+
+
+def test_launch_build_unset_pin_refuses_foreign_instance(tmp_path, monkeypatch):
+    # axis: no CLAUDE_CONFIG_DIR still defaults child root and refuses when seat differs
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    home.mkdir()
+    seat_root = str(tmp_path / "seat-claude")
+    monkeypatch.delenv(L.CONFIG_DIR_ENV, raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        seat_config_dir=seat_root,
+        seat_signal="resolved",
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "foreign-instance-pin"
+    assert result["seatConfigDir"] == seat_root
+    assert result["pinnedConfigDir"] == os.path.join(str(home), ".claude")
+
+
+def test_cli_launch_allow_foreign_instance_overrides_pin(tmp_path, monkeypatch):
+    # axis: --allow-foreign-instance proceeds and stamps seatInstanceSignal override
+    import io
+    from contextlib import redirect_stdout
+
+    repo = _init_repo(tmp_path / "repo")
+    _worktree_root(tmp_path, monkeypatch)
+    checks_path, premise_path, log_dir = _instance_pin_launch_files(tmp_path, repo)
+    seat_root = str(tmp_path / "seat-claude")
+    child_root = str(tmp_path / "child-claude")
+    monkeypatch.setenv(L.CONFIG_DIR_ENV, child_root)
+    monkeypatch.setattr(
+        L, "seat_config_dir", lambda **kw: (seat_root, "resolved"),
+    )
+    monkeypatch.setattr(L, "_default_spawn", _make_spawn_fn("sleep"))
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        exit_code = L.main([
+            "launch",
+            "--repo-root", repo,
+            "--issue", "656",
+            "--premise", str(premise_path),
+            "--checks", str(checks_path),
+            "--log-dir", str(log_dir),
+            "--allow-foreign-instance",
+        ])
+    assert exit_code == 0
+    payload = json.loads(buf.getvalue())
+    assert payload["ok"] is True
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    assert reserved["seatInstanceSignal"] == "override"
+    try:
+        os.kill(payload["pid"], signal.SIGTERM)
+    except (ProcessLookupError, KeyError):
+        pass
+
+
+def test_launch_build_seat_instance_signal_matched(tmp_path, monkeypatch):
+    # axis: reserved record carries seatInstanceSignal matched when roots agree
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    pin_root = str(tmp_path / "shared-claude")
+    monkeypatch.setenv(L.CONFIG_DIR_ENV, pin_root)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        seat_config_dir=pin_root,
+        seat_signal="resolved",
+    )
+    assert result["ok"] is True
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    assert reserved["seatInstanceSignal"] == "matched"
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_launch_build_seat_instance_signal_no_seat(tmp_path, monkeypatch):
+    # axis: reserved record carries seatInstanceSignal no-seat when walk found none
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        seat_config_dir=None,
+        seat_signal="no-seat",
+    )
+    assert result["ok"] is True
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    assert reserved["seatInstanceSignal"] == "no-seat"
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_launch_build_seat_instance_signal_absent(tmp_path, monkeypatch):
+    # axis: direct launch_build without seat leaves seatInstanceSignal absent
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    assert reserved["seatInstanceSignal"] == "absent"
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_launch_build_sensor_failed_refuses_seat_instance_unreadable(tmp_path, monkeypatch):
+    # axis: sensor-failed seat signal refuses seat-instance-unreadable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        seat_config_dir=None,
+        seat_signal="sensor-failed",
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "seat-instance-unreadable"
+    assert "seatConfigDir" in result
+    assert "pinnedConfigDir" in result
+
+
+def test_launch_build_relative_pin_refuses_foreign_instance_pin_unresolvable(
+    tmp_path, monkeypatch,
+):
+    # axis: relative explicit CLAUDE_CONFIG_DIR refuses foreign-instance-pin-unresolvable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    seat_root = str(tmp_path / "seat-claude")
+    relative_pin = "relative/.claude"
+    monkeypatch.setenv(L.CONFIG_DIR_ENV, relative_pin)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        seat_config_dir=seat_root,
+        seat_signal="resolved",
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "foreign-instance-pin-unresolvable"
+    assert result["seatConfigDir"] == seat_root
+    assert result["pinnedConfigDir"] == relative_pin
+
+
+def test_seat_config_dir_resolves_claude_ancestor_with_config_dir(tmp_path):
+    # axis: injected walk finds claude ancestor with CLAUDE_CONFIG_DIR set
+    config_root = str(tmp_path / "seat-config")
+    chain = {
+        100: (200, "python3"),
+        200: (300, "claude"),
+        300: (1, "launchd"),
+    }
+    envs = {
+        200: {L.CONFIG_DIR_ENV: config_root, "HOME": str(tmp_path)},
+    }
+
+    def ppid_of(pid):
+        return chain.get(pid, (None, None))[0]
+
+    def comm_of(pid):
+        entry = chain.get(pid)
+        return entry[1] if entry else None
+
+    def env_of(pid):
+        return envs.get(pid)
+
+    root, signal = L.seat_config_dir(
+        pid=100, ppid_of=ppid_of, comm_of=comm_of, env_of=env_of,
+    )
+    assert signal == "resolved"
+    assert root == config_root
+
+
+def test_seat_config_dir_defaults_when_config_dir_unset(tmp_path):
+    # axis: claude ancestor without CLAUDE_CONFIG_DIR resolves to HOME/.claude
+    home = str(tmp_path / "home")
+    chain = {
+        10: (20, "python3"),
+        20: (1, "claude"),
+    }
+    envs = {
+        20: {"HOME": home},
+    }
+
+    def ppid_of(pid):
+        return chain.get(pid, (None, None))[0]
+
+    def comm_of(pid):
+        entry = chain.get(pid)
+        return entry[1] if entry else None
+
+    def env_of(pid):
+        return envs.get(pid)
+
+    root, signal = L.seat_config_dir(
+        pid=10, ppid_of=ppid_of, comm_of=comm_of, env_of=env_of,
+    )
+    assert signal == "resolved"
+    assert root == os.path.join(home, ".claude")
+
+
+def test_seat_config_dir_no_seat_when_walk_completes_without_claude(tmp_path):
+    # axis: ancestry walk to pid 1 without claude returns no-seat
+    chain = {
+        5: (4, "python3"),
+        4: (3, "bash"),
+        3: (1, "cron"),
+    }
+
+    def ppid_of(pid):
+        return chain.get(pid, (None, None))[0]
+
+    def comm_of(pid):
+        entry = chain.get(pid)
+        return entry[1] if entry else None
+
+    def env_of(pid):
+        return {}
+
+    root, signal = L.seat_config_dir(
+        pid=5, ppid_of=ppid_of, comm_of=comm_of, env_of=env_of,
+    )
+    assert signal == "no-seat"
+    assert root is None
+
+
+def test_seat_config_dir_sensor_failed_on_unreadable_ppid(tmp_path):
+    # axis: ppid reader failure is sensor-failed not no-seat
+    def ppid_of(pid):
+        return None
+
+    def comm_of(pid):
+        return "python3"
+
+    def env_of(pid):
+        return {}
+
+    root, signal = L.seat_config_dir(
+        pid=5, ppid_of=ppid_of, comm_of=comm_of, env_of=env_of,
+    )
+    assert signal == "sensor-failed"
+    assert root is None
+
+
+def test_seat_config_dir_sensor_failed_on_hop_cap_exceeded(tmp_path):
+    # axis: exceeding the hop cap is sensor-failed
+    def ppid_of(pid):
+        return pid + 1
+
+    def comm_of(pid):
+        return "bash"
+
+    def env_of(pid):
+        return {}
+
+    root, signal = L.seat_config_dir(
+        pid=1, ppid_of=ppid_of, comm_of=comm_of, env_of=env_of,
+    )
+    assert signal == "sensor-failed"
+    assert root is None
+
+
+def test_parse_ps_eww_for_env_takes_last_config_dir_token():
+    # axis: ps eww parser prefers the last CLAUDE_CONFIG_DIR token over a command decoy
+    body = (
+        "  PID TTY           TIME CMD\n"
+        "12345 ??         0:00.12 claude -p prompt CLAUDE_CONFIG_DIR=/decoy "
+        "HOME=/real/home CLAUDE_CONFIG_DIR=/real/config\n"
+    )
+    env = L._parse_ps_eww_for_env(body)
+    assert env[L.CONFIG_DIR_ENV] == "/real/config"
+    assert env["HOME"] == "/real/home"
+
+
+@pytest.mark.skipif(
+    not os.path.isfile("/proc/self/environ"),
+    reason="/proc/self/environ unavailable on this host",
+)
+def test_read_proc_environ_parses_home():
+    # axis: /proc environ reader finds HOME losslessly when /proc exists
+    env = L._read_proc_environ(os.getpid())
+    assert isinstance(env, dict)
+    assert "HOME" in env
+    assert env["HOME"]
 
 
 def test_no_launch_build_return_drops_the_overlap_warnings():

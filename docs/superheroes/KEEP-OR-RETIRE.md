@@ -271,6 +271,17 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Notes.** structural — load-bearing spine for declare-batch, launch, record-outcome, and amend;
   wave_watch and heartbeat read the ledger it writes.
 
+#### B2a — Foreign-instance pin refusal
+
+- **Component.** Launcher ancestry walk and instance-pin gate that refuse a `launch` when the
+  effective child config root differs from the calling seat's own.
+- **Condition.** Citation-based, 45 days — refusal receipts or advisor reports citing a prevented
+  wrong-instance launch.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — the host gives a child no direct signal of the invoking seat's instance.
+
 #### B2 — wave_watch (loop watcher + re-arm doctrine)
 
 - **Component.** Ledger-driven batch watcher and loop re-arm doctrine with its reference doc; it
@@ -1252,6 +1263,10 @@ file, returns exactly that set.
 - `plugins/superheroes/lib/launcher.py` — launcher refuses spawn when cwd is the primary checkout
   (own-worktree). **delete-when:** the background-session trial receipt marks launcher worktree
   enforcement not needed.
+- `plugins/superheroes/lib/launcher.py` — ancestry walk reads the invoking seat's Claude instance
+  from process parentage because the host exposes no direct signal to a child. **delete-when:** the
+  host exposes the invoking session's Claude instance to a child process directly, so the launcher
+  no longer needs to read it from process ancestry.
 - `plugins/superheroes/lib/pilot_conformance_runtime.py` — env-var transport of connection detail
   across multi-account ownership probes. **delete-when:** the background-session trial receipt marks
   multi-account provisioning transport not needed.

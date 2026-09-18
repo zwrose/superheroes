@@ -78,8 +78,11 @@ at the premise's base commit — records the path, the builder's session id, and
 child is spawned under (`configDir`, absolute; omitted when no absolute root can be derived) on the
 `reserved` ledger record, and starts the session inside it, so a builder never sees the primary
 checkout. The recorded `configDir` is what lets a watcher running under a *different* Claude instance
-resolve that lane's session transcript under the lane's own root rather than its own (#1036). A path that already exists, or that
-git still registers, refuses the launch rather than being reused. **The ruling above stays in the
+resolve that lane's session transcript under the lane's own root rather than its own (#1036). A
+`launch` whose effective child config root is not the calling seat's own refuses with
+`foreign-instance-pin`; pass `--allow-foreign-instance` when a deliberate cross-instance launch is
+intended. A path that already exists, or that git still registers, refuses the launch rather than
+being reused. **The ruling above stays in the
 parsed block** — defense in depth, not a redundancy to prune: the structural guarantee covers
 launcher-issued sessions, while a directly-invoked builder still has only the prose. This paragraph
 is **documentation for advisors reading the doctrine for intent** — it is **not** a parsed invariant.

@@ -269,6 +269,250 @@ def spawn_config_dir(env=None, cwd=None):
     return os.path.join(home, _DEFAULT_CONFIG_DIR_NAME)
 
 
+_SEAT_WALK_HOP_CAP = 12
+
+
+def _is_valid_pid(pid):
+    return isinstance(pid, int) and pid > 0
+
+
+def _default_ppid_of(pid):
+    if not _is_valid_pid(pid):
+        return None
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "ppid=", "-p", str(pid)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            return None
+        stdout = result.stdout
+        if stdout is None or len(stdout) > 4096:
+            return None
+        text = stdout.decode("utf-8", errors="replace").strip()
+        if not text or not text.isdigit():
+            return None
+        return int(text)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+
+
+def _default_comm_of(pid):
+    if not _is_valid_pid(pid):
+        return None
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "comm=", "-p", str(pid)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            return None
+        stdout = result.stdout
+        if stdout is None or len(stdout) > 4096:
+            return None
+        text = stdout.decode("utf-8", errors="replace").strip()
+        return text or None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _parse_ps_eww_for_env(text):
+    """Extract CLAUDE_CONFIG_DIR and HOME from ``ps eww`` output.
+
+    ``ps eww`` reports a process's exec environment, not later mutations — which is what
+    is wanted, since a seat's instance is fixed at exec. Tokenize on whitespace and take
+    the **last** token matching each prefix: the environment block follows the command line,
+    so a ``claude -p <prompt>`` whose prompt text happens to contain ``CLAUDE_CONFIG_DIR=…``
+    cannot win over the real entry. Lossy by construction: a config path containing a space
+    truncates at the space; that direction is safe — a truncated root can only fail to equal
+    the pin, never manufacture a false match.
+    """
+    if not isinstance(text, str):
+        return None
+    env = {}
+    for token in text.split():
+        if token.startswith("CLAUDE_CONFIG_DIR="):
+            env[CONFIG_DIR_ENV] = token[len("CLAUDE_CONFIG_DIR="):]
+        elif token.startswith("HOME="):
+            env["HOME"] = token[len("HOME="):]
+    return env
+
+
+def _read_proc_environ(pid):
+    path = os.path.join("/proc", str(pid), "environ")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    env = {}
+    for entry in data.split(b"\x00"):
+        if not entry:
+            continue
+        try:
+            decoded = entry.decode("utf-8", errors="replace")
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if "=" not in decoded:
+            continue
+        key, value = decoded.split("=", 1)
+        if key in (CONFIG_DIR_ENV, "HOME"):
+            env[key] = value
+    return env
+
+
+def _default_env_of(pid):
+    if not _is_valid_pid(pid):
+        return None
+    proc_env = _read_proc_environ(pid)
+    if proc_env is not None:
+        return proc_env
+    try:
+        result = subprocess.run(
+            ["ps", "eww", "-p", str(pid)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            return None
+        stdout = result.stdout
+        if stdout is None or len(stdout) > 65536:
+            return None
+        text = stdout.decode("utf-8", errors="replace")
+        return _parse_ps_eww_for_env(text)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _resolve_seat_config_root(proc_env):
+    """Absolute config root from a claude ancestor's environment, or None when unreadable."""
+    if proc_env is None:
+        return None
+    env = dict(proc_env)
+    home = env.get("HOME")
+    if not isinstance(home, str) or not home.strip():
+        home = os.path.expanduser("~")
+    else:
+        home = home.strip()
+    home = _expand_home(home, env) if home.startswith("~") else home
+    if not isinstance(home, str) or not os.path.isabs(home):
+        return None
+    home = os.path.normpath(home)
+    configured = env.get(CONFIG_DIR_ENV)
+    if isinstance(configured, str) and configured.strip():
+        path = _expand_home(configured.strip(), env)
+        path = os.path.normpath(path)
+        if not os.path.isabs(path):
+            return None
+        return path
+    return os.path.normpath(os.path.join(home, _DEFAULT_CONFIG_DIR_NAME))
+
+
+def seat_config_dir(pid=None, ppid_of=None, env_of=None, comm_of=None):
+    """(root, signal) for the Claude instance of the seat that invoked this process."""
+    if pid is None:
+        pid = os.getpid()
+    ppid_reader = ppid_of if ppid_of is not None else _default_ppid_of
+    env_reader = env_of if env_of is not None else _default_env_of
+    comm_reader = comm_of if comm_of is not None else _default_comm_of
+
+    claude_pid_raw = os.environ.get("CLAUDE_PID")
+    if claude_pid_raw is not None:
+        try:
+            claude_pid = int(str(claude_pid_raw).strip())
+        except (ValueError, TypeError):
+            claude_pid = None
+        if _is_valid_pid(claude_pid):
+            comm = comm_reader(claude_pid)
+            if comm is not None and os.path.basename(comm.strip()) == "claude":
+                root = _resolve_seat_config_root(env_reader(claude_pid))
+                if root is None:
+                    return None, "sensor-failed"
+                return root, "resolved"
+
+    current = pid
+    hops = 0
+    while hops <= _SEAT_WALK_HOP_CAP:
+        if not _is_valid_pid(current):
+            return None, "sensor-failed"
+        comm = comm_reader(current)
+        if comm is None:
+            return None, "sensor-failed"
+        if os.path.basename(comm.strip()) == "claude":
+            root = _resolve_seat_config_root(env_reader(current))
+            if root is None:
+                return None, "sensor-failed"
+            return root, "resolved"
+        parent = ppid_reader(current)
+        if parent is None:
+            return None, "sensor-failed"
+        if parent <= 1:
+            return None, "no-seat"
+        current = parent
+        hops += 1
+    return None, "sensor-failed"
+
+
+def _instance_pin_gate(env, seat_config_dir_value, seat_signal, allow_foreign_instance):
+    base_env = dict(env if env is not None else os.environ)
+
+    def _refusal_pin_fields():
+        effective = spawn_config_dir(env=base_env)
+        raw_pin = base_env.get(CONFIG_DIR_ENV)
+        if not isinstance(raw_pin, str):
+            raw_pin = ""
+        pinned = effective if effective is not None else raw_pin
+        seat = seat_config_dir_value if seat_config_dir_value else ""
+        return seat, pinned
+
+    if allow_foreign_instance:
+        return None, "override"
+    if seat_signal is None:
+        return None, "absent"
+    if seat_signal == "sensor-failed":
+        seat, pinned = _refusal_pin_fields()
+        return _fail(
+            "seat-instance-unreadable", seatConfigDir=seat, pinnedConfigDir=pinned,
+        ), None
+    configured = base_env.get(CONFIG_DIR_ENV)
+    if isinstance(configured, str) and configured.strip():
+        raw = configured.strip()
+        if not raw.startswith("~") and not os.path.isabs(raw):
+            seat, _pinned = _refusal_pin_fields()
+            return _fail(
+                "foreign-instance-pin-unresolvable",
+                seatConfigDir=seat,
+                pinnedConfigDir=raw,
+            ), None
+    if seat_signal == "no-seat":
+        return None, "no-seat"
+    if seat_signal == "resolved":
+        effective = spawn_config_dir(env=base_env)
+        seat_root = seat_config_dir_value
+        if (
+            effective is not None
+            and seat_root is not None
+            and os.path.normpath(effective) == os.path.normpath(seat_root)
+        ):
+            return None, "matched"
+        return _fail(
+            "foreign-instance-pin",
+            seatConfigDir=seat_root or "",
+            pinnedConfigDir=effective or "",
+        ), None
+    return None, "absent"
+
+
 def _repo_tag(repo_root):
     """A readable, filesystem-safe stem for the repo the build belongs to."""
     tag = _WORKTREE_TAG_UNSAFE.sub("-", os.path.basename(os.path.abspath(repo_root)))
@@ -1212,6 +1456,9 @@ def launch_build(
     generation=None,
     boundary=None,
     effort=None,
+    seat_config_dir=None,
+    seat_signal=None,
+    allow_foreign_instance=False,
 ):
     """Full launch flow: preflight, premise, compose, reserve, spawn, settle/retry."""
     settle_seconds = _SETTLE_SECONDS if settle_seconds is None else settle_seconds
@@ -1227,6 +1474,12 @@ def launch_build(
     batch_id = premise.get("batchId") if isinstance(premise, dict) else None
     if not isinstance(batch_id, str) or not batch_id.strip():
         batch_id = None
+
+    pin_refusal, seat_instance_signal = _instance_pin_gate(
+        env, seat_config_dir, seat_signal, allow_foreign_instance,
+    )
+    if pin_refusal is not None:
+        return pin_refusal
 
     preflight_result = walk_preflight(
         checks_input,
@@ -1385,6 +1638,7 @@ def launch_build(
         "effortSource": compose_result["effortSource"],
         "worktree": worktree_path,
         "sessionId": compose_result["sessionId"],
+        "seatInstanceSignal": seat_instance_signal,
     }
     config_dir = spawn_config_dir(env=env, cwd=worktree_path)
     if config_dir is not None:
@@ -1765,6 +2019,7 @@ def _cli_launch(args):
             return _fail("launch-boundary-unreadable")
         boundary = boundary_data
 
+    seat_root, seat_sig = seat_config_dir()
     return launch_build(
         args.repo_root,
         args.issue,
@@ -1776,6 +2031,9 @@ def _cli_launch(args):
         generation=args.generation,
         boundary=boundary,
         effort=args.effort,
+        seat_config_dir=seat_root,
+        seat_signal=seat_sig,
+        allow_foreign_instance=args.allow_foreign_instance,
     )
 
 
@@ -1835,6 +2093,13 @@ def main(argv=None):
     la.add_argument("--slot", default=None)
     la.add_argument("--generation", type=int, default=None)
     la.add_argument("--boundary", default=None)
+    la.add_argument(
+        "--allow-foreign-instance",
+        action="store_true",
+        default=False,
+        help="deliberate cross-instance door when the effective child config root "
+             "differs from the calling seat's own",
+    )
     la.set_defaults(func=_cli_launch)
 
     ro = sub.add_parser("record-outcome")
