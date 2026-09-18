@@ -41,6 +41,7 @@ import cli_contract as cc  # noqa: E402  argparse caller-contract builders
 import dispatch_guard  # noqa: E402  model allowlist gate (#600, #1269 WO-B)
 import dispatch_outcome  # noqa: E402  outcome vocabulary chokepoint (#747)
 import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
+import engine_result_channel  # noqa: E402  native result channel (#1270 WO-B1)
 import seat_bundle  # noqa: E402  single dispatch seat entry (#1269 WO-A1)
 import file_lock  # noqa: E402
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
@@ -81,6 +82,8 @@ RUN_LOCK_NAME = "run.lock"
 WORKTREE_LEASE_PREFIX = "superheroes-worktree-lease-"
 PROMPT_NAME = "prompt.txt"
 PROGRESS_NAME = "progress.jsonl"
+NATIVE_SCHEMA_NAME = "native-schema.json"
+NATIVE_RESULT_NAME = "native-result.json"
 RUN_KIND_REVIEW = "review"
 # Consumers import engine_adapter.REVIEW_RESULT_KINDS — never restate the tuple (CONVENTIONS §11).
 REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
@@ -409,6 +412,67 @@ def _seat_dict_from_resolved_snapshot(snapshot):
     return {"vendor": vendor, "model": model, "effort": effort, "role": role}
 
 
+def _opened_channel(opened):
+    """Return the channel this run opened on; channel_for answers what a new run would take."""
+    return opened.get("channel", engine_result_channel.CHANNEL_MARKER)
+
+
+def _native_channel_paths(run_dir_real):
+    return (
+        os.path.join(run_dir_real, NATIVE_SCHEMA_NAME),
+        os.path.join(run_dir_real, NATIVE_RESULT_NAME),
+    )
+
+
+def _native_channel_suffix(opened):
+    """Return (--output-schema, schema_path, -o, result_path) when this run is native-channel."""
+    if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
+        return ()
+    schema_path = opened.get("nativeSchemaPath")
+    result_path = opened.get("nativeResultPath")
+    if not schema_path or not result_path:
+        return ()
+    return ("--output-schema", schema_path, "-o", result_path)
+
+
+def _prepare_native_result_spawn(run_dir_real, opened):
+    """Remove a stale native result file before spawn. Returns (ok, path, removed, refusal)."""
+    if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
+        return True, None, False, None
+    result_path = opened.get("nativeResultPath")
+    if not result_path:
+        result_path = os.path.join(run_dir_real, NATIVE_RESULT_NAME)
+    stale_removed = False
+    try:
+        if os.path.exists(result_path):
+            os.remove(result_path)
+            stale_removed = True
+    except OSError as exc:
+        return False, result_path, False, "spawn-failed: %s" % exc
+    return True, result_path, stale_removed, None
+
+
+def _open_native_channel_argv(run_dir_real, engine, argv, run_kind, expected_result_kind=None):
+    """Write native schema and extend argv for native-channel opens. Returns (argv, error_token)."""
+    if engine_result_channel.channel_for(engine) != engine_result_channel.CHANNEL_NATIVE:
+        return list(argv), None, None, None
+    try:
+        schema = engine_result_channel.declared_schema(
+            engine, run_kind, expected_result_kind,
+        )
+    except Exception:
+        return None, "native-schema-undeclarable", None, None
+    schema_path, result_path = _native_channel_paths(run_dir_real)
+    try:
+        with open(schema_path, "w", encoding="utf-8") as fh:
+            json.dump(schema, fh, separators=(",", ":"))
+            fh.write("\n")
+    except OSError:
+        return None, "native-schema-unwritable", None, None
+    argv_out = list(argv) + ["--output-schema", schema_path, "-o", result_path]
+    return argv_out, None, schema_path, result_path
+
+
 def _canonical_spawn_argv(opened):
     """Derive argv from the journal seat snapshot and cwd — G2 coherence source of truth."""
     snapshot = opened.get("resolvedInputs")
@@ -433,7 +497,11 @@ def _canonical_spawn_argv(opened):
     built = engine_adapter.build_argv_result(seat, role_kind, opts)
     if built.get("reason") is not None:
         return None, "engine-config:%s" % built["reason"]
-    return list(built["argv"]), None
+    argv = list(built["argv"])
+    suffix = _native_channel_suffix(opened)
+    if suffix:
+        argv = argv + list(suffix)
+    return argv, None
 
 
 def _spawn_argv_coherence(opened, stored_argv):
@@ -2647,6 +2715,16 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         _journal_spawn_guard_refusal(run_dir_real, attempt, coherence_err)
         return
     argv = spawn_argv
+    ok_prep, native_result_path, stale_removed, prep_refusal = _prepare_native_result_spawn(
+        run_dir_real, opened,
+    )
+    if not ok_prep:
+        _journal_append(run_dir_real, {
+            "kind": "attempt-ended", "attempt": attempt,
+            "exit": 127, "timedOut": False, "signal": None,
+            "refusal": prep_refusal[:_STDERR_TAIL], "at": time.time(),
+        })
+        return
     dispatch_path = _dispatch_path_from_opened(opened)
     try:
         prompt_bytes = os.path.getsize(prompt_path)
@@ -2674,10 +2752,14 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         return
 
     pgid = proc.pid
-    if not _journal_append(run_dir_real, {
+    engine_started = {
         "kind": "engine-started", "attempt": attempt,
         "enginePgid": pgid, "at": time.time(),
-    }):
+    }
+    if native_result_path is not None:
+        engine_started["nativeResultPath"] = native_result_path
+        engine_started["staleNativeResultRemoved"] = stale_removed
+    if not _journal_append(run_dir_real, engine_started):
         _terminate_process_group(pgid)
         try:
             proc.wait(timeout=2)
@@ -2793,6 +2875,11 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     if coherence_err:
         return False, coherence_err
     argv = spawn_argv
+    ok_prep, native_result_path, stale_removed, prep_refusal = _prepare_native_result_spawn(
+        run_dir_real, opened,
+    )
+    if not ok_prep:
+        return False, prep_refusal
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, attempt)
     prompt_path = opened["promptPath"]
@@ -2806,10 +2893,14 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         "childPid": os.getpid(), "at": time.time(),
     }):
         return False, "journal-append-failed"
-    if not _journal_append(run_dir_real, {
+    engine_started = {
         "kind": "engine-started", "attempt": attempt,
         "enginePgid": os.getpid(), "at": time.time(),
-    }):
+    }
+    if native_result_path is not None:
+        engine_started["nativeResultPath"] = native_result_path
+        engine_started["staleNativeResultRemoved"] = stale_removed
+    if not _journal_append(run_dir_real, engine_started):
         return False, "journal-append-failed"
 
     def cb(elapsed, stdout_bytes, stderr_bytes=0, _a=attempt):
@@ -3851,6 +3942,13 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     except OSError as exc:
         return False, "run-dir-setup-failed:%s" % type(exc).__name__
 
+    channel = engine_result_channel.channel_for(engine)
+    argv, native_err, native_schema_path, native_result_path = _open_native_channel_argv(
+        run_dir_real, engine, argv, RUN_KIND_REVIEW, expected_result_kind,
+    )
+    if native_err:
+        return False, native_err
+
     record = {
         "kind": "run-opened",
         "runKind": RUN_KIND_REVIEW,
@@ -3858,6 +3956,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "roleKind": RUN_KIND_REVIEW,
         "orderId": order_id,
         "mode": mode,
+        "channel": channel,
         "argv": argv,
         "cwd": cwd,
         "timeout": timeout,
@@ -3873,6 +3972,9 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "supervisorPid": os.getpid(),
         "at": time.time(),
     }
+    if native_schema_path is not None:
+        record["nativeSchemaPath"] = native_schema_path
+        record["nativeResultPath"] = native_result_path
     if expected_result_kind in REVIEW_RESULT_KINDS:
         record["expectedResultKind"] = expected_result_kind
     effective_nonce = review_findings_schema.effective_nonce(echo_nonce)
@@ -4409,12 +4511,20 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     except OSError as exc:
         return False, "run-dir-setup-failed:%s" % type(exc).__name__
 
+    channel = engine_result_channel.channel_for(engine)
+    argv, native_err, native_schema_path, native_result_path = _open_native_channel_argv(
+        run_dir_real, engine, argv, RUN_KIND_WRITE,
+    )
+    if native_err:
+        return False, native_err
+
     record = {
         "kind": "run-opened",
         "runKind": RUN_KIND_WRITE,
         "engine": engine,
         "roleKind": "build",
         "orderId": order_id,
+        "channel": channel,
         "argv": argv,
         "cwd": cwd,
         "timeout": timeout,
@@ -4433,6 +4543,9 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "supervisorPid": os.getpid(),
         "at": time.time(),
     }
+    if native_schema_path is not None:
+        record["nativeSchemaPath"] = native_schema_path
+        record["nativeResultPath"] = native_result_path
     if resolved_inputs is not None:
         record["resolvedInputs"] = resolved_inputs
     if not _journal_append(run_dir_real, record):
