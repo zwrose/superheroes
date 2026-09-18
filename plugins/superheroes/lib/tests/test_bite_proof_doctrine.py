@@ -14,6 +14,27 @@ headings.
   none** — a new heading or a new restated clause is silently unguarded until someone adds it;
 - the guard proves nothing about whether the doctrine is correct, obeyed, or actually recorded for
   any change.
+
+**Birth duties, for the pointer-count roster and its walk.** Under the rule in
+``rubric/review-discipline.md``, section ``Prefer shapes that cannot fail``, this roster and walk
+owe three duties:
+
+- **Bite-proof** — recorded at ``lib/tests/bite_proofs/c3_1262_pointer_census.md``. The pointer
+  count assertion and the roster completeness walker were each driven red on a planted defect and
+  returned to green.
+- **Retirement condition and tag** — entry **S7** on the project's keep-or-retire record, which
+  lives with the project's definition-docs.
+- **By-construction coverage, for the pointer half only** — ``_sections_with_pointer`` records a
+  pointer only when it sits inside a level-2 section, because of the ``if _heading_level(line) != 2:
+  continue`` guard, so a pointer before the first ``##`` heading, or in a file whose headings are only
+  ``#`` or ``###``, is invisible to the walk and ``test_pointer_roster_is_complete`` stays green.
+  Over the plugin root, ``_walk_plugin_pointer_sections`` enumerates every markdown file there
+  through the single ``_census_excluded`` chokepoint, and ``_check_pointer_roster_complete`` refuses
+  any pointer-carrying section the roster does not name. The reach outside the plugin root is one
+  hand-named file, ``CONVENTIONS.md``, spelled inline in ``_walk_pointer_carrying_sections`` and not
+  behind that chokepoint — a hand-maintained enumeration rather than by-construction coverage. The
+  **heading and clause rosters have no such walker**; they are hand-maintained, which is the residual
+  recorded above and is not covered by this duty.
 """
 import os
 import re
@@ -56,6 +77,7 @@ def _census_excluded(rel):
 # implementer § Validating — validity rule 6 names expected bite-proof (count=1)
 # test-reviewer § Named test-smell taxonomy — axis-line smell cites doctrine home (count=1)
 # review-discipline § Review bars — Mechanical guards subsection structural-pin doctrine (count=1)
+# review-discipline § Machinery — Prefer shapes that cannot fail subsection bite-proof pointer (count=1)
 # CONVENTIONS §12 — verification contracts pointer to vacuity-trap home (count=2)
 _CONSUMER_ROSTER = [
     ("skills/workhorse/SKILL.md", "## 6. Decompose into work orders", 1),
@@ -64,6 +86,7 @@ _CONSUMER_ROSTER = [
     ("agents/implementer.md", "## The rules", 1),
     ("agents/implementer.md", "## Validating your work order", 1),
     ("agents/test-reviewer.md", "## Named test-smell taxonomy", 1),
+    ("rubric/review-discipline.md", "## Machinery, homes, and what a review may ask for", 1),
     ("rubric/review-discipline.md", "## Review bars and recorded residuals", 1),
     (
         "../../CONVENTIONS.md",

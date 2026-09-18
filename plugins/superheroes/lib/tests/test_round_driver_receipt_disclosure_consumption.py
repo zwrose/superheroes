@@ -12,7 +12,6 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import round_driver  # noqa: E402
-import version_skew  # noqa: E402
 
 _INVARIANT_A = (
     "Building a terminal receipt never raises on a malformed per-round disclosure channel: "
@@ -45,16 +44,6 @@ def _round_entry(receipt):
 
 def _degraded_prose(receipt):
     return "\n".join(receipt.get("degraded") or [])
-
-
-def _skew_row(reason="plugin-version-skew: test skew line"):
-    return {
-        "constraint": version_skew.CONSTRAINT,
-        "status": version_skew.STATUS_CHECKED_DEGRADED,
-        "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
-        "reason": reason,
-        "inspectedRoot": "/tmp/repo",
-    }
 
 
 # --- E1: shape filter live in receipt builder ---
@@ -229,11 +218,8 @@ def test_e8_build_receipt_round_entry_name_is_never_rebound():
 # --- E6: helper-reached readers do not crash ---
 
 
-def test_e6_malformed_skew_and_violations_do_not_crash():
-    """E6 — malformed pluginVersionSkew / seatMapViolations do not raise through build_receipt."""
-    skew_state = _minimal_state({"pluginVersionSkew": 7})
-    round_driver.build_receipt(skew_state)
-
+def test_e6_malformed_violations_do_not_crash():
+    """E6 — malformed seatMapViolations do not raise through build_receipt."""
     viol_state = _minimal_state({"seatMapViolations": 7})
     round_driver.build_receipt(viol_state)
 
@@ -247,12 +233,8 @@ def test_e6_malformed_skew_and_violations_do_not_crash():
     assert isinstance(breach_lines[0], str)
 
 
-def test_e6_well_formed_skew_and_violations_pin_exact_prose():
-    """E6 pin — well-formed skew and breach rows still produce today's exact prose."""
-    skew_state = _minimal_state({"pluginVersionSkew": [_skew_row("plugin-version-skew: exact line")]})
-    skew_receipt = round_driver.build_receipt(skew_state)
-    assert "plugin-version-skew: exact line" in _degraded_prose(skew_receipt)
-
+def test_e6_well_formed_violations_pin_exact_prose():
+    """E6 pin — well-formed breach rows still produce today's exact prose."""
     viol_state = _minimal_state({
         "seatMapViolations": [{"constraint": "cross-vendor", "seat": "code-reviewer",
                                "evidence": "alternative-live"}],
@@ -330,10 +312,7 @@ def _helper_channel_read_is_list_guarded(fn_name, channel):
 
 
 def test_e7_helper_channel_reads_guarded_by_isinstance_list():
-    """E7 — _skew_records and _seat_map_violations guard channel reads with isinstance(..., list)."""
-    assert _helper_channel_read_is_list_guarded("_skew_records", "pluginVersionSkew"), (
-        "%s _skew_records must not iterate a bare rec.get(pluginVersionSkew) or []"
-        % _INVARIANT_B)
+    """E7 — _seat_map_violations guards channel reads with isinstance(..., list)."""
     assert _helper_channel_read_is_list_guarded("_seat_map_violations", "seatMapViolations"), (
         "%s _seat_map_violations must not iterate a bare rec.get(seatMapViolations) or []"
         % _INVARIANT_B)

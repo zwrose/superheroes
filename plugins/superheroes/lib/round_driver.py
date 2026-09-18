@@ -79,7 +79,6 @@ import seat_map_receipts  # noqa: E402
 import session_mode  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
-import version_skew  # noqa: E402
 from finding_identity import finding_identity, normalize_title  # noqa: E402
 
 # --- constants (the DIMENSIONS/AGENT_SUFFIX home, moved off the retired code_loop_plan) --------
@@ -408,18 +407,6 @@ def _order_vendor_provenance_gaps_shape(value):
     return True
 
 
-def _plugin_version_skew_shape(value):
-    # build_receipt reads constraint/status/detail/inspectedRoot/reason off each skew row.
-    if not _dict_list(value):
-        return False
-    for row in value:
-        if row.get("constraint") != version_skew.CONSTRAINT:
-            return False
-        if not isinstance(row.get("status"), str):
-            return False
-    return True
-
-
 def _normalize_adapter_provenance(prov):
     """Return {phase: disclosures} for either the per-phase `byPhase` shape or the legacy flat
     value (keyed as `unknown-phase`). Non-dict / corrupt `byPhase` → empty."""
@@ -448,7 +435,6 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "seatMapUnavailable": _str_list,
     "seatMapUnjudgeable": _str_list,
     "seatMapViolations": _dict_list,
-    "pluginVersionSkew": _plugin_version_skew_shape,
     "vacuousSeats": _str_list,
     "engagedArtifactSeats": _str_list,
     "canaryUnverified": _str_list,
@@ -996,15 +982,11 @@ _sm_any_seats = seat_map_receipts.any_seats
 _sm_same_family_seats = seat_map_receipts.same_family_seats
 _sm_unexcused_violations = seat_map_receipts.unexcused_violations
 _sm_pin_excused_records = seat_map_receipts.pin_excused_records
-_sm_skew_records = seat_map_receipts.skew_records
-_sm_plugin_version_skew_status = seat_map_receipts.plugin_version_skew_status
 _sm_canary_map = seat_map_receipts.canary_map
 _emit_receipt_seat_map = seat_map_receipts.emit_receipt_seat_map
 _sm_unjudgeable_receipts = seat_map_receipts.unjudgeable_receipts
 _sm_unjudgeable_run_level_disclosure = seat_map_receipts.unjudgeable_run_level_disclosure
 _sm_round_governing_unjudgeable = seat_map_receipts.round_governing_unjudgeable
-_skew_record_identity = seat_map_receipts._skew_record_identity
-_skew_records_from_seat_map = seat_map_receipts._skew_records_from_seat_map
 
 
 def _driver_author_family(state):
@@ -1024,86 +1006,6 @@ def _same_family_seats(state):
 
 def _same_family_degraded(state):
     return bool(_same_family_seats(state))
-
-
-def _union_skew_disclosures(existing, new):
-    """Deduped union of skew disclosure lists, keyed on ``_skew_record_identity``."""
-    seen: set[tuple] = set()
-    merged: list[dict] = []
-    for source in (existing or []), (new or []):
-        for rec in source:
-            key = _skew_record_identity(rec)
-            if key is None:
-                continue
-            status = rec.get("status")
-            if not version_skew.appends_degradation(status):
-                continue
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(rec)
-    merged.sort(
-        key=lambda item: (
-            str(item.get("constraint", "")),
-            str(item.get("status", "")),
-            str(item.get("detail", "")),
-            str(item.get("inspectedRoot", "")),
-        ),
-    )
-    return merged
-
-
-def _skew_records(state):
-    """Plugin-version-skew degradations — the UNION of what each round recorded and what the live
-    receipt projections carry, so neither channel alone is load-bearing: ``state["rounds"]`` is lost
-    across a ``recordsPath`` resume. Deduped by (constraint, status, detail, inspectedRoot), sorted."""
-    seen: set[tuple] = set()
-    merged: list[dict] = []
-    for rec in (state.get("rounds") or {}).values():
-        if not isinstance(rec, dict):
-            continue
-        skew = rec.get("pluginVersionSkew")
-        if not isinstance(skew, list):
-            continue
-        for row in skew:
-            key = _skew_record_identity(row)
-            if key is None:
-                continue
-            status = row.get("status")
-            if not version_skew.appends_degradation(status):
-                continue
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(row)
-    for row in _sm_skew_records(state):
-        key = _skew_record_identity(row)
-        if key is None or key in seen:
-            continue
-        seen.add(key)
-        merged.append(row)
-    merged.sort(
-        key=lambda item: (
-            str(item.get("constraint", "")),
-            str(item.get("status", "")),
-            str(item.get("detail", "")),
-            str(item.get("inspectedRoot", "")),
-        ),
-    )
-    return merged
-
-
-def _skew_degraded(state):
-    return bool(_skew_records(state))
-
-
-def _plugin_version_skew_status(state):
-    """Seat-map tri-state status for certification disclosure (#677). ``absent`` when no receipt
-    carries ``pluginVersionSkew`` — an older map or one built without the field — so the
-    certification block never claims a skew check ran. A receipt with an unrecognized ``status`` is
-    ``unknown``, not ``absent`` — unknown skew receipts degrade via ``version_skew.appends_degradation``
-    (#1107)."""
-    return _sm_plugin_version_skew_status(state)
 
 
 def _seat_map_violations(state):
@@ -1229,9 +1131,6 @@ def _cert_shape(state, base):
         _degraded(state)
         or _base_degraded(state)
         or _same_family_degraded(state)
-        # bite-axis: skewed review never reads unqualified-clean — projection 1 of 3 independent
-        # skew guards (_cert_shape here; shapeDrivers and degraded prose are the other two, #677).
-        or _skew_degraded(state)
         or _seat_pin_excused(state)
         # bite-axis: absent seat map never certifies unqualified-clean — projection 1 of 3 (#681).
         or _seat_map_unavailable(state)
@@ -2438,14 +2337,6 @@ def _fold_panel(state, config, artifact):
             _parts.append("%s@%s" % (c, s) if s else c)
         _decision(state, "seat-map-constraint-violated",
                   "unexcused seat-map constraint violation(s): %s" % ", ".join(_parts))
-    _sm_skew = _skew_records_from_seat_map(seat_map) if seat_map else []
-    if _sm_skew:
-        rnd_rec = state["rounds"].setdefault(str(state["round"]), {})
-        _record_round(
-            state,
-            "pluginVersionSkew",
-            _union_skew_disclosures(rnd_rec.get("pluginVersionSkew"), _sm_skew),
-        )
     _record_round(state, "compileDrops", drops)
     if unverified:
         _record_round(state, "unverified", unverified)
@@ -4052,10 +3943,6 @@ def _terminal_converged(state, config, full_panel, note=None):
         shape_drivers.append("base")
     if _same_family_degraded(state):
         shape_drivers.append("same-family")
-    # bite-axis: skewed review never reads unqualified-clean — projection 2 of 3 independent skew
-    # guards (shapeDrivers here; _cert_shape and degraded prose are the other two, #677).
-    if _skew_degraded(state):
-        shape_drivers.append("plugin-version-skew")
     if _seat_pin_excused(state):
         shape_drivers.append("seat-pin")
     # bite-axis: absent seat map names shapeDrivers — projection 2 of 3 (#681).
@@ -4066,12 +3953,9 @@ def _terminal_converged(state, config, full_panel, note=None):
     if _seat_map_unproven_liveness(state):
         shape_drivers.append("unproven-liveness")
     state["terminal"] = "converged"
-    # bite-axis: skew tri-state rides certification beside shape/shapeDrivers so a vetter sees
-    # whether the seat map checked skew — independent of the three -degraded projections (#677).
     cert = {"shape": shape, "fullPanel": bool(full_panel),
             "independence": "degraded" if _degraded(state) else "independent",
             "base": _certification_base(state),
-            "pluginVersionSkew": _plugin_version_skew_status(state),
             "shapeDrivers": sorted(shape_drivers)}
     if note:
         cert["note"] = note
@@ -4160,23 +4044,6 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
             "panel independence: seat(s) %s were filled with the MAKER's own model family — no "
             "alternative family was live; disclosed by the seat map and named in the certification "
             "shape" % ", ".join(_same_family_seats(state)))
-    # bite-axis: skewed review never reads unqualified-clean — projection 3 of 3 independent skew
-    # guards (degraded prose here; _cert_shape and shapeDrivers are the other two, #677).
-    if _skew_degraded(state):
-        _skew_reasons = []
-        for rec in _skew_records(state):
-            reason = rec.get("reason")
-            if isinstance(reason, str) and reason:
-                _skew_reasons.append(reason)
-        if _skew_reasons:
-            degraded.append(
-                "%s; disclosed by the seat map and named in the certification shape"
-                % "; ".join(_skew_reasons))
-        else:
-            degraded.append(
-                "plugin-version-skew: the review ran under a plugin/repository semantics skew "
-                "but no usable reason text was recorded; disclosed by the seat map and named in "
-                "the certification shape")
     _pin_seats = _seat_pin_excused_seats(state)
     if _pin_seats:
         degraded.append(
