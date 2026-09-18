@@ -65,7 +65,11 @@ carries the started-gate, because narrowing a detector can silently stale an old
 reds at that head are recorded in their own sections below under *Re-run at the final head*.
 
 Proof head for E1–E3b's original run: `87eb6cfbe6dbb67079f6403bfd4dfb7d34c611eb`.
-**Proof head for E4 and for every re-run: `cfa317b3afd1e3cfb290a475edaa28a1a1f18868`.**
+Proof head for E4's first run and for E1–E3b's re-runs: `cfa317b3afd1e3cfb290a475edaa28a1a1f18868`.
+**E4 was then proven a second time at `87e9300dd77bd46554f3df4a14634fc75c27a491`** — the head after
+the confirmation round's corrective — because that corrective rewrote one of E4's own fixtures. A
+detector whose fixture changed is not covered by a proof taken before the change; that re-run is
+recorded in E4's own section.
 
 ---
 
@@ -421,17 +425,56 @@ $ git status --porcelain
 (no output — whole tree identical to HEAD)
 ```
 
+**Re-proof at `87e9300d`, after the confirmation round's corrective.** The corrective rewrote the
+second detector's fixture — attempt 1 now ends before attempt 2 begins, and attempt 2's refusal is
+the `spawn-failed:` shape `_run_engine_files` actually writes rather than `journal-append-failed`
+(which is the shape of a *post*-`Popen` append failure, and so described the opposite of what the
+test asserts about). A rewritten fixture can stop exercising the thing it was written for, so E4 was
+proven again against it. Same neutralization, same two reds, the third detector green as before:
+
+```
+>       assert res["argv"] == attempt1_spawn_argv
+E       AssertionError: assert ['codex', 'ex...pt-2-refused'] == ['codex', 'ex...empt-1-spawn']
+E
+E         At index 2 diff: 'attempt-2-refused' != 'attempt-1-spawn'
+
+plugins/superheroes/lib/tests/test_engine_dispatch.py:3111: AssertionError
+2 failed, 1 passed in 1.38s
+```
+
+Restored by the exact inverse edit; `git status --porcelain` empty afterwards.
+
+---
+
+## Known limits of this element — stated, not papered over
+
+E4's gate establishes its invariant on the **production** dispatch path and not on every path, and
+the two gaps are recorded here rather than left for a later reader to rediscover. Both were raised by
+the confirmation round and both were checked by execution.
+
+- **A successful spawn whose `engine-started` append then fails is excluded.** On the real spawn path
+  `Popen` returns before that append; if the append fails, the engine has received the argv but the
+  fold carries no `enginePgid`, so the gate falls back to the canonical argv. This is a false
+  negative in the **safe** direction — it under-claims — and it occurs only on a path where the
+  runner immediately terminates the process group and the journal is already refusing writes.
+- **On the injected seam the gate does not establish that an engine was reached**, because
+  `_execute_injected_attempt` appends `engine-started` *before* calling `run_engine`. That path is
+  taken only when a caller injects a `run_engine` that is not the module's own `_run_engine` —
+  `_spawn_attempt`'s `run_engine is not _run_engine` branch — so it is the test seam and never a
+  production dispatch. Closing it would mean moving a record `_launching_uncertain` also reads, which
+  is beyond what this change was authorized to touch.
+
 ---
 
 ## All proofs green on the final head
 
-All seven detectors, every element's, green together at `cfa317b3` with the whole tree restored:
+All seven detectors, every element's, green together at `87e9300d` with the whole tree restored:
 
 ```
 $ git status --porcelain
 (no output)
 $ git rev-parse HEAD
-cfa317b3afd1e3cfb290a475edaa28a1a1f18868
+87e9300dd77bd46554f3df4a14634fc75c27a491
 $ /usr/bin/python3 -B -X pycache_prefix=... -m pytest \
     test_engine_dispatch_e2e.py::test_e2e_review_real_path_terminal_success \
     test_engine_dispatch.py::test_injected_seam_journals_spawn_argv_for_the_attempt \
@@ -441,7 +484,7 @@ $ /usr/bin/python3 -B -X pycache_prefix=... -m pytest \
     test_engine_dispatch.py::test_with_run_fields_argv_ignores_later_unstarted_attempt_spawn_argv \
     test_engine_dispatch.py::test_dispatch_review_result_argv_matches_started_attempt_spawn_argv -q
 .......                                                                  [100%]
-7 passed in 1.95s
+7 passed in 2.61s
 ```
 
 ## Keep-or-retire
