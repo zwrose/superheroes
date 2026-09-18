@@ -546,12 +546,14 @@ contract that nobody else can read, so it is gardened where everything else is �
 never on its own schedule. Three things, and the duties above are untouched by them; this is a
 standing rule of the pass, not an eighth duty.
 
-- **A rule a plugin user would need leaves memory for a plugin surface.** Memory reaches one advisor
-  on one machine; a skill, a charter, or a rubric reaches everyone who installs the plugin. A
-  user-relevant rule kept in memory is shipped to nobody, and it reads as covered because the one
-  session that remembers it keeps honouring it. The move itself is **work, and it enters through the
-  door** like any other item; memory keeps a recall copy until the surface ships, and afterwards may
-  keep one — never the only copy.
+- **Apply the memory-versus-plugin-surface routing test to what memory already holds.** The test
+  itself is not restated here — it is the **workhorse** charter's `## Memory` section, and the
+  charter's memory duty already points there. What the pass adds is *when*: the test is applied at
+  write time to one entry, and **here to the whole store**, where a rule that should have shipped has
+  been sitting unnoticed — shipped to nobody, and reading as covered because the one session that
+  remembers it keeps honouring it. A rule the test routes outward **moves to the surface**, and the
+  move is **work that enters through the door** like any other item; memory keeps a recall copy —
+  never the only copy.
 - **The pass re-reads every memory entry older than the last doctrine change.** A doctrine change is
   what silently stales an entry: the entry stays true about a surface that no longer exists, and
   nothing about the entry itself says so. Re-reading them against the current text is what surfaces a
@@ -585,8 +587,9 @@ standing rule of the pass, not an eighth duty.
 - **the latest mutation results**: survivors and kills per test file the run covered (unmeasured
   where no run covered the file);
 - **the lists**: the folded-in items, and the declines with their triggers;
-- **the two fold counts**: follow-ups per merged pull request, and lanes per child — the numbers the
-  fold, stack, or file rule is read against;
+- **the two fold counts**: **lanes per child**, the number the fold, stack, or file rule's
+  past-three-lanes condition is read against, and **follow-ups per merged pull request**, which
+  carries no threshold of its own and is recorded so accumulation on one surface is visible here;
 - **the memory gardening done**: entries moved out to a plugin surface, entries re-read against the
   last doctrine change, and any index lines repaired;
 - the workaround-marker state;
