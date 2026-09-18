@@ -855,7 +855,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
   `execution-evidence-head-unbound` or `certified-head-unresolvable`. On firing, a proposal to the
   owner at a gardening pass.
-- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Last demonstrated benefit.** unknown — it ships with this change. Birth bite-proof recorded at
+  `plugins/superheroes/lib/tests/bite_proofs/head-binding-check.md` (both legs red → restore →
+  green, run at the child's final head).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — binding evidence to a head is a property of how evidence is bound, not of
