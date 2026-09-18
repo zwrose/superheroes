@@ -450,7 +450,10 @@ above).
      at an [owner call](../../rubric/glossary.md#owner-call) it is the owner's word, via the
      collector; doubt resolves upward. **Craft calls** — craft record-keeping writes — venue-1
      continuations, craft declines with revisit trigger, an owner-owed or relay memory entry — happen
-     **immediately**; **Owner calls** — board decisions — new issues, product folds, scope changes,
+     **immediately**, under a standing order whose hours and whose fold, stack, or file disposition
+     for a follow-up on live work are stated in
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`;
+     **Owner calls** — board decisions — new issues, product folds, scope changes,
      product declines — are the owner's word. Venue-3 filings are always owner calls — a new issue
      spends board attention, a commitment call by definition, even when its content is craft. The
      project's **standing proposals collector** is one open issue per project (auto-filing per
@@ -695,7 +698,11 @@ above).
    delivered by default, and the inverse failure — over-filtering — appeared too: the owner became the
    backstop for delivery quality on exactly the surface the covenant says they must never backstop.
    Apply this duty's two tests per item as the filter's *why it is yours* ground, **written down**,
-   not re-derived silently. `/superheroes:discuss-open-decisions` is the owner's keystroke for the
+   not re-derived silently. Three further shapes are that file's, not this one's: **how you derive
+   an item's tier and its craft-or-owner classification** rather than inheriting it, **the batches
+   the walk runs and what the last of them carries**, and **the recap each sitting carries for the
+   owner**.
+   `/superheroes:discuss-open-decisions` is the owner's keystroke for the
    same contract on demand; it does not replace this standing duty.
 6. **Coordinate releases and drive the merge train.** The covenant's promise 1 governs: approval
    never delegates. This duty carries its operational half.
