@@ -240,11 +240,11 @@ def _registered_engine_models_detail(vendor):
     )
 
 
-_BUILD_ARGV_VENDORS = ("codex", "cursor")
+BUILD_ARGV_VENDORS = ("codex", "cursor")
 
 
 def _unknown_engine_detail(vendor):
-    valid = _format_valid(_BUILD_ARGV_VENDORS)
+    valid = _format_valid(BUILD_ARGV_VENDORS)
     if isinstance(vendor, str) and vendor.strip():
         return f"unknown vendor {vendor!r}; valid vendors: {valid}"
     return f"unknown engine vendor; valid vendors: {valid}"
