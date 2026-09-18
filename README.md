@@ -80,8 +80,9 @@ issues, drafts each builder's launch prompt as just the command and the issue po
 durable lives in the issue), vets
 every PR from its artifacts — the diff, the issue/spec, the build brief — against what was
 asked and what was proposed, diagnoses anomalies from artifacts, and coordinates releases. It
-keeps **merge approval** with the owner and may **execute an approved merge** only where
-a mechanical per-merge checkpoint exists.
+keeps **merge approval** with the owner — a scoped word in chat after the PRs are talked
+through — and may **execute merges inside that scope** after the lane's review and
+verification evidence, CI green on the recorded head, and a current branch.
 
 | Command | Use it to… |
 | --- | --- |
@@ -188,11 +189,6 @@ roll out across the guardian arc; this is the sweep it runs them in.
   discipline — never delegate merge approval; claim only what you verified; disclose every
   degradation; park rather than presume — into every session (see
   [`rubric/covenant.md`](plugins/superheroes/rubric/covenant.md)).
-- **An owner-authority gate backs the covenant mechanically.** A hook intercepts
-  merge, release, force-push, and workflow-run actions and routes them to the owner — not just a
-  promise in a prompt. On a calibrated project an owner may pre-authorize an exactly-named
-  workflow dispatch via `owner-authority-allow.json`; merge, release, and force-push are never
-  allowlistable.
 - **A worktree guard refuses silent destruction of uncommitted work — on Claude Code.** A
   second hook intercepts git commands that would irrecoverably discard uncommitted changes and
   points at recoverable alternatives — commit first, stash, or revert a probe edit with an
