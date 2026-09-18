@@ -5,8 +5,8 @@ The skills call THIS (at a known ${CLAUDE_PLUGIN_ROOT}/lib path), never the core
 directly — exactly as they call gate_write.py. In the consolidated one-plugin tree the
 core (`escalation.py`) is a same-tree sibling, so this wrapper imports it directly (no
 cross-plugin resolution, no subprocess) and owns the fail-closed degradation: on ANY core
-error it falls back to the conservative posture (GATE / on-floor / refuse), never to a
-silent proceed/allow. Output: JSON to stdout with a `degraded` flag so the skill can note
+error it falls back to the conservative posture (GATE / on-floor), never to a
+silent proceed. Output: JSON to stdout with a `degraded` flag so the skill can note
 the fallback.
 """
 import argparse
