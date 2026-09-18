@@ -81,7 +81,9 @@ checkout. The recorded `configDir` is what lets a watcher running under a *diffe
 resolve that lane's session transcript under the lane's own root rather than its own (#1036). A path that already exists, or that
 git still registers, refuses the launch rather than being reused. **`launch` also refuses a
 `CLAUDE_CONFIG_DIR` pin that is not the calling seat's own instance** (`launch-foreign-instance-pin`
-or `launch-seat-instance-undetermined`) unless the caller passes `--allow-foreign-instance`. **The ruling above stays in the
+or `launch-seat-instance-undetermined`) unless the caller passes `--allow-foreign-instance`; **that gate applies only on a Claude Code seat** — it keys on
+`CLAUDE_PID`, so a host with none (Codex, a scripted or cron caller) skips the gate entirely rather
+than refusing, which means the pin is left **unchecked**, not **approved**. **The ruling above stays in the
 parsed block** — defense in depth, not a redundancy to prune: the structural guarantee covers
 launcher-issued sessions, while a directly-invoked builder still has only the prose. This paragraph
 is **documentation for advisors reading the doctrine for intent** — it is **not** a parsed invariant.

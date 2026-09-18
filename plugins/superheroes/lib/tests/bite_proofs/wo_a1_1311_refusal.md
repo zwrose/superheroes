@@ -17,15 +17,15 @@
 
 - **axis:** mismatched config roots refuse with `launch-foreign-instance-pin` and both instances named
 
-**neutralization** (`plugins/superheroes/lib/launcher.py`, `launch_build` gate):
+**neutralization** (`plugins/superheroes/lib/launcher.py`, `launch_build` gate inside `_claude_seat_pin_gate_applies`):
 ```python
-        if False and seat_norm != requested_norm:
+            if False and seat_norm != requested_norm:
 ```
 (replaces `if seat_norm != requested_norm:`)
 
 **command:**
 ```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_launcher.py::test_launch_foreign_instance_pin_refuses_mismatch -q
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-a4 -m pytest plugins/superheroes/lib/tests/test_launcher.py::test_launch_foreign_instance_pin_refuses_mismatch -q
 ```
 
 **raw red** (exit 1):
@@ -34,14 +34,15 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 ______________ test_launch_foreign_instance_pin_refuses_mismatch _______________
 
-tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-1411/test_launch_foreign_instance_p0')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10645e580>
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-1557/test_launch_foreign_instance_p0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1044904c0>
 
     def test_launch_foreign_instance_pin_refuses_mismatch(tmp_path, monkeypatch):
         # axis: mismatched config roots refuse with both instances named
         repo = _init_repo(tmp_path / "repo")
         _ledger_env(tmp_path, monkeypatch)
         _worktree_root(tmp_path, monkeypatch)
+        monkeypatch.setenv("CLAUDE_PID", "4242")
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
         monkeypatch.setattr(
             L,
@@ -62,21 +63,21 @@ E
 E         - launch-foreign-instance-pin
 E         + settle-exit-zero-uncertain
 
-plugins/superheroes/lib/tests/test_launcher.py:5434: AssertionError
+plugins/superheroes/lib/tests/test_launcher.py:5530: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher.py::test_launch_foreign_instance_pin_refuses_mismatch
-1 failed in 3.99s
+1 failed in 1.52s
 ```
 
 **restore:**
 ```python
-        if seat_norm != requested_norm:
+            if seat_norm != requested_norm:
 ```
 
 **raw green:**
 ```
 .                                                                        [100%]
-1 passed in 0.58s
+1 passed in 0.31s
 ```
 
 ---
@@ -85,15 +86,15 @@ FAILED plugins/superheroes/lib/tests/test_launcher.py::test_launch_foreign_insta
 
 - **axis:** seat whose instance cannot be established refuses with `launch-seat-instance-undetermined` before any reservation
 
-**neutralization** (`plugins/superheroes/lib/launcher.py`, `launch_build` undetermined-seat gate):
+**neutralization** (`plugins/superheroes/lib/launcher.py`, `launch_build` undetermined-seat gate inside `_claude_seat_pin_gate_applies`):
 ```python
-        if False and not allow_foreign_instance:
+            if False and not allow_foreign_instance:
 ```
-(replaces `if not allow_foreign_instance:` inside `if seat["instance"] is None:`)
+(replaces `if not allow_foreign_instance:` inside `if seat["instance"] is None:` within `if _claude_seat_pin_gate_applies(env=env):`)
 
 **command:**
 ```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-a2 -m pytest plugins/superheroes/lib/tests/test_launcher.py::test_launch_seat_undetermined_refuses[seat_result0] -q
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-a4 -m pytest plugins/superheroes/lib/tests/test_launcher.py::test_launch_seat_undetermined_refuses[seat_result0] -q
 ```
 
 **raw red** (exit 1):
@@ -103,8 +104,8 @@ F                                                                        [100%]
 _____________ test_launch_seat_undetermined_refuses[seat_result0] ______________
 
 seat_result = {'instance': None, 'reason': 'seat-pid-absent'}
-tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-1428/test_launch_seat_undetermined_0')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108028370>
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-1559/test_launch_seat_undetermined_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1057c64c0>
 
     @pytest.mark.parametrize(
         "seat_result",
@@ -119,6 +120,7 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108028370>
         repo = _init_repo(tmp_path / "repo")
         _ledger_env(tmp_path, monkeypatch)
         _worktree_root(tmp_path, monkeypatch)
+        monkeypatch.setenv("CLAUDE_PID", "4242")
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
         monkeypatch.setattr(L, "seat_config_dir", lambda env=None: dict(seat_result))
         result = L.launch_build(
@@ -135,21 +137,21 @@ E
 E         - launch-seat-instance-undetermined
 E         + settle-exit-zero-uncertain
 
-plugins/superheroes/lib/tests/test_launcher.py:5523: AssertionError
+plugins/superheroes/lib/tests/test_launcher.py:5706: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher.py::test_launch_seat_undetermined_refuses[seat_result0]
-1 failed in 1.67s
+1 failed in 1.63s
 ```
 
 **restore:**
 ```python
-        if not allow_foreign_instance:
+            if not allow_foreign_instance:
 ```
 
 **raw green:**
 ```
 .                                                                        [100%]
-1 passed in 0.36s
+1 passed in 0.32s
 ```
 
 ---
@@ -166,7 +168,7 @@ FAILED plugins/superheroes/lib/tests/test_launcher.py::test_launch_seat_undeterm
 
 **command:**
 ```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-a2 -m pytest plugins/superheroes/lib/tests/test_launch_ledger.py::test_reserved_seat_instance_must_be_a_non_empty_absolute_path[] -q
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-a4 -m pytest plugins/superheroes/lib/tests/test_launch_ledger.py::test_reserved_seat_instance_must_be_a_non_empty_absolute_path[] -q
 ```
 
 **raw red** (exit 1):
@@ -191,7 +193,7 @@ E       assert True is False
 plugins/superheroes/lib/tests/test_launch_ledger.py:5161: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_ledger.py::test_reserved_seat_instance_must_be_a_non_empty_absolute_path[]
-1 failed in 0.32s
+1 failed in 0.30s
 ```
 
 **restore:**
@@ -202,7 +204,7 @@ FAILED plugins/superheroes/lib/tests/test_launch_ledger.py::test_reserved_seat_i
 **raw green:**
 ```
 .                                                                        [100%]
-1 passed in 0.29s
+1 passed in 0.26s
 ```
 
 ---
@@ -219,7 +221,7 @@ FAILED plugins/superheroes/lib/tests/test_launch_ledger.py::test_reserved_seat_i
 
 **command:**
 ```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-a2 -m pytest plugins/superheroes/lib/tests/test_launch_ledger.py::test_reserved_foreign_instance_allowed_must_be_literal_true[1] -q
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-a4 -m pytest plugins/superheroes/lib/tests/test_launch_ledger.py::test_reserved_foreign_instance_allowed_must_be_literal_true[1] -q
 ```
 
 **raw red** (exit 1):
@@ -241,7 +243,7 @@ E       assert True is False
 plugins/superheroes/lib/tests/test_launch_ledger.py:5175: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_ledger.py::test_reserved_foreign_instance_allowed_must_be_literal_true[1]
-1 failed in 0.32s
+1 failed in 0.30s
 ```
 
 **restore:**
@@ -252,5 +254,5 @@ FAILED plugins/superheroes/lib/tests/test_launch_ledger.py::test_reserved_foreig
 **raw green:**
 ```
 .                                                                        [100%]
-1 passed in 0.27s
+1 passed in 0.26s
 ```
