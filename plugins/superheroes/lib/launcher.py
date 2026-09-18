@@ -7,10 +7,14 @@ reserve and spawn. Never raises to callers."""
 from __future__ import annotations
 
 import argparse
+import ctypes
+import ctypes.util
 import json
 import os
+import platform
 import re
 import secrets
+import struct
 import subprocess
 import sys
 import time
@@ -267,6 +271,159 @@ def spawn_config_dir(env=None, cwd=None):
     if not os.path.isabs(home):
         return None
     return os.path.join(home, _DEFAULT_CONFIG_DIR_NAME)
+
+
+_CTL_KERN = 1
+_KERN_PROCARGS2 = 49
+
+_INSTANCE_PIN_REMEDY = (
+    "Relaunch with `--allow-foreign-instance` only when you deliberately intend the "
+    "builder to run under a Claude instance other than this seat's own."
+)
+
+
+def _parse_kern_procargs2(data):
+    """Parse a Darwin KERN_PROCARGS2 payload into exec path, argv, and env. Never raises."""
+    try:
+        if len(data) < 4:
+            return None
+        argc = struct.unpack("@I", data[:4])[0]
+        pos = 4
+        end = data.find(b"\x00", pos)
+        if end == -1:
+            return None
+        exec_path = data[pos:end].decode("utf-8", errors="surrogateescape")
+        pos = end + 1
+        while pos < len(data) and data[pos] == 0:
+            pos += 1
+        argv = []
+        for _ in range(argc):
+            if pos >= len(data):
+                return None
+            end = data.find(b"\x00", pos)
+            if end == -1:
+                return None
+            argv.append(data[pos:end].decode("utf-8", errors="surrogateescape"))
+            pos = end + 1
+        while pos < len(data) and data[pos] == 0:
+            pos += 1
+        env = {}
+        while pos < len(data):
+            end = data.find(b"\x00", pos)
+            if end == -1:
+                end = len(data)
+            entry = data[pos:end].decode("utf-8", errors="surrogateescape")
+            if "=" in entry:
+                key, value = entry.split("=", 1)
+                env[key] = value
+            pos = end + 1
+            if end >= len(data):
+                break
+        return {"exec_path": exec_path, "argv": argv, "env": env}
+    except (struct.error, UnicodeDecodeError, ValueError):
+        return None
+
+
+def _read_kern_procargs2_darwin(pid):
+    """Read KERN_PROCARGS2 for *pid* on Darwin. Returns bytes or None."""
+    try:
+        libc = ctypes.CDLL(ctypes.util.find_library("c"))
+    except (OSError, AttributeError):
+        return None
+    mib = (ctypes.c_int * 3)(_CTL_KERN, _KERN_PROCARGS2, pid)
+    size = ctypes.c_size_t(0)
+    if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0:
+        return None
+    buf = ctypes.create_string_buffer(size.value)
+    if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+        return None
+    return buf.raw[:size.value]
+
+
+def _read_seat_snapshot_linux(pid):
+    try:
+        with open("/proc/%d/environ" % pid, "rb") as fh:
+            env_data = fh.read()
+        exec_path = os.readlink("/proc/%d/exe" % pid)
+    except OSError:
+        return None
+    env = {}
+    for entry in env_data.split(b"\x00"):
+        if not entry:
+            continue
+        decoded = entry.decode("utf-8", errors="surrogateescape")
+        if "=" in decoded:
+            key, value = decoded.split("=", 1)
+            env[key] = value
+    return {"exec_path": exec_path, "argv": [], "env": env}
+
+
+def _read_seat_snapshot(pid):
+    """Structural seat-process snapshot. Returns dict or None. Never raises."""
+    try:
+        if platform.system() == "Darwin":
+            payload = _read_kern_procargs2_darwin(pid)
+            if payload is None:
+                return None
+            return _parse_kern_procargs2(payload)
+        if platform.system() == "Linux":
+            return _read_seat_snapshot_linux(pid)
+        return None
+    except OSError:
+        return None
+
+
+def _normalized_instance_path(path, home):
+    if not isinstance(path, str) or not path.strip():
+        return None
+    expanded = _expand_home(path.strip(), {"HOME": home})
+    if os.path.isabs(expanded):
+        return os.path.normpath(expanded)
+    if not isinstance(home, str) or not home.strip():
+        return None
+    home_norm = os.path.normpath(os.path.expanduser(home.strip()))
+    return os.path.normpath(os.path.join(home_norm, expanded))
+
+
+def seat_config_dir(env=None):
+    """The calling seat's own Claude instance root, from its process snapshot. Never raises."""
+    base = dict(env if env is not None else os.environ)
+    pid_raw = base.get("CLAUDE_PID")
+    if not isinstance(pid_raw, str) or not pid_raw.strip():
+        return {"instance": None, "reason": "seat-pid-absent"}
+    try:
+        pid = int(pid_raw.strip())
+        if pid <= 0:
+            return {"instance": None, "reason": "seat-pid-absent"}
+    except ValueError:
+        return {"instance": None, "reason": "seat-pid-absent"}
+
+    try:
+        snapshot = _read_seat_snapshot(pid)
+    except OSError:
+        snapshot = None
+    if snapshot is None:
+        return {"instance": None, "reason": "seat-snapshot-unreadable"}
+
+    exec_path = snapshot.get("exec_path")
+    if not isinstance(exec_path, str) or os.path.basename(exec_path) != "claude":
+        return {"instance": None, "reason": "seat-not-claude"}
+
+    seat_env = snapshot.get("env") or {}
+    home = seat_env.get("HOME")
+    if not isinstance(home, str) or not home.strip():
+        return {"instance": None, "reason": "seat-snapshot-unreadable"}
+    home_norm = os.path.normpath(os.path.expanduser(home.strip()))
+
+    configured = seat_env.get("CLAUDE_CONFIG_DIR")
+    if not isinstance(configured, str) or not configured.strip():
+        instance = os.path.normpath(os.path.join(home_norm, _DEFAULT_CONFIG_DIR_NAME))
+        return {"instance": instance, "reason": None}
+
+    instance = _normalized_instance_path(configured, home_norm)
+    if instance is None:
+        return {"instance": None, "reason": "seat-snapshot-unreadable"}
+    return {"instance": instance, "reason": None}
 
 
 def _repo_tag(repo_root):
@@ -1212,6 +1369,7 @@ def launch_build(
     generation=None,
     boundary=None,
     effort=None,
+    allow_foreign_instance=False,
 ):
     """Full launch flow: preflight, premise, compose, reserve, spawn, settle/retry."""
     settle_seconds = _SETTLE_SECONDS if settle_seconds is None else settle_seconds
@@ -1228,6 +1386,35 @@ def launch_build(
     if not isinstance(batch_id, str) or not batch_id.strip():
         batch_id = None
 
+    worktree_path = build_worktree_path(repo_root, issue, launch_id, env=env)
+    requested = spawn_config_dir(env=env, cwd=worktree_path)
+    seat = seat_config_dir(env=env)
+    foreign_override = False
+    if seat["instance"] is None:
+        if not allow_foreign_instance:
+            return _fail(  # pre-reservation: instance pin gate before any reservation
+                "launch-seat-instance-undetermined",
+                seatInstance=None,
+                seatReason=seat["reason"],
+                requestedInstance=requested,
+                launchId=launch_id,
+                remedy=_INSTANCE_PIN_REMEDY,
+            )
+        foreign_override = True
+    elif requested is not None:
+        seat_norm = os.path.normpath(os.path.expanduser(seat["instance"]))
+        requested_norm = os.path.normpath(os.path.expanduser(requested))
+        if seat_norm != requested_norm:
+            if not allow_foreign_instance:
+                return _fail(  # pre-reservation: instance pin gate before any reservation
+                    "launch-foreign-instance-pin",
+                    seatInstance=seat["instance"],
+                    requestedInstance=requested,
+                    launchId=launch_id,
+                    remedy=_INSTANCE_PIN_REMEDY,
+                )
+            foreign_override = True
+
     preflight_result = walk_preflight(
         checks_input,
         repo_root,
@@ -1243,6 +1430,8 @@ def launch_build(
         reserve_result = _try_reserve_for_refusal(
             repo_root, launch_id, issue, premise, preflight_result, None, env,
             slot=slot, generation=generation, boundary=boundary,
+            seat_instance=seat["instance"],
+            foreign_instance_allowed=foreign_override,
         )
         if reserve_result.get("reserved"):
             term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
@@ -1273,6 +1462,8 @@ def launch_build(
         reserve_result = _try_reserve_for_refusal(
             repo_root, launch_id, issue, premise, preflight_result, None, env,
             slot=slot, generation=generation, boundary=boundary,
+            seat_instance=seat["instance"],
+            foreign_instance_allowed=foreign_override,
         )
         if reserve_result.get("reserved"):
             term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
@@ -1297,6 +1488,8 @@ def launch_build(
             repo_root, launch_id, issue, premise_result["premise"],
             preflight_result, compose_result, env,
             slot=slot, generation=generation, boundary=boundary,
+            seat_instance=seat["instance"],
+            foreign_instance_allowed=foreign_override,
         )
         if reserve_result.get("reserved"):
             term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
@@ -1310,11 +1503,12 @@ def launch_build(
     doctrine = compose_result["doctrine"]
     argv = compose_result["argv"]
 
-    worktree_path = build_worktree_path(repo_root, issue, launch_id, env=env)
     if not worktree_path:
         reserve_result = _try_reserve_for_refusal(
             repo_root, launch_id, issue, stamped, preflight_result, compose_result, env,
             slot=slot, generation=generation, boundary=boundary,
+            seat_instance=seat["instance"],
+            foreign_instance_allowed=foreign_override,
         )
         if reserve_result.get("reserved"):
             term = _terminalize(
@@ -1339,6 +1533,8 @@ def launch_build(
         reserve_result = _try_reserve_for_refusal(
             repo_root, launch_id, issue, stamped, preflight_result, compose_result, env,
             slot=slot, generation=generation, boundary=boundary,
+            seat_instance=seat["instance"],
+            foreign_instance_allowed=foreign_override,
         )
         extra = {"path": worktree_result["path"]}
         if "remedy" in worktree_result:
@@ -1389,6 +1585,10 @@ def launch_build(
     config_dir = spawn_config_dir(env=env, cwd=worktree_path)
     if config_dir is not None:
         reserved["configDir"] = config_dir
+    if seat["instance"] is not None:
+        reserved["seatInstance"] = seat["instance"]
+    if foreign_override:
+        reserved["foreignInstanceAllowed"] = True
     if slot is not None:
         reserved["slot"] = slot
     if generation is not None:
@@ -1626,6 +1826,7 @@ def launch_build(
 def _try_reserve_for_refusal(
     repo_root, launch_id, issue, premise, preflight_result, compose_result, env,
     *, slot=None, generation=None, boundary=None,
+    seat_instance=None, foreign_instance_allowed=False,
 ):
     """Best-effort reserve so refusal is accounted. Returns {reserved: bool}."""
     if not isinstance(premise, dict):
@@ -1680,6 +1881,10 @@ def _try_reserve_for_refusal(
         reserved["generation"] = generation
     if boundary is not None:
         reserved["boundary"] = boundary
+    if seat_instance is not None:
+        reserved["seatInstance"] = seat_instance
+    if foreign_instance_allowed:
+        reserved["foreignInstanceAllowed"] = True
     result = ll.reserve(repo_root, reserved, env=env)
     # This accounting reservation can itself land on a live lane's surfaces, so it carries
     # the same disclosure a normal reservation does (#1054). Dropping it here is how the
@@ -1776,6 +1981,7 @@ def _cli_launch(args):
         generation=args.generation,
         boundary=boundary,
         effort=args.effort,
+        allow_foreign_instance=args.allow_foreign_instance,
     )
 
 
@@ -1835,6 +2041,11 @@ def main(argv=None):
     la.add_argument("--slot", default=None)
     la.add_argument("--generation", type=int, default=None)
     la.add_argument("--boundary", default=None)
+    la.add_argument(
+        "--allow-foreign-instance",
+        action="store_true",
+        help="allow launching when CLAUDE_CONFIG_DIR is not this seat's own instance",
+    )
     la.set_defaults(func=_cli_launch)
 
     ro = sub.add_parser("record-outcome")
