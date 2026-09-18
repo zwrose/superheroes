@@ -688,10 +688,14 @@ collector entry where it has one.
 
 Executing what a ruling unblocked is **advisor-side work only**: writes, filings, routings, board
 wiring, dispatches. It **never** includes the acts the covenant's first promise and showrunner duty
-6 reserve — **merge, release, publish, force-push**. A ruling that authorizes one of those is
-executed by the **owner**; the advisor's job is to make it one click, not to take the click. Read
-showrunner duty 6 in `skills/showrunner/SKILL.md` for the checkpoint conditions rather than
-restating them here.
+6 reserve — **merge, release, publish, force-push**. **A ruling on a decision is never a word to
+merge.** A merge happens only inside the owner's **scoped word** for the pull requests it names,
+given after those pull requests have been talked through; inside that word the advisor executes
+each merge under that duty's preconditions and reports it at once. A release or a publish is never
+inside a merge word: it is the owner's click unless the owner hands one over with a word for that
+release. A force-push needs a word given for that force-push. Read showrunner duty 6 in
+`skills/showrunner/SKILL.md` for the word's scope, what puts a pull request back outside it, the
+preconditions, and the reporting, rather than restating them here.
 
 ## The collector preamble — canonical snippet
 
