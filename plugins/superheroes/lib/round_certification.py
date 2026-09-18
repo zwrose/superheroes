@@ -641,14 +641,31 @@ def _orders_emitted_roster_or_refusal(session_dir, event):
             "orders manifest seats field is not an object",
         )
     roster = []
-    for entry in seats.values():
+    for seat_key, entry in seats.items():
         if not isinstance(entry, dict):
-            continue
+            return None, _refusal(
+                "unfetched-findings",
+                manifest_path,
+                "orders manifest seat entry '%s' is not an object" % seat_key,
+            )
         seat = entry.get("seat")
         if not isinstance(seat, str) or not seat:
-            continue
-        occurrence = entry.get("occurrence", 0)
-        if isinstance(occurrence, bool) or not isinstance(occurrence, int) or occurrence < 0:
+            return None, _refusal(
+                "unfetched-findings",
+                manifest_path,
+                "orders manifest seat entry '%s' has unusable seat field" % seat_key,
+            )
+        if "occurrence" in entry:
+            occurrence = entry["occurrence"]
+            if (isinstance(occurrence, bool) or not isinstance(occurrence, int)
+                    or occurrence < 0):
+                return None, _refusal(
+                    "unfetched-findings",
+                    manifest_path,
+                    "orders manifest seat entry '%s' has unusable occurrence"
+                    % seat_key,
+                )
+        else:
             occurrence = 0
         roster.append((seat, occurrence))
     return roster, None
