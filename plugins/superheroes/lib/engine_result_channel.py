@@ -25,7 +25,17 @@ REVIEW_RESULT_KINDS = ("findings", "verdicts", "grouping", "ruling")
 
 _PAYLOAD_CONTAINER_KEYS = ("findings", "verdicts", "grouping")
 
-_RULING_BRANCH_FIELDS = ("id", "ruling", "reason", "newIssues", "evidence", "auditorVendor")
+# Closed refinement table: fields whose payload_contracts token cannot be expressed in strict
+# mode without an explicit mapping. A missing entry for list/any/absent tokens raises at build.
+_STRICT_MODE_REFINEMENTS = {
+    ("grouping", "member_ids"): {
+        "type": "array",
+        "items": {"type": "string"},
+    },
+    ("ruling", "reason"): {
+        "type": "string",
+    },
+}
 
 _CHANNEL_BY_ENGINE = {
     "codex": CHANNEL_NATIVE,
@@ -48,6 +58,92 @@ class UnknownEngineError(ValueError):
     """Raised when channel_for receives an engine outside the closed registry set."""
 
 
+class StrictModeViolationError(ValueError):
+    """Raised when a schema node violates far-side strict-mode structural rules."""
+
+
+class UnrefinedTypeTokenError(ValueError):
+    """Raised when a list/any/absent token has no strict-mode refinement entry."""
+
+
+def _strict_context_path(path):
+    """Format a schema path like the vendor's invalid_json_schema context tuple."""
+    if not path:
+        return "()"
+    return repr(tuple(path))
+
+
+def assert_strict_mode_valid(schema, path=()):
+    """Walk schema and raise StrictModeViolationError on the first structural violation."""
+    if not isinstance(schema, dict):
+        raise StrictModeViolationError(
+            "In context=%s, schema must be an object"
+            % _strict_context_path(path)
+        )
+
+    if path == () and schema.get("type") != "object":
+        raise StrictModeViolationError(
+            "In context=%s, root schema must have type 'object'"
+            % _strict_context_path(path)
+        )
+
+    if "oneOf" in schema:
+        raise StrictModeViolationError(
+            "In context=%s, oneOf is not permitted in strict mode"
+            % _strict_context_path(path)
+        )
+
+    if "anyOf" in schema:
+        for index, branch in enumerate(schema["anyOf"]):
+            assert_strict_mode_valid(branch, path + ("anyOf", str(index)))
+        return
+
+    if "type" not in schema:
+        raise StrictModeViolationError(
+            "In context=%s, schema must have a 'type' key"
+            % _strict_context_path(path)
+        )
+
+    type_spec = schema["type"]
+    type_names = type_spec if isinstance(type_spec, list) else (type_spec,)
+
+    if "array" in type_names:
+        if "items" not in schema:
+            raise StrictModeViolationError(
+                "In context=%s, array schema missing items"
+                % _strict_context_path(path)
+            )
+        assert_strict_mode_valid(schema["items"], path + ("items",))
+
+    if "object" in type_names:
+        if schema.get("additionalProperties") is not False:
+            raise StrictModeViolationError(
+                "In context=%s, object schema must set additionalProperties to false"
+                % _strict_context_path(path)
+            )
+        props = schema.get("properties") or {}
+        required = schema.get("required")
+        if required is None:
+            raise StrictModeViolationError(
+                "In context=%s, object schema missing required list"
+                % _strict_context_path(path)
+            )
+        if set(required) != set(props.keys()):
+            missing = sorted(set(props.keys()) - set(required))
+            extra = sorted(set(required) - set(props.keys()))
+            detail = []
+            if missing:
+                detail.append("undeclared properties not in required: %s" % ", ".join(missing))
+            if extra:
+                detail.append("required properties not declared: %s" % ", ".join(extra))
+            raise StrictModeViolationError(
+                "In context=%s, object required/properties mismatch (%s)"
+                % (_strict_context_path(path), "; ".join(detail))
+            )
+        for name, subschema in props.items():
+            assert_strict_mode_valid(subschema, path + ("properties", name))
+
+
 def channel_for(engine):
     """Return the declared result channel for a registered dispatch engine."""
     if not isinstance(engine, str) or engine not in _CHANNEL_BY_ENGINE:
@@ -63,19 +159,22 @@ def declared_schema(engine, run_kind, expected_result_kind=None):
     if channel_for(engine) == CHANNEL_MARKER:
         return None
     if run_kind == RUN_KIND_REVIEW:
-        return _review_root_schema(expected_result_kind)
-    if run_kind == RUN_KIND_WRITE:
-        return _write_root_schema()
-    raise ValueError(
-        "unknown run_kind %r; expected %r or %r"
-        % (run_kind, RUN_KIND_REVIEW, RUN_KIND_WRITE)
-    )
+        schema = _review_root_schema(expected_result_kind)
+    elif run_kind == RUN_KIND_WRITE:
+        schema = _write_root_schema()
+    else:
+        raise ValueError(
+            "unknown run_kind %r; expected %r or %r"
+            % (run_kind, RUN_KIND_REVIEW, RUN_KIND_WRITE)
+        )
+    assert_strict_mode_valid(schema)
+    return schema
 
 
 def validate(schema, value):
     """Validate value against schema. Returns (ok, reason). Never raises."""
     if schema is None:
-        return True, ""
+        return False, "schema is None; marker-channel callers must not reach validate"
     try:
         _validate(schema, value, "$")
         return True, ""
@@ -133,6 +232,10 @@ def _nullable_type_schema(prop):
 def _json_schema_for_type_token(token):
     if token not in payload_contracts.TYPE_TOKENS:
         raise ValueError("unknown type token %r" % (token,))
+    if token in ("list", "any"):
+        raise UnrefinedTypeTokenError(
+            "type token %r requires a strict-mode refinement entry" % (token,)
+        )
     if token == "string":
         return {"type": "string"}
     if token == "non-empty-string":
@@ -143,14 +246,10 @@ def _json_schema_for_type_token(token):
         return {"type": "boolean"}
     if token == "integer":
         return {"type": "integer"}
-    if token == "list":
-        return {"type": "array"}
     if token == "object":
         return {"type": "object"}
     if token == "absolute-path":
         return {"type": "string"}
-    if token == "any":
-        return {}
     if token == "list-of-objects":
         return {"type": "array", "items": {"type": "object"}}
     if token == "nullable-list-of-objects":
@@ -158,7 +257,28 @@ def _json_schema_for_type_token(token):
     raise ValueError("unhandled type token %r" % (token,))
 
 
-def _element_object_schema(elem_contract):
+def _strict_schema_for_field(result_kind, field, token, *, optional=False, enums=None):
+    """Build a strict-mode schema fragment for one binding field."""
+    effective = token if token else "any"
+    if effective in ("list", "any"):
+        key = (result_kind, field)
+        if key not in _STRICT_MODE_REFINEMENTS:
+            raise UnrefinedTypeTokenError(
+                "no strict-mode refinement for %r field %r (token %r)"
+                % (result_kind, field, effective)
+            )
+        prop = dict(_STRICT_MODE_REFINEMENTS[key])
+    else:
+        prop = _json_schema_for_type_token(effective)
+    if enums:
+        prop = dict(prop)
+        prop["enum"] = list(enums)
+    if optional:
+        prop = _nullable_type_schema(prop)
+    return prop
+
+
+def _element_object_schema(elem_contract, result_kind):
     required = list(elem_contract.get("required") or [])
     optional = list(elem_contract.get("optional") or [])
     types = elem_contract.get("types") or {}
@@ -166,11 +286,13 @@ def _element_object_schema(elem_contract):
     all_fields = required + optional
     properties = {}
     for field in all_fields:
-        prop = dict(_json_schema_for_type_token(types.get(field, "any")))
-        if field in enums:
-            prop["enum"] = list(enums[field])
-        if field in optional:
-            prop = _nullable_type_schema(prop)
+        prop = _strict_schema_for_field(
+            result_kind,
+            field,
+            types.get(field, "any"),
+            optional=field in optional,
+            enums=enums.get(field),
+        )
         properties[field] = prop
     return {
         "type": "object",
@@ -180,7 +302,7 @@ def _element_object_schema(elem_contract):
     }
 
 
-def _top_level_field_schema(contract, field, *, optional_fields=()):
+def _top_level_field_schema(contract, field, *, result_kind, optional_fields=()):
     types = contract.get("types") or {}
     elements = contract.get("elements") or {}
     enums = contract.get("enums") or {}
@@ -189,21 +311,24 @@ def _top_level_field_schema(contract, field, *, optional_fields=()):
         elem = elements.get(field) or {}
         schema = {
             "type": "array",
-            "items": _element_object_schema(elem),
+            "items": _element_object_schema(elem, result_kind),
         }
+        if field in optional_fields:
+            schema = _nullable_type_schema(schema)
     elif tok == "nullable-list-of-objects":
         elem = elements.get(field) or {}
         schema = {
             "type": ["array", "null"],
-            "items": _element_object_schema(elem),
+            "items": _element_object_schema(elem, result_kind),
         }
     else:
-        schema = _json_schema_for_type_token(tok)
-        if field in enums:
-            schema = dict(schema)
-            schema["enum"] = list(enums[field])
-    if field in optional_fields:
-        schema = _nullable_type_schema(schema)
+        schema = _strict_schema_for_field(
+            result_kind,
+            field,
+            tok,
+            optional=field in optional_fields,
+            enums=enums.get(field),
+        )
     return schema
 
 
@@ -235,6 +360,11 @@ def _phase_contract(phase):
     return contract
 
 
+def _ruling_branch_fields():
+    contract = _phase_contract(payload_contracts.P_AUDITS)
+    return list(contract.get("required") or []) + list(contract.get("optional") or ())
+
+
 def _branch_payload_schema(kind):
     if kind == "findings":
         return {
@@ -243,10 +373,10 @@ def _branch_payload_schema(kind):
         }
     if kind == "verdicts":
         contract = _phase_contract(payload_contracts.P_VERIFIERS)
-        return _top_level_field_schema(contract, "verdicts")
+        return _top_level_field_schema(contract, "verdicts", result_kind=kind)
     if kind == "grouping":
         contract = _phase_contract(payload_contracts.P_SYNTHESIS)
-        return _top_level_field_schema(contract, "grouping")
+        return _top_level_field_schema(contract, "grouping", result_kind=kind)
     if kind == "ruling":
         contract = _phase_contract(payload_contracts.P_AUDITS)
         ordered = list(contract.get("required") or []) + list(contract.get("optional") or ())
@@ -254,7 +384,7 @@ def _branch_payload_schema(kind):
         properties = {}
         for field in ordered:
             properties[field] = _top_level_field_schema(
-                contract, field, optional_fields=optional)
+                contract, field, result_kind=kind, optional_fields=optional)
         return {
             "type": "object",
             "additionalProperties": False,
@@ -277,13 +407,14 @@ def _review_branch_schema(kind):
         else:
             properties[key] = _null_property()
         required.append(key)
+    ruling_fields = _ruling_branch_fields()
     if kind == "ruling":
         ruling_props = payload_schema["properties"]
-        for field in _RULING_BRANCH_FIELDS:
+        for field in ruling_fields:
             properties[field] = ruling_props[field]
             required.append(field)
     else:
-        for field in _RULING_BRANCH_FIELDS:
+        for field in ruling_fields:
             properties[field] = _null_property()
             required.append(field)
     return {

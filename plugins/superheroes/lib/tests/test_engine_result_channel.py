@@ -267,9 +267,15 @@ def test_generated_branch_tracks_payload_contracts(phase, field, kind):
                     assert item_props[fname]["enum"] == list(enum)
 
 
-@pytest.mark.parametrize("token", sorted(PC.TYPE_TOKENS))
+@pytest.mark.parametrize("token", sorted(PC.TYPE_TOKENS - {"list", "any"}))
 def test_every_type_token_handled(token):
     ERC._json_schema_for_type_token(token)
+
+
+@pytest.mark.parametrize("token", ("list", "any"))
+def test_list_and_any_tokens_require_refinement(token):
+    with pytest.raises(ERC.UnrefinedTypeTokenError):
+        ERC._json_schema_for_type_token(token)
 
 
 def test_unrecognised_type_token_raises():
@@ -396,3 +402,132 @@ def test_differential_agreement_with_jsonschema(run_kind):
 def test_marker_channel_declared_schema_is_none():
     assert ERC.declared_schema("cursor", ERC.RUN_KIND_REVIEW) is None
     assert ERC.declared_schema("cursor", ERC.RUN_KIND_WRITE) is None
+
+
+def _all_declared_native_schemas():
+    schemas = [
+        ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW),
+        ERC.declared_schema("codex", ERC.RUN_KIND_WRITE),
+    ]
+    for kind in ERC.REVIEW_RESULT_KINDS:
+        schemas.append(
+            ERC.declared_schema(
+                "codex", ERC.RUN_KIND_REVIEW, expected_result_kind=kind)
+        )
+    return schemas
+
+
+@pytest.mark.parametrize("schema", _all_declared_native_schemas(), ids=[
+    "review-all",
+    "write",
+    "review-findings",
+    "review-verdicts",
+    "review-grouping",
+    "review-ruling",
+])
+def test_assert_strict_mode_valid_passes_every_declared_schema(schema):
+    ERC.assert_strict_mode_valid(schema)
+
+
+@pytest.mark.parametrize("schema,path_fragment", [
+    ({"type": "string"}, "root schema must have type 'object'"),
+    (
+        {"type": "object", "oneOf": [{"type": "string"}]},
+        "oneOf is not permitted",
+    ),
+    (
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["x"],
+            "properties": {"x": {}},
+        },
+        "schema must have a 'type' key",
+    ),
+    (
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["items"],
+            "properties": {"items": {"type": "array"}},
+        },
+        "array schema missing items",
+    ),
+    (
+        {
+            "type": "object",
+            "additionalProperties": True,
+            "required": [],
+            "properties": {},
+        },
+        "additionalProperties to false",
+    ),
+], ids=["rule1-root", "rule2-oneof", "rule3-no-type", "rule4-array-items", "rule5-additional"])
+def test_assert_strict_mode_valid_catches_structural_violations(schema, path_fragment):
+    with pytest.raises(ERC.StrictModeViolationError, match=path_fragment) as exc:
+        ERC.assert_strict_mode_valid(schema)
+    assert "In context=" in str(exc.value)
+
+
+def test_assert_strict_mode_valid_rule5_required_properties_mismatch():
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["a"],
+        "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+    }
+    with pytest.raises(ERC.StrictModeViolationError, match="required/properties mismatch") as exc:
+        ERC.assert_strict_mode_valid(schema)
+    assert "b" in str(exc.value)
+
+
+_CONSUMED_PHASES = (
+    (PC.P_VERIFIERS, "verdicts"),
+    (PC.P_SYNTHESIS, "grouping"),
+    (PC.P_AUDITS, "ruling"),
+)
+
+
+def _iter_binding_fields_needing_refinement(phase, top_field):
+    contract, reason = PC.payload_contract(phase)
+    assert reason is None
+    if top_field == "ruling":
+        types = contract.get("types") or {}
+        for field in list(contract.get("required") or []) + list(contract.get("optional") or ()):
+            tok = types.get(field, "any")
+            if tok in ("list", "any") or tok is None:
+                yield top_field, field, tok or "any"
+        return
+    elem = contract["elements"][top_field]
+    types = elem.get("types") or {}
+    for field in list(elem.get("required") or []) + list(elem.get("optional") or ()):
+        tok = types.get(field, "any")
+        if tok in ("list", "any") or tok is None:
+            yield top_field, field, tok or "any"
+
+
+def test_strict_mode_refinement_table_covers_all_unrefinable_binding_fields():
+    needing = []
+    for phase, top_field in _CONSUMED_PHASES:
+        needing.extend(_iter_binding_fields_needing_refinement(phase, top_field))
+    assert needing, "expected at least one unrefinable field in consumed bindings"
+    for result_kind, field, _tok in needing:
+        assert (result_kind, field) in ERC._STRICT_MODE_REFINEMENTS
+
+
+def test_unrefined_list_token_raises_at_schema_build():
+    with pytest.raises(ERC.UnrefinedTypeTokenError, match="no strict-mode refinement"):
+        ERC._strict_schema_for_field("synthetic", "orphan", "list")
+
+
+def test_validate_none_schema_refuses():
+    ok, reason = ERC.validate(None, {"anything": True})
+    assert not ok
+    assert "schema is None" in reason
+
+
+def test_ruling_branch_fields_match_audits_binding():
+    contract, reason = PC.payload_contract(PC.P_AUDITS)
+    assert reason is None
+    expected = list(contract.get("required") or []) + list(contract.get("optional") or ())
+    assert ERC._ruling_branch_fields() == expected
