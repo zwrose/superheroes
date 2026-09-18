@@ -115,8 +115,32 @@ def _run_dir(tmp_path, name):
     return path
 
 
-def _findings_stdout():
-    return json.dumps({"findings": [{"id": "f1", "message": "issue found"}]})
+_TD = None
+
+
+def _dispatch_test_helpers():
+    global _TD
+    if _TD is None:
+        spec = importlib.util.spec_from_file_location(
+            "test_engine_dispatch",
+            os.path.join(_HERE, "test_engine_dispatch.py"),
+        )
+        _TD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_TD)
+    return _TD
+
+
+def _e2e_native_findings_envelope():
+    """Typed review envelope for codex review e2e fixtures (from test_engine_dispatch helpers)."""
+    td = _dispatch_test_helpers()
+    branch = td._native_review_branch("findings")
+    branch["findings"][0]["id"] = "f1"
+    branch["findings"][0]["body"] = "issue found"
+    return td._wrap_native_review_result(branch)
+
+
+def _e2e_native_findings_result_json():
+    return json.dumps(_e2e_native_findings_envelope(), separators=(",", ":"))
 
 
 def _build_ok_stdout():
@@ -136,7 +160,8 @@ def _honest_refusal_stdout():
 
 
 def _install_fake_engine(tmp_path, monkeypatch, name, *, stdout="", sleep_s=0, exit_code=0,
-                          argv_file=None, out_file=None, death_marker=None, stage_out_file=False):
+                          argv_file=None, out_file=None, death_marker=None, stage_out_file=False,
+                          native_review_result=None):
     """Install a fake engine; behavior is literal in the script (survives env scrub)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -152,6 +177,7 @@ _out_file = %(out_file)r
 _death_marker = %(death_marker)r
 _stage_out_file = %(stage_out_file)s
 _stdout_payload = %(stdout)r
+_native_review_result = %(native_review_result)r
 _sleep_s = %(sleep)s
 _exit_code = %(exit_code)s
 
@@ -181,6 +207,11 @@ if _out_file:
 if _sleep_s:
     time.sleep(_sleep_s)
 
+if _native_review_result is not None and "-o" in sys.argv:
+    _result_path = sys.argv[sys.argv.index("-o") + 1]
+    with open(_result_path, "w", encoding="utf-8") as fh:
+        fh.write(_native_review_result)
+
 if _stdout_payload:
     sys.stdout.write(_stdout_payload)
     sys.stdout.flush()
@@ -192,6 +223,7 @@ sys.exit(_exit_code)
         "death_marker": death_marker,
         "stage_out_file": stage_out_file,
         "stdout": stdout,
+        "native_review_result": native_review_result,
         "sleep": sleep_s,
         "exit_code": exit_code,
     }
@@ -363,7 +395,7 @@ def test_e2e_review_real_path_terminal_success(tmp_path, monkeypatch):
 
     _install_fake_engine(
         tmp_path, monkeypatch, "codex",
-        stdout=_findings_stdout(), argv_file=argv_file,
+        native_review_result=_e2e_native_findings_result_json(), argv_file=argv_file,
     )
 
     res = _poll_review_terminal(repo, run_dir, prompt_path)
@@ -661,7 +693,10 @@ def test_e2e_dispatch_poll_never_spawns(tmp_path, monkeypatch):
     run_dir = _run_dir(tmp_path, "run-poll")
     prompt_path = _prompt(tmp_path, "Review.\n")
 
-    _install_fake_engine(tmp_path, monkeypatch, "codex", stdout=_findings_stdout())
+    _install_fake_engine(
+        tmp_path, monkeypatch, "codex",
+        native_review_result=_e2e_native_findings_result_json(),
+    )
 
     opened = ED.dispatch_review(
         seat=_codex_seat(),
@@ -676,6 +711,7 @@ def test_e2e_dispatch_poll_never_spawns(tmp_path, monkeypatch):
 
     terminal = _poll_review_terminal(repo, run_dir, prompt_path)
     assert terminal["terminal"] is True
+    assert terminal["ok"] is True
 
     run_dir2 = _run_dir(tmp_path, "run-poll-dead")
     wt, _main = _linked_worktree(tmp_path)
@@ -778,7 +814,7 @@ def test_e2e_caller_exit_pgroup_kill_engine_survives_reattaches(tmp_path, monkey
         prompt_path = _prompt(tmp_path, "Review this.\n")
         _install_fake_engine(
             tmp_path, monkeypatch, "codex",
-            stdout=_findings_stdout(), sleep_s=engine_sleep_s,
+            native_review_result=_e2e_native_findings_result_json(), sleep_s=engine_sleep_s,
         )
         cli_args = [
             "--seat", _seat_json("codex", "gpt-5.6-terra", "high", _REVIEW_ROLE),
