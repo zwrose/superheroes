@@ -181,8 +181,33 @@ def test_t2_verify_fail_after_audits_halts(tmp_path):
     assert n3["payload"]["certification"]["shape"] is None
 
 
-# axis: ceiling round runs verify before round-ceiling park
+# axis: ceiling round with no prior gate runs verify before round-ceiling park
 def test_t3_ceiling_gate_runs_then_parks(tmp_path):
+    d = str(tmp_path)
+    cfg = _cfg(maxRoundsAbsolute=1, maxRounds=1, verifyCommand="pytest -q")
+    respond = _responder(round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE)
+    n = _drive_to_phase(d, cfg, respond, RD.P_FIXER)
+    assert n["round"] == 1
+    s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                      {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Code"]})
+    assert s["ok"], s
+    ok, state = RD.load_state(d)
+    assert state["rounds"]["1"].get("verifyResult") is None
+    n2 = RD.cmd_next(d)
+    assert n2["ok"] and n2["phase"] == RD.P_VERIFY, n2
+    s2 = RD.cmd_submit(d, n2["phase"], n2["attempt"], n2["expectedStateHash"], {"result": "pass"})
+    assert s2["ok"], s2
+    n3 = RD.cmd_next(d)
+    assert n3["action"] == RD.P_TERMINAL
+    assert n3["payload"]["verdict"] == "halted"
+    ok, state = RD.load_state(d)
+    assert ok
+    assert state["rounds"]["1"]["verifyResult"] == "pass"
+    assert any(dec["kind"] == "round-ceiling" for dec in state["decisions"])
+
+
+# axis: ceiling round skips second gate when post-audits verify already ran
+def test_t3_ceiling_gate_skipped_when_prior_verify(tmp_path):
     d = str(tmp_path)
     scoped_b = [{"title": "delta-b", "severity": "Important", "file": "newsurf.py", "line": 1}]
     cfg = _cfg(maxRoundsAbsolute=2, maxRounds=2, verifyCommand="pytest -q")
@@ -197,17 +222,20 @@ def test_t3_ceiling_gate_runs_then_parks(tmp_path):
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                       {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Code"]})
     assert s["ok"], s
-    n2 = RD.cmd_next(d)
-    assert n2["ok"] and n2["phase"] == RD.P_VERIFY, n2
-    s2 = RD.cmd_submit(d, n2["phase"], n2["attempt"], n2["expectedStateHash"], {"result": "pass"})
-    assert s2["ok"], s2
     n3 = RD.cmd_next(d)
     assert n3["action"] == RD.P_TERMINAL
     assert n3["payload"]["verdict"] == "halted"
     ok, state = RD.load_state(d)
     assert ok
     assert state["rounds"]["2"]["verifyResult"] == "pass"
+    assert state["rounds"]["2"]["ceilingGateSkipped"] == (
+        "the round's gate already ran on an earlier head; the post-fix head is unverified by the "
+        "loop — certification is withheld at the ceiling regardless")
     assert any(dec["kind"] == "round-ceiling" for dec in state["decisions"])
+    verify_nexts = [e for e in RD.read_journal(d)
+                    if e.get("cmd") == "next" and e.get("phase") == RD.P_VERIFY
+                    and e.get("round") == 2]
+    assert len(verify_nexts) == 1
 
 
 # axis: unknown surface — verify then full panel in the new round
@@ -242,19 +270,9 @@ def _multi_file_diff(n):
         "@@ -1 +1,2 @@\n-old\n+new\n+more\n" % (i, i, i, i) for i in range(n))
 
 
-def _six_findings():
+def _n_findings(n):
     return [{"title": "bug%d" % i, "severity": "Important", "file": "f%d.py" % i, "line": 1}
-            for i in range(6)]
-
-
-def _four_findings():
-    return [{"title": "bug%d" % i, "severity": "Important", "file": "f%d.py" % i, "line": 1}
-            for i in range(4)]
-
-
-def _five_findings():
-    return [{"title": "bug%d" % i, "severity": "Important", "file": "f%d.py" % i, "line": 1}
-            for i in range(5)]
+            for i in range(n)]
 
 
 def _multi_head(n):
@@ -268,30 +286,31 @@ def _newsurf():
             "+++ b/newsurf.py\n@@ -0,0 +1,2 @@\n+ns\n+ns2\n")
 
 
-# axis: six findings split across two fixer dispatches in one round
+# axis: cap+2 findings split across two fixer dispatches in one round
 def test_t5_fix_batch_split_six_findings(tmp_path):
     cap = round_phases.FIX_BATCH_CAP_DEFAULT
+    over = cap + 2
     d = str(tmp_path)
-    cfg = _cfg(verifyCommand="pytest -q", diff=_multi_file_diff(6))
+    cfg = _cfg(verifyCommand="pytest -q", diff=_multi_file_diff(over))
     seen_batches = []
 
     def respond(phase, payload, rnd):
         if phase == RD.P_FIXER:
             seen_batches.append(list(payload.get("batch") or []))
-        return _responder(round1_findings=_six_findings(), head=_multi_head(6))(
+        return _responder(round1_findings=_n_findings(over), head=_multi_head(over))(
             phase, payload, rnd)
 
     n = _drive_to_phase(d, cfg, respond, RD.P_FIXER)
     assert n["attempt"] == 0
     assert len(n["payload"]["batch"]) == cap
-    head = _multi_head(6)
+    head = _multi_head(over)
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                       {"fixes": [{"file": "x"}], "headDiff": head,
                        "changedSubjects": ["Code"]})
     assert s["ok"], s
     n2 = RD.cmd_next(d)
     assert n2["phase"] == RD.P_FIXER and n2["round"] == 1 and n2["attempt"] == 1
-    assert len(n2["payload"]["batch"]) == 6 - cap
+    assert len(n2["payload"]["batch"]) == over - cap
     s2 = RD.cmd_submit(d, n2["phase"], n2["attempt"], n2["expectedStateHash"],
                        {"fixes": [{"file": "y"}], "headDiff": head,
                         "changedSubjects": ["Code"]})
@@ -301,25 +320,25 @@ def test_t5_fix_batch_split_six_findings(tmp_path):
     assert any(d_["kind"] == "fix-batch-split" for d_ in state["decisions"])
     n3 = RD.cmd_next(d)
     assert n3["phase"] == RD.P_AUDITS
-    assert len(n3["payload"]["targets"]) == 6
+    assert len(n3["payload"]["targets"]) == over
     assert len(state["rounds"]["1"]["fix"]["fixes"]) == 2
     batches = state["rounds"]["1"]["fixBatches"]
     assert batches == [{"index": 0, "size": cap, "fixes": 1},
-                       {"index": 1, "size": 6 - cap, "fixes": 1}]
+                       {"index": 1, "size": over - cap, "fixes": 1}]
     split = [d_ for d_ in state["decisions"] if d_["kind"] == "fix-batch-split"]
     assert split == [{"round": 1, "kind": "fix-batch-split",
                       "detail": "fix batch slice 1 of this round dispatched (%d findings; %d queued)"
-                                  % (cap, len(_six_findings()) - cap - min(cap, 6 - cap))}]
+                                  % (cap, len(_n_findings(over)) - cap - min(cap, over - cap))}]
 
 
 # axis: exactly cap findings — one slice, no split decision
 def test_t5_fix_batch_exact_cap_no_split(tmp_path):
     cap = round_phases.FIX_BATCH_CAP_DEFAULT
     d = str(tmp_path)
-    head = _multi_head(4)
-    cfg = _cfg(verifyCommand="pytest -q", diff=_multi_file_diff(4))
+    head = _multi_head(cap)
+    cfg = _cfg(verifyCommand="pytest -q", diff=_multi_file_diff(cap))
     n = _drive_to_phase(d, cfg,
-                        _responder(round1_findings=_four_findings(), head=head),
+                        _responder(round1_findings=_n_findings(cap), head=head),
                         RD.P_FIXER)
     assert len(n["payload"]["batch"]) == cap
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
@@ -336,7 +355,7 @@ def test_t5_fix_batch_cap_config_governs_slices(tmp_path):
     d = str(tmp_path)
     head = _multi_head(5)
     cfg = _cfg(verifyCommand="pytest -q", diff=_multi_file_diff(5), fixBatchCap=2)
-    n = _drive_to_phase(d, cfg, _responder(round1_findings=_five_findings(), head=head),
+    n = _drive_to_phase(d, cfg, _responder(round1_findings=_n_findings(5), head=head),
                         RD.P_FIXER)
     for expected_attempt, expected_size in enumerate((2, 2, 1)):
         assert n["attempt"] == expected_attempt
@@ -354,11 +373,12 @@ def test_t5_fix_batch_cap_config_governs_slices(tmp_path):
 # axis: durable path — fix-batch.json and fix-batch.1.json for split slices
 def test_t5_durable_fix_batch_files(tmp_path):
     cap = round_phases.FIX_BATCH_CAP_DEFAULT
+    over = cap + 2
     session_dir, gitdir, head_path = _bootstrap(
-        tmp_path, verifyCommand="pytest -q", diff=_multi_file_diff(6))
+        tmp_path, verifyCommand="pytest -q", diff=_multi_file_diff(over))
     with open(head_path, "w", encoding="utf-8") as fh:
-        fh.write(_multi_head(6))
-    findings = _six_findings()
+        fh.write(_multi_head(over))
+    findings = _n_findings(over)
     for phase in (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS):
         _TDI._drive_one_phase(session_dir, gitdir, findings, head_path)
     state = _state(session_dir)
@@ -435,6 +455,8 @@ def test_t8_fix_batch_chokepoint_census():
 
 
 _CAP_DEFAULT_CITATION_RE = re.compile(r"round_phases\.FIX_BATCH_CAP_DEFAULT")
+_CAP_DEFAULT_PROSE_VALUE_RE = re.compile(
+    r"default\s+(\d+)\s*\([^)]*round_phases\.FIX_BATCH_CAP_DEFAULT")
 
 
 # axis: default cap constant and reference prose stay aligned
@@ -450,16 +472,22 @@ def test_t9_cap_default_and_reference_aligned():
         raise AssertionError(
             "§ Round economy must cite round_phases.FIX_BATCH_CAP_DEFAULT by name; "
             "no match in sentence block starting: %s" % economy.strip()[:200])
-    assert re.search(r"FIX_BATCH_CAP_DEFAULT\s*\(\s*\d+\s*\)", economy) is None
+    prose_match = _CAP_DEFAULT_PROSE_VALUE_RE.search(economy)
+    if not prose_match:
+        raise AssertionError(
+            "§ Round economy must state the default cap value in the sentence citing "
+            "FIX_BATCH_CAP_DEFAULT; no match in: %s" % economy.strip()[:300])
+    assert int(prose_match.group(1)) == round_phases.FIX_BATCH_CAP_DEFAULT
 
 
 # axis: escalated self-recovery split — both fixer slices carry escalatedRung
 def test_t5_escalated_split_carries_rung_on_both_slices(tmp_path):
     cap = round_phases.FIX_BATCH_CAP_DEFAULT
+    over = cap + 1
     d = str(tmp_path)
-    findings = _five_findings()
-    head = _multi_head(5)
-    cfg = _cfg(verifyCommand="pytest -q", diff=_multi_file_diff(5))
+    findings = _n_findings(over)
+    head = _multi_head(over)
+    cfg = _cfg(verifyCommand="pytest -q", diff=_multi_file_diff(over))
     respond = _responder(round1_findings=findings, head=head)
     n = _drive_to_phase(d, cfg, respond, RD.P_SYNTHESIS)
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
@@ -480,7 +508,7 @@ def test_t5_escalated_split_carries_rung_on_both_slices(tmp_path):
     n2 = RD.cmd_next(d)
     assert n2["phase"] == RD.P_FIXER
     assert n2["payload"]["escalatedRung"] == rung
-    assert len(n2["payload"]["batch"]) == 5 - cap
+    assert len(n2["payload"]["batch"]) == over - cap
 
 
 # axis: VERIFY_BUDGET placeholder — sorted files, no VERIFY_COMMAND

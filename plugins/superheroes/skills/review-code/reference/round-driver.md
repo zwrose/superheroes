@@ -616,7 +616,7 @@ hand-`submit` session keep the result and submit `{result}` at `run-verify`. Bot
 fold to the same state.
 
 **Fixer batches are capped and split.** `fixBatchCap` (config key, CLI `--fix-batch-cap`,
-default `round_phases.FIX_BATCH_CAP_DEFAULT` (the one home; the driver reads it at runtime), positive integer — refused `fix-batch-cap-invalid` otherwise) limits findings per
+default 4 (`round_phases.FIX_BATCH_CAP_DEFAULT`, the one home; the driver reads it at runtime), positive integer — refused `fix-batch-cap-invalid` otherwise) limits findings per
 `dispatch-fixer` order. A larger blocking set dispatches as consecutive `dispatch-fixer` attempts
 in the same round (`fix-batch.json`, `fix-batch.1.json`, …), each folded on its own with a
 `fix-batch-split` decision; the round record carries `fixBatches` and `fix.fixes` is the union.
