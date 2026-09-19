@@ -1248,11 +1248,22 @@ def _mint_finding_keys(findings):
     by_identity = {}
     for idx, (f, kind, identity, legacy_key) in enumerate(entries):
         by_identity.setdefault(identity, []).append((idx, f, kind, legacy_key))
+    legacy_claims = {}
+    for identity, group in by_identity.items():
+        legacy_keys_in_group = [lk for _, _, kind, lk in group if kind == "legacy-owned" and lk]
+        if legacy_keys_in_group:
+            lk = legacy_keys_in_group[0]
+            legacy_claims[lk] = legacy_claims.get(lk, 0) + 1
     for identity, group in by_identity.items():
         has_foreign = any(kind == "foreign" for _, _, kind, _ in group)
         if not has_foreign:
             legacy_keys = [lk for _, _, kind, lk in group if kind == "legacy-owned" and lk]
-            chosen_key = legacy_keys[0] if legacy_keys else identity
+            # Parent build minted list-wide-unique keys; two bare legacy rows cannot come from
+            # stored state — this branch is fail-closed hardening when claims collide.
+            if legacy_keys and legacy_claims.get(legacy_keys[0], 0) == 1:
+                chosen_key = legacy_keys[0]
+            else:
+                chosen_key = identity
             for _, f, _, _ in group:
                 f[session_contract.FINDING_KEY_FIELD] = chosen_key
         else:
@@ -7423,7 +7434,7 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "resultKind": result_kind}
         shaped = _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload)
-        carried, _subject = engine_adapter.review_payload_carried(shaped, result_kind)
+        carried, adapter_subject = engine_adapter.review_payload_carried(shaped, result_kind)
         digest_carried, digest_subject = session_contract.evidence_digest_subject(
             envelope_payload, result_kind)
         # Leaf rule (session_contract.evidence_digest_subject) is the writer's rule; drift test
@@ -7431,6 +7442,11 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
         if not carried or not digest_carried:
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "resultKind": result_kind}
+        if round_records.payload_sha256(adapter_subject) != round_records.payload_sha256(
+                digest_subject):
+            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                       "resultKind": result_kind,
+                                                       "subjectDisagreement": True}
         payload_digest = round_records.payload_sha256(digest_subject)
         if result_digest != payload_digest:
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,

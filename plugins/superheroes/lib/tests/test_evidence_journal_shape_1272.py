@@ -13,6 +13,7 @@ import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
 import review_findings_schema  # noqa: E402
 import round_driver  # noqa: E402
+import round_records  # noqa: E402
 import sanitized_view  # noqa: E402
 import test_round_driver_integration as TRI  # noqa: E402
 
@@ -82,3 +83,75 @@ def test_journal_line_not_an_object_refuses_evidence_binding(tmp_path, monkeypat
     assert assembled is None
     assert refusal == "evidence-run-dir-unreadable"
     assert extra == {"detail": "internal-error"}
+
+
+def _panel_cross_kind_fixture():
+    finding = {
+        "dimension": "d",
+        "taxonomy": "t",
+        "title": "x",
+        "file": "f.py",
+        "line": 1,
+        "severity": "Important",
+    }
+    grouping = [{"group_id": "g", "member_ids": ["x"]}]
+    payload = {"findings": [finding], "grouping": grouping}
+    order_sha = "a" * 64
+    envelope = {
+        "phase": round_driver.P_PANEL,
+        "orderSha256": order_sha,
+        "payload": payload,
+    }
+    base_record = {
+        "orderPromptSha256": order_sha,
+        "source": "runner",
+        "runnerNonce": "nonce-cross-kind",
+        "recordDigest": "digest-cross-kind",
+        "observation": TRI._execution_evidence()["observation"],
+    }
+    return envelope, payload, grouping, base_record
+
+
+def test_assemble_dispatch_evidence_refuses_cross_kind_subject_disagreement(tmp_path):
+    """T9: grouping digest on a panel envelope with findings refuses subject disagreement."""
+    envelope, payload, grouping, base_record = _panel_cross_kind_fixture()
+    record = dict(
+        base_record,
+        resultKind="grouping",
+        resultDigest=round_records.payload_sha256(grouping),
+    )
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir, exist_ok=True)
+    real_record = engine_dispatch.run_execution_record
+
+    def _patched(_run_dir):
+        return record, None
+
+    engine_dispatch.run_execution_record = _patched
+    try:
+        assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
+            session_dir, envelope, "fake-run-dir")
+    finally:
+        engine_dispatch.run_execution_record = real_record
+    assert assembled is None
+    assert refusal == "evidence-result-mismatch"
+    assert extra.get("subjectDisagreement") is True
+
+    findings_record = dict(
+        base_record,
+        resultKind="findings",
+        resultDigest=round_records.payload_sha256(payload["findings"]),
+    )
+
+    def _findings_patched(_run_dir):
+        return findings_record, None
+
+    engine_dispatch.run_execution_record = _findings_patched
+    try:
+        assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
+            session_dir, envelope, "fake-run-dir")
+    finally:
+        engine_dispatch.run_execution_record = real_record
+    assert assembled is not None
+    assert refusal is None
+    assert extra == {}

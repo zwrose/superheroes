@@ -189,6 +189,30 @@ def test_legacy_unsuffixed_key_bridges_to_recompiled_long_title_copy():
     assert state2["findings"][0][SC.FINDING_KEY_FIELD] == bare_key
 
 
+def test_ambiguous_legacy_key_never_collapses_distinct_findings():
+    """T10: two distinct long-title findings sharing one bare legacy key keep minted keys."""
+    prefix = "x" * 165
+    alpha = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important"}
+    bravo = {"file": "f.py", "line": 5, "title": prefix + " bravo", "severity": "Important"}
+    bare_key = SC.location_key(alpha)
+    legacy_a = dict(alpha, **{SC.FINDING_KEY_FIELD: bare_key})
+    legacy_b = dict(bravo, **{SC.FINDING_KEY_FIELD: bare_key})
+
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, [legacy_a, legacy_b])
+    keys = [f[SC.FINDING_KEY_FIELD] for f in state["findings"]]
+    assert len(state["findings"]) == 2
+    assert keys[0] != keys[1]
+    assert "#" in keys[0] and "#" in keys[1]
+
+    state_rev = RD.new_state(_cfg())
+    RD._set_findings(state_rev, [legacy_b, legacy_a])
+    keys_rev = [f[SC.FINDING_KEY_FIELD] for f in state_rev["findings"]]
+    assert len(state_rev["findings"]) == 2
+    assert keys_rev[0] != keys_rev[1]
+    assert "#" in keys_rev[0] and "#" in keys_rev[1]
+
+
 def test_foreign_preset_key_collision_still_rekeys():
     """T7: foreign preset keys on different locations stay content-hash re-keyed."""
     finding1 = {
