@@ -636,6 +636,31 @@ def test_submit_verify_skip_accepted_with_a_configured_command(tmp_path, token):
     assert "pytest -q" in state["certification"]["reason"]
 
 
+def test_run_verify_payload_binds_base_ref_token_to_the_pinned_base(tmp_path):
+    """`{baseRef}` in the calibrated verify command is bound to the session's pinned base commit
+    at `run-verify`, so a touched-tests gate on a stacked branch diffs against the PR base rather
+    than main (vet 244, @244-3).
+
+    Bites on: `_verify_command` substituting the token from `config["baseRef"]`."""
+    pin = "a" * 40
+    d, n = _at(tmp_path, RD.P_VERIFY,
+               cfg=_cfg(verifyCommand="gate.py --base {baseRef} && pytest -q", baseRef=pin))
+    assert n["payload"]["command"] == "gate.py --base %s && pytest -q" % pin, n["payload"]
+
+
+def test_run_verify_payload_leaves_base_ref_token_verbatim_without_a_full_hex_pin(tmp_path):
+    """No pin, or a pin that is not a full hex object id, leaves the token in the command so the
+    gate refuses loudly on an unresolvable ref — never a silent substitution of main or of ``.
+
+    Bites on: the full-hex guard in `_verify_command` (a `""`/short/None pin does not substitute)."""
+    for i, pin in enumerate((None, "", "abc1234", "not-a-sha", "x" * 40)):
+        cfg = _cfg(verifyCommand="gate.py --base {baseRef}")
+        if pin is not None:
+            cfg["baseRef"] = pin
+        d, n = _at(str(tmp_path / ("case-%d" % i)), RD.P_VERIFY, cfg=cfg)   # one fresh session per case
+        assert n["payload"]["command"] == "gate.py --base {baseRef}", (pin, n["payload"])
+
+
 def test_submit_verify_guard_does_not_preempt_fences(tmp_path):
     """A mis-shaped verify artifact with a stale attempt or bad hash keeps the existing fence
     reasons — the shape guard sits AFTER the echo/hash fences, never in front of them."""
