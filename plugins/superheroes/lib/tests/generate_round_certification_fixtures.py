@@ -53,10 +53,10 @@ def _binding_fields(nonce, payload=None, source="runner"):
     }
 
 
-def _observation_fields(*, read="engaged", tool_calls=1, source="runner"):
+def _observation_fields(*, read="engaged", tool_calls=1):
     return {
         "read": read,
-        "source": source,
+        "source": "runner",
         "telemetry": "tool-calls",
         "stdoutBytes": 10,
         "wallSeconds": 1.0,
@@ -68,7 +68,7 @@ def _observation_fields(*, read="engaged", tool_calls=1, source="runner"):
 def _execution_evidence(nonce, *, payload=None, read="engaged", tool_calls=1, source="runner"):
     return {
         **_binding_fields(nonce, payload=payload, source=source),
-        "observation": _observation_fields(read=read, tool_calls=tool_calls, source=source),
+        "observation": _observation_fields(read=read, tool_calls=tool_calls),
     }
 
 
