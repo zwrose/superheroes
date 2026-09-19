@@ -600,3 +600,15 @@ Every code proof above was re-run by the orchestrator on the final head after th
 | BP-OL-11 | the guidance elision — `test_round_driver_order_lint.py::test_fixer_emission_ignores_lint_triggers_inside_gate_guidance` | `1 failed in 4.91s`; `E                   ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-path-unresolved:p` | `git status --porcelain` empty | `1 passed in 4.47s` |
 | BP-OL-12 | the residuals elision — `test_round_driver_order_lint.py::test_fixer_emission_ignores_lint_triggers_inside_ratified_residuals` | `1 failed in 4.11s`; `E                   ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-path-unresolved:l` | `git status --porcelain` empty | `1 passed in 3.83s` |
 | BP-OL-13 | the plugin alt-root — `test_round_driver_order_lint.py::test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root` | `1 failed in 4.53s`; `E                   ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-path-unresolved:r` | `git status --porcelain` empty | `1 passed in 5.10s` |
+
+## Re-run after the main merge — merged head `b799acb0` (2026-09-19)
+
+The disclosed conflict round merged `origin/main` (the C11 stack) into this branch. The merge changed `lib/round_driver.py`, so the five proofs whose neutralization lives in that file were re-run on the merged head; `lib/order_lint.py` and both test files were untouched by the merge, so BP-OL-1…8 stand on the `60568e76` table above. Same mechanics: targeted neutralization, single node, inverse restore, `git status --porcelain` empty after each, then the whole `test_round_driver_order_lint.py` file green (**12 passed in 48.95s**).
+
+| ID | element | red on `b799acb0` |
+|---|---|---|
+| BP-OL-9 | the hook runs on the fixer phase — `test_fixer_emission_refuses_on_real_placeholder` | `1 failed in 6.60s` |
+| BP-OL-10 | the refusal carries the token — `test_fixer_emission_refuses_on_lint_finding` | `1 failed in 7.26s` |
+| BP-OL-11 | the guidance elision — `test_fixer_emission_ignores_lint_triggers_inside_gate_guidance` | `1 failed in 7.25s` |
+| BP-OL-12 | the residuals elision — `test_fixer_emission_ignores_lint_triggers_inside_ratified_residuals` | `1 failed in 6.86s` |
+| BP-OL-13 | the plugin alt-root — `test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root` | `1 failed in 7.32s` |
