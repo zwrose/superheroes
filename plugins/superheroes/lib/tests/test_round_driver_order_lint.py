@@ -137,7 +137,7 @@ def test_fixer_emission_refuses_on_lint_finding(tmp_path, monkeypatch):
     session_dir, state = _seed_session(tmp_path, monkeypatch)
     monkeypatch.setattr(
         RD.order_lint, "check_text",
-        lambda _text, _root, kind="fixer": {
+        lambda _text, _root, kind="fixer", **_kw: {
             "ok": False, "kind": "fixer",
             "findings": [{"token": "order-placeholder-unfilled", "detail": "FOO"}],
             "checked": {"paths": 0, "placeholders": 1},
@@ -193,7 +193,7 @@ def test_lint_refusal_names_first_finding_only(tmp_path, monkeypatch):
     session_dir, state = _seed_session(tmp_path, monkeypatch)
     monkeypatch.setattr(
         RD.order_lint, "check_text",
-        lambda _text, _root, kind="fixer": {
+        lambda _text, _root, kind="fixer", **_kw: {
             "ok": False, "kind": "fixer",
             "findings": [
                 {"token": "order-placeholder-unfilled", "detail": "FIRST"},
@@ -212,7 +212,7 @@ def test_empty_findings_with_ok_false_refuses_unknown(tmp_path, monkeypatch):
     session_dir, state = _seed_session(tmp_path, monkeypatch)
     monkeypatch.setattr(
         RD.order_lint, "check_text",
-        lambda _text, _root, kind="fixer": {
+        lambda _text, _root, kind="fixer", **_kw: {
             "ok": False, "kind": "fixer", "findings": [], "checked": {"paths": 0, "placeholders": 0},
         })
     with pytest.raises(ValueError, match=r"order-render-refused:%s:order-lint:unknown" % _FIXER_SKEY):
@@ -243,5 +243,47 @@ def test_fixer_emission_still_refuses_driver_authored_trigger_with_guidance_pres
     with pytest.raises(
             ValueError,
             match=r"order-render-refused:%s:order-lint:order-placeholder-unfilled:REPO_ROOT"
+            % _FIXER_SKEY):
+        _emit_fixer(session_dir, state)
+
+
+_LINT_TRIGGER_RESIDUALS = (
+    '{"fixes"} via marker channel parser with "resultKind". '
+    'See `lib/tests/no_such_residual_file_1339.py`.'
+)
+
+
+def test_fixer_emission_ignores_lint_triggers_inside_ratified_residuals(tmp_path, monkeypatch):
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        RD.round_orders, "resolve_order_residuals",
+        lambda _repo, _base: (_LINT_TRIGGER_RESIDUALS, "provenance line", None))
+    anchor = _emit_fixer(session_dir, state)
+    assert "manifestSha256" in anchor
+    order_path = RR.order_prompt_path(session_dir, state["round"], RP.P_FIXER, _FIXER_SKEY, 0)
+    order_text = open(order_path, encoding="utf-8").read()
+    assert _LINT_TRIGGER_RESIDUALS in order_text
+
+
+def test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root(tmp_path, monkeypatch):
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+
+    def _render_with_path(phase, seat_key, context, cited):
+        return ("You are the fixer.\n\nSee `%s` for the rubric.\n" % cited, None)
+
+    monkeypatch.setattr(
+        RD.round_orders, "render_order",
+        lambda phase, seat_key, context: _render_with_path(
+            phase, seat_key, context, "rubric/review-base.md"))
+    anchor = _emit_fixer(session_dir, state)
+    assert "manifestSha256" in anchor
+
+    monkeypatch.setattr(
+        RD.round_orders, "render_order",
+        lambda phase, seat_key, context: _render_with_path(
+            phase, seat_key, context, "rubric/no_such_rubric_1339.md"))
+    with pytest.raises(
+            ValueError,
+            match=r"order-render-refused:%s:order-lint:order-path-unresolved:rubric/no_such_rubric_1339.md"
             % _FIXER_SKEY):
         _emit_fixer(session_dir, state)

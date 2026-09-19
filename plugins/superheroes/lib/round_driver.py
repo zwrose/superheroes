@@ -115,7 +115,17 @@ _SELF_RECOVERY_FIXER_EFFORT = "high"
 
 # Fold-owned guidance record key inside judgmentDispositions entries (dispatch-fixer.md).
 GATE_GUIDANCE_RECORD_KEY = "userGuidance"
-GATE_GUIDANCE_LINT_ELISION = "(owner-gate guidance elided from the order lint)"
+QUOTED_DATA_LINT_ELISION = "(quoted data elided from the order lint)"
+
+
+def _order_lint_text(order_text, context):
+    """The rendered order minus every quoted-data block: the lint grades the driver's text, never the owner's."""
+    ph = context.get("placeholders") if isinstance(context.get("placeholders"), dict) else {}
+    text = order_text
+    for quoted in (ph.get("GATE_GUIDANCE"), context.get("ratified_residuals")):
+        if isinstance(quoted, str) and quoted.strip():
+            text = text.replace(quoted, QUOTED_DATA_LINT_ELISION, 1)
+    return text
 GATE_GUIDANCE_ROW_BYTE_CAP = 2000
 GATE_GUIDANCE_AGGREGATE_BYTE_CAP = 8000
 # Bounds each header field so one oversized value cannot cost its entry a place under the
@@ -6747,17 +6757,16 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         # acts on; an unfilled placeholder (order-placeholder-unfilled), a dangling path
         # (order-path-unresolved), or two result contracts named at once
         # (order-result-shape-ambiguous) refuses the emission here and never reaches a dispatch.
-        # Owner-gate guidance is quoted prose the driver did not author — elide it from the lint
-        # text so paths, braces, or result-shape words in the owner's guidance never refuse
-        # emission; only the first occurrence is elided when the block appears more than once.
+        # Quoted-data blocks (owner-gate guidance, ratified residuals) are elided from the lint
+        # text so paths, braces, or result-shape words in owner prose never refuse emission;
+        # only the first occurrence of each block is elided when it appears more than once.
+        # Plugin-relative citations resolve via the plugin root as well as the repo root.
         # Deterministic half only — a driver-rendered order has no author for the semantic seat
         # to send a finding back to.
         if phase == P_FIXER:
-            guidance = (context.get("placeholders") or {}).get("GATE_GUIDANCE") or ""
-            lint_text = order_text
-            if guidance.strip():
-                lint_text = order_text.replace(guidance, GATE_GUIDANCE_LINT_ELISION, 1)
-            lint = order_lint.check_text(lint_text, repo_root, kind="fixer")
+            lint_text = _order_lint_text(order_text, context)
+            lint = order_lint.check_text(
+                lint_text, repo_root, alt_roots=(_plugin_resource_root(),), kind="fixer")
             if not lint.get("ok"):
                 first = (lint.get("findings") or [{}])[0]
                 token = first.get("token") or "unknown"

@@ -182,6 +182,8 @@ Note: `engine_result_channel.py` is absent from this worktree; in a full tree wh
 | BP-OL-9 | the hook runs on the fixer phase | `test_fixer_emission_refuses_on_real_placeholder` |
 | BP-OL-10 | the refusal carries the token | `test_fixer_emission_refuses_on_lint_finding` |
 | BP-OL-11 | the guidance elision | `test_fixer_emission_ignores_lint_triggers_inside_gate_guidance` |
+| BP-OL-12 | the residuals elision | `test_fixer_emission_ignores_lint_triggers_inside_ratified_residuals` |
+| BP-OL-13 | the plugin alt-root | `test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root` |
 
 Normalization: `-B -X pycache_prefix=/private/tmp/superheroes-pyc-wo2`, single-node `::test_*`.
 
@@ -224,7 +226,7 @@ FAILED ... AssertionError: Regex pattern did not match.
 **Axis:** owner-gate guidance prose is elided from the fixer-emission lint text so quoted owner
 paths, braces, or result-shape words never refuse emission.
 
-**Neutralization:** set `lint_text = order_text` unconditionally (drop the `replace`).
+**Neutralization:** at `_order_lint_text`, drop `ph.get("GATE_GUIDANCE")` from the quoted tuple.
 
 **Red** — `plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_ignores_lint_triggers_inside_gate_guidance`:
 
@@ -233,6 +235,42 @@ FAILED ... ValueError: order-render-refused:fixer-508e7896192355de:order-lint:..
 1 failed in ...
 ```
 
-**Restore:** restore `lint_text = order_text.replace(guidance, GATE_GUIDANCE_LINT_ELISION, 1)`.
+**Restore:** restore `ph.get("GATE_GUIDANCE")` in the `_order_lint_text` quoted tuple.
+
+**Green:** `1 passed in ...`
+
+## BP-OL-12 — the residuals elision
+
+**Axis:** ratified-residuals quoted data is elided from the fixer-emission lint text so owner
+paths, braces, or result-shape words in the residuals block never refuse emission.
+
+**Neutralization:** at `_order_lint_text`, drop `context.get("ratified_residuals")` from the
+quoted tuple.
+
+**Red** — `plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_ignores_lint_triggers_inside_ratified_residuals`:
+
+```
+FAILED ... ValueError: order-render-refused:fixer-508e7896192355de:order-lint:...
+1 failed in ...
+```
+
+**Restore:** restore `context.get("ratified_residuals")` in the `_order_lint_text` quoted tuple.
+
+**Green:** `1 passed in ...`
+
+## BP-OL-13 — the plugin alt-root
+
+**Axis:** driver-authored plugin-relative citations resolve via the plugin root at fixer emission.
+
+**Neutralization:** pass `alt_roots=()` to `order_lint.check_text` in the `P_FIXER` block.
+
+**Red** — `plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root`:
+
+```
+FAILED ... ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-path-unresolved:rubric/review-base.md
+1 failed in ...
+```
+
+**Restore:** restore `alt_roots=(_plugin_resource_root(),)` in the `P_FIXER` block.
 
 **Green:** `1 passed in ...`
