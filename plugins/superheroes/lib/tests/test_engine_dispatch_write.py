@@ -2889,6 +2889,48 @@ def _write_opened_record(run_dir):
     return next(r for r in records if r.get("kind") == "run-opened")
 
 
+def _strip_opened_to_marker_channel(run_dir):
+    records, _ = ED._journal_read(run_dir)
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            if rec.get("kind") == "run-opened":
+                rec.pop("channel", None)
+                rec.pop("nativeSchemaPath", None)
+                argv = list(rec.get("argv") or [])
+                cleaned = []
+                idx = 0
+                while idx < len(argv):
+                    token = argv[idx]
+                    if token in ("--output-schema", "-o") and idx + 1 < len(argv):
+                        idx += 2
+                        continue
+                    if token == "--json":
+                        idx += 1
+                        continue
+                    cleaned.append(token)
+                    idx += 1
+                rec["argv"] = cleaned
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+
+
+def test_codex_marker_channel_write_run_refuses_to_spawn(tmp_path):
+    run_dir = str(tmp_path / "marker-retired-codex-write")
+    wt, _main = _linked_worktree(tmp_path)
+    _dispatch_write(tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=0)
+    _strip_opened_to_marker_channel(run_dir)
+    fake = FakeRunner([])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=120)
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "marker-channel-retired"
+    assert fake.calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended1 = next(
+        r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended1.get("refusal") == "marker-channel-retired"
+
+
 # axis: codex write open records CHANNEL_NATIVE and binds argv to the declared write schema path.
 def test_codex_write_open_records_native_channel_and_schema(tmp_path):
     wt, _main = _linked_worktree(tmp_path)

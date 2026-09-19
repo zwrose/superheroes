@@ -503,7 +503,8 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
         out = []
         for c in clusters or []:
             for i in c.get("ids") or []:
-                out.append({"id": i, "verdict": "CONFIRMED", "evidence": "fixture harness"})
+                out.append({"id": i, "verdict": "CONFIRMED", "reason": "fixture harness",
+                            "evidence": "fixture harness"})
         return out
 
     def auditor(targets, rnd):

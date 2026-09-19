@@ -396,6 +396,19 @@ def _opened_channel(opened):
     return opened.get("channel", engine_result_channel.CHANNEL_MARKER)
 
 
+def _marker_channel_retired_run(opened):
+    """True when a persisted run opened on marker but the engine now declares native channel."""
+    if not isinstance(opened, dict):
+        return False
+    engine = opened.get("engine")
+    try:
+        if engine_result_channel.channel_for(engine) != engine_result_channel.CHANNEL_NATIVE:
+            return False
+    except Exception:
+        return False
+    return _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE
+
+
 def _native_result_path(run_dir_real, attempt):
     """Per-attempt native result file path. attempt must be a positive int."""
     if not isinstance(attempt, int):
@@ -2217,9 +2230,12 @@ def _write_report_missing_items_delivered_detail(run_dir_real, state, attempt):
 
 def _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempt):
     """Apply report-missing-items-delivered classifier and salvage without upgrading outcome."""
-    # axis: marker-channel recoveries never touch a native terminal.
-    if isinstance(state, dict) and _opened_channel(state.get("opened") or {}) == engine_result_channel.CHANNEL_NATIVE:
-        return terminal
+    # axis: marker-channel recoveries never touch a native or retired-marker terminal.
+    if isinstance(state, dict):
+        opened = state.get("opened") or {}
+        if (_opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE
+                or _marker_channel_retired_run(opened)):
+            return terminal
     if run_dir_real is not None and state is not None:
         missing = _write_report_missing_items_delivered_detail(
             run_dir_real, state, attempt,
@@ -3781,7 +3797,10 @@ def _grade_write_attempt(run_dir_real, state, attempt):
     if ended.get("guardRefusal"):
         return _grade_spawn_guard_refusal(ended)
     if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
-        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
+        result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
+        if ended.get("refusal"):
+            result["detail"] = ended["refusal"]
+        return result
 
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
         return _admit_native_write_result(run_dir_real, attempt, opened)
@@ -4223,7 +4242,9 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     ))
 
                 reason = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
-                if run_kind == RUN_KIND_WRITE and _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
+                if (run_kind == RUN_KIND_WRITE
+                        and _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE
+                        and not _marker_channel_retired_run(opened)):
                     truncated_bytes = _attempt_stdout_truncated(
                         run_dir_real, state, latest,
                     )
@@ -4277,7 +4298,8 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         payload_shape=grade.get("payloadShape"),
                         detail=grade.get("detail"),
                     )
-                    if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
+                    if (_opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE
+                            and not _marker_channel_retired_run(opened)):
                         terminal = _maybe_upgrade_review_terminal_forfeit(
                             run_dir_real, state, terminal, engine,
                         )

@@ -1459,7 +1459,7 @@ def _persistent_not_discharged_seams(io=None):
 
     def plaus_verifier(clusters, rnd):
         return [{"id": i, "verdict": "PLAUSIBLE", "reason": "checked"}
-                for i in range(len(clusters or []))]
+                for c in (clusters or []) for i in (c.get("ids") or [])]
 
     return _seams(
         reviewer=lambda dim, tier, rnd, ctx:
@@ -1740,7 +1740,7 @@ def _stall_then_clean_auditor_seams(io=None, clean_after=2):
 
     def plaus_verifier(clusters, rnd):
         return [{"id": i, "verdict": "PLAUSIBLE", "reason": "checked"}
-                for i in range(len(clusters or []))]
+                for c in (clusters or []) for i in (c.get("ids") or [])]
 
     seams = _seams(
         reviewer=lambda dim, tier, rnd, ctx:

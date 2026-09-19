@@ -4330,7 +4330,11 @@ def _run_seam(seams, action, payload, state, config):
                 out["canaryResult"] = cr
         return out
     if action == P_VERIFIERS:
-        return {"verdicts": seams["verifier"](payload.get("clusters"), state["round"])}
+        artifact = {"verdicts": seams["verifier"](payload.get("clusters"), state["round"])}
+        fault = verifier_results_fault(artifact)
+        if fault is not None:
+            raise ValueError(fault)
+        return artifact
     if action == P_SYNTHESIS:
         return {"grouping": seams["synthesis"](payload.get("findings"), state["round"])}
     if action == P_GAPSWEEP:
@@ -4831,7 +4835,11 @@ def run_loop(seams, config=None):
             if action == P_TERMINAL:
                 break
             # handle the gap-sweep re-entry (verifiers → synthesis carries the merge back).
-            artifact = _run_seam(seams, action, step["payload"], state, state["config"])
+            try:
+                artifact = _run_seam(seams, action, step["payload"], state, state["config"])
+            except ValueError as exc:
+                _park_cannot_certify(state, str(exc))
+                return _run_loop_certified_receipt(state, guard)
             _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
             _persist_round_records(state, state["config"])
             # a delta round routes scoped candidates through verifiers; when that path is armed the
