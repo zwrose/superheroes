@@ -167,6 +167,28 @@ def test_carry_recombination_merges_same_anchor_rows_with_different_severity():
     assert state_rev["findings"][0][SC.FINDING_KEY_FIELD] == expected_key
 
 
+def test_legacy_unsuffixed_key_bridges_to_recompiled_long_title_copy():
+    """T8: legacy unsuffixed loop key merges with freshly compiled long-title copy."""
+    prefix = "x" * 165
+    finding = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important"}
+    compiled, _ = RD.mechanical_compile([finding], None)
+    minted_key = compiled[0][SC.FINDING_KEY_FIELD]
+    bare_key = SC.location_key(finding)
+    assert minted_key != bare_key
+    assert "#" in minted_key
+    legacy = dict(finding, **{SC.FINDING_KEY_FIELD: bare_key})
+
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, [legacy] + compiled)
+    assert len(state["findings"]) == 1
+    assert state["findings"][0][SC.FINDING_KEY_FIELD] == bare_key
+
+    state2 = RD.new_state(_cfg())
+    RD._set_findings(state2, compiled + [legacy])
+    assert len(state2["findings"]) == 1
+    assert state2["findings"][0][SC.FINDING_KEY_FIELD] == bare_key
+
+
 def test_foreign_preset_key_collision_still_rekeys():
     """T7: foreign preset keys on different locations stay content-hash re-keyed."""
     finding1 = {

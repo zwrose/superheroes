@@ -130,6 +130,10 @@ def test_apply_audit_results_stamps_unauthenticated_cause_vendor_mismatch():
 
 
 def test_adapter_provenance_source_values_are_round_records_constants():
+    """Bites on: round_driver provenance tokens stay aliased to round_records definitions."""
+    rd_source = open(os.path.join(_LIB, "round_driver.py"), encoding="utf-8").read()
+    assert "AUDIT_PROVENANCE_RUNNER_RECORD = round_records.AUDIT_PROVENANCE_RUNNER_RECORD" in rd_source
+    assert "AUDIT_PROVENANCE_HAND_LANDED = round_records.AUDIT_PROVENANCE_HAND_LANDED" in rd_source
     disclosures = {}
     indexed = {
         ("runner-seat", 0): {
@@ -151,11 +155,33 @@ def test_adapter_provenance_source_values_are_round_records_constants():
     }
     round_adapters._trusted_vendors(["runner-seat", "hand-seat"], indexed, None, disclosures)
     prov = disclosures["provenanceSource"]
-    assert prov["runner-seat"] is round_records.AUDIT_PROVENANCE_RUNNER_RECORD
-    assert prov["hand-seat"] is round_records.AUDIT_PROVENANCE_HAND_LANDED
+    assert prov["runner-seat"] == round_records.AUDIT_PROVENANCE_RUNNER_RECORD
+    assert prov["hand-seat"] == round_records.AUDIT_PROVENANCE_HAND_LANDED
 
 
-def test_fold_audits_missing_manifest_detail_from_cause_not_prose():
+def test_fold_audits_missing_manifest_detail_from_cause_not_prose(monkeypatch):
+    """Bites on: _fold_audits manifest-missing detail comes from cause branch, not reason prose."""
+
+    def _fake_apply_audit_results(*_args, **_kwargs):
+        return {
+            "audits": [{
+                "id": "t1",
+                "ruling": "not-discharged",
+                "reason": "anything",
+                "unauthenticatedCause": audits.UNAUTHENTICATED_MANIFEST_ENTRY_MISSING,
+            }],
+            "unauthenticated": ["t1"],
+            "notDischarged": ["t1"],
+            "discharged": [],
+            "newIssues": [],
+            "unaudited": [],
+            "ambiguous": [],
+            "malformed": [],
+            "unmatched": [],
+            "echoMismatch": [],
+        }
+
+    monkeypatch.setattr(RD.audits, "apply_audit_results", _fake_apply_audit_results)
     state = {"round": 1, "rounds": {}, "auditRounds": [], "decisions": [],
              "_auditTargets": [{"id": "t1", "auditorVendor": "codex",
                                 "independence": "cross-vendor"}]}

@@ -1224,40 +1224,45 @@ def _mint_finding_keys(findings):
     for f in findings:
         if not isinstance(f, dict):
             continue
-        preset = f.get(session_contract.FINDING_KEY_FIELD)
-        had_preset = isinstance(preset, str) and preset
-        if had_preset:
-            assigned = preset
+        minted = _loop_minted_key(f)
+        bare = session_contract.location_key(f)
+        preset_raw = f.get(session_contract.FINDING_KEY_FIELD)
+        preset = preset_raw if isinstance(preset_raw, str) and preset_raw else None
+        if preset is None:
+            kind = "unkeyed"
+            identity = minted
+            legacy_key = None
+        elif preset == minted:
+            kind = "loop-owned"
+            identity = minted
+            legacy_key = None
+        elif preset == bare and minted != bare:
+            kind = "legacy-owned"
+            identity = minted
+            legacy_key = preset
         else:
-            base = session_contract.location_key(f)
-            suffix = _title_clamp_hash_suffix(f)
-            assigned = base + ("#" + suffix if suffix else "")
-        entries.append((f, assigned, had_preset))
-    by_key = {}
-    for idx, (f, key, had_preset) in enumerate(entries):
-        by_key.setdefault(key, []).append((idx, f, had_preset))
-    for key, group in by_key.items():
-        contents = {_finding_content_canonical(f) for _, f, _ in group}
-        if len(group) == 1:
-            group[0][1][session_contract.FINDING_KEY_FIELD] = key
-        elif len(contents) == 1:
-            for _, f, _ in group:
-                f[session_contract.FINDING_KEY_FIELD] = key
+            kind = "foreign"
+            identity = preset
+            legacy_key = None
+        entries.append((f, kind, identity, legacy_key))
+    by_identity = {}
+    for idx, (f, kind, identity, legacy_key) in enumerate(entries):
+        by_identity.setdefault(identity, []).append((idx, f, kind, legacy_key))
+    for identity, group in by_identity.items():
+        has_foreign = any(kind == "foreign" for _, _, kind, _ in group)
+        if not has_foreign:
+            legacy_keys = [lk for _, _, kind, lk in group if kind == "legacy-owned" and lk]
+            chosen_key = legacy_keys[0] if legacy_keys else identity
+            for _, f, _, _ in group:
+                f[session_contract.FINDING_KEY_FIELD] = chosen_key
         else:
-            all_loop_owned = (
-                not any(had_preset for _, _, had_preset in group)
-                or all(
-                    _loop_minted_key(f) == key
-                    for _, f, had_preset in group
-                    if had_preset
-                )
-            )
-            if all_loop_owned:
-                for _, f, _ in group:
-                    f[session_contract.FINDING_KEY_FIELD] = key
+            contents = {_finding_content_canonical(f) for _, f, _, _ in group}
+            if len(group) == 1 or len(contents) == 1:
+                for _, f, _, _ in group:
+                    f[session_contract.FINDING_KEY_FIELD] = identity
             else:
-                for _, f, _ in group:
-                    f[session_contract.FINDING_KEY_FIELD] = key + "#" + _content_hash_suffix(f)
+                for _, f, _, _ in group:
+                    f[session_contract.FINDING_KEY_FIELD] = identity + "#" + _content_hash_suffix(f)
     return findings
 
 
