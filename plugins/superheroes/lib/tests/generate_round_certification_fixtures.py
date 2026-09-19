@@ -40,12 +40,12 @@ def _slot_nonce(seat, phase, attempt, occurrence=0):
     return "nonce-%s-%s-a%d-o%d" % (seat, phase, attempt, occurrence)
 
 
-def _binding_fields(nonce, payload=None):
+def _binding_fields(nonce, payload=None, source="runner"):
     if payload is None:
         payload = {"findings": []}
     findings = payload.get("findings", [])
     return {
-        "source": "runner",
+        "source": source,
         "runnerNonce": nonce,
         "recordDigest": RR.payload_sha256(payload),
         "resultDigest": RR.payload_sha256(findings),
@@ -53,10 +53,10 @@ def _binding_fields(nonce, payload=None):
     }
 
 
-def _observation_fields(*, read="engaged", tool_calls=1):
+def _observation_fields(*, read="engaged", tool_calls=1, source="runner"):
     return {
         "read": read,
-        "source": "runner",
+        "source": source,
         "telemetry": "tool-calls",
         "stdoutBytes": 10,
         "wallSeconds": 1.0,
@@ -65,10 +65,10 @@ def _observation_fields(*, read="engaged", tool_calls=1):
     }
 
 
-def _execution_evidence(nonce, *, payload=None, read="engaged", tool_calls=1):
+def _execution_evidence(nonce, *, payload=None, read="engaged", tool_calls=1, source="runner"):
     return {
-        **_binding_fields(nonce, payload=payload),
-        "observation": _observation_fields(read=read, tool_calls=tool_calls),
+        **_binding_fields(nonce, payload=payload, source=source),
+        "observation": _observation_fields(read=read, tool_calls=tool_calls, source=source),
     }
 
 
@@ -781,6 +781,7 @@ def build_specimen_must_certify_sixteen_seat_audit():
             _slot_nonce(seat, AUDIT_PHASE, 0),
             payload=payload,
             tool_calls=None,
+            source="codex",
         )
         envelope = production_hand_landed_envelope(
             seat, payload, phase=AUDIT_PHASE, evidence=evidence)

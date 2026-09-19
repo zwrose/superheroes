@@ -207,6 +207,26 @@ def test_audit_seat_same_family_per_runner_record_refuses(tmp_path):
     assert refusal["class"] == "same-family-seat"
 
 
+def test_audit_seat_source_runner_is_not_a_vendor_refuses(tmp_path):
+    session_dir = _independence_session(
+        tmp_path,
+        journal_lines=[
+            _journal_row("code-reviewer", RC.PANEL_PHASE, source="codex"),
+            _journal_row(FIXER_SEAT, FIXER_PHASE, source="cursor"),
+            _journal_row(AUDIT_SEAT, AUDIT_PHASE, source="runner"),
+        ],
+        envelopes=[
+            _envelope_spec("code-reviewer", RC.PANEL_PHASE, source="codex"),
+            _envelope_spec(FIXER_SEAT, FIXER_PHASE, source="cursor"),
+            _envelope_spec(AUDIT_SEAT, AUDIT_PHASE, source="runner"),
+        ],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unfetched-findings"
+    assert "runner" in refusal["detail"]
+
+
 def test_audit_seat_without_recorded_vendor_refuses(tmp_path):
     audit_payload = {"findings": [{"id": AUDIT_SEAT, "severity": "Minor", "title": "audit ok"}]}
     audit_payload_sha = RR.payload_sha256(audit_payload)

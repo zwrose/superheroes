@@ -1212,15 +1212,13 @@ def check_same_family_seat(ctx):
 
 
 def _runner_recorded_vendor_status(obs, session_dir, seat_entry):
-    """Return ``vendor`` | ``skip`` | ``missing`` for an audit seat's runner-recorded vendor."""
+    """Return ``vendor`` | ``missing`` for an audit seat's runner-recorded vendor."""
     seat = seat_entry["seat"]
     phase = seat_entry["phase"]
     attempt = seat_entry["attempt"]
     occurrence = seat_entry.get("occurrence", 0)
     rnd = seat_entry["round"]
     vendor = obs.get("source") if isinstance(obs, dict) else None
-    if vendor == "runner":
-        return "skip"
     if isinstance(vendor, str) and vendor:
         return vendor
     provenance = seat_entry.get("provenance")
@@ -1237,8 +1235,6 @@ def _runner_recorded_vendor_status(obs, session_dir, seat_entry):
             evidence = env.get("executionEvidence")
             if isinstance(evidence, dict):
                 vendor = evidence.get("source")
-    if vendor == "runner":
-        return "skip"
     if isinstance(vendor, str) and vendor:
         return vendor
     return "missing"
@@ -1270,7 +1266,7 @@ def check_seat_independence(ctx):
         )
         if phase == P_FIXER:
             source = obs.get("source") if isinstance(obs, dict) else None
-            if (isinstance(source, str) and source and source != "runner" and source != fixer):
+            if isinstance(source, str) and source and source != fixer:
                 return _refusal(
                     "unfetched-findings",
                     seat,
@@ -1282,8 +1278,6 @@ def check_seat_independence(ctx):
         if phase != P_AUDITS:
             continue
         vendor_status = _runner_recorded_vendor_status(obs, session_dir, seat_entry)
-        if vendor_status == "skip":
-            continue
         if vendor_status == "missing":
             return _refusal(
                 "unrun-review",
@@ -1328,7 +1322,7 @@ def _independence_block(ctx):
             journal, seat, phase, attempt, occurrence, rnd
         )
         vendor_status = _runner_recorded_vendor_status(obs, ctx["session_dir"], seat_entry)
-        if vendor_status in ("skip", "missing"):
+        if vendor_status == "missing":
             continue
         vendor = vendor_status
         fam = model_registry.family_for("verifier", vendor)
