@@ -305,6 +305,42 @@ def test_result_production_fails_on_schema_invalid_native_result(tmp_path):
     assert payload["legs"]["progressTelemetry"]["ok"] is True
 
 
+def test_result_production_ok_but_telemetry_fails_when_only_the_result_write(tmp_path):
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    branch = _native_verdicts_branch()
+
+    def _cursor_edit_stream(result_path):
+        return "\n".join([
+            json.dumps({
+                "type": "tool_call", "call_id": "w1", "subtype": "started",
+                "tool_call": {"editToolCall": {"args": {"path": result_path}}},
+            }),
+            json.dumps({
+                "type": "tool_call", "call_id": "w1", "subtype": "completed",
+                "tool_call": {"editToolCall": {"args": {"path": result_path}}},
+            }),
+        ])
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = ERC.result_file_path_from_prompt(
+            prompt_bytes.decode("utf-8", "ignore"))
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({"result": branch}, fh, separators=(",", ":"))
+            fh.write("\n")
+        return _cursor_edit_stream(result_path), False, 0, ""
+
+    fake = FakeRunner([runner, runner], sync_native=False)
+    payload, code, _stderr = CP.probe(
+        "cursor", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert payload["legs"]["resultProduction"]["ok"] is True
+    assert payload["legs"]["progressTelemetry"]["ok"] is False
+    assert payload["legs"]["progressTelemetry"]["detail"] == "telemetry-absent"
+
+
 def test_result_production_fails_on_cursor_native_schema_invalid(tmp_path):
     repo = _repo(tmp_path)
     run_dir = str(tmp_path / "run")

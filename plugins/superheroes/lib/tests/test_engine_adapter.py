@@ -1822,6 +1822,57 @@ def test_cursor_tool_calls_empty_returns_none():
     assert EA.cursor_tool_calls(None) is None
 
 
+def _cursor_edit_tool_call_lines(path, call_id="tool_edit1"):
+    return [
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"editToolCall": {"args": {"path": path}}},
+        }),
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "completed",
+            "tool_call": {"editToolCall": {"args": {"path": path}}},
+        }),
+    ]
+
+
+def _cursor_shell_tool_call_lines(command, call_id="tool_shell1"):
+    return [
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"shellToolCall": {"args": {"command": command}}},
+        }),
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "completed",
+            "tool_call": {"shellToolCall": {"args": {"command": command}}},
+        }),
+    ]
+
+
+def _cursor_read_tool_call_lines(path, call_id="tool_read1"):
+    return [
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"readToolCall": {"args": {"path": path}}},
+        }),
+    ]
+
+
+def test_cursor_tool_calls_excludes_result_path(tmp_path):
+    result_path = str(tmp_path / "native-result-1.json")
+    write_only = "\n".join(_cursor_edit_tool_call_lines(result_path))
+    assert EA.cursor_tool_calls(write_only, exclude_paths=(result_path,)) == 0
+
+    other_path = str(tmp_path / "other.py")
+    write_plus_read = "\n".join(
+        _cursor_edit_tool_call_lines(result_path, "w1")
+        + _cursor_read_tool_call_lines(other_path, "r1"))
+    assert EA.cursor_tool_calls(write_plus_read, exclude_paths=(result_path,)) == 1
+
+    shell_named = "\n".join(
+        _cursor_shell_tool_call_lines("cat %s" % result_path, "s1"))
+    assert EA.cursor_tool_calls(shell_named, exclude_paths=(result_path,)) == 1
+
+
 # ---------------------------------------------------------------------------
 # #666: investigated propagation + spot_check_investigated floor
 

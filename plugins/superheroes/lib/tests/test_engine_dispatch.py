@@ -12831,6 +12831,32 @@ def _cursor_native_findings_runner(tool_calls=0):
     return runner
 
 
+def _cursor_edit_tool_call_stream(path, call_id="tool_edit1"):
+    return "\n".join([
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"editToolCall": {"args": {"path": path}}},
+        }),
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "completed",
+            "tool_call": {"editToolCall": {"args": {"path": path}}},
+        }),
+    ])
+
+
+def _cursor_shell_tool_call_stream(command, call_id="tool_shell1"):
+    return "\n".join([
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"shellToolCall": {"args": {"command": command}}},
+        }),
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "completed",
+            "tool_call": {"shellToolCall": {"args": {"command": command}}},
+        }),
+    ])
+
+
 def _plant_layer_3b_cursor_review_journal(tmp_path, run_dir, repo_root):
     os.makedirs(run_dir, exist_ok=True)
     prompt_path = _valid_prompt(tmp_path)
@@ -12914,6 +12940,11 @@ def test_cursor_review_admits_typed_file_through_injected_seam(tmp_path):
     assert "-o" not in argv
     assert "--output-schema" not in argv
     records, _ = ED._journal_read(res["runDir"])
+    launching = next(
+        r for r in records
+        if r.get("kind") == "engine-launching" and r.get("attempt") == 1)
+    assert "-o" not in launching["spawnArgv"]
+    assert "--output-schema" not in launching["spawnArgv"]
     started = next(r for r in records if r.get("kind") == "engine-started")
     assert started["attemptPromptPath"].endswith("prompt-attempt-1.md")
     attempt_prompt = open(started["attemptPromptPath"], encoding="utf-8").read()
@@ -12922,6 +12953,185 @@ def test_cursor_review_admits_typed_file_through_injected_seam(tmp_path):
     with open(os.path.join(res["runDir"], ED.NATIVE_SCHEMA_NAME), encoding="utf-8") as fh:
         schema_on_disk = fh.read().rstrip("\n")
     assert schema_on_disk in attempt_prompt
+
+
+def test_cursor_result_file_write_is_not_engagement(tmp_path):
+    repo_root = _repo(tmp_path)
+    rel = "path/to/file.py"
+    os.makedirs(os.path.join(repo_root, os.path.dirname(rel)), exist_ok=True)
+    with open(os.path.join(repo_root, rel), "w", encoding="utf-8") as fh:
+        fh.write("# investigated\n")
+    branch = _native_review_branch("findings", findings=[])
+
+    def write_only_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+        return _cursor_edit_tool_call_stream(result_path), False, 0, ""
+
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([write_only_runner]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["engagement"]["toolCalls"] == 0
+    assert res["engagement"]["read"] == "unknown"
+
+    def write_plus_shell_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+        stream = _cursor_edit_tool_call_stream(result_path, "w1")
+        stream += "\n" + _cursor_shell_tool_call_stream("ls", "s1")
+        return stream, False, 0, ""
+
+    res2 = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([write_plus_shell_runner]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res2["ok"] is True
+    assert res2["engagement"]["toolCalls"] == 1
+    assert res2["engagement"]["read"] == "engaged"
+
+
+def test_stage_attempt_prompt_unreadable_prompt_refuses_prompt_unreadable(tmp_path):
+    run_dir = str(tmp_path / "unreadable-prompt")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    seat = _reviewer_cursor_seat()
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", _cursor_argv_for_run(seat, "review", run_dir), ED.RUN_KIND_REVIEW,
+    )
+    assert native_err is None
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "cursor",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "unreadable-prompt",
+        "argv": argv, "cwd": repo_root, "timeout": 30, "retryTimeout": 30,
+        "promptPath": str(tmp_path / "missing-prompt.md"),
+        "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "nativeSchemaPath": native_schema_path,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    })
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    assert ok is True
+    assert detail == ""
+    assert fake.calls == []
+    ended = next(
+        r for r in ED._journal_read(run_dir)[0]
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "prompt-unreadable"
+
+
+@pytest.mark.parametrize("schema_arm", ["absent", "directory", "symlink"])
+def test_stage_attempt_prompt_refusal_arms(tmp_path, schema_arm):
+    run_dir = str(tmp_path / ("schema-arm-" + schema_arm))
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    prompt_path = _valid_prompt(tmp_path)
+    seat = _reviewer_cursor_seat()
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", _cursor_argv_for_run(seat, "review", run_dir), ED.RUN_KIND_REVIEW,
+    )
+    assert native_err is None
+    if schema_arm == "absent":
+        schema_path = None
+    elif schema_arm == "directory":
+        schema_path = os.path.join(run_dir, "schema-dir")
+        os.makedirs(schema_path)
+    else:
+        schema_path = os.path.join(run_dir, "schema-link")
+        real = tmp_path / "real-schema.json"
+        real.write_text('{"type":"object"}\n', encoding="utf-8")
+        os.symlink(str(real), schema_path)
+    opened = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "cursor",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "schema-arm",
+        "argv": argv, "cwd": repo_root, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    if schema_path is not None:
+        opened["nativeSchemaPath"] = schema_path
+    ED._journal_append(run_dir, opened)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    assert ok is True
+    assert detail == ""
+    ended = next(
+        r for r in ED._journal_read(run_dir)[0]
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "native-schema-unreadable"
+
+
+def test_stage_attempt_prompt_refusal_readonly_run_dir(tmp_path):
+    run_dir = str(tmp_path / "readonly-run")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    prompt_path = _valid_prompt(tmp_path)
+    seat = _reviewer_cursor_seat()
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", _cursor_argv_for_run(seat, "review", run_dir), ED.RUN_KIND_REVIEW,
+    )
+    assert native_err is None
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "cursor",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "readonly-run",
+        "argv": argv, "cwd": repo_root, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "nativeSchemaPath": native_schema_path,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    })
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    try:
+        os.chmod(run_dir, 0o500)
+        ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    finally:
+        os.chmod(run_dir, 0o755)
+    assert ok is True
+    assert detail == ""
+    ended = next(
+        r for r in ED._journal_read(run_dir)[0]
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "attempt-prompt-unwritable"
+
+
+def test_engine_started_always_carries_attempt_prompt_sha_for_cursor(tmp_path):
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([_cursor_native_findings_runner()]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    records, _ = ED._journal_read(res["runDir"])
+    started = next(r for r in records if r.get("kind") == "engine-started")
+    assert "attemptPromptSha256" in started
+    assert started["attemptPromptSha256"] == hashlib.sha256(
+        open(started["attemptPromptPath"], "rb").read(),
+    ).hexdigest()
 
 
 def test_cursor_write_admits_typed_file_through_injected_seam(tmp_path):

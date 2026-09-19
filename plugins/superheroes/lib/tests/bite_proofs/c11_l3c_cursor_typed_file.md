@@ -210,6 +210,58 @@ assert False is True  (res["ok"] is True)
 - **raw red:** `1 passed` (gate unreachable — chokepoint returns first)
 - **verdict:** Unreachable through this entry point
 
+## WO-D — review-round fixes
+
+### D1 — result-file write excluded from engagement (`engine_adapter.py:cursor_tool_calls`)
+
+- **axis:** cursor `editToolCall` writing `nativeResultPath` is not investigation
+- **neutralization:** `if False and write_path is not None and excluded_realpaths:`
+- **detector:** `test_cursor_result_file_write_is_not_engagement`
+- **raw red:** `assert res["engagement"]["toolCalls"] == 0` → `assert 1 == 0`
+- **restore:** remove `False and` prefix from exclusion guard
+- **raw green:** `1 passed in 0.92s`
+- **verdict:** proven
+
+### D2 — unreadable staged prompt token (`engine_dispatch.py:_stage_attempt_prompt`)
+
+- **axis:** unreadable `promptPath` → `prompt-unreadable`, not `native-schema-unreadable`
+- **neutralization:** first `OSError` return `native-schema-unreadable`
+- **detector:** `test_stage_attempt_prompt_unreadable_prompt_refuses_prompt_unreadable`
+- **raw red:** `assert ended["refusal"] == "prompt-unreadable"` → `AssertionError: assert 'native-schema-unreadable' == 'prompt-unreadable'`
+- **restore:** `return None, None, "prompt-unreadable"`
+- **raw green:** `1 passed in 1.00s`
+- **verdict:** proven
+
+### D3 — attempt prompt sha from written bytes (`engine_dispatch.py:_stage_attempt_prompt`)
+
+- **axis:** `engine-started.attemptPromptSha256` always present for cursor prompt delivery
+- **neutralization:** `return path, None, None` (drop sha from written bytes)
+- **detector:** `test_engine_started_always_carries_attempt_prompt_sha_for_cursor`
+- **raw red:** `assert "attemptPromptSha256" in started` → `AssertionError`
+- **restore:** `return path, hashlib.sha256(content.encode("utf-8")).hexdigest(), None`
+- **raw green:** `1 passed in 1.07s`
+- **verdict:** proven
+
+### D4 — preflight probe cursor argv (`preflight_probe.py:cross_vendor_no_op_argv`)
+
+- **axis:** cursor no-op argv matches review argv minus stream-json (`-f --sandbox enabled`)
+- **neutralization:** restore `--mode plan` in `cross_vendor_no_op_argv("cursor")`
+- **detector:** `test_cross_vendor_no_op_argv_cursor`
+- **raw red:** `AssertionError: assert ('cursor-agent', ... '--mode', ...) == (..., '-f', '--sandbox', 'enabled')`
+- **restore:** `"-f", "--sandbox", "enabled"`
+- **raw green:** `1 passed in 0.26s`
+- **verdict:** proven
+
+### D5 — cursor spawn argv omits `-o` (`engine_dispatch.py:_spawn_native_result_argv`)
+
+- **axis:** cursor `engine-launching.spawnArgv` carries no `-o` / `--output-schema`
+- **neutralization:** `argv_out = list(spawn_argv) + ["-o", result_path]` unconditionally
+- **detector:** `test_cursor_review_admits_typed_file_through_injected_seam` (spawnArgv assertion)
+- **raw red:** `assert "-o" not in launching["spawnArgv"]` → `AssertionError`
+- **restore:** gate `-o` append on `RESULT_DELIVERY_ARGV` only
+- **raw green:** `1 passed in 0.97s`
+- **verdict:** proven
+
 ### R7 — `_finalize_write_forfeit_terminal` passthrough
 
 - **axis:** terminal dict passes through unchanged (no classifier/salvage attach)
