@@ -293,8 +293,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **`engagement.read` (#687).** When the result carries an **`engagement`** block with a non-`null`
 > value (present only when the attempt produced stdout that was graded), `engagement.read` is
 > `"engaged"` when the seat demonstrably acted: at least
-> one finding returned, at least one accepted `investigated` path, or `engagement.toolCalls` is not
-> `None` and `>= 1`. Otherwise it is `"unknown"`. On a timeout, refusal, nonzero-exit, or
+> one finding returned, or `engagement.toolCalls` is not
+> `None` and `>= 1`. Otherwise it is `"unknown"`. A seat's `investigated` list is **disclosure**,
+> not engagement evidence (register R7); the runner still spot-checks it. On a timeout, refusal, nonzero-exit, or
 > missing-stdout forfeit the `engagement` key is **present with the value `null`** (there was no graded
 > stdout to measure), so `engagement.read` is unavailable — `result.get("engagement", {})` is
 > **unsafe** because the key may carry `null`, not merely be missing; consumers must handle a `null`
@@ -679,25 +680,6 @@ Write $SESSION_DIR/round-<N>/triage.json — every listed finding id exactly onc
 
 ## Fixer Subagent Prompt
 
-**Fixer file-scope guard (`escalation-base.md` hard floor — runtime self-modification).** The guard runs
-in the **fixer subagent** context, which does NOT inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}` or `$REPO_ROOT`. So the
-orchestrator embeds both absolute values into the fixer prompt's `## Input` block (the expanded `ESC_WRAPPER`
-and `REPO_ROOT` resolved in setup), exactly as it embeds the absolute `RUBRIC`/`PROFILE` paths. Before the
-fixer edits any file, it gates it with those embedded absolute values:
-`python3 -B "<absolute ESC_WRAPPER path>" guard --root "<absolute REPO_ROOT>" --path "<file>"`.
-If `allow` is false, the fixer MUST NOT edit that file (it is safety machinery — the authoritative
-membership is the `SAFETY_MACHINERY` tuple in `escalation.py`); report the refusal and let the
-orchestrator route it per `rubric/review-discipline.md` § *The safety-machinery route — the guard
-refuses the fixer*. A `degraded:true`
-result also refuses (fail-closed). The fixer never pushes/merges/deploys (those stay user-gated).
-
-**Where those findings go next.** A refusal here means this loop **cannot converge on that surface** —
-that is the guard's designed bound, not a defect, an engine failure, or an escalation trigger. The
-route from the refusal to a fix — ordered implementer work orders on advisor or builder authority
-with loud disclosure — is
-`rubric/review-discipline.md` § *The safety-machinery route — the guard refuses the fixer*. Follow it
-rather than re-deriving it; do not retry the fixer, and never narrow the guard to converge a round.
-
 **Moved.** The fixer subagent prompt template now ships as data and is rendered per round by
 `round_orders.render_order` on each `next` for `dispatch-fixer`. The orchestrator **dispatches the
 emitted order file** — do not hand-compose from a fenced template.
@@ -715,19 +697,11 @@ You are the fixer for one round of an auto-fix code-review loop.
   severity/format from the base rubric (<absolute RUBRIC path>)
 - Work in the current branch's working tree at <cwd>
 - Repo root: <absolute REPO_ROOT>
-- Escalation guard: <absolute ESC_WRAPPER path>
 - Verify command: <VERIFY_CMD, or the literal "none" when the profile is mode: unverified>
 
 ## Your job
 1. Apply a fix for EACH finding. Follow CLAUDE.md conventions and the profile's
-   canonical patterns.
-   BEFORE editing any file, gate it with the fixer
-   file-scope guard, using the absolute "Escalation guard" and "Repo root"
-   values from ## Input:
-   `python3 -B "<absolute ESC_WRAPPER path>" guard --root "<absolute REPO_ROOT>" --path "<file>"`
-   — if `allow` is false (or `degraded` is true), DO NOT edit that file (it is
-   safety machinery); report it under "escalated" for the orchestrator to route instead. Never
-   push/merge/deploy (those stay user-gated).
+   canonical patterns. Never push/merge/deploy (those stay user-gated).
 2. Fix ONLY what the findings call for. No unrelated refactors (YAGNI).
 3. If a verify command was provided, run it. If it fails, fix the failure and
    retry ONCE. If it still fails, STOP and report CHECK_FAILED with the failing

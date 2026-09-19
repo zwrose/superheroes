@@ -32,15 +32,8 @@ def test_classify_fixture_exact_match():
     for case in _fixture()["classify"]:
         assert ESC.classify_floor(case["action"]) == case["on_floor"], case
 
-def test_guard_fixture_exact_match():
-    band = [os.path.join(_REPO_ROOT, "plugins", "superheroes")]
-    for case in _fixture()["guard"]:
-        path = os.path.join(_REPO_ROOT, case["path"])
-        assert (not ESC.is_safety_machinery(path, band)) == case["allow"], case
+def test_guard_fixture_retired():
+    assert "guard" not in _fixture()
 
-def test_guard_fixture_covers_every_safety_member():
-    # Anti-drift: the eval fixture's refuse-cases must cover EVERY SAFETY_MACHINERY member, so a
-    # future 10th member can't be pinned in the unit test yet silently uncovered by the eval gate.
-    refused = {os.path.basename(c["path"]) for c in _fixture()["guard"] if c["allow"] is False}
-    missing = set(ESC.SAFETY_MACHINERY) - refused
-    assert not missing, missing
+def test_safety_machinery_tuple_retired():
+    assert not hasattr(ESC, "SAFETY_MACHINERY")

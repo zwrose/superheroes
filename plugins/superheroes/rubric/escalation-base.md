@@ -1,4 +1,4 @@
-<!-- escalation-version: 3 -->
+<!-- escalation-version: 4 -->
 # escalation-base
 
 The source of truth for **when a superheroes skill escalates to the owner vs. decides
@@ -55,8 +55,13 @@ in `escalation.py` (paired with this rubric as `loop_state.py` is paired with `r
 - irreversible git/infra: push to a protected branch, force-push / history-rewrite, merge, deploy
 - crosses a trust boundary (runs external/untrusted code) or degrades security/observability
 - changes public-facing behavior / shared resources others depend on
-- modifies the safety machinery itself at runtime (the escalation rubric, the floor, the
-  loop-enforcement state)
+- modifies its own control system at runtime — mutating the live escalation rubric, the floor, or
+  the loop-enforcement state that this run is currently executing under: control material the run
+  has loaded and will re-read or re-invoke before it finishes. The loop driver resolves its
+  resource root from its own module path and is re-invoked from disk each phase, so a mid-run edit
+  to loop source or rubric in the build worktree changes what the same run loads on its next phase
+  and stays on this floor. No ratified issue, work order, or build-worktree location exempts such an
+  edit from this item.
 
 **Global invariant (above the list):** the agent may **never** grant itself authority or bypass a
 gate. Skipping or auto-resolving its own GATE is self-granting and is forbidden.

@@ -934,6 +934,17 @@ def _validate_reserved_optional_fields(rec):
         if "\x00" in config_dir:
             return "fold-bad-field:reserved:configDir"
 
+    if "seatInstance" in rec:
+        seat_instance = rec["seatInstance"]
+        if not isinstance(seat_instance, str) or not seat_instance.strip():
+            return "fold-bad-field:reserved:seatInstance"
+        if not os.path.isabs(seat_instance):
+            return "fold-bad-field:reserved:seatInstance"
+
+    if "foreignInstanceAllowed" in rec:
+        if rec["foreignInstanceAllowed"] is not True:
+            return "fold-bad-field:reserved:foreignInstanceAllowed"
+
     slot_present = "slot" in rec
     generation_present = "generation" in rec
     boundary_present = "boundary" in rec
@@ -1156,6 +1167,10 @@ def fold(records):
                 "worktree": rec.get("worktree"),
                 "sessionId": rec.get("sessionId"),
                 "configDir": rec.get("configDir"),
+                # seatInstance and foreignInstanceAllowed are absent on pre-#1311 records —
+                # the documented signal that the launcher did not establish or override the pin.
+                "seatInstance": rec.get("seatInstance"),
+                "foreignInstanceAllowed": rec.get("foreignInstanceAllowed"),
                 # The live lanes this launch overlapped when it reserved (#1054). None on a
                 # lane that overlapped nothing and on every pre-#1054 record — the two are
                 # deliberately indistinguishable, because neither ran over an overlap.

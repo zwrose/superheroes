@@ -1,7 +1,7 @@
 # Launch doctrine
 
 This document is the standing doctrine for headless builder launches and recovery: the eight rulings
-a dispatch must carry verbatim, the eight-check dispatch preflight every launch records before it
+a dispatch must carry verbatim, the seven-check dispatch preflight every launch records before it
 goes autonomous, and the recovery doctrine for taking over a build that stopped. Advisors read it
 for intent; `lib/launch_doctrine.py` parses the two marked blocks below fail-closed — not the
 recovery prose. A whole-file SHA-256 digest of this artifact is still recorded on every dispatch
@@ -27,7 +27,6 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 <!-- launch-doctrine:rulings:end -->
 
 <!-- launch-doctrine:preflight:begin -->
-- `quota` (always) — Account headroom — not measured; records pass on the auth exercise only
 - `engine-auth` (always) — Engine and CLI authentication
 - `base-state` (always) — Base state matches the premise
 - `disjoint-surfaces` (conditional) — Overlap with a live lane recorded, with its landing order
@@ -80,7 +79,11 @@ child is spawned under (`configDir`, absolute; omitted when no absolute root can
 `reserved` ledger record, and starts the session inside it, so a builder never sees the primary
 checkout. The recorded `configDir` is what lets a watcher running under a *different* Claude instance
 resolve that lane's session transcript under the lane's own root rather than its own (#1036). A path that already exists, or that
-git still registers, refuses the launch rather than being reused. **The ruling above stays in the
+git still registers, refuses the launch rather than being reused. **`launch` also refuses a
+`CLAUDE_CONFIG_DIR` pin that is not the calling seat's own instance** (`launch-foreign-instance-pin`
+or `launch-seat-instance-undetermined`) unless the caller passes `--allow-foreign-instance`; **that gate applies only on a Claude Code seat** — it keys on
+`CLAUDE_PID`, so a host with none (Codex, a scripted or cron caller) skips the gate entirely rather
+than refusing, which means the pin is left **unchecked**, not **approved**. **The ruling above stays in the
 parsed block** — defense in depth, not a redundancy to prune: the structural guarantee covers
 launcher-issued sessions, while a directly-invoked builder still has only the prose. This paragraph
 is **documentation for advisors reading the doctrine for intent** — it is **not** a parsed invariant.
@@ -192,11 +195,3 @@ empty or unchanging log says nothing about whether the session is working. **Nev
 by a global process match**: a `pgrep` on an engine's name catches long-lived daemons and, under
 parallel load, sibling sessions' dispatches — poll the thing you own (your own output file, your own
 recorded pid, your own task id).
-
-### Suspect quota before you suspect a defect
-
-An **unexplained early exit** — a session that stops with no park, no handback, and no error that
-explains it — is checked against **the account the builder was burning** before it is treated as a
-defect in the work. A cross-instance launch makes this easy to miss: the recovering session cannot
-feel the builder's quota pressure, and a cheap probe that passes on that account is **not proof of
-deep headroom**. Rule out the limit first.

@@ -37,6 +37,10 @@ _ERC = importlib.util.spec_from_file_location(
     "engine_result_channel", os.path.join(_HERE, "..", "engine_result_channel.py"))
 ERC = importlib.util.module_from_spec(_ERC)
 _ERC.loader.exec_module(ERC)
+_RR = importlib.util.spec_from_file_location(
+    "round_records", os.path.join(_HERE, "..", "round_records.py"))
+RR = importlib.util.module_from_spec(_RR)
+_RR.loader.exec_module(RR)
 
 
 @pytest.fixture(autouse=True)
@@ -864,41 +868,31 @@ def test_write_success_terminal(tmp_path):
     assert res["evidence"]["testPassed"] is True
 
 
-def test_write_argv_shape_codex(tmp_path, monkeypatch):
+def test_write_argv_shape_codex(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     cwd_real = os.path.realpath(wt)
+    run_dir = str(tmp_path / "run")
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     seat = _codex_seat()
-    res = _dispatch_write(tmp_path, fake, cwd=wt, seat=seat)
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=seat)
     assert res["ok"] is True
-    argv = fake.calls[0]["argv"]
+    spawn_argv = fake.calls[0]["argv"]
     built = EA.build_argv_result(seat, "build", {"cwd": cwd_real})
-    assert argv == built["argv"]
-    assert argv == [
-        "codex", "exec", "--sandbox", "workspace-write", "-m", argv[5],
-        "-c", "model_reasoning_effort=high", "-C", cwd_real, "-",
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["argv"] == built["argv"]
+    last_msg_idx = spawn_argv.index("--output-last-message")
+    assert spawn_argv == [
+        "codex", "exec", "--sandbox", "workspace-write", "-m", spawn_argv[5],
+        "-c", "model_reasoning_effort=high", "-C", cwd_real,
+        "--json", "--output-last-message", spawn_argv[last_msg_idx + 1],
+        "-",
     ]
-    assert "read-only" not in argv
+    assert spawn_argv[last_msg_idx + 1] == ED._attempt_last_message_path(run_dir, 1)
+    assert "read-only" not in spawn_argv
     review_built = EA.build_argv_result(seat, "review", {"cwd": cwd_real})
-    assert review_built["argv"] != argv
+    assert review_built["argv"] != spawn_argv
     assert "read-only" in review_built["argv"]
-
-    real_build = ED.engine_adapter.build_argv_result
-
-    def neutralized(seat, role_kind, opts):
-        if role_kind == "build":
-            role_kind = "review"
-        return real_build(seat, role_kind, opts)
-
-    monkeypatch.setattr(ED.engine_adapter, "build_argv_result", neutralized)
-    fake2 = FakeRunner([(_build_ok_stdout(), False, 0, "")])
-    _dispatch_write(tmp_path, fake2, cwd=wt, run_dir=str(tmp_path / "run2"))
-    bad_argv = fake2.calls[0]["argv"]
-    with pytest.raises(AssertionError):
-        assert bad_argv == [
-            "codex", "exec", "--sandbox", "workspace-write", "-m", bad_argv[5],
-            "-c", "model_reasoning_effort=high", "-C", cwd_real, "-",
-        ]
 
 
 def test_write_argv_shape_cursor(tmp_path):
@@ -2459,6 +2453,68 @@ def test_write_legacy_uncontracted_resume_grades_like_parse_result(tmp_path):
     assert grade["signal"] == "ok"
 
 
+def _execution_record_completed_write_attempt(
+    tmp_path, run_dir, *, stdout, echo_nonce="execution-record-nonce",
+):
+    """One completed write attempt on disk for run_execution_record round-trips."""
+    wt, _main = _linked_worktree(tmp_path)
+    wt_real = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(wt_real)
+    ED._acquire_worktree_lease(wt_real, run_dir)
+    ok, detail = ED._open_write_run(
+        run_dir, engine="codex", argv=["codex"], cwd=wt_real,
+        timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=_prompt(tmp_path), order_id="execution-record-1", base_sha="abc",
+        worktree_baseline=baseline, progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert ok, detail
+    records, _ = ED._journal_read(run_dir)
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            if rec.get("kind") == "run-opened":
+                rec["echoNonce"] = echo_nonce
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "wallSeconds": 1.0, "stdoutBytes": len(stdout),
+        "at": time.time(),
+    })
+
+
+def test_run_execution_record_write_stamps_evidence_binding(tmp_path):
+    run_dir = str(tmp_path / "write-ev-binding")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout = _build_ok_stdout()
+    _execution_record_completed_write_attempt(tmp_path, run_dir, stdout=stdout)
+    records, _ = ED._journal_read(run_dir)
+    fed_prompt = next(rec["fedPrompt"] for rec in records if rec.get("kind") == "run-opened")
+    parsed = EA.grade_write_report("codex", "build", stdout, fed_prompt)
+    assert parsed["ok"] is True
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert record["resultKind"] == "evidence"
+    assert record["resultDigest"] == RR.payload_sha256(parsed["evidence"])
+
+
+def test_run_execution_record_write_omits_binding_when_parse_yields_nothing(tmp_path):
+    run_dir = str(tmp_path / "write-no-parse-binding")
+    os.makedirs(run_dir, exist_ok=True)
+    _execution_record_completed_write_attempt(tmp_path, run_dir, stdout="not a write report\n")
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert isinstance(record, dict)
+    assert "resultDigest" not in record
+    assert "resultKind" not in record
 # --- #1269 WO-A2: resolved-input snapshot on write path -----------------------
 
 _WRITE_RESOLVED_INPUT_KEYS = frozenset({

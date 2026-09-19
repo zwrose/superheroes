@@ -668,22 +668,137 @@ def strip_echoed_prompt(stdout, prompt_text):
     return out
 
 
-def codex_tokens_used(stderr_tail):
-    """Parse codex stderr tail for the last 'tokens used' block; return int or None. Never raises."""
+_CODEX_ACTION_ITEM_TYPES = frozenset({
+    "command_execution", "file_change", "mcp_tool_call", "web_search",
+})
+_CODEX_TOKEN_PARTS = (
+    "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens",
+)
+_CODEX_EVENT_TYPES = frozenset({
+    "thread.started", "turn.started", "turn.completed", "item.started", "item.completed",
+})
+
+
+def _is_codex_event_object(obj):
+    return isinstance(obj, dict) and obj.get("type") in _CODEX_EVENT_TYPES
+
+
+def _iter_codex_event_lines(stdout):
+    """Yield parsed JSON objects from codex JSONL stdout. Never raises."""
+    if not isinstance(stdout, str) or not stdout:
+        return
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            yield obj
+
+
+def is_codex_event_stream(stdout):
+    """True when stdout is recognizable codex JSONL telemetry. Never raises."""
     try:
-        if not isinstance(stderr_tail, str) or not stderr_tail:
+        if not isinstance(stdout, str) or not stdout:
+            return False
+        for obj in _iter_codex_event_lines(stdout):
+            if _is_codex_event_object(obj):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def codex_json_argv_flags(last_message_path):
+    """Codex review argv flags for JSONL telemetry and last-message extraction."""
+    if isinstance(last_message_path, str) and last_message_path:
+        return ["--json", "--output-last-message", last_message_path]
+    return []
+
+
+def codex_tool_calls(stdout):
+    """Count completed codex action items in JSONL stdout; int or None. Never raises."""
+    try:
+        if not isinstance(stdout, str) or not stdout:
             return None
-        lines = stderr_tail.splitlines()
-        last_idx = None
-        for i, line in enumerate(lines):
-            if line.strip() == "tokens used":
-                last_idx = i
-        if last_idx is None or last_idx + 1 >= len(lines):
+        count = 0
+        parsed_any = False
+        for obj in _iter_codex_event_lines(stdout):
+            if not _is_codex_event_object(obj):
+                continue
+            parsed_any = True
+            if obj.get("type") != "item.completed":
+                continue
+            item = obj.get("item")
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") in _CODEX_ACTION_ITEM_TYPES:
+                count += 1
+        if not parsed_any:
             return None
-        count_line = lines[last_idx + 1].strip()
-        if not count_line:
+        return count
+    except Exception:
+        return None
+
+
+def codex_event_tokens(stdout):
+    """Sum token parts from the last turn.completed usage in JSONL stdout; int or None. Never raises."""
+    try:
+        if not isinstance(stdout, str) or not stdout:
             return None
-        return int(count_line.replace(",", "").strip())
+        parsed_any = False
+        last_usage = None
+        for obj in _iter_codex_event_lines(stdout):
+            if not _is_codex_event_object(obj):
+                continue
+            parsed_any = True
+            if obj.get("type") != "turn.completed":
+                continue
+            usage = obj.get("usage")
+            if isinstance(usage, dict):
+                last_usage = usage
+        if last_usage is None:
+            return 0 if parsed_any else None
+        total = 0
+        for part in _CODEX_TOKEN_PARTS:
+            val = last_usage.get(part, 0)
+            if val is None:
+                val = 0
+            if not isinstance(val, int):
+                return None
+            total += val
+        return total
+    except Exception:
+        return None
+
+
+def codex_review_payload_text(stdout, last_message_path=None):
+    """Review payload text for marker parsing: last-message file, else last agent_message. Never raises."""
+    try:
+        if isinstance(last_message_path, str) and last_message_path:
+            try:
+                with open(last_message_path, encoding="utf-8", errors="ignore") as fh:
+                    text = fh.read()
+                if isinstance(text, str) and text.strip():
+                    return text
+            except OSError:
+                pass
+        if not isinstance(stdout, str) or not stdout:
+            return None
+        last_text = None
+        for obj in _iter_codex_event_lines(stdout):
+            if not _is_codex_event_object(obj) or obj.get("type") != "item.completed":
+                continue
+            item = obj.get("item")
+            if not isinstance(item, dict) or item.get("type") != "agent_message":
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text:
+                last_text = text
+        return last_text
     except Exception:
         return None
 
@@ -1885,18 +2000,23 @@ def salvage_from_artifact(stdout, fed_prompt, *, echo_nonce=None):
         }
 
 
+ENGAGEMENT_READ_VALUES = frozenset(("engaged", "unknown"))
+
+
 def engagement_read(result):
     """The single home for "did this seat demonstrably act?".
 
     ACTION-BASED ONLY. Never tokens, never wall time, never stdout size.
-    `result` is a dispatch-result-shaped mapping (it may carry "findings", "investigated",
+    `result` is a dispatch-result-shaped mapping (it may carry a registered review payload
     and an "engagement" mapping with "toolCalls").
 
     Returns "engaged" when there is POSITIVE evidence of action:
       - a non-empty payload of any registered review result kind, OR
-      - at least one accepted `investigated` path, OR
       - engagement.toolCalls is not None and >= 1
     Otherwise returns "unknown".
+
+    A seat's `investigated` list is disclosure, not engagement evidence (register R7); the
+    runner still spot-checks it, but it never grades `engagement.read`.
 
     NEVER returns "inert". Absence of positive evidence is NOT proof of inaction — a correct
     payload the transport could not read (the #687 verdict-shape specimen) looks identical to a
@@ -1909,9 +2029,6 @@ def engagement_read(result):
         for kind in REVIEW_RESULT_KINDS:
             if review_payload_engaged(result, kind):
                 return "engaged"
-        investigated = result.get("investigated")
-        if isinstance(investigated, list) and investigated:
-            return "engaged"
         eng = result.get("engagement")
         if not isinstance(eng, dict):
             eng = {}
@@ -1920,7 +2037,9 @@ def engagement_read(result):
         # repo files spent 2,460 tokens, while the field's vacuous seat (issue #666) spent ~23,000 — ten
         # times more — because prompt ingestion dominates. Engaged runs here ranged 2,460 → 34,857 tokens.
         # Wall time is equally unusable: an engaged dispatch returned a Critical finding in 8 seconds.
-        # Only *actions* count — findings produced, files provably read, tools invoked.
+        # Measured 2026-09-16: a codex seat ordered to read nothing returned 8,825 tokens over 8.9 s and
+        # would clear any floor this repository's records could justify.
+        # Only *actions* count — findings produced, tools invoked.
         tool_calls = eng.get("toolCalls")
         if tool_calls is not None:
             try:
