@@ -1673,6 +1673,31 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   stale inherited pin; a zero citation count means callers are not attempting cross-instance
   launches, not that bypass paths vanished. On an ungated host the pin is left unchecked, not approved.
 
+#### S15 — showrunner-handoff skill
+
+- **Component.** Not a census row. The `showrunner-handoff` skill front door — the deliberate seat-handover
+  command and its prose (`plugins/superheroes/skills/showrunner-handoff/SKILL.md`).
+- **Condition.** Usage-based, 60 days: recorded runs of the command at a seat handover. On firing, a
+  proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — a deliberate handover exists because a session's account and lifetime are
+  host facts. Arrives with issue #1311.
+
+#### S16 — showrunner-resume skill
+
+- **Component.** Not a census row. The `showrunner-resume` skill front door — the seat pick-up command
+  and its prose, including the duplicate-loop check (`plugins/superheroes/skills/showrunner-resume/SKILL.md`).
+- **Condition.** Usage-based, 60 days: recorded runs of the command at a new, restarted, or compacted
+  seat. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a seat will always have to pick up from durable state, whatever the host does.
+  Arrives with issue #1311. S16's duplicate-loop check retires with the wave watcher if reset child
+  C15 (#1274) deletes it.
+
 
 ## The workaround-marker inventory
 
@@ -1732,6 +1757,9 @@ file, returns exactly that set.
 - `plugins/superheroes/skills/showrunner/reference/wave-watch.md` — harness background-task arming
   pattern with manual re-arm after each event. **delete-when:** the background-session trial receipt
   marks wave-watch arming not needed.
+- `plugins/superheroes/skills/showrunner-resume/SKILL.md` — duplicate-loop check via process listing
+  before background arming. **delete-when:** a durable batch watcher makes the duplicate-loop check
+  and this arming shape unnecessary.
 - `plugins/superheroes/skills/workhorse/reference/dispatch-mechanics.md` — 540 s continuation and
   short launch slice recipes for turn-end survival. **delete-when:** the background-session trial
   receipt marks turn-end slice recipes not needed.
