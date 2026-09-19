@@ -8351,28 +8351,23 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
         ident = entry.get("recordIdentity")
         if not isinstance(ident, dict) and slot is not None:
             ident = round_records.record_identity(phase, slot[0], slot[1], entry.get("attempt"))
-        if slot is None:
-            return _refuse_cmd(session_dir, "advance", "recorded-row-store-unreadable",
-                               fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
-                               detail="reappend entry has no roster slot for storage key %r"
-                                      % entry.get("storageKey"))
-        seat_key, occurrence = slot
+        storage_key = entry.get("storageKey")
         entry_attempt = entry.get("attempt")
-        if entry_attempt is None:
+        if storage_key is None or entry_attempt is None:
             return _refuse_cmd(session_dir, "advance", "recorded-row-store-unreadable",
                                fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
-                               seat=seat_key)
-        skey = round_records.storage_key(seat_key, occurrence)
-        spath = round_records.store_path(session_dir, rnd, phase, skey, entry_attempt)
+                               detail="reappend entry missing storageKey or attempt")
+        spath = round_records.store_path(session_dir, rnd, phase, storage_key, entry_attempt)
         stored_envelope, read_err = round_records.read_json(spath)
         if read_err is not None or not isinstance(stored_envelope, dict):
+            seat_key = slot[0] if slot is not None else None
             return _refuse_cmd(session_dir, "advance", "recorded-row-store-unreadable",
                                fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
                                seat=seat_key, storePath=spath)
-        cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
+        cited_head = _anchor_cited_head(state, session_dir, rnd, phase, entry_attempt)
         revision_fields = round_records.recorded_row_fields(stored_envelope, cited_head)
         _journal_event(session_dir, "advance", "recorded", phase=phase, round=rnd,
-                       attempt=entry.get("attempt"), seat=slot[0] if slot else None,
+                       attempt=entry_attempt, seat=slot[0] if slot else None,
                        occurrence=slot[1] if slot else None,
                        reappended=True, recordIdentity=ident, **revision_fields)
     orphans = rec.get("journalOrphan") or []

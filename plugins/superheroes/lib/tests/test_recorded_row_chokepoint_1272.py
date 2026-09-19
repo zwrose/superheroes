@@ -359,6 +359,52 @@ def test_sweep_refuses_when_store_unreadable_before_journal(tmp_path, adapters, 
     assert len(_recorded_rows(d)) == before_rows
 
 
+def test_reappend_slotless_storage_key_produces_complete_recorded_row(tmp_path, adapters):
+    """Slot-less reappend with a readable store produces a complete recorded row; advance proceeds."""
+    d = _session(tmp_path)
+    ghost_seat = "ghost-reviewer"
+    ghost_skey = RR.storage_key(ghost_seat)
+    _record_all_panel_seats(d)
+    pend = _pending(d)
+    env = _result_envelope(d, ghost_seat,
+                           payload={"findings": [], "confidence": "high", "seat": ghost_seat})
+    spath = RR.store_path(d, pend["round"], pend["phase"], ghost_skey, pend["attempt"])
+    os.makedirs(os.path.dirname(spath), exist_ok=True)
+    RR.atomic_write_json(spath, env)
+    out = _advance(d, tmp_path)
+    assert out["ok"], out
+    reappended = [e for e in _recorded_rows(d)
+                  if e.get("reappended") is True and e.get("seat") is None]
+    assert len(reappended) == 1
+    _assert_revision_identity(reappended[0])
+
+
+def test_reappend_slotless_missing_store_refuses(tmp_path, adapters, monkeypatch):
+    """Slot-less reappend whose store file is absent refuses recorded-row-store-unreadable."""
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    pend = _pending(d)
+    ghost_skey = RR.storage_key("ghost-reviewer")
+    real_reconcile = RR.reconcile
+
+    def fake_reconcile(session_dir, rnd, phase, journal_identities):
+        result = real_reconcile(session_dir, rnd, phase, journal_identities)
+        result = dict(result)
+        result["reappend"] = list(result.get("reappend") or []) + [{
+            "storageKey": ghost_skey,
+            "attempt": pend["attempt"],
+            "path": RR.store_path(session_dir, rnd, phase, ghost_skey, pend["attempt"]),
+        }]
+        return result
+
+    monkeypatch.setattr(RD.round_records, "reconcile", fake_reconcile)
+    before_rows = len(_recorded_rows(d))
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False
+    assert out["reason"] == "recorded-row-store-unreadable"
+    assert len(_recorded_rows(d)) == before_rows
+
+
 def test_journal_revision_helpers_removed_from_lib():
     """T5 — grep DoD: no `_journal_revision_fields` / `_journal_stored_revision` in lib/*.py."""
     paths = glob.glob(os.path.join(_LIB, "*.py"))
