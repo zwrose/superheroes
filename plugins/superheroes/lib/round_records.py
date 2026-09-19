@@ -681,7 +681,7 @@ def _probe_store_entry(spath):
 def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                      supersede=False, expect_sha256=None, anchor=None, occurrence=0,
                      seat_result_schema=None, envelope_override=None,
-                     evidence_minted=False, dispatch_manifest=None):
+                     evidence_minted=False):
     """Every check `ingest_landing` performs, with NO write.
 
     When ``envelope_override`` is a dict, that dict is validated in place of reading the
@@ -816,15 +816,6 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
                                              detail=("executionEvidence.source must name the "
                                                      "executing vendor (one of %s)"
                                                      % ", ".join(model_registry.VENDORS)))
-        elif (schema == SEAT_RESULT_SCHEMA and phase in PROVENANCE_RUNNER_RECORD_PHASES
-              and isinstance(dispatch_manifest, dict) and seat_key not in dispatch_manifest):
-            # axis: a legacy manifest that survives names the key it expected and the keys it
-            # found — the misread points at its cause.
-            return None, _refuse("dispatch-manifest-key-missing", expectedKey=seat_key,
-                                 foundKeys=sorted(k for k in dispatch_manifest if isinstance(k, str)),
-                                 detail=("the dispatch manifest is keyed by the exact roster seat "
-                                         "key (for dispatch-audits: payload.targets[].id); no "
-                                         "entry for this seat"))
     elif schema == SEAT_MISSING_SCHEMA:
         if envelope.get("reason") not in MISSING_REASONS:
             return None, _refuse("missing-reason",
@@ -867,7 +858,7 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
 
 def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                    supersede=False, expect_sha256=None, anchor=None, occurrence=0,
-                   seat_result_schema=None, evidence_minted=False, dispatch_manifest=None):
+                   seat_result_schema=None, evidence_minted=False):
     """Ingest ONE landed seat envelope into the durable store. Never raises on bad input.
 
     Returns `{"ok": True, "storePath", "payloadSha256", "superseded"}` or a refusal
@@ -902,8 +893,7 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
                                      supersede=supersede, expect_sha256=expect_sha256,
                                      anchor=anchor, occurrence=occurrence,
                                      seat_result_schema=seat_result_schema,
-                                     evidence_minted=evidence_minted,
-                                     dispatch_manifest=dispatch_manifest)
+                                     evidence_minted=evidence_minted)
     if refusal is not None:
         return refusal
     atomic_write_json(plan["storePath"], plan["envelope"])
@@ -914,7 +904,7 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
 
 
 def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=None,
-                  seat_result_schema=None, evidence_minted=False, dispatch_manifest=None):
+                  seat_result_schema=None, evidence_minted=False):
     """Ingest every unclaimed landing file for `phase` at `current_attempt`.
 
     Idempotent by construction: a seat already in the store is reported `already-stored` with
@@ -975,8 +965,7 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
         out = ingest_landing(session_dir, rnd, phase, seat_key, current_attempt,
                              current_attempt=current_attempt, roster=roster, anchor=anchor,
                              occurrence=occurrence, seat_result_schema=seat_result_schema,
-                             evidence_minted=evidence_minted,
-                             dispatch_manifest=dispatch_manifest)
+                             evidence_minted=evidence_minted)
         out.setdefault("seatKey", seat_key)
         out.setdefault("storageKey", skey)
         out.setdefault("occurrence", occurrence)

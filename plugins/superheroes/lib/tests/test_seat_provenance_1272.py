@@ -43,7 +43,12 @@ _bootstrap = _TDI._bootstrap
 _blocking_finding = _TDI._blocking_finding
 _drive_to_phase = _TDI._drive_to_phase
 _fake_git = _TDI._fake_git
-_write_dispatch_manifest = _TDI._write_dispatch_manifest
+
+_TRD_SPEC = importlib.util.spec_from_file_location(
+    "test_round_driver_for_1272",
+    os.path.join(_HERE, "test_round_driver.py"))
+_TRD = importlib.util.module_from_spec(_TRD_SPEC)
+_TRD_SPEC.loader.exec_module(_TRD)
 
 
 def _journal(session_dir):
@@ -238,24 +243,29 @@ def test_panel_dispatch_observed_without_evidence_stores_provenance_underived(tm
     assert seat in artifact["provenance"]["provenanceUnderived"]
 
 
-def test_legacy_manifest_missing_key_refusal_names_expected_and_found(tmp_path):
-    """E6 — legacy v1 audits refuses dispatch-manifest-key-missing with expected/found keys."""
-    session_dir, seat = _legacy_audits_session(tmp_path, name="legacy-audits")
-    _land(session_dir, seat, payload=_audit_payload(seat))
-    pend = _pending(session_dir)
-    state = _state(session_dir)
-    roster, roster_reason = round_adapters.roster_for(RD.P_AUDITS, state, state.get("config") or {})
-    assert roster_reason is None, roster_reason
-    manifest = {"other-seat": {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}}
-    plan, refusal = round_records.validate_landing(
-        session_dir, pend["round"], pend["phase"], seat, pend["attempt"],
-        current_attempt=pend["attempt"], roster=roster, dispatch_manifest=manifest,
-        seat_result_schema=round_records.SEAT_RESULT_SCHEMA)
-    assert plan is None
-    assert refusal["reason"] == "dispatch-manifest-key-missing"
-    assert refusal["expectedKey"] == seat
-    assert seat not in refusal["foundKeys"]
-    assert not os.path.exists(_store_path(session_dir, seat, pend))
+def test_hand_submit_missing_manifest_key_names_expected_and_found(tmp_path):
+    """E6 — hand submit missing manifest entry names expected/found keys in audit-provenance-fail."""
+    session_dir, n = _TRD._at(tmp_path, RD.P_AUDITS)
+    targets = n["payload"]["targets"]
+    assert targets
+    tid = targets[0]["id"]
+    art = {
+        "results": [{"id": tid, "ruling": "discharged", "reason": "r", "evidence": "e",
+                     "auditorVendor": targets[0].get("auditorVendor")}],
+        "collectionManifest": {},
+    }
+    out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], art)
+    assert out["ok"] is True, out
+    ok, state = RD.load_state(session_dir)
+    assert ok
+    assert tid in (state.get("_auditOutcome") or {}).get("notDischarged", [])
+    prov_fail = [dec for dec in state.get("decisions", [])
+                 if dec.get("kind") == "audit-provenance-fail"]
+    assert prov_fail, state.get("decisions")
+    detail = prov_fail[0].get("detail", "")
+    assert "expected a collectionManifest entry keyed" in detail
+    assert repr(tid) in detail
+    assert "manifest keys found: []" in detail
 
 
 def test_legacy_manifest_absent_and_v5_manifest_ignored(tmp_path):
@@ -268,7 +278,7 @@ def test_legacy_manifest_absent_and_v5_manifest_ignored(tmp_path):
     assert roster_reason is None, roster_reason
     out = round_records.ingest_landing(
         session_dir, pend["round"], pend["phase"], seat, pend["attempt"],
-        current_attempt=pend["attempt"], roster=roster, dispatch_manifest=None,
+        current_attempt=pend["attempt"], roster=roster,
         seat_result_schema=round_records.SEAT_RESULT_SCHEMA)
     assert out["ok"] is True, out
     assert os.path.exists(_store_path(session_dir, seat, pend))

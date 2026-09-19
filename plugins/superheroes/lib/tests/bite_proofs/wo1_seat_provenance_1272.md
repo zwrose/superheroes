@@ -9,7 +9,7 @@ reverted by its exact inverse.
 | G1 | `round_records.validate_landing` dispatch-observed branch | an audits envelope without minted evidence is refused |
 | G2 | `validate_landing` hand-landed branch | a hand-landed audits envelope without evidence is refused |
 | G2b | `validate_landing` source-is-a-vendor check | a source that names no vendor is refused |
-| G3 | `validate_landing` legacy manifest-key branch | refusal names expected/found keys |
+| G3 (WO-R2) | `_fold_audits` `audit-provenance-fail` decision | unauthenticated decision names expected key and found keys |
 | G4 | `round_adapters._trusted_vendors` v2 branch | the vendor is the runner record, not the manifest |
 
 ---
@@ -149,36 +149,43 @@ FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_audit_so
 
 ---
 
-## G3 — legacy manifest-key branch
+## G3 (WO-R2) — hand submit missing manifest key names expected/found
 
-**Neutralization** (`round_records.py`):
+**Neutralization** (`round_driver.py`):
 
 ```python
--              and isinstance(dispatch_manifest, dict) and seat_key not in dispatch_manifest):
-+              and isinstance(dispatch_manifest, dict) and False):
+-            detail = ("audit result for %s could not be authenticated — expected a "
+-                      "collectionManifest entry keyed %r (payload.targets[].id); manifest keys "
+-                      "found: %s — not-discharged"
+-                      % (pid, pid, found_keys))
++            detail = ("audit result for %s could not be authenticated against the recorded dispatch "
++                      "provenance (missing entry or wrong vendor) — not-discharged" % pid)
 ```
 
-**Raw red** — `test_legacy_manifest_missing_key_refusal_names_expected_and_found`:
+**Raw red** — `test_hand_submit_missing_manifest_key_names_expected_and_found`:
 
 ```
-FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_legacy_manifest_missing_key_refusal_names_expected_and_found
-AssertionError: assert {'envelope': ...} is None
-1 failed in 1.79s
+FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_hand_submit_missing_manifest_key_names_expected_and_found
+AssertionError: assert 'expected a collectionManifest entry keyed' in ...
+1 failed
 ```
 
-**Restore:** `and False` → `and seat_key not in dispatch_manifest`.
+**Restore:** revert the `detail =` assignment to the expected-key/found-keys wording.
 
 **Restore receipt (quoted lines):**
 
 ```python
-              and isinstance(dispatch_manifest, dict) and seat_key not in dispatch_manifest):
+            detail = ("audit result for %s could not be authenticated — expected a "
+                      "collectionManifest entry keyed %r (payload.targets[].id); manifest keys "
+                      "found: %s — not-discharged"
+                      % (pid, pid, found_keys))
 ```
 
 **Raw green:**
 
 ```
 .                                                                        [100%]
-1 passed in 1.92s
+1 passed
 ```
 
 ---

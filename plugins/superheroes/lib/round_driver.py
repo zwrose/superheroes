@@ -3249,9 +3249,21 @@ def _fold_audits(state, config, artifact):
         for a in outcome["audits"]]}
     state["auditRounds"].append(audit_round)
     for pid in outcome.get("unauthenticated", []):
-        _decision(state, "audit-provenance-fail",
-                  "audit result for %s could not be authenticated against the recorded dispatch "
-                  "provenance (missing entry or wrong vendor) — not-discharged" % pid)
+        audit_reason = None
+        for audit in outcome.get("audits", []):
+            if isinstance(audit, dict) and audit.get("id") == pid:
+                audit_reason = audit.get("reason")
+                break
+        if isinstance(audit_reason, str) and audit_reason.startswith("the dispatch manifest names"):
+            detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
+        else:
+            found_keys = (sorted(collection_manifest)
+                          if isinstance(collection_manifest, dict) else [])
+            detail = ("audit result for %s could not be authenticated — expected a "
+                      "collectionManifest entry keyed %r (payload.targets[].id); manifest keys "
+                      "found: %s — not-discharged"
+                      % (pid, pid, found_keys))
+        _decision(state, "audit-provenance-fail", detail)
     for pid in outcome.get("echoMismatch", []):
         _decision(state, "audit-echo-mismatch",
                   "audit result for %s echoed a vendor other than the recorded dispatch provenance "
@@ -7392,15 +7404,12 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                                        attempt=cur_attempt, seat=seat, headDiffPath=head_path)
     else:
         head_content = None
-    manifest_path = round_records.dispatch_manifest_path(session_dir, rnd, phase, cur_attempt)
-    manifest, merr = _read_dispatch_manifest(manifest_path)
     plan, landing_refusal = round_records.validate_landing(
         session_dir, rnd, phase, seat, cur_attempt, current_attempt=cur_attempt, roster=roster,
         supersede=supersede, expect_sha256=expect_sha256, anchor=anchor, occurrence=occurrence,
         seat_result_schema=seat_schema,
         envelope_override=assembled,
-        evidence_minted=assembled is not None,
-        dispatch_manifest=manifest if merr is None else None)
+        evidence_minted=assembled is not None)
     if landing_refusal is not None:
         return _refuse_cmd(session_dir, "record-result", landing_refusal.get("reason"), phase=phase,
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
@@ -7501,12 +7510,9 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
     if seat_schema is None:
         return _refuse_cmd(session_dir, cmd, "state-version-unsupported", phase=phase, rnd=rnd,
                            attempt=attempt)
-    manifest_path = round_records.dispatch_manifest_path(session_dir, rnd, phase, attempt)
-    manifest, merr = _read_dispatch_manifest(manifest_path)
     results = round_records.sweep_landing(session_dir, rnd, phase, current_attempt=attempt,
                                           roster=roster, anchor=anchor,
-                                          seat_result_schema=seat_schema,
-                                          dispatch_manifest=manifest if merr is None else None)
+                                          seat_result_schema=seat_schema)
     recorded = []
     stale_strays = []
     for result in results:
