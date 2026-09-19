@@ -156,7 +156,7 @@ def _execution_evidence(**over):
     return evidence
 
 
-def _execution_evidence_for_payload(payload):
+def _execution_evidence_for_payload(payload, source="runner"):
     observation = {
         "tokens": None,
         "toolCalls": None,
@@ -172,8 +172,9 @@ def _execution_evidence_for_payload(payload):
                 resultKind=kind,
                 resultDigest=round_records.payload_sha256(payload[kind]),
                 observation=observation,
+                source=source,
             )
-    return _execution_evidence(observation=observation)
+    return _execution_evidence(observation=observation, source=source)
 
 
 def _land(session_dir, state, pend, seat, payload, occurrence=0):
@@ -199,7 +200,10 @@ def _land(session_dir, state, pend, seat, payload, occurrence=0):
         "payload": payload,
     }
     if schema == round_records.SEAT_RESULT_SCHEMA_V2:
-        evidence = _execution_evidence_for_payload(payload)
+        evidence_source = "runner"
+        if pend["phase"] == round_driver.P_AUDITS:
+            evidence_source = _auditor_vendor_for(state)(seat)
+        evidence = _execution_evidence_for_payload(payload, source=evidence_source)
         envelope["executionEvidence"] = evidence
         envelope["provenance"] = round_records.PROVENANCE_HAND_LANDED
         envelope["envelopeSha256"] = round_records.envelope_sha256(payload, evidence)

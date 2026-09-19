@@ -3203,13 +3203,13 @@ def _fold_audits(state, config, artifact):
     # The DRIVER records the SELECTED independent auditor per target (its own seating decision).
     expected_auditors = {t.get("id"): t.get("auditorVendor")
                          for t in targets if isinstance(t, dict) and t.get("id") is not None}
-    # Provenance rests on the ORCHESTRATOR's out-of-band dispatch manifest — {result-id: vendor} the
-    # orchestrator recorded from its OWN dispatch records and carried in the submit artifact's
+    # Provenance rests on the recorded dispatch provenance (the runner record at state v5; the
+    # dispatch manifest on a legacy session) — {result-id: vendor} carried in the submit artifact's
     # `collectionManifest`, NEVER derived from the result contents. The fold authenticates a clearing
     # ruling against THIS manifest (must exist AND equal the recorded selection); the in-result
     # `auditorVendor` echo is advisory only. The driver cannot cryptographically verify engine
-    # identity and does not pretend to — the guarantee is exactly as strong as the orchestrator's
-    # dispatch manifest (#507 WO-FIX-RECOVERY).
+    # identity and does not pretend to — the guarantee is exactly as strong as the recorded dispatch
+    # provenance (#507 WO-FIX-RECOVERY).
     collection_manifest = artifact.get("collectionManifest")
     if not isinstance(collection_manifest, dict):
         collection_manifest = None
@@ -3229,15 +3229,17 @@ def _fold_audits(state, config, artifact):
     state["auditRounds"].append(audit_round)
     for pid in outcome.get("unauthenticated", []):
         _decision(state, "audit-provenance-fail",
-                  "audit result for %s could not be authenticated against the orchestrator's "
-                  "dispatch manifest (missing entry or wrong vendor) — not-discharged" % pid)
+                  "audit result for %s could not be authenticated against the recorded dispatch "
+                  "provenance (missing entry or wrong vendor) — not-discharged" % pid)
     for pid in outcome.get("echoMismatch", []):
         _decision(state, "audit-echo-mismatch",
-                  "audit result for %s echoed a vendor other than the orchestrator's dispatch "
-                  "manifest — advisory only; the manifest governed and the discharge stands" % pid)
-    # Provenance rests on the orchestrator's dispatch manifest (never the result echo) — recorded
-    # per round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY).
-    _record_round(state, "auditProvenance", "collection-manifest")
+                  "audit result for %s echoed a vendor other than the recorded dispatch provenance "
+                  "— advisory only; the manifest governed and the discharge stands" % pid)
+    # Provenance rests on the recorded dispatch provenance (never the result echo) — recorded per
+    # round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY).
+    _record_round(state, "auditProvenance",
+                  "runner-record" if _seat_result_schema(state) == round_records.SEAT_RESULT_SCHEMA_V2
+                  else "collection-manifest")
     _record_round(state, "audits", outcome["audits"])
     _record_round(state, "auditIndependence",
                   targets[0]["independence"] if targets else "n/a")
@@ -7343,11 +7345,15 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                                        attempt=cur_attempt, seat=seat, headDiffPath=head_path)
     else:
         head_content = None
+    manifest_path = round_records.dispatch_manifest_path(session_dir, rnd, phase, cur_attempt)
+    manifest, merr = _read_dispatch_manifest(manifest_path)
     plan, landing_refusal = round_records.validate_landing(
         session_dir, rnd, phase, seat, cur_attempt, current_attempt=cur_attempt, roster=roster,
         supersede=supersede, expect_sha256=expect_sha256, anchor=anchor, occurrence=occurrence,
         seat_result_schema=seat_schema,
-        envelope_override=assembled)
+        envelope_override=assembled,
+        evidence_minted=assembled is not None,
+        dispatch_manifest=manifest if merr is None else None)
     if landing_refusal is not None:
         return _refuse_cmd(session_dir, "record-result", landing_refusal.get("reason"), phase=phase,
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
@@ -7448,9 +7454,12 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
     if seat_schema is None:
         return _refuse_cmd(session_dir, cmd, "state-version-unsupported", phase=phase, rnd=rnd,
                            attempt=attempt)
+    manifest_path = round_records.dispatch_manifest_path(session_dir, rnd, phase, attempt)
+    manifest, merr = _read_dispatch_manifest(manifest_path)
     results = round_records.sweep_landing(session_dir, rnd, phase, current_attempt=attempt,
                                           roster=roster, anchor=anchor,
-                                          seat_result_schema=seat_schema)
+                                          seat_result_schema=seat_schema,
+                                          dispatch_manifest=manifest if merr is None else None)
     recorded = []
     stale_strays = []
     for result in results:
@@ -8070,6 +8079,9 @@ def _dispatch_manifest_disclosure(mpath, merr):
     whether the manifest's contents are valid, and never a refusal (a manifest-less run is a
     disclosed degradation by design). A definite ``ENOENT`` / ``ENOTDIR`` is ``absent``; every other
     read failure on a path that exists (or cannot be ruled absent) is ``unreadable``.
+
+    At state v5 the manifest is ignored when every landed envelope is ``seat-result/2``
+    (`dispatchManifestIgnored`); provenance is the runner record on each stored envelope.
 
     Manifest-less runs are a disclosed degradation by design — this never refuses `advance`, only
     surfaces the expected path so an operator is not left guessing after a stall."""

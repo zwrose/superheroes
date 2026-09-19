@@ -14,15 +14,18 @@ One pure function per concern, none of which mutate anything:
 
 Design rules this module is bound by (each one is a defect class it exists to prevent):
 
-TRUST. `ranManifest` (panel) and `collectionManifest` (audits) are DISPATCH PROVENANCE and come
-ONLY from `dispatch_manifest` — the orchestrator's own out-of-band record of which engine it
-seated. A seat envelope's `vendor`/`model` is a claimant-controlled ADVISORY ECHO: a forfeiting or
-misrouted worker simply echoes the expected value, so the echo authenticates nothing (see
-`audits.apply_audit_results` and `round_driver._fell_open_rows`, both explicit on this). A
-disagreement between the echo and the manifest is DISCLOSED in the artifact's `provenance` block;
-it never populates a manifest. With no `dispatch_manifest` the manifest key is OMITTED so the
-driver's existing provenance-unavailable disclosure fires — a synthesized manifest would silently
-authenticate an unauthenticated run.
+TRUST. At state v5 (`seat-result/2`), `ranManifest` (panel) and `collectionManifest` (audits) are
+DISPATCH PROVENANCE derived from each stored envelope's `executionEvidence.source` — the runner's
+own record of who executed the seat. The orchestrator's `dispatch_manifest` is LEGACY-ONLY: read
+for `seat-result/1` envelopes; when every landed result is v2 and a manifest file is present it is
+ignored (`dispatchManifestIgnored`). A seat envelope's `vendor`/`model` is a claimant-controlled
+ADVISORY ECHO: a forfeiting or misrouted worker simply echoes the expected value, so the echo
+authenticates nothing (see `audits.apply_audit_results` and `round_driver._fell_open_rows`, both
+explicit on this). A disagreement between the echo and the trusted source is DISCLOSED in the
+artifact's `provenance` block; it never populates a manifest. With no trusted source on a v2
+envelope the manifest key is OMITTED and the seat rides `provenanceUnderived`; on legacy v1 with
+no `dispatch_manifest` the manifest key is OMITTED so the driver's provenance-unavailable disclosure
+fires — a synthesized manifest would silently authenticate an unauthenticated run.
 
 SILENCE NEVER CERTIFIES. `missing_policy` is the whole safety surface of this module. A
 `record-missing` seat must never become a success artifact: single-seat phases REFUSE to assemble
@@ -43,6 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import audits  # noqa: E402
 import dispatch_outcome  # noqa: E402
+import model_registry  # noqa: E402 — stdlib-only leaf; no cycle with adapters layer
 import round_phases  # noqa: E402
 import round_records  # noqa: E402
 import seat_map_receipts  # noqa: E402
@@ -276,42 +280,68 @@ def _landed(indexed, seat, occurrence):
 # =============================================================================================
 
 def _trusted_vendors(roster, indexed, dispatch_manifest, disclosures):
-    """{seat: vendor} from the ORCHESTRATOR's dispatch manifest ONLY.
-
-    The envelope's own `vendor` never contributes a value here — it is compared against the
-    manifest and any disagreement is disclosed, which is the whole point: the result side of a
-    dispatch is claimant-controlled, so using it as provenance would authenticate a claim with the
-    claimant's own words.
-    """
-    if dispatch_manifest is None:
-        disclosures["dispatchManifestUnavailable"] = True
-        return {}
+    """{seat: vendor} from the runner record on v2 envelopes; legacy v1 reads dispatch_manifest."""
     trusted = {}
     unusable = []
     mismatch = []
+    underived = []
+    landed_v2 = False
+    landed_v1 = False
     for seat, occurrence in _roster_slots(roster):
-        entry_manifest = dispatch_manifest.get(seat)
-        vendor = None
-        if isinstance(entry_manifest, dict):
-            candidate = entry_manifest.get("vendor")
-            if isinstance(candidate, str) and candidate:
-                vendor = candidate
-        if vendor is None:
-            if seat not in unusable:
-                unusable.append(seat)
-            continue
-        trusted[seat] = vendor
         entry, is_result = _landed(indexed, seat, occurrence)
-        if entry is None:
+        if not is_result:
             continue
-        echo = entry["envelope"].get("vendor")
-        if isinstance(echo, str) and echo and echo != vendor:
-            mismatch.append({"seat": seat, "occurrence": occurrence, "echo": echo,
-                             "manifest": vendor})
+        envelope = entry["envelope"]
+        schema = envelope.get("schema")
+        if schema == round_records.SEAT_RESULT_SCHEMA_V2:
+            landed_v2 = True
+            provenance = envelope.get("provenance")
+            evidence = envelope.get("executionEvidence")
+            source = evidence.get("source") if isinstance(evidence, dict) else None
+            if isinstance(source, str) and source and source in model_registry.VENDORS:
+                trusted[seat] = source
+                prov_src = disclosures.setdefault("provenanceSource", {})
+                if provenance == round_records.PROVENANCE_DISPATCH_OBSERVED:
+                    prov_src[seat] = "runner-record"
+                elif provenance == round_records.PROVENANCE_HAND_LANDED:
+                    prov_src[seat] = "hand-landed-evidence"
+            elif seat not in underived:
+                underived.append(seat)
+            echo = envelope.get("vendor")
+            if (isinstance(source, str) and source and isinstance(echo, str) and echo
+                    and echo != source):
+                mismatch.append({"seat": seat, "occurrence": occurrence, "echo": echo,
+                                 "recorded": source})
+            continue
+        if schema in round_records.SEAT_RESULT_SCHEMAS:
+            landed_v1 = True
+            entry_manifest = (dispatch_manifest.get(seat)
+                              if isinstance(dispatch_manifest, dict) else None)
+            vendor = None
+            if isinstance(entry_manifest, dict):
+                candidate = entry_manifest.get("vendor")
+                if isinstance(candidate, str) and candidate:
+                    vendor = candidate
+            if vendor is None:
+                if seat not in unusable:
+                    unusable.append(seat)
+                continue
+            trusted[seat] = vendor
+            disclosures.setdefault("provenanceSource", {})[seat] = "dispatch-manifest"
+            echo = envelope.get("vendor")
+            if isinstance(echo, str) and echo and echo != vendor:
+                mismatch.append({"seat": seat, "occurrence": occurrence, "echo": echo,
+                                 "manifest": vendor})
+    if dispatch_manifest is not None and landed_v2 and not landed_v1:
+        disclosures["dispatchManifestIgnored"] = True
+    if dispatch_manifest is None and landed_v1:
+        disclosures["dispatchManifestUnavailable"] = True
     if unusable:
         disclosures["dispatchManifestEntryUnusable"] = unusable
     if mismatch:
         disclosures["vendorEchoMismatch"] = mismatch
+    if underived:
+        disclosures["provenanceUnderived"] = underived
     return trusted
 
 
