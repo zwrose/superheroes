@@ -1439,6 +1439,7 @@ def _panel_finding_reviewer():
 
 
 def test_run_seam_verifier_reason_less_verdict_returns_fault_directly():
+    """axis: a reason-less verifier verdict is converted into _verifierArtifactFault, not a ruling."""
     def bad_verifier(clusters, rnd):
         return [{"id": i, "verdict": "CONFIRMED"}
                 for c in (clusters or []) for i in (c.get("ids") or [])]

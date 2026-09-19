@@ -801,6 +801,7 @@ def test_preflight_entry_stale_boundary_exact_age_passes(tmp_path, monkeypatch):
 
 
 def test_preflight_entry_stale_boundary_one_past_refuses(tmp_path, monkeypatch):
+    """axis: age == max_age_seconds + 1 refuses probe-stale (the bound is >, pinned one past)."""
     repo = _repo(tmp_path)
     now = datetime(2026, 9, 19, 12, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(CP, "_now_utc", lambda: now)

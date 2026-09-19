@@ -11501,6 +11501,7 @@ def test_journal_corruption_class_does_not_leak_between_reads(tmp_path):
 
 
 def test_native_result_path_occupied_exhausts_to_terminal_detail(tmp_path):
+    """axis: terminal forfeit detail after both native result paths are occupied, engine never invoked."""
     run_dir = str(tmp_path / "run")
     _manual_open_review_run(tmp_path, run_dir)
     path1 = ED._native_result_path(run_dir, 1)
