@@ -2515,36 +2515,139 @@ def _gate_guidance_record_id_line(fid):
         _normalize_gate_guidance_header_field(label))
 
 
+def _round_record_sort_key(rnd_key):
+    """Numeric round order for ``state['rounds']`` keys; non-numeric keys sort last."""
+    try:
+        return (0, int(rnd_key))
+    except (TypeError, ValueError):
+        return (1, str(rnd_key))
+
+
+def _fix_batch_row_key(row):
+    """Disposition key for one fix-batch row — content-derived via ``_finding_key_of``."""
+    if not isinstance(row, dict):
+        return None
+    return _finding_key_of(row)
+
+
+def _finding_history(state):
+    """Latest gate and audit rulings per finding key across ``state['rounds']``."""
+    history = {}
+    rounds = state.get("rounds") if isinstance(state, dict) else None
+    if not isinstance(rounds, dict):
+        return history
+    for rnd_key in sorted(rounds.keys(), key=_round_record_sort_key):
+        round_entry = rounds[rnd_key]
+        if not isinstance(round_entry, dict):
+            continue
+        try:
+            rnd_num = int(rnd_key)
+        except (TypeError, ValueError):
+            continue
+        log = round_entry.get("judgmentDispositions")
+        if isinstance(log, list):
+            for item in log:
+                if not isinstance(item, dict):
+                    continue
+                fid = item.get("id")
+                if not isinstance(fid, str) or not fid.strip():
+                    continue
+                fid = fid.strip()
+                gate_ruling = {"round": rnd_num, "disposition": item.get("disposition")}
+                if item.get("reason") is not None:
+                    gate_ruling["reason"] = item.get("reason")
+                guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+                if isinstance(guidance, str) and guidance.strip():
+                    gate_ruling["guidance"] = guidance.strip()
+                if item.get("title") is not None:
+                    gate_ruling["title"] = item.get("title")
+                if item.get("file") is not None:
+                    gate_ruling["file"] = item.get("file")
+                if item.get("line") is not None:
+                    gate_ruling["line"] = item.get("line")
+                slot = history.setdefault(fid, {"gateRuling": None, "priorAudit": None})
+                slot["gateRuling"] = gate_ruling
+        audits = round_entry.get("audits")
+        if isinstance(audits, list):
+            for item in audits:
+                if not isinstance(item, dict):
+                    continue
+                fid = item.get("id")
+                if not isinstance(fid, str) or not fid.strip():
+                    continue
+                fid = fid.strip()
+                prior = {"round": rnd_num, "ruling": item.get("ruling")}
+                if item.get("reason") is not None:
+                    prior["reason"] = item.get("reason")
+                if item.get("unauthenticatedCause") is not None:
+                    prior["unauthenticatedCause"] = item.get("unauthenticatedCause")
+                slot = history.setdefault(fid, {"gateRuling": None, "priorAudit": None})
+                slot["priorAudit"] = prior
+    return history
+
+
+def _validate_gate_guidance_logs(rounds):
+    """Refuse untrustworthy fold-owned guidance ids in any round's judgment log."""
+    if not isinstance(rounds, dict):
+        return
+    for rnd_key in sorted(rounds.keys(), key=_round_record_sort_key):
+        round_entry = rounds[rnd_key]
+        if not isinstance(round_entry, dict):
+            continue
+        log = round_entry.get("judgmentDispositions")
+        if not isinstance(log, list):
+            continue
+        seen_ids = set()
+        for item in log:
+            if not isinstance(item, dict):
+                continue
+            if item.get("disposition") != "fix-with-guidance":
+                continue
+            guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+            if not isinstance(guidance, str) or not guidance.strip():
+                continue
+            fid = item.get("id")
+            if not isinstance(fid, str) or not fid.strip():
+                raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
+            fid = fid.strip()
+            if fid in seen_ids:
+                raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
+            seen_ids.add(fid)
+
+
 def _gate_guidance_entries(state, rnd):
     """Return validated fold-owned guidance records for order rendering."""
     rounds = state.get("rounds") if isinstance(state, dict) else None
     if not isinstance(rounds, dict):
         return []
-    round_entry = rounds.get(str(rnd))
-    if not isinstance(round_entry, dict):
-        return []
-    log = round_entry.get("judgmentDispositions")
-    if not isinstance(log, list):
-        return []
+    _validate_gate_guidance_logs(rounds)
+    batch = state.get("_fixBatch")
+    if not isinstance(batch, list):
+        batch = state.get("fixBatch")
+    if not isinstance(batch, list):
+        batch = []
+    batch_keys = set()
+    for row in batch:
+        key = _fix_batch_row_key(row)
+        if key:
+            batch_keys.add(key)
+    history = _finding_history(state)
     out = []
-    seen_ids = set()
-    for item in log:
-        if not isinstance(item, dict):
+    for key in sorted(batch_keys):
+        slot = history.get(key)
+        if not isinstance(slot, dict):
             continue
-        if item.get("disposition") != "fix-with-guidance":
+        gate_ruling = slot.get("gateRuling")
+        if not isinstance(gate_ruling, dict):
             continue
-        guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+        if gate_ruling.get("disposition") != "fix-with-guidance":
+            continue
+        guidance = gate_ruling.get("guidance")
         if not isinstance(guidance, str) or not guidance.strip():
             continue
-        fid = item.get("id")
-        if not isinstance(fid, str) or not fid.strip():
-            raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
-        fid = fid.strip()
-        if fid in seen_ids:
-            raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
-        seen_ids.add(fid)
-        out.append({"id": fid, "title": item.get("title"), "file": item.get("file"),
-                    "line": item.get("line"), "guidance": guidance.strip()})
+        out.append({"id": key, "title": gate_ruling.get("title"),
+                    "file": gate_ruling.get("file"), "line": gate_ruling.get("line"),
+                    "guidance": guidance.strip(), "round": gate_ruling.get("round")})
     return out
 
 
@@ -2581,6 +2684,9 @@ def _gate_guidance_block(entries):
             omitted = len(guided) - idx
             break
         header_lines = [identity_line]
+        entry_round = entry.get("round")
+        if entry_round is not None:
+            header_lines.append("Ruled in round %s" % entry_round)
         if identity_counts[identity_line] >= 2:
             header_lines.append(
                 "Note: %d guided findings share this identity (file, line, title) — "
@@ -6484,9 +6590,32 @@ def _ensure_fix_batch_file(session_dir, rnd, state):
         batch = state.get("fixBatch")
     if not isinstance(batch, list):
         raise ValueError("order-render-refused:fix-batch-unavailable")
+    history = _finding_history(state)
+    materialized = []
+    for row in batch:
+        if not isinstance(row, dict):
+            materialized.append(row)
+            continue
+        row_copy = dict(row)
+        key = _fix_batch_row_key(row_copy)
+        if key and key in history:
+            slot = history[key]
+            if isinstance(slot, dict):
+                prior = slot.get("priorAudit")
+                if isinstance(prior, dict):
+                    row_copy["priorAudit"] = dict(prior)
+                gate_ruling = slot.get("gateRuling")
+                if isinstance(gate_ruling, dict):
+                    row_gate = {"round": gate_ruling.get("round"),
+                                "disposition": gate_ruling.get("disposition")}
+                    if gate_ruling.get("reason") is not None:
+                        row_gate["reason"] = gate_ruling.get("reason")
+                    row_copy["gateRuling"] = row_gate
+        materialized.append(row_copy)
     rdir = round_records.round_dir(session_dir, rnd)
     path = os.path.join(rdir, "fix-batch.json")
-    return _ensure_bytes_at_path(session_dir, path, round_records.canonical(batch).encode("utf-8"))
+    return _ensure_bytes_at_path(session_dir, path,
+                                 round_records.canonical(materialized).encode("utf-8"))
 
 
 # Round-relative paths the driver materializes for order templates — production reads this registry.
