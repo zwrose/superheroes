@@ -7297,13 +7297,16 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
 
 def _runner_shaped_result(phase, result_kind, envelope_payload):
     """The runner-shaped result whose payload the seat landed — derived from the seat-payload
-    contract (payload_contracts), so the digest subject comes from engine_adapter's own semantics."""
+    contract's declared type for the kind (payload_contracts), so the digest subject comes from
+    engine_adapter's own semantics."""
     contract, _ = payload_contracts.payload_contract(phase)
-    required = contract.get("required") or ()
-    if len(required) > 1 and result_kind in required:
-        # The seat lands the record itself (the audits contract requires `ruling` at top level).
-        return {"ok": True, "resultKind": result_kind, result_kind: envelope_payload}
-    return {"ok": True, "resultKind": result_kind, **envelope_payload}
+    types = contract.get("types") or {}
+    declared = types.get(result_kind)
+    # List kinds wrap under the kind key; scalar kinds land the record itself
+    # (payload_contracts.TYPE_TOKENS: list-of-objects, nullable-list-of-objects).
+    if declared in ("list-of-objects", "nullable-list-of-objects"):
+        return {"ok": True, "resultKind": result_kind, **envelope_payload}
+    return {"ok": True, "resultKind": result_kind, result_kind: envelope_payload}
 
 
 def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
