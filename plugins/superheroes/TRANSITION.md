@@ -190,18 +190,35 @@ from the worktree diff.
 
 ### Cursor result channel and the conformance probe
 
-Cursor is still on stream-json with the marker parser in this layer; consumers see no cursor
-result-shape change here. The stdout capture cap (`MAX_STDOUT_CAPTURE`, 8 MiB) is an operating
-parameter, not a contract row — recorded in the project's C1 values annex like codex's native
-channel. The two-dispatch trial had two shapes: on the `--output-format json` envelope the write
-dispatch validated and the review dispatch did not (the envelope's `result` string joins every
-assistant text turn with the JSON, so it is never the result); on the typed-file shape — the engine
-writes the result file at the path the shell hands it, with the stream-json event stream as
-telemetry — both halves passed (register R9 as amended 2026-09-19). Cursor therefore moves to the
-typed-file channel in layer 3c, with the marker parser and salvage tiers retired for cursor as they
-were for codex. Wave preflight now runs `lib/conformance_probe.py` once per dispatchable engine; its
-result is recorded as the launcher's `engine-auth` check — the liveness check the dispatch selftest
-is not.
+Cursor's results now come home on the typed-file channel — reviews and writes — with the same
+declared schema per run kind as codex. A consumer that read cursor's stream-json stdout for a
+result, a `WRITE_REPORT_SENTINEL` tail, or a `salvage` block reads the folded `dispatch-review` /
+`dispatch-write` result instead.
+
+The argv is `cursor-agent --model <tok> -p --trust -f --sandbox enabled --output-format
+stream-json` for both roles; `--mode plan` is gone. Each attempt stages a per-attempt prompt file
+`<run-dir>/prompt-attempt-<n>.md` (the order prompt plus the typed-file contract); `engine-started`
+carries `attemptPromptPath` and `attemptPromptSha256`, and the execution record's `promptSha256`
+binds the attempt prompt for cursor (`orderPromptSha256` is the caller's order in both).
+
+Refusal tokens a consumer can now meet on cursor: `native-result-missing`,
+`native-result-oversized`, `native-result-malformed`, `native-result-schema-invalid`,
+`native-result-report-blank`, `native-result-path-occupied`, `attempt-prompt-occupied`,
+`attempt-prompt-unwritable`, `native-schema-unreadable`, `marker-channel-retired`. Tokens that
+never mint again for any engine: `stdout-capped-by-attempt`, `report-missing-items-delivered`,
+`forfeit-with-engaged-artifact`, and the `salvage` block. No engine remains on the marker channel;
+the marker parser, the write-report sentinel contract, the salvage tiers, the delivered-items
+classifier, and the stdout-cap forfeit are retired from the supervised path and stay in the tree
+only until the gardening pass that deletes them (KEEP-OR-RETIRE S1/S2).
+
+- **Codex** — unchanged since layer 2c: native channel, result path on argv (`-o
+  <run-dir>/native-result-<n>.json` with `--output-schema <run-dir>/native-schema.json`), JSONL
+  telemetry on `--json`.
+- **Cursor** — native channel since layer 3c: result path in the per-attempt prompt file, stream-json
+  telemetry (`engagement.source: "cursor-stream"`).
+
+Wave preflight runs `lib/conformance_probe.py` once per dispatchable engine; its result is recorded
+as the launcher's `engine-auth` check — the liveness check the dispatch selftest is not.
 
 A runner-journal line that is valid JSON but not an object now counts as interior corruption under
 the class `journal-line-not-object`. The launcher's `preflight-failed:<id>` refusal now carries the
