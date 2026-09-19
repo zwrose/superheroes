@@ -172,3 +172,48 @@ FAILED ... AssertionError: assert False
 ```
 
 Note: `engine_result_channel.py` is absent from this worktree; in a full tree where that file exists under `plugins/superheroes/lib/`, the last path finding would not fire at repository root.
+
+## WO-2 — the driver hook
+
+**Provenance:** cursor composer-2.5 / dispatch-write (WO-2, issue #1339)
+
+| ID | guarded element | proving test |
+|---|---|---|
+| BP-OL-9 | the hook runs on the fixer phase | `test_fixer_emission_refuses_on_real_placeholder` |
+| BP-OL-10 | the refusal carries the token | `test_fixer_emission_refuses_on_lint_finding` |
+
+Normalization: `-B -X pycache_prefix=/private/tmp/superheroes-pyc-wo2`, single-node `::test_*`.
+
+## BP-OL-9 — the hook runs on the fixer phase
+
+**Axis:** `P_FIXER` emission runs `order_lint.check_text` before committing the manifest.
+
+**Neutralization:** change `if phase == P_FIXER:` to `if False:`.
+
+**Red** — `plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_refuses_on_real_placeholder`:
+
+```
+FAILED ... AssertionError: Regex pattern did not match.
+1 failed in ...
+```
+
+**Restore:** change `if False:` back to `if phase == P_FIXER:`.
+
+**Green:** `1 passed in ...`
+
+## BP-OL-10 — the refusal carries the token
+
+**Axis:** a lint finding's token and detail appear in the `order-render-refused` string.
+
+**Neutralization:** replace the raise's format with `"order-render-refused:%s:order-lint" % skey`.
+
+**Red** — `plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_refuses_on_lint_finding`:
+
+```
+FAILED ... AssertionError: Regex pattern did not match.
+1 failed in ...
+```
+
+**Restore:** restore the original `raise ValueError("order-render-refused:%s:order-lint:%s" % (...))` format.
+
+**Green:** `1 passed in ...`
