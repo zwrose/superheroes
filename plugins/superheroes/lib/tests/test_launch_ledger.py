@@ -104,7 +104,7 @@ def _outcome(launch_id, outcome="handback", evidence="done"):
     }
 
 
-def _refused(launch_id, stage="preflight", reason="quota"):
+def _refused(launch_id, stage="preflight", reason="engine-auth"):
     return {
         "event": "refused",
         "launchId": launch_id,
@@ -5145,3 +5145,63 @@ def test_declaration_token_census_batch_reasons():
             "adjudicated test %r for token %r must contain %r as a string literal"
             % (test_name, token, token)
         )
+
+
+# --- reserved seatInstance / foreignInstanceAllowed (#1311) --------------------
+
+
+@pytest.mark.parametrize(
+    "seat_instance",
+    ["", "   ", "relative/seat", "~/.claude", 7, None, True],
+)
+def test_reserved_seat_instance_must_be_a_non_empty_absolute_path(seat_instance):
+    # axis: non-absolute or empty seatInstance refuses the whole record
+    rec = _reserved("l1", "b", ["a"], "/tmp", seatInstance=seat_instance)
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:seatInstance"
+
+
+def test_reserved_seat_instance_accepts_an_absolute_path():
+    rec = _reserved("l1", "b", ["a"], "/tmp", seatInstance="/home/seat/.claude-two")
+    assert ll.fold([rec])["ok"] is True
+
+
+@pytest.mark.parametrize("foreign_allowed", [1, "true", False])
+def test_reserved_foreign_instance_allowed_must_be_literal_true(foreign_allowed):
+    # axis: only Python True is accepted — not truthy ints or strings
+    rec = _reserved("l1", "b", ["a"], "/tmp", foreignInstanceAllowed=foreign_allowed)
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:foreignInstanceAllowed"
+
+
+def test_reserved_foreign_instance_allowed_accepts_true():
+    rec = _reserved("l1", "b", ["a"], "/tmp", foreignInstanceAllowed=True)
+    assert ll.fold([rec])["ok"] is True
+
+
+def test_fold_exposes_seat_instance_and_foreign_instance_allowed():
+    rec = _reserved(
+        "l1",
+        "b",
+        ["a"],
+        "/tmp",
+        seatInstance="/home/seat/.claude-two",
+        foreignInstanceAllowed=True,
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    lane = result["launches"]["l1"]
+    assert lane["seatInstance"] == "/home/seat/.claude-two"
+    assert lane["foreignInstanceAllowed"] is True
+
+
+def test_fold_seat_instance_and_foreign_allowed_are_none_when_omitted():
+    # axis: pre-#1311 records expose None for both omitted fields
+    rec = _reserved("l1", "b", ["a"], "/tmp")
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    lane = result["launches"]["l1"]
+    assert lane["seatInstance"] is None
+    assert lane["foreignInstanceAllowed"] is None

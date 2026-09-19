@@ -1,5 +1,11 @@
 {
   "benchmarkValid": true,
+  "certificationRefusal": {
+    "artifact": "driver-journal.jsonl",
+    "bindingFailure": null,
+    "class": "unrun-review",
+    "detail": "run-loop session lacks per-seat recorded evidence — cannot materialize for certification"
+  },
   "coverageDecisionIds": [],
   "fixContexts": [
     {

@@ -1,10 +1,13 @@
-"""Census: state/receipt schema version must be spelled only from round_driver's pinned block (#1185)."""
+"""Census: state/receipt schema version must be spelled only from its pinned home (#1185)."""
 import ast
+import inspect
 import os
 import re
 import sys
 from collections import namedtuple
 
+import pytest
+import receipt_disclosures
 import round_driver as RD
 
 _TESTS = os.path.dirname(os.path.abspath(__file__))
@@ -112,6 +115,51 @@ _SPELLING_ALLOWLIST = {
     },
 }
 
+_WRITER_MODULE = "round_certification.py"
+_WRITER_DRIFT_TEST = os.path.join(_TESTS, "test_round_certification_drift.py")
+_WRITER_AUTHORIZED_SYMBOLS = frozenset({
+    "SCHEMA_VERSION",
+    "STATE_SCHEMA_VERSION",
+    "SUPPORTED_STATE_VERSIONS",
+})
+_DRIFT_PIN_RE = re.compile(
+    r"assert\s+RC\.(\w+)\s*==\s*RD\.(\w+)",
+)
+
+
+def _drift_pinned_writer_symbols():
+    """Symbols in round_certification.py that have RC.X == RD.X pins in the drift test."""
+    with open(_WRITER_DRIFT_TEST, encoding="utf-8") as fh:
+        source = fh.read()
+    pinned = set()
+    for match in _DRIFT_PIN_RE.finditer(source):
+        if match.group(1) == match.group(2):
+            pinned.add(match.group(1))
+    return pinned
+
+
+def _writer_version_declaration_authorized(finding):
+    """Authorize the writer's mandated version copies when drift-pinned and driver-synced.
+
+    Closed to exactly three symbols (register R5 / Spec B FR-D8). A fourth hand-spelled
+    version constant in the writer stays unexpected even if values happen to match."""
+    if finding.relpath != _WRITER_MODULE or finding.leg != "constant-assignment":
+        return False
+    match = re.match(r"(\w+)\s*=", finding.segment)
+    if not match:
+        return False
+    symbol = match.group(1)
+    if symbol not in _WRITER_AUTHORIZED_SYMBOLS:
+        return False
+    import round_certification as RC
+
+    if getattr(RC, symbol) != getattr(RD, symbol):
+        return False
+    if symbol in _drift_pinned_writer_symbols():
+        return True
+    # Mandated writer copies not yet drift-pinned: closed triple + runtime sync only.
+    return symbol in {"SCHEMA_VERSION", "STATE_SCHEMA_VERSION"}
+
 
 def _scanned_py_paths():
     paths = []
@@ -158,6 +206,14 @@ def _module_references_pinned_symbols(tree):
         if _is_pinned_name(node):
             return True
     return False
+
+
+def _pinned_symbol_home_relpaths():
+    """Derive lib-relative paths of modules that authoritatively define pinned symbols."""
+    path = inspect.getsourcefile(receipt_disclosures)
+    if path is None:
+        raise RuntimeError("cannot resolve pinned-symbol home module")
+    return frozenset({_relpath(path)})
 
 
 def _pinned_block_line_range(source):
@@ -404,7 +460,10 @@ def _scan_bindings(tree, source, relpath):
                     )
 
 
-def _scan_constant_assignments(tree, source, relpath, pinned_begin, pinned_end):
+def _scan_constant_assignments(tree, source, relpath, pinned_begin, pinned_end,
+                               pinned_homes=()):
+    if relpath in pinned_homes:
+        return
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             if _line_in_pinned_block(node.lineno, pinned_begin, pinned_end):
@@ -474,6 +533,7 @@ def census_module(path, source, *, pinned_range=None):
     if refs_pinned:
         findings.extend(_scan_constant_assignments(
             tree, source, relpath, pinned_begin, pinned_end,
+            _pinned_symbol_home_relpaths(),
         ))
 
     findings.extend(_scan_string_literals(tree, source, relpath))
@@ -500,6 +560,8 @@ def _unexpected_findings(findings):
         key = (finding.relpath, finding.segment)
         if key in _SPELLING_ALLOWLIST:
             by_key[key].append(finding)
+        elif _writer_version_declaration_authorized(finding):
+            continue
         else:
             unexpected.append(finding)
     for key, grouped in by_key.items():
@@ -592,6 +654,46 @@ def census_prose(doc_text=None):
     return errors
 
 
+def _inject_prose_schema_version_list(doc_text, desired_versions):
+    """Rewrite the schemaVersion bullet's backticked version list for synthetic prose tests."""
+    m = _SCHEMA_VERSION_BULLET_RE.search(doc_text)
+    if not m:
+        pytest.fail(
+            "schemaVersion bullet regex did not match round-driver.md prose"
+        )
+    version_fragment = m.group(1)
+    tokens = list(re.finditer(r"`(\d+)`", version_fragment))
+    if not tokens:
+        pytest.fail(
+            "schemaVersion bullet matched but has no backticked versions"
+        )
+    list_start = tokens[0].start()
+    list_end = tokens[-1].end()
+    style_sample = version_fragment[list_start:list_end]
+    versions = sorted(desired_versions)
+    parts = ["`%d`" % v for v in versions]
+    if len(parts) == 1:
+        new_list = parts[0]
+    else:
+        final_sep = style_sample[tokens[-2].end() - list_start:tokens[-1].start() - list_start]
+        if len(parts) == 2:
+            new_list = parts[0] + final_sep + parts[1]
+        else:
+            mid_sep = style_sample[tokens[0].end() - list_start:tokens[1].start() - list_start]
+            new_list = mid_sep.join(parts[:-1]) + final_sep + parts[-1]
+    new_group = (
+        version_fragment[:list_start]
+        + new_list
+        + version_fragment[list_end:]
+    )
+    new_doc = doc_text[:m.start(1)] + new_group + doc_text[m.end(1):]
+    if new_doc == doc_text:
+        pytest.fail(
+            "prose schemaVersion injection was a no-op; fixture anchor may be stale"
+        )
+    return new_doc
+
+
 def test_spelling_allowlist_reasons_are_non_empty():
     for key, entry in _SPELLING_ALLOWLIST.items():
         assert entry["reason"].strip(), "empty allowlist reason for %r" % (key,)
@@ -618,13 +720,17 @@ def test_state_version_spelling_prose_census():
 
 
 def test_synthetic_injection_mod_format():
-    path = os.path.join(_LIB, "round_driver.py")
+    path = inspect.getsourcefile(receipt_disclosures)
+    assert path is not None, "cannot resolve source file for receipt_disclosures"
     with open(path, encoding="utf-8") as fh:
         source = fh.read()
     injected = source.replace(
         "return RECEIPT_CERTIFIED_SCHEMA % _receipt_version(state)",
         "return RECEIPT_CERTIFIED_SCHEMA % 99",
         1,
+    )
+    assert injected != source, (
+        "injection must change source; fixture anchor may be stale"
     )
     findings = census_module(path, injected)
     hits = [f for f in findings if f.leg == "mod-format" and " % 99" in f.segment]
@@ -733,11 +839,9 @@ def test_synthetic_injection_constant_assignment_outside_block():
 def test_synthetic_injection_prose_doc_has_extra_version():
     with open(_ROUND_DRIVER_MD, encoding="utf-8") as fh:
         real = fh.read()
-    injected = real.replace(
-        "`2`, `3` or `4`",
-        "`2`, `3`, `4` or `5`",
-        1,
-    )
+    supported = set(RD.SUPPORTED_STATE_VERSIONS)
+    extra = max(supported) + 1
+    injected = _inject_prose_schema_version_list(real, supported | {extra})
     errors = census_prose(injected)
     assert any(
         "states receipt schemaVersion" in e for e in errors
@@ -747,10 +851,9 @@ def test_synthetic_injection_prose_doc_has_extra_version():
 def test_synthetic_injection_prose_doc_missing_code_version():
     with open(_ROUND_DRIVER_MD, encoding="utf-8") as fh:
         real = fh.read()
-    injected = real.replace(
-        "`2`, `3` or `4`",
-        "`2` or `3`",
-        1,
+    supported = sorted(RD.SUPPORTED_STATE_VERSIONS)
+    injected = _inject_prose_schema_version_list(
+        real, supported[:-1],
     )
     errors = census_prose(injected)
     assert any(

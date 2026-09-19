@@ -1,0 +1,197 @@
+"""Certification receipt today-fields must match round_driver.build_receipt (#1271 C12 L2-G)."""
+import json
+import os
+import shutil
+
+import pytest
+import round_certification as RC
+import round_driver as RD
+
+from round_certification_fixtures import (
+    DEFAULT_PANEL_PAYLOAD_SHA,
+    PARITY_FIXTURES,
+    STATE_FILE,
+    parity_multi_round_fix,
+    write_session,
+)
+
+CERTIFICATION_EXTRA_KEYS = frozenset(
+    ("terminalState", "terminalCause", "seats", "disclosures", "provenanceLabels")
+)
+
+# The writer's receipt is a superset of the driver's except certificationShape when any
+# seat is hand-landed — the writer labels audited-chain, never full-panel-confirmed (#1271).
+# Findings carry disposition proof on the writer receipt (register R5/R6) that the driver
+# projection omits — compare via _assert_findings_parity instead of strict equality.
+PARITY_FIELD_EXCEPTIONS = frozenset({"certificationShape", "findings"})
+
+
+def _load_state(session_dir):
+    with open(os.path.join(session_dir, STATE_FILE), encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _assert_findings_parity(session_dir, driver_findings, cert_findings):
+    state = _load_state(session_dir)
+    state_rows = [f for f in (state.get("findings") or []) if isinstance(f, dict)]
+    assert len(driver_findings) == len(cert_findings) == len(state_rows)
+    for drv, cert, src in zip(driver_findings, cert_findings, state_rows):
+        for key, val in drv.items():
+            assert cert.get(key) == val
+        projected = RC._project_finding(src)
+        assert cert.get("disposition") == projected.get("disposition")
+        assert cert.get("dispositionReceipt") == projected.get("dispositionReceipt")
+
+
+def _assert_receipt_parity(session_dir):
+    assert len(PARITY_FIELD_EXCEPTIONS) == 2
+    state = _load_state(session_dir)
+    driver_receipt = RD.build_receipt(state, session_dir)
+    cert_receipt, refusal = RC.certify(session_dir)
+    assert refusal is None, refusal
+    assert cert_receipt is not None
+    assert set(cert_receipt.keys()) >= set(driver_receipt.keys())
+    for key in driver_receipt:
+        if key in PARITY_FIELD_EXCEPTIONS:
+            continue
+        assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
+    _assert_findings_parity(
+        session_dir, driver_receipt["findings"], cert_receipt["findings"]
+    )
+    hand_landed = any(
+        s.get("provenance") == RC.PROVENANCE_HAND_LANDED for s in cert_receipt.get("seats") or []
+    )
+    if hand_landed:
+        assert cert_receipt["certificationShape"] == "audited-chain"
+    else:
+        assert cert_receipt["certificationShape"] == driver_receipt["certificationShape"]
+    extra = set(cert_receipt.keys()) - set(driver_receipt.keys())
+    assert extra == CERTIFICATION_EXTRA_KEYS, "unexpected extra keys: %s" % sorted(extra)
+    ok, reason = RD.validate_receipt(cert_receipt)
+    assert ok, reason
+
+
+def parity_hand_landed_shape(tmp_path):
+    """Hand-landed seat forces audited-chain certificationShape on the writer receipt."""
+    payload = {"findings": []}
+    payload_sha = DEFAULT_PANEL_PAYLOAD_SHA
+    evidence = {
+        "source": "runner",
+        "runnerNonce": "nonce-code-reviewer-dispatch-panel-a0-o0",
+        "recordDigest": "d" * 64,
+        "resultDigest": "e" * 64,
+        "resultKind": "findings",
+        "observation": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+            "tokens": None,
+            "toolCalls": None,
+        },
+    }
+    return write_session(
+        tmp_path,
+        name="hand-landed",
+        state={
+            "certification": {
+                "shape": "full-panel-confirmed",
+                "fullPanel": True,
+                "independence": "independent",
+                "base": "fetched",
+                "shapeDrivers": [],
+            },
+            "rounds": {
+                "1": {
+                    "roundKind": "baseline",
+                    "seatStatus": {"code-reviewer": "run"},
+                    "blockingCount": 0,
+                    "verifyResult": "pass",
+                    "verifyPasses": [],
+                }
+            },
+        },
+        journal_lines=[
+            {
+                "cmd": "record-result",
+                "outcome": "recorded",
+                "phase": RC.PANEL_PHASE,
+                "round": 1,
+                "attempt": 0,
+                "seat": "code-reviewer",
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "payloadSha256": payload_sha,
+                "executionEvidence": evidence,
+                "recordIdentity": {
+                    "phase": RC.PANEL_PHASE,
+                    "seat": "code-reviewer",
+                    "occurrence": 0,
+                    "attempt": 0,
+                },
+            }
+        ],
+        envelopes=[
+            {
+                "seat": "code-reviewer",
+                "payloadSha256": payload_sha,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "executionEvidence": evidence,
+                "payload": payload,
+            }
+        ],
+    )
+
+
+PARITY_FIXTURES_WITH_HAND_LANDED = PARITY_FIXTURES + (
+    ("hand-landed-shape", parity_hand_landed_shape),
+)
+
+ROUND_TRIP_FIXTURES = (
+    ("converged-single-round", PARITY_FIXTURES[0][1]),
+    ("multi-round-fix", parity_multi_round_fix),
+    ("hand-landed-shape", parity_hand_landed_shape),
+)
+
+
+@pytest.mark.parametrize(
+    "label,builder",
+    PARITY_FIXTURES_WITH_HAND_LANDED,
+    ids=[label for label, _ in PARITY_FIXTURES_WITH_HAND_LANDED],
+)
+def test_certification_receipt_matches_driver_today_fields(tmp_path, label, builder):
+    session_dir = builder(tmp_path)
+    _assert_receipt_parity(session_dir)
+
+
+@pytest.mark.parametrize(
+    "label,builder",
+    ROUND_TRIP_FIXTURES,
+    ids=[label for label, _ in ROUND_TRIP_FIXTURES],
+)
+def test_materialized_state_round_trip_matches_driver_receipt(tmp_path, label, builder):
+    session_dir = builder(tmp_path)
+    state = _load_state(session_dir)
+    materialized = RD._materialize_run_loop_session(state, 0, source_session_dir=session_dir)
+    try:
+        cert_receipt, refusal = RC.certify(materialized)
+        assert refusal is None, refusal
+        driver_receipt = RD.build_receipt(state, session_dir)
+        assert set(cert_receipt.keys()) >= set(driver_receipt.keys())
+        for key in driver_receipt:
+            if key in PARITY_FIELD_EXCEPTIONS:
+                continue
+            assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
+        _assert_findings_parity(
+            materialized, driver_receipt["findings"], cert_receipt["findings"]
+        )
+        hand_landed = any(
+            s.get("provenance") == RC.PROVENANCE_HAND_LANDED
+            for s in cert_receipt.get("seats") or []
+        )
+        if hand_landed:
+            assert cert_receipt["certificationShape"] == "audited-chain"
+        else:
+            assert cert_receipt["certificationShape"] == driver_receipt["certificationShape"]
+    finally:
+        shutil.rmtree(materialized, ignore_errors=True)
