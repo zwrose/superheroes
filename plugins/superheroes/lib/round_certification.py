@@ -129,6 +129,7 @@ _DECISION_KEYS = (
     "capped-with-open-critical",
     "confirmation-rearm",
     "converged",
+    "fix-batch-split",
     "judgment-fail-closed",
     "judgment-gate",
     "judgment-skip",
