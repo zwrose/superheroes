@@ -381,9 +381,23 @@ def _out_of_scope_follow_up(finding):
     return None
 
 
-def _certification_findings(state):
-    """Live open-work plus durable ledger and review-record history for disposition checks."""
+def _certification_findings_by_key(state):
+    """Keyed findings for disposition checks — ledger owner uses ledger + live only."""
     by_key = {}
+    if state.get("dispositionLedgerOwner") == "ledger":
+        ledger = state.get("dispositionLedger")
+        if isinstance(ledger, list):
+            for finding in ledger:
+                if isinstance(finding, dict):
+                    key = _finding_identity_key(finding)
+                    if key:
+                        by_key[key] = finding
+        for finding in state.get("findings") or []:
+            if isinstance(finding, dict):
+                key = _finding_identity_key(finding)
+                if key:
+                    by_key[key] = finding
+        return by_key
     ledger = state.get("dispositionLedger")
     if isinstance(ledger, list):
         for finding in ledger:
@@ -405,7 +419,37 @@ def _certification_findings(state):
             key = _finding_identity_key(finding)
             if key:
                 by_key[key] = finding
-    return list(by_key.values())
+    return by_key
+
+
+def _certification_findings(state):
+    """Live open-work plus durable ledger and review-record history for disposition checks."""
+    return list(_certification_findings_by_key(state).values())
+
+
+def _resolve_merged_into_entry(finding, by_key):
+    """Follow mergedInto through by_key; None when the chain does not resolve."""
+    if not isinstance(finding, dict):
+        return finding
+    if not finding.get("mergedInto"):
+        return finding
+    limit = max(len(by_key), 1)
+    entry = finding
+    visited = set()
+    for _ in range(limit):
+        into = entry.get("mergedInto")
+        if not isinstance(into, str) or not into:
+            return None
+        if into in visited:
+            return None
+        visited.add(into)
+        target = by_key.get(into)
+        if target is None:
+            return None
+        if not target.get("mergedInto"):
+            return target
+        entry = target
+    return None
 
 
 def _resolve_repo_head_sha(ctx):
@@ -1498,12 +1542,23 @@ def check_disposition_without_receipt(ctx):
         )
     certified_head = _certified_head_sha(ctx)
     disclosures = []
-    for finding in _certification_findings(state):
+    by_key = _certification_findings_by_key(state)
+    for finding in by_key.values():
         if not isinstance(finding, dict):
             continue
         fid = finding.get("id") or finding.get("title") or "finding"
         severity = finding.get("severity")
-        disposition = finding.get("disposition")
+        graded = finding
+        if finding.get("mergedInto"):
+            resolved = _resolve_merged_into_entry(finding, by_key)
+            if resolved is None:
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "merged-into chain does not resolve",
+                )
+            graded = resolved
+        disposition = graded.get("disposition")
         if disposition is None:
             return _refusal(
                 "disposition-without-receipt",
@@ -1523,7 +1578,7 @@ def check_disposition_without_receipt(ctx):
                 "finding severity %r is not in the closed severity contract" % (severity,),
             )
         if disposition == "fixed":
-            receipt = finding.get("dispositionReceipt")
+            receipt = graded.get("dispositionReceipt")
             if not isinstance(receipt, dict):
                 return _refusal(
                     "disposition-without-receipt",
@@ -1545,11 +1600,11 @@ def check_disposition_without_receipt(ctx):
                     "fixed disposition verification receipt did not pass",
                     binding_failure="verify-not-pass",
                 )
-            refusal = _fix_still_present_at_head(ctx, finding, receipt)
+            refusal = _fix_still_present_at_head(ctx, graded, receipt)
             if refusal is not None:
                 return refusal
         elif disposition == "refuted":
-            if _refuted_reason_text(finding) is None:
+            if _refuted_reason_text(graded) is None:
                 return _refusal(
                     "disposition-without-receipt",
                     fid,
@@ -1562,7 +1617,7 @@ def check_disposition_without_receipt(ctx):
                     fid,
                     "Critical finding may not take out-of-scope disposition",
                 )
-            follow_up = _out_of_scope_follow_up(finding)
+            follow_up = _out_of_scope_follow_up(graded)
             if not isinstance(follow_up, dict):
                 return _refusal(
                     "disposition-without-receipt",

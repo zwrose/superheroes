@@ -1260,31 +1260,215 @@ def _finding_key_of(finding):
     return session_contract.finding_identity_key(copy)
 
 
-def _archive_disposition_findings(state, departing):
-    """Append findings leaving the live list that carry disposition into dispositionLedger."""
-    if not departing:
-        return
+_DISPOSITION_FAMILY_FIELDS = (
+    "disposition", "dispositionRound", "dispositionReceipt", "refutedReason",
+    "outOfScopeReason", "followUp", "mergedInto",
+)
+
+
+def _ensure_disposition_ledger(state):
     ledger = state.get("dispositionLedger")
     if not isinstance(ledger, list):
         ledger = []
         state["dispositionLedger"] = ledger
+    return ledger
+
+
+def _ledger_index_by_key(ledger):
     seen = {}
     for i, entry in enumerate(ledger):
         if isinstance(entry, dict):
             key = _finding_identity_key(entry)
             if key:
                 seen[key] = i
-    for finding in departing:
-        if not isinstance(finding, dict) or finding.get("disposition") is None:
+    return seen
+
+
+def _live_finding_by_key(state, key):
+    for finding in state.get("findings") or []:
+        if isinstance(finding, dict) and _finding_identity_key(finding) == key:
+            return finding
+    return None
+
+
+def _strip_disposition_family(entry):
+    copy = dict(entry)
+    for field in _DISPOSITION_FAMILY_FIELDS:
+        copy.pop(field, None)
+    return copy
+
+
+def _stage_findings(state, compiled):
+    """The only writer of ``_toVerify`` — seeds one ledger entry per compiled candidate."""
+    state["_toVerify"] = compiled
+    if not isinstance(compiled, list):
+        return
+    ledger = _ensure_disposition_ledger(state)
+    seen = _ledger_index_by_key(ledger)
+    round_no = state["round"]
+    seeded = False
+    for finding in compiled:
+        if not isinstance(finding, dict):
             continue
         key = _finding_identity_key(finding)
         if not key:
             continue
+        existing = ledger[seen[key]] if key in seen else None
+        entry = dict(finding)
+        entry["raisedRound"] = round_no
+        if isinstance(existing, dict) and existing.get("disposition") is not None:
+            for field in _DISPOSITION_FAMILY_FIELDS:
+                if field in existing:
+                    entry[field] = existing[field]
+        else:
+            entry = _strip_disposition_family(entry)
+            entry["raisedRound"] = round_no
         if key in seen:
-            ledger[seen[key]] = finding
+            ledger[seen[key]] = entry
         else:
             seen[key] = len(ledger)
-            ledger.append(finding)
+            ledger.append(entry)
+        seeded = True
+    if seeded:
+        state["dispositionLedgerOwner"] = "ledger"
+
+
+def _record_disposition(state, key, disposition, round_no, **fields):
+    if disposition not in ("fixed", "refuted", "out-of-scope"):
+        raise ValueError("unknown disposition %r" % (disposition,))
+    ledger = _ensure_disposition_ledger(state)
+    seen = _ledger_index_by_key(ledger)
+    live = _live_finding_by_key(state, key)
+    if key in seen and isinstance(ledger[seen[key]], dict):
+        entry = dict(ledger[seen[key]])
+    elif live is not None:
+        entry = dict(live)
+        entry["raisedRound"] = state.get("round", round_no)
+    else:
+        entry = {session_contract.FINDING_KEY_FIELD: key}
+    entry["disposition"] = disposition
+    entry["dispositionRound"] = round_no
+    for fname, val in fields.items():
+        if val is not None:
+            entry[fname] = val
+    if key in seen:
+        ledger[seen[key]] = entry
+    else:
+        ledger.append(entry)
+    if live is not None:
+        live["disposition"] = disposition
+        live["dispositionRound"] = round_no
+        for fname, val in fields.items():
+            if val is not None:
+                live[fname] = val
+
+
+def _record_merged_into(state, key, into_key):
+    ledger = _ensure_disposition_ledger(state)
+    seen = _ledger_index_by_key(ledger)
+    live = _live_finding_by_key(state, key)
+    if key in seen and isinstance(ledger[seen[key]], dict):
+        entry = dict(ledger[seen[key]])
+    elif live is not None:
+        entry = dict(live)
+        entry["raisedRound"] = state.get("round", state["round"])
+    else:
+        entry = {session_contract.FINDING_KEY_FIELD: key}
+    entry["mergedInto"] = into_key
+    if key in seen:
+        ledger[seen[key]] = entry
+    else:
+        ledger.append(entry)
+
+
+def _fix_receipt_content_fields(session_dir, head_sha, file_path):
+    if not session_dir or not isinstance(head_sha, str) or not head_sha:
+        return {}
+    if not isinstance(file_path, str) or not file_path:
+        return {}
+    data = _read_head_content_blobs_file(session_dir)
+    if not isinstance(data, dict):
+        return {}
+    for row in data.get("reads") or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("headSha") == head_sha and row.get("path") == file_path:
+            fields = {"fixContentHeadSha": head_sha}
+            digest = row.get("contentDigest")
+            if isinstance(digest, str) and digest:
+                fields["fixContentDigest"] = digest
+            nbytes = row.get("bytes")
+            if isinstance(nbytes, int):
+                fields["fixContentBytes"] = nbytes
+            return fields
+    return {}
+
+
+def _verify_result_for_disposition(state, round_no):
+    """Per-round verify result, or the latest prior round's when a delta audits without re-verify."""
+    rounds = state.get("rounds") or {}
+    rec = rounds.get(str(round_no)) or {}
+    if rec.get("verifyResult") is not None:
+        return rec.get("verifyResult")
+    prior = []
+    for key in rounds:
+        try:
+            prior.append(int(key))
+        except (TypeError, ValueError):
+            continue
+    for rnd in sorted(prior, reverse=True):
+        if rnd >= round_no:
+            continue
+        val = (rounds.get(str(rnd)) or {}).get("verifyResult")
+        if val is not None:
+            return val
+    return None
+
+
+def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):
+    cfg = state.get("config") or {}
+    head = cfg.get(FIX_FOLD_HEAD_KEY) if isinstance(cfg, dict) else None
+    verify_result = _verify_result_for_disposition(state, state.get("round"))
+    receipt = {}
+    if isinstance(head, str) and head:
+        receipt["headSha"] = head
+    if verify_result is not None:
+        receipt["verifyResult"] = verify_result
+    file_path = None
+    if isinstance(target, dict):
+        file_path = target.get("file")
+    if not file_path:
+        live = _live_finding_by_key(state, finding_key)
+        if isinstance(live, dict):
+            file_path = live.get("file")
+    if session_dir and isinstance(head, str) and head and isinstance(file_path, str):
+        receipt.update(_fix_receipt_content_fields(session_dir, head, file_path))
+    return receipt
+
+
+def _archive_departures(state, departing):
+    """Write every departing keyed finding into dispositionLedger (replace-by-key)."""
+    if not departing:
+        return
+    ledger = _ensure_disposition_ledger(state)
+    seen = _ledger_index_by_key(ledger)
+    for finding in departing:
+        if not isinstance(finding, dict):
+            continue
+        key = _finding_identity_key(finding)
+        if not key:
+            continue
+        replacement = dict(finding)
+        if key in seen and isinstance(ledger[seen[key]], dict):
+            prior = ledger[seen[key]]
+            for field in _DISPOSITION_FAMILY_FIELDS:
+                if field in prior and field not in replacement:
+                    replacement[field] = prior[field]
+        if key in seen:
+            ledger[seen[key]] = replacement
+        else:
+            seen[key] = len(ledger)
+            ledger.append(replacement)
 
 
 def _set_findings(state, new_findings):
@@ -1334,7 +1518,7 @@ def _set_findings(state, new_findings):
         key = _finding_identity_key(finding)
         if key and key not in new_keys:
             departing.append(finding)
-    _archive_disposition_findings(state, departing)
+    _archive_departures(state, departing)
     state["findings"] = new_list
 
 
@@ -1766,7 +1950,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     elif phase == P_GAPSWEEP:
         _fold_gapsweep(state, config, artifact)
     elif phase == P_AUDITS:
-        _fold_audits(state, config, artifact)
+        _fold_audits(state, config, artifact, session_dir=session_dir)
     elif phase == P_SCOPED:
         _fold_scoped(state, config, artifact)
     elif phase == P_VERIFY:
@@ -2368,7 +2552,7 @@ def _fold_panel(state, config, artifact):
         dim_map[dim] = {"dimension": dim, "status": seat_status.get(dim, "run"),
                         "confidence": confidence, "tier": tier, "findings": s_findings}
     _append_review_record(state, state["round"], kind, dim_map, compiled)
-    state["_toVerify"] = compiled
+    _stage_findings(state, compiled)
     state["step"] = P_VERIFIERS
 
 
@@ -2376,6 +2560,8 @@ def _fold_verifiers(state, config, artifact):
     """Apply per-finding verification verdicts deterministically (verification.apply_verdicts)."""
     verdicts = artifact.get("verdicts") if isinstance(artifact.get("verdicts"), list) else []
     staged = verification.stage_ids(state.get("_toVerify") or [])
+    staged_by_id = {f.get("id"): f for f in staged
+                    if isinstance(f, dict) and f.get("id") is not None}
     applied = verification.apply_verdicts(staged, verdicts)
     state["_verified"] = applied["findings"]
     _record_round(state, "verify", {"drops": applied["drops"], "downgrades": applied["downgrades"],
@@ -2392,6 +2578,12 @@ def _fold_verifiers(state, config, artifact):
     })
     for d in applied["drops"]:
         _decision(state, "verifier-refuted", d.get("reason"))
+        staged = staged_by_id.get(d.get("id"))
+        if isinstance(staged, dict):
+            key = _finding_identity_key(staged)
+            if key:
+                reason = d.get("reason") or "verifier refuted (no reason recorded)"
+                _record_disposition(state, key, "refuted", state["round"], refutedReason=reason)
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
     # armed on the delta path (see _fold_scoped) so _after_findings_settled re-settles the delta.
     state["step"] = P_SYNTHESIS
@@ -2401,11 +2593,38 @@ def _fold_synthesis(state, config, artifact):
     """Merge same-root-cause survivors (verification.merge_and_rank, coverage-guaranteed), then the
     author-justification POST-filter, then decide gap-sweep / fix / terminal."""
     grouping = artifact.get("grouping") if isinstance(artifact.get("grouping"), list) else None
-    merged = verification.merge_and_rank(state.get("_verified") or [], grouping)
+    verified = state.get("_verified") or []
+    verified_by_id = {f.get("id"): f for f in verified
+                      if isinstance(f, dict) and f.get("id") is not None}
+    merged = verification.merge_and_rank(verified, grouping)
     findings = merged["findings"]
     kept, aj_drops = author_justification_filter(findings, config.get("priorComments"))
     for d in aj_drops:
         _decision(state, "author-justified-drop", d.get("justification"))
+        staged = verified_by_id.get(d.get("id"))
+        if isinstance(staged, dict):
+            key = _finding_identity_key(staged)
+            if key:
+                justification = d.get("justification") or ""
+                _record_disposition(
+                    state, key, "refuted", state["round"],
+                    refutedReason="author-justified: " + justification)
+    for merge in merged.get("merges") or []:
+        if not isinstance(merge, dict):
+            continue
+        kept_id = merge.get("kept_id")
+        kept_finding = verified_by_id.get(kept_id)
+        kept_key = _finding_identity_key(kept_finding) if isinstance(kept_finding, dict) else None
+        if not kept_key:
+            continue
+        for member_id in merge.get("member_ids") or []:
+            if member_id == kept_id:
+                continue
+            member = verified_by_id.get(member_id)
+            if isinstance(member, dict):
+                key = _finding_identity_key(member)
+                if key:
+                    _record_merged_into(state, key, kept_key)
     _record_round(state, "authorJustifiedDrops", aj_drops)
     _record_round(state, "merges", merged["merges"])
     _set_findings(state, kept)
@@ -2427,7 +2646,7 @@ def _fold_gapsweep(state, config, artifact):
     compiled, _drops = mechanical_compile(candidates, state.get("reviewedDiff"))
     if compiled:
         # route candidates through verification like any other findings.
-        state["_toVerify"] = compiled
+        _stage_findings(state, compiled)
         state["_gapMerge"] = True
         state["step"] = P_VERIFIERS
         # after verifiers → synthesis will merge with the already-settled findings.
@@ -2717,6 +2936,11 @@ def _fold_judgment(state, config, artifact):
             _decision(state, "judgment-skip",
                       "owner skipped judgment blocker %r — reason: %s"
                       % (f.get("title") or fid, reason.strip()))
+            follow_up = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
+            disp_kwargs = {"outOfScopeReason": reason.strip()}
+            if follow_up is not None:
+                disp_kwargs["followUp"] = follow_up
+            _record_disposition(state, fid, "out-of-scope", state["round"], **disp_kwargs)
             continue
         g = dict(f)
         if disposition == "fix-with-guidance":
@@ -3344,7 +3568,7 @@ def _audit_provenance_basis(state, artifact):
     return AUDIT_PROVENANCE_MIXED
 
 
-def _fold_audits(state, config, artifact):
+def _fold_audits(state, config, artifact, session_dir=None):
     """Consume the fix-audit rulings deterministically (audits.apply_audit_results). Record the
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
     results = artifact.get("results") if isinstance(artifact.get("results"), list) else []
@@ -3415,6 +3639,10 @@ def _fold_audits(state, config, artifact):
     _record_round(state, "audits", outcome["audits"])
     _record_round(state, "auditIndependence",
                   targets[0]["independence"] if targets else "n/a")
+    targets_by_id = {t.get("id"): t for t in targets if isinstance(t, dict) and t.get("id")}
+    for tid in outcome.get("discharged") or []:
+        receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
+        _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt)
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
         _decision(state, "not-discharged", aid)
@@ -3443,7 +3671,7 @@ def _fold_scoped(state, config, artifact):
     compiled, _drops = mechanical_compile(combined, state.get("reviewedDiff"))
     state["_postAudit"] = True
     if compiled:
-        state["_toVerify"] = compiled
+        _stage_findings(state, compiled)
         state["step"] = P_VERIFIERS
         # after verify+synthesis, _after_findings_settled runs; but for delta rounds we need the
         # audit-breaker + confirmation re-arm, handled in _settle_delta.
@@ -3944,6 +4172,17 @@ def _fold_stall(state, config, artifact):
         state["terminal"] = "held"
         state["certification"] = {"shape": None, "reason": "owner chose to hold"}
     elif choice == ACCEPT_RISK_CHOICE and _stall_targets_accept_risk_eligible(state):
+        follow_up = artifact.get("followUp") if isinstance(artifact.get("followUp"), dict) else None
+        for target in state.get("_stallTargets") or []:
+            if not isinstance(target, dict):
+                continue
+            key = _finding_key_of(target)
+            if not key:
+                continue
+            disp_kwargs = {"outOfScopeReason": "owner accepted the disclosed risk (stall gate)"}
+            if follow_up is not None:
+                disp_kwargs["followUp"] = follow_up
+            _record_disposition(state, key, "out-of-scope", state["round"], **disp_kwargs)
         _terminal_converged(state, config, full_panel=False,
                             note="owner accepted the disclosed (CONFIRMED) risk")
         return
