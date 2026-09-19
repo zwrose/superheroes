@@ -153,7 +153,7 @@ Children: C1 founding texts · C2 front-door references (issue-contract.md, the 
 | A | FR-F4 | 2 | Acceptance (rule, vocabulary; R4): | "the host model" means whatever runs the current session, read from the hook payload and never assum… | **C4** |
 | A | FR-F4 | 3 | Acceptance (record, deferred under R1's  | the Codex hook wiring, charter state outside the transcript, the dual-host acceptance run, and any C… | **C4** |
 | A | FR-F5 | 1 | Acceptance (rule): | native in-session seats are declared live, never probed: a LEDGERS §3 residual with R1's trigger, an… | **split:** C14 owns the engine registration and the certification disclosure line; C4 owns the LEDGERS section 3 residual |
-| A | FR-F5 | 2 | Acceptance (rule, Astra): | GPT-6 Astra becomes the codex reviewer-deep cell at effort high *(ruled 2026-09-14 at the stamp sitt… | **C14** |
+| A | FR-F5 | 2 | Acceptance (rule, Astra): | GPT-6 Astra registers as the top rung of the codex ladder (terra, sol, astra), flagged as the last peer-map… *(re-quoted 2026-09-19, Spec A amendment #7)* | **C14** |
 | A | FR-F6 | n1 | numbered | No nightly ledger or classifier.** The escape rate is the gardening pa… | outside the epic: the verification-strategy spec's own children (#1105), reciprocal seam R28 |
 | A | FR-F6 | n2 | numbered | No day count for bulk removal.** Bulk removal of behavior tests is an… | outside the epic: the verification-strategy spec's own children (#1105), reciprocal seam R28 |
 | A | FR-F6 | n3 | numbered | Delete on contact; the keep list is the only record** *(simplified 202… | **split:** outside the epic (#1105's children) owns the keep-list seed and the verification spec's FR-1 amendment; C3 owns the builder's at-contact classification step as review-discipline text, which every child carries through R28 |
@@ -247,7 +247,7 @@ Children: C1 founding texts · C2 front-door references (issue-contract.md, the 
 | B | FR-S8 | 2 | Acceptance (rule, stripped changes are s | the export keeps the agent-configuration paths out of the tree the seats run in (the twelve config f… | **C16** |
 | B | FR-S8 | 3 | Acceptance (rule, what retires and what  | export-time path containment (the refusal of a symlink that points outside the export, recorded toda… | **C16** |
 | B | FR-S8 | 4 | Acceptance (rule, the seats read the pro | the security lens reads the project's declared threat model (Spec A FR-E1 item 10). An accepted expo… | **C4** |
-| B | FR-S9 | 1 | Acceptance (rule): | GPT-6 Astra registers under the codex vendor as the top rung (ladder terra, sol, astra), becomes the… | **C14** |
+| B | FR-S9 | 1 | Acceptance (rule): | GPT-6 Astra registers under the codex vendor as the top rung (ladder terra, sol, astra). **Sol stays the default… *(re-quoted 2026-09-19, Spec B amendment #1)* | **C14** |
 | B | FR-S9 | 2 | Acceptance (rule, the gate): | the registration lands only after one live security-lens dispatch on a planted fail-open returns a f… | **C14** |
 
 **Counts.** C1: 6, C10: 14, C11: 6, C12: 24, C13: 9, C14: 4, C15: 1, C16: 5, C17: 30, C2: 46, C3: 20, C4: 4, C5: 3, C6: 16, C7: 5, C8: 1, CLOSED-DERIVATION: 6, OUTSIDE-VERIFICATION: 6, SPLIT-B5: 2, SPLIT-B6: 1, SPLIT-C1: 3, SPLIT-D8: 5, SPLIT-E1: 1, SPLIT-F1: 5, SPLIT-F3: 1, SPLIT-F5: 1, SPLIT-F6: 1, SPLIT-M1: 1, SPLIT-M2: 1, SPLIT-M3: 2, SPLIT-M4: 2, SPLIT-M5: 2, SPLIT-M7: 1, STAMP: 5. Total criteria: 240. Unallocated: 0.
