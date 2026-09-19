@@ -70,6 +70,9 @@ REFUSAL_CLASSES = frozenset(
 )
 
 PANEL_PHASE = session_contract.PANEL_PHASE
+# dispatch-fixer / dispatch-audits phase tokens (round_phases leaf values; inlined for import register).
+P_FIXER = "dispatch-fixer"
+P_AUDITS = "dispatch-audits"
 
 SEAT_MISSING_SCHEMA = session_contract.SEAT_MISSING_SCHEMA
 SEAT_RESULT_SCHEMA_V2 = "seat-result/2"
@@ -194,6 +197,7 @@ def certify(session_dir):
         check_unfetched_findings,
         check_unrun_review,
         check_same_family_seat,
+        check_seat_independence,
         check_disposition_without_receipt,
         check_evidence_head_bound,
         check_hand_landed_read_engaged,
@@ -1207,6 +1211,154 @@ def check_same_family_seat(ctx):
     return None
 
 
+def _runner_recorded_vendor_status(obs, session_dir, seat_entry):
+    """Return ``vendor`` | ``skip`` | ``missing`` for an audit seat's runner-recorded vendor."""
+    seat = seat_entry["seat"]
+    phase = seat_entry["phase"]
+    attempt = seat_entry["attempt"]
+    occurrence = seat_entry.get("occurrence", 0)
+    rnd = seat_entry["round"]
+    vendor = obs.get("source") if isinstance(obs, dict) else None
+    if vendor == "runner":
+        return "skip"
+    if isinstance(vendor, str) and vendor:
+        return vendor
+    provenance = seat_entry.get("provenance")
+    if provenance == PROVENANCE_HAND_LANDED:
+        env, _path = _load_envelope(
+            session_dir,
+            rnd,
+            phase,
+            seat,
+            attempt,
+            occurrence,
+        )
+        if isinstance(env, dict):
+            evidence = env.get("executionEvidence")
+            if isinstance(evidence, dict):
+                vendor = evidence.get("source")
+    if vendor == "runner":
+        return "skip"
+    if isinstance(vendor, str) and vendor:
+        return vendor
+    return "missing"
+
+
+def check_seat_independence(ctx):
+    # axis: the receipt's independence is read from the record — the declared fixer vendor and each
+    # audit seat's runner-recorded vendor — and a record that contradicts itself refuses.
+    state = ctx["state"]
+    journal = ctx["journal"]
+    session_dir = ctx["session_dir"]
+    cfg = state.get("config") or {}
+    fixer = cfg.get("fixerVendor")
+    fixer_fam = model_registry.family_for("code-fixer", fixer)
+    if fixer_fam is None:
+        return _refusal(
+            "unfetched-findings",
+            STATE_FILE,
+            "fixer vendor %r has no maker family" % (fixer,),
+        )
+    for seat_entry in _collect_seats(ctx):
+        seat = seat_entry["seat"]
+        phase = seat_entry["phase"]
+        attempt = seat_entry["attempt"]
+        occurrence = seat_entry.get("occurrence", 0)
+        rnd = seat_entry["round"]
+        obs = _journal_observation_for_seat(
+            journal, seat, phase, attempt, occurrence, rnd
+        )
+        if phase == P_FIXER:
+            source = obs.get("source") if isinstance(obs, dict) else None
+            if (isinstance(source, str) and source and source != "runner" and source != fixer):
+                return _refusal(
+                    "unfetched-findings",
+                    seat,
+                    "fixer seat %s ran on %r per the runner record; the declared fixer vendor is %r"
+                    % (seat, source, fixer),
+                    binding_failure="fixer-vendor-contradicted",
+                )
+            continue
+        if phase != P_AUDITS:
+            continue
+        vendor_status = _runner_recorded_vendor_status(obs, session_dir, seat_entry)
+        if vendor_status == "skip":
+            continue
+        if vendor_status == "missing":
+            return _refusal(
+                "unrun-review",
+                seat,
+                "audit seat %s has no runner-recorded vendor" % seat,
+                binding_failure="auditor-vendor-underivable",
+            )
+        vendor = vendor_status
+        fam = model_registry.family_for("verifier", vendor)
+        if fam is None:
+            return _refusal(
+                "unfetched-findings",
+                seat,
+                "audit seat %s vendor %r has no registry family" % (seat, vendor),
+            )
+        if fam == fixer_fam:
+            return _refusal(
+                "same-family-seat",
+                seat,
+                "audit seat %s ran on %r, the maker family %r, per the runner record"
+                % (seat, vendor, fam),
+            )
+    return None
+
+
+def _independence_block(ctx):
+    state = ctx["state"]
+    journal = ctx["journal"]
+    cfg = state.get("config") or {}
+    fixer = cfg.get("fixerVendor")
+    fixer_fam = model_registry.family_for("code-fixer", fixer)
+    audit_seats = []
+    for seat_entry in _collect_seats(ctx):
+        if seat_entry.get("phase") != P_AUDITS:
+            continue
+        seat = seat_entry["seat"]
+        phase = seat_entry["phase"]
+        attempt = seat_entry["attempt"]
+        occurrence = seat_entry.get("occurrence", 0)
+        rnd = seat_entry["round"]
+        obs = _journal_observation_for_seat(
+            journal, seat, phase, attempt, occurrence, rnd
+        )
+        vendor_status = _runner_recorded_vendor_status(obs, ctx["session_dir"], seat_entry)
+        if vendor_status in ("skip", "missing"):
+            continue
+        vendor = vendor_status
+        fam = model_registry.family_for("verifier", vendor)
+        audit_seats.append(
+            {
+                "seat": seat,
+                "round": rnd,
+                "vendor": vendor,
+                "family": fam,
+            }
+        )
+    if audit_seats:
+        status = "independent"
+        basis = "runner-recorded-audit-seats"
+    elif receipt_disclosures.independent_auditor_available(cfg)[0]:
+        status = "independent"
+        basis = "declared-vendors"
+    else:
+        status = "degraded"
+        basis = "no-independent-auditor-declared"
+    return {
+        "status": status,
+        "basis": basis,
+        "fixerVendor": fixer,
+        "fixerFamily": fixer_fam,
+        "declaredVendors": receipt_disclosures.live_vendors(cfg),
+        "auditSeats": audit_seats,
+    }
+
+
 def check_unfetched_findings(ctx):
     session_dir = ctx["session_dir"]
     journal = ctx["journal"]
@@ -1811,6 +1963,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
         "terminalCause": terminal_cause,
         "seats": seat_rows,
         "disclosures": {"importantOutOfScope": list(ctx.get("important_disclosures") or [])},
+        "independence": _independence_block(ctx),
         "provenanceLabels": {
             "derived": [
                 "schemaVersion",
@@ -1820,6 +1973,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
                 "seats",
                 "disclosures",
                 "certificationShape",
+                "independence",
             ],
             "makerAuthored": [
                 "verdict",

@@ -169,6 +169,26 @@ def receipt_round_disclosures(entry, form, state):
             if round_entry_key_allowed(chan, form, state)}
 
 
+def live_vendors(config):
+    vendors = config.get("vendors") if isinstance(config, dict) else None
+    if not isinstance(vendors, list) or not vendors:
+        return ["claude"]
+    return [v for v in vendors if isinstance(v, str) and v]
+
+
+def independent_auditor_available(config):
+    fixer = config.get("fixerVendor") if isinstance(config, dict) else None
+    fixer_fam = model_registry.family_for("code-fixer", fixer)
+    if fixer_fam is None:
+        return False, None
+    for v in live_vendors(config):
+        if v != fixer:
+            cand_fam = model_registry.family_for("verifier", v)
+            if cand_fam is not None and cand_fam != fixer_fam:
+                return True, fixer_fam
+    return False, fixer_fam
+
+
 def degraded(state):
     return bool(state.get("independenceDegraded"))
 
@@ -548,6 +568,8 @@ __all__ = (
     "round_entry_key_declared",
     "round_entry_key_allowed",
     "receipt_round_disclosures",
+    "live_vendors",
+    "independent_auditor_available",
     "degraded",
     "base_degraded",
     "author_family",

@@ -275,6 +275,7 @@ round_entry_key_declared = receipt_disclosures.round_entry_key_declared
 round_entry_key_allowed = receipt_disclosures.round_entry_key_allowed
 receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
+_live_vendors = receipt_disclosures.live_vendors
 str_list = receipt_disclosures.str_list
 dict_list = receipt_disclosures.dict_list
 bool_value = receipt_disclosures.bool_value
@@ -832,13 +833,6 @@ def author_justification_filter(findings, prior_comments):
 # independence + certification shape
 # =============================================================================================
 
-def _live_vendors(config):
-    vendors = config.get("vendors") if isinstance(config, dict) else None
-    if not isinstance(vendors, list) or not vendors:
-        return ["claude"]
-    return [v for v in vendors if isinstance(v, str) and v]
-
-
 def _auditor_vendor(config, fixer_vendor):
     """The auditor of a fix is never the fixer's model FAMILY (CONVENTIONS §7.5 — independence keys
     on family, not the dispatch CLI). Independence is NEVER satisfied between two cursor first-party
@@ -1013,7 +1007,12 @@ def new_state(config=None):
         "auditRounds": [],
         "confirmations": 0,
         "selfRecovered": False,
-        "independenceDegraded": len(_live_vendors(cfg)) < 2,
+        # A single live vendor is degraded only when no live vendor is family-independent of the
+        # declared fixer; an undeclared fixer stays degraded.
+        "independenceDegraded": (
+            len(_live_vendors(cfg)) < 2
+            and not receipt_disclosures.independent_auditor_available(cfg)[0]
+        ),
         # Seeded from `--seat-map` when one was supplied (#723) as receipt round "0".
         "seatMapReceipts": ([{"round": "0", "map": dict(seeded_seat_map)}]
                             if isinstance(seeded_seat_map, dict) and seeded_seat_map else []),
@@ -2808,6 +2807,7 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         state.setdefault("_coverage", []).extend(d for d in cds if isinstance(d, dict))
     _record_round(state, "fix", {"fixes": artifact.get("fixes") or [],
                                  "escalated": bool(artifact.get("escalated") or state.get("_escalatedRung"))})
+    _record_round(state, "fixerVendor", config.get("fixerVendor"))
     state.pop("_escalatedRung", None)
     if session_dir:
         head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
