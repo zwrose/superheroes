@@ -168,9 +168,12 @@ def _execution_evidence_for_payload(payload, source="runner"):
     }
     for kind in engine_adapter.REVIEW_RESULT_KINDS + ("fixes", "result"):
         if kind in payload:
+            carried, subject = session_contract.evidence_digest_subject(payload, kind)
+            result_digest = (round_records.payload_sha256(subject)
+                             if carried else round_records.payload_sha256(payload[kind]))
             return _execution_evidence(
                 resultKind=kind,
-                resultDigest=round_records.payload_sha256(payload[kind]),
+                resultDigest=result_digest,
                 observation=observation,
                 source=source,
             )

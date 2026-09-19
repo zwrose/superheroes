@@ -3217,11 +3217,11 @@ def _audit_targets(state, config, audit_targets_map):
     return targets
 
 
-AUDIT_PROVENANCE_RUNNER_RECORD = "runner-record"
-AUDIT_PROVENANCE_HAND_LANDED = "hand-landed-evidence"
-AUDIT_PROVENANCE_MIXED = "mixed-evidence"
-AUDIT_PROVENANCE_COLLECTION_MANIFEST = "collection-manifest"
-_LEGACY_AUDIT_PROVENANCE_DISPATCH_MANIFEST = "dispatch-manifest"
+AUDIT_PROVENANCE_RUNNER_RECORD = round_records.AUDIT_PROVENANCE_RUNNER_RECORD
+AUDIT_PROVENANCE_HAND_LANDED = round_records.AUDIT_PROVENANCE_HAND_LANDED
+AUDIT_PROVENANCE_MIXED = round_records.AUDIT_PROVENANCE_MIXED
+AUDIT_PROVENANCE_COLLECTION_MANIFEST = round_records.AUDIT_PROVENANCE_COLLECTION_MANIFEST
+_LEGACY_AUDIT_PROVENANCE_DISPATCH_MANIFEST = round_records.AUDIT_PROVENANCE_LEGACY_DISPATCH_MANIFEST
 
 
 def _audit_adapter_disclosures(state, artifact):
@@ -3275,10 +3275,6 @@ def _audit_provenance_basis(state, artifact):
     return AUDIT_PROVENANCE_MIXED
 
 
-# audits._reject_unauthenticated — missing manifest entry reason prefix.
-_MISSING_MANIFEST_ENTRY_REASON_PREFIX = "no dispatch-manifest entry for this target"
-
-
 def _fold_audits(state, config, artifact):
     """Consume the fix-audit rulings deterministically (audits.apply_audit_results). Record the
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
@@ -3313,24 +3309,25 @@ def _fold_audits(state, config, artifact):
     state["auditRounds"].append(audit_round)
     for pid in outcome.get("unauthenticated", []):
         audit_reason = None
+        audit_cause = None
         for audit in outcome.get("audits", []):
             if isinstance(audit, dict) and audit.get("id") == pid:
                 audit_reason = audit.get("reason")
+                audit_cause = audit.get("unauthenticatedCause")
                 break
-        if isinstance(audit_reason, str) and audit_reason.startswith("the dispatch manifest names"):
+        if audit_cause in (audits.UNAUTHENTICATED_MANIFEST_VENDOR_MISMATCH,
+                           audits.UNAUTHENTICATED_NO_AUDITOR_RECORDED):
             detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
-        elif (isinstance(audit_reason, str)
-              and audit_reason.startswith(_MISSING_MANIFEST_ENTRY_REASON_PREFIX)
-              and (not isinstance(collection_manifest, dict)
-                   or pid not in collection_manifest)):
-            found_keys = (sorted(collection_manifest)
-                          if isinstance(collection_manifest, dict) else [])
-            detail = ("audit result for %s could not be authenticated — expected a "
-                      "collectionManifest entry keyed %r (payload.targets[].id); manifest keys "
-                      "found: %s — not-discharged"
-                      % (pid, pid, found_keys))
-        elif isinstance(audit_reason, str) and audit_reason:
-            detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
+        elif audit_cause == audits.UNAUTHENTICATED_MANIFEST_ENTRY_MISSING:
+            if isinstance(collection_manifest, dict) and pid in collection_manifest:
+                detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
+            else:
+                found_keys = (sorted(collection_manifest)
+                              if isinstance(collection_manifest, dict) else [])
+                detail = ("audit result for %s could not be authenticated — expected a "
+                          "collectionManifest entry keyed %r (payload.targets[].id); manifest keys "
+                          "found: %s — not-discharged"
+                          % (pid, pid, found_keys))
         else:
             found_keys = (sorted(collection_manifest)
                           if isinstance(collection_manifest, dict) else [])
@@ -7303,8 +7300,8 @@ def _runner_shaped_result(phase, result_kind, envelope_payload):
     types = contract.get("types") or {}
     declared = types.get(result_kind)
     # List kinds wrap under the kind key; scalar kinds land the record itself
-    # (payload_contracts.TYPE_TOKENS: list-of-objects, nullable-list-of-objects).
-    if declared in ("list-of-objects", "nullable-list-of-objects"):
+    # (payload_contracts.is_list_type).
+    if payload_contracts.is_list_type(declared):
         return {"ok": True, "resultKind": result_kind, **envelope_payload}
     return {"ok": True, "resultKind": result_kind, result_kind: envelope_payload}
 
@@ -7335,13 +7332,16 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
         if not isinstance(envelope_payload, dict):
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "resultKind": result_kind}
-        carried, subject = engine_adapter.review_payload_carried(
-            _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload),
-            result_kind)
-        if not carried:
+        shaped = _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload)
+        carried, _subject = engine_adapter.review_payload_carried(shaped, result_kind)
+        digest_carried, digest_subject = session_contract.evidence_digest_subject(
+            envelope_payload, result_kind)
+        # Leaf rule (session_contract.evidence_digest_subject) is the writer's rule; drift test
+        # pins it equal to review_payload_carried on the runner-shaped result.
+        if not carried or not digest_carried:
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "resultKind": result_kind}
-        payload_digest = round_records.payload_sha256(subject)
+        payload_digest = round_records.payload_sha256(digest_subject)
         if result_digest != payload_digest:
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "payloadSha256": payload_digest,
