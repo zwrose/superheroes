@@ -291,6 +291,59 @@ def test_completion_fails_on_refusal_names_auth_or_config(tmp_path):
     assert "spawn-failed" in (leg["evidence"].get("refusal") or "")
 
 
+def test_telemetry_fails_on_zero_tool_call_count(tmp_path):
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout = _codex_event_stream(action_items=0)
+    fake = FakeRunner([(stdout, False, 0, "")])
+    payload, code, _stderr = CP.probe(
+        "codex", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert payload["legs"]["progressTelemetry"]["ok"] is False
+    assert payload["legs"]["progressTelemetry"]["detail"] == "telemetry-absent"
+
+
+def test_grade_legs_accepts_production_last_activity_stamp():
+    terminal = {
+        "ok": True, "terminal": True, "attempts": 1,
+        "resultKind": "verdicts", "verdicts": [{"id": "conformance-probe-1"}],
+        "engagement": {"source": "codex-events", "telemetry": "tool-calls", "toolCalls": 2},
+        "runDir": "/tmp/run",
+    }
+    state = {
+        "attempts": {
+            1: {"ended": {
+                "exit": 0, "timedOut": False, "attempt": 1,
+                "lastActivityAt": 1700000000.0, "activitySource": "codex-events",
+            }},
+        },
+    }
+    legs = CP._grade_legs(terminal, state, False)
+    assert legs["progressTelemetry"]["ok"] is True
+
+
+def test_grade_legs_rejects_missing_production_last_activity():
+    terminal = {
+        "ok": True, "terminal": True, "attempts": 1,
+        "resultKind": "verdicts", "verdicts": [{"id": "conformance-probe-1"}],
+        "engagement": {"source": "codex-events", "telemetry": "tool-calls", "toolCalls": 2},
+        "runDir": "/tmp/run",
+    }
+    state = {
+        "attempts": {
+            1: {"ended": {
+                "exit": 0, "timedOut": False, "attempt": 1,
+                "lastActivityAt": None, "activitySource": "codex-events",
+            }},
+        },
+    }
+    legs = CP._grade_legs(terminal, state, False)
+    assert legs["progressTelemetry"]["ok"] is False
+    assert legs["progressTelemetry"]["detail"] == "telemetry-absent"
+
+
 def test_telemetry_fails_when_stream_has_no_tool_calls(tmp_path):
     repo = _repo(tmp_path)
     run_dir = str(tmp_path / "run")
@@ -471,6 +524,215 @@ def test_preflight_entry_parks_on_same_family(tmp_path, monkeypatch):
     assert code == 0
     assert payload["engine-auth"]["state"] == "fail"
     assert "PARK" in payload["engine-auth"]["reason"]
+
+
+def test_probe_refuses_reused_run_dir_with_folded_result(tmp_path):
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout = _codex_event_stream(action_items=1)
+    fake = FakeRunner([(stdout, False, 0, "")])
+    payload1, code1, _ = CP.probe(
+        "codex", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert code1 == 0
+    payload2, code2, _ = CP.probe(
+        "codex", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert code2 == 1
+    assert payload2["legs"]["resultProduction"]["detail"] == "run-dir-reused"
+
+
+def test_probe_run_dir_setup_failure_never_raises(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+
+    def _boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(CP.tempfile, "mkdtemp", _boom)
+    payload, code, stderr = CP.probe("codex", repo_root=repo)
+    assert code == 1
+    assert payload["legs"]["resultProduction"]["detail"] == "run-dir-setup-failed:OSError"
+    assert stderr is not None
+
+
+def test_preflight_requires_all_dispatchable_engines_not_only_calibrated(tmp_path):
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    cal = _calibration_rows(implementation="codex", reviewer="codex", pilot="codex")
+    payload, code = CP.preflight_entry(repo, [str(cpath)], calibration_rows=cal)
+    assert code == 1
+    assert payload["reason"] == "probe-missing:cursor"
+
+
+def test_preflight_entry_wave_binding_none_without_wave_arg(tmp_path):
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo)
+    cursor = _probe_result("cursor", repoRoot=repo)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+    )
+    assert code == 0
+    assert payload["waveBinding"] == "none"
+
+
+def test_preflight_entry_refuses_wave_mismatch(tmp_path):
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo, wave="wave-a")
+    cursor = _probe_result("cursor", repoRoot=repo, wave="wave-a")
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), wave="wave-b",
+    )
+    assert code == 1
+    assert payload["reason"].startswith("probe-wave-mismatch:")
+
+
+def test_preflight_entry_refuses_probe_cell_mismatch(tmp_path):
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo)
+    codex["probedCell"] = ["codex", "wrong-model", None]
+    cursor = _probe_result("cursor", repoRoot=repo)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+    )
+    assert code == 1
+    assert payload["reason"] == "probe-cell-mismatch:codex"
+
+
+def test_preflight_entry_refuses_malformed_json(tmp_path):
+    repo = _repo(tmp_path)
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    cursor = _probe_result("cursor", repoRoot=repo)
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(repo, [str(bad), str(kpath)], calibration_rows=_calibration_rows())
+    assert code == 1
+    assert payload["reason"].startswith("probe-result-malformed:")
+
+
+def test_preflight_entry_refuses_wrong_schema(tmp_path):
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo)
+    codex["schema"] = "wrong/1"
+    cursor = _probe_result("cursor", repoRoot=repo)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+    )
+    assert code == 1
+    assert payload["reason"].startswith("probe-result-malformed:")
+
+
+def test_preflight_entry_refuses_truthy_ok_without_legs(tmp_path):
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo)
+    codex.pop("legs")
+    cursor = _probe_result("cursor", repoRoot=repo)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+    )
+    assert code == 1
+    assert payload["reason"].startswith("probe-result-malformed:")
+
+
+def test_preflight_entry_refuses_owner_word_missing(tmp_path):
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo)
+    cursor = _probe_result("cursor", repoRoot=repo)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)],
+        launch_without=["codex", "cursor"],
+        owner_words=["only-one"],
+        calibration_rows=_calibration_rows(),
+    )
+    assert code == 1
+    assert payload["reason"] == "owner-word-missing"
+
+
+def test_preflight_entry_refuses_calibration_unreadable(tmp_path):
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo)
+    cursor = _probe_result("cursor", repoRoot=repo)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    cal = [{"role": "*", "readError": "cannot read prefs"}]
+    payload, code = CP.preflight_entry(repo, [str(cpath), str(kpath)], calibration_rows=cal)
+    assert code == 1
+    assert payload["reason"] == "calibration-unreadable"
+
+
+def test_preflight_entry_refuses_author_family_unresolved(tmp_path):
+    repo = _repo(tmp_path)
+    codex_fail = _probe_result("codex", ok=False, repoRoot=repo, failed=["resultProduction"])
+    codex_fail["legs"]["resultProduction"]["ok"] = False
+    codex_fail["failed"] = ["resultProduction"]
+    cursor_ok = _probe_result("cursor", repoRoot=repo)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex_fail), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor_ok), encoding="utf-8")
+    cal = [{"role": "implementer", "engine": "codex"}]
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)],
+        launch_without=["codex"], owner_words=["proceed"],
+        calibration_rows=cal,
+    )
+    assert code == 1
+    assert payload["reason"] == "author-family-unresolved"
+
+
+def test_preflight_entry_refuses_seat_map_failed(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("seat-map-broken")
+
+    monkeypatch.setattr(CP.seat_map, "build", _boom)
+    codex_fail = _probe_result("codex", ok=False, repoRoot=repo, failed=["resultProduction"])
+    codex_fail["legs"]["resultProduction"]["ok"] = False
+    codex_fail["failed"] = ["resultProduction"]
+    cursor_ok = _probe_result("cursor", repoRoot=repo)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex_fail), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor_ok), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)],
+        launch_without=["codex"], owner_words=["proceed"],
+        calibration_rows=_calibration_rows(),
+    )
+    assert code == 1
+    assert payload["reason"] == "seat-map-failed:RuntimeError"
 
 
 def test_preflight_entry_refuses_blank_owner_word_and_unfailed_engine(tmp_path):

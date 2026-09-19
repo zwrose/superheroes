@@ -3,10 +3,10 @@
 import argparse
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from datetime import datetime, timezone
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -21,6 +21,7 @@ import model_registry  # noqa: E402
 import preflight_probe  # noqa: E402
 import readout  # noqa: E402
 import seat_map  # noqa: E402
+import store_core  # noqa: E402
 
 SCHEMA = "conformance-probe/1"
 PREFLIGHT_ENTRY_SCHEMA = "conformance-preflight-entry/1"
@@ -87,13 +88,9 @@ def _failed_leg_names(legs):
 def _resolve_repo_root(repo_root):
     if repo_root is None:
         try:
-            proc = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=30)
-        except (OSError, subprocess.TimeoutExpired):
+            return store_core.repo_root(os.getcwd()), None
+        except store_core.RepoRootUnavailable:
             return None, "repo-root-unresolvable"
-        if proc.returncode != 0:
-            return None, "repo-root-unresolvable"
-        repo_root = proc.stdout.strip()
     try:
         return os.path.realpath(repo_root), None
     except OSError:
@@ -203,7 +200,9 @@ def _grade_legs(terminal, state, bound_exceeded):
     telemetry = (engagement or {}).get("telemetry")
     tool_calls = (engagement or {}).get("toolCalls")
     last_at = _effective_last_activity(ended or {}, engagement or {})
-    if telemetry == "tool-calls" and source not in (None, "none") and last_at is not None:
+    tool_count_ok = isinstance(tool_calls, (int, float)) and not isinstance(tool_calls, bool) and tool_calls >= 1
+    if (telemetry == "tool-calls" and source not in (None, "none") and last_at is not None
+            and tool_count_ok):
         pt = _leg(True, None, {"source": source, "telemetry": telemetry,
                                "toolCalls": tool_calls, "lastActivityAt": last_at})
     else:
@@ -212,9 +211,9 @@ def _grade_legs(terminal, state, bound_exceeded):
     return {"resultProduction": rp, "completionDetection": cd, "progressTelemetry": pt}
 
 def _payload(engine, channel, seat, repo_root, started_at, completed_at, wall, run_dir,
-             legs, dependent_roles, dependent_lanes):
+             legs, dependent_roles, dependent_lanes, wave=None):
     all_ok = all(legs[n]["ok"] for n in _LEG_NAMES)
-    return {
+    out = {
         "schema": SCHEMA, "ok": all_ok, "engine": engine, "channel": channel, "seat": seat,
         "probedCell": [seat["vendor"], seat["model"], seat.get("effort")],
         "repoRoot": repo_root, "startedAt": started_at, "completedAt": completed_at,
@@ -223,6 +222,9 @@ def _payload(engine, channel, seat, repo_root, started_at, completed_at, wall, r
         "dependentLanes": dependent_lanes,
         "preflightCheck": _preflight_check_entry(engine, channel, seat, wall, legs, run_dir, all_ok),
     }
+    if wave:
+        out["wave"] = wave
+    return out
 
 def _refuse(engine, detail, repo_root, seat=None, channel=None):
     seat = seat or {"vendor": engine, "model": None, "effort": None, "role": PROBE_ROLE}
@@ -235,7 +237,8 @@ def _refuse(engine, detail, repo_root, seat=None, channel=None):
     payload = _scrub_obj(_payload(engine, channel, seat, repo_root, now, now, 0.0, "", legs, dep_roles, dep_lanes))
     return payload, 1, _stderr_failure_line(engine, legs, dep_lanes)
 
-def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, build_view=None):
+def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, build_view=None,
+          wave=None):
     """Run the conformance probe for `engine`. Returns (payload, exit code, stderr line). Never raises."""
     started_at, t0 = _utc_now_iso(), time.monotonic()
     timeout = timeout if timeout is not None else engine_dispatch.RETRY_MIN_TIMEOUT
@@ -250,14 +253,24 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
     if cell_err:
         return _refuse(engine, cell_err, repo_real, seat=seat)
     if run_dir is None:
-        run_dir = tempfile.mkdtemp(prefix="conformance-probe-")
+        try:
+            run_dir = tempfile.mkdtemp(prefix="conformance-probe-")
+        except OSError as exc:
+            return _refuse(engine, "run-dir-setup-failed:%s" % type(exc).__name__, repo_real, seat=seat)
     run_dir_real = os.path.realpath(run_dir)
+    try:
+        records, _ = engine_dispatch._journal_read(run_dir_real)
+        if engine_dispatch._journal_state(records).get("folded") is not None:
+            return _refuse(engine, "run-dir-reused", repo_real, seat=seat)
+    except OSError:
+        pass
     prompt_path = os.path.join(os.path.dirname(run_dir_real), "probe-prompt.md")
     try:
         _write_probe_prompt(prompt_path, repo_real)
     except OSError:
-        return _refuse(engine, "repo-root-unresolvable", repo_real, seat=seat)
+        return _refuse(engine, "prompt-write-failed", repo_real, seat=seat)
     channel = engine_result_channel.channel_for(engine)
+    order_id = "conformance-probe:%s:%s" % (engine, uuid.uuid4().hex)
     deadline = time.monotonic() + timeout + BOUND_PAD_SECONDS
     terminal, bound_exceeded = {"ok": False, "terminal": False, "attempts": 0}, False
     while time.monotonic() < deadline:
@@ -268,7 +281,7 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
             dispatch_kw = {
                 "seat": seat, "prompt_path": prompt_path, "repo_root": repo_real,
                 "run_dir": run_dir, "max_wait": min(SLICE_MAX_WAIT, int(remaining)),
-                "order_id": "conformance-probe:%s" % engine,
+                "order_id": order_id,
                 "expected_result_kind": "verdicts", "timeout": timeout, "run_engine": run_engine,
             }
             if build_view is not None:
@@ -295,16 +308,66 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
         preflight_probe.dispatch_calibration(cwd=repo_real), engine)
     payload = _scrub_obj(_payload(
         engine, channel, seat, repo_real, started_at, _utc_now_iso(), round(wall, 1),
-        run_dir_real, legs, dep_roles, dep_lanes))
+        run_dir_real, legs, dep_roles, dep_lanes, wave=wave))
     all_ok = payload["ok"]
     return payload, (0 if all_ok else 1), (_stderr_failure_line(engine, legs, dep_lanes) if not all_ok else None)
+
+def _expected_probe_cell(engine):
+    cell = seat_map.matrix_config(PROBE_ROLE, engine)
+    if cell is None or cell[0] is None:
+        return None
+    return [engine, cell[0], cell[1]]
+
+def _validate_probe_record(raw, path_hint=""):
+    if not isinstance(raw, dict):
+        return "probe-result-malformed:%s" % path_hint
+    if raw.get("schema") != SCHEMA:
+        return "probe-result-malformed:%s" % path_hint
+    if not isinstance(raw.get("ok"), bool):
+        return "probe-result-malformed:%s" % path_hint
+    eng = raw.get("engine")
+    if eng not in DISPATCHABLE_ENGINES:
+        return "probe-result-malformed:%s" % path_hint
+    if not isinstance(raw.get("channel"), str):
+        return "probe-result-malformed:%s" % path_hint
+    seat = raw.get("seat")
+    if not isinstance(seat, dict) or seat.get("vendor") != eng:
+        return "probe-result-malformed:%s" % path_hint
+    probed = raw.get("probedCell")
+    if not isinstance(probed, list) or len(probed) < 2:
+        return "probe-result-malformed:%s" % path_hint
+    if not isinstance(raw.get("repoRoot"), str):
+        return "probe-result-malformed:%s" % path_hint
+    for fld in ("startedAt", "completedAt"):
+        if not isinstance(raw.get(fld), str):
+            return "probe-result-malformed:%s" % path_hint
+    if not isinstance(raw.get("wallSeconds"), (int, float)):
+        return "probe-result-malformed:%s" % path_hint
+    if not isinstance(raw.get("runDir"), str):
+        return "probe-result-malformed:%s" % path_hint
+    legs = raw.get("legs")
+    if not isinstance(legs, dict):
+        return "probe-result-malformed:%s" % path_hint
+    for name in _LEG_NAMES:
+        leg = legs.get(name)
+        if not isinstance(leg, dict) or not isinstance(leg.get("ok"), bool):
+            return "probe-result-malformed:%s" % path_hint
+    computed_ok = all(legs[n]["ok"] for n in _LEG_NAMES)
+    computed_failed = _failed_leg_names(legs)
+    if raw.get("ok") != computed_ok:
+        return "probe-result-malformed:%s" % path_hint
+    failed = raw.get("failed")
+    if not isinstance(failed, list) or sorted(failed) != sorted(computed_failed):
+        return "probe-result-malformed:%s" % path_hint
+    if not isinstance(raw.get("preflightCheck"), dict):
+        return "probe-result-malformed:%s" % path_hint
+    return None
 
 def _required_probe_engines(repo_root, calibration_rows=None):
     rows = calibration_rows if calibration_rows is not None else preflight_probe.dispatch_calibration(cwd=repo_root)
     if len(rows) == 1 and rows[0].get("role") == "*" and rows[0].get("readError"):
         return None, "calibration-unreadable"
-    return sorted({row["engine"] for row in rows
-                   if isinstance(row, dict) and row.get("engine") in DISPATCHABLE_ENGINES}), None
+    return sorted(DISPATCHABLE_ENGINES), None
 
 def _author_family_from_calibration(rows):
     impl = next((r for r in rows if r.get("role") == "implementer"), None)
@@ -319,12 +382,14 @@ def _author_family_from_calibration(rows):
 def _evidence_join(required, results_by_engine):
     return "; ".join(results_by_engine[e][1].get("preflightCheck", {}).get("evidence", "") for e in required)
 
-def _entry_result(entry, required, failed, sm):
-    return {"schema": PREFLIGHT_ENTRY_SCHEMA, "ok": True, "reason": None,
-            "engine-auth": entry, "required": required, "failed": failed, "seatMap": sm}, 0
+def _entry_result(entry, required, failed, sm, wave=None):
+    out = {"schema": PREFLIGHT_ENTRY_SCHEMA, "ok": True, "reason": None,
+           "engine-auth": entry, "required": required, "failed": failed, "seatMap": sm,
+           "waveBinding": wave if wave else "none"}
+    return out, 0
 
 def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
-                    max_age_seconds=DEFAULT_MAX_AGE_SECONDS, calibration_rows=None):
+                    max_age_seconds=DEFAULT_MAX_AGE_SECONDS, calibration_rows=None, wave=None):
     """Build the engine-auth preflight entry from probe results. Returns (payload, exit_code)."""
     try:
         repo_real = os.path.realpath(repo_root)
@@ -340,8 +405,9 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
                 raw = json.load(fh)
         except (OSError, json.JSONDecodeError):
             return {"ok": False, "reason": "probe-result-malformed:%s" % path}, 1
-        if raw.get("schema") != SCHEMA:
-            return {"ok": False, "reason": "probe-result-malformed:%s" % path}, 1
+        malformed = _validate_probe_record(raw, path)
+        if malformed:
+            return {"ok": False, "reason": malformed}, 1
         eng = raw.get("engine")
         if eng in results_by_engine:
             return {"ok": False, "reason": "probe-duplicate:%s" % eng}, 1
@@ -360,8 +426,17 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
         if os.path.realpath(res.get("repoRoot") or "") != repo_real:
             return {"ok": False, "reason": "probe-foreign-repo:%s" % eng}, 1
         completed = _parse_completed_at(res.get("completedAt"))
-        if completed is None or (now - completed).total_seconds() > max_age_seconds:
+        age = (now - completed).total_seconds() if completed is not None else None
+        if completed is None or age < 0 or age > max_age_seconds:
             return {"ok": False, "reason": "probe-stale:%s" % eng}, 1
+        if wave is not None:
+            result_wave = res.get("wave")
+            if not result_wave or result_wave != wave:
+                return {"ok": False, "reason": "probe-wave-mismatch:%s" % eng}, 1
+        expected_cell = _expected_probe_cell(eng)
+        probed_cell = res.get("probedCell")
+        if expected_cell is None or list(probed_cell[:len(expected_cell)]) != expected_cell:
+            return {"ok": False, "reason": "probe-cell-mismatch:%s" % eng}, 1
         (passing if res.get("ok") else failed).append(eng)
     owner_map = {}
     for eng, word in zip(launch_pairs, words):
@@ -373,7 +448,7 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
     ev_join = _scrub_text(_evidence_join(required, results_by_engine))
     if not failed:
         return _entry_result({"state": "pass", "reason": "conformance probes passed: %s" % ",".join(required),
-                              "evidence": ev_join}, required, [], None)
+                              "evidence": ev_join}, required, [], None, wave=wave)
     uncovered = [e for e in failed if e not in owner_map]
     if uncovered:
         legs = ["%s (%s)" % (e, ",".join(results_by_engine[e][1].get("failed") or [])) for e in uncovered]
@@ -381,7 +456,7 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
             "state": "fail",
             "reason": "conformance probe failed: %s — hold; nothing launches without the owner's word" % "; ".join(legs),
             "evidence": ev_join,
-        }, required, failed, None)
+        }, required, failed, None, wave=wave)
     author_family, fam_err = _author_family_from_calibration(cal_rows)
     if fam_err:
         return {"ok": False, "reason": fam_err}, 1
@@ -406,7 +481,7 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
                       "full lanes PARK: %s would seat the maker family %s"
                       % (",".join(failed), seats, author_family),
             "evidence": ev_join,
-        }, required, failed, sm)
+        }, required, failed, sm, wave=wave)
     other_deg = sorted({d.get("constraint") for d in (sm.get("degradations") or [])
                         if isinstance(d, dict) and d.get("constraint") != "same-family"})
     sub_parts = ["%s: %s/%s/%s" % (n, v.get("family"), v.get("vendor"), v.get("model"))
@@ -419,7 +494,7 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
         "evidence": _scrub_text("substitutes — %s; other degradations: %s; implementer calibrated on %s: %s"
                                 % ("; ".join(sub_parts), ",".join(other_deg) or "none", impl_on,
                                    "yes" if impl_on in passing else "no")),
-    }, required, failed, sm)
+    }, required, failed, sm, wave=wave)
 
 def main(argv):
     ap = argparse.ArgumentParser(prog="conformance_probe")
@@ -429,16 +504,19 @@ def main(argv):
     run_p.add_argument("--repo-root", default=None)
     run_p.add_argument("--run-dir", default=None)
     run_p.add_argument("--timeout", type=int, default=None)
+    run_p.add_argument("--wave", default=None)
     pe = sub.add_parser("preflight-entry", help="aggregate probe results into engine-auth entry")
     pe.add_argument("--repo-root", required=True)
     pe.add_argument("--result", action="append", required=True, dest="results")
     pe.add_argument("--launch-without", action="append", default=[], dest="launch_without")
     pe.add_argument("--owner-word", action="append", default=[], dest="owner_words")
     pe.add_argument("--max-age-seconds", type=int, default=DEFAULT_MAX_AGE_SECONDS)
+    pe.add_argument("--wave", default=None)
     args = ap.parse_args(argv[1:])
     if args.cmd == "run":
         payload, code, stderr_line = probe(args.engine, repo_root=args.repo_root,
-                                           run_dir=args.run_dir, timeout=args.timeout)
+                                           run_dir=args.run_dir, timeout=args.timeout,
+                                           wave=args.wave)
         sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
         if stderr_line:
             sys.stderr.write(stderr_line + "\n")
@@ -447,7 +525,8 @@ def main(argv):
         payload, code = preflight_entry(args.repo_root, args.results,
                                         launch_without=args.launch_without,
                                         owner_words=args.owner_words,
-                                        max_age_seconds=args.max_age_seconds)
+                                        max_age_seconds=args.max_age_seconds,
+                                        wave=args.wave)
         sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
         return code
     return 0

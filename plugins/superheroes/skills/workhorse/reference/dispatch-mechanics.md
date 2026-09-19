@@ -248,7 +248,9 @@ be read from it without the marker parser; cursor therefore has no native channe
 Wave preflight runs one real review dispatch per dispatchable engine before any builder launches.
 Resolve `ROOT_DIR` as in every other recipe here, then run `python3 -B
 "$ROOT_DIR/lib/conformance_probe.py" run --engine <codex|cursor>` — optional `--repo-root`,
-`--run-dir`, and `--timeout`; only the engine name is required. It dispatches through the shell's own
+`--run-dir`, `--timeout`, and `--wave <id>` (the launcher's wave id, recorded on the result); only
+the engine name is required. Each invocation allocates a unique dispatch order id; a `--run-dir` that
+already holds a folded terminal result refuses `run-dir-reused` with nothing launched. It dispatches through the shell's own
 library entry on the engine's declared channel (native for codex, the marker channel with the marker
 grader for cursor), using that engine's `reviewer-deep` cell, and grades three legs **separately**:
 `resultProduction` (the folded result is a typed, validated result), `completionDetection` (the
@@ -264,17 +266,24 @@ failed=<legs> dependent lanes: <…>`; the JSON result carries `legs`, `failed`,
 the CLI-Claude engine branch is a later child's; the engine set is the adapter's dispatchable vendors
 intersected with the channel map, by construction, with no separate list.
 
-Before launch, compose the walked `engine-auth` check from one probe result per engine the
-calibration routes to:
+Before launch, compose the walked `engine-auth` check from one probe result per **dispatchable**
+engine (`codex` and `cursor` — not merely the engines the calibration routes to):
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/conformance_probe.py" preflight-entry --repo-root <abs> --result <probe.json>… \
-  [--launch-without <engine> --owner-word "<text>"]… [--max-age-seconds N]
+  [--wave <id>] [--launch-without <engine> --owner-word "<text>"]… [--max-age-seconds N]
 ```
 
-It refuses `probe-missing:<e>`, `probe-duplicate:<e>`, `probe-foreign-repo:<e>`, and
-`probe-stale:<e>` (default max age 3600 s). A failed engine with no owner word → `state: fail` (hold;
+Without `--wave`, binding is repository path plus age only and the entry records
+`waveBinding: none`. With `--wave`, each result's `wave` must match or the entry refuses
+`probe-wave-mismatch:<e>`. Each result's `probedCell` must match the engine's current
+`reviewer-deep` matrix cell or the entry refuses `probe-cell-mismatch:<e>`.
+
+It refuses `probe-missing:<e>`, `probe-duplicate:<e>`, `probe-foreign-repo:<e>`,
+`probe-stale:<e>` (default max age 3600 s; future `completedAt` timestamps count as stale),
+`probe-result-malformed:<path>`, `calibration-unreadable`, `author-family-unresolved`,
+`owner-word-missing`, and `seat-map-failed:<type>`. A failed engine with no owner word → `state: fail` (hold;
 the launcher's `walk_preflight` refuses `preflight-failed:engine-auth`, so nothing launches). With the
 owner's word → `state: pass` whose evidence names the substitute family per seat, computed by the seat
 map from the **probed cells only** (`live_cells_source: "probed"`) with the maker family derived from

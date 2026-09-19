@@ -181,11 +181,12 @@ check the selftest is not:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -B "$ROOT_DIR/lib/conformance_probe.py" run --engine <codex|cursor>
+python3 -B "$ROOT_DIR/lib/conformance_probe.py" run --engine <codex|cursor> [--wave <launch-id>]
 ```
 
-Compose the walked `engine-auth` check with `preflight-entry` from those results; the launcher reads
-that entry at wave preflight.
+Compose the walked `engine-auth` check with `preflight-entry` from those results (one per
+dispatchable engine; optional `--wave <launch-id>` binds results to the wave — without it the entry
+records `waveBinding: none`); the launcher reads that entry at wave preflight.
 
 ### B.1 — Seed the composition-liveness receipt (write side, #610 leg 2)
 
