@@ -301,7 +301,7 @@ Without `--wave`, binding is repository path plus age only and the entry records
 `reviewer-deep` matrix cell or the entry refuses `probe-cell-mismatch:<e>`.
 
 It refuses `probe-missing:<e>`, `probe-duplicate:<e>`, `probe-foreign-repo:<e>`,
-`probe-stale:<e>` (default max age 3600 s; future `completedAt` timestamps count as stale),
+`probe-stale:<e>` (default max age 86400 s, one day — owner-ruled 2026-09-19; future `completedAt` timestamps count as stale),
 `probe-result-malformed:<path>`, `calibration-unreadable`, `author-family-unresolved`,
 `owner-word-missing`, and `seat-map-failed:<type>`. A failed engine with no owner word → `state: fail` (hold;
 the launcher's `walk_preflight` refuses `preflight-failed:engine-auth`, so nothing launches). With the

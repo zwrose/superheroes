@@ -28,7 +28,7 @@ PREFLIGHT_ENTRY_SCHEMA = "conformance-preflight-entry/1"
 PROBE_ROLE = "reviewer-deep"
 SLICE_MAX_WAIT = 300
 BOUND_PAD_SECONDS = 60
-DEFAULT_MAX_AGE_SECONDS = 3600
+DEFAULT_MAX_AGE_SECONDS = 86400  # a probe result is good for a day (owner-ruled 2026-09-19; was one hour)
 DISPATCHABLE_ENGINES = tuple(
     e for e in engine_adapter.BUILD_ARGV_VENDORS if e in engine_result_channel._CHANNEL_BY_ENGINE)
 _LEG_NAMES = ("resultProduction", "completionDetection", "progressTelemetry")
