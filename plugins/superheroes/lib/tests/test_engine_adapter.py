@@ -168,22 +168,26 @@ def test_build_argv_codex_invalid_engine_model_pin_refuses_unregistered():
     assert "gpt-5.6-sol" in res["detail"]
 
 
-def test_build_argv_cursor_review_plan_mode():
-    argv = EA.build_argv(_seat("cursor", "composer-2.5", None), "review", {"cwd": "/wt"})
-    assert argv[0] == "cursor-agent"
-    assert "--mode" in argv and argv[argv.index("--mode") + 1] == "plan"
-    # cursor-agent 2026.06.26: --model (not -m); -p (headless) + --trust (clear the trust gate) required.
-    assert "--model" in argv and argv[argv.index("--model") + 1] == "composer-2.5"
-    assert "-p" in argv and "--trust" in argv
-    assert "-m" not in argv                  # the old short flag is rejected by this cursor-agent
+@pytest.mark.parametrize("role_kind", ["review", "build"])
+def test_cursor_argv_shape_both_roles(role_kind):
+    argv = EA.build_argv(_seat("cursor", "composer-2.5", None), role_kind, {"cwd": "/wt"})
+    assert argv == [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--trust", "-f",
+        "--sandbox", "enabled", "--output-format", "stream-json",
+    ]
 
 
-def test_build_argv_cursor_build_force_write():
-    argv = EA.build_argv(_seat("cursor", "composer-2.5", None), "build", {"cwd": "/wt"})
-    assert argv[0] == "cursor-agent"
-    assert "-f" in argv                      # workspace-write / force
-    assert "-p" in argv and "--trust" in argv
-    assert argv[argv.index("--model") + 1] == "composer-2.5"
+def test_codex_argv_unchanged_by_delivery_table():
+    review_argv = EA.build_argv(_seat("codex", "gpt-5.6-sol", "high"), "review", {"cwd": "/wt"})
+    assert review_argv == [
+        "codex", "exec", "--sandbox", "read-only", "-m", "gpt-5.6-sol",
+        "-c", "model_reasoning_effort=high", "-C", "/wt", "-",
+    ]
+    build_argv = EA.build_argv(_seat("codex", "gpt-5.6-sol", "high"), "build", {"cwd": "/wt"})
+    assert build_argv == [
+        "codex", "exec", "--sandbox", "workspace-write", "-m", "gpt-5.6-sol",
+        "-c", "model_reasoning_effort=high", "-C", "/wt", "-",
+    ]
 
 
 def test_build_argv_cli(capsys):
@@ -623,11 +627,12 @@ def test_build_argv_result_fail_closed_edges():
     # 15 codex sol + max passes
     r = EA.build_argv_result(_seat("codex", "gpt-5.6-sol", "max"), "review", {})
     assert r["reason"] is None and "model_reasoning_effort=max" in r["argv"]
-    # 16 read vs write roles unchanged
+    # 16 review and build share the same cursor argv shape
     rev = EA.build_argv_result(_seat("cursor", "composer-2.5", None), "review", {})
     bld = EA.build_argv_result(_seat("cursor", "composer-2.5", None), "build", {})
-    assert "--mode" in rev["argv"] and rev["argv"][rev["argv"].index("--mode") + 1] == "plan"
-    assert "-f" in bld["argv"] and "--mode" not in bld["argv"]
+    assert rev["argv"] == bld["argv"]
+    assert "-f" in rev["argv"] and "--sandbox" in rev["argv"]
+    assert "--mode" not in rev["argv"]
 
 
 def test_build_argv_matches_build_argv_result_argv():
@@ -664,8 +669,8 @@ def test_build_argv_cli_empty_effort_normalizes_to_none_for_composer_pin(capsys)
 def test_build_argv_must_not_regress_measured_invariants():
     argv = EA.build_argv(_seat("cursor", "cursor-grok-4.6", "xhigh"), "review", {})
     assert argv == [
-        "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust",
-        "--mode", "plan", "--output-format", "stream-json",
+        "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust", "-f",
+        "--sandbox", "enabled", "--output-format", "stream-json",
     ]
     argv = EA.build_argv(_seat("codex", "gpt-5.6-sol", "xhigh"), "review", {})
     assert argv == [
@@ -675,7 +680,7 @@ def test_build_argv_must_not_regress_measured_invariants():
     argv = EA.build_argv(_seat("cursor", "composer-2.5", None), "build", {})
     assert argv == [
         "cursor-agent", "--model", "composer-2.5", "-p", "--trust", "-f",
-        "--output-format", "stream-json",
+        "--sandbox", "enabled", "--output-format", "stream-json",
     ]
 
 

@@ -153,7 +153,7 @@ def _wrap_result(branch):
 
 @pytest.mark.parametrize("vendor,expected", [
     ("codex", ERC.CHANNEL_NATIVE),
-    ("cursor", ERC.CHANNEL_MARKER),
+    ("cursor", ERC.CHANNEL_NATIVE),
     ("claude", ERC.CHANNEL_MARKER),
 ])
 def test_channel_for_registered_engines(vendor, expected):
@@ -402,8 +402,27 @@ def test_differential_agreement_with_jsonschema(run_kind):
 
 
 def test_marker_channel_declared_schema_is_none():
-    assert ERC.declared_schema("cursor", ERC.RUN_KIND_REVIEW) is None
-    assert ERC.declared_schema("cursor", ERC.RUN_KIND_WRITE) is None
+    assert ERC.declared_schema("claude", ERC.RUN_KIND_REVIEW) is None
+    assert ERC.declared_schema("claude", ERC.RUN_KIND_WRITE) is None
+    assert ERC.declared_schema("cursor", ERC.RUN_KIND_REVIEW) is not None
+    assert ERC.declared_schema("cursor", ERC.RUN_KIND_WRITE) is not None
+
+
+def test_result_delivery_registered_engines():
+    assert ERC.result_delivery("codex") == ERC.RESULT_DELIVERY_ARGV
+    assert ERC.result_delivery("cursor") == ERC.RESULT_DELIVERY_PROMPT
+    assert ERC.result_delivery("claude") is None
+
+
+def test_result_delivery_unknown_engine_refuses():
+    with pytest.raises(ERC.UnknownEngineError):
+        ERC.result_delivery("bogus")
+
+
+def test_result_delivery_native_missing_from_table(monkeypatch):
+    monkeypatch.setitem(ERC._CHANNEL_BY_ENGINE, "testnative", ERC.CHANNEL_NATIVE)
+    with pytest.raises(ValueError, match="no result delivery entry"):
+        ERC.result_delivery("testnative")
 
 
 def _all_declared_native_schemas():

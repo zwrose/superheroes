@@ -485,12 +485,10 @@ def build_argv_result(seat, role_kind, opts):
             model = tok
         else:
             model = _CURSOR_MODEL
-        argv = ["cursor-agent", "--model", model, "-p", "--trust"]
-        if is_read:
-            argv += ["--mode", "plan"]
-        else:
-            argv += ["-f"]
-        argv += ["--output-format", "stream-json"]
+        argv = [
+            "cursor-agent", "--model", model, "-p", "--trust", "-f",
+            "--sandbox", "enabled", "--output-format", "stream-json",
+        ]
         return _ok(argv)
     return _refuse("unknown-engine", detail=_unknown_engine_detail(vendor))
 

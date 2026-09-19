@@ -109,7 +109,7 @@ def _write_probe_prompt(prompt_path, repo_root=None):
     return prompt_path
 
 def _seat_for_engine(engine):
-    cell = seat_map.matrix_config(PROBE_ROLE, engine)
+    cell = model_registry.matrix_config(PROBE_ROLE, engine)
     if cell is None or cell[0] is None:
         return None, "probe-cell-unresolvable"
     return {"vendor": engine, "model": cell[0], "effort": cell[1], "role": PROBE_ROLE}, None
@@ -350,6 +350,17 @@ def _validate_probe_record(raw, path_hint=""):
     for fld in ("startedAt", "completedAt"):
         if not isinstance(raw.get(fld), str):
             return "probe-result-malformed:%s" % path_hint
+    completed_parsed = _parse_completed_at(raw.get("completedAt"))
+    if completed_parsed is None and isinstance(raw.get("completedAt"), str) and raw.get("completedAt").strip():
+        text = raw.get("completedAt").strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            naive_check = datetime.fromisoformat(text)
+            if naive_check.tzinfo is None:
+                return "probe-result-malformed:%s" % path_hint
+        except ValueError:
+            pass
     if not isinstance(raw.get("wallSeconds"), (int, float)):
         return "probe-result-malformed:%s" % path_hint
     if not isinstance(raw.get("runDir"), str):

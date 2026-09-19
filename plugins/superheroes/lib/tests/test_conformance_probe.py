@@ -165,15 +165,21 @@ class FakeRunner:
             stdout, timed_out, rc, stderr_tail = out
         else:
             stdout, timed_out, rc, stderr_tail = out, False, 0, ""
-        if self.sync_native and isinstance(stdout, str) and "-o" in argv:
-            result_path = argv[argv.index("-o") + 1]
-            try:
-                branch = _native_verdicts_branch()
-                with open(result_path, "w", encoding="utf-8") as fh:
-                    json.dump({"result": branch}, fh, separators=(",", ":"))
-                    fh.write("\n")
-            except OSError:
-                pass
+        if self.sync_native and isinstance(stdout, str):
+            result_path = None
+            if "-o" in argv:
+                result_path = argv[argv.index("-o") + 1]
+            elif prompt_bytes is not None:
+                result_path = ERC.result_file_path_from_prompt(
+                    prompt_bytes.decode("utf-8", "ignore"))
+            if result_path:
+                try:
+                    branch = _native_verdicts_branch()
+                    with open(result_path, "w", encoding="utf-8") as fh:
+                        json.dump({"result": branch}, fh, separators=(",", ":"))
+                        fh.write("\n")
+                except OSError:
+                    pass
         return stdout, timed_out, rc, stderr_tail
 
 
@@ -249,7 +255,7 @@ def test_run_grades_three_legs_ok_on_valid_native_result(tmp_path):
     assert "plugins/superheroes" not in prompt_text
 
 
-def test_run_grades_three_legs_ok_on_valid_cursor_marker_result(tmp_path):
+def test_run_grades_three_legs_ok_on_valid_cursor_native_result(tmp_path):
     repo = _repo(tmp_path)
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
@@ -261,7 +267,7 @@ def test_run_grades_three_legs_ok_on_valid_cursor_marker_result(tmp_path):
     )
     assert code == 0
     assert payload["ok"] is True
-    assert payload["channel"] == ERC.CHANNEL_MARKER
+    assert payload["channel"] == ERC.CHANNEL_NATIVE
     assert payload["legs"]["resultProduction"]["ok"] is True
     assert payload["legs"]["completionDetection"]["ok"] is True
     assert payload["legs"]["progressTelemetry"]["ok"] is True
@@ -294,20 +300,28 @@ def test_result_production_fails_on_schema_invalid_native_result(tmp_path):
     assert payload["legs"]["progressTelemetry"]["ok"] is True
 
 
-def test_result_production_fails_on_cursor_marker_parse_error(tmp_path):
+def test_result_production_fails_on_cursor_native_schema_invalid(tmp_path):
     repo = _repo(tmp_path)
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
-    stdout = _cursor_event_stream(
-        tool_calls=1,
-        verdicts=[{"id": "", "verdict": "CONFIRMED", "reason": "ok"}],
-    )
-    fake = FakeRunner([(stdout, False, 0, ""), (stdout, False, 0, "")])
+    invalid = _native_verdicts_branch()
+    invalid["investigated"] = ["path.py", 42]
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1] if "-o" in argv else ERC.result_file_path_from_prompt(
+            prompt_bytes.decode("utf-8", "ignore"))
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({"result": invalid}, fh, separators=(",", ":"))
+            fh.write("\n")
+        return _cursor_event_stream(tool_calls=1), False, 0, ""
+
+    fake = FakeRunner([runner, runner], sync_native=False)
     payload, code, _stderr = CP.probe(
         "cursor", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
     assert payload["legs"]["resultProduction"]["ok"] is False
+    assert payload["legs"]["resultProduction"]["detail"] == "native-result-schema-invalid"
     assert payload["legs"]["completionDetection"]["ok"] is True
     assert payload["legs"]["progressTelemetry"]["ok"] is True
 
@@ -782,6 +796,21 @@ def test_expected_probe_cell_reads_the_registry_home(monkeypatch):
     assert CP._expected_probe_cell("codex") == ["codex", "m-x", "e-x"]
 
 
+def test_seat_for_engine_reads_model_registry_home(monkeypatch):
+    monkeypatch.setattr(CP.model_registry, "matrix_config", lambda role, eng: ("m-x", "e-x"))
+    monkeypatch.setattr(CP.seat_map, "matrix_config", lambda role, eng: ("m-y", "e-y"))
+    seat, err = CP._seat_for_engine("codex")
+    assert err is None
+    assert seat["model"] == "m-x"
+    assert seat["effort"] == "e-x"
+
+
+def test_validate_probe_record_refuses_naive_completed_at():
+    raw = _probe_result("codex", completedAt="2026-09-19T12:00:00")
+    err = CP._validate_probe_record(raw, "/tmp/codex.json")
+    assert err == "probe-result-malformed:/tmp/codex.json"
+
+
 def test_preflight_entry_stale_boundary_exact_age_passes(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     now = datetime(2026, 9, 19, 12, 0, 0, tzinfo=timezone.utc)
@@ -842,7 +871,7 @@ def test_preflight_entry_stale_boundary_future_completed_at_refuses(tmp_path, mo
 @pytest.mark.parametrize("completed_at,expect", [
     ("", "probe-stale:codex"),
     ("not-a-date", "probe-stale:codex"),
-    ("2026-09-19T12:00:00", "probe-stale:codex"),
+    ("2026-09-19T12:00:00", "probe-result-malformed:"),
     (12345, "probe-result-malformed:"),
 ])
 def test_preflight_entry_completed_at_parse_edges(tmp_path, completed_at, expect):

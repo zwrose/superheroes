@@ -433,7 +433,12 @@ def _native_schema_path(run_dir_real):
 
 
 def _native_channel_suffix(opened):
-    """Return (--output-schema, schema_path) when this run is native-channel."""
+    """Return (--output-schema, schema_path) when this run is native-channel argv-delivery."""
+    try:
+        if engine_result_channel.result_delivery(opened.get("engine")) != engine_result_channel.RESULT_DELIVERY_ARGV:
+            return ()
+    except Exception:
+        return ()
     if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
         return ()
     schema_path = opened.get("nativeSchemaPath")
@@ -465,8 +470,73 @@ def _spawn_native_result_argv(run_dir_real, attempt, opened, spawn_argv):
         return False, spawn_argv, result_path, "spawn-failed: %s" % exc
     else:
         return False, spawn_argv, result_path, "native-result-path-occupied"
-    argv_out = list(spawn_argv) + ["-o", result_path]
+    # axis: prompt-delivered path is handed in _stage_attempt_prompt; argv delivery appends -o here.
+    try:
+        delivery = engine_result_channel.result_delivery(opened.get("engine"))
+    except Exception:
+        delivery = None
+    if delivery == engine_result_channel.RESULT_DELIVERY_ARGV:
+        argv_out = list(spawn_argv) + ["-o", result_path]
+    else:
+        argv_out = list(spawn_argv)
     return True, argv_out, result_path, None
+
+
+def _stage_attempt_prompt(run_dir_real, attempt, opened, result_path):
+    """Stage per-attempt prompt with typed-file contract when delivery is prompt. Returns (prompt_path, refusal)."""
+    try:
+        delivery = engine_result_channel.result_delivery(opened.get("engine"))
+    except Exception:
+        delivery = None
+    if result_path is None or delivery != engine_result_channel.RESULT_DELIVERY_PROMPT:
+        return opened["promptPath"], None
+    try:
+        with open(opened["promptPath"], "r", encoding="utf-8", errors="ignore") as fh:
+            staged = fh.read()
+    except OSError:
+        return None, "native-schema-unreadable"
+    schema_path = opened.get("nativeSchemaPath")
+    if not schema_path:
+        return None, "native-schema-unreadable"
+    try:
+        st = os.lstat(schema_path)
+        if not stat.S_ISREG(st.st_mode):
+            return None, "native-schema-unreadable"
+    except OSError:
+        return None, "native-schema-unreadable"
+    try:
+        with open(schema_path, "r", encoding="utf-8") as fh:
+            schema_text = fh.read()
+    except OSError:
+        return None, "native-schema-unreadable"
+    contract = engine_result_channel.file_result_contract(
+        schema_text.rstrip("\n"), result_path,
+    )
+    if staged and not staged.endswith("\n"):
+        staged = staged + "\n"
+    content = staged + "\n" + contract
+    path = os.path.join(run_dir_real, "prompt-attempt-%d.md" % attempt)
+    # axis: the engine learns the run dir from the result path, so a first attempt could plant prompt-attempt-2.md; the second attempt must refuse rather than follow or overwrite.
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return None, "attempt-prompt-unwritable"
+    else:
+        return None, "attempt-prompt-occupied"
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        return None, "attempt-prompt-occupied"
+    except OSError:
+        return None, "attempt-prompt-unwritable"
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+    except OSError:
+        return None, "attempt-prompt-unwritable"
+    return path, None
 
 
 def _open_native_channel_argv(run_dir_real, engine, argv, run_kind, expected_result_kind=None):
@@ -486,7 +556,10 @@ def _open_native_channel_argv(run_dir_real, engine, argv, run_kind, expected_res
             fh.write("\n")
     except OSError:
         return None, "native-schema-unwritable", None
-    argv_out = list(argv) + ["--output-schema", schema_path]
+    if engine_result_channel.result_delivery(engine) == engine_result_channel.RESULT_DELIVERY_ARGV:
+        argv_out = list(argv) + ["--output-schema", schema_path]
+    else:
+        argv_out = list(argv)
     return argv_out, None, schema_path
 
 
@@ -997,6 +1070,10 @@ def _journal_state(records):
             if att is not None:
                 slot = state["attempts"].setdefault(att, {"childPid": None, "enginePgid": None, "ended": None})
                 slot["enginePgid"] = rec.get("enginePgid")
+                if "attemptPromptPath" in rec:
+                    slot["attemptPromptPath"] = rec.get("attemptPromptPath")
+                if "attemptPromptSha256" in rec:
+                    slot["attemptPromptSha256"] = rec.get("attemptPromptSha256")
         elif kind == "attempt-ended":
             att = rec.get("attempt")
             if att is not None:
@@ -2786,6 +2863,9 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     if not guard_verdict.get("ok"):
         _journal_spawn_guard_refusal(run_dir_real, attempt, guard_verdict["reason"])
         return
+    if _marker_channel_retired_run(opened):
+        _journal_prep_refusal(run_dir_real, attempt, "marker-channel-retired")
+        return
     spawn_argv, coherence_err = _spawn_argv_coherence(opened, argv)
     if coherence_err:
         _journal_spawn_guard_refusal(run_dir_real, attempt, coherence_err)
@@ -2796,6 +2876,13 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     if not ok_prep:
         _journal_prep_refusal(run_dir_real, attempt, prep_refusal)
         return
+    staged_path, prompt_refusal = _stage_attempt_prompt(
+        run_dir_real, attempt, opened, native_result_path,
+    )
+    if prompt_refusal:
+        _journal_prep_refusal(run_dir_real, attempt, prompt_refusal)
+        return
+    prompt_path = staged_path
     argv, recorded = _derive_and_record_spawn_argv(
         run_dir_real, attempt, spawn_argv, opened.get("engine"))
     if not recorded:
@@ -2839,6 +2926,13 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     }
     if native_result_path is not None:
         engine_started["nativeResultPath"] = native_result_path
+    if staged_path != opened["promptPath"]:
+        engine_started["attemptPromptPath"] = staged_path
+        try:
+            with open(staged_path, "rb") as fh:
+                engine_started["attemptPromptSha256"] = hashlib.sha256(fh.read()).hexdigest()
+        except OSError:
+            pass
     if not _journal_append(run_dir_real, engine_started):
         _terminate_process_group(pgid)
         try:
@@ -2951,6 +3045,15 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     guard_verdict = _spawn_allowlist_verdict(opened)
     if not guard_verdict.get("ok"):
         return False, guard_verdict["reason"]
+    if _marker_channel_retired_run(opened):
+        if not _journal_append(run_dir_real, {
+            "kind": "attempt-started", "attempt": attempt,
+            "childPid": os.getpid(), "at": time.time(),
+        }):
+            return False, "journal-append-failed"
+        if not _journal_prep_refusal(run_dir_real, attempt, "marker-channel-retired"):
+            return False, "journal-append-failed"
+        return True, ""
     spawn_argv, coherence_err = _spawn_argv_coherence(opened, opened.get("argv"))
     if coherence_err:
         return False, coherence_err
@@ -2966,6 +3069,18 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         if not _journal_prep_refusal(run_dir_real, attempt, prep_refusal):
             return False, "journal-append-failed"
         return True, ""
+    staged_path, prompt_refusal = _stage_attempt_prompt(
+        run_dir_real, attempt, opened, native_result_path,
+    )
+    if prompt_refusal:
+        if not _journal_append(run_dir_real, {
+            "kind": "attempt-started", "attempt": attempt,
+            "childPid": os.getpid(), "at": time.time(),
+        }):
+            return False, "journal-append-failed"
+        if not _journal_prep_refusal(run_dir_real, attempt, prompt_refusal):
+            return False, "journal-append-failed"
+        return True, ""
     argv, recorded = _derive_and_record_spawn_argv(
         run_dir_real, attempt, spawn_argv, opened.get("engine"))
     if not recorded:
@@ -2973,7 +3088,7 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         return False, "journal-append-failed"
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, attempt)
-    prompt_path = opened["promptPath"]
+    prompt_path = staged_path
     with open(prompt_path, "rb") as fh:
         prompt_bytes = fh.read()
     progress_path = opened.get("progressPath") or os.path.join(run_dir_real, PROGRESS_NAME)
@@ -2990,6 +3105,13 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     }
     if native_result_path is not None:
         engine_started["nativeResultPath"] = native_result_path
+    if staged_path != opened["promptPath"]:
+        engine_started["attemptPromptPath"] = staged_path
+        try:
+            with open(staged_path, "rb") as fh:
+                engine_started["attemptPromptSha256"] = hashlib.sha256(fh.read()).hexdigest()
+        except OSError:
+            pass
     if not _journal_append(run_dir_real, engine_started):
         return False, "journal-append-failed"
 
@@ -3511,7 +3633,7 @@ def _verify_native_schema(opened, run_kind, expected_result_kind=None):
 
 
 def _admit_native_write_result(run_dir_real, attempt, opened):
-    """Single admission authority for codex's native write channel. Never raises."""
+    """Single admission authority for the native write channel (codex, cursor). Never raises."""
     obj, detail = _load_native_result_json(run_dir_real, attempt)
     if detail:
         return {
@@ -3569,7 +3691,7 @@ def _admit_native_write_result(run_dir_real, attempt, opened):
 
 
 def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_nonce):
-    """Single admission authority for codex's native review channel. Never raises."""
+    """Single admission authority for the native review channel (codex, cursor). Never raises."""
     loaded = _read_native_review_envelope(run_dir_real, attempt, engagement)
     if not isinstance(loaded, tuple):
         return loaded
@@ -4901,16 +5023,18 @@ def _dispatch_review_impl(seat, *, prompt_path,
             _prompt_section_sep = "\n\n"
             if expected_result_kind == "findings":
                 fed_prompt += _prompt_section_sep + review_findings_schema.example_prompt_block(echo_nonce)
+            delivery = engine_result_channel.result_delivery(engine)
             if engine_result_channel.channel_for(engine) == engine_result_channel.CHANNEL_NATIVE:
                 native_schema = engine_result_channel.declared_schema(
                     engine, RUN_KIND_REVIEW, expected_result_kind,
                 )
                 fed_prompt += _prompt_section_sep + engine_result_channel.review_result_contract_from_schema(
-                    native_schema,
+                    native_schema, delivery=delivery,
                 )
-            fed_prompt += _prompt_section_sep + engine_adapter.REVIEW_RESULT_CONTRACT(
-                expected_result_kind,
-            )
+            if delivery != engine_result_channel.RESULT_DELIVERY_PROMPT:
+                fed_prompt += _prompt_section_sep + engine_adapter.REVIEW_RESULT_CONTRACT(
+                    expected_result_kind,
+                )
 
             if run_dir_real is None:
                 run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
@@ -5071,12 +5195,15 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
             base = src.read()
         base_prompt_sha256 = hashlib.sha256(base.encode("utf-8")).hexdigest()
         channel = engine_result_channel.channel_for(engine)
+        delivery = engine_result_channel.result_delivery(engine)
         if channel == engine_result_channel.CHANNEL_NATIVE:
             try:
                 native_schema = engine_result_channel.declared_schema(engine, RUN_KIND_WRITE)
             except Exception:
                 return False, "native-schema-undeclarable"
-            contract = engine_result_channel.write_result_contract_from_schema(native_schema)
+            contract = engine_result_channel.write_result_contract_from_schema(
+                native_schema, delivery=delivery,
+            )
         else:
             contract = engine_adapter.WRITE_REPORT_CONTRACT
         prompt_sep = "\n" if base and not base.endswith("\n") else ""
@@ -5825,13 +5952,20 @@ def run_execution_record(run_dir):
         except OSError:
             return None, "journal-unreadable"
         record_digest = hashlib.sha256(journal_bytes).hexdigest()
-        prompt_path = opened.get("promptPath") or os.path.join(run_dir_real, PROMPT_NAME)
-        try:
-            with open(prompt_path, "rb") as fh:
-                prompt_bytes = fh.read()
-        except OSError:
-            return None, "prompt-unreadable"
-        prompt_sha256 = hashlib.sha256(prompt_bytes).hexdigest()
+        attempt_slot = attempts.get(attempt) or {}
+        attempt_prompt_sha = attempt_slot.get("attemptPromptSha256")
+        if isinstance(attempt_prompt_sha, str) and attempt_prompt_sha:
+            prompt_sha256 = attempt_prompt_sha
+            attempt_prompt_path = attempt_slot.get("attemptPromptPath")
+        else:
+            prompt_path = opened.get("promptPath") or os.path.join(run_dir_real, PROMPT_NAME)
+            try:
+                with open(prompt_path, "rb") as fh:
+                    prompt_bytes = fh.read()
+            except OSError:
+                return None, "prompt-unreadable"
+            prompt_sha256 = hashlib.sha256(prompt_bytes).hexdigest()
+            attempt_prompt_path = None
         observation = _observation_from_attempt(run_dir_real, state, attempt)
         if not isinstance(observation, dict):
             return None, "observation-unavailable"
@@ -5843,6 +5977,8 @@ def run_execution_record(run_dir):
             "promptSha256": prompt_sha256,
             "orderPromptSha256": opened.get("basePromptSha256"),
         }
+        if isinstance(attempt_prompt_path, str) and attempt_prompt_path:
+            record["attemptPromptPath"] = attempt_prompt_path
         if isinstance(result_digest, str) and result_digest and isinstance(result_kind, str) and result_kind:
             record["resultDigest"] = result_digest
             record["resultKind"] = result_kind
