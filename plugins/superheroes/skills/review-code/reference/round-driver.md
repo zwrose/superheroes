@@ -598,10 +598,10 @@ reference the batch's target files plus the project's static validators, at most
 the project's full verify command. The orchestrator's `run-verify` phase is the round's **one**
 full gate run on the post-fix head. Field evidence from PR #1332 and the C13 layer-2c lane: every
 fixer round that ran the full gate inside a 900 s attempt forfeited on
-`worktree-dirtied-by-attempt`; one project ran its gate 141 times across 24 lanes. The calibrated
-verify command's `{baseRef}` token (#1336 on `main`, bound by `round_driver._verify_command` once
-that commit is in the installed driver; this layer's base predates it) is what keeps a stacked
-branch's gate to its own layer.
+`worktree-dirtied-by-attempt`; one project ran its gate 141 times across 24 lanes. A touched-tests gate that diffs against `main` selects a stacked branch's whole stack; the
+`{baseRef}` token that #1336 (on `main`) introduces is what keeps the gate to its own layer —
+this layer's driver predates that change, so a stacked lane passes `--base <layer base>` by hand
+until the stack merges.
 
 **The gate and the fix audits run concurrently.** After a fixer fold the durable path advertises
 `payload.verify` on the `dispatch-audits` `next` payload (`{phase: "run-verify", command, round,
@@ -616,7 +616,7 @@ hand-`submit` session keep the result and submit `{result}` at `run-verify`. Bot
 fold to the same state.
 
 **Fixer batches are capped and split.** `fixBatchCap` (config key, CLI `--fix-batch-cap`,
-default `round_phases.FIX_BATCH_CAP_DEFAULT` (4), positive integer — refused `fix-batch-cap-invalid` otherwise) limits findings per
+default `round_phases.FIX_BATCH_CAP_DEFAULT` (the one home; the driver reads it at runtime), positive integer — refused `fix-batch-cap-invalid` otherwise) limits findings per
 `dispatch-fixer` order. A larger blocking set dispatches as consecutive `dispatch-fixer` attempts
 in the same round (`fix-batch.json`, `fix-batch.1.json`, …), each folded on its own with a
 `fix-batch-split` decision; the round record carries `fixBatches` and `fix.fixes` is the union.

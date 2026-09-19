@@ -3145,7 +3145,6 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
                          {"index": index, "size": len(slice_),
                           "fixes": len(artifact.get("fixes") or [])})
     _record_round(state, "fixerVendor", config.get("fixerVendor"))
-    state.pop("_escalatedRung", None)
     if session_dir:
         head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
         if head_err:
@@ -3155,11 +3154,15 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
             _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
     queue = state.get("_fixQueue") or []
     if queue:
+        cap = _fix_batch_cap(config)
+        done = len(slice_)
+        queued = len(queue) - min(cap, len(queue))
         _queue_fix_batch(state, config, queue, reset_accumulator=False, batch_index=index + 1)
         _decision(state, "fix-batch-split",
                   "fix batch slice %d of this round dispatched (%d findings; %d queued)"
-                  % (index + 1, len(state["_fixBatch"]), len(state["_fixQueue"])))
+                  % (index + 1, done, queued))
         return
+    state.pop("_escalatedRung", None)
     state.pop("_fixQueue", None)
     state.pop("_fixBatchIndex", None)
     _enter_post_fix(state, config)

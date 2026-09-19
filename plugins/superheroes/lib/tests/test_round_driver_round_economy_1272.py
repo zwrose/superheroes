@@ -270,6 +270,7 @@ def _newsurf():
 
 # axis: six findings split across two fixer dispatches in one round
 def test_t5_fix_batch_split_six_findings(tmp_path):
+    cap = round_phases.FIX_BATCH_CAP_DEFAULT
     d = str(tmp_path)
     cfg = _cfg(verifyCommand="pytest -q", diff=_multi_file_diff(6))
     seen_batches = []
@@ -282,7 +283,7 @@ def test_t5_fix_batch_split_six_findings(tmp_path):
 
     n = _drive_to_phase(d, cfg, respond, RD.P_FIXER)
     assert n["attempt"] == 0
-    assert len(n["payload"]["batch"]) == 4
+    assert len(n["payload"]["batch"]) == cap
     head = _multi_head(6)
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                       {"fixes": [{"file": "x"}], "headDiff": head,
@@ -290,7 +291,7 @@ def test_t5_fix_batch_split_six_findings(tmp_path):
     assert s["ok"], s
     n2 = RD.cmd_next(d)
     assert n2["phase"] == RD.P_FIXER and n2["round"] == 1 and n2["attempt"] == 1
-    assert len(n2["payload"]["batch"]) == 2
+    assert len(n2["payload"]["batch"]) == 6 - cap
     s2 = RD.cmd_submit(d, n2["phase"], n2["attempt"], n2["expectedStateHash"],
                        {"fixes": [{"file": "y"}], "headDiff": head,
                         "changedSubjects": ["Code"]})
@@ -303,26 +304,31 @@ def test_t5_fix_batch_split_six_findings(tmp_path):
     assert len(n3["payload"]["targets"]) == 6
     assert len(state["rounds"]["1"]["fix"]["fixes"]) == 2
     batches = state["rounds"]["1"]["fixBatches"]
-    assert batches == [{"index": 0, "size": 4, "fixes": 1},
-                       {"index": 1, "size": 2, "fixes": 1}]
+    assert batches == [{"index": 0, "size": cap, "fixes": 1},
+                       {"index": 1, "size": 6 - cap, "fixes": 1}]
+    split = [d_ for d_ in state["decisions"] if d_["kind"] == "fix-batch-split"]
+    assert split == [{"round": 1, "kind": "fix-batch-split",
+                      "detail": "fix batch slice 1 of this round dispatched (%d findings; %d queued)"
+                                  % (cap, len(_six_findings()) - cap - min(cap, 6 - cap))}]
 
 
 # axis: exactly cap findings — one slice, no split decision
 def test_t5_fix_batch_exact_cap_no_split(tmp_path):
+    cap = round_phases.FIX_BATCH_CAP_DEFAULT
     d = str(tmp_path)
     head = _multi_head(4)
     cfg = _cfg(verifyCommand="pytest -q", diff=_multi_file_diff(4))
     n = _drive_to_phase(d, cfg,
                         _responder(round1_findings=_four_findings(), head=head),
                         RD.P_FIXER)
-    assert len(n["payload"]["batch"]) == 4
+    assert len(n["payload"]["batch"]) == cap
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                       {"fixes": [{"file": "x"}], "headDiff": head,
                        "changedSubjects": ["Code"]})
     assert s["ok"], s
     ok, state = RD.load_state(d)
     assert not any(d_["kind"] == "fix-batch-split" for d_ in state["decisions"])
-    assert state["rounds"]["1"]["fixBatches"] == [{"index": 0, "size": 4, "fixes": 1}]
+    assert state["rounds"]["1"]["fixBatches"] == [{"index": 0, "size": cap, "fixes": 1}]
 
 
 # axis: a configured cap below the default governs the slice size
@@ -347,6 +353,7 @@ def test_t5_fix_batch_cap_config_governs_slices(tmp_path):
 
 # axis: durable path — fix-batch.json and fix-batch.1.json for split slices
 def test_t5_durable_fix_batch_files(tmp_path):
+    cap = round_phases.FIX_BATCH_CAP_DEFAULT
     session_dir, gitdir, head_path = _bootstrap(
         tmp_path, verifyCommand="pytest -q", diff=_multi_file_diff(6))
     with open(head_path, "w", encoding="utf-8") as fh:
@@ -357,7 +364,7 @@ def test_t5_durable_fix_batch_files(tmp_path):
     state = _state(session_dir)
     pend = state["pending"]
     assert pend["phase"] == RD.P_FIXER and pend["attempt"] == 0
-    assert len(pend["payload"]["batch"]) == 4
+    assert len(pend["payload"]["batch"]) == cap
     _TDI._drive_one_phase(session_dir, gitdir, findings, head_path)
     state = _state(session_dir)
     assert os.path.isfile(os.path.join(session_dir, "round-1", "fix-batch.json"))
@@ -427,9 +434,7 @@ def test_t8_fix_batch_chokepoint_census():
     assert func_name == "_queue_fix_batch"
 
 
-_CAP_DEFAULT_SENTENCE_RE = re.compile(
-    r"round_phases\.FIX_BATCH_CAP_DEFAULT[^0-9]*\((\d+)\)"
-)
+_CAP_DEFAULT_CITATION_RE = re.compile(r"round_phases\.FIX_BATCH_CAP_DEFAULT")
 
 
 # axis: default cap constant and reference prose stay aligned
@@ -441,13 +446,41 @@ def test_t9_cap_default_and_reference_aligned():
     economy_start = text.index("## Round economy")
     economy_end = text.index("## Lens coverage beside counts", economy_start)
     economy = text[economy_start:economy_end]
-    m = _CAP_DEFAULT_SENTENCE_RE.search(economy)
-    if not m:
+    if not _CAP_DEFAULT_CITATION_RE.search(economy):
         raise AssertionError(
-            "§ Round economy must cite round_phases.FIX_BATCH_CAP_DEFAULT with its numeric "
-            "value in parentheses; no match in sentence block starting: %s"
-            % economy.strip()[:200])
-    assert int(m.group(1)) == round_phases.FIX_BATCH_CAP_DEFAULT
+            "§ Round economy must cite round_phases.FIX_BATCH_CAP_DEFAULT by name; "
+            "no match in sentence block starting: %s" % economy.strip()[:200])
+    assert re.search(r"FIX_BATCH_CAP_DEFAULT\s*\(\s*\d+\s*\)", economy) is None
+
+
+# axis: escalated self-recovery split — both fixer slices carry escalatedRung
+def test_t5_escalated_split_carries_rung_on_both_slices(tmp_path):
+    cap = round_phases.FIX_BATCH_CAP_DEFAULT
+    d = str(tmp_path)
+    findings = _five_findings()
+    head = _multi_head(5)
+    cfg = _cfg(verifyCommand="pytest -q", diff=_multi_file_diff(5))
+    respond = _responder(round1_findings=findings, head=head)
+    n = _drive_to_phase(d, cfg, respond, RD.P_SYNTHESIS)
+    s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                      respond(n["phase"], n["payload"], n["round"]))
+    assert s["ok"], s
+    ok, state = RD.load_state(d)
+    assert ok
+    rung = {"rung": "opus-5-thinking-high", "vendor": "claude"}
+    state["_escalatedRung"] = rung
+    RD.save_state(d, state)
+    n1 = RD.cmd_next(d)
+    assert n1["phase"] == RD.P_FIXER
+    assert n1["payload"]["escalatedRung"] == rung
+    assert len(n1["payload"]["batch"]) == cap
+    s1 = RD.cmd_submit(d, n1["phase"], n1["attempt"], n1["expectedStateHash"],
+                       {"fixes": [], "headDiff": head, "changedSubjects": ["Code"]})
+    assert s1["ok"], s1
+    n2 = RD.cmd_next(d)
+    assert n2["phase"] == RD.P_FIXER
+    assert n2["payload"]["escalatedRung"] == rung
+    assert len(n2["payload"]["batch"]) == 5 - cap
 
 
 # axis: VERIFY_BUDGET placeholder — sorted files, no VERIFY_COMMAND
