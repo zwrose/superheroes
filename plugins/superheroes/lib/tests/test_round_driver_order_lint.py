@@ -24,6 +24,7 @@ RD = _load("round_driver")
 RO = _load("round_orders")
 RP = _load("round_phases")
 OL = _load("order_lint")
+RR = _load("round_records")
 
 # Copied from test_round_orders.py — golden fixer render context helpers.
 def _base_context(**over):
@@ -93,6 +94,27 @@ def _emit_fixer(session_dir, state, pending_payload=None):
     return RD._emit_orders_manifest(
         session_dir, state, state["round"], RD.P_FIXER, 0, ["fixer"],
         journal_cmd="next", pending_payload=pending_payload or {}, seat_map={})
+
+
+def _seed_gate_guidance(state, guidance_text):
+    rnd = str(state["round"])
+    state["rounds"].setdefault(rnd, {})["judgmentDispositions"] = [
+        {
+            "id": "f.py::result shape@L1",
+            "title": "result shape",
+            "file": "f.py",
+            "line": 1,
+            "disposition": "fix-with-guidance",
+            RD.GATE_GUIDANCE_RECORD_KEY: guidance_text,
+        }
+    ]
+    state["_fixBatch"] = [{"title": "result shape", "file": "f.py", "line": 1}]
+
+
+_LINT_TRIGGER_GUIDANCE = (
+    '{"fixes"} via marker channel parser with "resultKind" and --output-schema. '
+    'See `plugins/superheroes/lib/no_such_file_1339.py`.'
+)
 
 
 def test_rendered_fixer_order_lints_clean_at_head(tmp_path):
@@ -194,4 +216,32 @@ def test_empty_findings_with_ok_false_refuses_unknown(tmp_path, monkeypatch):
             "ok": False, "kind": "fixer", "findings": [], "checked": {"paths": 0, "placeholders": 0},
         })
     with pytest.raises(ValueError, match=r"order-render-refused:%s:order-lint:unknown" % _FIXER_SKEY):
+        _emit_fixer(session_dir, state)
+
+
+def test_fixer_emission_ignores_lint_triggers_inside_gate_guidance(tmp_path, monkeypatch):
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    _seed_gate_guidance(state, _LINT_TRIGGER_GUIDANCE)
+    anchor = _emit_fixer(session_dir, state)
+    assert "manifestSha256" in anchor
+    order_path = RR.order_prompt_path(session_dir, state["round"], RP.P_FIXER, _FIXER_SKEY, 0)
+    order_text = open(order_path, encoding="utf-8").read()
+    assert _LINT_TRIGGER_GUIDANCE in order_text
+
+
+def test_fixer_emission_still_refuses_driver_authored_trigger_with_guidance_present(
+        tmp_path, monkeypatch):
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    _seed_gate_guidance(state, _LINT_TRIGGER_GUIDANCE)
+
+    def _poisoned_render(phase, seat_key, context):
+        guidance = (context.get("placeholders") or {}).get("GATE_GUIDANCE") or ""
+        return ("You are the fixer.\n\n" + guidance + "\n\nRepo root: "
+                + "{{" + "REPO_ROOT" + "}}" + "\n", None)
+
+    monkeypatch.setattr(RD.round_orders, "render_order", _poisoned_render)
+    with pytest.raises(
+            ValueError,
+            match=r"order-render-refused:%s:order-lint:order-placeholder-unfilled:REPO_ROOT"
+            % _FIXER_SKEY):
         _emit_fixer(session_dir, state)

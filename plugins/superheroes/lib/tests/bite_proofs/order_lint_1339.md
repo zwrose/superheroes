@@ -181,6 +181,7 @@ Note: `engine_result_channel.py` is absent from this worktree; in a full tree wh
 |---|---|---|
 | BP-OL-9 | the hook runs on the fixer phase | `test_fixer_emission_refuses_on_real_placeholder` |
 | BP-OL-10 | the refusal carries the token | `test_fixer_emission_refuses_on_lint_finding` |
+| BP-OL-11 | the guidance elision | `test_fixer_emission_ignores_lint_triggers_inside_gate_guidance` |
 
 Normalization: `-B -X pycache_prefix=/private/tmp/superheroes-pyc-wo2`, single-node `::test_*`.
 
@@ -215,5 +216,23 @@ FAILED ... AssertionError: Regex pattern did not match.
 ```
 
 **Restore:** restore the original `raise ValueError("order-render-refused:%s:order-lint:%s" % (...))` format.
+
+**Green:** `1 passed in ...`
+
+## BP-OL-11 — the guidance elision
+
+**Axis:** owner-gate guidance prose is elided from the fixer-emission lint text so quoted owner
+paths, braces, or result-shape words never refuse emission.
+
+**Neutralization:** set `lint_text = order_text` unconditionally (drop the `replace`).
+
+**Red** — `plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_ignores_lint_triggers_inside_gate_guidance`:
+
+```
+FAILED ... ValueError: order-render-refused:fixer-508e7896192355de:order-lint:...
+1 failed in ...
+```
+
+**Restore:** restore `lint_text = order_text.replace(guidance, GATE_GUIDANCE_LINT_ELISION, 1)`.
 
 **Green:** `1 passed in ...`

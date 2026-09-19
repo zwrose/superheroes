@@ -115,6 +115,7 @@ _SELF_RECOVERY_FIXER_EFFORT = "high"
 
 # Fold-owned guidance record key inside judgmentDispositions entries (dispatch-fixer.md).
 GATE_GUIDANCE_RECORD_KEY = "userGuidance"
+GATE_GUIDANCE_LINT_ELISION = "(owner-gate guidance elided from the order lint)"
 GATE_GUIDANCE_ROW_BYTE_CAP = 2000
 GATE_GUIDANCE_AGGREGATE_BYTE_CAP = 8000
 # Bounds each header field so one oversized value cannot cost its entry a place under the
@@ -6746,10 +6747,17 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         # acts on; an unfilled placeholder (order-placeholder-unfilled), a dangling path
         # (order-path-unresolved), or two result contracts named at once
         # (order-result-shape-ambiguous) refuses the emission here and never reaches a dispatch.
+        # Owner-gate guidance is quoted prose the driver did not author — elide it from the lint
+        # text so paths, braces, or result-shape words in the owner's guidance never refuse
+        # emission; only the first occurrence is elided when the block appears more than once.
         # Deterministic half only — a driver-rendered order has no author for the semantic seat
         # to send a finding back to.
         if phase == P_FIXER:
-            lint = order_lint.check_text(order_text, repo_root, kind="fixer")
+            guidance = (context.get("placeholders") or {}).get("GATE_GUIDANCE") or ""
+            lint_text = order_text
+            if guidance.strip():
+                lint_text = order_text.replace(guidance, GATE_GUIDANCE_LINT_ELISION, 1)
+            lint = order_lint.check_text(lint_text, repo_root, kind="fixer")
             if not lint.get("ok"):
                 first = (lint.get("findings") or [{}])[0]
                 token = first.get("token") or "unknown"
