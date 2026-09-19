@@ -87,7 +87,7 @@ import session_contract  # noqa: E402
 import session_mode  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
-from finding_identity import finding_identity, normalize_title  # noqa: E402
+from finding_identity import finding_identity, finding_label, normalize_title  # noqa: E402
 
 # --- constants (the DIMENSIONS/AGENT_SUFFIX home, moved off the retired code_loop_plan) --------
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
@@ -728,6 +728,19 @@ def _nit_cap(findings):
     return kept
 
 
+def _merge_same_finding(existing, incoming):
+    """Higher severity wins the base dict, dimension unioned, tradeoff OR-ed."""
+    dims = panel_tally._merge_dims(existing, incoming)
+    if circuit_breaker.severity_rank(incoming.get("severity")) \
+            < circuit_breaker.severity_rank(existing.get("severity")):
+        merged = dict(incoming)
+    else:
+        merged = dict(existing)
+    merged["dimension"] = dims
+    merged["tradeoff"] = bool(existing.get("tradeoff") or incoming.get("tradeoff"))
+    return merged
+
+
 def _compile_by_anchor(findings):
     """Dedupe by the binding review workflow's per-LOCATION anchor — (file, line, normalized-title)
     — NOT panel_tally's line-less `file::normalized-title` identity. The line was the DROPPED key:
@@ -740,16 +753,7 @@ def _compile_by_anchor(findings):
     for f in findings:
         key = (f.get("file"), f.get("line"), normalize_title(str(f.get("title") or "")))
         if key in by_anchor:
-            ex = by_anchor[key]
-            dims = panel_tally._merge_dims(ex, f)
-            if circuit_breaker.severity_rank(f.get("severity")) \
-                    < circuit_breaker.severity_rank(ex.get("severity")):
-                merged = dict(f)
-            else:
-                merged = dict(ex)
-            merged["dimension"] = dims
-            merged["tradeoff"] = bool(ex.get("tradeoff") or f.get("tradeoff"))
-            by_anchor[key] = merged
+            by_anchor[key] = _merge_same_finding(by_anchor[key], f)
         else:
             by_anchor[key] = dict(f)
             order.append(key)
@@ -1182,27 +1186,62 @@ def _finding_identity_key(finding):
     return session_contract.finding_identity_key(finding)
 
 
+def _finding_content_canonical(finding):
+    """Canonical JSON of a finding without findingKey."""
+    if not isinstance(finding, dict):
+        return None
+    body = dict(finding)
+    body.pop(session_contract.FINDING_KEY_FIELD, None)
+    return session_contract.canonical(body)
+
+
+def _content_hash_suffix(finding):
+    return session_contract.sha256_text(_finding_content_canonical(finding))[:12]
+
+
+def _title_clamp_hash_suffix(finding):
+    """12-hex suffix when the clamped title in location_key lost information."""
+    title = str(finding.get("title") or "")
+    full_norm = normalize_title(title)
+    clamped_norm = normalize_title(review_memory.clamp_title(finding_label(finding)))
+    if full_norm != clamped_norm:
+        return session_contract.sha256_text(full_norm)[:12]
+    return None
+
+
 def _mint_finding_keys(findings):
     """Stamp findingKey on dict findings that lack a non-empty one; ensure list-wide uniqueness."""
     if not isinstance(findings, list):
         return findings
-    used = set()
+    entries = []
     for f in findings:
         if not isinstance(f, dict):
             continue
-        key = f.get(session_contract.FINDING_KEY_FIELD)
-        if isinstance(key, str) and key:
-            base = key.rsplit("#", 1)[0] if "#" in key else key
+        preset = f.get(session_contract.FINDING_KEY_FIELD)
+        had_preset = isinstance(preset, str) and preset
+        if had_preset:
+            assigned = preset
         else:
             base = session_contract.location_key(f)
-            key = base
-        if key in used:
-            n = 1
-            while "%s#%d" % (base, n) in used:
-                n += 1
-            key = "%s#%d" % (base, n)
-        used.add(key)
-        f[session_contract.FINDING_KEY_FIELD] = key
+            suffix = _title_clamp_hash_suffix(f)
+            assigned = base + ("#" + suffix if suffix else "")
+        entries.append((f, assigned, had_preset))
+    by_key = {}
+    for idx, (f, key, had_preset) in enumerate(entries):
+        by_key.setdefault(key, []).append((idx, f, had_preset))
+    for key, group in by_key.items():
+        contents = {_finding_content_canonical(f) for _, f, _ in group}
+        if len(group) == 1:
+            group[0][1][session_contract.FINDING_KEY_FIELD] = key
+        elif len(contents) == 1:
+            for _, f, _ in group:
+                f[session_contract.FINDING_KEY_FIELD] = key
+        elif any(had_preset for _, _, had_preset in group):
+            for _, f, _ in group:
+                f[session_contract.FINDING_KEY_FIELD] = key + "#" + _content_hash_suffix(f)
+        else:
+            for _, f, _ in group:
+                f[session_contract.FINDING_KEY_FIELD] = key
     return findings
 
 
@@ -1240,6 +1279,33 @@ def _set_findings(state, new_findings):
         prior = []
     new_list = list(new_findings) if new_findings is not None else []
     _mint_finding_keys(new_list)
+    merged_by_key = {}
+    for finding in new_list:
+        if not isinstance(finding, dict):
+            continue
+        key = _finding_identity_key(finding)
+        if not key:
+            continue
+        if key in merged_by_key:
+            merged_by_key[key] = _merge_same_finding(merged_by_key[key], finding)
+        else:
+            merged_by_key[key] = finding
+    if merged_by_key:
+        seen_keys = set()
+        compact = []
+        for finding in new_list:
+            if not isinstance(finding, dict):
+                compact.append(finding)
+                continue
+            key = _finding_identity_key(finding)
+            if not key:
+                compact.append(finding)
+                continue
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            compact.append(merged_by_key[key])
+        new_list = compact
     new_keys = set()
     for finding in new_list:
         if isinstance(finding, dict):
@@ -2357,25 +2423,19 @@ def _fold_gapsweep(state, config, artifact):
 
 def _location_id(finding):
     """Per-LOCATION key: line-less `finding_identity` plus line. Two same-title findings at
-    DIFFERENT lines get DISTINCT keys (#507 R2 v5); audit target ids reuse this form with an
-    occurrence suffix when the same file+title+line repeats in one batch."""
+    DIFFERENT lines get DISTINCT keys (#507 R2 v5)."""
     return session_contract.location_key(finding)
 
 
 def _judgment_row_ids(findings):
-    """Per-row disposition keys for judgment findings. Reuses the audit-target occurrence pattern:
-    the first row at a location gets the bare per-location id; repeats get ``#1``, ``#2``, … so two
-    surviving tradeoff findings at the same location (e.g. different severities) never share one id."""
+    """Per-row disposition keys for judgment findings — each row's minted findingKey."""
     ids = []
-    seen_location = {}
     for f in findings:
         if not isinstance(f, dict):
             ids.append(None)
             continue
-        loc = _location_id(f)
-        n = seen_location.get(loc, 0)
-        seen_location[loc] = n + 1
-        ids.append(loc if n == 0 else "%s#%d" % (loc, n))
+        _mint_finding_keys([f])
+        ids.append(session_contract.finding_identity_key(f))
     return ids
 
 
@@ -3180,23 +3240,27 @@ def _enter_delta_round(state, config):
 def _audit_targets(state, config, audit_targets_map):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
-    hunks that sit over their lines."""
+    hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
+    occurrence wins."""
     fixer_vendor = config.get("fixerVendor")
     auditor_vendor, independence = _auditor_vendor(config, fixer_vendor)
     if independence == "degraded":
         state["independenceDegraded"] = True
     targets = []
-    seen_location = {}
+    seen_keys = set()
     for f in state.get("fixBatch") or []:
         if not isinstance(f, dict):
             continue
-        loc = _location_id(f)
-        n = seen_location.get(loc, 0)
-        seen_location[loc] = n + 1
-        # Same ``%s#%d`` format as ``_slot_label`` roster occurrence suffixes; the two namespaces
-        # stay disjoint because audit roster keys are per-location unique (no occurrence suffix)
-        # and pre-change persisted ids carry no ``#``.
-        tid = loc if n == 0 else "%s#%d" % (loc, n)
+        row_id = f.get("id")
+        key = f.get(session_contract.FINDING_KEY_FIELD)
+        if row_id and not (isinstance(key, str) and key):
+            f[session_contract.FINDING_KEY_FIELD] = row_id
+        else:
+            _mint_finding_keys([f])
+        tid = session_contract.finding_identity_key(f)
+        if tid in seen_keys:
+            continue
+        seen_keys.add(tid)
         targets.append({
             "id": tid,
             "identity": finding_identity(f),

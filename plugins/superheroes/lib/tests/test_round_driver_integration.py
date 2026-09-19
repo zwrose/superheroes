@@ -560,13 +560,13 @@ def test_two_same_titled_targets_at_different_lines_one_discharged_sibling_not(t
 
 
 def test_a_missing_second_occurrence_is_named_by_slot_not_by_seat(tmp_path):
-    """Two same-location findings in fixBatch yield occurrence-suffixed ids; advance names the
-    absent second target when only the first is recorded."""
+    """Two same-location findings whose titles agree past the clamp yield distinct content-keyed ids; advance names the absent second target when only the first is recorded."""
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name="collide-short")
     findings = [_blocking_finding("unchecked index", 2)]
     _drive_to_phase(session_dir, gitdir, findings, head_path, round_driver.P_AUDITS)
     state = _state(session_dir)
-    dup = [_blocking_finding("unchecked index", 2), _blocking_finding("unchecked index", 2)]
+    sibling = "unchecked index " + "x" * 160 + " beta"   # same location, title clamped → content-keyed id
+    dup = [_blocking_finding("unchecked index", 2), _blocking_finding(sibling, 2)]
     state["fixBatch"] = dup
     state["_auditTargets"] = round_driver._audit_targets(state, state.get("config") or {}, {})
     round_driver.save_state(session_dir, state)

@@ -21,6 +21,7 @@ AU = _load("audits")
 CB = _load("circuit_breaker")
 FI = _load("finding_identity")
 RR = _load("round_records")
+SC = _load("session_contract")
 
 
 def _cfg(**over):
@@ -37,12 +38,13 @@ def _finding(file="f.py", line=1, title="bug", severity="Important", **extra):
 
 # --- D1: judgment ids byte-identical ------------------------------------------
 
-def test_judgment_row_ids_occurrence_suffix_same_location():
-    # axis: repeated same-location judgment findings must get #1, #2, … suffixes
+def test_judgment_row_ids_same_finding_same_id():
+    # axis: byte-identical judgment rows share one minted finding key
     f = _finding(line=5, title="dup")
-    loc = RD._location_id(f)
     findings = [f, dict(f), dict(f)]
-    assert RD._judgment_row_ids(findings) == [loc, "%s#1" % loc, "%s#2" % loc]
+    RD._mint_finding_keys(findings)
+    key = SC.finding_identity_key(findings[0])
+    assert RD._judgment_row_ids(findings) == [key, key, key]
 
 
 # --- D2: unique ids + identity ------------------------------------------------
@@ -60,16 +62,17 @@ def test_audit_targets_distinct_ids_same_title_different_lines():
     assert targets[1]["id"] == "%s@L3" % targets[1]["identity"]
 
 
-def test_audit_targets_occurrence_suffix_same_location():
-    # axis: repeated same-location findings must get #1, #2, … suffixes (not all #1)
+def test_audit_targets_same_finding_same_id():
+    # axis: byte-identical fix-batch rows collapse to one audit target per finding key
     state = RD.new_state(_cfg())
-    state["fixBatch"] = [_finding(line=5, title="dup"), _finding(line=5, title="dup"),
-                         _finding(line=5, title="dup")]
+    rows = [_finding(line=5, title="dup"), _finding(line=5, title="dup"),
+            _finding(line=5, title="dup")]
+    state["fixBatch"] = rows
     targets = RD._audit_targets(state, state["config"], {})
-    loc = RD._location_id(_finding(line=5, title="dup"))
+    key = SC.finding_identity_key(rows[0])
     ids = [t["id"] for t in targets]
-    assert ids == [loc, "%s#1" % loc, "%s#2" % loc]
-    assert len(set(ids)) == 3
+    assert len(targets) == 1
+    assert ids == [key]
 
 
 def test_location_id_stable_when_line_missing():
@@ -535,15 +538,18 @@ def test_handle_stall_legacy_no_audit_outcome_uses_alias_only():
     assert batch[0]["id"] == target["id"]
 
 
-def test_audit_target_ids_disjoint_from_roster_occurrence_suffix():
-    # axis: #n occurrence mint for repeated locations must not collide with roster slot suffixes
+def test_audit_target_ids_one_target_per_finding_key_disjoint_from_roster_suffix():
+    # axis: one finding key per audit target; no occurrence suffix on finding ids
     state = RD.new_state(_cfg())
     state["fixBatch"] = [_finding(line=5, title="dup"), _finding(line=5, title="dup")]
     targets = RD._audit_targets(state, state["config"], {})
     ids = [t["id"] for t in targets]
-    assert len(set(ids)) == len(ids)
+    key = SC.finding_identity_key(state["fixBatch"][0])
+    assert len(targets) == 1
+    assert ids == [key]
+    assert "#" not in ids[0]
     roster = [t["id"] for t in targets]
-    assert RR.roster_slots(roster) == [(ids[0], 0), (ids[1], 0)]
+    assert RR.roster_slots(roster) == [(ids[0], 0)]
 
 
 # --- D6: settle_delta dedupe both directions ----------------------------------
