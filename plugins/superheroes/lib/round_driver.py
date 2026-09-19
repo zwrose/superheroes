@@ -2716,6 +2716,7 @@ def _gate_guidance_entries(state, rnd):
         key = _fix_batch_row_key(row)
         if key:
             batch_keys.add(key)
+    sliced = bool(state.get("_fixQueue")) or (state.get("_fixBatchIndex") or 0) >= 1
     _validate_gate_guidance_logs(rounds, rnd, batch_keys)
     out = []
     covered_keys = set()
@@ -2734,7 +2735,7 @@ def _gate_guidance_entries(state, rnd):
                 key = _history_row_key(item)
                 if not key:
                     continue
-                if key not in batch_keys:
+                if sliced and key not in batch_keys:
                     continue
                 covered_keys.add(key)
                 out.append({"id": key, "title": item.get("title"),

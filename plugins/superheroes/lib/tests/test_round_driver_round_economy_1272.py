@@ -578,10 +578,20 @@ def test_t12_guidance_rendered_per_slice():
             },
         },
     }
+    unsliced = {
+        "config": config,
+        "round": rnd,
+        "rounds": state["rounds"],
+        "_fixBatch": [],
+    }
+    entries_unsliced = RD._gate_guidance_entries(unsliced, rnd)
+    assert {e["id"] for e in entries_unsliced} == {k1, k2, k3}
     RD._queue_fix_batch(state, config, rows)
+    assert state["_fixQueue"]
     entries = RD._gate_guidance_entries(state, rnd)
     assert {e["id"] for e in entries} == {k1, k2}
     state["_fixBatch"] = [rows[2]]
     state["_fixBatchIndex"] = 1
+    state["_fixQueue"] = []
     entries_slice2 = RD._gate_guidance_entries(state, rnd)
     assert {e["id"] for e in entries_slice2} == {k3}
