@@ -173,7 +173,10 @@ VERIFY_CMD=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyCommand // empty')
 VERIFY_MODE=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyMode // empty')
 REFUSAL=$(printf '%s' "$VERIFY_JSON" | jq -r '.calibrationRefusal.remedy // empty')
 [ "$VERIFY_CMD" = "none" ] && VERIFY_CMD=""
+case "$BASE_REF" in ????????????????????????????????????????*) VERIFY_CMD="${VERIFY_CMD//\{baseRef\}/$BASE_REF}" ;; esac
 ```
+
+`{baseRef}` in the calibrated command is the pinned base commit (`$BASE_REF`, resolved once at Setup): a touched-tests gate on a stacked branch then diffs against the PR base instead of main. The substitution runs only once `$BASE_REF` is a full object id — an unpinned base leaves the token in place, and the gate's own unresolvable-ref refusal is the loud failure. The driver binds the same token in its `run-verify` payload (`round_driver._verify_command`).
 
 When `REFUSAL` is non-empty, `core.md` calibration was not read and the legacy profile is unsupported — state that, quote the remedy, and note the legacy profile may still have supplied `VERIFY_CMD` and per-role tier overrides; say which values differ from band defaults rather than asserting they all came from the legacy file. When `VERIFY_MODE` is `unverified`, skip the verify gate — there is no verify command and no implied test receipt. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation. For what grounds a test-pass claim versus a verify receipt, read `rubric/test-receipt-evidence.md`.
 

@@ -380,7 +380,7 @@ The orchestrator's verify gate (loop step 12) and the fixer (prompt step 3) both
 - **`mode: unverified` →** there is no verify command. SKIP the verify gate (step 12); tell the fixer to skip checks (verify command `"none"`); commits proceed ungated. State "unverified" in the dispatch summary and the End-of-Loop summary.
 - **`mode: review-only` →** the project opted out of auto-fix. The default path degrades to a single review pass + the `--review-only` presentation (no triage, no fixer, no commits, no loop). Note this in the dispatch summary.
 
-`meta.json` records the verify story (`verify`: the command string, or `"unverified"` / `"review-only"`) so a cold-resumed orchestrator recovers it without re-reading the profile.
+`meta.json` records the verify story (`verify`: the command string, or `"unverified"` / `"review-only"`) so a cold-resumed orchestrator recovers it without re-reading the profile. A `{baseRef}` token in the command is bound to the pinned base commit at Setup and in the driver's `run-verify` payload (`reference/setup.md`), so a touched-tests gate on a stacked branch diffs against the PR base, not main; with no full-hex pin the token stays and the gate refuses loudly.
 
 Test-receipt evidence policy: `rubric/test-receipt-evidence.md`.
 
