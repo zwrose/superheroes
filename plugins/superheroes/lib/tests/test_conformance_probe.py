@@ -227,7 +227,12 @@ def _ok_dispatchable_probe_paths(tmp_path, repo, omit=(), **per_engine):
         if supplied is not None and not isinstance(supplied, dict):
             data = supplied
         elif isinstance(supplied, dict):
-            data = _probe_result(engine, repoRoot=repo, **supplied)
+            if "legs" in supplied:
+                data = dict(supplied)
+            else:
+                merged = {"repoRoot": repo, **supplied}
+                merged.pop("engine", None)
+                data = _probe_result(engine, **merged)
         else:
             data = _probe_result(engine, repoRoot=repo)
         path = tmp_path / ("probe-%s.json" % engine)
@@ -768,21 +773,18 @@ def test_preflight_entry_hold_when_failed_without_owner_word(tmp_path):
 def test_preflight_entry_refuses_missing_duplicate_foreign_stale(tmp_path, case, expect):
   # axis: probe-missing-duplicate-foreign-stale
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo)
-    cursor = _probe_result("cursor", repoRoot=repo)
-    paths = []
-    if case != "missing":
-        cpath = tmp_path / "codex.json"
+    if case == "missing":
+        paths = _ok_dispatchable_probe_paths(tmp_path, repo, omit=("codex",))
+    else:
+        codex_kw = {}
         if case == "foreign":
-            codex["repoRoot"] = "/other/repo"
+            codex_kw["repoRoot"] = "/other/repo"
         if case == "stale":
             old = (datetime.now(timezone.utc) - timedelta(hours=5)).replace(microsecond=0)
-            codex["completedAt"] = old.isoformat().replace("+00:00", "Z")
-        cpath.write_text(json.dumps(codex), encoding="utf-8")
-        paths.append(str(cpath))
+            codex_kw["completedAt"] = old.isoformat().replace("+00:00", "Z")
+        paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_kw)
         if case == "duplicate":
-            paths.append(str(cpath))
-    paths.extend(_ok_dispatchable_probe_paths(tmp_path, repo, omit=("codex",), cursor=cursor))
+            paths.append(str(tmp_path / "probe-codex.json"))
     payload, code = CP.preflight_entry(
         repo, paths, calibration_rows=_calibration_rows(), max_age_seconds=3600,
     )
@@ -815,7 +817,12 @@ def test_preflight_entry_launch_without_names_substitutes_from_probed_cells(tmp_
     assert payload["engine-auth"]["state"] == "pass"
     assert "substitutes" in payload["engine-auth"]["evidence"]
     assert captured.get("live_cells_source") == "probed"
-    assert captured.get("live_cells") == [tuple(cursor_ok["probedCell"])]
+    cursor_probe = _probe_result("cursor", repoRoot=repo)
+    claude_probe = _probe_result("claude", repoRoot=repo)
+    assert captured.get("live_cells") == [
+        tuple(claude_probe["probedCell"]),
+        tuple(cursor_probe["probedCell"]),
+    ]
 
 
 def test_preflight_entry_parks_on_same_family(tmp_path, monkeypatch):
@@ -899,14 +906,9 @@ def test_preflight_requires_all_dispatchable_engines_not_only_calibrated(tmp_pat
 
 def test_preflight_entry_wave_binding_none_without_wave_arg(tmp_path):
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo)
-    cursor = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo)
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+        repo, paths, calibration_rows=_calibration_rows(),
     )
     assert code == 0
     assert payload["waveBinding"] == "none"
@@ -914,14 +916,12 @@ def test_preflight_entry_wave_binding_none_without_wave_arg(tmp_path):
 
 def test_preflight_entry_refuses_wave_mismatch(tmp_path):
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo, wave="wave-a")
-    cursor = _probe_result("cursor", repoRoot=repo, wave="wave-a")
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    wave_kw = {"wave": "wave-a"}
+    paths = _ok_dispatchable_probe_paths(
+        tmp_path, repo, codex=wave_kw, cursor=wave_kw, claude=wave_kw,
+    )
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), wave="wave-b",
+        repo, paths, calibration_rows=_calibration_rows(), wave="wave-b",
     )
     assert code == 1
     assert payload["reason"].startswith("probe-wave-mismatch:")
@@ -962,15 +962,11 @@ def test_preflight_entry_refuses_failed_list_disagreeing_with_legs(tmp_path):
 
 def test_preflight_entry_refuses_record_without_wave_under_wave(tmp_path):
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo)
-    cursor = _probe_result("cursor", repoRoot=repo)
-    assert "wave" not in codex
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo)
+    codex_data = json.loads((tmp_path / "probe-codex.json").read_text(encoding="utf-8"))
+    assert "wave" not in codex_data
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), wave="wave-a",
+        repo, paths, calibration_rows=_calibration_rows(), wave="wave-a",
     )
     assert code == 1
     assert payload["reason"].startswith("probe-wave-mismatch:")
@@ -1003,14 +999,12 @@ def test_preflight_entry_stale_boundary_exact_age_passes(tmp_path, monkeypatch):
     monkeypatch.setattr(CP, "_now_utc", lambda: now)
     completed = (now - timedelta(seconds=3600)).replace(microsecond=0)
     completed_iso = completed.isoformat().replace("+00:00", "Z")
-    codex = _probe_result("codex", repoRoot=repo, completedAt=completed_iso)
-    cursor = _probe_result("cursor", repoRoot=repo, completedAt=completed_iso)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    age_kw = {"completedAt": completed_iso}
+    paths = _ok_dispatchable_probe_paths(
+        tmp_path, repo, codex=age_kw, cursor=age_kw, claude=age_kw,
+    )
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), max_age_seconds=3600,
+        repo, paths, calibration_rows=_calibration_rows(), max_age_seconds=3600,
     )
     assert code == 0
 
@@ -1022,14 +1016,16 @@ def test_preflight_entry_stale_boundary_one_past_refuses(tmp_path, monkeypatch):
     monkeypatch.setattr(CP, "_now_utc", lambda: now)
     completed = (now - timedelta(seconds=3601)).replace(microsecond=0)
     completed_iso = completed.isoformat().replace("+00:00", "Z")
-    codex = _probe_result("codex", repoRoot=repo, completedAt=completed_iso)
-    cursor = _probe_result("cursor", repoRoot=repo, completedAt=completed_iso)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    healthy = (now - timedelta(seconds=1800)).replace(microsecond=0)
+    healthy_iso = healthy.isoformat().replace("+00:00", "Z")
+    paths = _ok_dispatchable_probe_paths(
+        tmp_path, repo,
+        codex={"completedAt": completed_iso},
+        cursor={"completedAt": healthy_iso},
+        claude={"completedAt": healthy_iso},
+    )
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), max_age_seconds=3600,
+        repo, paths, calibration_rows=_calibration_rows(), max_age_seconds=3600,
     )
     assert code == 1
     assert payload["reason"] == "probe-stale:codex"
@@ -1041,14 +1037,16 @@ def test_preflight_entry_stale_boundary_future_completed_at_refuses(tmp_path, mo
     monkeypatch.setattr(CP, "_now_utc", lambda: now)
     completed = (now + timedelta(seconds=60)).replace(microsecond=0)
     completed_iso = completed.isoformat().replace("+00:00", "Z")
-    codex = _probe_result("codex", repoRoot=repo, completedAt=completed_iso)
-    cursor = _probe_result("cursor", repoRoot=repo, completedAt=completed_iso)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    healthy = (now - timedelta(seconds=1800)).replace(microsecond=0)
+    healthy_iso = healthy.isoformat().replace("+00:00", "Z")
+    paths = _ok_dispatchable_probe_paths(
+        tmp_path, repo,
+        codex={"completedAt": completed_iso},
+        cursor={"completedAt": healthy_iso},
+        claude={"completedAt": healthy_iso},
+    )
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), max_age_seconds=3600,
+        repo, paths, calibration_rows=_calibration_rows(), max_age_seconds=3600,
     )
     assert code == 1
     assert payload["reason"] == "probe-stale:codex"
@@ -1062,14 +1060,11 @@ def test_preflight_entry_stale_boundary_future_completed_at_refuses(tmp_path, mo
 ])
 def test_preflight_entry_completed_at_parse_edges(tmp_path, completed_at, expect):
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo, completedAt=completed_at)
-    cursor = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(
+        tmp_path, repo, codex={"completedAt": completed_at},
+    )
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), max_age_seconds=3600,
+        repo, paths, calibration_rows=_calibration_rows(), max_age_seconds=3600,
     )
     assert code == 1
     if expect.endswith(":"):
@@ -1080,15 +1075,11 @@ def test_preflight_entry_completed_at_parse_edges(tmp_path, completed_at, expect
 
 def test_preflight_entry_refuses_probe_cell_mismatch(tmp_path):
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo)
-    codex["probedCell"] = ["codex", "wrong-model", None]
-    cursor = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(
+        tmp_path, repo, codex={"probedCell": ["codex", "wrong-model", None]},
+    )
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+        repo, paths, calibration_rows=_calibration_rows(),
     )
     assert code == 1
     assert payload["reason"] == "probe-cell-mismatch:codex"
@@ -1195,14 +1186,10 @@ def test_preflight_entry_refuses_author_family_unresolved(tmp_path):
     codex_fail = _probe_result("codex", ok=False, repoRoot=repo, failed=["resultProduction"])
     codex_fail["legs"]["resultProduction"]["ok"] = False
     codex_fail["failed"] = ["resultProduction"]
-    cursor_ok = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex_fail), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor_ok), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_fail)
     cal = [{"role": "implementer", "engine": "codex"}]
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)],
+        repo, paths,
         launch_without=["codex"], owner_words=["proceed"],
         calibration_rows=cal,
     )
@@ -1220,13 +1207,9 @@ def test_preflight_entry_refuses_seat_map_failed(tmp_path, monkeypatch):
     codex_fail = _probe_result("codex", ok=False, repoRoot=repo, failed=["resultProduction"])
     codex_fail["legs"]["resultProduction"]["ok"] = False
     codex_fail["failed"] = ["resultProduction"]
-    cursor_ok = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex_fail), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor_ok), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_fail)
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)],
+        repo, paths,
         launch_without=["codex"], owner_words=["proceed"],
         calibration_rows=_calibration_rows(),
     )
@@ -1236,21 +1219,16 @@ def test_preflight_entry_refuses_seat_map_failed(tmp_path, monkeypatch):
 
 def test_preflight_entry_refuses_blank_owner_word_and_unfailed_engine(tmp_path):
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo)
-    cursor = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo)
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)],
+        repo, paths,
         launch_without=["codex"], owner_words=["  "],
         calibration_rows=_calibration_rows(),
     )
     assert code == 1
     assert payload["reason"] == "owner-word-blank"
     payload2, code2 = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)],
+        repo, paths,
         launch_without=["cursor"], owner_words=["word"],
         calibration_rows=_calibration_rows(),
     )
