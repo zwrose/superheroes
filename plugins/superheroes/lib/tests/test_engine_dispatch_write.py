@@ -3596,6 +3596,35 @@ def test_claude_write_blank_report_forfeits_native_result_report_blank(tmp_path,
     assert res["detail"] == "native-result-report-blank"
 
 
+def test_claude_write_planted_valid_result_without_stdout_result_forfeits_occupied(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "occupied-no-result")
+    os.makedirs(run_dir, exist_ok=True)
+    monkeypatch.setenv("WO_B_CLAUDE_RUN_DIR", os.path.realpath(run_dir))
+
+    plant_calls = []
+    valid = _valid_claude_write_structured()
+
+    def plant_no_result(argv, prompt_bytes, timeout, progress_cb, cwd):
+        attempt = len(plant_calls) + 1
+        plant_calls.append(attempt)
+        result_path = ED._native_result_path(os.environ["WO_B_CLAUDE_RUN_DIR"], attempt)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(valid, separators=(",", ":")) + "\n")
+        return "", False, 0, ""
+
+    res = _dispatch_write(
+        tmp_path,
+        _ClaudeStdoutWriteFakeRunner([plant_no_result, plant_no_result]),
+        cwd=wt,
+        run_dir=run_dir,
+        seat=_claude_seat(),
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-path-occupied"
+
+
 def test_claude_off_allowlist_seat_refused_at_spawn_gate_write(tmp_path, monkeypatch):
     _ensure_claude_config_dir(tmp_path, monkeypatch)
     wt, _main = _linked_worktree(tmp_path)
