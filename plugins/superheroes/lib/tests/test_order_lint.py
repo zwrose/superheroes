@@ -373,3 +373,43 @@ def test_planted_bad_path_in_fixture_order(tmp_path):
     )
     r = OL.check(str(copy), str(repo), alt_roots=(_PLUGIN,), kind="implementer")
     assert any("does_not_exist_1339.py" in d for d in _details(r))
+
+
+def test_created_path_exemption_is_order_wide(tmp_path):
+    repo = _mk_repo(tmp_path)
+    semantic = "plugins/superheroes/rubric/orders/order-lint-semantic.md"
+    text = (
+        "# WO-3\n\n"
+        "Budget: at most 5 commands.\n\n"
+        "Create `%(semantic)s` (new file).\n\n"
+        "See also `%(semantic)s`.\n"
+    ) % {"semantic": semantic}
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert OL.TOKEN_PATH_UNRESOLVED not in _tokens(r)
+    repeat = (
+        "# WO\n\n"
+        "Budget: at most 3 commands.\n\n"
+        "`lib/missing_twice.py` and `lib/missing_twice.py`.\n"
+    )
+    r2 = _record(OL.check_text(repeat, str(repo), kind="implementer"))
+    assert _tokens(r2).count(OL.TOKEN_PATH_UNRESOLVED) == 1
+    assert "missing_twice.py" in _details(r2)[0]
+
+
+def test_cli_unknown_kind_reports_kind_token(tmp_path):
+    repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
+    order = tmp_path / "order.md"
+    order.write_text(_accepted_implementer_text(), encoding="utf-8")
+    script = os.path.join(_LIB, "order_lint.py")
+    run = subprocess.run(
+        [
+            sys.executable, "-B", script, "check",
+            "--order", str(order),
+            "--repo-root", str(repo),
+            "--kind", "pilot",
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    assert run.returncode == 1
+    out = json.loads(run.stdout)
+    assert out["findings"][0]["token"] == OL.TOKEN_KIND_UNKNOWN

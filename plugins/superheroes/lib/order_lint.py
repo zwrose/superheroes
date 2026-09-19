@@ -1,5 +1,17 @@
-"""Deterministic half of order lint (#1339); semantic: rubric/orders/order-lint-semantic.md.
+"""Deterministic half of order lint (#1339); semantic half is a Haiku seat
+(prompt: ``rubric/orders/order-lint-semantic.md``).
 
+Reads the authored order text only — never the runner-augmented prompt.
+``--expect-item`` paths arrive as declarations, not as citations to resolve.
+Tokens (one finding each when triggered):
+- ``order-unreadable`` — the order file is missing, empty, or not UTF-8 text.
+- ``order-repo-root-unresolved`` — ``--repo-root`` or ``--alt-root`` is absent or unreadable.
+- ``order-path-unresolved`` — a cited repo-relative path with a known extension does not exist.
+- ``order-placeholder-unfilled`` — a ``{{NAME}}`` or ``{name}`` placeholder remains in the text.
+- ``order-result-shape-ambiguous`` — the order names more than one result contract.
+- ``order-budget-missing`` — an implementer order lacks a command-budget declaration.
+- ``order-kind-unknown`` — ``--kind`` is not ``implementer`` or ``fixer``.
+Per-kind table:
 | check | implementer | fixer |
 |---|---|---|
 | order-unreadable | yes | yes |
@@ -10,7 +22,8 @@
 | order-budget-missing | yes | no |
 | order-kind-unknown | other kind; alone | |
 
-No-slash/extensionless tokens skip path check.
+Limitations: no-slash/extensionless tokens skip the path check; a ``budget`` word
+within 60 characters of any integer satisfies the budget rule.
 """
 from __future__ import annotations
 
@@ -51,12 +64,14 @@ _BUDGET_AT = re.compile(r"at most \d+ (?:command|invocation)", re.I)
 _STDOUT = ("<<<SUPERHEROES-WRITE-REPORT>>>", '{"fixes"', "marker channel", "marker parser")
 _NATIVE = ('"resultKind"', "--output-schema")
 
+
 def _f(token, detail=""):
     return {"token": token, "detail": detail}
 
 
 def _refuse(kind, token, detail):
     return {"ok": False, "kind": kind, "findings": [_f(token, detail)], "checked": _EMPTY}
+
 
 def _norm_item(raw):
     if not isinstance(raw, str) or not raw.strip():
@@ -72,6 +87,8 @@ def _norm_item(raw):
     if n in (".", "..") or any(p == ".." for p in n.split("/")):
         return False, "escapes-root"
     return True, n
+
+
 def _cand(tok):
     if "/" not in tok or tok.startswith(("/", "~", "$", "{", "<", "-", "http")):
         return False
@@ -80,6 +97,8 @@ def _cand(tok):
     base = tok.rsplit("/", 1)[-1]
     i = base.rfind(".")
     return i > 0 and base[i:] in EXTENSIONS
+
+
 def _resolve(rel, roots):
     n = posixpath.normpath(rel)
     if n in (".", "..") or any(p == ".." for p in n.split("/")):
@@ -94,21 +113,56 @@ def _resolve(rel, roots):
         if os.path.exists(joined):
             return True, ""
     return False, ("escapes-root" if escaped else "")
+
+
 def _exempt(line, o, c, tok, expect):
     if posixpath.normpath(tok) in expect:
         return True
     if _EX_AFTER.search(line[c:c + 12]):
         return True
     return bool(_EX_BEFORE.search(line[max(0, o - 24):o]))
-def _region(text, expect, roots, skip, out, seen, line=None, o=None, c=None):
+
+
+def _gather_exempt(text, expect):
+    exempt = set()
+    for m in _BTICK.finditer(text):
+        ls = text.rfind("\n", 0, m.start()) + 1
+        le = text.find("\n", m.end())
+        line = text[ls:le if le >= 0 else len(text)]
+        o_base = m.start() - ls
+        for raw in m.group(1).split():
+            tok = _SUFFIX.sub("", raw.strip().strip("\"'`,()"))
+            if not _cand(tok):
+                continue
+            o = line.find(raw, o_base)
+            if o < 0:
+                o = line.find(tok, o_base)
+            c = o + len(raw) if o >= 0 else o_base
+            if _exempt(line, o, c, tok, expect):
+                exempt.add(posixpath.normpath(tok))
+    for m in _FENCE.finditer(text):
+        for ln in m.group(1).splitlines():
+            pos = 0
+            for raw in ln.split():
+                tok = _SUFFIX.sub("", raw.strip().strip("\"'`,()"))
+                if not _cand(tok):
+                    continue
+                o = ln.find(raw, pos)
+                if o < 0:
+                    o = ln.find(tok, pos)
+                c = o + len(raw) if o >= 0 else pos
+                if _exempt(ln, o, c, tok, expect):
+                    exempt.add(posixpath.normpath(tok))
+                pos = c if o >= 0 else pos + len(raw)
+    return exempt
+
+
+def _region(text, expect, roots, skip, out, seen, exempt, line=None, o=None, c=None):
     for raw in text.split():
         tok = _SUFFIX.sub("", raw.strip().strip("\"'`,()"))
         if not _cand(tok) or tok in seen:
             continue
-        if line is not None:
-            if _exempt(line, o, c, tok, expect):
-                continue
-        elif posixpath.normpath(tok) in expect:
+        if posixpath.normpath(tok) in exempt:
             continue
         seen.add(tok)
         if skip:
@@ -116,17 +170,23 @@ def _region(text, expect, roots, skip, out, seen, line=None, o=None, c=None):
         ok, why = _resolve(tok, roots)
         if not ok:
             out.append(_f(TOKEN_PATH_UNRESOLVED, tok + (":" + why if why else "")))
+
+
 def _paths(text, expect, roots, skip):
+    exempt = _gather_exempt(text, expect)
     out, seen = [], set()
     for m in _BTICK.finditer(text):
         ls = text.rfind("\n", 0, m.start()) + 1
         le = text.find("\n", m.end())
         line = text[ls:le if le >= 0 else len(text)]
-        _region(m.group(1), expect, roots, skip, out, seen, line, m.start() - ls, m.end() - ls)
+        _region(m.group(1), expect, roots, skip, out, seen, exempt,
+                line, m.start() - ls, m.end() - ls)
     for m in _FENCE.finditer(text):
         for ln in m.group(1).splitlines():
-            _region(ln, expect, roots, skip, out, seen)
+            _region(ln, expect, roots, skip, out, seen, exempt)
     return out, len(seen)
+
+
 def _placeholders(text):
     hits = [(m.start(), m.group(1)) for m in _DBL_PH.finditer(text)]
     hits += [(m.start(), m.group(1)) for m in _SGL_PH.finditer(text)]
@@ -137,6 +197,8 @@ def _placeholders(text):
             seen.add(name)
             out.append(_f(TOKEN_PLACEHOLDER_UNFILLED, name))
     return out, len(seen)
+
+
 def _shape(text, expect_items):
     sh = [s for s in _STDOUT if s in text]
     nt = [s for s in _NATIVE if s in text]
@@ -145,10 +207,16 @@ def _shape(text, expect_items):
     if '{"fixes"' in text and expect_items:
         return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, '{"fixes"+expect-item')
     return None
+
+
 def _budget_ok(text):
     return bool(_BUDGET_AT.search(text) or _BUDGET.search(text))
+
+
 def _root_ok(path):
     return isinstance(path, str) and path and os.path.isdir(path) and os.access(path, os.R_OK)
+
+
 def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer"):
     if not isinstance(text, str):
         return _refuse(kind, TOKEN_UNREADABLE, "not-text")
@@ -185,6 +253,8 @@ def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer
         findings.append(_f(TOKEN_BUDGET_MISSING, ""))
     return {"ok": not findings, "kind": kind, "findings": findings,
             "checked": {"paths": path_n, "placeholders": pc}}
+
+
 def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implementer"):
     try:
         with open(order_path, encoding="utf-8", errors="strict") as fh:
@@ -198,9 +268,14 @@ def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implemente
     if not text.strip():
         return _refuse(kind, TOKEN_UNREADABLE, "empty")
     return check_text(text, repo_root, expect_items, alt_roots, kind)
+
+
 class _LintArgumentParser(argparse.ArgumentParser):
+    """Raise RuntimeError on usage errors so main can emit JSON instead of SystemExit."""
+
     def error(self, message):
         raise RuntimeError(message)
+
 
 def main(argv=None):
     argv = argv if argv is not None else sys.argv[1:]
@@ -212,7 +287,7 @@ def main(argv=None):
     cp.add_argument("--expect-item", action="append", default=[])
     cp.add_argument("--expect-items-file")
     cp.add_argument("--alt-root", action="append", default=[])
-    cp.add_argument("--kind", default="implementer", choices=list(KINDS))
+    cp.add_argument("--kind", default="implementer")
     try:
         args = p.parse_args(argv)
     except RuntimeError as exc:
