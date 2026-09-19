@@ -624,8 +624,8 @@ session offered**), `stall-choice-missing` (the submit artifact carries no `choi
 `stall-accept-risk-not-eligible` (an `accept-the-disclosed-risk` choice submitted when the session
 did not mark it eligible).
 
-On `present-judgment`, a `skip` disposition may carry an optional `followUp` object. On
-`present-stall-menu`, `accept-the-disclosed-risk` may carry the same optional `followUp` object.
+On the judgment gate, a `skip` disposition may carry an optional `followUp` object; on the stall
+gate, `accept-the-disclosed-risk` may carry the same optional `followUp` object.
 Without a `followUp`, the disposition is still recorded and the certification writer refuses it
 under the follow-up rule — the fail-closed answer, not an error.
 
@@ -710,7 +710,7 @@ certification writer grades every one of these and refuses what is missing.
 independent auditor discharged, bound to the fix-fold head and the round's verify result. `refuted`
 is recorded at the verifiers fold for every candidate the verifier refuted (the verdict's reason),
 and at synthesis for an author-justified drop (the quoted justification). `out-of-scope` is
-recorded where the owner gives it: a `present-judgment` `skip` and a `present-stall-menu`
+recorded where the owner gives it: the judgment gate's `skip` and the stall gate's
 `accept-the-disclosed-risk` both accept an optional `followUp` object; without one the disposition
 is recorded and the writer refuses it under the follow-up rule — the fail-closed answer, not an
 error.
