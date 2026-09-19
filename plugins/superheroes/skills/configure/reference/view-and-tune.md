@@ -38,8 +38,10 @@ calibration (FR-18).
 Present, inline beneath the view, the things the owner can change — each routed to the **smallest**
 action that owns it, leaving the rest of the calibration untouched:
 
-- **Change a single discrete field** (the verify command, the threat model) → a focused guided edit
-  through `core_md`.
+- **Change a single discrete field** (the verify command, the threat model) → edit that field in the
+  calibration file directly, then run the view again so the new value reads back. `core_md` has no
+  write verb for a single field, and a malformed value fails the next gate loudly rather than
+  silently.
 - **Change one project-configuration item** → write only that item's home through `project_config`.
   Show the current value from the view first, then pipe the new value on stdin. A refusal is
   reported to the owner and never worked around.
