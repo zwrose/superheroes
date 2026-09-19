@@ -634,3 +634,49 @@ FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_dispatch
  M plugins/superheroes/lib/tests/test_seat_provenance_1272.py
 ```
 
+
+
+## Final-head re-proof by the orchestrator (head `3ba66c30`) — supersedes the G7 and G8 entries above
+
+The G7 (WO-R4) and G8 (WO-R5) entries above quote neutralizations of code that later rounds rewrote (`_evidence_digest_subject` was replaced by `_runner_shaped_result`, whose discriminator became the contract's declared type in WO-R5b). The review's round-6 scoped finder caught the staleness. The orchestrator re-ran both proofs on the final head in a detached probe worktree, detector unedited, neutralization applied through the host edit action and reverted by its exact inverse.
+
+**Guarded element:** `round_driver._runner_shaped_result`, the declared-type branch (line ~7307). **Axis (G7 and G8 together):** a ruling's evidence digest is over the whole ruling record, derived through the runner's own payload semantics; a shape that wraps the ruling under its key must fail to bind.
+
+**Neutralization** (the `if declared in ("list-of-objects", "nullable-list-of-objects"):` test replaced by `if True:` so every kind wraps).
+
+**Raw red** — `test_dispatch_observed_audit_seat_binds_runner_evidence_end_to_end` and `test_evidence_digest_subject_follows_runner_semantics`:
+
+```
+E       AssertionError: {'ok': False, 'reason': 'evidence-result-mismatch', 'resultDigest': '35960e668b7f1d6d23551afed1c6b048469b8e260d75d80a4c2bfedbefb589bf', 'resultKind': 'ruling', ...}
+E       assert False is True
+E           AssertionError: ('ruling', {'evidence': 'e', 'id': 'a1', 'ok': True, 'reason': 'ok', ...})
+E           assert False
+2 failed in 8.04s
+```
+
+**Restore:** the inverse edit (`if declared in ("list-of-objects", "nullable-list-of-objects"):` restored). **Restore receipt:** `git status --porcelain` in the probe worktree printed nothing (0 lines).
+
+**Raw green:**
+
+```
+2 passed in 9.14s
+```
+
+**Guarded element:** `round_driver._fold_audits`, the missing-manifest-entry branch of the `audit-provenance-fail` decision (line ~3322; G3 of WO-R2 and G9 of WO-R5, re-run together on the final head). **Axis:** the decision names the expected key and the keys found only when the entry is genuinely missing.
+
+**Neutralization:** the `elif (isinstance(audit_reason, str) and audit_reason.startswith(_MISSING_MANIFEST_ENTRY_REASON_PREFIX) and (...))` branch replaced by `elif False:`.
+
+**Raw red** — `test_hand_submit_missing_manifest_key_names_expected_and_found`:
+
+```
+E       AssertionError: assert 'expected a collectionManifest entry keyed' in 'audit result for f.py::bug@L1 could not be authenticated — no dispatch-manifest entry for this target — the orchestrator did not record which engine executed the audit; cannot authenticate; treated as not-discharged'
+1 failed in 7.19s
+```
+
+**Restore:** the inverse edit. **Restore receipt:** `git status --porcelain` printed nothing (0 lines).
+
+**Raw green:**
+
+```
+1 passed in 15.28s
+```
