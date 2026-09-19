@@ -302,7 +302,7 @@ Without `--wave`, binding is repository path plus age only and the entry records
 
 It refuses `probe-missing:<e>`, `probe-duplicate:<e>`, `probe-foreign-repo:<e>`,
 `probe-stale:<e>` (default max age 86400 s, one day — owner-ruled 2026-09-19; future `completedAt` timestamps count as stale),
-`probe-result-malformed:<path>`, `calibration-unreadable`, `author-family-unresolved`,
+`probe-result-malformed:<path>`, `probe-channel-mismatch:<e>` (the record's channel is not the channel the engine dispatches on today — a probe taken before a channel move proves nothing about the new channel), `calibration-unreadable`, `author-family-unresolved`,
 `owner-word-missing`, and `seat-map-failed:<type>`. A failed engine with no owner word → `state: fail` (hold;
 the launcher's `walk_preflight` refuses `preflight-failed:engine-auth`, so nothing launches). With the
 owner's word → `state: pass` whose evidence names the substitute family per seat, computed by the seat
