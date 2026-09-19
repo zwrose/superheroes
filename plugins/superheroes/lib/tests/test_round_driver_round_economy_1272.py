@@ -17,6 +17,7 @@ import round_adapters  # noqa: E402
 import round_driver as RD  # noqa: E402
 import round_phases  # noqa: E402
 import round_records  # noqa: E402
+import session_contract as SC  # noqa: E402
 
 _SPEC = importlib.util.spec_from_file_location(
     "test_round_driver_integration",
@@ -528,3 +529,59 @@ def test_t11_decision_refuses_unregistered_kind():
     with pytest.raises(ValueError, match="decision-kind-unregistered:not-a-registered-kind"):
         RD._decision(state, "not-a-registered-kind", "x")
     RD._decision(state, "fix-batch-split", "detail")
+
+
+def _guided_judgment(key, title, file, line, guidance):
+    return {
+        "id": key,
+        SC.FINDING_KEY_FIELD: key,
+        "title": title,
+        "file": file,
+        "line": line,
+        "disposition": "fix-with-guidance",
+        RD.GATE_GUIDANCE_RECORD_KEY: guidance,
+    }
+
+
+def _fix_batch_row(key, title, file, line):
+    return {
+        SC.FINDING_KEY_FIELD: key,
+        "title": title,
+        "file": file,
+        "line": line,
+        "severity": "Important",
+    }
+
+
+# axis: owner-gate guidance is rendered only for findings in the active fixer slice
+def test_t12_guidance_rendered_per_slice():
+    k1 = "a.py::finding one@L1"
+    k2 = "b.py::finding two@L2"
+    k3 = "c.py::finding three@L3"
+    rows = [
+        _fix_batch_row(k1, "finding one", "a.py", 1),
+        _fix_batch_row(k2, "finding two", "b.py", 2),
+        _fix_batch_row(k3, "finding three", "c.py", 3),
+    ]
+    rnd = 1
+    config = {"fixBatchCap": 2}
+    state = {
+        "config": config,
+        "round": rnd,
+        "rounds": {
+            str(rnd): {
+                "judgmentDispositions": [
+                    _guided_judgment(k1, "finding one", "a.py", 1, "guidance one"),
+                    _guided_judgment(k2, "finding two", "b.py", 2, "guidance two"),
+                    _guided_judgment(k3, "finding three", "c.py", 3, "guidance three"),
+                ],
+            },
+        },
+    }
+    RD._queue_fix_batch(state, config, rows)
+    entries = RD._gate_guidance_entries(state, rnd)
+    assert {e["id"] for e in entries} == {k1, k2}
+    state["_fixBatch"] = [rows[2]]
+    state["_fixBatchIndex"] = 1
+    entries_slice2 = RD._gate_guidance_entries(state, rnd)
+    assert {e["id"] for e in entries_slice2} == {k3}

@@ -2734,6 +2734,8 @@ def _gate_guidance_entries(state, rnd):
                 key = _history_row_key(item)
                 if not key:
                     continue
+                if key not in batch_keys:
+                    continue
                 covered_keys.add(key)
                 out.append({"id": key, "title": item.get("title"),
                             "file": item.get("file"), "line": item.get("line"),
