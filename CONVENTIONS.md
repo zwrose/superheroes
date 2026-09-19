@@ -826,7 +826,9 @@ not — so effort travels alongside the token, never inferred from a token that 
 encode it. Every refusal at the dispatch boundary is **named**
 (`engine_adapter.build_argv_result` → `engine_dispatch` `detail: "engine-config:<reason>"`);
 a nameless fall-open is a defect. The round-trip self-test (`lib/dispatch_selftest.py`
-`run()` / its preflight probe) keeps the three shapes honest.
+`run()` / its preflight probe) keeps the three shapes honest. It proves configuration only, never
+engine liveness — a green selftest says nothing about whether an engine answers; the wave preflight's
+live probe does.
 
 ---
 
