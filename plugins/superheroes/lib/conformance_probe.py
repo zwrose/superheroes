@@ -340,6 +340,11 @@ def _validate_probe_record(raw, path_hint=""):
         return "probe-result-malformed:%s" % path_hint
     if not isinstance(raw.get("channel"), str):
         return "probe-result-malformed:%s" % path_hint
+    if raw.get("channel") != engine_result_channel.channel_for(eng):
+        # A record taken on a channel the engine no longer dispatches on proves nothing about the
+        # channel it does dispatch on (a pre-3c cursor record on the marker channel, inside the
+        # day-long window, would otherwise pass the preflight for the typed-file channel).
+        return "probe-channel-mismatch:%s" % eng
     seat = raw.get("seat")
     if not isinstance(seat, dict) or seat.get("vendor") != eng:
         return "probe-result-malformed:%s" % path_hint

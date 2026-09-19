@@ -961,6 +961,26 @@ def test_preflight_entry_refuses_malformed_json(tmp_path):
     assert payload["reason"].startswith("probe-result-malformed:")
 
 
+def test_preflight_entry_refuses_probe_taken_on_a_retired_channel(tmp_path):
+    """A cursor probe record taken on the marker channel (pre-3c) is refused under the typed-file
+    channel with its own token — a day-long freshness window must not admit a stale-channel proof.
+
+    Bites on: the `channel != engine_result_channel.channel_for(eng)` check in `_validate_probe_record`."""
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo)
+    cursor = _probe_result("cursor", repoRoot=repo)
+    cursor["channel"] = "marker"
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+    )
+    assert code == 1
+    assert payload["reason"] == "probe-channel-mismatch:cursor"
+
+
 def test_preflight_entry_refuses_wrong_schema(tmp_path):
     repo = _repo(tmp_path)
     codex = _probe_result("codex", repoRoot=repo)
