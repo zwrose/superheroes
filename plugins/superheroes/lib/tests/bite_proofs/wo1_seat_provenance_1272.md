@@ -219,3 +219,53 @@ AssertionError: assert {'src/f00.py:...L3': 'claude'} == {'src/f00.py:...L3': 'c
 .                                                                        [100%]
 1 passed in 3.86s
 ```
+
+---
+
+## G5 (WO-1f) — auditProvenance basis follows the fold path
+
+**Neutralization** (`round_driver.py`):
+
+```python
+-                  if (_seat_result_schema(state) == round_records.SEAT_RESULT_SCHEMA_V2
+-                      and not state.get("_submitUsed"))
++                  if (_seat_result_schema(state) == round_records.SEAT_RESULT_SCHEMA_V2)
+```
+
+**Raw red** — `test_audit_provenance_basis_follows_the_fold_path` (second half):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_audit_provenance_basis_follows_the_fold_path _______________
+
+    def test_audit_provenance_basis_follows_the_fold_path(tmp_path):
+        ...
+        RD._fold_audits(state2, state2["config"], {"results": [], "collectionManifest": {}})
+>       assert state2["rounds"][str(hand_round)]["auditProvenance"] == "collection-manifest"
+E       AssertionError: assert 'runner-record' == 'collection-manifest'
+E         
+E         - collection-manifest
+E         + runner-record
+
+plugins/superheroes/lib/tests/test_seat_provenance_1272.py:399: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_audit_provenance_basis_follows_the_fold_path
+1 failed in 8.43s
+```
+
+**Restore:** re-add `and not state.get("_submitUsed")` to the v2 branch condition.
+
+**Restore receipt (quoted lines):**
+
+```python
+                  if (_seat_result_schema(state) == round_records.SEAT_RESULT_SCHEMA_V2
+                      and not state.get("_submitUsed"))
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 7.05s
+```
