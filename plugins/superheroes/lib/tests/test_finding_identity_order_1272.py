@@ -307,12 +307,20 @@ def test_legacy_bare_key_with_clamp_exact_new_finding_keeps_two_rows():
     keys_rev = {f[SC.FINDING_KEY_FIELD] for f in state_rev["findings"]}
     assert keys_rev == {bare, SC.minted_identity_key(long)}
 
+
+def test_foreign_preset_is_a_claimant_of_a_legacy_bare_key():
+    """T13b: foreign preset K at another location is a claimant — legacy row keeps minted key."""
+    prefix = "x" * 165
+    long = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Critical"}
+    bare = SC.location_key(long)
+    legacy_fresh = dict(long, **{SC.FINDING_KEY_FIELD: bare})
+    assert legacy_fresh[SC.FINDING_KEY_FIELD] == bare
     foreign = {
         "file": "g.py", "line": 1, "title": "other", "severity": "Important",
         SC.FINDING_KEY_FIELD: bare,
     }
     state_foreign = RD.new_state(_cfg())
-    RD._set_findings(state_foreign, [legacy, foreign])
+    RD._set_findings(state_foreign, [legacy_fresh, foreign])
     assert len(state_foreign["findings"]) == 2
     by_file = {f["file"]: f[SC.FINDING_KEY_FIELD] for f in state_foreign["findings"]}
     assert by_file["g.py"] == bare
@@ -362,6 +370,15 @@ def test_finding_identity_has_one_home_driver_and_certification_agree():
     assert SC.finding_identity_key(a) != SC.finding_identity_key(b)
     assert RD._finding_key_of(a) == SC.finding_identity_key(a)
     assert RD._finding_key_of(b) == SC.finding_identity_key(b)
+
+    alpha_u, beta_u = _clamped_collision_pair()
+    legacy_state = RD.new_state(_cfg())
+    legacy_state["findings"] = [dict(alpha_u), dict(beta_u)]
+    assert SC.FINDING_KEY_FIELD not in legacy_state["findings"][0]
+    assert len(RC._certification_findings(legacy_state)) == 2
+    assert SC.finding_identity_key(alpha_u) != SC.finding_identity_key(beta_u)
+    assert RD._finding_key_of(alpha_u) == SC.finding_identity_key(alpha_u)
+    assert RD._finding_key_of(beta_u) == SC.finding_identity_key(beta_u)
 
 
 def test_persisted_targets_without_marker_dedupe_by_content():
