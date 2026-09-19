@@ -454,6 +454,29 @@ class RoundCeilingRefusal(ValueError):
         self.value = value
 
 
+RECEIPT_FAULT_WRITE = "receipt-write"                 # round-receipt.json could not be written
+RECEIPT_FAULT_CERTIFICATION = "certification-artifact"  # certification receipt/refusal artifact could not be written
+RECEIPT_FAULT_VERIFY = "receipt-verify"               # the on-disk receipt failed re-verification
+RECEIPT_FAULT_KINDS = (RECEIPT_FAULT_WRITE, RECEIPT_FAULT_CERTIFICATION, RECEIPT_FAULT_VERIFY)
+
+
+class ReceiptFault(str):
+    """A terminal-receipt fault detail that carries its class as data. It IS the detail string
+    (every consumer — CLI responses, `_receiptFault` in state, the tests that read it — keeps
+    reading a str); `kind` is the classification minted at the raise site."""
+    def __new__(cls, detail, kind):
+        if kind not in RECEIPT_FAULT_KINDS:
+            raise ValueError("unknown receipt fault kind %r" % (kind,))
+        obj = str.__new__(cls, detail)
+        obj.kind = kind
+        return obj
+
+
+class ReceiptWriteError(Exception):
+    """Raised by `_write_receipt` around the OSError: the raise site names the class."""
+    kind = RECEIPT_FAULT_WRITE
+
+
 class JournalFaultUnrecordable(Exception):
     """Last-resort fail-loud (#507 WO-FIX-RECOVERY): the journal append failed AND the durable fault
     marker that would have made finalization park ALSO could not be written. There is NO silent tier
@@ -4685,8 +4708,10 @@ def _write_certification_artifacts(session_dir):
         round_commit.atomic_write_bytes(
             path, (json.dumps(refusal, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     except OSError as exc:
-        return ("certification refusal artifact write failed (%s) — cannot certify; treat as park"
-                % exc)
+        return ReceiptFault(
+            "certification refusal artifact write failed (%s) — cannot certify; treat as park"
+            % exc,
+            RECEIPT_FAULT_CERTIFICATION)
     return None
 
 
@@ -5396,13 +5421,16 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
 
 
 def _write_receipt(session_dir, state):
-    """Write the terminal receipt atomically. OSError PROPAGATES — a receipt-write failure is itself
-    a receipt defect the CLI must surface (see _finalize_receipt), never a silent swallow (#507
-    v14)."""
+    """Write the terminal receipt atomically. ReceiptWriteError PROPAGATES — a receipt-write failure
+    is itself a receipt defect the CLI must surface (see _finalize_receipt), never a silent swallow
+    (#507 v14)."""
     receipt = build_receipt(state, session_dir)
     path = os.path.join(session_dir, RECEIPT_FILE)
-    round_commit.atomic_write_bytes(
-        path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    try:
+        round_commit.atomic_write_bytes(
+            path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    except OSError as exc:
+        raise ReceiptWriteError(str(exc)) from exc
     return receipt
 
 
@@ -5421,18 +5449,28 @@ def _verify_terminal_receipt(session_dir):
         with open(os.path.join(session_dir, RECEIPT_FILE), encoding="utf-8") as fh:
             on_disk = json.load(fh)
     except (OSError, ValueError) as exc:
-        return "terminal receipt unreadable (%s) — cannot certify; treat as park" % exc
+        return ReceiptFault(
+            "terminal receipt unreadable (%s) — cannot certify; treat as park" % exc,
+            RECEIPT_FAULT_VERIFY)
     if receipt_kind(on_disk) == RECEIPT_INTERIM_SCHEMA:
-        return ("terminal receipt is interim — cannot certify; treat as park")
+        return ReceiptFault(
+            "terminal receipt is interim — cannot certify; treat as park",
+            RECEIPT_FAULT_VERIFY)
     ok, why = validate_receipt(on_disk)
     if not ok:
-        return "terminal receipt invalid (%s) — cannot certify; treat as park" % why
+        return ReceiptFault(
+            "terminal receipt invalid (%s) — cannot certify; treat as park" % why,
+            RECEIPT_FAULT_VERIFY)
     if not (on_disk.get("scriptRan") or {}).get("invocations"):
-        return ("terminal receipt scriptRan is empty — the journal (the driver's ran evidence) did "
-                "not persist; cannot certify; treat as park")
+        return ReceiptFault(
+            "terminal receipt scriptRan is empty — the journal (the driver's ran evidence) did "
+            "not persist; cannot certify; treat as park",
+            RECEIPT_FAULT_VERIFY)
     if _journal_faulted(session_dir):
-        return ("driver journal recorded a write fault — the scriptRan evidence is incomplete "
-                "(a next/submit event was lost); cannot certify; treat as park")
+        return ReceiptFault(
+            "driver journal recorded a write fault — the scriptRan evidence is incomplete "
+            "(a next/submit event was lost); cannot certify; treat as park",
+            RECEIPT_FAULT_VERIFY)
     return None
 
 
@@ -5444,8 +5482,10 @@ def _finalize_receipt(session_dir, state):
     Returns None on success."""
     try:
         _write_receipt(session_dir, state)
-    except OSError as exc:
-        return "terminal receipt write failed (%s) — cannot certify; treat as park" % exc
+    except ReceiptWriteError as exc:
+        return ReceiptFault(
+            "terminal receipt write failed (%s) — cannot certify; treat as park" % exc,
+            exc.kind)
     _persist_head_content_blobs(
         session_dir,
         state,
@@ -5470,7 +5510,8 @@ def _terminal_receipt_gate(session_dir, state):
     later replayed `next` that re-wrote the receipt from state and answered ok. Once finalized, only a
     genuinely valid ON-DISK receipt (re-read fresh each call) clears the fault; a state overwrite
     cannot. Returns a fault detail string or None, persisting the finalized mark and the durable
-    `_receiptFault` detail so the durability survives across separate CLI processes (#507).
+    `_receiptFault` detail so the durability survives across separate CLI processes (#507). The fault
+    class is data minted at the raise site, not inferred from exception text.
 
     INVARIANT (#507, third audit): no terminal-phase invocation — first-emission next, replayed next,
     terminating submit, or a duplicate/replayed submit — may answer ok without a fresh on-disk receipt
@@ -5479,9 +5520,13 @@ def _terminal_receipt_gate(session_dir, state):
         fault = _verify_terminal_receipt(session_dir)
     else:
         fault = _finalize_receipt(session_dir, state)
-        if fault is None or "certification" not in fault:
+        if fault is not None and not isinstance(fault, ReceiptFault):
+            raise TypeError("terminal receipt fault without a class: %r" % (fault,))
+        # axis: finalization is decided by the fault's minted class, never by the text of an exception.
+        if fault is None or fault.kind != RECEIPT_FAULT_CERTIFICATION:
             state["_receiptFinalized"] = True
     state["_receiptFault"] = fault or None
+    state["_receiptFaultClass"] = fault.kind if fault else None
     save_state(session_dir, state)
     return fault
 
