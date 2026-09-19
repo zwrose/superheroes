@@ -2613,6 +2613,28 @@ def _gate_guidance_entries(state, rnd):
     if not isinstance(rounds, dict):
         return []
     _validate_gate_guidance_logs(rounds)
+    out = []
+    covered_keys = set()
+    round_entry = rounds.get(str(rnd))
+    if isinstance(round_entry, dict):
+        log = round_entry.get("judgmentDispositions")
+        if isinstance(log, list):
+            for item in log:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("disposition") != "fix-with-guidance":
+                    continue
+                guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+                if not isinstance(guidance, str) or not guidance.strip():
+                    continue
+                fid = item.get("id")
+                if not isinstance(fid, str) or not fid.strip():
+                    continue
+                fid = fid.strip()
+                covered_keys.add(fid)
+                out.append({"id": fid, "title": item.get("title"),
+                            "file": item.get("file"), "line": item.get("line"),
+                            "guidance": guidance.strip()})
     batch = state.get("_fixBatch")
     if not isinstance(batch, list):
         batch = state.get("fixBatch")
@@ -2624,8 +2646,9 @@ def _gate_guidance_entries(state, rnd):
         if key:
             batch_keys.add(key)
     history = _finding_history(state)
-    out = []
     for key in sorted(batch_keys):
+        if key in covered_keys:
+            continue
         slot = history.get(key)
         if not isinstance(slot, dict):
             continue
