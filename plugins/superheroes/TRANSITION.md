@@ -21,6 +21,47 @@ when its JSON carries `reason: unrunnable` (for example after abandon). `dispatc
 `engine_adapter build-argv` exit-code behavior is unchanged from the C10 correction documented
 below.
 
+### Command-line Claude result channel
+
+Command-line **claude** is now dispatchable through the shell — `dispatch-review` / `dispatch-write`
+with `{"vendor":"claude", …}` no longer refuse `undispatchable-vendor`. A consumer that treated
+claude as undispatchable must route it through the sanctioned verbs like codex and cursor.
+
+The argv is `claude -p --model <tok> --effort <effort> --output-format stream-json --verbose`,
+plus `--restricted` for the review role or `--permission-mode acceptEdits --allowedTools Bash` for
+the write role (the first-cut permission shape for implementer dispatches), with `--json-schema
+<declared schema JSON>` appended at run-open; the prompt arrives on stdin. `<tok>` is the registry's
+claude dispatch token (`haiku`, `sonnet`, `opus`); `fable` refuses `fable-unrunnable`.
+
+The typed result is the `structured_output` member of the **last** `{"type":"result"}` event on
+stdout — the final response `--json-schema` governs. The runner **materializes** it to
+`<run-dir>/native-result-<n>.json` at attempt end; `attempt-ended.stdoutResult` records
+`materialized`, `absent`, `error`, or `occupied`. Only a `materialized` attempt is loaded;
+`occupied` forfeits `native-result-path-occupied`; `absent` (no `result` event, `is_error: true`,
+or no `structured_output`) and `error` forfeit `native-result-missing`. Admission then runs the
+engine-neutral native path unchanged (declared schema, scrub, the `native-result-*` forfeits).
+`--output-format json` prints the identical envelope object once at exit; `stream-json --verbose`
+prints `assistant` events carrying `tool_use` blocks and then that same envelope as the last line.
+
+Telemetry uses `engagement.source: "claude-stream"`, `telemetry: "tool-calls"`; tool calls are counted
+by distinct `tool_use` block id across `assistant` events, **excluding** the `StructuredOutput` call
+(it is the result, not activity).
+
+At run-open the shell resolves the target `CLAUDE_CONFIG_DIR` through `lib/config_dir.resolve(env,
+cwd)` and records it as `run-opened.configDir`; a value that is not an existing directory refuses at
+open with `config-dir-unusable:<why>` (`attempts: 0`). At spawn the same value is injected into the
+child env together with `CLAUDE_CODE_EFFORT_LEVEL=<seat effort>`, and `engine-started.env` records
+both pins.
+
+Refusal tokens a consumer can meet on claude: `config-dir-unusable:<why>`, plus the shared native
+family `native-result-missing`, `native-result-oversized`, `native-result-malformed`,
+`native-result-schema-invalid`, `native-result-report-blank`, `native-result-path-occupied`,
+`native-schema-unreadable`, `marker-channel-retired`; the adapter refusals `unregistered-engine-model`,
+`fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
+
+Not in this release: background mode (`claude --bg`), the launcher's hand-built argv retiring into
+the adapter, the watcher and the steer channel, Astra.
+
 ### Dispatch CLI arguments
 
 On `engine_dispatch dispatch-review`, `engine_dispatch dispatch-write`, `dispatch_guard check`,
