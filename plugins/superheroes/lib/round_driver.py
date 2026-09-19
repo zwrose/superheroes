@@ -64,6 +64,7 @@ import delta_surface  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import diff_scope  # noqa: E402
 import engine_adapter  # noqa: E402
+import payload_contracts  # noqa: E402
 import engine_pref  # noqa: E402
 import model_tier_overrides  # noqa: E402
 import loop_plan_common  # noqa: E402
@@ -3274,6 +3275,10 @@ def _audit_provenance_basis(state, artifact):
     return AUDIT_PROVENANCE_MIXED
 
 
+# audits._reject_unauthenticated — missing manifest entry reason prefix.
+_MISSING_MANIFEST_ENTRY_REASON_PREFIX = "no dispatch-manifest entry for this target"
+
+
 def _fold_audits(state, config, artifact):
     """Consume the fix-audit rulings deterministically (audits.apply_audit_results). Record the
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
@@ -3313,6 +3318,18 @@ def _fold_audits(state, config, artifact):
                 audit_reason = audit.get("reason")
                 break
         if isinstance(audit_reason, str) and audit_reason.startswith("the dispatch manifest names"):
+            detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
+        elif (isinstance(audit_reason, str)
+              and audit_reason.startswith(_MISSING_MANIFEST_ENTRY_REASON_PREFIX)
+              and (not isinstance(collection_manifest, dict)
+                   or pid not in collection_manifest)):
+            found_keys = (sorted(collection_manifest)
+                          if isinstance(collection_manifest, dict) else [])
+            detail = ("audit result for %s could not be authenticated — expected a "
+                      "collectionManifest entry keyed %r (payload.targets[].id); manifest keys "
+                      "found: %s — not-discharged"
+                      % (pid, pid, found_keys))
+        elif isinstance(audit_reason, str) and audit_reason:
             detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
         else:
             found_keys = (sorted(collection_manifest)
@@ -7278,29 +7295,15 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
         return _lock_held_refusal(session_dir, "record-result", held)
 
 
-def _evidence_digest_subject(result_kind, envelope_payload):
-    """Return (digest_subject, refusal) matching engine_dispatch._result_kind_and_content_from_parse."""
-    if not isinstance(envelope_payload, dict):
-        return None, "evidence-result-mismatch"
-    if result_kind == "findings":
-        # engine_dispatch._result_kind_and_content_from_parse hashes the findings list.
-        if "findings" not in envelope_payload:
-            return None, "evidence-result-mismatch"
-        return envelope_payload["findings"], None
-    if result_kind == "verdicts":
-        # engine_dispatch._result_kind_and_content_from_parse hashes the verdicts list.
-        if "verdicts" not in envelope_payload:
-            return None, "evidence-result-mismatch"
-        return envelope_payload["verdicts"], None
-    if result_kind == "grouping":
-        # engine_dispatch._result_kind_and_content_from_parse hashes the grouping list.
-        if "grouping" not in envelope_payload:
-            return None, "evidence-result-mismatch"
-        return envelope_payload["grouping"], None
-    if result_kind == "ruling":
-        # engine_dispatch._result_kind_and_content_from_parse hashes res["ruling"], the whole scrubbed record.
-        return envelope_payload, None
-    return None, "evidence-result-mismatch"
+def _runner_shaped_result(phase, result_kind, envelope_payload):
+    """The runner-shaped result whose payload the seat landed — derived from the seat-payload
+    contract (payload_contracts), so the digest subject comes from engine_adapter's own semantics."""
+    contract, _ = payload_contracts.payload_contract(phase)
+    required = contract.get("required") or ()
+    if len(required) > 1 and result_kind in required:
+        # The seat lands the record itself (the audits contract requires `ruling` at top level).
+        return {"ok": True, "resultKind": result_kind, result_kind: envelope_payload}
+    return {"ok": True, "resultKind": result_kind, **envelope_payload}
 
 
 def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
@@ -7326,10 +7329,12 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
     if result_kind == session_contract.WRITE_RESULT_KIND:
         pass
     else:
-        subject, subject_refusal = _evidence_digest_subject(result_kind, envelope_payload)
-        if subject_refusal is not None:
-            return None, subject_refusal, {"resultDigest": result_digest,
-                                           "resultKind": result_kind}
+        carried, subject = engine_adapter.review_payload_carried(
+            _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload),
+            result_kind)
+        if not carried:
+            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                       "resultKind": result_kind}
         payload_digest = round_records.payload_sha256(subject)
         if result_digest != payload_digest:
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,

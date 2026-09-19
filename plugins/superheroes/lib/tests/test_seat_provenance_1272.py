@@ -271,6 +271,28 @@ def test_hand_submit_missing_manifest_key_names_expected_and_found(tmp_path):
     assert repr(tid) in detail
     assert "manifest keys found: []" in detail
 
+    art_empty = {
+        "results": [{"id": tid, "ruling": "discharged", "reason": "r", "evidence": "e",
+                     "auditorVendor": targets[0].get("auditorVendor")}],
+        "collectionManifest": {tid: ""},
+    }
+    session_dir2, n2 = _TRD._at(tmp_path / "empty-manifest", RD.P_AUDITS)
+    targets2 = n2["payload"]["targets"]
+    tid2 = targets2[0]["id"]
+    art_empty["results"][0]["id"] = tid2
+    art_empty["collectionManifest"] = {tid2: ""}
+    out2 = RD.cmd_submit(session_dir2, n2["phase"], n2["attempt"], n2["expectedStateHash"],
+                         art_empty)
+    assert out2["ok"] is True, out2
+    ok2, state2 = RD.load_state(session_dir2)
+    assert ok2
+    prov_fail2 = [dec for dec in state2.get("decisions", [])
+                  if dec.get("kind") == "audit-provenance-fail"]
+    assert prov_fail2, state2.get("decisions")
+    detail2 = prov_fail2[0].get("detail", "")
+    assert "no dispatch-manifest entry for this target" in detail2
+    assert "expected a collectionManifest entry keyed" not in detail2
+
 
 def test_legacy_manifest_absent_and_v5_manifest_ignored(tmp_path):
     """E7/E8 — legacy manifest absent stores; v5 present manifest is ignored."""
@@ -449,6 +471,28 @@ def _audit_execution_run_dir(tmp_path, order_path, seat, echo_nonce="nonce-audit
     with open(os.path.join(run_dir, "attempt-1.stderr"), "wb") as fh:
         fh.write(b"")
     return run_dir
+
+
+def test_evidence_digest_subject_follows_runner_semantics():
+    """Digest subject matches engine_dispatch parse digest for every review result kind."""
+    _KIND_PHASE_PAYLOAD = [
+        ("findings", RD.P_PANEL, {"findings": [{"dimension": "d", "taxonomy": "t", "title": "x"}]}),
+        ("verdicts", RD.P_VERIFIERS, {"verdicts": [{"id": "v1", "verdict": "pass"}]}),
+        ("grouping", RD.P_SYNTHESIS, {"grouping": [{"member_ids": ["a"]}]}),
+        ("ruling", RD.P_AUDITS,
+         {"id": "a1", "ruling": "discharged", "reason": "ok", "evidence": "e"}),
+    ]
+    for kind in engine_adapter.REVIEW_RESULT_KINDS:
+        match = next(((ph, p) for k, ph, p in _KIND_PHASE_PAYLOAD if k == kind), None)
+        assert match is not None, kind
+        phase, seat_payload = match
+        runner_shaped = RD._runner_shaped_result(phase, kind, seat_payload)
+        carried, subject = engine_adapter.review_payload_carried(runner_shaped, kind)
+        assert carried, (kind, runner_shaped)
+        parse_res = {"ok": True, "resultKind": kind, kind: runner_shaped[kind]}
+        digest, parsed_kind = engine_dispatch._result_digest_and_kind_from_parse(parse_res)
+        assert parsed_kind == kind
+        assert round_records.payload_sha256(subject) == digest
 
 
 def test_dispatch_observed_audit_seat_binds_runner_evidence_end_to_end(tmp_path):

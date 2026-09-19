@@ -445,3 +445,106 @@ FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_dispatch
 .                                                                        [100%]
 1 passed in 3.58s
 ```
+
+---
+
+## Review round 5 (WO-R5)
+
+| # | Guarded element | Axis |
+|---|---|---|
+| G8 | `_runner_shaped_result` contract branch | digest subject follows runner semantics |
+| G9 | `_fold_audits` missing-entry prefix check | diagnostic names missing key only when key is absent |
+
+---
+
+## G8 (WO-R5) — digest subject follows runner semantics
+
+**Neutralization** (`round_driver.py`):
+
+```python
+-    contract, _ = payload_contracts.payload_contract(phase)
+-    required = contract.get("required") or ()
+-    if len(required) > 1 and result_kind in required:
+-        # The seat lands the record itself (the audits contract requires `ruling` at top level).
+-        return {"ok": True, "resultKind": result_kind, result_kind: envelope_payload}
+-    return {"ok": True, "resultKind": result_kind, **envelope_payload}
++    return {"ok": True, "resultKind": result_kind, **envelope_payload}
+```
+
+**Raw red** — `test_dispatch_observed_audit_seat_binds_runner_evidence_end_to_end`:
+
+```
+FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_dispatch_observed_audit_seat_binds_runner_evidence_end_to_end
+AssertionError: {'ok': False, 'reason': 'evidence-result-mismatch', ...}
+```
+
+**Raw red** — `test_evidence_digest_subject_follows_runner_semantics` (ruling case):
+
+```
+FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_evidence_digest_subject_follows_runner_semantics
+AssertionError: ('ruling', {'evidence': 'e', 'id': 'a1', 'ok': True, 'reason': 'ok', ...})
+assert False
+```
+
+**Restore:** reinstate the `payload_contract` contract branch in `_runner_shaped_result`.
+
+**Restore receipt (quoted lines):**
+
+```python
+    contract, _ = payload_contracts.payload_contract(phase)
+    required = contract.get("required") or ()
+    if len(required) > 1 and result_kind in required:
+        # The seat lands the record itself (the audits contract requires `ruling` at top level).
+        return {"ok": True, "resultKind": result_kind, result_kind: envelope_payload}
+    return {"ok": True, "resultKind": result_kind, **envelope_payload}
+```
+
+**Raw green:**
+
+```
+..                                                                       [100%]
+2 passed in 3.87s
+```
+
+---
+
+## G9 (WO-R5) — diagnostic names missing key only when absent
+
+**Neutralization** (`round_driver.py`):
+
+```python
+-        elif (isinstance(audit_reason, str)
+-              and audit_reason.startswith(_MISSING_MANIFEST_ENTRY_REASON_PREFIX)
+-              and (not isinstance(collection_manifest, dict)
+-                   or pid not in collection_manifest)):
+-            ...
+-        elif isinstance(audit_reason, str) and audit_reason:
+-            detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
+         else:
+             found_keys = ...
+```
+
+**Raw red** — `test_hand_submit_missing_manifest_key_names_expected_and_found` (empty-value case):
+
+```
+FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_hand_submit_missing_manifest_key_names_expected_and_found
+assert 'no dispatch-manifest entry for this target' in "audit result for f.py::bug@L1 could not be authenticated — expected a collectionManifest entry keyed ..."
+```
+
+**Restore:** reinstate the `_MISSING_MANIFEST_ENTRY_REASON_PREFIX` branch and verbatim-reason branch.
+
+**Restore receipt (quoted lines):**
+
+```python
+        elif (isinstance(audit_reason, str)
+              and audit_reason.startswith(_MISSING_MANIFEST_ENTRY_REASON_PREFIX)
+              and (not isinstance(collection_manifest, dict)
+                   or pid not in collection_manifest)):
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 5.85s
+```
