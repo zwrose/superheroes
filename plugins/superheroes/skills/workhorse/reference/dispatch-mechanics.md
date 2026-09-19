@@ -238,10 +238,13 @@ fix commits are read by their `fix` type and touched paths; no new instrument; t
 owner's judgment at the pass. The readout the pass reads is the project's C1 values annex, its
 result-channel-per-engine rows — the annex is out-of-repo.
 
-Cursor stays on the marker channel (stream-json). The stdout capture cap (`MAX_STDOUT_CAPTURE`, 8
-MiB) is an operating parameter recorded in the same annex rows, not a contract row. The cursor JSON
-envelope's `result` string carries every assistant text turn concatenated, so a typed result cannot
-be read from it without the marker parser; cursor therefore has no native channel.
+Cursor is on the marker channel (stream-json) until layer 3c moves it. The stdout capture cap
+(`MAX_STDOUT_CAPTURE`, 8 MiB) is an operating parameter recorded in the same annex rows, not a
+contract row. The cursor JSON envelope's `result` string carries every assistant text turn
+concatenated, so a typed result is never read from it — the trial on that envelope failed for the
+review half. The typed-file shape (the engine writes the result file at the path the shell hands
+it; the stream-json event stream is the telemetry) passed both halves of the trial (R9, amended
+2026-09-19), and that is the channel cursor moves to in layer 3c.
 
 ### The conformance probe
 

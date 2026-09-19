@@ -190,13 +190,18 @@ from the worktree diff.
 
 ### Cursor result channel and the conformance probe
 
-Cursor stays on stream-json with the marker parser. The stdout capture cap (`MAX_STDOUT_CAPTURE`, 8
-MiB) is an operating parameter, not a contract row — recorded in the project's C1 values annex like
-codex's native channel. A two-dispatch trial validated the write dispatch on cursor's envelope; the
-review dispatch did not — the envelope's `result` concatenates narration with the JSON, so consumers
-see no cursor result-shape change. Wave preflight now runs `lib/conformance_probe.py` once per
-dispatchable engine; its result is recorded as the launcher's `engine-auth` check — the liveness
-check the dispatch selftest is not.
+Cursor is still on stream-json with the marker parser in this layer; consumers see no cursor
+result-shape change here. The stdout capture cap (`MAX_STDOUT_CAPTURE`, 8 MiB) is an operating
+parameter, not a contract row — recorded in the project's C1 values annex like codex's native
+channel. The two-dispatch trial had two shapes: on the `--output-format json` envelope the write
+dispatch validated and the review dispatch did not (the envelope's `result` string joins every
+assistant text turn with the JSON, so it is never the result); on the typed-file shape — the engine
+writes the result file at the path the shell hands it, with the stream-json event stream as
+telemetry — both halves passed (register R9 as amended 2026-09-19). Cursor therefore moves to the
+typed-file channel in layer 3c, with the marker parser and salvage tiers retired for cursor as they
+were for codex. Wave preflight now runs `lib/conformance_probe.py` once per dispatchable engine; its
+result is recorded as the launcher's `engine-auth` check — the liveness check the dispatch selftest
+is not.
 
 The launcher's `preflight-failed:<id>` refusal now carries the walked `checks`, including the
 failing entry, so the launch ledger keeps the probe's evidence on refusal.
