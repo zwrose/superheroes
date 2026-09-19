@@ -70,9 +70,10 @@ REFUSAL_CLASSES = frozenset(
 )
 
 PANEL_PHASE = session_contract.PANEL_PHASE
-# dispatch-fixer / dispatch-audits phase tokens (round_phases leaf values; inlined for import register).
-P_FIXER = "dispatch-fixer"
-P_AUDITS = "dispatch-audits"
+FIXER_PHASE = session_contract.FIXER_PHASE
+AUDITS_PHASE = session_contract.AUDITS_PHASE
+P_FIXER = session_contract.FIXER_PHASE
+P_AUDITS = session_contract.AUDITS_PHASE
 
 SEAT_MISSING_SCHEMA = session_contract.SEAT_MISSING_SCHEMA
 SEAT_RESULT_SCHEMA_V2 = "seat-result/2"
@@ -1242,7 +1243,8 @@ def _runner_recorded_vendor_status(obs, session_dir, seat_entry):
 
 def check_seat_independence(ctx):
     # axis: the receipt's independence is read from the record — the declared fixer vendor and each
-    # audit seat's runner-recorded vendor — and a record that contradicts itself refuses.
+    # audit seat's runner-recorded vendor — and a record that contradicts itself refuses; a record
+    # that shows a same-family audit reads degraded.
     state = ctx["state"]
     journal = ctx["journal"]
     session_dir = ctx["session_dir"]
@@ -1250,11 +1252,7 @@ def check_seat_independence(ctx):
     fixer = cfg.get("fixerVendor")
     fixer_fam = model_registry.family_for("code-fixer", fixer)
     if fixer_fam is None:
-        return _refusal(
-            "unfetched-findings",
-            STATE_FILE,
-            "fixer vendor %r has no maker family" % (fixer,),
-        )
+        return None
     for seat_entry in _collect_seats(ctx):
         seat = seat_entry["seat"]
         phase = seat_entry["phase"]
@@ -1293,13 +1291,6 @@ def check_seat_independence(ctx):
                 seat,
                 "audit seat %s vendor %r has no registry family" % (seat, vendor),
             )
-        if fam == fixer_fam:
-            return _refusal(
-                "same-family-seat",
-                seat,
-                "audit seat %s ran on %r, the maker family %r, per the runner record"
-                % (seat, vendor, fam),
-            )
     return None
 
 
@@ -1334,7 +1325,14 @@ def _independence_block(ctx):
                 "family": fam,
             }
         )
-    if audit_seats:
+    same_family_seats = [
+        entry["seat"] for entry in audit_seats
+        if entry.get("family") == fixer_fam
+    ]
+    if same_family_seats:
+        status = "degraded"
+        basis = "auditor-same-family"
+    elif audit_seats:
         status = "independent"
         basis = "runner-recorded-audit-seats"
     elif receipt_disclosures.independent_auditor_available(cfg)[0]:
@@ -1343,7 +1341,7 @@ def _independence_block(ctx):
     else:
         status = "degraded"
         basis = "no-independent-auditor-declared"
-    return {
+    block = {
         "status": status,
         "basis": basis,
         "fixerVendor": fixer,
@@ -1351,6 +1349,9 @@ def _independence_block(ctx):
         "declaredVendors": receipt_disclosures.live_vendors(cfg),
         "auditSeats": audit_seats,
     }
+    if same_family_seats:
+        block["sameFamilySeats"] = same_family_seats
+    return block
 
 
 def check_unfetched_findings(ctx):

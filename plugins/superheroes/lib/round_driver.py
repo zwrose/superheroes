@@ -276,6 +276,7 @@ round_entry_key_allowed = receipt_disclosures.round_entry_key_allowed
 receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
 live_vendors = receipt_disclosures.live_vendors
+independent_auditor = receipt_disclosures.independent_auditor
 independent_auditor_available = receipt_disclosures.independent_auditor_available
 _live_vendors = receipt_disclosures.live_vendors
 str_list = receipt_disclosures.str_list
@@ -866,15 +867,10 @@ def _auditor_vendor(config, fixer_vendor):
     vendor is live the audit still RUNS but is stamped degraded — never silently counted as
     independent. The same-vendor fallback loop was removed as unreachable post-#651 (issue #652
     rider 4a); see test_verifier_and_code_fixer_families_match_per_vendor in test_model_registry."""
+    vendor, _fam = receipt_disclosures.independent_auditor(config, fixer_vendor)
+    if vendor is not None:
+        return vendor, "independent"
     live = _live_vendors(config)
-    fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
-    if fixer_fam is None:
-        return (live[0] if live else fixer_vendor), "degraded"
-    for v in live:
-        if v != fixer_vendor:
-            cand_fam = model_registry.family_for("verifier", v)
-            if cand_fam is not None and cand_fam != fixer_fam:
-                return v, "independent"
     return (live[0] if live else fixer_vendor), "degraded"
 
 
@@ -1033,7 +1029,7 @@ def new_state(config=None):
         "confirmations": 0,
         "selfRecovered": False,
         # A single live vendor is degraded only when no live vendor is family-independent of the
-        # declared fixer; an undeclared fixer stays degraded.
+        # declared fixer; duplicate vendor entries never count twice toward the two-vendor pool.
         "independenceDegraded": (
             len(_live_vendors(cfg)) < 2
             and not receipt_disclosures.independent_auditor_available(cfg)[0]

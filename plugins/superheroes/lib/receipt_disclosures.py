@@ -173,20 +173,31 @@ def live_vendors(config):
     vendors = config.get("vendors") if isinstance(config, dict) else None
     if not isinstance(vendors, list) or not vendors:
         return ["claude"]
-    return [v for v in vendors if isinstance(v, str) and v]
+    seen = set()
+    out = []
+    for v in vendors:
+        if isinstance(v, str) and v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+def independent_auditor(config, fixer_vendor):
+    fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
+    if fixer_fam is None:
+        return None, None
+    for v in live_vendors(config):
+        if v != fixer_vendor:
+            cand_fam = model_registry.family_for("verifier", v)
+            if cand_fam is not None and cand_fam != fixer_fam:
+                return v, fixer_fam
+    return None, fixer_fam
 
 
 def independent_auditor_available(config):
     fixer = config.get("fixerVendor") if isinstance(config, dict) else None
-    fixer_fam = model_registry.family_for("code-fixer", fixer)
-    if fixer_fam is None:
-        return False, None
-    for v in live_vendors(config):
-        if v != fixer:
-            cand_fam = model_registry.family_for("verifier", v)
-            if cand_fam is not None and cand_fam != fixer_fam:
-                return True, fixer_fam
-    return False, fixer_fam
+    vendor, fam = independent_auditor(config, fixer)
+    return (vendor is not None, fam)
 
 
 def degraded(state):
@@ -533,8 +544,8 @@ def build_degraded_prose(state, form):
                     "ranManifest/collectionManifest omitted" % (rkey, phase_name))
             mismatch = prov.get("vendorEchoMismatch")
             if isinstance(mismatch, list) and mismatch:
-                parts = ["%s echo=%r manifest=%r" % (row.get("seat"), row.get("echo"),
-                                                     row.get("manifest"))
+                parts = ["%s echo=%r trusted=%r" % (row.get("seat"), row.get("echo"),
+                                                     row.get("recorded", row.get("manifest")))
                          for row in mismatch if isinstance(row, dict)]
                 degraded_out.append(
                     "adapter-provenance (round %s, %s): vendor echo mismatch on seat(s): %s"
@@ -569,6 +580,7 @@ __all__ = (
     "round_entry_key_allowed",
     "receipt_round_disclosures",
     "live_vendors",
+    "independent_auditor",
     "independent_auditor_available",
     "degraded",
     "base_degraded",

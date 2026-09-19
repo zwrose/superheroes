@@ -1,5 +1,6 @@
 """Seat independence — loop record, driver seed, certification receipt (#1272 WO-2)."""
 import model_registry
+import receipt_disclosures
 import round_certification as RC
 import round_driver as RD
 import round_records as RR
@@ -187,7 +188,7 @@ def test_fixer_seat_contradicting_declaration_refuses(tmp_path):
     assert refusal["bindingFailure"] == "fixer-vendor-contradicted"
 
 
-def test_audit_seat_same_family_per_runner_record_refuses(tmp_path):
+def test_audit_seat_same_family_per_runner_record_reads_degraded(tmp_path):
     session_dir = _independence_session(
         tmp_path,
         state={"config": {"fixerVendor": "claude", "baseGuard": RC.BASE_GUARD_CHECKED, "headSha": HEAD_SHA}},
@@ -203,8 +204,23 @@ def test_audit_seat_same_family_per_runner_record_refuses(tmp_path):
         ],
     )
     receipt, refusal = RC.certify(session_dir)
-    assert receipt is None
-    assert refusal["class"] == "same-family-seat"
+    assert refusal is None, refusal
+    assert receipt["independence"] == {
+        "status": "degraded",
+        "basis": "auditor-same-family",
+        "fixerVendor": "claude",
+        "fixerFamily": model_registry.family_for("code-fixer", "claude"),
+        "declaredVendors": ["claude"],
+        "auditSeats": [
+            {
+                "seat": AUDIT_SEAT,
+                "round": 1,
+                "vendor": "claude",
+                "family": model_registry.family_for("verifier", "claude"),
+            }
+        ],
+        "sameFamilySeats": [AUDIT_SEAT],
+    }
 
 
 def test_audit_seat_source_runner_is_not_a_vendor_refuses(tmp_path):
@@ -321,3 +337,31 @@ def test_fixer_round_record_carries_declared_vendor():
     )
     RD._fold_fixer(state, state["config"], {"fixes": [], "headDiff": HEAD})
     assert state["rounds"][str(state["round"])]["fixerVendor"] == state["config"]["fixerVendor"]
+
+
+def test_duplicate_vendor_entries_do_not_read_independent():
+    assert (
+        RD.new_state(RD._default_config({"vendors": ["claude", "claude"]}))["independenceDegraded"]
+        is True
+    )
+    assert receipt_disclosures.live_vendors({"vendors": ["codex", "codex", "cursor"]}) == [
+        "codex",
+        "cursor",
+    ]
+
+
+def test_auditor_vendor_and_seed_share_one_rule():
+    configs = [
+        {"vendors": ["claude"], "fixerVendor": "cursor"},
+        {"vendors": ["claude"], "fixerVendor": "claude"},
+        {"vendors": ["codex", "cursor"], "fixerVendor": "cursor"},
+    ]
+    for cfg in configs:
+        full_cfg = RD._default_config(cfg)
+        fixer = full_cfg.get("fixerVendor")
+        expected = (
+            "independent"
+            if receipt_disclosures.independent_auditor_available(full_cfg)[0]
+            else "degraded"
+        )
+        assert RD._auditor_vendor(full_cfg, fixer)[1] == expected

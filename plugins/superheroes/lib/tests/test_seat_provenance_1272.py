@@ -11,6 +11,7 @@ _LIB = os.path.dirname(_HERE)
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import receipt_disclosures  # noqa: E402
 import round_adapters  # noqa: E402
 import round_records  # noqa: E402
 
@@ -323,6 +324,19 @@ def test_vendor_echo_mismatch_discloses_recorded_source(tmp_path):
     assert artifact["collectionManifest"] == {seat: "codex"}
     mismatch = artifact["provenance"]["vendorEchoMismatch"]
     assert mismatch == [{"seat": seat, "occurrence": 0, "echo": "claude", "recorded": "codex"}]
+    state = _state(session_dir)
+    state["rounds"] = {
+        "1": {
+            "adapterProvenance": {
+                "byPhase": {RD.P_AUDITS: artifact["provenance"]},
+            },
+        },
+    }
+    degraded, _skipped = receipt_disclosures.build_degraded_prose(
+        state, receipt_disclosures.RECEIPT_FORM_CERTIFIED)
+    degraded_text = "\n".join(degraded)
+    assert "trusted='codex'" in degraded_text
+    assert "trusted=None" not in degraded_text
 
 
 def test_record_result_sweep_refuses_dispatch_observed_audits(tmp_path):

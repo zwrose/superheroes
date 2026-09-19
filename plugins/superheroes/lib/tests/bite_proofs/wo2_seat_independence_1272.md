@@ -248,3 +248,223 @@ FAILED plugins/superheroes/lib/tests/test_seat_independence_1272.py::test_audit_
 .                                                                        [100%]
 1 passed in 0.31s
 ```
+
+---
+
+## Review round 1 (WO-R1)
+
+| # | Guarded element | Axis |
+|---|---|---|
+| R1 | `live_vendors` dedupe | duplicate vendor entries never count twice |
+| R2 | `_auditor_vendor` leaf call | `_auditor_vendor` and the seed share one rule |
+| R3 | echo-mismatch renderer key | the trusted vendor renders in degraded prose |
+| R4 | `session_contract` phase tokens | tokens equal `round_phases` |
+| R5 | `_independence_block` same-family branch (G1 rewrite) | same-family audit per record reads degraded |
+
+### R1 — duplicate vendors deduped
+
+**Neutralization** (`receipt_disclosures.py`): removed order-preserving dedupe from `live_vendors`.
+
+**Raw red** — `test_duplicate_vendor_entries_do_not_read_independent`:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_duplicate_vendor_entries_do_not_read_independent _____________
+
+    def test_duplicate_vendor_entries_do_not_read_independent():
+>       assert (
+            RD.new_state(RD._default_config({"vendors": ["claude", "claude"]}))["independenceDegraded"]
+            is True
+        )
+E       assert False is True
+
+plugins/superheroes/lib/tests/test_seat_independence_1272.py:343: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_independence_1272.py::test_duplicate_vendor_entries_do_not_read_independent
+1 failed in 0.15s
+```
+
+**Restore:** restored order-preserving dedupe loop in `live_vendors`.
+
+**Restore receipt (quoted lines):**
+
+```python
+    seen = set()
+    out = []
+    for v in vendors:
+        if isinstance(v, str) and v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 0.13s
+```
+
+### R2 — one rule for auditor seating and seed
+
+**Neutralization** (`round_driver.py` `_auditor_vendor`): return `(fixer_vendor, "independent")` unconditionally.
+
+**Raw red** — `test_auditor_vendor_and_seed_share_one_rule`:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________________ test_auditor_vendor_and_seed_share_one_rule __________________
+
+    def test_auditor_vendor_and_seed_share_one_rule():
+        ...
+>           assert RD._auditor_vendor(full_cfg, fixer)[1] == expected
+E           AssertionError: assert 'independent' == 'degraded'
+E             
+E             - degraded
+E             + independent
+
+plugins/superheroes/lib/tests/test_seat_independence_1272.py:367: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_independence_1272.py::test_auditor_vendor_and_seed_share_one_rule
+1 failed in 0.15s
+```
+
+**Restore:** restored leaf call through `receipt_disclosures.independent_auditor`.
+
+**Restore receipt (quoted lines):**
+
+```python
+    vendor, _fam = receipt_disclosures.independent_auditor(config, fixer_vendor)
+    if vendor is not None:
+        return vendor, "independent"
+    live = _live_vendors(config)
+    return (live[0] if live else fixer_vendor), "degraded"
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 0.13s
+```
+
+### R3 — trusted vendor renders from `recorded` key
+
+**Neutralization** (`receipt_disclosures.py` renderer): read only `row.get("manifest")`.
+
+**Raw red** — `test_vendor_echo_mismatch_discloses_recorded_source`:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_vendor_echo_mismatch_discloses_recorded_source ______________
+
+>       assert "trusted='codex'" in degraded_text
+E       assert "trusted='codex'" in "independence: a single live vendor — the fix's auditor is the fixer's vendor; independence degraded and named in the certification shape\nadapter-provenance (round 1, dispatch-audits): vendor echo mismatch on seat(s): src/f00.py::unchecked index@L2 echo='claude' trusted=None"
+
+plugins/superheroes/lib/tests/test_seat_provenance_1272.py:338: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_vendor_echo_mismatch_discloses_recorded_source
+1 failed in 3.50s
+```
+
+**Restore:** restored `row.get("recorded", row.get("manifest"))`.
+
+**Restore receipt (quoted lines):**
+
+```python
+                parts = ["%s echo=%r trusted=%r" % (row.get("seat"), row.get("echo"),
+                                                     row.get("recorded", row.get("manifest")))
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 3.40s
+```
+
+### R4 — phase tokens drift-pinned
+
+**Neutralization** (`session_contract.py`): `FIXER_PHASE = "dispatch-fixers"`.
+
+**Raw red** — `test_phase_tokens_match_round_phases`:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________________ test_phase_tokens_match_round_phases _____________________
+
+>       assert session_contract.FIXER_PHASE == round_phases.P_FIXER
+E       AssertionError: assert 'dispatch-fixers' == 'dispatch-fixer'
+E         
+E         - dispatch-fixer
+E         + dispatch-fixers
+E         ?               +
+
+plugins/superheroes/lib/tests/test_round_certification_drift.py:86: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_round_certification_drift.py::test_phase_tokens_match_round_phases
+1 failed in 0.14s
+```
+
+**Restore:** `FIXER_PHASE = "dispatch-fixer"`.
+
+**Restore receipt (quoted lines):**
+
+```python
+FIXER_PHASE = "dispatch-fixer"
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 0.13s
+```
+
+### R5 — same-family audit reads degraded (G1 rewrite)
+
+**Neutralization** (`round_certification.py` `_independence_block`): same-family branch reports `independent` / `runner-recorded-audit-seats`.
+
+**Raw red** — `test_audit_seat_same_family_per_runner_record_reads_degraded`:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_audit_seat_same_family_per_runner_record_reads_degraded _________
+
+>       assert receipt["independence"] == {
+            "status": "degraded",
+            "basis": "auditor-same-family",
+            ...
+        }
+E       AssertionError: assert {'auditSeats'...thropic', ...} == {'auditSeats'...thropic', ...}
+E         Differing items:
+E         {'basis': 'runner-recorded-audit-seats'} != {'basis': 'auditor-same-family'}
+E         {'status': 'independent'} != {'status': 'degraded'}
+
+plugins/superheroes/lib/tests/test_seat_independence_1272.py:208: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_independence_1272.py::test_audit_seat_same_family_per_runner_record_reads_degraded
+1 failed in 0.16s
+```
+
+**Restore:** restored `status = "degraded"` / `basis = "auditor-same-family"` for same-family seats.
+
+**Restore receipt (quoted lines):**
+
+```python
+    if same_family_seats:
+        status = "degraded"
+        basis = "auditor-same-family"
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 0.16s
+```
