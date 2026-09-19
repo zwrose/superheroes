@@ -100,7 +100,7 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
         return []
 
     def default_verifier(clusters, rnd):
-        return [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+        return [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                 for c in (clusters or []) for i in (c.get("ids") or [])]
 
     def default_synthesis(findings, rnd):
@@ -456,7 +456,7 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
             out = []
             for c in payload.get("clusters", []):
                 for i in c.get("ids", []):
-                    v = {"id": i, "verdict": verdict}
+                    v = {"id": i, "verdict": verdict, "reason": "checked"}
                     if verdict == "CONFIRMED":
                         v["evidence"] = "ran"
                     out.append(v)
@@ -1008,7 +1008,9 @@ def test_submit_audits_collection_manifest_refusal_no_fold(tmp_path):
 
 def test_verifier_results_fault_pure():
     assert RD.verifier_results_fault({"verdicts": []}) is None
-    assert RD.verifier_results_fault({"verdicts": [{"id": "x", "verdict": "CONFIRMED"}]}) is None
+    fault = RD.verifier_results_fault({"verdicts": [{"id": "x", "verdict": "CONFIRMED"}]})
+    assert fault is not None
+    assert "reason" in fault
     assert RD.verifier_results_fault(None) is not None
     assert RD.verifier_results_fault({}) is not None
     assert "missing `verdicts`" in RD.verifier_results_fault({}) or \
@@ -1144,7 +1146,7 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path):
                     {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
             return {"seats": seats}
         if phase == RD.P_VERIFIERS:
-            return {"verdicts": [{"id": i, "verdict": "PLAUSIBLE"}
+            return {"verdicts": [{"id": i, "verdict": "PLAUSIBLE", "reason": "checked"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
@@ -1192,7 +1194,7 @@ def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
                     {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
             return {"seats": seats}
         if phase == RD.P_VERIFIERS:
-            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
@@ -1269,7 +1271,7 @@ def _multifile_delta_respond(captured, fixer_artifact):
                     {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
             return {"seats": seats}
         if phase == RD.P_VERIFIERS:
-            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
@@ -1329,7 +1331,7 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
                     {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
             return {"seats": seats}
         if phase == RD.P_VERIFIERS:
-            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
@@ -1456,7 +1458,8 @@ def _persistent_not_discharged_seams(io=None):
         return {"fixes": [], "headDiff": _headf(counter["n"]), "changedSubjects": ["Code"]}
 
     def plaus_verifier(clusters, rnd):
-        return [{"id": i, "verdict": "PLAUSIBLE"} for i in range(len(clusters or []))]
+        return [{"id": i, "verdict": "PLAUSIBLE", "reason": "checked"}
+                for i in range(len(clusters or []))]
 
     return _seams(
         reviewer=lambda dim, tier, rnd, ctx:
@@ -1736,7 +1739,8 @@ def _stall_then_clean_auditor_seams(io=None, clean_after=2):
         return {"fixes": [], "headDiff": _headf(counter["n"]), "changedSubjects": ["Code"]}
 
     def plaus_verifier(clusters, rnd):
-        return [{"id": i, "verdict": "PLAUSIBLE"} for i in range(len(clusters or []))]
+        return [{"id": i, "verdict": "PLAUSIBLE", "reason": "checked"}
+                for i in range(len(clusters or []))]
 
     seams = _seams(
         reviewer=lambda dim, tier, rnd, ctx:
@@ -2643,7 +2647,8 @@ def test_receipt_missing_seat_surfaces_unverified(tmp_path):
         return []
 
     receipt = RD.run_loop(_seams(reviewer=reviewer,
-                                 verifier=lambda cl, rnd: [{"id": i, "verdict": "PLAUSIBLE"}
+                                 verifier=lambda cl, rnd: [{"id": i, "verdict": "PLAUSIBLE",
+                                                            "reason": "checked"}
                                                            for c in (cl or []) for i in c.get("ids", [])]),
                           _cfg_cert())
     r1 = [x for x in receipt["loopRounds"] if x["round"] == 1][0]

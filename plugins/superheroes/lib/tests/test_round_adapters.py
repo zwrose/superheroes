@@ -58,7 +58,7 @@ def _responder(round1_findings=None, head=HEAD, grouping=None, verify="pass"):
                 seats["code-reviewer"] = {"findings": list(round1_findings)}
             return {"seats": seats}
         if phase == RD.P_VERIFIERS:
-            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": grouping}
@@ -271,11 +271,11 @@ def test_verifiers_assembles_verdicts_in_cluster_order(tmp_path):
     def build(n, state):
         clusters = n["payload"]["clusters"]
         assert clusters
-        hand = {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+        hand = {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                              for c in clusters for i in c["ids"]]}
         envelopes = [
             _result_env(RA.VERIFIER_SEAT_PREFIX + c["key"],
-                        {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+                        {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                       for i in c["ids"]]})
             for c in clusters]
         return hand, envelopes, {}
@@ -710,9 +710,10 @@ def test_panel_vacuous_flag_marks_a_seat_never_ran(tmp_path):
     ({"verdicts": {}}, "`verdicts` is dict, not a list"),
     ({"verdicts": [{"verdict": "CONFIRMED", "findingId": "v0"}]},
      "apply_verdicts keys on `id`"),
-    ({"verdicts": [{"id": "v0", "verdict": "MAYBE"}]}, "`verdicts[0].verdict` is 'MAYBE'"),
+    ({"verdicts": [{"id": "v0", "verdict": "MAYBE", "reason": "checked"}]},
+     "`verdicts[0].verdict` is 'MAYBE'"),
     ({"verdicts": [{"id": "v0", "verdict": "REFUTED", "reason": 3}]},
-     "`verdicts[0].reason` is int, not a string"),
+     "`verdicts[0].reason` is int, not a non-empty string"),
 ])
 def test_verifier_payload_faults(payload, fragment):
     fault = RA.payload_fault(RD.P_VERIFIERS, payload, "verifier:f.py:0")
@@ -1022,7 +1023,7 @@ def _minimal_payload_for_contract(phase, contract, seat_key):
         elif field == "findings":
             payload[field] = []
         elif field == "verdicts":
-            payload[field] = [{"id": "v0", "verdict": verification.VERDICTS[0]}]
+            payload[field] = [{"id": "v0", "verdict": verification.VERDICTS[0], "reason": "grounds"}]
         elif field == "grouping":
             payload[field] = None
         elif field == "fixes":
@@ -1126,7 +1127,7 @@ def test_payload_contract_declaration_completeness():
 
 def test_declared_element_required_id_is_enforced():
     fault = RA.payload_fault(RD.P_VERIFIERS,
-                             {"verdicts": [{"verdict": verification.VERDICTS[0]}]},
+                             {"verdicts": [{"verdict": verification.VERDICTS[0], "reason": "grounds"}]},
                              "verifier:f.py:0")
     assert fault is not None and "id" in fault
 
@@ -1136,12 +1137,12 @@ def test_declared_element_type_reason_is_string():
         RD.P_VERIFIERS,
         {"verdicts": [{"id": "v0", "verdict": verification.VERDICTS[0], "reason": 1}]},
         "verifier:f.py:0")
-    assert fault is not None and "`verdicts[0].reason` is int, not a string" in fault
+    assert fault is not None and "`verdicts[0].reason` is int, not a non-empty string" in fault
 
 
 def test_declared_element_enum_verdict_is_enforced():
     fault = RA.payload_fault(RD.P_VERIFIERS,
-                             {"verdicts": [{"id": "v0", "verdict": "NOT-A-VERDICT"}]},
+                             {"verdicts": [{"id": "v0", "verdict": "NOT-A-VERDICT", "reason": "grounds"}]},
                              "verifier:f.py:0")
     assert fault is not None and "`verdicts[0].verdict` is 'NOT-A-VERDICT'" in fault
 

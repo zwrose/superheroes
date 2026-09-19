@@ -78,7 +78,22 @@ def _install_fake_codex(monkeypatch, tmp_path, script_body):
     monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
 
 
+def _install_fake_cursor(monkeypatch, tmp_path, script_body):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_cursor = fake_bin / "cursor-agent"
+    fake_cursor.write_text("#!/usr/bin/env python3\n" + script_body, encoding="utf-8")
+    fake_cursor.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+
+
 def _codex_argv_for_run(seat, role_kind, cwd):
+    built = EA.build_argv_result(seat, role_kind, {"cwd": cwd})
+    assert built["reason"] is None, built
+    return built["argv"]
+
+
+def _cursor_argv_for_run(seat, role_kind, cwd):
     built = EA.build_argv_result(seat, role_kind, {"cwd": cwd})
     assert built["reason"] is None, built
     return built["argv"]
@@ -3087,11 +3102,21 @@ def test_run_engine_files_caps_under_live_writer_stdout_and_stderr(tmp_path, mon
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    seat = _codex_seat(role=_WRITE_ROLE)
-    argv = _journal_codex_run_for_engine_files(
-        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
-    )
-    _install_fake_codex(monkeypatch, tmp_path, script)
+    seat = _cursor_seat(role=_WRITE_ROLE)
+    argv = _cursor_argv_for_run(seat, "build", run_dir)
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "cursor",
+        "roleKind": "build", "orderId": "cap-live", "argv": argv,
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1,
+        "argv": argv, "at": time.time(),
+    })
+    _install_fake_cursor(monkeypatch, tmp_path, script)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
     ED._run_engine_files(
         run_dir, 1, argv, run_dir,
@@ -4203,10 +4228,10 @@ def test_dispatch_poll_running_graded_attempt1_ended_attempt2_live(tmp_path):
 
 
 def _wo2_open_run(run_dir, prompt_path, *, seat=None, role_kind=ED.RUN_KIND_REVIEW, **opened_overrides):
-    seat = seat or _codex_seat()
-    argv = _codex_argv_for_run(seat, role_kind, run_dir)
+    seat = seat or _reviewer_cursor_seat()
+    argv = _cursor_argv_for_run(seat, role_kind, run_dir)
     opened = {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "cursor",
         "roleKind": role_kind, "orderId": "wo2",
         "argv": argv,
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
@@ -4231,7 +4256,7 @@ def _wo2_run_engine(run_dir, script, timeout=30, heartbeat=None, monkeypatch=Non
     argv = _wo2_open_run(run_dir, prompt_path)
     if monkeypatch is not None:
         assert tmp_path is not None
-        _install_fake_codex(monkeypatch, tmp_path, script)
+        _install_fake_cursor(monkeypatch, tmp_path, script)
     if monkeypatch is not None and heartbeat is not None:
         monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", heartbeat)
     ED._run_engine_files(
@@ -4611,11 +4636,11 @@ def test_poster_child_engaged_artifact_forfeit_plain_path_cursor(tmp_path):
     assert "independently verified" in res["disclosure"].lower()
 
 
-def test_engaged_artifact_forfeit_from_vacuous_path(tmp_path):
-    """axis: which outcome is minted — vacuous terminal upgraded when earlier attempt engaged."""
-    repo_root = _git_init(str(tmp_path / "repo-vac"))
+def test_native_vacuous_terminal_is_never_upgraded(tmp_path):
+    """axis: native vacuous terminal is never upgraded to forfeit-with-engaged-artifact."""
+    repo_root = _git_init(str(tmp_path / "repo-vac-native"))
     prose = _poster_child_attempt1_stdout()
-    empty = json.dumps({"findings": []})
+    empty = json.dumps({"findings": [], "investigated": ["path/to/file.py"]})
     fake = FakeRunner([
         (prose, False, 0, ""),
         (empty, False, 0, ""),
@@ -4625,8 +4650,8 @@ def test_engaged_artifact_forfeit_from_vacuous_path(tmp_path):
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
-    assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
-    assert res["salvage"]["attempt"] == 1
+    assert res["reason"] == "vacuous"
+    assert "salvage" not in res
 
 
 def test_engaged_artifact_forfeit_from_vacuous_path_cursor(tmp_path):
@@ -5603,13 +5628,14 @@ def test_legitimate_concurrent_sibling_change_observed_unattributed(tmp_path):
 # --- #1017: dispatch-review --mode brief-check ---------------------------------
 
 
-def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_mode=False, expected_result_kind=None):
+def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_mode=False, expected_result_kind=None, seat=None):
     """Journal run-opened with optional mode key — for continuation tests."""
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
     view = build_view(os.path.realpath(repo_root))
     cwd = os.path.realpath(view["path"])
-    seat = _brief_check_codex_seat() if mode == "brief-check" else _codex_seat()
+    if seat is None:
+        seat = _brief_check_codex_seat() if mode == "brief-check" else _codex_seat()
     built = EA.build_argv_result(
         seat, "review", {"model": "sonnet", "cwd": cwd},
     )
@@ -5625,7 +5651,7 @@ def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_
     record = {
         "kind": "run-opened",
         "runKind": ED.RUN_KIND_REVIEW,
-        "engine": "codex",
+        "engine": seat["vendor"],
         "roleKind": ED.RUN_KIND_REVIEW,
         "orderId": "test-order",
         "argv": argv,
@@ -5798,15 +5824,16 @@ def test_continuation_result_kind_pin_agreeing_proceeds(tmp_path):
 
 def test_continuation_omitted_result_kind_inherits_journal(tmp_path):
     run_dir = str(tmp_path / "run")
+    seat = _reviewer_cursor_seat()
     repo_root, _ = _manual_open_review_run_with_mode(
-        tmp_path, run_dir, expected_result_kind="verdicts",
+        tmp_path, run_dir, expected_result_kind="verdicts", seat=seat,
     )
     fake = FakeRunner([
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
     ])
     res = ED.dispatch_review(
-        seat=_codex_seat(),
+        seat=seat,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
     )
@@ -6916,7 +6943,9 @@ def test_truncated_attempt1_stdout_capped_forfeit_not_dirtied(tmp_path):
         (truncated, False, 0, ""),
         (_build_ok_stdout(), False, 0, ""),
     ])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, max_wait=120)
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, max_wait=120, seat=_cursor_seat(role=_WRITE_ROLE),
+    )
     assert res["terminal"] is True
     assert res["forfeited"] is True
     assert res["detail"].startswith("%s:" % ED.ITEM_DETAIL_STDOUT_CAPPED)
@@ -6933,7 +6962,9 @@ def test_truncated_final_attempt_stdout_capped_forfeit(tmp_path):
         ("not gradeable", True, 0, ""),
         (truncated, False, 0, ""),
     ])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, max_wait=120)
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, max_wait=120, seat=_cursor_seat(role=_WRITE_ROLE),
+    )
     assert res["terminal"] is True
     assert res["forfeited"] is True
     assert res["attempts"] == ED.MAX_ATTEMPTS
@@ -12345,7 +12376,7 @@ def test_grade_native_review_attempt_ignores_stdout_on_semantic_refusal(tmp_path
 def test_admit_native_review_parser_refusal_forfeit_payload_shape_describes_branch(tmp_path):
     # axis: parser refusal forfeit carries payloadShape describing parsed branch
     branch = _native_review_branch("verdicts")
-    branch["verdicts"][0]["reason"] = None
+    branch["verdicts"][0]["reason"] = "   "
     run_dir, state = _native_review_grade_state(
         tmp_path, branch, expected_result_kind="verdicts",
     )

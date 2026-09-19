@@ -1210,10 +1210,10 @@ def test_engine_started_append_failure_terminates_engine(tmp_path, monkeypatch):
     open(prompt_path, "w").write("go\n")
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
-    seat = _codex_seat(role=_WRITE_ROLE)
-    argv = _codex_argv_for_run(seat, "build", run_dir)
+    seat = _cursor_seat()
+    argv = EA.build_argv_result(seat, "build", {"cwd": run_dir})["argv"]
     ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "cursor",
         "roleKind": "build", "orderId": "x", "argv": argv,
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
@@ -1223,7 +1223,12 @@ def test_engine_started_append_failure_terminates_engine(tmp_path, monkeypatch):
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
     })
-    _install_fake_codex(monkeypatch, tmp_path, "import time\ntime.sleep(120)\n")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_cursor = fake_bin / "cursor-agent"
+    fake_cursor.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(120)\n", encoding="utf-8")
+    fake_cursor.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
     real_append = ED._journal_append
 
     def fail_engine_started(rd, record):
