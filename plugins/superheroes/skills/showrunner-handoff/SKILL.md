@@ -1,6 +1,6 @@
 ---
 name: showrunner-handoff
-description: "Use in the showrunner advisor seat you are leaving while it is still alive — deliberate handover before the seat goes dark. Parks builders when the account is going dark, stops watch loops, freshens the resume point, says ready. Emits no paste block. Not checkpoint (`/compact`); not showrunner-resume (incoming seat)."
+description: "Use in the showrunner advisor seat you are leaving while it is still alive — deliberate handover before the seat goes dark. Parks builders when the account is going dark, stops watch loops, freshens the resume point. Emits no paste block. Not checkpoint (`/compact`); not showrunner-resume (incoming seat)."
 user-invocable: true
 ---
 
@@ -8,7 +8,7 @@ This skill speaks in host-neutral actions. Resolve them to your runtime's tools 
 
 # showrunner-handoff — hand the advisor seat over
 
-Run this in the **showrunner advisor seat you are leaving**, while that seat is still alive and you have time to hand over deliberately. It prepares durable state and says **ready**. It does **not** emit a block of text for the owner to paste — nothing is handed over by text, so nothing can go stale.
+Run this in the **showrunner advisor seat you are leaving**, while that seat is still alive and you have time to hand over deliberately. It prepares durable state for the incoming seat and closes with the verdict Step 5 defines. It does **not** emit a block of text for the owner to paste — nothing is handed over by text, so nothing can go stale.
 
 **Refuse plainly and stop** when this is not a showrunner advisor session. Emit no partial output.
 
@@ -16,7 +16,7 @@ Run this in the **showrunner advisor seat you are leaving**, while that seat is 
 
 | Form | Behavior |
 | --- | --- |
-| `/superheroes:showrunner-handoff` | Ask whether this instance's account is going dark, prepare durable state, stop this seat's watch loops, freshen the resume point if one exists, and say ready with every unresolved lane named. Refuse plainly when this is not a showrunner advisor session. |
+| `/superheroes:showrunner-handoff` | Ask whether this instance's account is going dark, prepare durable state, stop this seat's watch loops, freshen the resume point if one exists, and close (Step 5). Refuse plainly when this is not a showrunner advisor session. |
 
 ## Step 1 — the one question
 
@@ -48,12 +48,14 @@ When a loop cannot be confirmed stopped, name it in step 5 as unresolved. Do not
 
 When this session keeps a resume point, freshen it; when it does not, say so and continue — invent no format, path, or filename. The shape and lookup are the same ones `skills/checkpoint/SKILL.md` under this plugin's root defines.
 
-## Step 5 — say "ready"
+Whether the write succeeded, failed, or there was nothing to write is carried to Step 5.
 
-The closing output is one short block. Which shape it takes is decided by evidence, not by tone:
+## Step 5 — close
 
-- **`Ready.`** — only when **every** live lane of this account reached durable park or terminal evidence, **and** every watch loop this seat armed was confirmed stopped. Nothing unresolved.
-- **`Not ready — <n> unresolved.`** followed by each unresolved item by name and why — a builder that could not be reached, park evidence that could not be read, a loop that could not be confirmed stopped. Say plainly that the incoming seat will find these lanes as they stand and resolve them from durable state, and that the handoff does not wait on them.
+The closing output is one short block. Which shape it takes is decided here, once:
+
+- **`Ready.`** is legal **only** when nothing is unresolved (every live lane of this account reached durable park or terminal evidence when the park branch ran; every watch loop this seat armed was confirmed stopped) **and** the resume point was freshened by a write that **succeeded**.
+- Otherwise the close is **`Not ready — <n> unresolved.`** naming each item and what failed — a builder that could not be reached, park evidence that could not be read, a loop not confirmed stopped, a resume-point write that failed, **or no resume point kept by this session to freshen** (Step 4 invents none, so there was no successful write). Say plainly that the incoming seat will find these as they stand and resolve them from durable state, and that the handoff does not wait on them.
 
 ### Worked example (not ready — one unresolved lane)
 
@@ -61,10 +63,16 @@ The closing output is one short block. Which shape it takes is decided by eviden
 Not ready — 1 unresolved. Account going dark — lanes #412 and #415 parked: park records on their issues, heartbeats terminal, ledger outcomes recorded. Lane #418 unresolved: no host channel to reach its builder; park not requested. Watch loops for batch wave-handoff-a stopped. The incoming seat will find lane #418 as it stands and resolve it from durable state; this handoff does not wait on it.
 ```
 
+### Worked example (not ready — resume-point write failed)
+
+```text
+Not ready — 1 unresolved. Account not going dark — builders keep running. Watch loops for batch wave-handoff-b stopped. Resume-point write failed: ledger top pointer could not be updated. The incoming seat will find this as it stands and resolve it from durable state; this handoff does not wait on it.
+```
+
 ### Worked example (ready — all lanes resolved)
 
 ```text
-Ready. Account going dark — lanes #412 and #415 parked: park records on their issues, heartbeats terminal, ledger outcomes recorded. Watch loops for batch wave-handoff-a stopped.
+Ready. Account going dark — lanes #412 and #415 parked: park records on their issues, heartbeats terminal, ledger outcomes recorded. Watch loops for batch wave-handoff-a stopped. Resume point freshened by successful write.
 ```
 
 ## No paste block
@@ -76,10 +84,11 @@ This skill emits **no block of text for the owner to paste**. A block of text is
 | Failure | Outcome |
 | --- | --- |
 | This is not a showrunner advisor session | Refuse plainly. Stop. No partial output. |
-| The ledger or resume point cannot be read | Preserve the fact as unresolved. Name it in step 5. Force the **not ready** closing shape. |
-| A builder cannot be reached | Preserve the lane as unresolved. Name it in step 5. Force the **not ready** closing shape for that lane. |
-| Park evidence cannot be read | Preserve the lane as unresolved. Name it in step 5. Force the **not ready** closing shape for that lane. |
-| A watch loop cannot be confirmed stopped | Preserve the batch as unresolved. Name it in step 5. Force the **not ready** closing shape for that batch. |
+| The ledger or resume point cannot be read | Preserve the fact as unresolved. Name it in step 5. |
+| A builder cannot be reached | Preserve the lane as unresolved. Name it in step 5. |
+| Park evidence cannot be read | Preserve the lane as unresolved. Name it in step 5. |
+| A watch loop cannot be confirmed stopped | Preserve the batch as unresolved. Name it in step 5. |
+| The resume-point write fails | Name it in Step 5. |
 
 ## Common mistakes
 

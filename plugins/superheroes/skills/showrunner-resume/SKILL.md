@@ -1,6 +1,6 @@
 ---
 name: showrunner-resume
-description: "First action in a new, restarted, or compacted showrunner advisor seat — no arguments; with or without handoff. Reads durable state only, pins this seat's config on launches, classifies lanes (vet / re-arm / adopt / unresolved), records outcomes, arms watches. Not checkpoint or handoff."
+description: "First action in a new, restarted, or compacted showrunner advisor seat — no arguments; with or without handoff. Reads durable state only, pins this seat's config on launches, classifies each lane from one decision table, records outcomes, arms watches. Not checkpoint or handoff."
 user-invocable: true
 ---
 
@@ -41,7 +41,7 @@ Read **no other source**, and in particular read **no handed-over text as fact**
 3. the builder-liveness heartbeat sweep;
 4. each lane's recorded leader process, probed for liveness;
 5. each lane's issue and pull request: whether the pull request exists, whether it is still a draft, whether a durable review receipt stands on it, the **remote** head commit, and the continuous integration conclusion for **that exact commit**, selected by workflow name **plus** head commit — never by "the newest run";
-6. each lane's own session transcript — the one named by the **session identifier recorded on that lane's own launch record**, looked up under **the configuration root that launch record itself recorded** — never the seat's own root, and never "the newest transcript"; exactly one file may match. **No recorded session identifier, no file, more than one match, an unreadable directory, or a file dated into the future all mean the lane is not vouched for** — it is not fresh, and the lane falls to **unresolved**, never to re-arm. The reader **stats the file only** and never reads its contents.
+6. each lane's own session transcript — the one named by the **session identifier recorded on that lane's own launch record**, looked up under **the configuration root that launch record itself recorded** — never the seat's own root, and never "the newest transcript"; exactly one file may match. Whether the transcript resolved is evidence for the decision table's row 2; the table decides. The reader **stats the file only** and never reads its contents.
 
 Shell forms for 1–4:
 
@@ -64,20 +64,23 @@ Probe each lane's recorded leader pid from the ledger's `started` record — a d
 
 For 5, read each lane's issue and pull request through the host-neutral actions your forge exposes — existence, draft state, durable review receipt, remote head sha, and the integration run for that workflow name on that sha. Do not pin a particular forge's command syntax here.
 
-## Step 4 — choose per lane, from that lane's own evidence
+## Step 4 — choose per lane from the decision table
 
-| Branch | Evidence required before choosing it |
-| --- | --- |
-| **vet** | the pull request exists, is **not** a draft, carries a durable review receipt, its **remote** head is the commit that receipt names, and continuous integration concluded success on that exact commit. **A lane in this branch is never relaunched.** If the ledger carries no terminal outcome for it, record the handback outcome first. |
-| **re-arm** | the recorded leader process is **positively** live, **and** the lane's heartbeat is inside the promise that lane itself stated, or the lane's session transcript is fresh. Nothing is relaunched and no outcome is recorded. |
-| **adopt** | the vet row's evidence does not hold, **and** either: the recorded leader process is **not live** and the lane carries **no** unresolved blocker — record the lane's terminal outcome **first**, then relaunch it as an adoption from the pushed head; **or** the lane carries a **park** record **only when** that park's stated blocker has been cleared, or the owner or advisor has ruled that it should resume — record the terminal outcome **first**, then relaunch. A lane carrying a park record whose blocker is **not** cleared and has **no** such ruling is **reported as parked and left alone** — neither relaunched nor treated as unresolved-for-want-of-reading; it is a lane waiting on a decision, and the report says so. |
-| **unresolved** | any one of those reads is missing, unreadable, ambiguous, or failed. The lane is **named in the report and nothing is done to it**: not relaunched, not armed, no outcome recorded. |
+Read rows **top to bottom**; the **first row whose required evidence holds** decides the lane. **A read that failed, was ambiguous, or was not made satisfies no row's requirement** — a failed read can only push a lane down the table, never select a row that needed that read. The "evidence required" column is **required**, not indicative.
 
-The evidence column is **required**, not indicative.
+| Row | Evidence required | Action |
+| --- | --- | --- |
+| **1. parked** | A park record on the lane's issue or pull request (read completed) whose stated blocker is **not** cleared, and no owner or advisor ruling to resume it. This row needs no process, heartbeat, or transcript read — which is why a park record outranks a failed transcript read. | Report the lane as parked, awaiting a decision; nothing is relaunched, armed, or recorded. |
+| **2. re-arm** | **All** of: the recorded leader process is **positively live** (the double-confirmed probe in Step 3); the lane's heartbeat classifies **`fresh`** in the heartbeat sweep — the sweep's `fresh` class, the lane's age inside its own `staleAfterSeconds` promise, as CONVENTIONS §15 defines it; and the lane's session transcript **resolved** (Step 3, source 6: exactly one file found by the identity rule, not dated into the future). **A transcript alone never re-arms.** | Nothing is relaunched and no outcome recorded; the lane's batch is a candidate for Step 6 arming. |
+| **3. vet** | **All** of: the pull request exists, is **not** a draft, carries a durable review receipt, its **remote** head is the commit that receipt names, and CI concluded success on that exact commit (selected by workflow name plus head commit). | If the ledger carries no terminal outcome, record `handback` first (Step 5); **never relaunched**. |
+| **4. adopt** | **All** of: the recorded leader process is **positively not live** (the probe completed and found it dead); the lane's pull request is **not** both ready (non-draft) and carrying a durable review receipt; and the park-record read completed and found either no park record, or a park whose stated blocker is cleared or which the owner or advisor has ruled should resume. | Record the lane's terminal outcome first (Step 5), then relaunch it as an adoption from the pushed head (cite `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Recovery). |
+| **5. unresolved** | None — the last row, for any lane no earlier row could establish. | The lane is named in the report with the read that failed or the evidence that is missing; nothing is relaunched, armed, or recorded. |
 
-Two rules the branches protect: a finished lane is never spent again as a fresh launch, and an unreadable lane is never treated as a dead one. Adoption semantics: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Recovery.
+A finished lane is never spent again as a fresh launch, and an unreadable lane is never treated as a dead one.
 
 ## Step 5 — record a terminal outcome for every lane that died or parked
+
+Applies to lanes the decision table sent to **row 3** (when the ledger lacks an outcome) and **row 4**.
 
 Before its successor launches, record the lane's terminal outcome using the vocabulary the ledger spells exactly: **`handback`**, **`park`**, **`refusal`**, **`died`**.
 
@@ -90,6 +93,8 @@ python3 -B "$ROOT_DIR/lib/launcher.py" record-outcome \
 ```
 
 ## Step 6 — arm one watch loop per live batch, after checking none is already running for it
+
+Arming applies to batches holding a **row-2** lane.
 
 **The check comes first.** Its authoritative form is a **read-only process listing** for a wave-watch loop naming that batch. Where the host also offers an inventory of this session's own background tasks, read that too. **Nothing is ever killed on either reading.**
 
@@ -109,23 +114,31 @@ This skill does **not** take that reference's suggestion of a one-off foreground
 Exactly three lines:
 
 1. **Seat and reads** — which seat this is, which configuration directory it pinned, and what durable sources it read.
-2. **Lanes by branch** — counts and lane identifiers grouped by vet, re-arm, adopt, parked (awaiting a decision), and unresolved.
+2. **Lanes by branch** — counts and lane identifiers grouped by parked, re-arm, vet, adopt, and unresolved.
 3. **Watches and owner items** — watches armed, batches not armed and why, and anything owed to the owner.
 
-### Worked example (one live lane, one finished lane)
+### Worked example (row 3 vet and row 2 re-arm)
 
 ```text
-Seat: showrunner advisor, instance ~/.claude. Read resume point, ledger batch wave-a, heartbeat sweep, process probes, PR #220 and #221 CI by workflow+sha.
-Lanes: vet 1 (#220 handback recorded); re-arm 1 (#221 launch-9f3a live, heartbeat fresh); adopt 0; parked 0; unresolved 0.
+Seat: showrunner advisor, instance ~/.claude. Read resume point, ledger batch wave-a, heartbeat sweep, process probes, PR #220 and #221 CI by workflow+sha, session transcripts (stat only).
+Lanes: vet 1 (#220 — PR exists, non-draft, durable review receipt, remote head = receipt commit, CI success on that sha by workflow name); re-arm 1 (#221 — leader positively live, heartbeat sweep class fresh, transcript resolved one file stat only); adopt 0; parked 0; unresolved 0.
 Watches: armed loop for wave-a. None skipped. Owner: none.
 ```
 
-### Worked example (one unresolved lane, one batch not armed)
+### Worked example (row 5 unresolved and batch not armed)
 
 ```text
-Seat: showrunner advisor, instance ~/.claude-two. Read ledger batch wave-b; heartbeat sweep returned heartbeat-ledger-unreadable; PR #305 head unreadable.
-Lanes: vet 0; re-arm 0; adopt 0; parked 0; unresolved 1 (#305 — remote head read failed).
+Seat: showrunner advisor, instance ~/.claude-two. Read ledger batch wave-b; heartbeat sweep; PR #305 head read failed.
+Lanes: vet 0; re-arm 0; adopt 0; parked 0; unresolved 1 (#305 — row 5: remote head read failed).
 Watches: wave-b not armed — process listing ambiguous (two wave_watch.py matches). Owner: re-run resume after clearing duplicate watcher or name which batch is canonical.
+```
+
+### Worked example (row 1 parked despite unresolvable transcript)
+
+```text
+Seat: showrunner advisor, instance ~/.claude. Read ledger batch wave-c, park record on #330 issue, session transcript lookup for #330 failed (no file).
+Lanes: vet 0; re-arm 0; adopt 0; parked 1 (#330 — row 1: park record read completed, blocker not cleared, no advisor ruling to resume); unresolved 0.
+Watches: armed loop for wave-c. None skipped. Owner: decision on #330 park blocker.
 ```
 
 ## No foreground step waits on a live lane
@@ -140,14 +153,9 @@ Three instances: the one-off watch verb is not used at all; the terminal-outcome
 | --- | --- |
 | The ledger is missing or unreadable | Preserve every lane as unresolved. Stop the transition. |
 | The ledger fold fails (a live-launch read that cannot fold returns an empty list) | Never read an empty list as "no live lanes." Preserve as unresolved. Stop. |
-| The heartbeat sweep returns not-ok or an unknown class | Preserve affected lanes as unresolved. Stop the transition for those lanes. |
-| A process probe is uncertain | Preserve the lane as unresolved. Stop the transition for that lane. |
-| A pull-request, receipt, head, or integration read fails | Preserve the lane as unresolved. Stop the transition for that lane. |
-| No session identifier on the lane's launch record | The lane is not vouched for. Preserve as unresolved. Stop the transition for that lane. |
-| The lane's session transcript cannot be resolved (no file, more than one match, unreadable directory, or file dated into the future) | The lane is not vouched for. Preserve as unresolved. Stop the transition for that lane. |
-| A lane carries a park record whose blocker is not cleared and has no owner or advisor ruling to resume | Report the lane as parked and leave it alone. Do not relaunch. Do not treat as unresolved-for-want-of-reading. |
+| A per-lane read fails or is ambiguous (heartbeat not-ok/unknown class, uncertain process probe, pull-request/receipt/head/CI read failure, no session identifier on the launch record, session transcript unresolvable) | That read satisfies no row; the decision table decides (Step 4). |
 | The process listing for the duplicate check fails or is ambiguous | Do not arm that batch. Name it in the report. |
-| The outcome verb or the amendment verb refuses | Preserve the lane as unresolved. Stop the transition for that lane. |
+| The outcome verb or the amendment verb refuses | Stop the transition for that lane and name it in the report. |
 | Arming fails | Name the batch in the report. Do not claim the watch is running. |
 | The instance pin cannot be determined on this host | The pin rule is yours alone; if you cannot determine the instance, name that in line 1 and do not launch until you can. |
 
@@ -157,8 +165,8 @@ Three instances: the one-off watch verb is not used at all; the terminal-outcome
 | --- | --- |
 | Skipping this on a restarted or compacted seat | This is the first action — run it before dispatching or vetting. |
 | Treating handed-over chat text as fact | Read only the six durable sources in step 3. |
-| Relaunching a lane whose PR already vets | Choose **vet**; record handback first if the ledger lacks the outcome. |
-| Treating a missing heartbeat as a dead builder | Choose **unresolved** until evidence is readable. |
+| Relaunching a lane whose PR already vets | → the decision table decides; row 3 is never relaunched. |
+| Treating a missing heartbeat as a dead builder | → a missing read satisfies no row; see Step 4. |
 | Using the newest CI run instead of workflow+sha | Select the run for the remote head commit the receipt names. |
 | Killing a duplicate watcher before arming | The duplicate check is read-only; never kill on either reading. |
 | Running a foreground one-off watch before arming | Cite wave-watch for arming only; the spot check blocks on quiet lanes. |
