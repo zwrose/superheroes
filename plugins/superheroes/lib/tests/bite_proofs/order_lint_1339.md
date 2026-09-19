@@ -7,7 +7,7 @@
 | BP-OL-1 | placeholder rule | `test_token_placeholder_unfilled` |
 | BP-OL-2 | path rule, existence | `test_token_path_unresolved` |
 | BP-OL-3 | path rule, escape | `test_symlink_escape_is_unresolved` |
-| BP-OL-4 | result-shape rule | `test_token_result_shape_ambiguous` |
+| BP-OL-4 | result-shape rule | `test_result_shape_ambiguous_fires_on_stdout_protocol_literals` |
 | BP-OL-5 | budget rule | `test_token_budget_missing_implementer` |
 | BP-OL-6 | per-kind gate | `test_accepted_shape_fixer` |
 | BP-OL-7 | unreadable mapping | `test_token_unreadable_missing_file` |
@@ -121,22 +121,23 @@ $ git status --porcelain -- plugins/superheroes/lib/order_lint.py
 
 ## BP-OL-4 — result-shape rule
 
-**Axis:** mixed stdout-report and native-typed literals are ambiguous.
+**Axis:** write-report sentinel beside a native-typed literal, or fixer literal with expect-items.
 
 **Neutralization:** at `_shape`, insert `return None` before family detection.
 
-**Red** — `::test_token_result_shape_ambiguous`:
+**Red** — `::test_result_shape_ambiguous_fires_on_stdout_protocol_literals`:
 
 ```
 =================================== FAILURES ===================================
-______________________ test_token_result_shape_ambiguous _______________________
-plugins/superheroes/lib/tests/test_order_lint.py:122: in test_token_result_shape_ambiguous
-    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(r)
-E   AssertionError: assert 'order-result-shape-ambiguous' in []
+________ test_result_shape_ambiguous_fires_on_stdout_protocol_literals _________
+plugins/superheroes/lib/tests/test_order_lint.py:476: in test_result_shape_ambiguous_fires_on_stdout_protocol_literals
+    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(r), marker
+E   AssertionError: <<<SUPERHEROES-WRITE-REPORT>>>
+E   assert 'order-result-shape-ambiguous' in []
 E    +  where 'order-result-shape-ambiguous' = OL.TOKEN_RESULT_SHAPE_AMBIGUOUS
 E    +  and   [] = _tokens({'checked': {'paths': 0, 'placeholders': 0}, 'findings': [], 'kind': 'implementer', 'ok': True, ...})
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_order_lint.py::test_token_result_shape_ambiguous
+FAILED plugins/superheroes/lib/tests/test_order_lint.py::test_result_shape_ambiguous_fires_on_stdout_protocol_literals
 1 failed in 0.18s
 ```
 

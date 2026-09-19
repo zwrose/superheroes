@@ -112,11 +112,12 @@ def test_token_placeholder_unfilled(tmp_path):
 
 
 def test_token_result_shape_ambiguous(tmp_path):
-    # axis: mixed stdout-report and native-typed literals are ambiguous
+    # axis: write-report sentinel beside a native-typed literal is ambiguous
     repo = _mk_repo(tmp_path)
     text = (
         "# WO\n\nBudget 1.\n\n"
-        'Use marker channel and `"resultKind"`.\n'
+        "Print %s on stdout; the shell --output-schema carries it.\n"
+        % OL._WRITE_SENTINEL
     )
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
     assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(r)
@@ -278,7 +279,9 @@ def test_tokens_census():
     refused = [
         OL.check_text("budget 1\n{{A}}\n`../x.py`\n", "/tmp", kind="pilot"),
         OL.check_text("budget 1\n", "/tmp", kind="implementer"),
-        OL.check_text('budget 1\nmarker channel `"resultKind"`\n', "/tmp"),
+        OL.check_text(
+            "budget 1\n%s and --output-schema\n" % OL._WRITE_SENTINEL, "/tmp",
+        ),
         OL.check_text("#\n", "/tmp"),
         OL.check_text(None, "/tmp"),
     ]
@@ -332,7 +335,8 @@ def test_fixture_c11_l3_wo_a(tmp_path):
     """At a consuming-project root, ``plugins/superheroes/lib/engine_result_channel.py`` is
     unresolved when the plugin alt-root lacks that file (WO-A2). The deterministic half catches the
     plugin-only path only when linted against a root where it does not exist.
-    ``order-result-shape-ambiguous`` fires (WO-A3)."""
+    ``order-result-shape-ambiguous`` is absent — WO-A3's mixed marker/native prose is the semantic
+    half's item (b), not the deterministic half's protocol literals."""
     path = _fixture_path("c11_l3_wo_a.md")
     consume = tmp_path / "consume"
     consume.mkdir()
@@ -341,12 +345,12 @@ def test_fixture_c11_l3_wo_a(tmp_path):
     eng_file = consume / "plugins" / "superheroes" / "lib" / "engine_result_channel.py"
     absent_r = OL.check(path, str(consume))
     assert (OL.TOKEN_PATH_UNRESOLVED, eng_path) in _finding_pairs(absent_r)
-    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(absent_r)
+    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS not in _tokens(absent_r)
     eng_file.parent.mkdir(parents=True, exist_ok=True)
     eng_file.write_text("# channel\n", encoding="utf-8")
     present_r = OL.check(path, str(consume))
     assert (OL.TOKEN_PATH_UNRESOLVED, eng_path) not in _finding_pairs(present_r)
-    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(present_r)
+    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS not in _tokens(present_r)
 
 
 def test_fixture_c11_l3_wo_c(tmp_path):
@@ -376,10 +380,11 @@ def test_fixture_c11_l3_wo_c(tmp_path):
 
 
 def test_fixture_c11_l3_wo_a3():
-    """``order-result-shape-ambiguous`` fires (WO-A3 rework quotes mixed shapes). Budget rule passes."""
+    """``order-result-shape-ambiguous`` is absent — WO-A3's mixed shapes are the semantic half's
+    item (b), not the deterministic half's protocol literals. Budget rule passes."""
     path = _fixture_path("c11_l3_wo_a3.md")
     r = OL.check(path, REPO_ROOT, alt_roots=(_PLUGIN,))
-    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(r)
+    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS not in _tokens(r)
     assert OL.TOKEN_BUDGET_MISSING not in _tokens(r)
 
 
@@ -464,6 +469,94 @@ def test_stdout_protocol_matches_engine_adapter_and_payload_contracts():
         '{"' + contract["required"][0] + '"',
     )
     assert OL._STDOUT_PROTOCOL == expected
+
+
+def test_result_shape_ambiguous_fires_on_stdout_protocol_literals(tmp_path):
+    # axis: the protocol literals, not prose aliases, count as a stdout-report contract
+    assert OL._FIXER_LITERAL == '{"fixes"'
+    assert OL._WRITE_SENTINEL == "<<<SUPERHEROES-WRITE-REPORT>>>"
+    repo = _mk_repo(tmp_path)
+    text = (
+        "Budget 1.\n\nPrint %s on stdout; the shell --output-schema carries it.\n"
+        % OL._WRITE_SENTINEL
+    )
+    r = OL.check_text(text, str(repo), kind="implementer")
+    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(r)
+    r = OL.check_text(
+        'Budget 1.\n\nPrint {"fixes": []} on stdout.\n',
+        str(repo),
+        expect_items=("lib/new.py",),
+        kind="implementer",
+    )
+    assert (OL.TOKEN_RESULT_SHAPE_AMBIGUOUS, OL._FIXER_LITERAL + "+expect-item") in _finding_pairs(r)
+    clean = OL.check_text(
+        'Budget 1.\n\nPrint {"fixes": []} on stdout.\n',
+        str(repo),
+        kind="implementer",
+    )
+    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS not in _tokens(clean)
+
+
+def test_multi_channel_order_does_not_fire_result_shape(tmp_path):
+    repo = _mk_repo(tmp_path)
+    text = (
+        "Budget: 3 commands.\n"
+        "For cursor dispatches, use the marker channel parser.\n"
+        "For codex native dispatches, pass --output-schema.\n"
+    )
+    r = OL.check_text(text, str(repo), kind="implementer")
+    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS not in _tokens(r)
+
+
+def test_created_path_exemption_after_fence(tmp_path):
+    repo = _mk_repo(tmp_path)
+    text = (
+        "```sh\n"
+        + ("x" * 100)
+        + "\n```\nSee `a/b.md`.\nCreate `a/b.md` (new file).\n"
+    )
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert OL.TOKEN_PATH_UNRESOLVED not in _tokens(r)
+
+
+def test_sentence_ending_path_is_checked(tmp_path):
+    repo = _mk_repo(tmp_path)
+    text = "Budget: 1 command. See missing/file.py.\n"
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert any("missing/file.py" in d for d in _details(r))
+
+
+def test_markdown_link_path_is_checked(tmp_path):
+    repo = _mk_repo(tmp_path)
+    text = "Budget: 1 command. See [file](missing/file.py).\n"
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert any("missing/file.py" in d for d in _details(r))
+
+
+def test_literal_brace_in_backtick_is_not_placeholder(tmp_path):
+    repo = _mk_repo(tmp_path)
+    text = "Budget: 1 command. Preserve literal `s3://bucket/{namespace}/x.json`.\n"
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert OL.TOKEN_PLACEHOLDER_UNFILLED not in _tokens(r)
+
+
+def test_literal_brace_in_fence_is_not_placeholder(tmp_path):
+    repo = _mk_repo(tmp_path)
+    text = (
+        "Budget: 1 command.\n\n"
+        "```python\n"
+        'value = f"{value}"\n'
+        "```\n"
+    )
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert OL.TOKEN_PLACEHOLDER_UNFILLED not in _tokens(r)
+
+
+def test_double_brace_in_fence_is_still_placeholder(tmp_path):
+    repo = _mk_repo(tmp_path)
+    text = "Budget: 1 command.\n\n```\n{{NAME}}\n```\n"
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert OL.TOKEN_PLACEHOLDER_UNFILLED in _tokens(r)
 
 
 def test_prose_expect_item_exempts_declared_path(tmp_path):

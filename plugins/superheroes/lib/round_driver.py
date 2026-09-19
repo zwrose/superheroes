@@ -122,7 +122,7 @@ def _order_lint_text(order_text, context):
     """The rendered order minus every quoted-data block: the lint grades the driver's text, never the owner's."""
     ph = context.get("placeholders") if isinstance(context.get("placeholders"), dict) else {}
     text = order_text
-    for quoted in (ph.get("GATE_GUIDANCE"), context.get("ratified_residuals")):
+    for quoted in (ph.get("GATE_GUIDANCE"), ph.get("VERIFY_COMMAND"), context.get("ratified_residuals")):
         if isinstance(quoted, str) and quoted.strip():
             text = text.replace(quoted, QUOTED_DATA_LINT_ELISION, 1)
     return text
@@ -6757,8 +6757,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         # acts on; an unfilled placeholder (order-placeholder-unfilled), a dangling path
         # (order-path-unresolved), or two result contracts named at once
         # (order-result-shape-ambiguous) refuses the emission here and never reaches a dispatch.
-        # Quoted-data blocks (owner-gate guidance, ratified residuals) are elided from the lint
-        # text so paths, braces, or result-shape words in owner prose never refuse emission;
+        # Quoted-data blocks (owner-gate guidance, verify command, ratified residuals) are elided
+        # from the lint text so paths, braces, or result-shape words in owner prose never refuse
         # only the first occurrence of each block is elided when it appears more than once.
         # Plugin-relative citations resolve via the plugin root as well as the repo root.
         # Deterministic half only — a driver-rendered order has no author for the semantic seat

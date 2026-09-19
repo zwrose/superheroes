@@ -269,6 +269,25 @@ def test_fixer_emission_ignores_lint_triggers_inside_ratified_residuals(tmp_path
     assert _LINT_TRIGGER_RESIDUALS in order_text
 
 
+def test_fixer_emission_ignores_lint_triggers_inside_verify_command(tmp_path, monkeypatch):
+    # axis: owner-configured verify command is elided from fixer-emission lint text
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    repo = str(tmp_path / "proj")
+    os.makedirs(repo)
+    verify = "npm run build && node dist/cli.js && xargs -I {item} echo ok"
+    state.setdefault("config", {})["repoRoot"] = repo
+    state["config"]["verifyCommand"] = verify
+    anchor = _emit_fixer(session_dir, state)
+    assert "manifestSha256" in anchor
+    order_path = RR.order_prompt_path(session_dir, state["round"], RP.P_FIXER, _FIXER_SKEY, 0)
+    order_text = open(order_path, encoding="utf-8").read()
+    assert verify in order_text
+    lint = OL.check_text(RD._order_lint_text(order_text, {
+        "placeholders": {"VERIFY_COMMAND": verify},
+    }), repo, kind="fixer")
+    assert lint["ok"] is True
+
+
 def test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root(tmp_path, monkeypatch):
     # axis: driver-authored plugin-relative citations resolve via the plugin root at fixer emission
     session_dir, state = _seed_session(tmp_path, monkeypatch)

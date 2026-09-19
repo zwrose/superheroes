@@ -7,8 +7,11 @@ Tokens (one finding each when triggered):
 - ``order-unreadable`` — the order file is missing, empty, or not UTF-8 text.
 - ``order-repo-root-unresolved`` — ``--repo-root`` or ``--alt-root`` is absent or unreadable.
 - ``order-path-unresolved`` — a cited repo-relative path with a known extension does not exist.
-- ``order-placeholder-unfilled`` — a ``{{NAME}}`` or ``{name}`` placeholder remains in the text.
-- ``order-result-shape-ambiguous`` — the order names more than one result contract.
+- ``order-placeholder-unfilled`` — a ``{{NAME}}`` or ``{name}`` placeholder remains in the
+  text outside inline backticks and fenced blocks (``{ {NAME}}`` is checked everywhere).
+- ``order-result-shape-ambiguous`` — the write-report sentinel sits beside a native-typed
+  literal (``"resultKind"`` or ``--output-schema``), or the fixer literal ``{"fixes"`` appears
+  while ``--expect-item`` declarations were passed.
 - ``order-budget-missing`` — an implementer order lacks a command-budget declaration.
 - ``order-kind-unknown`` — ``--kind`` is not ``implementer`` or ``fixer``.
 Per-kind table:
@@ -64,8 +67,8 @@ _SUFFIX = re.compile(r":(?:\d+(?:-\d+)?|:[\w.-]+)$")
 _EX_AFTER = re.compile(r"\((?:new file|new|create|created)\)", re.I)
 _BUDGET = re.compile(r"budget.{0,60}(\d+)|(\d+).{0,60}budget", re.I | re.DOTALL)
 _BUDGET_AT = re.compile(r"at most \d+ (?:command|invocation)", re.I)
-# Prose aliases for result-channel lint — not protocol values.
-_STDOUT_ALIASES = ("marker channel", "marker parser")
+_MD_LINK = re.compile(r"\]\(([^)]+)\)")
+_TRAIL_PUNCT = re.compile(r"[.,;:!?)}\]]+$")
 _NATIVE = ('"resultKind"', "--output-schema")
 # Driver-bound verify-command token — not an unfilled order placeholder.
 _DRIVER_PH = frozenset({"baseRef"})
@@ -87,6 +90,19 @@ _STDOUT_PROTOCOL = (_WRITE_SENTINEL, _FIXER_LITERAL)
 
 def _mask_fences(text):
     return _FENCE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+
+
+def _mask_bticks(text):
+    return _BTICK.sub(lambda m: " " * len(m.group(0)), text)
+
+
+def _mask_code_spans(text):
+    return _mask_bticks(_mask_fences(text))
+
+
+def _strip_tok(raw):
+    s = _SUFFIX.sub("", raw.strip().strip("\"'`,()"))
+    return _TRAIL_PUNCT.sub("", s)
 
 
 def _f(token, detail=""):
@@ -151,12 +167,12 @@ def _gather_exempt(text, expect):
     exempt = set()
     inline = _mask_fences(text)
     for m in _BTICK.finditer(inline):
-        ls = text.rfind("\n", 0, m.start()) + 1
-        le = text.find("\n", m.end())
-        line = text[ls:le if le >= 0 else len(text)]
+        ls = inline.rfind("\n", 0, m.start()) + 1
+        le = inline.find("\n", m.end())
+        line = inline[ls:le if le >= 0 else len(inline)]
         o_base = m.start() - ls
         for raw in m.group(1).split():
-            tok = _SUFFIX.sub("", raw.strip().strip("\"'`,()"))
+            tok = _strip_tok(raw)
             if not _cand(tok):
                 continue
             o = line.find(raw, o_base)
@@ -169,7 +185,7 @@ def _gather_exempt(text, expect):
         for ln in m.group(1).splitlines():
             pos = 0
             for raw in ln.split():
-                tok = _SUFFIX.sub("", raw.strip().strip("\"'`,()"))
+                tok = _strip_tok(raw)
                 if not _cand(tok):
                     continue
                 o = ln.find(raw, pos)
@@ -187,7 +203,7 @@ def _region(text, expect, roots, skip, out, seen, exempt, line=None, o=None, c=N
     end = c if c is not None else (len(line) if line is not None else len(text))
     search_line = line if line is not None else text
     for raw in text.split():
-        tok = _SUFFIX.sub("", raw.strip().strip("\"'`,()"))
+        tok = _strip_tok(raw)
         if not _cand(tok) or tok in seen:
             continue
         norm = posixpath.normpath(tok)
@@ -227,12 +243,16 @@ def _paths(text, expect, roots, skip):
     prose = _BTICK.sub(" ", inline)
     for ln in prose.splitlines():
         _region(ln, expect, roots, skip, out, seen, exempt, line=ln)
+    for m in _MD_LINK.finditer(prose):
+        target = _strip_tok(m.group(1))
+        if _cand(target):
+            _region(target, expect, roots, skip, out, seen, exempt, line=target)
     return out, len(seen)
 
 
 def _placeholders(text):
     hits = [(m.start(), m.group(1)) for m in _DBL_PH.finditer(text)]
-    hits += [(m.start(), m.group(1)) for m in _SGL_PH.finditer(text)]
+    hits += [(m.start(), m.group(1)) for m in _SGL_PH.finditer(_mask_code_spans(text))]
     hits.sort()
     out, seen = [], set()
     for _, name in hits:
@@ -244,10 +264,9 @@ def _placeholders(text):
 
 
 def _shape(text, expect_items):
-    sh = [s for s in _STDOUT_PROTOCOL + _STDOUT_ALIASES if s in text]
-    nt = [s for s in _NATIVE if s in text]
-    if sh and nt:
-        return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, "+".join(sh + nt))
+    native = [s for s in _NATIVE if s in text]
+    if _WRITE_SENTINEL in text and native:
+        return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, "+".join([_WRITE_SENTINEL] + native))
     if _FIXER_LITERAL in text and expect_items:
         return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, _FIXER_LITERAL + "+expect-item")
     return None
