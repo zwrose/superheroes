@@ -17,7 +17,6 @@ import round_records  # noqa: E402
 from test_recorded_row_chokepoint_1272 import (  # noqa: E402
     DIFF,
     HEAD_SHA,
-    FakeAdapters,
     _advance,
     _anchor_hashes,
     _execution_evidence,
@@ -29,7 +28,6 @@ from test_recorded_row_chokepoint_1272 import (  # noqa: E402
     _session,
     _session_id,
     _state,
-    adapters,
 )
 
 RD = importlib.import_module("round_driver")
@@ -86,6 +84,24 @@ def _store_path(session_dir, seat, pend=None):
                                     round_records.storage_key(seat), pend["attempt"])
 
 
+def _anchor_head_sha(session_dir):
+    pend = _pending(session_dir)
+    state = _state(session_dir)
+    anchor = RD._orders_anchor(state, session_dir, pend["round"], pend["phase"], pend["attempt"])
+    if isinstance(anchor, dict):
+        return anchor.get("headSha")
+    return None
+
+
+def _land_audits(session_dir, seat, payload=None, **over):
+    """Land on a session driven through _TDI with anchor-aligned headSha."""
+    head = _anchor_head_sha(session_dir)
+    if head:
+        over = dict(over)
+        over["headSha"] = head
+    return _land(session_dir, seat, payload=payload, **over)
+
+
 def _legacy_session(tmp_path, name="legacy"):
     session_dir = _session(tmp_path, name=name)
     state = _state(session_dir)
@@ -94,7 +110,19 @@ def _legacy_session(tmp_path, name="legacy"):
     return session_dir
 
 
-def test_audit_seat_missing_journal_record_refuses_at_record_time(tmp_path, adapters):
+def _legacy_audits_session(tmp_path, name="legacy-audits", seat="src/f00.py::unchecked index@L2"):
+    """Hand-built legacy (seat-result/1) session pending on dispatch-audits."""
+    session_dir = _legacy_session(tmp_path, name=name)
+    state = _state(session_dir)
+    state["round"] = 1
+    state["pending"] = {"round": 1, "phase": RD.P_AUDITS, "attempt": 0}
+    state["_auditTargets"] = [{"id": seat, "identity": "unchecked index", "auditorVendor": "claude",
+                               "verdict": "blocking", "evidence": "unchecked index at src/f00.py:2"}]
+    RD.save_state(session_dir, state)
+    return session_dir, seat
+
+
+def test_audit_seat_missing_journal_record_refuses_at_record_time(tmp_path):
     """E1 — dispatch-observed audits envelope without minted evidence refuses at record-result."""
     session_dir, _gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
@@ -111,7 +139,7 @@ def test_audit_seat_missing_journal_record_refuses_at_record_time(tmp_path, adap
     assert row.get("cmd") == "record-result"
 
 
-def test_audit_dispatch_observed_landed_evidence_without_run_dir_refuses(tmp_path, adapters):
+def test_audit_dispatch_observed_landed_evidence_without_run_dir_refuses(tmp_path):
     """E2 — landed executionEvidence without evidence_minted still refuses."""
     session_dir, _gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
@@ -123,7 +151,7 @@ def test_audit_dispatch_observed_landed_evidence_without_run_dir_refuses(tmp_pat
     assert out["ok"] is False and out["reason"] == "provenance-underivable"
 
 
-def test_advance_sweep_refuses_dispatch_observed_audits_without_minted_evidence(tmp_path, adapters):
+def test_advance_sweep_refuses_dispatch_observed_audits_without_minted_evidence(tmp_path):
     """E3 — advance sweep refuses provenance-underivable on dispatch-observed audits."""
     session_dir, gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
@@ -134,7 +162,7 @@ def test_advance_sweep_refuses_dispatch_observed_audits_without_minted_evidence(
     assert out["ok"] is False and out["reason"] == "provenance-underivable"
 
 
-def test_hand_landed_audits_without_evidence_refuses(tmp_path, adapters):
+def test_hand_landed_audits_without_evidence_refuses(tmp_path):
     """E4 — hand-landed audits envelope without executionEvidence refuses."""
     session_dir, _gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
@@ -149,13 +177,13 @@ def test_hand_landed_audits_without_evidence_refuses(tmp_path, adapters):
     assert out["ok"] is False and out["reason"] == "provenance-underivable"
 
 
-def test_hand_landed_audits_with_vendor_source_stores(tmp_path, adapters):
+def test_hand_landed_audits_with_vendor_source_stores(tmp_path):
     """E4 — hand-landed audits with registry vendor source stores."""
     session_dir, _gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
     evidence = _execution_evidence(source="claude")
-    _land(session_dir, seat, payload=_audit_payload(seat),
-          provenance=round_records.PROVENANCE_HAND_LANDED, executionEvidence=evidence)
+    _land_audits(session_dir, seat, payload=_audit_payload(seat),
+                 provenance=round_records.PROVENANCE_HAND_LANDED, executionEvidence=evidence)
     out = RD.cmd_record_result(session_dir, seat)
     assert out["ok"] is True, out
     stored, err = round_records.read_json(out["storePath"])
@@ -163,7 +191,7 @@ def test_hand_landed_audits_with_vendor_source_stores(tmp_path, adapters):
     assert stored["executionEvidence"]["source"] == "claude"
 
 
-def test_audit_source_not_in_vendor_registry_refuses(tmp_path, adapters):
+def test_audit_source_not_in_vendor_registry_refuses(tmp_path):
     """E4b — executionEvidence.source outside model_registry.VENDORS refuses."""
     session_dir, _gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
@@ -174,7 +202,7 @@ def test_audit_source_not_in_vendor_registry_refuses(tmp_path, adapters):
     assert out["ok"] is False and out["reason"] == "provenance-underivable"
 
 
-def test_panel_dispatch_observed_without_evidence_stores_provenance_underived(tmp_path, adapters):
+def test_panel_dispatch_observed_without_evidence_stores_provenance_underived(tmp_path):
     """E5 — panel dispatch-observed without evidence stores; provenanceUnderived discloses."""
     session_dir = _session(tmp_path)
     seat = "code-reviewer"
@@ -207,42 +235,45 @@ def test_panel_dispatch_observed_without_evidence_stores_provenance_underived(tm
     assert seat in artifact["provenance"]["provenanceUnderived"]
 
 
-def test_legacy_manifest_missing_key_refusal_names_expected_and_found(tmp_path, adapters):
+def test_legacy_manifest_missing_key_refusal_names_expected_and_found(tmp_path):
     """E6 — legacy v1 audits refuses dispatch-manifest-key-missing with expected/found keys."""
-    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="legacy-audits")
-    state = _state(session_dir)
-    state["schemaVersion"] = 2
-    RD.save_state(session_dir, state)
-    _drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_AUDITS)
-    seat = _audit_roster(session_dir)[0]
+    session_dir, seat = _legacy_audits_session(tmp_path, name="legacy-audits")
     _land(session_dir, seat, payload=_audit_payload(seat))
     pend = _pending(session_dir)
-    manifest = {"other-seat": {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}}
-    round_records.atomic_write_json(
-        round_records.dispatch_manifest_path(session_dir, pend["round"], pend["phase"],
-                                             pend["attempt"]),
-        manifest)
-    out = RD.cmd_record_result(session_dir, seat)
-    assert out["ok"] is False
-    assert out["reason"] == "dispatch-manifest-key-missing"
-    assert out["expectedKey"] == seat
-    assert seat not in out["foundKeys"]
-
-
-def test_legacy_manifest_absent_and_v5_manifest_ignored(tmp_path, adapters):
-    """E7/E8 — legacy manifest absent stores; v5 present manifest is ignored."""
-    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="legacy-absent")
     state = _state(session_dir)
-    state["schemaVersion"] = 2
-    RD.save_state(session_dir, state)
-    _drive_to_phase(session_dir, gitdir, [_blocking_finding("unchecked index", 2)],
-                    head_path, RD.P_AUDITS)
-    seat = _audit_roster(session_dir)[0]
-    _land(session_dir, seat, payload=_audit_payload(seat))
-    out = RD.cmd_record_result(session_dir, seat)
-    assert out["ok"] is True, out
+    roster, roster_reason = round_adapters.roster_for(RD.P_AUDITS, state, state.get("config") or {})
+    assert roster_reason is None, roster_reason
+    manifest = {"other-seat": {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}}
+    plan, refusal = round_records.validate_landing(
+        session_dir, pend["round"], pend["phase"], seat, pend["attempt"],
+        current_attempt=pend["attempt"], roster=roster, dispatch_manifest=manifest,
+        seat_result_schema=round_records.SEAT_RESULT_SCHEMA)
+    assert plan is None
+    assert refusal["reason"] == "dispatch-manifest-key-missing"
+    assert refusal["expectedKey"] == seat
+    assert seat not in refusal["foundKeys"]
+    assert not os.path.exists(_store_path(session_dir, seat, pend))
 
-    session_dir2, _gitdir2, _head_path2 = _drive_to_audits(tmp_path, name="v5-ignored")
+
+def test_legacy_manifest_absent_and_v5_manifest_ignored(tmp_path):
+    """E7/E8 — legacy manifest absent stores; v5 present manifest is ignored."""
+    session_dir, seat = _legacy_audits_session(tmp_path, name="legacy-absent")
+    _land(session_dir, seat, payload=_audit_payload(seat))
+    pend = _pending(session_dir)
+    state = _state(session_dir)
+    roster, roster_reason = round_adapters.roster_for(RD.P_AUDITS, state, state.get("config") or {})
+    assert roster_reason is None, roster_reason
+    out = round_records.ingest_landing(
+        session_dir, pend["round"], pend["phase"], seat, pend["attempt"],
+        current_attempt=pend["attempt"], roster=roster, dispatch_manifest=None,
+        seat_result_schema=round_records.SEAT_RESULT_SCHEMA)
+    assert out["ok"] is True, out
+    assert os.path.exists(_store_path(session_dir, seat, pend))
+
+    session_dir2, _gitdir2, _head_path2 = _drive_to_audits(
+        tmp_path, name="v5-ignored",
+        findings=[_blocking_finding("unchecked index", 2),
+                  _blocking_finding("unchecked index", 3)])
     targets = _audit_targets(session_dir2)
     assert len(targets) >= 2
     tid0, tid1 = targets[0]["id"], targets[1]["id"]
@@ -254,8 +285,8 @@ def test_legacy_manifest_absent_and_v5_manifest_ignored(tmp_path, adapters):
         misleading)
     for tid, source in ((tid0, "codex"), (tid1, "cursor")):
         evidence = _execution_evidence(source=source)
-        _land(session_dir2, tid, payload=_audit_payload(tid),
-              provenance=round_records.PROVENANCE_HAND_LANDED, executionEvidence=evidence)
+        _land_audits(session_dir2, tid, payload=_audit_payload(tid),
+                     provenance=round_records.PROVENANCE_HAND_LANDED, executionEvidence=evidence)
         assert RD.cmd_record_result(session_dir2, tid)["ok"] is True
     records = []
     for tid in (tid0, tid1):
@@ -272,13 +303,13 @@ def test_legacy_manifest_absent_and_v5_manifest_ignored(tmp_path, adapters):
     assert artifact["provenance"]["dispatchManifestIgnored"] is True
 
 
-def test_vendor_echo_mismatch_discloses_recorded_source(tmp_path, adapters):
+def test_vendor_echo_mismatch_discloses_recorded_source(tmp_path):
     """E9 — envelope vendor echo mismatch discloses; source governs."""
     session_dir, _gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
     evidence = _execution_evidence(source="codex")
-    _land(session_dir, seat, payload=_audit_payload(seat), vendor="claude",
-          provenance=round_records.PROVENANCE_HAND_LANDED, executionEvidence=evidence)
+    _land_audits(session_dir, seat, payload=_audit_payload(seat), vendor="claude",
+                 provenance=round_records.PROVENANCE_HAND_LANDED, executionEvidence=evidence)
     out = RD.cmd_record_result(session_dir, seat)
     assert out["ok"] is True, out
     stored, err = round_records.read_json(out["storePath"])
@@ -292,7 +323,7 @@ def test_vendor_echo_mismatch_discloses_recorded_source(tmp_path, adapters):
     assert mismatch == [{"seat": seat, "occurrence": 0, "echo": "claude", "recorded": "codex"}]
 
 
-def test_record_result_sweep_refuses_dispatch_observed_audits(tmp_path, adapters):
+def test_record_result_sweep_refuses_dispatch_observed_audits(tmp_path):
     """E10 — record-result --sweep refuses the same provenance-underivable as advance sweep."""
     session_dir, _gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
@@ -303,7 +334,7 @@ def test_record_result_sweep_refuses_dispatch_observed_audits(tmp_path, adapters
     assert out["ok"] is False and out["reason"] == "provenance-underivable"
 
 
-def test_advance_derives_collection_manifest_from_runner_record(tmp_path, adapters):
+def test_advance_derives_collection_manifest_from_runner_record(tmp_path):
     """Named DoD — collectionManifest from executionEvidence.source; manifest ignored at v5."""
     session_dir, gitdir, head_path = _drive_to_audits(
         tmp_path, findings=[_blocking_finding("unchecked index", 2),
@@ -319,8 +350,8 @@ def test_advance_derives_collection_manifest_from_runner_record(tmp_path, adapte
         misleading)
     for tid, source in ((tid0, "codex"), (tid1, "cursor")):
         evidence = _execution_evidence(source=source)
-        _land(session_dir, tid, payload=_audit_payload(tid),
-              provenance=round_records.PROVENANCE_HAND_LANDED, executionEvidence=evidence)
+        _land_audits(session_dir, tid, payload=_audit_payload(tid),
+                     provenance=round_records.PROVENANCE_HAND_LANDED, executionEvidence=evidence)
         assert RD.cmd_record_result(session_dir, tid)["ok"] is True
     out = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
     assert out["ok"] is True, out
