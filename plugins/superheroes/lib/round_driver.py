@@ -706,6 +706,24 @@ def _diff_scope_ok(finding, valid):
     return finding.get("line") in file_lines
 
 
+COMPILE_DROP_LINE_NOT_INTEGER = "line is not an integer"
+
+
+def _coerce_line(value):
+    """Return ``(ok, line)``: an int (never a bool) passes as itself; a numeric string
+    (``"291"``, surrounding whitespace tolerated) coerces to its int; anything else refuses."""
+    if isinstance(value, bool):
+        return False, value
+    if isinstance(value, int):
+        return True, value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and all(ch.isdigit() for ch in stripped):
+            return True, int(stripped)
+        return False, value
+    return False, value
+
+
 def _nit_cap(findings):
     """After dedupe, keep at most 5 Nits; the overflow collapses to ONE summary entry so the
     readout isn't buried (the base rubric's severity cap)."""
@@ -784,11 +802,17 @@ def mechanical_compile(findings, diff_text=None):
             drops.append({"file": f.get("file"), "title": f.get("title"),
                           "reason": "uncited — no file:line"})
             continue
-        if not _diff_scope_ok(f, valid):
+        ok, line = _coerce_line(f.get("line"))
+        if not ok:
             drops.append({"file": f.get("file"), "line": f.get("line"),
-                          "title": f.get("title"), "reason": "outside the round diff scope"})
+                          "title": f.get("title"), "reason": COMPILE_DROP_LINE_NOT_INTEGER})
             continue
         fc = dict(f)
+        fc["line"] = line
+        if not _diff_scope_ok(fc, valid):
+            drops.append({"file": fc.get("file"), "line": fc.get("line"),
+                          "title": fc.get("title"), "reason": "outside the round diff scope"})
+            continue
         fc.pop(session_contract.FINDING_KEY_FIELD, None)
         fc["severity"] = circuit_breaker.effective_severity(fc.get("severity"))
         if "dimension" in fc:
@@ -1719,6 +1743,14 @@ def _record_round_append(state, key, value):
         rec[key] = [existing, value]
 
 
+def _record_compile_drops(state, drops):
+    """Extend the round's `compileDrops` list — never overwrite an existing panel write."""
+    if not drops:
+        return
+    for drop in drops:
+        _record_round_append(state, "compileDrops", drop)
+
+
 def _decision(state, kind, detail):
     state["decisions"].append({"round": state["round"], "kind": kind, "detail": detail})
 
@@ -2422,7 +2454,8 @@ def _fold_gapsweep(state, config, artifact):
     """Big-diff gap sweep: candidate findings from the full-diff pass fold through the same
     stage/cluster/verify path, then re-settle."""
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
-    compiled, _drops = mechanical_compile(candidates, state.get("reviewedDiff"))
+    compiled, drops = mechanical_compile(candidates, state.get("reviewedDiff"))
+    _record_compile_drops(state, drops)
     if compiled:
         # route candidates through verification like any other findings.
         state["_toVerify"] = compiled
@@ -3570,7 +3603,8 @@ def _fold_scoped(state, config, artifact):
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
     new_issues = state.get("_newIssues") or []
     combined = list(candidates) + [ni for ni in new_issues if isinstance(ni, dict)]
-    compiled, _drops = mechanical_compile(combined, state.get("reviewedDiff"))
+    compiled, drops = mechanical_compile(combined, state.get("reviewedDiff"))
+    _record_compile_drops(state, drops)
     state["_postAudit"] = True
     if compiled:
         state["_toVerify"] = compiled
