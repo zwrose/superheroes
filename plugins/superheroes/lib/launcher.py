@@ -892,7 +892,14 @@ def walk_preflight(
             return _fail("preflight-always-check-na:%s" % check_id)
 
         if state == "fail":
-            return _fail("preflight-failed:%s" % check_id)
+            out_checks.append({
+                "id": check_id,
+                "class": check_class,
+                "state": state,
+                "reason": reason,
+                "evidence": entry.get("evidence", "") if isinstance(entry.get("evidence"), str) else "",
+            })
+            return _fail("preflight-failed:%s" % check_id, checks=out_checks)
 
         if check_id == "disjoint-surfaces":
             if state == "na":

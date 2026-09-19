@@ -7,6 +7,7 @@
 5. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
 6. [Supervised review dispatch](#supervised-review-dispatch)
    - [Result channels](#result-channels)
+   - [The conformance probe](#the-conformance-probe)
 7. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
 8. [Supervised write dispatch](#supervised-write-dispatch)
 9. [Declared items](#declared-items)
@@ -226,6 +227,75 @@ opened record is marker (a persisted pre-upgrade run) never spawns again — its
 The journal writes two `engine-launching` records per attempt: the first (from the run child's
 entry) carries `argv`, the opened argv; the second carries `spawnArgv`, the argv the engine actually
 received. A reader trusts `spawnArgv`.
+
+A second grader or salvage fix — a `fix` commit touching the marker grader or
+the salvage modules — on an engine still on the marker channel proposes, at the next gardening pass,
+one of two things: move that engine to a native channel, or drop the engine. Patching the marker
+channel a third time is not an option the proposal offers. On an engine on its native channel, a second
+schema or adapter fix after landing — a `fix` commit touching that engine's declared schema or its
+output or completion adapter — proposes dropping the engine or accepting the cost in the record. The
+fix commits are read by their `fix` type and touched paths; no new instrument; the proposal is the
+owner's judgment at the pass. The readout the pass reads is the project's C1 values annex, its
+result-channel-per-engine rows — the annex is out-of-repo.
+
+Cursor is on the marker channel (stream-json) until layer 3c moves it. The stdout capture cap
+(`MAX_STDOUT_CAPTURE`, 8 MiB) is an operating parameter recorded in the same annex rows, not a
+contract row. The cursor JSON envelope's `result` string carries every assistant text turn
+concatenated, so a typed result is never read from it — the trial on that envelope failed for the
+review half. The typed-file shape (the engine writes the result file at the path the shell hands
+it; the stream-json event stream is the telemetry) passed both halves of the trial (R9, amended
+2026-09-19), and that is the channel cursor moves to in layer 3c.
+
+### The conformance probe
+
+Wave preflight runs one real review dispatch per dispatchable engine before any builder launches.
+Resolve `ROOT_DIR` as in every other recipe here, then run `python3 -B
+"$ROOT_DIR/lib/conformance_probe.py" run --engine <codex|cursor>` — optional `--repo-root`,
+`--run-dir`, `--timeout`, and `--wave <id>` (the launcher's wave id, recorded on the result); only
+the engine name is required. Each invocation allocates a unique dispatch order id; a `--run-dir` that
+already holds a folded terminal result refuses `run-dir-reused` with nothing launched. It dispatches through the shell's own
+library entry on the engine's declared channel (native for codex, the marker channel with the marker
+grader for cursor), using that engine's `reviewer-deep` cell, and grades three legs **separately**:
+`resultProduction` (the folded result is a typed, validated result), `completionDetection` (the
+attempt ended by natural exit 0 inside the wait and the run folded terminal), and
+`progressTelemetry` (runner-observed tool-call telemetry with a named source and a last-activity
+stamp). Failure is loud: exit **1** and one stderr line `CONFORMANCE PROBE FAILED engine=<e>
+failed=<legs> dependent lanes: <…>`; the JSON result carries `legs`, `failed`, `dependentRoles` /
+`dependentLanes` (derived from the project's dispatch calibration — the roles routed to that engine),
+`probedCell`, `repoRoot`, `completedAt`, and a `preflightCheck` member shaped as the launcher's
+`engine-auth` check entry. Per-leg failure vocabulary: `result-did-not-validate` or the shell's own
+`native-result-*` / parser detail; `no-response-within-wait`, `attempt-ended-missing`, or
+`auth-or-config-refusal`; `telemetry-absent`. `--engine claude` refuses `engine-not-dispatchable` —
+the CLI-Claude engine branch is a later child's; the engine set is the adapter's dispatchable vendors
+intersected with the channel map, by construction, with no separate list.
+
+Before launch, compose the walked `engine-auth` check from one probe result per **dispatchable**
+engine (`codex` and `cursor` — not merely the engines the calibration routes to):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 -B "$ROOT_DIR/lib/conformance_probe.py" preflight-entry --repo-root <abs> --result <probe.json>… \
+  [--wave <id>] [--launch-without <engine> --owner-word "<text>"]… [--max-age-seconds N]
+```
+
+Without `--wave`, binding is repository path plus age only and the entry records
+`waveBinding: none`. With `--wave`, each result's `wave` must match or the entry refuses
+`probe-wave-mismatch:<e>`. Each result's `probedCell` must match the engine's current
+`reviewer-deep` matrix cell or the entry refuses `probe-cell-mismatch:<e>`.
+
+It refuses `probe-missing:<e>`, `probe-duplicate:<e>`, `probe-foreign-repo:<e>`,
+`probe-stale:<e>` (default max age 3600 s; future `completedAt` timestamps count as stale),
+`probe-result-malformed:<path>`, `calibration-unreadable`, `author-family-unresolved`,
+`owner-word-missing`, and `seat-map-failed:<type>`. A failed engine with no owner word → `state: fail` (hold;
+the launcher's `walk_preflight` refuses `preflight-failed:engine-auth`, so nothing launches). With the
+owner's word → `state: pass` whose evidence names the substitute family per seat, computed by the seat
+map from the **probed cells only** (`live_cells_source: "probed"`) with the maker family derived from
+the calibrated implementer — or `state: fail` with **PARK** when the seat map reports a
+`same-family` degradation. A `preflight-failed:<id>` refusal carries the walked `checks` including
+the failing entry, so the refusal record in the launch ledger keeps the probe's evidence.
+
+A drift or auth failure that arrives **mid-wave** forfeits that dispatch with no salvage; nothing
+re-probes mid-wave.
 
 ### Findings-only review prompts
 
