@@ -408,9 +408,14 @@ def test_e2e_review_real_path_terminal_success(tmp_path, monkeypatch):
 
     with open(argv_file, encoding="utf-8") as fh:
         spawned_argv = json.load(fh)
-    # argv[0] is PATH-resolved in the child; tail must match the journaled argv exactly.
+    # argv[0] is PATH-resolved in the child; tail is the journaled spawnArgv.
     assert os.path.basename(spawned_argv[0]) == res["argv"][0]
-    assert spawned_argv[1:] == res["argv"][1:]
+    journalled_tail = res["argv"][1:]
+    expected_path = ED._native_result_path(run_dir, 1)
+    assert spawned_argv[1:] == journalled_tail
+    o_idx = journalled_tail.index("-o")
+    assert journalled_tail.count("-o") == 1
+    assert journalled_tail[o_idx + 1] == expected_path
     records = _journal_records(run_dir)
     assert _no_mismatch_tokens(records)
     for rec in records:

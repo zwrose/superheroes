@@ -774,10 +774,8 @@ def _write_native_review_result(run_dir, repo_root, *, findings=None, panel_find
         rel = "reviewed.py"
     rel = _ensure_investigated_repo_path(repo_root, rel)
     branch = td._native_review_branch("findings", findings=findings, investigated=[rel])
-    records, _ = engine_dispatch._journal_read(run_dir)
-    state = engine_dispatch._journal_state(records)
-    native_path = (state.get("opened") or {}).get("nativeResultPath")
-    assert native_path, "nativeResultPath missing from run-opened"
+    native_path = engine_dispatch._native_result_path(run_dir, 1)
+    assert native_path, "native result path missing for attempt 1"
     with open(native_path, "w", encoding="utf-8") as fh:
         json.dump({"result": branch}, fh, separators=(",", ":"))
         fh.write("\n")

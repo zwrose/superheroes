@@ -432,14 +432,14 @@ def _write_native_review_result(argv, stdout):
         fh.write("\n")
 
 
-def _sync_native_review_result_from_stdout(run_dir, stdout):
+def _sync_native_review_result_from_stdout(run_dir, stdout, attempt=1):
     """Write the native result file from legacy stdout when the run is native-channel."""
     records, _ = ED._journal_read(run_dir)
     state = ED._journal_state(records)
     opened = state.get("opened") or {}
     if opened.get("channel") != ERC.CHANNEL_NATIVE:
         return
-    native_path = opened.get("nativeResultPath")
+    native_path = ED._native_result_path(run_dir, attempt)
     if not native_path:
         return
     _write_native_review_result(["-o", native_path], stdout)
@@ -652,12 +652,18 @@ def test_codex_open_argv_is_canonical_spawn_seam_carries_per_attempt_flags(tmp_p
     assert fake.calls, "spawn seam never reached"
     spawn_argv = fake.calls[0]["argv"]
     assert spawn_argv != canonical
-    expected_spawn = ED._argv_for_attempt(canonical, run_dir, 1, "codex")
+    coherent, err = ED._spawn_argv_coherence(opened, canonical)
+    assert err is None
+    ok, with_o, _, _, _ = ED._spawn_native_result_argv(run_dir, 1, opened, coherent)
+    assert ok
+    expected_spawn = ED._argv_for_attempt(with_o, run_dir, 1, "codex")
     assert spawn_argv == expected_spawn
     assert "--json" in spawn_argv
     assert "--output-schema" in spawn_argv
+    assert "--output-last-message" not in spawn_argv
     idx = spawn_argv.index("-o")
-    assert spawn_argv[idx + 1] == os.path.join(run_dir, ED.NATIVE_RESULT_NAME)
+    assert spawn_argv.count("-o") == 1
+    assert spawn_argv[idx + 1] == ED._native_result_path(run_dir, 1)
 
 
 def test_dispatch_review_codex_json_wiring_grades_native_result_file(tmp_path):
@@ -687,7 +693,7 @@ def test_dispatch_review_codex_json_wiring_grades_native_result_file(tmp_path):
         r for r in records if r.get("kind") == "engine-launching" and r.get("attempt") == 1)
     spawn_argv = launching["spawnArgv"]
     assert "--json" in spawn_argv
-    native_path = os.path.join(run_dir, ED.NATIVE_RESULT_NAME)
+    native_path = ED._native_result_path(run_dir, 1)
     idx = spawn_argv.index("-o")
     assert spawn_argv[idx + 1] == native_path
     assert res["ok"] is True
@@ -1396,7 +1402,7 @@ def test_dispatch_mixed_findings_propagates_rejected_records(tmp_path):
     stdout = json.dumps({"findings": [42, {"id": "f1", "message": "issue found"}]})
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        seat=_codex_seat(),
+        seat=_reviewer_cursor_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -1562,7 +1568,7 @@ def test_dispatch_findings_with_wholly_rejected_investigated_still_succeeds(tmp_
     })
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
-        seat=_codex_seat(),
+        seat=_reviewer_cursor_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
@@ -6290,7 +6296,7 @@ def test_dispatch_review_expected_result_kind_pin_vacuous_not_masked(tmp_path):
     empty = json.dumps({"findings": []})
     fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
     res = ED.dispatch_review(
-        seat=_codex_seat(),
+        seat=_reviewer_cursor_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), expected_result_kind="verdicts",
     )
@@ -10500,9 +10506,9 @@ def test_codex_review_open_records_native_channel(tmp_path):
         on_disk = json.load(fh)
     assert on_disk == ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW)
     built = EA.build_argv_result(_codex_seat(), "review", {"cwd": opened["cwd"]})
-    result_path = os.path.join(run_dir, ED.NATIVE_RESULT_NAME)
+    schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
     assert opened["argv"] == built["argv"] + [
-        "--output-schema", schema_path, "-o", result_path,
+        "--output-schema", schema_path,
     ]
 
 
@@ -10592,31 +10598,35 @@ def test_opened_channel_defaults_missing_key_to_marker():
 def test_native_stale_result_removed_before_second_spawn(tmp_path):
     run_dir = str(tmp_path / "run")
     _manual_open_review_run(tmp_path, run_dir)
-    result_path = os.path.join(run_dir, ED.NATIVE_RESULT_NAME)
-    with open(result_path, "w", encoding="utf-8") as fh:
+    attempt1_path = ED._native_result_path(run_dir, 1)
+    with open(attempt1_path, "w", encoding="utf-8") as fh:
         fh.write('{"stub": true}\n')
     ED._journal_append(run_dir, {
         "kind": "attempt-ended", "attempt": 1,
         "exit": 0, "timedOut": False, "refusal": None, "at": time.time(),
     })
+    attempt2_path = ED._native_result_path(run_dir, 2)
+    with open(attempt2_path, "w", encoding="utf-8") as fh:
+        fh.write('{"stale": true}\n')
     records, _ = ED._journal_read(run_dir)
     state = ED._journal_state(records)
     existence_checks = []
 
     def fake_run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
-        existence_checks.append(os.path.exists(result_path))
+        existence_checks.append(os.path.exists(attempt2_path))
         return (_VALID_FINDINGS_STDOUT, False, 0, "")
 
     ok, detail = ED._spawn_attempt(run_dir, state, 2, run_engine=fake_run_engine)
     assert ok, detail
     assert existence_checks == [False]
+    assert os.path.isfile(attempt1_path)
     records, _ = ED._journal_read(run_dir)
     started = next(
         r for r in records
         if r.get("kind") == "engine-started" and r.get("attempt") == 2
     )
     assert started["staleNativeResultRemoved"] is True
-    assert started["nativeResultPath"] == result_path
+    assert started["nativeResultPath"] == attempt2_path
 
 
 # --- WO-B2 (#1270 L2): native-channel review grading --------------------------------
@@ -10737,6 +10747,7 @@ def _native_review_grade_state(
     schema_path=None,
     write_result=True,
     write_schema=True,
+    attempt=1,
 ):
     run_dir = str(tmp_path / "run")
     repo_root = _repo(tmp_path)
@@ -10746,7 +10757,7 @@ def _native_review_grade_state(
     if schema_path is None:
         schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
     if result_path is None:
-        result_path = os.path.join(run_dir, ED.NATIVE_RESULT_NAME)
+        result_path = ED._native_result_path(run_dir, attempt)
     if write_schema:
         with open(schema_path, "w", encoding="utf-8") as fh:
             json.dump(schema, fh, separators=(",", ":"))
@@ -10755,9 +10766,9 @@ def _native_review_grade_state(
         with open(result_path, "w", encoding="utf-8") as fh:
             json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
             fh.write("\n")
-    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(run_dir, "attempt-%d.stdout" % attempt), "w", encoding="utf-8") as fh:
         fh.write(stdout)
-    with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(run_dir, "attempt-%d.stderr" % attempt), "w", encoding="utf-8") as fh:
         fh.write(stderr_tail)
     opened = {
         "engine": "codex",
@@ -10766,14 +10777,13 @@ def _native_review_grade_state(
         "fedPrompt": "",
         "channel": channel,
         "nativeSchemaPath": schema_path,
-        "nativeResultPath": result_path,
     }
     if expected_result_kind is not None:
         opened["expectedResultKind"] = expected_result_kind
     state = {
         "opened": opened,
         "attempts": {
-            1: {
+            attempt: {
                 "ended": {
                     "exit": 0,
                     "timedOut": False,
@@ -10962,7 +10972,6 @@ def test_grade_native_review_attempt_result_missing(tmp_path):
     run_dir, state = _native_review_grade_state(
         tmp_path,
         _native_review_branch("findings"),
-        result_path=str(tmp_path / "absent.json"),
         write_result=False,
     )
     grade = ED._grade_review_attempt(run_dir, state, 1)
@@ -10973,7 +10982,7 @@ def test_grade_native_review_attempt_result_missing(tmp_path):
 def test_grade_native_review_attempt_result_symlink(tmp_path):
     branch = _native_review_branch("findings")
     run_dir, state = _native_review_grade_state(tmp_path, branch)
-    result_path = state["opened"]["nativeResultPath"]
+    result_path = ED._native_result_path(run_dir, 1)
     os.remove(result_path)
     os.symlink("/etc/hosts", result_path)
     grade = ED._grade_review_attempt(run_dir, state, 1)
@@ -10984,7 +10993,7 @@ def test_grade_native_review_attempt_result_symlink(tmp_path):
 def test_grade_native_review_attempt_result_oversized(tmp_path):
     branch = _native_review_branch("findings")
     run_dir, state = _native_review_grade_state(tmp_path, branch)
-    result_path = state["opened"]["nativeResultPath"]
+    result_path = ED._native_result_path(run_dir, 1)
     with open(result_path, "wb") as fh:
         fh.write(b"x" * (ERC.NATIVE_RESULT_MAX_BYTES + 1))
     grade = ED._grade_review_attempt(run_dir, state, 1)
@@ -10994,7 +11003,7 @@ def test_grade_native_review_attempt_result_oversized(tmp_path):
 
 def test_grade_native_review_attempt_result_malformed_json(tmp_path):
     run_dir, state = _native_review_grade_state(tmp_path, _native_review_branch("findings"))
-    with open(state["opened"]["nativeResultPath"], "w", encoding="utf-8") as fh:
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
         fh.write("not-json\n")
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
@@ -11003,7 +11012,7 @@ def test_grade_native_review_attempt_result_malformed_json(tmp_path):
 
 def test_grade_native_review_attempt_result_malformed_no_result_key(tmp_path):
     run_dir, state = _native_review_grade_state(tmp_path, _native_review_branch("findings"))
-    with open(state["opened"]["nativeResultPath"], "w", encoding="utf-8") as fh:
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
         json.dump({"findings": []}, fh)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
@@ -11041,18 +11050,6 @@ def test_grade_native_review_attempt_schema_invalid_severity_enum_injection(tmp_
     assert grade.get("detail") == "native-result-schema-invalid"
 
 
-def test_scrub_native_review_branch_all_findings_rejected_is_unreadable():
-    branch = {
-        "resultKind": "findings",
-        "findings": [42],
-        "investigated": ["real.py"],
-    }
-    assert ED._scrub_native_review_branch(branch, "test-echo-nonce") == {
-        "ok": False,
-        "reason": "unreadable",
-    }
-
-
 def test_grade_native_review_attempt_kind_before_validation(tmp_path):
     branch = _native_review_branch("verdicts")
     run_dir, state = _native_review_grade_state(
@@ -11062,6 +11059,19 @@ def test_grade_native_review_attempt_kind_before_validation(tmp_path):
     assert grade.get("forfeit") is True
     assert grade.get("detail") == ED.RESULT_KIND_MISMATCH_DETAIL
     assert grade.get("detail") != "native-result-schema-invalid"
+
+
+def test_grade_native_review_attempt_unrecognised_kind_not_kind_mismatch(tmp_path):
+    # axis: unrecognised resultKind forfeits schema-invalid, not RESULT_KIND_MISMATCH_DETAIL
+    branch = _native_review_branch("findings")
+    branch["resultKind"] = "summary"
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, expected_result_kind="findings",
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") != ED.RESULT_KIND_MISMATCH_DETAIL
+    assert grade.get("detail") == "native-result-schema-invalid"
 
 
 def test_grade_native_review_attempt_scrubs_secret_from_result_and_journal(tmp_path):
@@ -11103,7 +11113,7 @@ def test_grade_native_review_attempt_marker_channel_skips_native_forfeits(tmp_pa
         channel=ERC.CHANNEL_MARKER,
         stdout=_VALID_FINDINGS_STDOUT,
     )
-    os.remove(state["opened"]["nativeResultPath"])
+    os.remove(ED._native_result_path(run_dir, 1))
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
     assert grade.get("detail") not in {
@@ -11162,7 +11172,7 @@ def test_codex_native_review_spawn_argv_journals_single_output_flag(tmp_path):
     spawn_argv = launching["spawnArgv"]
     assert spawn_argv.count("-o") + spawn_argv.count("--output-last-message") == 1
     o_idx = spawn_argv.index("-o")
-    assert spawn_argv[o_idx + 1] == os.path.join(run_dir, ED.NATIVE_RESULT_NAME)
+    assert spawn_argv[o_idx + 1] == ED._native_result_path(run_dir, 1)
     assert "--json" in spawn_argv
     assert "--output-schema" in spawn_argv
 
@@ -11199,7 +11209,7 @@ def test_run_execution_record_native_parse_binding_survives_view_removal(tmp_pat
     run_dir = str(tmp_path / "native-parse-binding-fold")
     _repo_root, view = _manual_open_review_run(tmp_path, run_dir)
     schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
-    result_path = os.path.join(run_dir, ED.NATIVE_RESULT_NAME)
+    result_path = ED._native_result_path(run_dir, 1)
     schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW)
     with open(schema_path, "w", encoding="utf-8") as fh:
         json.dump(schema, fh, separators=(",", ":"))
@@ -11928,4 +11938,348 @@ def test_run_execution_record_omits_result_binding_when_parse_yields_nothing(tmp
     assert isinstance(record, dict)
     assert "resultDigest" not in record
     assert "resultKind" not in record
+
+
+# --- #1270 WO-2a2-A: the one admission authority ----
+
+
+def _native_findings_branch_from_example(example_obj):
+    branch = _native_review_branch("findings")
+    branch["findings"] = example_obj["findings"]
+    branch["investigated"] = example_obj["investigated"]
+    return branch
+
+
+def test_admit_native_review_schema_invalid_mistyped_investigated_forfeits(tmp_path):
+    # axis: mistyped investigated member → native-result-schema-invalid forfeit
+    branch = _native_review_branch("findings")
+    branch["investigated"] = ["path/to/file.py", 42]
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-schema-invalid"
+
+
+def test_admit_native_review_schema_invalid_mistyped_finding_member_forfeits(tmp_path):
+    # axis: mistyped finding member type → native-result-schema-invalid forfeit
+    branch = _native_review_branch("findings")
+    branch["findings"][0]["line"] = "not-an-integer"
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-schema-invalid"
+
+
+def test_admit_native_review_nonce_echo_validates_then_refuses(tmp_path):
+    # axis: schema-valid nonce echo still forfeits at grade as native-result-malformed
+    echo_nonce = "wo-2a2-a-nonce"
+    example = RFS.example_findings_object(echo_nonce)
+    branch = _native_findings_branch_from_example(example)
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, "findings")
+    ok, reason = ERC.validate(schema, _wrap_native_review_result(branch))
+    assert ok, reason
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, expected_result_kind="findings",
+    )
+    state["opened"]["echoNonce"] = echo_nonce
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-malformed"
+
+
+def test_admit_native_review_semantic_guards_use_adapter_not_scrub_branch(tmp_path):
+    # axis: admission path no longer exposes _scrub_native_review_branch
+    # axis: hollow finding (whitespace-only substance keys) → native-result-malformed
+    # axis: placeholder template id → native-result-malformed
+    assert not hasattr(ED, "_scrub_native_review_branch")
+    hollow = _native_review_branch("findings")
+    for key in RFS.SUBSTANCE_KEYS_CANONICAL:
+        hollow["findings"][0][key] = "   "
+    run_dir, state = _native_review_grade_state(tmp_path, hollow)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-malformed"
+    placeholder = _native_review_branch("findings")
+    placeholder["findings"][0]["id"] = EA.REVIEW_BASE_TEMPLATE_ID
+    run_dir2, state2 = _native_review_grade_state(tmp_path, placeholder)
+    grade2 = ED._grade_review_attempt(run_dir2, state2, 1)
+    assert grade2.get("forfeit") is True
+    assert grade2.get("detail") == "native-result-malformed"
+
+
+def test_admit_native_review_schema_substitution_refuses(tmp_path):
+    # axis: schema file substituted with empty object → native-schema-unreadable
+    branch = _native_review_branch("findings")
+    branch["findings"] = None
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    schema_path = state["opened"]["nativeSchemaPath"]
+    with open(schema_path, "w", encoding="utf-8") as fh:
+        json.dump({}, fh)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-schema-unreadable"
+
+
+def test_admit_native_review_stdout_cannot_rescue_semantic_refusal(tmp_path):
+    # axis: valid stdout cannot override hollow-finding semantic refusal
+    hollow = _native_review_branch("findings")
+    for key in RFS.SUBSTANCE_KEYS_CANONICAL:
+        hollow["findings"][0][key] = "   "
+    run_dir, state = _native_review_grade_state(
+        tmp_path, hollow, stdout=_VALID_FINDINGS_STDOUT,
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("ok") is not True
+    assert grade.get("detail") == "native-result-malformed"
+
+
+def test_admit_native_review_parser_refusal_forfeit_payload_shape_describes_branch(tmp_path):
+    # axis: parser refusal forfeit carries payloadShape describing parsed branch
+    branch = _native_review_branch("verdicts")
+    branch["verdicts"][0]["reason"] = None
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, expected_result_kind="verdicts",
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-malformed"
+    shape = grade.get("payloadShape")
+    assert shape is not None
+    assert shape["parsed"] != EA.SHAPE_NO_PARSEABLE_JSON
+    assert shape["topLevelKeys"]
+    assert "resultKind" in shape["topLevelKeys"]
+
+
+# --- #1270 WO-2a2-B: one native result file per attempt ----
+
+
+def _native_two_attempt_spawn_fixture(tmp_path, run_dir):
+    """Open a native review run and end attempt 1 so attempt 2 can spawn."""
+    _manual_open_review_run(tmp_path, run_dir)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None, "at": time.time(),
+    })
+    records, _ = ED._journal_read(run_dir)
+    return ED._journal_state(records)
+
+
+def test_native_result_paths_differ_per_attempt_and_attempt1_preserved(tmp_path):
+    # axis: per-attempt native result paths differ; attempt-1 file preserved on attempt-2 spawn
+    run_dir = str(tmp_path / "run")
+    state = _native_two_attempt_spawn_fixture(tmp_path, run_dir)
+    path1 = ED._native_result_path(run_dir, 1)
+    path2 = ED._native_result_path(run_dir, 2)
+    assert path1 != path2
+    assert path1 == os.path.join(run_dir, "native-result-1.json")
+    assert path2 == os.path.join(run_dir, "native-result-2.json")
+    with open(path1, "w", encoding="utf-8") as fh:
+        fh.write('{"attempt": 1}\n')
+    before = open(path1, encoding="utf-8").read()
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        idx = argv.index("-o")
+        assert argv[idx + 1] == path2
+        with open(path2, "w", encoding="utf-8") as fh:
+            fh.write('{"attempt": 2}\n')
+        return ("", False, 0, "")
+
+    ok, detail = ED._spawn_attempt(run_dir, state, 2, run_engine=runner)
+    assert ok, detail
+    assert open(path1, encoding="utf-8").read() == before
+    assert os.path.isfile(path2)
+
+
+def test_grade_attempt2_does_not_read_attempt1_stale_result(tmp_path):
+    # axis: grading attempt 2 reads attempt-2 path only, not attempt-1 stale result
+    run_dir = str(tmp_path / "run")
+    branch = _native_review_branch("findings")
+    run_dir, state = _native_review_grade_state(tmp_path, branch, attempt=1)
+    attempt1_path = ED._native_result_path(run_dir, 1)
+    assert os.path.isfile(attempt1_path)
+    state["attempts"][2] = {
+        "ended": {
+            "exit": 0,
+            "timedOut": False,
+            "refusal": None,
+            "stdoutBytes": 0,
+            "wallSeconds": 1.0,
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 2)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-missing"
+
+
+def test_native_spawn_injected_seam_appends_attempt_o(tmp_path):
+    # axis: injected spawn seam appends -o with per-attempt native result path
+    run_dir = str(tmp_path / "run")
+    state = _native_two_attempt_spawn_fixture(tmp_path, run_dir)
+    captured = []
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        captured.append(list(argv))
+        return ("", False, 0, "")
+
+    ok, detail = ED._spawn_attempt(run_dir, state, 2, run_engine=runner)
+    assert ok, detail
+    assert captured[0][-2:] == ["-o", ED._native_result_path(run_dir, 2)]
+
+
+def test_native_spawn_production_path_appends_attempt_o(tmp_path, monkeypatch):
+    # axis: production run-child path appends -o with per-attempt native result path
+    run_dir = str(tmp_path / "run")
+    opened = _production_run_child_setup(tmp_path, run_dir)
+    captured = []
+
+    def fake_popen(argv, **kwargs):
+        captured.append(list(argv))
+
+        class _Proc:
+            pid = 4242
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        return _Proc()
+
+    monkeypatch.setattr(ED.subprocess, "Popen", fake_popen)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    assert captured[0][-2:] == ["-o", ED._native_result_path(run_dir, 1)]
+
+
+def test_native_review_retry_isolation_admits_attempt2_result_only(tmp_path):
+    """WO-2a2 merge (d): retry isolates per-attempt native result admission and binding."""
+    import round_records
+
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["echoNonce"] = "retry-isolation-nonce"
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+
+    branch1 = _native_review_branch("findings")
+    branch1["findings"][0]["id"] = "finding-attempt-one"
+    branch2 = _native_review_branch("findings")
+    branch2["findings"][0]["id"] = "finding-attempt-two"
+    attempt1_path = ED._native_result_path(run_dir, 1)
+    with open(attempt1_path, "w", encoding="utf-8") as fh:
+        json.dump(_wrap_native_review_result(branch1), fh, separators=(",", ":"))
+        fh.write("\n")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 1, "timedOut": False, "refusal": None,
+        "wallSeconds": 1.0, "stdoutBytes": 0, "at": time.time(),
+    })
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    attempt2_path = ED._native_result_path(run_dir, 2)
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        assert argv.count("-o") == 1
+        assert argv[argv.index("-o") + 1] == attempt2_path
+        with open(attempt2_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch2), fh, separators=(",", ":"))
+            fh.write("\n")
+        stream = _codex_event_stream(json.dumps({"resultKind": "findings", **branch2}))
+        return (stream, False, 0, "")
+
+    ok, detail = ED._spawn_attempt(run_dir, state, 2, run_engine=runner)
+    assert ok, detail
+    records, _ = ED._journal_read(run_dir)
+    launching = next(
+        r for r in records
+        if r.get("kind") == "engine-launching" and r.get("attempt") == 2)
+    assert launching["spawnArgv"].count("-o") == 1
+    assert launching["spawnArgv"][launching["spawnArgv"].index("-o") + 1] == attempt2_path
+    record, err = ED.run_execution_record(run_dir)
+    assert err is None
+    assert record.get("resultKind") == "findings"
+    expected_digest = round_records.payload_sha256(branch2["findings"])
+    assert record.get("resultDigest") == expected_digest
+    assert record.get("resultDigest") != round_records.payload_sha256(branch1["findings"])
+
+    run_dir2 = str(tmp_path / "run-inverse")
+    _manual_open_review_run(tmp_path, run_dir2)
+    records2, _ = ED._journal_read(run_dir2)
+    for rec in records2:
+        if rec.get("kind") == "run-opened":
+            rec["echoNonce"] = "retry-isolation-nonce-2"
+    with open(ED._journal_path(run_dir2), "w", encoding="utf-8") as fh:
+        for rec in records2:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    attempt1_only = ED._native_result_path(run_dir2, 1)
+    with open(attempt1_only, "w", encoding="utf-8") as fh:
+        json.dump(_wrap_native_review_result(branch1), fh, separators=(",", ":"))
+        fh.write("\n")
+    ED._journal_append(run_dir2, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 1, "timedOut": False, "refusal": None,
+        "wallSeconds": 1.0, "stdoutBytes": 0, "at": time.time(),
+    })
+    stream2 = _codex_event_stream(_VALID_FINDINGS_STDOUT)
+    with open(os.path.join(run_dir2, "attempt-2.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stream2)
+    records2, _ = ED._journal_read(run_dir2)
+    state2 = ED._journal_state(records2)
+    state2["attempts"][2] = {
+        "ended": {
+            "exit": 0, "timedOut": False, "refusal": None,
+            "stdoutBytes": len(stream2), "wallSeconds": 1.0,
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir2, state2, 2)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-missing"
+    assert "findings" not in grade
+    ED._journal_append(run_dir2, {
+        "kind": "attempt-ended", "attempt": 2,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "wallSeconds": 1.0, "stdoutBytes": len(stream2), "at": time.time(),
+    })
+    record2, err2 = ED.run_execution_record(run_dir2)
+    assert err2 is None
+    assert "resultDigest" not in record2
+    assert "resultKind" not in record2
+
+
+def test_native_spawn_g2_still_refuses_argv_snapshot_mismatch(tmp_path):
+    # axis: G2 argv coherence still refuses snapshot mismatch after per-attempt -o
+    run_dir = str(tmp_path / "wo2a2b-g2")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["argv"] = [
+                "codex", "exec", "--sandbox", "read-only",
+                "-m", _OFF_ALLOWLIST_CODEX, "-c", "model_reasoning_effort=high", "-",
+            ]
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    assert ok is False
+    assert "does not match resolvedInputs snapshot" in detail
+    assert _OFF_ALLOWLIST_CODEX in detail
+    assert fake.calls == []
 

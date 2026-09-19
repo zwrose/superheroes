@@ -15,9 +15,9 @@ CHANNEL_MARKER = "marker"
 RUN_KIND_REVIEW = "review"
 RUN_KIND_WRITE = "write"
 
-# Align with engine_dispatch.MAX_STDOUT_CAPTURE (8 MiB): native results are structured JSON
-# written to a dedicated file; the authoritative cap lives on engine_dispatch.MAX_STDOUT_CAPTURE.
-NATIVE_RESULT_MAX_BYTES = 8 * 1024 * 1024
+# Native results are structured JSON written to a dedicated file; the authoritative cap lives on
+# engine_adapter.ENGINE_OUTPUT_MAX_BYTES (engine_dispatch.MAX_STDOUT_CAPTURE reads the same home).
+NATIVE_RESULT_MAX_BYTES = engine_adapter.ENGINE_OUTPUT_MAX_BYTES
 
 # Write tail signals graded by engine_adapter._grade_build_report_obj (CONVENTIONS §11).
 WRITE_SIGNAL_ENUM = engine_adapter.WRITE_SIGNAL_ENUM
@@ -188,41 +188,6 @@ def validate(schema, value):
     """Validate value against schema. Returns (ok, reason). Never raises."""
     ok, reason, _detail = _validate_with_detail(schema, value)
     return ok, reason
-
-
-def native_schema_allows_scrub_finish(failure_detail, branch=None):
-    """True when a schema failure is scrub-salvageable, keyed on path/kind not prose."""
-    if not failure_detail:
-        return False
-    kind = failure_detail.get("kind")
-    path = failure_detail.get("path") or ""
-    if kind == "enum-mismatch":
-        return path.endswith(".resultKind")
-    if kind == "type-mismatch":
-        if path.endswith(".findings"):
-            return False
-        if ".investigated" in path:
-            return True
-        if ".findings[" in path:
-            return True
-        return False
-    if kind == "any-of-failed":
-        sub = failure_detail.get("sub_failures") or []
-        if not sub or not isinstance(branch, dict):
-            return False
-        result_kind = branch.get("resultKind")
-        if not isinstance(result_kind, str):
-            return False
-        try:
-            branch_index = REVIEW_RESULT_KINDS.index(result_kind)
-        except ValueError:
-            return False
-        prefix = "$.result.anyOf[%d]." % branch_index
-        relevant = [item for item in sub if (item.get("path") or "").startswith(prefix)]
-        if not relevant:
-            return False
-        return all(native_schema_allows_scrub_finish(item, branch=branch) for item in relevant)
-    return False
 
 
 def _sanitize_schema_node(node):
@@ -426,8 +391,14 @@ def _branch_payload_schema(kind):
         optional = set(contract.get("optional") or ())
         properties = {}
         for field in ordered:
-            properties[field] = _top_level_field_schema(
-                contract, field, result_kind=kind, optional_fields=optional)
+            if field == "newIssues":
+                properties[field] = _nullable_type_schema({
+                    "type": "array",
+                    "items": _finding_member_schema(),
+                })
+            else:
+                properties[field] = _top_level_field_schema(
+                    contract, field, result_kind=kind, optional_fields=optional)
         return {
             "type": "object",
             "additionalProperties": False,

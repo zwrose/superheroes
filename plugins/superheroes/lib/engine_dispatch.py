@@ -84,7 +84,6 @@ WORKTREE_LEASE_PREFIX = "superheroes-worktree-lease-"
 PROMPT_NAME = "prompt.txt"
 PROGRESS_NAME = "progress.jsonl"
 NATIVE_SCHEMA_NAME = "native-schema.json"
-NATIVE_RESULT_NAME = "native-result.json"
 _LAST_MESSAGE_BASENAME = "attempt-%d.last-message"
 RUN_KIND_REVIEW = "review"
 # Consumers import engine_adapter.REVIEW_RESULT_KINDS — never restate the tuple (CONVENTIONS §11).
@@ -124,7 +123,7 @@ ITEM_EVIDENCE_CAUSE_STATUS_FAILED = "status-failed"
 BASE_SHA_UNRESOLVABLE = "base-sha-unresolvable"
 HEARTBEAT_INTERVAL = 10     # DoD 4: seconds between liveness heartbeats (time-based, not output-based)
 _STDERR_TAIL = 4096
-MAX_STDOUT_CAPTURE = 8 * 1024 * 1024   # keep only the last 8 MB of engine stdout — the result JSON
+MAX_STDOUT_CAPTURE = engine_adapter.ENGINE_OUTPUT_MAX_BYTES   # keep only the last 8 MB of engine stdout — the result JSON
 # is at the TAIL (parse_result reads the tail), and an unbounded read would let a runaway engine OOM
 # the runner before it can return the structured forfeit that triggers the host-model fall-open (#563).
 MAX_STDERR_CAPTURE = 64 * 1024
@@ -419,60 +418,64 @@ def _opened_channel(opened):
     return opened.get("channel", engine_result_channel.CHANNEL_MARKER)
 
 
-def _native_channel_paths(run_dir_real):
-    return (
-        os.path.join(run_dir_real, NATIVE_SCHEMA_NAME),
-        os.path.join(run_dir_real, NATIVE_RESULT_NAME),
-    )
+def _native_result_path(run_dir_real, attempt):
+    """Per-attempt native result file path. attempt must be a positive int."""
+    if not isinstance(attempt, int):
+        return None
+    return os.path.join(run_dir_real, "native-result-%d.json" % attempt)
+
+
+def _native_schema_path(run_dir_real):
+    return os.path.join(run_dir_real, NATIVE_SCHEMA_NAME)
 
 
 def _native_channel_suffix(opened):
-    """Return (--output-schema, schema_path, -o, result_path) when this run is native-channel."""
+    """Return (--output-schema, schema_path) when this run is native-channel."""
     if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
         return ()
     schema_path = opened.get("nativeSchemaPath")
-    result_path = opened.get("nativeResultPath")
-    if not schema_path or not result_path:
+    if not schema_path:
         return ()
-    return ("--output-schema", schema_path, "-o", result_path)
+    return ("--output-schema", schema_path)
 
 
-def _prepare_native_result_spawn(run_dir_real, opened):
-    """Remove a stale native result file before spawn. Returns (ok, path, removed, refusal)."""
+def _spawn_native_result_argv(run_dir_real, attempt, opened, spawn_argv):
+    """After G2 coherence: remove this attempt's result file and append -o. Returns (ok, argv, path, removed, refusal)."""
     if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
-        return True, None, False, None
-    result_path = opened.get("nativeResultPath")
-    if not result_path:
-        result_path = os.path.join(run_dir_real, NATIVE_RESULT_NAME)
+        return True, spawn_argv, None, False, None
+    result_path = _native_result_path(run_dir_real, attempt)
+    if result_path is None:
+        return False, spawn_argv, None, False, "spawn-failed: invalid attempt"
     stale_removed = False
     try:
         if os.path.exists(result_path):
             os.remove(result_path)
             stale_removed = True
     except OSError as exc:
-        return False, result_path, False, "spawn-failed: %s" % exc
-    return True, result_path, stale_removed, None
+        return False, spawn_argv, result_path, False, "spawn-failed: %s" % exc
+    argv_out = list(spawn_argv) + ["-o", result_path]
+    return True, argv_out, result_path, stale_removed, None
 
 
 def _open_native_channel_argv(run_dir_real, engine, argv, run_kind, expected_result_kind=None):
-    """Write native schema and extend argv for native-channel opens. Returns (argv, error_token)."""
+    """Write native schema and extend argv for native-channel opens. Returns (argv, error_token, schema_path)."""
     if engine_result_channel.channel_for(engine) != engine_result_channel.CHANNEL_NATIVE:
-        return list(argv), None, None, None
+        return list(argv), None, None
     try:
         schema = engine_result_channel.declared_schema(
             engine, run_kind, expected_result_kind,
         )
     except Exception:
-        return None, "native-schema-undeclarable", None, None
-    schema_path, result_path = _native_channel_paths(run_dir_real)
+        return None, "native-schema-undeclarable", None
+    schema_path = _native_schema_path(run_dir_real)
     try:
         with open(schema_path, "w", encoding="utf-8") as fh:
             json.dump(schema, fh, separators=(",", ":"))
             fh.write("\n")
     except OSError:
-        return None, "native-schema-unwritable", None, None
-    argv_out = list(argv) + ["--output-schema", schema_path, "-o", result_path]
-    return argv_out, None, schema_path, result_path
+        return None, "native-schema-unwritable", None
+    argv_out = list(argv) + ["--output-schema", schema_path]
+    return argv_out, None, schema_path
 
 
 def _canonical_spawn_argv(opened):
@@ -2741,6 +2744,16 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     if coherence_err:
         _journal_spawn_guard_refusal(run_dir_real, attempt, coherence_err)
         return
+    ok_prep, spawn_argv, native_result_path, stale_removed, prep_refusal = _spawn_native_result_argv(
+        run_dir_real, attempt, opened, spawn_argv,
+    )
+    if not ok_prep:
+        _journal_append(run_dir_real, {
+            "kind": "attempt-ended", "attempt": attempt,
+            "exit": 127, "timedOut": False, "signal": None,
+            "refusal": prep_refusal[:_STDERR_TAIL], "at": time.time(),
+        })
+        return
     argv, recorded = _derive_and_record_spawn_argv(
         run_dir_real, attempt, spawn_argv, opened.get("engine"))
     if not recorded:
@@ -2749,16 +2762,6 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             "kind": "attempt-ended", "attempt": attempt,
             "exit": 127, "timedOut": False, "signal": None,
             "refusal": "journal-append-failed", "at": time.time(),
-        })
-        return
-    ok_prep, native_result_path, stale_removed, prep_refusal = _prepare_native_result_spawn(
-        run_dir_real, opened,
-    )
-    if not ok_prep:
-        _journal_append(run_dir_real, {
-            "kind": "attempt-ended", "attempt": attempt,
-            "exit": 127, "timedOut": False, "signal": None,
-            "refusal": prep_refusal[:_STDERR_TAIL], "at": time.time(),
         })
         return
     dispatch_path = _dispatch_path_from_opened(opened)
@@ -2910,16 +2913,16 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     spawn_argv, coherence_err = _spawn_argv_coherence(opened, opened.get("argv"))
     if coherence_err:
         return False, coherence_err
+    ok_prep, spawn_argv, native_result_path, stale_removed, prep_refusal = _spawn_native_result_argv(
+        run_dir_real, attempt, opened, spawn_argv,
+    )
+    if not ok_prep:
+        return False, prep_refusal
     argv, recorded = _derive_and_record_spawn_argv(
         run_dir_real, attempt, spawn_argv, opened.get("engine"))
     if not recorded:
         # axis: spawnArgv append failed — run_engine not invoked, attempt ends journal-append-failed.
         return False, "journal-append-failed"
-    ok_prep, native_result_path, stale_removed, prep_refusal = _prepare_native_result_spawn(
-        run_dir_real, opened,
-    )
-    if not ok_prep:
-        return False, prep_refusal
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, attempt)
     prompt_path = opened["promptPath"]
@@ -3346,10 +3349,10 @@ def _native_result_path_is_regular_file(path):
     return stat.S_ISREG(st.st_mode)
 
 
-def _read_native_review_envelope(opened, engagement):
+def _read_native_review_envelope(run_dir_real, attempt, engagement):
     """Load and unwrap a native review result envelope. Returns (envelope, branch) or a forfeit."""
-    result_path = opened.get("nativeResultPath")
-    if not _native_result_path_is_regular_file(result_path):
+    result_path = _native_result_path(run_dir_real, attempt)
+    if result_path is None or not _native_result_path_is_regular_file(result_path):
         shape = engine_result_channel.native_review_payload_shape("native-result-missing")
         return _native_review_forfeit(engagement, "native-result-missing", payload_shape=shape)
     try:
@@ -3408,64 +3411,6 @@ def _native_branch_placeholder_shape(branch):
     return None
 
 
-def _scrub_native_review_branch(branch, echo_nonce):
-    """Scrub a schema-validated native review branch via existing scrub entry points."""
-    kind = branch.get("resultKind")
-    if kind == "findings":
-        raw_findings = branch.get("findings")
-        if raw_findings is not None and engine_adapter._review_items_have_placeholder_literal(
-                raw_findings):
-            return {"ok": False, "reason": "unreadable"}
-    if kind == "verdicts":
-        raw_verdicts = branch.get("verdicts")
-        if raw_verdicts is not None and engine_adapter._review_items_have_placeholder_literal(
-                raw_verdicts):
-            return {"ok": False, "reason": "unreadable"}
-    investigated, inv_rejected = engine_adapter._scrub_investigated(branch.get("investigated"))
-    if kind == "findings":
-        findings_list, findings_rejected = engine_adapter._scrub_findings(
-            branch.get("findings") or [], echo_nonce=echo_nonce)
-        if engine_adapter._findings_reply_has_hollow_member(findings_rejected):
-            return {"ok": False, "reason": "unreadable"}
-        if raw_findings and not findings_list:
-            return {"ok": False, "reason": "unreadable"}
-        res = {
-            "ok": True,
-            "resultKind": "findings",
-            "findings": findings_list,
-            "investigated": investigated,
-        }
-        res = engine_adapter._attach_findings_parse_rejections(res, findings_rejected)
-        return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
-    if kind == "verdicts":
-        verdicts = _normalize_native_verdicts(branch.get("verdicts") or [])
-        res = {
-            "ok": True,
-            "resultKind": "verdicts",
-            "verdicts": engine_adapter._scrub_verdicts(verdicts),
-            "investigated": investigated,
-        }
-        return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
-    if kind == "grouping":
-        res = {
-            "ok": True,
-            "resultKind": "grouping",
-            "grouping": engine_adapter._scrub_grouping(branch.get("grouping")),
-            "investigated": investigated,
-        }
-        return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
-    if kind == "ruling":
-        ruling_branch = _normalize_native_ruling_branch(branch)
-        res = {
-            "ok": True,
-            "resultKind": "ruling",
-            "ruling": engine_adapter._scrub_ruling_object(ruling_branch),
-            "investigated": investigated,
-        }
-        return engine_adapter._attach_investigated_parse_rejections(res, inv_rejected)
-    return {"ok": False, "reason": "unreadable"}
-
-
 def _omit_null_optional_fields(obj, optional_keys):
     """Drop null-valued optional fields so payload_contracts sees absent, not null."""
     if not isinstance(obj, dict):
@@ -3485,6 +3430,100 @@ def _normalize_native_verdicts(verdicts):
 def _normalize_native_ruling_branch(branch):
     optional = ("newIssues", "evidence", "auditorVendor")
     return _omit_null_optional_fields(branch, optional)
+
+
+def _normalize_native_review_branch_for_parser(branch):
+    """Drop null optional slots the native schema requires but adapter parsers read as absent."""
+    kind = branch.get("resultKind")
+    if kind == "verdicts":
+        normalized = dict(branch)
+        normalized["verdicts"] = _normalize_native_verdicts(branch.get("verdicts") or [])
+        return normalized
+    if kind == "ruling":
+        return _normalize_native_ruling_branch(branch)
+    return branch
+
+
+def _native_review_parser_refusal_forfeit(engagement, envelope, branch):
+    """Forfeit a schema-valid native branch the adapter parser refused. Never raises."""
+    placeholder_shape = _native_branch_placeholder_shape(branch)
+    if placeholder_shape is not None:
+        return _native_review_forfeit(
+            engagement, "native-result-malformed", payload_shape=placeholder_shape)
+    shape = engine_result_channel.native_review_payload_shape(
+        "native-result-malformed-branch", envelope=envelope, branch=branch)
+    return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
+
+
+def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_nonce):
+    """Single admission authority for codex's native review channel. Never raises."""
+    loaded = _read_native_review_envelope(run_dir_real, attempt, engagement)
+    if not isinstance(loaded, tuple):
+        return loaded
+    envelope, branch = loaded
+
+    expected_result_kind = opened.get("expectedResultKind")
+    branch_kind = branch.get("resultKind")
+    if (expected_result_kind in REVIEW_RESULT_KINDS
+            and branch_kind in REVIEW_RESULT_KINDS
+            and branch_kind != expected_result_kind):
+        has_payload, payload = _review_result_payload(branch, branch_kind)
+        engagement = _engagement_with_read(
+            engagement, result_kind=branch_kind, items=payload if has_payload else [])
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": RESULT_KIND_MISMATCH_DETAIL,
+            "engagement": engagement,
+        }
+
+    engine = opened["engine"]
+    run_kind = opened.get("roleKind", RUN_KIND_REVIEW)
+    schema_path = opened.get("nativeSchemaPath")
+    if not schema_path or not os.path.isfile(schema_path) or os.path.islink(schema_path):
+        return _native_review_forfeit(engagement, "native-schema-unreadable")
+    try:
+        declared = engine_result_channel.declared_schema(
+            engine, run_kind, expected_result_kind)
+    except Exception:
+        return _native_review_forfeit(engagement, "native-schema-unreadable")
+    try:
+        with open(schema_path, encoding="utf-8") as fh:
+            on_disk = json.load(fh)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return _native_review_forfeit(engagement, "native-schema-unreadable")
+    if on_disk != declared:
+        return _native_review_forfeit(engagement, "native-schema-unreadable")
+
+    ok, validation_reason, _validation_detail = engine_result_channel._validate_with_detail(
+        declared, envelope)
+    if not ok:
+        return _native_review_forfeit_with_payload_shape(
+            engagement,
+            "native-result-schema-invalid",
+            None,
+            None,
+            echo_nonce,
+            envelope=envelope,
+            branch=branch,
+            validationReason=validation_reason,
+        )
+
+    kind = branch.get("resultKind")
+    parser = engine_adapter._REVIEW_CONTRACT_PARSERS.get(kind)
+    if parser is None:
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+    normalized = _normalize_native_review_branch_for_parser(branch)
+    try:
+        if kind == "findings":
+            parsed = parser(normalized, None, echo_nonce=echo_nonce)
+        else:
+            parsed = parser(normalized, None)
+    except Exception:
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+    if not parsed.get("ok"):
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+    return parsed
 
 
 def _finish_review_grade_from_parse(
@@ -3573,60 +3612,14 @@ def _native_review_forfeit_with_payload_shape(
     return result
 
 
-def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_nonce):
-    """Typed-file admission for native review: load, validate, scrub. Parse-only; no spot-check."""
-    loaded = _read_native_review_envelope(opened, engagement)
-    if not isinstance(loaded, tuple):
-        return loaded
-    envelope, branch = loaded
-    schema_path = opened.get("nativeSchemaPath")
-    if not schema_path or not os.path.isfile(schema_path) or os.path.islink(schema_path):
-        return _native_review_forfeit(engagement, "native-schema-unreadable")
-    try:
-        with open(schema_path, encoding="utf-8") as fh:
-            schema = json.load(fh)
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return _native_review_forfeit(engagement, "native-schema-unreadable")
-    ok, validation_reason, validation_detail = engine_result_channel._validate_with_detail(
-        schema, envelope)
-    placeholder_shape = _native_branch_placeholder_shape(branch)
-    if placeholder_shape is not None:
-        return _native_review_forfeit(
-            engagement, "native-result-malformed", payload_shape=placeholder_shape)
-    scrub_try = _scrub_native_review_branch(branch, echo_nonce)
-    if ok and scrub_try.get("ok"):
-        return scrub_try
-    if not ok:
-        if scrub_try.get("ok") and engine_result_channel.native_schema_allows_scrub_finish(
-                validation_detail, branch=branch):
-            return scrub_try
-        fed_prompt = opened.get("fedPrompt", "")
-        stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
-        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
-        return _native_review_forfeit_with_payload_shape(
-            engagement,
-            "native-result-schema-invalid",
-            stdout,
-            fed_prompt,
-            echo_nonce,
-            envelope=envelope,
-            branch=branch,
-            validationReason=validation_reason,
-        )
-    if scrub_try.get("ok"):
-        return scrub_try
-    return _native_review_forfeit(engagement, "native-result-malformed")
-
-
 def _grade_native_review_attempt(
-        opened, cwd, engagement, echo_nonce, *, stdout="", fed_prompt="",
-        stderr_tail="", elapsed=0, stdout_bytes=0, run_dir_real="", attempt=0):
+        run_dir_real, attempt, opened, cwd, engagement, echo_nonce, *,
+        stdout="", stderr_tail="", elapsed=0, stdout_bytes=0):
     """Grade a native-channel review attempt from the typed result file."""
-    engine = opened["engine"]
-    admitted = _admit_native_review_result(
-        run_dir_real, attempt, opened, engagement, echo_nonce)
-    if not admitted.get("ok"):
+    admitted = _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_nonce)
+    if admitted.get("forfeit"):
         return admitted
+    engine = opened["engine"]
     return _finish_review_grade_from_parse(
         opened, cwd, engagement, admitted, engine, stdout, stderr_tail, elapsed, stdout_bytes)
 
@@ -3663,9 +3656,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
 
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
         return _grade_native_review_attempt(
-            opened, cwd, engagement, echo_nonce, stdout=stdout, fed_prompt=fed_prompt,
-            stderr_tail=stderr_tail, elapsed=elapsed, stdout_bytes=stdout_bytes,
-            run_dir_real=run_dir_real, attempt=attempt)
+            run_dir_real, attempt, opened, cwd, engagement, echo_nonce,
+            stdout=stdout, stderr_tail=stderr_tail, elapsed=elapsed, stdout_bytes=stdout_bytes)
 
     if not stdout and not os.path.exists(stdout_path):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
@@ -4382,7 +4374,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         return False, "run-dir-setup-failed:%s" % type(exc).__name__
 
     channel = engine_result_channel.channel_for(engine)
-    argv, native_err, native_schema_path, native_result_path = _open_native_channel_argv(
+    argv, native_err, native_schema_path = _open_native_channel_argv(
         run_dir_real, engine, argv, RUN_KIND_REVIEW, expected_result_kind,
     )
     if native_err:
@@ -4414,7 +4406,6 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     }
     if native_schema_path is not None:
         record["nativeSchemaPath"] = native_schema_path
-        record["nativeResultPath"] = native_result_path
     if expected_result_kind in REVIEW_RESULT_KINDS:
         record["expectedResultKind"] = expected_result_kind
     effective_nonce = review_findings_schema.effective_nonce(echo_nonce)
@@ -4962,7 +4953,6 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     channel = engine_result_channel.CHANNEL_MARKER
     argv = list(argv)
     native_schema_path = None
-    native_result_path = None
 
     record = {
         "kind": "run-opened",
@@ -4992,7 +4982,6 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     }
     if native_schema_path is not None:
         record["nativeSchemaPath"] = native_schema_path
-        record["nativeResultPath"] = native_result_path
     if resolved_inputs is not None:
         record["resolvedInputs"] = resolved_inputs
     if not _journal_append(run_dir_real, record):

@@ -607,10 +607,8 @@ def _write_native_review_result(run_dir, repo_root, *, findings=None):
   if findings is None:
     findings = []
   branch = td._native_review_branch("findings", findings=findings, investigated=[rel])
-  records, _ = ED._journal_read(run_dir)
-  state = ED._journal_state(records)
-  native_path = (state.get("opened") or {}).get("nativeResultPath")
-  assert native_path, "nativeResultPath missing from run-opened"
+  native_path = ED._native_result_path(run_dir, 1)
+  assert native_path, "native result path missing for attempt 1"
   with open(native_path, "w", encoding="utf-8") as fh:
     json.dump({"result": branch}, fh, separators=(",", ":"))
     fh.write("\n")
@@ -869,10 +867,8 @@ def test_seam_a_evidence_result_binding_incomplete_refuses(tmp_path, adapters):
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
                                      RR.storage_key("code-reviewer"), pend["attempt"])
   run_dir = _execution_run_dir(tmp_path, order_path, name="ev-binding-incomplete-run")
-  records, _ = ED._journal_read(run_dir)
-  journal_state = ED._journal_state(records)
-  native_path = (journal_state.get("opened") or {}).get("nativeResultPath")
-  assert native_path, "nativeResultPath missing from run-opened"
+  native_path = ED._native_result_path(run_dir, 1)
+  assert native_path, "native result path missing for attempt 1"
   open(native_path, "wb").write(b"not parseable review output\n")
   out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
   assert out["ok"] is False

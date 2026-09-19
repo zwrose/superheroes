@@ -526,21 +526,51 @@ def test_validate_none_schema_refuses():
     assert "schema is None" in reason
 
 
-def test_native_schema_allows_scrub_finish_rejects_enum_injection_in_severity():
-    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW)
-    branch = _valid_review_branch("findings")
-    branch["findings"][0]["severity"] = "Critical (investigated)"
-    ok, _reason, detail = ERC._validate_with_detail(schema, _wrap_result(branch))
-    assert not ok
-    assert not ERC.native_schema_allows_scrub_finish(detail, branch=branch)
+def test_ruling_new_issues_detailed_entry_validates_and_survives_grading(tmp_path):
+    # axis: ruling newIssues with detailed entry validates and survives native grading
+    ed = _load("engine_dispatch")
 
+    new_issue = _example_finding_member()
+    new_issue["title"] = "Detailed new issue from audit"
+    new_issue["body"] = "Concrete defect description"
+    branch = _valid_review_branch("ruling")
+    branch["newIssues"] = [new_issue]
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, "ruling")
+    ok, reason = ERC.validate(schema, _wrap_result(branch))
+    assert ok, reason
 
-def test_native_schema_allows_scrub_finish_accepts_wrong_result_kind():
-    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, expected_result_kind="findings")
-    branch = _valid_review_branch("verdicts")
-    ok, _reason, detail = ERC._validate_with_detail(schema, _wrap_result(branch))
-    assert not ok
-    assert ERC.native_schema_allows_scrub_finish(detail, branch=branch)
+    run_dir = str(tmp_path / "run")
+    repo_root = os.path.join(_HERE, "..", "..", "..")
+    os.makedirs(run_dir, exist_ok=True)
+    schema_path = os.path.join(run_dir, ed.NATIVE_SCHEMA_NAME)
+    result_path = ed._native_result_path(run_dir, 1)
+    with open(schema_path, "w", encoding="utf-8") as fh:
+        json.dump(schema, fh, separators=(",", ":"))
+        fh.write("\n")
+    with open(result_path, "w", encoding="utf-8") as fh:
+        json.dump(_wrap_result(branch), fh, separators=(",", ":"))
+        fh.write("\n")
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    opened = {
+        "engine": "codex",
+        "roleKind": ERC.RUN_KIND_REVIEW,
+        "cwd": repo_root,
+        "fedPrompt": "",
+        "channel": ERC.CHANNEL_NATIVE,
+        "nativeSchemaPath": schema_path,
+        "expectedResultKind": "ruling",
+    }
+    state = {
+        "opened": opened,
+        "attempts": {1: {"ended": {"exit": 0, "timedOut": False, "refusal": None,
+                                   "stdoutBytes": 0, "wallSeconds": 1.0}}},
+    }
+    grade = ed._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade["ruling"]["newIssues"][0]["title"] == "Detailed new issue from audit"
 
 
 def test_ruling_branch_fields_match_audits_binding():
@@ -574,3 +604,12 @@ def test_review_result_contract_from_schema_lists_active_payload_properties():
     contract = ERC.review_result_contract_from_schema(schema)
     for field in ERC._ruling_branch_fields():
         assert "`%s`" % field in contract
+
+
+def test_engine_output_byte_cap_single_home():
+    # axis: ENGINE_OUTPUT_MAX_BYTES is the single literal home for the 8 MiB cap
+    home = EA.ENGINE_OUTPUT_MAX_BYTES
+    ed = _load("engine_dispatch")
+    assert ERC.NATIVE_RESULT_MAX_BYTES == home
+    assert ed.MAX_STDOUT_CAPTURE == home
+    assert home == 8 * 1024 * 1024
