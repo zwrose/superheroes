@@ -447,6 +447,7 @@ def _spawn_native_result_argv(run_dir_real, attempt, opened, spawn_argv):
     if result_path is None:
         return False, spawn_argv, None, "spawn-failed: invalid attempt"
     try:
+        # axis: any entry already at the result path (file, symlink, dangling symlink, directory) refuses the attempt; the path handed to the engine as -o is always empty.
         os.lstat(result_path)
     except FileNotFoundError:
         pass
@@ -3353,6 +3354,7 @@ def _load_native_result_json(run_dir_real, attempt):
         return None, "native-result-missing"
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
     try:
+        # axis: the result path is opened without following a symlink and without blocking; a symlink, FIFO or absent entry reads as native-result-missing.
         fd = os.open(path, flags)
     except OSError:
         return None, "native-result-missing"
@@ -3361,6 +3363,7 @@ def _load_native_result_json(run_dir_real, attempt):
             st = os.fstat(fd)
         except OSError:
             return None, "native-result-missing"
+        # axis: only a regular file, judged on the opened fd (never the path), is read as a result.
         if not stat.S_ISREG(st.st_mode):
             return None, "native-result-missing"
         if st.st_size > engine_result_channel.NATIVE_RESULT_MAX_BYTES:
@@ -3515,6 +3518,7 @@ def _admit_native_write_result(run_dir_real, attempt, opened):
             "reason": dispatch_outcome.REASON_FORFEITED,
             "detail": "native-schema-unreadable",
         }
+    # axis: the write schema on disk must equal the declared one, or the attempt refuses native-schema-unreadable.
     if on_disk != declared:
         return {
             "forfeit": True,
@@ -3524,6 +3528,7 @@ def _admit_native_write_result(run_dir_real, attempt, opened):
 
     ok, validation_reason, _validation_detail = engine_result_channel._validate_with_detail(
         declared, obj)
+    # axis: a native write result that fails the declared schema forfeits native-result-schema-invalid; nothing after this can produce ok.
     if not ok:
         return {
             "forfeit": True,
@@ -3533,6 +3538,7 @@ def _admit_native_write_result(run_dir_real, attempt, opened):
         }
 
     report_raw = obj.get("report") if isinstance(obj.get("report"), str) else ""
+    # axis: a blank or whitespace-only report forfeits native-result-report-blank.
     if report_raw.strip() == "":
         return {
             "forfeit": True,
@@ -3540,6 +3546,7 @@ def _admit_native_write_result(run_dir_real, attempt, opened):
             "detail": "native-result-report-blank",
         }
 
+    # axis: the report reaches the terminal and the journal only through the scrub egress.
     report = engine_adapter._scrub(obj["report"])
     graded = engine_adapter._grade_build_report_obj(obj)
     if graded.get("ok") is True:

@@ -3023,7 +3023,12 @@ def test_native_write_progress_telemetry_recorded(tmp_path):
     assert res["ok"] is True
     with open(progress_path, encoding="utf-8") as fh:
         lines = fh.read().strip().splitlines()
-    assert len(lines) >= 1
+    records = [json.loads(line) for line in lines]
+    attempt_one = [rec for rec in records if rec.get("attempt") == 1]
+    assert len(attempt_one) >= 2
+    elapsed_values = {rec["elapsed_s"] for rec in attempt_one}
+    assert 1.0 in elapsed_values
+    assert 2.0 in elapsed_values
 
 
 def test_native_write_report_threaded_with_declared_items(tmp_path):
@@ -3115,13 +3120,14 @@ def test_native_write_secret_in_report_scrubbed_from_terminal_and_journal(tmp_pa
         _write_native_obj_at_argv(argv, obj)
         return "", False, 0, ""
 
+    planted_report = obj["report"]
     res = _dispatch_write(tmp_path, runner, cwd=wt, run_dir=run_dir)
     assert res["ok"] is True
-    assert res["report"]
     assert _NATIVE_WRITE_SECRET not in json.dumps(res)
     journal_bytes = open(ED._journal_path(run_dir), "rb").read()
     assert _NATIVE_WRITE_SECRET.encode("utf-8") not in journal_bytes
-    assert res["report"]
+    assert "log shows Authorization" in res["report"]
+    assert res["report"] != planted_report
 
 
 def test_native_write_exhausted_forfeit_carries_native_detail(tmp_path):
