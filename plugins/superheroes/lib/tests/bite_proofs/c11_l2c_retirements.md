@@ -147,3 +147,26 @@ Command: single run of every proving test listed above after all restores.
 ```
 
 `git status --porcelain -- plugins/superheroes/lib/*.py` empty (code files committed and untouched).
+
+---
+
+## Orchestrator re-run on the final code head `fbe873aa` (2026-09-19)
+
+**Provenance:** the layer-2c orchestrator session (opus 5, medium), orchestrator-typed, in a detached probe worktree at `fbe873aa` (never the build tree the review seats read). The review loop's fix rounds moved every gate this record proves (the retired-marker predicate `_marker_channel_retired_run` joined each gate; the lifecycle-head fold was added), so every proof above was re-run against the final text. Each neutralization is the final head's exact gate text removed by a targeted edit and restored by writing the pre-neutralization bytes back; the probe tree's `git status --porcelain -- plugins/superheroes/lib` was empty after every restore.
+
+Command prefix: `/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-2c-probe -m pytest <node ids> -q -p no:cacheprovider --tb=line`
+
+| ID | Neutralization on `fbe873aa` | Red (exit 1) | Restore receipt |
+|---|---|---|---|
+| BP-2c-1 | the `if (_opened_channel(opened) != CHANNEL_NATIVE and not _marker_channel_retired_run(opened))` guard around `_maybe_upgrade_review_terminal_forfeit` removed (call made unconditional) | `test_native_review_terminal_forfeit_carries_no_salvage` — `assert 'forfeit-with…aged-artifact' == 'forfeited'`; `test_native_vacuous_terminal_is_never_upgraded` — `assert 'forfeit-with…aged-artifact' == 'vacuous'` · `2 failed in 1.26s` | clean |
+| BP-2c-2 | the early `return terminal` block (native or retired-marker) in `_finalize_write_forfeit_terminal` removed | `test_native_write_exhausted_forfeit_carries_no_salvage` — `assert 'salvage' not in {…}` · `1 failed in 0.75s` | clean |
+| BP-2c-3 | the stdout-cap guard reduced to `if run_kind == RUN_KIND_WRITE:` | `test_native_write_over_cap_stdout_never_forfeits_stdout_capped` — `assert 'stdout-capped-by-attempt' not in 'stdout-capp…empt:8389120'` · `1 failed in 0.71s` | clean |
+| BP-2c-4 | `record["echoNonce"] = …` (and the `effective_nonce` lines) removed from `_open_write_run` | `test_write_run_execution_record_carries_runner_nonce` — `assert (False)` · `1 failed in 0.70s` | clean |
+| BP-2c-5 | P_VERIFIERS `reason` moved back to `optional` | `test_verdict_reason_required_in_contract_and_schema` — `assert 'reason' in ['id', 'verdict']` · `1 failed in 0.28s` | clean |
+| BP-2c-6 | the `marker-channel-retired` refusal in `_spawn_native_result_argv` replaced by `pass` | `test_codex_marker_channel_run_refuses_to_spawn` — `assert False is True` · `1 failed in 1.07s` | clean |
+| BP-2c-7 | see the note below | `test_payload_contracts_non_empty_string_rejects_blank` — `1 failed` (both element-member sites neutralized together) | clean |
+| BP-2c-8 | the `payload_fault` call in `verifier_results_fault` removed | `test_hand_submit_verifier_reasonless_verdict_refused` — `assert None is not None` · `1 failed in 0.93s` | clean |
+
+Green run after every restore (the nine proving tests together): `9 passed in 4.04s`.
+
+**BP-2c-7 disclosure (per-site reading).** The non-blank rule for `non-empty-string` lives at three sites in `payload_contracts.py`: (a) the required-member check in `_check_element_fields`, (b) the top-level scalar check in `_check_scalar_type`, and (c) the per-field element check in `_check_element_fields`. Sites (a) and (c) are each other's backup for a blank **required** member — neutralizing either one alone leaves the test green (measured twice: `1 passed`), and only removing both goes red (measured: `1 failed`). Site (b) is reachable only through a **top-level** `non-empty-string` field (P_PANEL `confidence`/`tier`, P_AUDITS `id`/`ruling`); the committed test carries no such specimen, so (b) is **unproven by a committed test** — a live check on the final head (`payload_fault(P_PANEL, {"findings": [], "confidence": "   "}, "x")` → `` `confidence` is str, not a non-empty string ``) shows the site fires. Both facts are handed up in the PR's follow-ups (collapse (a)/(c) to one site; add a top-level specimen) rather than reworked here, under the third-rework tripwire on this order's test surface.
