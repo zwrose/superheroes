@@ -21,7 +21,7 @@ not listed in the table below is the same as the **full** lane.
 | Review before handback | full panel, fix loop | one independent cross-vendor reviewer | one independent cross-vendor reviewer, in-session |
 | Test-pilot | where there is an app | where there is an app | no — *if you think you need it, it isn't micro* |
 | Preflight | yes | yes | no |
-| Order lint before dispatch | every implementer and review-fix order, both halves; the driver lints each fixer order | — (no orders) | — |
+| Order lint before dispatch | every implementer and review-fix order: the deterministic half always, the semantic half where the host vendor has a mechanical cell (else dispatched with semantic-lint-unavailable:<vendor> disclosed); the driver lints each fixer order | — (no orders) | — |
 | Definition-of-done table | yes | yes | no — nothing to disposition against |
 | Authorized by | the route | the route | the owner, per change |
 | Size (non-test lines — see below) | — | ~100–400 | ~100 or fewer |

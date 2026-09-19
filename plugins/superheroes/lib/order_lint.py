@@ -6,7 +6,9 @@ Reads the authored order text only — never the runner-augmented prompt.
 Tokens (one finding each when triggered):
 - ``order-unreadable`` — the order file is missing, empty, or not UTF-8 text.
 - ``order-repo-root-unresolved`` — ``--repo-root`` or ``--alt-root`` is absent or unreadable.
-- ``order-path-unresolved`` — a cited repo-relative path with a known extension does not exist.
+- ``order-path-unresolved`` — a cited repo-relative path with a known extension (seeded
+  locally, unioned with ``guardian_lens_docs.KNOWN_EXTENSIONS``; matched case-insensitively)
+  does not exist.
 - ``order-placeholder-unfilled`` — a ``{{NAME}}`` or ``{name}`` placeholder remains in the
   text outside inline backticks and fenced blocks (``{ {NAME}}`` is checked everywhere).
 - ``order-result-shape-ambiguous`` — the write-report sentinel sits beside a native-typed
@@ -41,6 +43,8 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import guardian_lens_docs  # noqa: E402
+
 TOKEN_UNREADABLE = "order-unreadable"
 TOKEN_REPO_ROOT_UNRESOLVED = "order-repo-root-unresolved"
 TOKEN_PATH_UNRESOLVED = "order-path-unresolved"
@@ -58,6 +62,7 @@ EXTENSIONS = (
     ".py", ".md", ".json", ".yml", ".yaml", ".txt", ".sh", ".toml", ".ini", ".cfg",
     ".js", ".ts", ".tsx", ".jsx", ".css", ".html", ".sql", ".csv", ".jsonl",
 )
+EXTENSIONS = tuple(sorted(set(EXTENSIONS) | set(guardian_lens_docs.KNOWN_EXTENSIONS)))
 _EMPTY = {"paths": 0, "placeholders": 0}
 _DBL_PH = re.compile(r"\{\{([A-Z][A-Z0-9_]*)\}\}")
 _SGL_PH = re.compile(r"(?<![{$])\{([A-Za-z_][A-Za-z0-9_.-]*)\}(?!\})")
@@ -85,6 +90,7 @@ def _load_result_vocab():
 
 
 _WRITE_SENTINEL, _FIXER_LITERAL = _load_result_vocab()
+_FIXER_OBJECT = re.compile(r'\{\s*"' + re.escape(_FIXER_LITERAL[2:].strip('"')) + r'"')
 _STDOUT_PROTOCOL = (_WRITE_SENTINEL, _FIXER_LITERAL)
 
 
@@ -138,7 +144,7 @@ def _cand(tok):
         return False
     base = tok.rsplit("/", 1)[-1]
     i = base.rfind(".")
-    return i > 0 and base[i:] in EXTENSIONS
+    return i > 0 and base[i:].lower() in EXTENSIONS
 
 
 def _resolve(rel, roots):
@@ -267,7 +273,7 @@ def _shape(text, expect_items):
     native = [s for s in _NATIVE if s in text]
     if _WRITE_SENTINEL in text and native:
         return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, "+".join([_WRITE_SENTINEL] + native))
-    if _FIXER_LITERAL in text and expect_items:
+    if _FIXER_OBJECT.search(text) and expect_items:
         return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, _FIXER_LITERAL + "+expect-item")
     return None
 

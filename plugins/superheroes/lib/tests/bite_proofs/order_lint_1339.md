@@ -29,7 +29,7 @@ edit with post-restore `git status --porcelain` over the neutralized path.
 ```
 =================================== FAILURES ===================================
 _______________________ test_token_placeholder_unfilled ________________________
-plugins/superheroes/lib/tests/test_order_lint.py:111: in test_token_placeholder_unfilled
+plugins/superheroes/lib/tests/test_order_lint.py:135: in test_token_placeholder_unfilled
     assert "NAME" in details and "foo" in details
 E   AssertionError: assert ('NAME' in [])
 =========================== short test summary info ============================
@@ -62,7 +62,7 @@ $ git status --porcelain -- plugins/superheroes/lib/order_lint.py
 ```
 =================================== FAILURES ===================================
 __________________________ test_token_path_unresolved __________________________
-plugins/superheroes/lib/tests/test_order_lint.py:99: in test_token_path_unresolved
+plugins/superheroes/lib/tests/test_order_lint.py:101: in test_token_path_unresolved
     assert any(
 E   assert False
 E    +  where False = any(<generator object test_token_path_unresolved.<locals>.<genexpr> at 0x1021bb890>)
@@ -96,7 +96,7 @@ $ git status --porcelain -- plugins/superheroes/lib/order_lint.py
 ```
 =================================== FAILURES ===================================
 ______________________ test_symlink_escape_is_unresolved _______________________
-plugins/superheroes/lib/tests/test_order_lint.py:317: in test_symlink_escape_is_unresolved
+plugins/superheroes/lib/tests/test_order_lint.py:362: in test_symlink_escape_is_unresolved
     assert any("escapes-root" in d for d in _details(r))
 E   assert False
 E    +  where False = any(<generator object test_symlink_escape_is_unresolved.<locals>.<genexpr> at 0x1060acdd0>)
@@ -130,7 +130,7 @@ $ git status --porcelain -- plugins/superheroes/lib/order_lint.py
 ```
 =================================== FAILURES ===================================
 ________ test_result_shape_ambiguous_fires_on_stdout_protocol_literals _________
-plugins/superheroes/lib/tests/test_order_lint.py:484: in test_result_shape_ambiguous_fires_on_stdout_protocol_literals
+plugins/superheroes/lib/tests/test_order_lint.py:532: in test_result_shape_ambiguous_fires_on_stdout_protocol_literals
     assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(r)
 E   AssertionError: assert 'order-result-shape-ambiguous' in []
 E    +  where 'order-result-shape-ambiguous' = OL.TOKEN_RESULT_SHAPE_AMBIGUOUS
@@ -165,7 +165,7 @@ $ git status --porcelain -- plugins/superheroes/lib/order_lint.py
 ```
 =================================== FAILURES ===================================
 ____________________ test_token_budget_missing_implementer _____________________
-plugins/superheroes/lib/tests/test_order_lint.py:130: in test_token_budget_missing_implementer
+plugins/superheroes/lib/tests/test_order_lint.py:155: in test_token_budget_missing_implementer
     assert OL.TOKEN_BUDGET_MISSING in _tokens(r)
 E   AssertionError: assert 'order-budget-missing' in []
 E    +  where 'order-budget-missing' = OL.TOKEN_BUDGET_MISSING
@@ -200,7 +200,7 @@ $ git status --porcelain -- plugins/superheroes/lib/order_lint.py
 ```
 =================================== FAILURES ===================================
 __________________________ test_accepted_shape_fixer ___________________________
-plugins/superheroes/lib/tests/test_order_lint.py:170: in test_accepted_shape_fixer
+plugins/superheroes/lib/tests/test_order_lint.py:199: in test_accepted_shape_fixer
     assert r["ok"] is True
 E   assert False is True
 =========================== short test summary info ============================
@@ -235,7 +235,7 @@ $ git status --porcelain -- plugins/superheroes/lib/order_lint.py
 ______________________ test_token_unreadable_missing_file ______________________
 plugins/superheroes/lib/tests/test_order_lint.py:74: in test_token_unreadable_missing_file
     r = _record(OL.check(str(tmp_path / "nope.md"), str(tmp_path)))
-plugins/superheroes/lib/order_lint.py:305: in check
+plugins/superheroes/lib/order_lint.py:330: in check
     with open(order_path, encoding="utf-8", errors="strict") as fh:
 E   FileNotFoundError: [Errno 2] No such file or directory: '/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-1449/test_token_unreadable_missing_0/nope.md'
 =========================== short test summary info ============================
@@ -268,7 +268,7 @@ $ git status --porcelain -- plugins/superheroes/lib/order_lint.py
 ```
 =================================== FAILURES ===================================
 ____________________ test_planted_bad_path_in_fixture_order ____________________
-plugins/superheroes/lib/tests/test_order_lint.py:398: in test_planted_bad_path_in_fixture_order
+plugins/superheroes/lib/tests/test_order_lint.py:445: in test_planted_bad_path_in_fixture_order
     assert any("does_not_exist_1339.py" in d for d in _details(r))
 E   assert False
 E    +  where False = any(<generator object test_planted_bad_path_in_fixture_order.<locals>.<genexpr> at 0x10462f890>)

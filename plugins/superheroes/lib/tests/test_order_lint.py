@@ -104,6 +104,28 @@ def test_token_path_unresolved(tmp_path):
     )
 
 
+def test_token_path_unresolved_go_extension(tmp_path):
+    # axis: guardian_lens_docs extensions (.go) are path candidates
+    repo = _mk_repo(tmp_path)
+    text = "Budget: 1 command. See `src/main.go`.\n"
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert any(
+        f["token"] == OL.TOKEN_PATH_UNRESOLVED and "src/main.go" in f["detail"]
+        for f in r["findings"]
+    )
+
+
+def test_token_path_unresolved_case_insensitive_extension(tmp_path):
+    # axis: extension matching is case-insensitive
+    repo = _mk_repo(tmp_path)
+    text = "Budget: 1 command. Read `Lib/Foo.RS`.\n"
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert any(
+        f["token"] == OL.TOKEN_PATH_UNRESOLVED and "Lib/Foo.RS" in f["detail"]
+        for f in r["findings"]
+    )
+
+
 def test_token_placeholder_unfilled(tmp_path):
     # axis: {{NAME}} and {name} placeholders are detected and refused
     repo = _mk_repo(tmp_path)
@@ -510,6 +532,13 @@ def test_result_shape_ambiguous_fires_on_stdout_protocol_literals(tmp_path):
     assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(r)
     r = OL.check_text(
         'Budget 1.\n\nPrint {"fixes": []} on stdout.\n',
+        str(repo),
+        expect_items=("lib/new.py",),
+        kind="implementer",
+    )
+    assert (OL.TOKEN_RESULT_SHAPE_AMBIGUOUS, OL._FIXER_LITERAL + "+expect-item") in _finding_pairs(r)
+    r = OL.check_text(
+        'Budget 1.\n\nReturn { "fixes": [] } on stdout.\n',
         str(repo),
         expect_items=("lib/new.py",),
         kind="implementer",

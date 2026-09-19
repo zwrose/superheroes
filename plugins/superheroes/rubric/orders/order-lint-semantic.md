@@ -26,6 +26,6 @@ Return exactly one JSON object and nothing else — raw JSON on stdout, no markd
 
 {"findings": [{"severity": "Important or Minor", "title": "one line", "body": "what and where, quoting the order's own words", "paragraph": "the heading or first words of the paragraph"}], "investigated": ["the absolute path of the order", "every file under the repository root you opened"]}
 
-An empty findings list with a non-empty investigated list is a valid, common answer. An empty investigated list is never valid — you at least read the order.
+An empty findings list counts as clean only when investigated contains the order's absolute path and every listed path resolves under the repository root or the session scratch. An empty investigated list is never valid — you at least read the order.
 
-The dispatcher treats any Important finding as stop-and-fix-the-order; Minor is the orchestrator's call, recorded. An unparseable answer or an empty investigated means the check did not happen.
+The dispatcher treats any Important finding as stop-and-fix-the-order; Minor is the orchestrator's call, recorded. An unparseable answer, an empty investigated list, or an investigated list that omits the order's absolute path or lists paths that do not resolve under the repository root or session scratch means the check did not happen — re-dispatch once, then the order is not dispatched.
