@@ -3216,6 +3216,64 @@ def _audit_targets(state, config, audit_targets_map):
     return targets
 
 
+AUDIT_PROVENANCE_RUNNER_RECORD = "runner-record"
+AUDIT_PROVENANCE_HAND_LANDED = "hand-landed-evidence"
+AUDIT_PROVENANCE_MIXED = "mixed-evidence"
+AUDIT_PROVENANCE_COLLECTION_MANIFEST = "collection-manifest"
+_LEGACY_AUDIT_PROVENANCE_DISPATCH_MANIFEST = "dispatch-manifest"
+
+
+def _audit_adapter_disclosures(state, artifact):
+    """The adapter disclosures block for the audits fold — from the artifact if still present, else
+    from the round record `_record_adapter_provenance` wrote earlier in the same `_fold` call."""
+    prov = artifact.get("provenance") if isinstance(artifact, dict) else None
+    if isinstance(prov, dict):
+        return prov
+    rec = state.get("rounds", {}).get(str(state["round"]), {})
+    adapter = rec.get("adapterProvenance")
+    if not isinstance(adapter, dict):
+        return None
+    by_phase = adapter.get("byPhase")
+    if isinstance(by_phase, dict):
+        phase_prov = by_phase.get(P_AUDITS)
+        return phase_prov if isinstance(phase_prov, dict) else None
+    return adapter if adapter and "byPhase" not in adapter else None
+
+
+def _audit_provenance_basis(state, artifact):
+    """Per-round auditProvenance from adapter-recorded seat sources, not the fold path alone."""
+    if state.get("_submitUsed"):
+        return AUDIT_PROVENANCE_COLLECTION_MANIFEST
+    disclosures = _audit_adapter_disclosures(state, artifact)
+    prov_src = (disclosures.get("provenanceSource")
+                if isinstance(disclosures, dict) else None)
+    if not isinstance(prov_src, dict) or not prov_src:
+        return AUDIT_PROVENANCE_COLLECTION_MANIFEST
+    targets = state.get("_auditTargets") or []
+    seat_ids = [t.get("id") for t in targets
+                if isinstance(t, dict) and t.get("id") is not None]
+    if not seat_ids:
+        seat_ids = list(prov_src)
+    sources = set()
+    for seat in seat_ids:
+        src = prov_src.get(seat)
+        if src is None:
+            return AUDIT_PROVENANCE_MIXED
+        sources.add(src)
+    if not sources:
+        return AUDIT_PROVENANCE_COLLECTION_MANIFEST
+    if len(sources) == 1:
+        only = next(iter(sources))
+        if only == AUDIT_PROVENANCE_RUNNER_RECORD:
+            return AUDIT_PROVENANCE_RUNNER_RECORD
+        if only == AUDIT_PROVENANCE_HAND_LANDED:
+            return AUDIT_PROVENANCE_HAND_LANDED
+        if only == _LEGACY_AUDIT_PROVENANCE_DISPATCH_MANIFEST:
+            return AUDIT_PROVENANCE_COLLECTION_MANIFEST
+        return AUDIT_PROVENANCE_MIXED
+    return AUDIT_PROVENANCE_MIXED
+
+
 def _fold_audits(state, config, artifact):
     """Consume the fix-audit rulings deterministically (audits.apply_audit_results). Record the
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
@@ -3268,15 +3326,9 @@ def _fold_audits(state, config, artifact):
         _decision(state, "audit-echo-mismatch",
                   "audit result for %s echoed a vendor other than the recorded dispatch provenance "
                   "— advisory only; the manifest governed and the discharge stands" % pid)
-    # Provenance rests on the recorded dispatch provenance (never the result echo) — recorded per
-    # round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY). The hand path's
-    # collectionManifest is orchestrator-written, so its basis stays collection-manifest; only the
-    # durable-record path derives from the runner record.
-    _record_round(state, "auditProvenance",
-                  "runner-record"
-                  if (_seat_result_schema(state) == round_records.SEAT_RESULT_SCHEMA_V2
-                      and not state.get("_submitUsed"))
-                  else "collection-manifest")
+    # Provenance rests on the adapter-recorded seat sources (never the fold path alone) — recorded
+    # per round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY, #1272 WO-R3).
+    _record_round(state, "auditProvenance", _audit_provenance_basis(state, artifact))
     _record_round(state, "audits", outcome["audits"])
     _record_round(state, "auditIndependence",
                   targets[0]["independence"] if targets else "n/a")
@@ -4266,7 +4318,8 @@ def _validate_certified_receipt(receipt):
     missing scriptRan or the seat map, or with a non-list rounds/findings/decisions/degraded/
     skippedBlockers, is rejected with a reason. `skippedBlockers` is REQUIRED (possibly empty) so a
     receipt can never omit the skipped-blocking channel (the exit_skipped invariant). Per-round entries
-    may carry an `auditProvenance` field (`collection-manifest` when the round ran fix audits) — it is
+    may carry an `auditProvenance` field (`runner-record`, `hand-landed-evidence`, `mixed-evidence`,
+    or `collection-manifest` on a hand `submit`) — it is
     ACCEPTED, not required. The optional top-level `base` block (pinned diff-base metadata from a CLI
     `next` that ran the base guard) is likewise ACCEPTED, not required — library/eval runs omit it. The
     always-present `baseGuard` field records whether the CLI base guard ran (``BASE_GUARD_CHECKED``,

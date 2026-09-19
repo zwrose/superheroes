@@ -276,3 +276,54 @@ FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_audit_pr
 .                                                                        [100%]
 1 passed in 7.05s
 ```
+
+---
+
+## G6 (WO-R3) — auditProvenance follows adapter-recorded seat sources
+
+**Neutralization** (`round_driver.py`):
+
+```python
+-    _record_round(state, "auditProvenance", _audit_provenance_basis(state, artifact))
++    _record_round(state, "auditProvenance",
++                  AUDIT_PROVENANCE_RUNNER_RECORD
++                  if (_seat_result_schema(state) == round_records.SEAT_RESULT_SCHEMA_V2
++                      and not state.get("_submitUsed"))
++                  else AUDIT_PROVENANCE_COLLECTION_MANIFEST)
+```
+
+**Raw red** — `test_audit_provenance_basis_follows_the_fold_path` (hand-landed durable-record half):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_audit_provenance_basis_follows_the_fold_path _______________
+
+    def test_audit_provenance_basis_follows_the_fold_path(tmp_path):
+        ...
+>       assert state["rounds"][str(pend["round"])]["auditProvenance"] == "hand-landed-evidence"
+E       AssertionError: assert 'runner-record' == 'hand-landed-evidence'
+E         
+E         - hand-landed-evidence
+E         + runner-record
+
+plugins/superheroes/lib/tests/test_seat_provenance_1272.py:414: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_audit_provenance_basis_follows_the_fold_path
+1 failed in 4.12s
+```
+
+**Restore:** reinstate `_record_round(state, "auditProvenance", _audit_provenance_basis(state, artifact))`.
+
+**Restore receipt (quoted lines):**
+
+```python
+    _record_round(state, "auditProvenance", _audit_provenance_basis(state, artifact))
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 7.07s
+```

@@ -383,7 +383,7 @@ def test_advance_derives_collection_manifest_from_runner_record(tmp_path):
     out = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
     assert out["ok"] is True, out
     state = _state(session_dir)
-    assert state["rounds"][str(pend["round"])]["auditProvenance"] == "runner-record"
+    assert state["rounds"][str(pend["round"])]["auditProvenance"] == "hand-landed-evidence"
     records = []
     for tid in (tid0, tid1):
         stored, err = round_records.read_json(_store_path(session_dir, tid, pend))
@@ -400,7 +400,7 @@ def test_advance_derives_collection_manifest_from_runner_record(tmp_path):
 
 
 def test_audit_provenance_basis_follows_the_fold_path(tmp_path):
-    """auditProvenance names the basis the fold actually used, not the state schema alone."""
+    """auditProvenance names the adapter-recorded seat sources, not the fold path alone."""
     session_dir, gitdir, _head_path = _drive_to_audits(tmp_path, name="durable-record")
     seat = _audit_roster(session_dir)[0]
     evidence = _execution_evidence(source="codex")
@@ -411,7 +411,21 @@ def test_audit_provenance_basis_follows_the_fold_path(tmp_path):
     out = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
     assert out["ok"] is True, out
     state = _state(session_dir)
-    assert state["rounds"][str(pend["round"])]["auditProvenance"] == "runner-record"
+    assert state["rounds"][str(pend["round"])]["auditProvenance"] == "hand-landed-evidence"
+
+    session_dir3 = _session(tmp_path, name="runner-record")
+    state3 = _state(session_dir3)
+    state3["_auditTargets"] = [{"id": seat, "identity": "unchecked index", "auditorVendor": "claude",
+                                "independence": "cross-vendor", "verdict": "blocking",
+                                "evidence": "unchecked index at src/f00.py:2"}]
+    state3["auditRounds"] = []
+    runner_round = state3["round"]
+    RD._fold(state3, state3.get("config") or {}, RD.P_AUDITS, {
+        "results": [{"id": seat, "ruling": "discharged", "reason": "r", "auditorVendor": "claude"}],
+        "collectionManifest": {seat: "claude"},
+        "provenance": {"provenanceSource": {seat: "runner-record"}},
+    })
+    assert state3["rounds"][str(runner_round)]["auditProvenance"] == "runner-record"
 
     session_dir2 = _session(tmp_path, name="hand-path")
     state2 = _state(session_dir2)
