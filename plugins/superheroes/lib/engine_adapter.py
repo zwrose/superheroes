@@ -485,12 +485,10 @@ def build_argv_result(seat, role_kind, opts):
             model = tok
         else:
             model = _CURSOR_MODEL
-        argv = ["cursor-agent", "--model", model, "-p", "--trust"]
-        if is_read:
-            argv += ["--mode", "plan"]
-        else:
-            argv += ["-f"]
-        argv += ["--output-format", "stream-json"]
+        argv = [
+            "cursor-agent", "--model", model, "-p", "--trust", "-f",
+            "--sandbox", "enabled", "--output-format", "stream-json",
+        ]
         return _ok(argv)
     return _refuse("unknown-engine", detail=_unknown_engine_detail(vendor))
 
@@ -772,13 +770,85 @@ def codex_event_tokens(stdout):
         return None
 
 
-def cursor_tool_calls(stdout):
-    """Count distinct tool_call call_ids in a cursor stream-json stdout; int or None. Never raises."""
+def _cursor_tool_call_write_path(tool_call_obj):
+    """Return a file path from a cursor tool_call envelope, or None. Never raises."""
+    try:
+        if not isinstance(tool_call_obj, dict):
+            return None
+        for key, val in tool_call_obj.items():
+            if not isinstance(key, str) or not key.endswith("ToolCall"):
+                continue
+            if not isinstance(val, dict):
+                continue
+            args = val.get("args")
+            if not isinstance(args, dict):
+                continue
+            for path_key in ("path", "file_path", "target_file"):
+                candidate = args.get(path_key)
+                if isinstance(candidate, str) and candidate:
+                    return candidate
+    except Exception:
+        pass
+    return None
+
+
+def _cursor_shell_call_delivers_excluded_path(
+        tool_call_obj, excluded_path_strings, excluded_realpaths):
+    """True when a shell-style tool call's command mentions an excluded path. Never raises."""
+    try:
+        if not isinstance(tool_call_obj, dict):
+            return False
+        for key, val in tool_call_obj.items():
+            if not isinstance(key, str) or not key.endswith("ToolCall"):
+                continue
+            if not isinstance(val, dict):
+                continue
+            args = val.get("args")
+            if not isinstance(args, dict):
+                continue
+            if any(
+                isinstance(args.get(path_key), str) and args.get(path_key)
+                for path_key in ("path", "file_path", "target_file")
+            ):
+                continue
+            command = args.get("command")
+            if not isinstance(command, str) or not command:
+                continue
+            for fragment in excluded_path_strings:
+                if fragment in command:
+                    return True
+            for fragment in excluded_realpaths:
+                if fragment in command:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def cursor_tool_calls(stdout, exclude_paths=()):
+    """Count distinct tool_call call_ids in a cursor stream-json stdout; int or None. Never raises.
+
+    A file-writing tool_call whose target path realpath-equals an exclude_paths member is not
+    counted (both started and completed share call_id). A shell-style tool call whose command
+    text contains an exclude_paths member (path string or realpath substring) is also excluded."""
     try:
         if not isinstance(stdout, str) or not stdout:
             return None
+        excluded_path_strings = set()
+        excluded_realpaths = set()
+        if exclude_paths:
+            for path in exclude_paths:
+                if not isinstance(path, str):
+                    continue
+                excluded_path_strings.add(path)
+                try:
+                    excluded_realpaths.add(os.path.realpath(path))
+                except OSError:
+                    continue
+        excluded_call_ids = set()
         call_ids = set()
         object_count = 0
+        events = []
         for line in stdout.splitlines():
             line = line.strip()
             if not line:
@@ -791,13 +861,30 @@ def cursor_tool_calls(stdout):
                 continue
             object_count += 1
             cid = obj.get("call_id")
-            if isinstance(cid, str) and cid:
-                call_ids.add(cid)
+            if not (isinstance(cid, str) and cid):
+                continue
+            events.append((cid, obj.get("tool_call")))
         if object_count == 0:
             return 0
+        if excluded_path_strings or excluded_realpaths:
+            for cid, tool_call in events:
+                write_path = _cursor_tool_call_write_path(tool_call)
+                if write_path is not None:
+                    try:
+                        if os.path.realpath(write_path) in excluded_realpaths:
+                            excluded_call_ids.add(cid)
+                    except OSError:
+                        pass
+                    continue
+                if _cursor_shell_call_delivers_excluded_path(
+                        tool_call, excluded_path_strings, excluded_realpaths):
+                    excluded_call_ids.add(cid)
+        for cid, _tool_call in events:
+            if cid not in excluded_call_ids:
+                call_ids.add(cid)
         if call_ids:
             return len(call_ids)
-        return object_count
+        return 0
     except Exception:
         return None
 

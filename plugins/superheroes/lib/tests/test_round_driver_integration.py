@@ -792,8 +792,9 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
     ``telemetry_shape`` selects the stdout/engine pairing:
     - ``dispatch-observed`` (default): codex engine with a JSONL event stream carrying at
       least one completed action item and the panel findings as the last ``agent_message``.
-    - ``no-telemetry``: claude engine with plain JSON stdout from which no runner tool-call
-      count can be derived.
+    - ``no-telemetry``: codex engine with plain JSON stdout carrying no event stream, so no
+      runner tool-call count can be derived; the typed result file is still written so grading
+      admits the findings.
     """
     run_dir = str(tmp_path / "dispatch-evidence-run")
     journal_root = str(tmp_path / "dispatch-journal-root")
@@ -816,11 +817,10 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
     )
     findings_text = json.dumps({"findings": panel_findings})
     if telemetry_shape == "no-telemetry":
-        engine = "claude"
         stdout = findings_text
     else:
-        engine = "codex"
         stdout = _codex_event_stream(findings_text, action_items=1)
+    engine = "codex"
     ok, detail = engine_dispatch._open_review_run(
         run_dir, engine=engine, argv=[sys.executable, "-c", "pass"], cwd=repo_root,
         timeout=30, retry_timeout=30, prompt_path=order_path, view_path=view_path,

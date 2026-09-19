@@ -37,6 +37,11 @@ _TIERS = {
 _CALIB_PREFS = {"implementation": "cursor", "reviewer": "codex"}
 
 
+def test_probe_prompt_is_result_channel_neutral():
+    assert "runner's declared result channel" in CP._PROBE_PROMPT
+    assert "with nothing before or after the object" not in CP._PROBE_PROMPT
+
+
 def _repo(tmp_path, git_as_file=True):
     root = tmp_path / "repo"
     root.mkdir(exist_ok=True)
@@ -165,15 +170,21 @@ class FakeRunner:
             stdout, timed_out, rc, stderr_tail = out
         else:
             stdout, timed_out, rc, stderr_tail = out, False, 0, ""
-        if self.sync_native and isinstance(stdout, str) and "-o" in argv:
-            result_path = argv[argv.index("-o") + 1]
-            try:
-                branch = _native_verdicts_branch()
-                with open(result_path, "w", encoding="utf-8") as fh:
-                    json.dump({"result": branch}, fh, separators=(",", ":"))
-                    fh.write("\n")
-            except OSError:
-                pass
+        if self.sync_native and isinstance(stdout, str):
+            result_path = None
+            if "-o" in argv:
+                result_path = argv[argv.index("-o") + 1]
+            elif prompt_bytes is not None:
+                result_path = ERC.result_file_path_from_prompt(
+                    prompt_bytes.decode("utf-8", "ignore"))
+            if result_path:
+                try:
+                    branch = _native_verdicts_branch()
+                    with open(result_path, "w", encoding="utf-8") as fh:
+                        json.dump({"result": branch}, fh, separators=(",", ":"))
+                        fh.write("\n")
+                except OSError:
+                    pass
         return stdout, timed_out, rc, stderr_tail
 
 
@@ -249,7 +260,7 @@ def test_run_grades_three_legs_ok_on_valid_native_result(tmp_path):
     assert "plugins/superheroes" not in prompt_text
 
 
-def test_run_grades_three_legs_ok_on_valid_cursor_marker_result(tmp_path):
+def test_run_grades_three_legs_ok_on_valid_cursor_native_result(tmp_path):
     repo = _repo(tmp_path)
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
@@ -261,7 +272,7 @@ def test_run_grades_three_legs_ok_on_valid_cursor_marker_result(tmp_path):
     )
     assert code == 0
     assert payload["ok"] is True
-    assert payload["channel"] == ERC.CHANNEL_MARKER
+    assert payload["channel"] == ERC.CHANNEL_NATIVE
     assert payload["legs"]["resultProduction"]["ok"] is True
     assert payload["legs"]["completionDetection"]["ok"] is True
     assert payload["legs"]["progressTelemetry"]["ok"] is True
@@ -294,20 +305,64 @@ def test_result_production_fails_on_schema_invalid_native_result(tmp_path):
     assert payload["legs"]["progressTelemetry"]["ok"] is True
 
 
-def test_result_production_fails_on_cursor_marker_parse_error(tmp_path):
+def test_result_production_ok_but_telemetry_fails_when_only_the_result_write(tmp_path):
     repo = _repo(tmp_path)
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
-    stdout = _cursor_event_stream(
-        tool_calls=1,
-        verdicts=[{"id": "", "verdict": "CONFIRMED", "reason": "ok"}],
+    branch = _native_verdicts_branch()
+
+    def _cursor_edit_stream(result_path):
+        return "\n".join([
+            json.dumps({
+                "type": "tool_call", "call_id": "w1", "subtype": "started",
+                "tool_call": {"editToolCall": {"args": {"path": result_path}}},
+            }),
+            json.dumps({
+                "type": "tool_call", "call_id": "w1", "subtype": "completed",
+                "tool_call": {"editToolCall": {"args": {"path": result_path}}},
+            }),
+        ])
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = ERC.result_file_path_from_prompt(
+            prompt_bytes.decode("utf-8", "ignore"))
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({"result": branch}, fh, separators=(",", ":"))
+            fh.write("\n")
+        return _cursor_edit_stream(result_path), False, 0, ""
+
+    fake = FakeRunner([runner, runner], sync_native=False)
+    payload, code, _stderr = CP.probe(
+        "cursor", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
     )
-    fake = FakeRunner([(stdout, False, 0, ""), (stdout, False, 0, "")])
+    assert payload["legs"]["resultProduction"]["ok"] is True
+    assert payload["legs"]["progressTelemetry"]["ok"] is False
+    assert payload["legs"]["progressTelemetry"]["detail"] == "telemetry-absent"
+
+
+def test_result_production_fails_on_cursor_native_schema_invalid(tmp_path):
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    invalid = _native_verdicts_branch()
+    invalid["investigated"] = ["path.py", 42]
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1] if "-o" in argv else ERC.result_file_path_from_prompt(
+            prompt_bytes.decode("utf-8", "ignore"))
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({"result": invalid}, fh, separators=(",", ":"))
+            fh.write("\n")
+        return _cursor_event_stream(tool_calls=1), False, 0, ""
+
+    fake = FakeRunner([runner, runner], sync_native=False)
     payload, code, _stderr = CP.probe(
         "cursor", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
     assert payload["legs"]["resultProduction"]["ok"] is False
+    assert payload["legs"]["resultProduction"]["detail"] == "native-result-schema-invalid"
     assert payload["legs"]["completionDetection"]["ok"] is True
     assert payload["legs"]["progressTelemetry"]["ok"] is True
 
@@ -782,6 +837,21 @@ def test_expected_probe_cell_reads_the_registry_home(monkeypatch):
     assert CP._expected_probe_cell("codex") == ["codex", "m-x", "e-x"]
 
 
+def test_seat_for_engine_reads_model_registry_home(monkeypatch):
+    monkeypatch.setattr(CP.model_registry, "matrix_config", lambda role, eng: ("m-x", "e-x"))
+    monkeypatch.setattr(CP.seat_map, "matrix_config", lambda role, eng: ("m-y", "e-y"))
+    seat, err = CP._seat_for_engine("codex")
+    assert err is None
+    assert seat["model"] == "m-x"
+    assert seat["effort"] == "e-x"
+
+
+def test_validate_probe_record_refuses_naive_completed_at():
+    raw = _probe_result("codex", completedAt="2026-09-19T12:00:00")
+    err = CP._validate_probe_record(raw, "/tmp/codex.json")
+    assert err == "probe-result-malformed:/tmp/codex.json"
+
+
 def test_preflight_entry_stale_boundary_exact_age_passes(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     now = datetime(2026, 9, 19, 12, 0, 0, tzinfo=timezone.utc)
@@ -842,7 +912,7 @@ def test_preflight_entry_stale_boundary_future_completed_at_refuses(tmp_path, mo
 @pytest.mark.parametrize("completed_at,expect", [
     ("", "probe-stale:codex"),
     ("not-a-date", "probe-stale:codex"),
-    ("2026-09-19T12:00:00", "probe-stale:codex"),
+    ("2026-09-19T12:00:00", "probe-result-malformed:"),
     (12345, "probe-result-malformed:"),
 ])
 def test_preflight_entry_completed_at_parse_edges(tmp_path, completed_at, expect):
@@ -889,6 +959,26 @@ def test_preflight_entry_refuses_malformed_json(tmp_path):
     payload, code = CP.preflight_entry(repo, [str(bad), str(kpath)], calibration_rows=_calibration_rows())
     assert code == 1
     assert payload["reason"].startswith("probe-result-malformed:")
+
+
+def test_preflight_entry_refuses_probe_taken_on_a_retired_channel(tmp_path):
+    """A cursor probe record taken on the marker channel (pre-3c) is refused under the typed-file
+    channel with its own token — a day-long freshness window must not admit a stale-channel proof.
+
+    Bites on: the `channel != engine_result_channel.channel_for(eng)` check in `_validate_probe_record`."""
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo)
+    cursor = _probe_result("cursor", repoRoot=repo)
+    cursor["channel"] = "marker"
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+    )
+    assert code == 1
+    assert payload["reason"] == "probe-channel-mismatch:cursor"
 
 
 def test_preflight_entry_refuses_wrong_schema(tmp_path):

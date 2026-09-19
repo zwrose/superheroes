@@ -1,6 +1,8 @@
 """Declared result channel: one schema home per (engine, run-kind) shape (#1270 WO-A).
 
 Pure + deterministic. Stdlib-only; never imports jsonschema at runtime.
+Codex and cursor are both native-channel engines; result delivery differs by engine
+(see ``_RESULT_DELIVERY_BY_ENGINE``).
 """
 from __future__ import annotations
 
@@ -41,9 +43,15 @@ _STRICT_MODE_REFINEMENTS = {
 
 _CHANNEL_BY_ENGINE = {
     "codex": CHANNEL_NATIVE,
-    "cursor": CHANNEL_MARKER,
+    "cursor": CHANNEL_NATIVE,
     "claude": CHANNEL_MARKER,
 }
+
+RESULT_DELIVERY_ARGV = "argv"      # the shell appends -o <path> --output-schema <schema>
+RESULT_DELIVERY_PROMPT = "prompt"  # the shell names <path> in a per-attempt prompt block
+_RESULT_DELIVERY_BY_ENGINE = {"codex": RESULT_DELIVERY_ARGV, "cursor": RESULT_DELIVERY_PROMPT}
+
+RESULT_FILE_LINE_PREFIX = "Result file (write exactly this path; nothing else is graded): "
 
 _ALLOWED_SCHEMA_KEYWORDS = frozenset({
     "type",
@@ -154,6 +162,67 @@ def channel_for(engine):
             % (engine, ", ".join(model_registry.vendors()))
         )
     return _CHANNEL_BY_ENGINE[engine]
+
+
+def result_delivery(engine):
+    """How a native-channel engine receives its result path; None for a marker-channel engine."""
+    if not isinstance(engine, str) or engine not in _CHANNEL_BY_ENGINE:
+        raise UnknownEngineError(
+            "unknown engine %r; registered engines: %s"
+            % (engine, ", ".join(model_registry.vendors()))
+        )
+    channel = _CHANNEL_BY_ENGINE[engine]
+    if channel == CHANNEL_MARKER:
+        return None
+    delivery = _RESULT_DELIVERY_BY_ENGINE.get(engine)
+    if delivery is None:
+        raise ValueError("native engine %r has no result delivery entry" % (engine,))
+    return delivery
+
+
+def file_result_contract(schema_text, result_path, run_kind=RUN_KIND_REVIEW):
+    """Prompt block for RESULT_DELIVERY_PROMPT engines: the one file to write and the schema it must match."""
+    if run_kind == RUN_KIND_REVIEW:
+        edit_clause = (
+            "Writing this one file is the sole exception to \"do not edit anything\" — "
+            "create no other file and change nothing else. "
+        )
+    elif run_kind == RUN_KIND_WRITE:
+        edit_clause = (
+            "Writing this result file is in addition to the repository changes your order asks for; "
+            "never add the result file itself to the repository. "
+        )
+    else:
+        raise ValueError(
+            "unknown run_kind %r; expected %r or %r"
+            % (run_kind, RUN_KIND_REVIEW, RUN_KIND_WRITE)
+        )
+    return (
+        "Typed-file result contract (this run is graded ONLY from the file named on the next line):\n"
+        + RESULT_FILE_LINE_PREFIX
+        + result_path
+        + "\n"
+        "Write that one file, containing exactly one JSON object that validates against the declared schema below. "
+        + edit_clause
+        + "The JSON is graded from the file only: your final chat reply is never read, so do not print the object to stdout; "
+        "when the file is written, reply with the single word DONE.\n"
+        "Declared schema (JSON Schema; every listed property is required; additionalProperties is false throughout):\n"
+        "```json\n"
+        + schema_text
+        + "\n```\n"
+    )
+
+
+def result_file_path_from_prompt(text):
+    """The result path named by the LAST RESULT_FILE_LINE_PREFIX line in text, or None. Never raises."""
+    if not isinstance(text, str):
+        return None
+    path = None
+    for line in text.split("\n"):
+        if line.startswith(RESULT_FILE_LINE_PREFIX):
+            remainder = line[len(RESULT_FILE_LINE_PREFIX):].strip()
+            path = remainder if remainder else None
+    return path
 
 
 def declared_schema(engine, run_kind, expected_result_kind=None):
@@ -691,15 +760,22 @@ def native_review_payload_shape(detail, envelope=None, branch=None):
     return None
 
 
-def write_result_contract_from_schema(schema):
+def write_result_contract_from_schema(schema, delivery=None):
     """Derive native-channel write prompt contract prose from a declared schema dict."""
     if not isinstance(schema, dict):
         return ""
     required = schema.get("required") or []
     req_list = ", ".join("`%s`" % k for k in required)
+    if delivery == RESULT_DELIVERY_PROMPT:
+        graded_line = (
+            "The graded result is the JSON object you write to the result file named in the typed-file "
+            "contract at the end of this prompt; it must match the declared output schema."
+        )
+    else:
+        graded_line = "The final response must be exactly one JSON object matching the declared output schema."
     lines = [
         "Write result contract (your graded result file must match the declared output schema):",
-        "The final response must be exactly one JSON object matching the declared output schema.",
+        graded_line,
         "Root required properties: %s." % req_list,
         "`report` is a non-blank plain-language summary of what was done and the receipts "
         "observed; an empty `report` is refused.",
@@ -708,7 +784,7 @@ def write_result_contract_from_schema(schema):
     return "\n".join(lines) + "\n"
 
 
-def review_result_contract_from_schema(schema):
+def review_result_contract_from_schema(schema, delivery=None):
     """Derive native-channel review prompt contract prose from a declared schema dict."""
     if not isinstance(schema, dict):
         return ""
@@ -722,9 +798,18 @@ def review_result_contract_from_schema(schema):
     if not kinds:
         return ""
     kind_list = ", ".join("`%s`" % k for k in kinds)
+    if delivery == RESULT_DELIVERY_PROMPT:
+        result_line = (
+            "The graded result is the JSON object you write to the result file named in the typed-file "
+            "contract at the end of this prompt; its root has exactly one property `result` wrapping the graded branch."
+        )
+    else:
+        result_line = (
+            "Write a JSON object whose root has exactly one property `result` wrapping the graded branch."
+        )
     lines = [
         "Review result contract (your graded result file must match the declared schema):",
-        "Write a JSON object whose root has exactly one property `result` wrapping the graded branch.",
+        result_line,
         "The declared envelope is a root object whose single `result` property holds the branch.",
         "`resultKind` on that branch names which result kind this run carries (%s)."
         % kind_list,

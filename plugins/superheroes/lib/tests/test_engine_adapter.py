@@ -168,22 +168,26 @@ def test_build_argv_codex_invalid_engine_model_pin_refuses_unregistered():
     assert "gpt-5.6-sol" in res["detail"]
 
 
-def test_build_argv_cursor_review_plan_mode():
-    argv = EA.build_argv(_seat("cursor", "composer-2.5", None), "review", {"cwd": "/wt"})
-    assert argv[0] == "cursor-agent"
-    assert "--mode" in argv and argv[argv.index("--mode") + 1] == "plan"
-    # cursor-agent 2026.06.26: --model (not -m); -p (headless) + --trust (clear the trust gate) required.
-    assert "--model" in argv and argv[argv.index("--model") + 1] == "composer-2.5"
-    assert "-p" in argv and "--trust" in argv
-    assert "-m" not in argv                  # the old short flag is rejected by this cursor-agent
+@pytest.mark.parametrize("role_kind", ["review", "build"])
+def test_cursor_argv_shape_both_roles(role_kind):
+    argv = EA.build_argv(_seat("cursor", "composer-2.5", None), role_kind, {"cwd": "/wt"})
+    assert argv == [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--trust", "-f",
+        "--sandbox", "enabled", "--output-format", "stream-json",
+    ]
 
 
-def test_build_argv_cursor_build_force_write():
-    argv = EA.build_argv(_seat("cursor", "composer-2.5", None), "build", {"cwd": "/wt"})
-    assert argv[0] == "cursor-agent"
-    assert "-f" in argv                      # workspace-write / force
-    assert "-p" in argv and "--trust" in argv
-    assert argv[argv.index("--model") + 1] == "composer-2.5"
+def test_codex_argv_unchanged_by_delivery_table():
+    review_argv = EA.build_argv(_seat("codex", "gpt-5.6-sol", "high"), "review", {"cwd": "/wt"})
+    assert review_argv == [
+        "codex", "exec", "--sandbox", "read-only", "-m", "gpt-5.6-sol",
+        "-c", "model_reasoning_effort=high", "-C", "/wt", "-",
+    ]
+    build_argv = EA.build_argv(_seat("codex", "gpt-5.6-sol", "high"), "build", {"cwd": "/wt"})
+    assert build_argv == [
+        "codex", "exec", "--sandbox", "workspace-write", "-m", "gpt-5.6-sol",
+        "-c", "model_reasoning_effort=high", "-C", "/wt", "-",
+    ]
 
 
 def test_build_argv_cli(capsys):
@@ -623,11 +627,12 @@ def test_build_argv_result_fail_closed_edges():
     # 15 codex sol + max passes
     r = EA.build_argv_result(_seat("codex", "gpt-5.6-sol", "max"), "review", {})
     assert r["reason"] is None and "model_reasoning_effort=max" in r["argv"]
-    # 16 read vs write roles unchanged
+    # 16 review and build share the same cursor argv shape
     rev = EA.build_argv_result(_seat("cursor", "composer-2.5", None), "review", {})
     bld = EA.build_argv_result(_seat("cursor", "composer-2.5", None), "build", {})
-    assert "--mode" in rev["argv"] and rev["argv"][rev["argv"].index("--mode") + 1] == "plan"
-    assert "-f" in bld["argv"] and "--mode" not in bld["argv"]
+    assert rev["argv"] == bld["argv"]
+    assert "-f" in rev["argv"] and "--sandbox" in rev["argv"]
+    assert "--mode" not in rev["argv"]
 
 
 def test_build_argv_matches_build_argv_result_argv():
@@ -664,8 +669,8 @@ def test_build_argv_cli_empty_effort_normalizes_to_none_for_composer_pin(capsys)
 def test_build_argv_must_not_regress_measured_invariants():
     argv = EA.build_argv(_seat("cursor", "cursor-grok-4.6", "xhigh"), "review", {})
     assert argv == [
-        "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust",
-        "--mode", "plan", "--output-format", "stream-json",
+        "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust", "-f",
+        "--sandbox", "enabled", "--output-format", "stream-json",
     ]
     argv = EA.build_argv(_seat("codex", "gpt-5.6-sol", "xhigh"), "review", {})
     assert argv == [
@@ -675,7 +680,7 @@ def test_build_argv_must_not_regress_measured_invariants():
     argv = EA.build_argv(_seat("cursor", "composer-2.5", None), "build", {})
     assert argv == [
         "cursor-agent", "--model", "composer-2.5", "-p", "--trust", "-f",
-        "--output-format", "stream-json",
+        "--sandbox", "enabled", "--output-format", "stream-json",
     ]
 
 
@@ -1815,6 +1820,82 @@ def test_cursor_tool_calls_skips_garbage_no_raise():
 def test_cursor_tool_calls_empty_returns_none():
     assert EA.cursor_tool_calls("") is None
     assert EA.cursor_tool_calls(None) is None
+
+
+def _cursor_edit_tool_call_lines(path, call_id="tool_edit1"):
+    return [
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"editToolCall": {"args": {"path": path}}},
+        }),
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "completed",
+            "tool_call": {"editToolCall": {"args": {"path": path}}},
+        }),
+    ]
+
+
+def _cursor_shell_tool_call_lines(command, call_id="tool_shell1"):
+    return [
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"shellToolCall": {"args": {"command": command}}},
+        }),
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "completed",
+            "tool_call": {"shellToolCall": {"args": {"command": command}}},
+        }),
+    ]
+
+
+def _cursor_read_tool_call_lines(path, call_id="tool_read1"):
+    return [
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"readToolCall": {"args": {"path": path}}},
+        }),
+    ]
+
+
+def test_cursor_tool_calls_excludes_result_path(tmp_path):
+    result_path = str(tmp_path / "native-result-1.json")
+    write_only = "\n".join(_cursor_edit_tool_call_lines(result_path))
+    assert EA.cursor_tool_calls(write_only, exclude_paths=(result_path,)) == 0
+
+    other_path = str(tmp_path / "other.py")
+    write_plus_read = "\n".join(
+        _cursor_edit_tool_call_lines(result_path, "w1")
+        + _cursor_read_tool_call_lines(other_path, "r1"))
+    assert EA.cursor_tool_calls(write_plus_read, exclude_paths=(result_path,)) == 1
+
+    shell_named = "\n".join(
+        _cursor_shell_tool_call_lines("cat %s" % other_path, "s1"))
+    assert EA.cursor_tool_calls(shell_named, exclude_paths=(result_path,)) == 1
+
+    shell_write = "\n".join(
+        _cursor_shell_tool_call_lines("printf x > %s" % result_path, "s2"))
+    assert EA.cursor_tool_calls(shell_write, exclude_paths=(result_path,)) == 0
+
+    shell_investigate = "\n".join(
+        _cursor_shell_tool_call_lines("ls -la", "s3"))
+    assert EA.cursor_tool_calls(shell_investigate, exclude_paths=(result_path,)) == 1
+
+    shell_list_and_deliver = "\n".join(
+        _cursor_shell_tool_call_lines(
+            "ls -la %s && printf x > %s" % (result_path, result_path), "s4"))
+    assert EA.cursor_tool_calls(shell_list_and_deliver, exclude_paths=(result_path,)) == 0
+
+
+def test_cursor_tool_calls_excludes_late_discovered_result_path(tmp_path):
+    result_path = str(tmp_path / "native-result-1.json")
+    lines = [
+        json.dumps({"type": "tool_call", "call_id": "w1", "subtype": "started"}),
+        json.dumps({
+            "type": "tool_call", "call_id": "w1", "subtype": "completed",
+            "tool_call": {"editToolCall": {"args": {"path": result_path}}},
+        }),
+    ]
+    assert EA.cursor_tool_calls("\n".join(lines), exclude_paths=(result_path,)) == 0
 
 
 # ---------------------------------------------------------------------------

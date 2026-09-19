@@ -201,28 +201,46 @@ the at-dispatch-time summary only. For the full CLI argument surface, read
 
 ### Result channels
 
-Dispatch runs on one of two result channels. **Codex** uses the **native** channel; **cursor** and
-**claude** use the **marker** channel.
+Both dispatchable engines — **codex** and **cursor** — use the **native** channel. **Claude** is not
+dispatchable through the shell (`build_argv_result` refuses it); its map entry is historical.
+
+**Codex** receives the result path as `-o <run-dir>/native-result-<n>.json` with `--output-schema
+<run-dir>/native-schema.json`. **Cursor** receives it in a per-attempt prompt file
+`<run-dir>/prompt-attempt-<n>.md` — the staged prompt plus the typed-file contract (the prefix line
+`Result file (write exactly this path; nothing else is graded): <path>` and the declared schema
+quoted in a fenced block) — under the argv `cursor-agent --model <tok> -p --trust -f --sandbox
+enabled --output-format stream-json` for both roles (`--mode plan` is gone: plan mode cannot write
+the file).
 
 On the native channel, the output adapter reads a typed result file validated against the declared
-schema at `<run-dir>/native-schema.json`. Admission requires: the schema on disk must equal the
-declared one (`native-schema-unreadable` otherwise); the file must be a regular file within the size
-cap that decodes as JSON (`native-result-missing`, `native-result-oversized`,
+schema at `<run-dir>/native-schema.json`. Admission is engine-neutral: the schema on disk must equal
+the declared one (`native-schema-unreadable` otherwise); the file must be a regular file within the
+size cap that decodes as JSON (`native-result-missing`, `native-result-oversized`,
 `native-result-malformed`); it must validate against the declared schema
 (`native-result-schema-invalid`); on a write, its `report` must be non-blank
 (`native-result-report-blank`); and an entry already at the result path when an attempt would spawn
-refuses that attempt (`native-result-path-occupied`). Every refusal is a forfeit or an attempt
+refuses that attempt (`native-result-path-occupied`). Cursor adds attempt-prompt refusals:
+`attempt-prompt-occupied` (any pre-existing entry at the attempt-prompt path — file, symlink,
+dangling symlink, directory — the engine learns the run dir from the result path, so a first attempt
+could plant the second's), `attempt-prompt-unwritable`, and `prompt-tampered` (the staged source
+prompt's bytes no longer match the digest bound at run-open). Every refusal is a forfeit or an attempt
 refusal — the runner never scans stdout for a result and never repairs a malformed file.
 
 Completion is the process exit plus the typed file; a missing or invalid file forfeits. Progress and
 engagement telemetry come from codex's JSONL event stream on `--json` (`engagement.source:
-"codex-events"`, `telemetry: "tool-calls"`). Stdout is telemetry, never a result, on native.
+"codex-events"`); cursor's stream-json event stream (`engagement.source: "cursor-stream"`,
+`tool_call` events counted by distinct call id). Stdout is telemetry, never a result, on both. The
+`--output-format json` envelope is never used: it emits one object at exit and carries no
+`tool_call` events.
 
-A native-channel run never receives marker-channel recoveries: no `salvage` block, no
+Every run the shell opens never receives marker-channel recoveries: no `salvage` block, no
 `forfeit-with-engaged-artifact`, no `stdout-capped-by-attempt` forfeit, and no
-`report-missing-items-delivered` reclassification or `itemCheck` on a forfeit. A codex run whose
-opened record is marker (a persisted pre-upgrade run) never spawns again — its attempt ends with
-`marker-channel-retired` and the run forfeits.
+`report-missing-items-delivered` reclassification or `itemCheck` on a forfeit. A run whose opened
+record is marker — a persisted pre-3c journal, codex or cursor — never spawns again: the spawn-side
+check runs before argv coherence, so a stale argv is not what refuses it; its attempt ends
+`marker-channel-retired`. The execution record's `promptSha256` binds the bytes the engine received
+— the attempt prompt for cursor (`attemptPromptSha256`/`attemptPromptPath` on `engine-started`), the
+staged prompt for codex; `orderPromptSha256` is the caller's order in both.
 
 The journal writes two `engine-launching` records per attempt: the first (from the run child's
 entry) carries `argv`, the opened argv; the second carries `spawnArgv`, the argv the engine actually
@@ -230,21 +248,20 @@ received. A reader trusts `spawnArgv`.
 
 A second grader or salvage fix — a `fix` commit touching the marker grader or
 the salvage modules — on an engine still on the marker channel proposes, at the next gardening pass,
-one of two things: move that engine to a native channel, or drop the engine. Patching the marker
-channel a third time is not an option the proposal offers. On an engine on its native channel, a second
-schema or adapter fix after landing — a `fix` commit touching that engine's declared schema or its
-output or completion adapter — proposes dropping the engine or accepting the cost in the record. The
-fix commits are read by their `fix` type and touched paths; no new instrument; the proposal is the
-owner's judgment at the pass. The readout the pass reads is the project's C1 values annex, its
-result-channel-per-engine rows — the annex is out-of-repo.
+one of two things: move that engine to a native channel, or drop the engine; no dispatchable engine
+is on the marker channel since layer 3c, so today only the native-channel half can fire. Patching
+the marker channel a third time is not an option the proposal offers. On an engine on its native
+channel, a second schema or adapter fix after landing — a `fix` commit touching that engine's
+declared schema or its output or completion adapter — proposes dropping the engine or accepting the
+cost in the record. The fix commits are read by their `fix` type and touched paths; no new
+instrument; the proposal is the owner's judgment at the pass. The readout the pass reads is the
+project's C1 values annex, its result-channel-per-engine rows — the annex is out-of-repo.
 
-Cursor is on the marker channel (stream-json) until layer 3c moves it. The stdout capture cap
-(`MAX_STDOUT_CAPTURE`, 8 MiB) is an operating parameter recorded in the same annex rows, not a
-contract row. The cursor JSON envelope's `result` string carries every assistant text turn
-concatenated, so a typed result is never read from it — the trial on that envelope failed for the
-review half. The typed-file shape (the engine writes the result file at the path the shell hands
-it; the stream-json event stream is the telemetry) passed both halves of the trial (R9, amended
-2026-09-19), and that is the channel cursor moves to in layer 3c.
+Cursor moved to the native channel in layer 3c. The `json`-envelope trial failed on the review half
+(the envelope's `result` string joins every assistant text turn, so it is never the result). The
+typed-file trial passed both halves (R9 as amended 2026-09-19). The stdout capture cap
+(`MAX_STDOUT_CAPTURE`, 8 MiB) stays an operating parameter — it bounds the telemetry capture; the
+`stdout-capped-by-attempt` forfeit no longer runs for any engine.
 
 ### The conformance probe
 
@@ -254,8 +271,8 @@ Resolve `ROOT_DIR` as in every other recipe here, then run `python3 -B
 `--run-dir`, `--timeout`, and `--wave <id>` (the launcher's wave id, recorded on the result); only
 the engine name is required. Each invocation allocates a unique dispatch order id; a `--run-dir` that
 already holds a folded terminal result refuses `run-dir-reused` with nothing launched. It dispatches through the shell's own
-library entry on the engine's declared channel (native for codex, the marker channel with the marker
-grader for cursor), using that engine's `reviewer-deep` cell, and grades three legs **separately**:
+library entry on the engine's declared native channel (the typed file for both engines), using that
+engine's `reviewer-deep` cell, and grades three legs **separately**:
 `resultProduction` (the folded result is a typed, validated result), `completionDetection` (the
 attempt ended by natural exit 0 inside the wait and the run folded terminal), and
 `progressTelemetry` (runner-observed tool-call telemetry with a named source and a last-activity
@@ -284,8 +301,8 @@ Without `--wave`, binding is repository path plus age only and the entry records
 `reviewer-deep` matrix cell or the entry refuses `probe-cell-mismatch:<e>`.
 
 It refuses `probe-missing:<e>`, `probe-duplicate:<e>`, `probe-foreign-repo:<e>`,
-`probe-stale:<e>` (default max age 3600 s; future `completedAt` timestamps count as stale),
-`probe-result-malformed:<path>`, `calibration-unreadable`, `author-family-unresolved`,
+`probe-stale:<e>` (default max age 86400 s, one day — owner-ruled 2026-09-19; future `completedAt` timestamps count as stale),
+`probe-result-malformed:<path>`, `probe-channel-mismatch:<e>` (the record's channel is not the channel the engine dispatches on today — a probe taken before a channel move proves nothing about the new channel), `calibration-unreadable`, `author-family-unresolved`,
 `owner-word-missing`, and `seat-map-failed:<type>`. A failed engine with no owner word → `state: fail` (hold;
 the launcher's `walk_preflight` refuses `preflight-failed:engine-auth`, so nothing launches). With the
 owner's word → `state: pass` whose evidence names the substitute family per seat, computed by the seat

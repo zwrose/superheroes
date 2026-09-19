@@ -28,7 +28,7 @@ PREFLIGHT_ENTRY_SCHEMA = "conformance-preflight-entry/1"
 PROBE_ROLE = "reviewer-deep"
 SLICE_MAX_WAIT = 300
 BOUND_PAD_SECONDS = 60
-DEFAULT_MAX_AGE_SECONDS = 3600
+DEFAULT_MAX_AGE_SECONDS = 86400  # a probe result is good for a day (owner-ruled 2026-09-19; was one hour)
 DISPATCHABLE_ENGINES = tuple(
     e for e in engine_adapter.BUILD_ARGV_VENDORS if e in engine_result_channel._CHANNEL_BY_ENGINE)
 _LEG_NAMES = ("resultProduction", "completionDetection", "progressTelemetry")
@@ -37,11 +37,12 @@ _PROBE_PROMPT = (
     "Claim: The working directory you were given contains at least one regular "
     "file at its top level (list it to check).\n\n"
     "You must open the directory listing (use a tool call).\n\n"
-    "Respond with a single JSON object of the form "
+    "Return exactly one JSON object of the form "
     '`{"verdicts": [{"id": "conformance-probe-1", "verdict": "CONFIRMED" | "REFUTED", '
     '"reason": "<one sentence>", "severity": null, "evidence": "<the file name, or why none>"}], '
     '"investigated": ["<the path you listed>"]}` '
-    "with nothing before or after the object and no code fence. "
+    "on the runner's declared result channel (the contract appended at the end of this prompt "
+    "says whether that is a result file or your final response); no code fence. "
     "The reason field is required and must be a non-empty sentence; "
     "investigated lists the directory you listed. "
     'Use verdict `"CONFIRMED"` with evidence naming one such file when true, '
@@ -109,7 +110,7 @@ def _write_probe_prompt(prompt_path, repo_root=None):
     return prompt_path
 
 def _seat_for_engine(engine):
-    cell = seat_map.matrix_config(PROBE_ROLE, engine)
+    cell = model_registry.matrix_config(PROBE_ROLE, engine)
     if cell is None or cell[0] is None:
         return None, "probe-cell-unresolvable"
     return {"vendor": engine, "model": cell[0], "effort": cell[1], "role": PROBE_ROLE}, None
@@ -339,6 +340,11 @@ def _validate_probe_record(raw, path_hint=""):
         return "probe-result-malformed:%s" % path_hint
     if not isinstance(raw.get("channel"), str):
         return "probe-result-malformed:%s" % path_hint
+    if raw.get("channel") != engine_result_channel.channel_for(eng):
+        # A record taken on a channel the engine no longer dispatches on proves nothing about the
+        # channel it does dispatch on (a pre-3c cursor record on the marker channel, inside the
+        # day-long window, would otherwise pass the preflight for the typed-file channel).
+        return "probe-channel-mismatch:%s" % eng
     seat = raw.get("seat")
     if not isinstance(seat, dict) or seat.get("vendor") != eng:
         return "probe-result-malformed:%s" % path_hint
@@ -350,6 +356,17 @@ def _validate_probe_record(raw, path_hint=""):
     for fld in ("startedAt", "completedAt"):
         if not isinstance(raw.get(fld), str):
             return "probe-result-malformed:%s" % path_hint
+    completed_parsed = _parse_completed_at(raw.get("completedAt"))
+    if completed_parsed is None and isinstance(raw.get("completedAt"), str) and raw.get("completedAt").strip():
+        text = raw.get("completedAt").strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            naive_check = datetime.fromisoformat(text)
+            if naive_check.tzinfo is None:
+                return "probe-result-malformed:%s" % path_hint
+        except ValueError:
+            pass
     if not isinstance(raw.get("wallSeconds"), (int, float)):
         return "probe-result-malformed:%s" % path_hint
     if not isinstance(raw.get("runDir"), str):
