@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-08-24",
+  "recordedAt": "2026-09-18",
   "observations": [
     {
       "skill": "superheroes/architect-discovery",
@@ -2391,6 +2391,258 @@
     {
       "skill": "superheroes/detective",
       "phrase": "I'm on the OAuth migration build and pytest fails on test_callback \u2014 figure out which mock is wrong and get the PR ready",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "I'm handing the advisor seat over to a new session \u2014 prepare this one",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "I'm handing the advisor seat over to a new session \u2014 prepare this one",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "I'm handing the advisor seat over to a new session \u2014 prepare this one",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "this account is going dark, get the advisor seat ready to hand over",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "this account is going dark, get the advisor seat ready to hand over",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "this account is going dark, get the advisor seat ready to hand over",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "park the builders and hand this advisor seat off deliberately",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "park the builders and hand this advisor seat off deliberately",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "park the builders and hand this advisor seat off deliberately",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "pick the advisor seat back up in this new session",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "pick the advisor seat back up in this new session",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "pick the advisor seat back up in this new session",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-handoff",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "pick the advisor seat back up in this new session",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "pick the advisor seat back up in this new session",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "pick the advisor seat back up in this new session",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "the advisor session died \u2014 resume the seat from durable state",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "the advisor session died \u2014 resume the seat from durable state",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "the advisor session died \u2014 resume the seat from durable state",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "I restarted the app, re-arm the watchers and pick up the lanes",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "I restarted the app, re-arm the watchers and pick up the lanes",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "I restarted the app, re-arm the watchers and pick up the lanes",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "I'm handing the advisor seat over to a new session \u2014 prepare this one",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "I'm handing the advisor seat over to a new session \u2014 prepare this one",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "I'm handing the advisor seat over to a new session \u2014 prepare this one",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "vet this PR from its artifacts against its issue and build brief",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "vet this PR from its artifacts against its issue and build brief",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner-resume",
+      "phrase": "vet this PR from its artifacts against its issue and build brief",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
