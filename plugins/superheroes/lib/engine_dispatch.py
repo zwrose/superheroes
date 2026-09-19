@@ -84,7 +84,6 @@ WORKTREE_LEASE_PREFIX = "superheroes-worktree-lease-"
 PROMPT_NAME = "prompt.txt"
 PROGRESS_NAME = "progress.jsonl"
 NATIVE_SCHEMA_NAME = "native-schema.json"
-_LAST_MESSAGE_BASENAME = "attempt-%d.last-message"
 RUN_KIND_REVIEW = "review"
 # Consumers import engine_adapter.REVIEW_RESULT_KINDS — never restate the tuple (CONVENTIONS §11).
 REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
@@ -337,27 +336,6 @@ def _normalize_allowlist_verdict(verdict, *, role=None, vendor=None):
     return verdict
 
 
-def _dispatch_allowlist_validate(role, vendor, model, effort):
-    seat_raw = {
-        "vendor": vendor,
-        "model": model,
-        "effort": effort,
-        "role": role,
-    }
-    resolved = seat_bundle.resolve_entry(seat_raw, verb="guard-check")
-    if resolved.get("ok"):
-        return resolved["allowlistVerdict"]
-    verdict = resolved.get("allowlistVerdict")
-    if isinstance(verdict, dict):
-        return _normalize_allowlist_verdict(verdict, role=role, vendor=vendor)
-    return {
-        "ok": False,
-        "reason": resolved.get("detail") or resolved.get("entryReason"),
-        "allowlist": [],
-        "allowlist_pairs": [],
-    }
-
-
 def _allowlist_guard_payload(verdict):
     return {
         "reason": verdict["reason"],
@@ -441,6 +419,13 @@ def _native_channel_suffix(opened):
 
 def _spawn_native_result_argv(run_dir_real, attempt, opened, spawn_argv):
     """After G2 coherence: refuse an occupied result path or append -o. Returns (ok, argv, path, refusal)."""
+    try:
+        if engine_result_channel.channel_for(opened.get("engine")) == engine_result_channel.CHANNEL_NATIVE:
+            if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
+                # axis: marker-channel codex runs refuse native spawn — channel_for is native but opened channel is not.
+                return False, spawn_argv, None, "marker-channel-retired"
+    except Exception:
+        return False, spawn_argv, None, "spawn-failed: unknown-engine"
     if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
         return True, spawn_argv, None, None
     result_path = _native_result_path(run_dir_real, attempt)
@@ -2114,10 +2099,6 @@ def _scan_review_engaged_candidates(run_dir_real, state):
         stdout = _read_stdout_for_artifact_scan(stdout_path)
         if stdout is None:
             continue
-        if engine == "codex":
-            stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, att)
-            if not stdout:
-                continue
         shape = engine_adapter.review_artifact_shape(stdout, fed_prompt)
         if not shape.get("engaged"):
             continue
@@ -2236,6 +2217,9 @@ def _write_report_missing_items_delivered_detail(run_dir_real, state, attempt):
 
 def _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempt):
     """Apply report-missing-items-delivered classifier and salvage without upgrading outcome."""
+    # axis: marker-channel recoveries never touch a native terminal.
+    if isinstance(state, dict) and _opened_channel(state.get("opened") or {}) == engine_result_channel.CHANNEL_NATIVE:
+        return terminal
     if run_dir_real is not None and state is not None:
         missing = _write_report_missing_items_delivered_detail(
             run_dir_real, state, attempt,
@@ -2315,7 +2299,7 @@ def _salvage_block_from_candidate(best, also):
 
 
 def _maybe_upgrade_review_terminal_forfeit(run_dir_real, state, terminal, engine):
-    """Mint forfeit-with-engaged-artifact when any attempt stdout is engaged (#747 WO-4b).
+    """Marker-channel runs only — a native run's terminal is never upgraded; the typed result file is the only result.
 
     axis: which outcome is minted — engaged artifact upgrades forfeited/vacuous terminal only.
   Write runs never mint this outcome — build salvage is work-on-disk doctrine."""
@@ -3054,12 +3038,8 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
     return True, ""
 
 
-def _attempt_last_message_path(run_dir_real, attempt):
-    return os.path.join(run_dir_real, _LAST_MESSAGE_BASENAME % attempt)
-
-
 def _argv_for_attempt(argv, run_dir_real, attempt, engine):
-    """Per-attempt argv: codex last-message path tracks the attempt number. Never raises."""
+    """Per-attempt argv: codex gains ``--json`` beside its native result flags. Never raises."""
     argv = list(argv)
     if engine != "codex":
         return argv
@@ -3068,17 +3048,7 @@ def _argv_for_attempt(argv, run_dir_real, attempt, engine):
             o_idx = argv.index("-o")
             return argv[:o_idx] + ["--json"] + argv[o_idx:]
         return argv
-    path = _attempt_last_message_path(run_dir_real, attempt)
-    if "--output-last-message" in argv:
-        idx = argv.index("--output-last-message")
-        if idx + 1 < len(argv):
-            argv[idx + 1] = path
-        return argv
-    # Spawn-time only — downstream of the G2 argv coherence gate.
-    flags = engine_adapter.codex_json_argv_flags(path)
-    if argv and argv[-1] == "-":
-        return argv[:-1] + flags + ["-"]
-    return argv + flags
+    return argv
 
 
 def _derive_and_record_spawn_argv(run_dir_real, attempt, argv, engine):
@@ -3091,21 +3061,6 @@ def _derive_and_record_spawn_argv(run_dir_real, attempt, argv, engine):
         "childPid": os.getpid(), "at": time.time(),
     })
     return spawn_argv, ok
-
-
-def _review_stdout_for_parse(engine, stdout, run_dir_real, attempt):
-    """Stdout text passed to review parse/normalize. Codex reads payload off the event stream."""
-    if engine != "codex":
-        return stdout
-    payload = engine_adapter.codex_review_payload_text(
-        stdout, _attempt_last_message_path(run_dir_real, attempt))
-    if payload is not None:
-        return payload
-    if isinstance(stdout, str):
-        if engine_adapter.is_codex_event_stream(stdout):
-            return ""
-        return stdout
-    return ""
 
 
 def _engagement_telemetry(tool_calls):
@@ -3208,7 +3163,6 @@ def _review_attempt_engagement(
     role_kind=None,
     fed_prompt="",
     echo_nonce=None,
-    last_message_path=None,
 ):
     """Shared engine signals and engagement.read grading decision. Never raises.
 
@@ -3257,9 +3211,6 @@ def _review_attempt_engagement(
     if role_kind is not None:
         try:
             parse_stdout = stdout
-            if engine == "codex" and last_message_path is not None:
-                payload = engine_adapter.codex_review_payload_text(stdout, last_message_path)
-                parse_stdout = payload if payload is not None else ""
             norm_strip = engine_adapter.normalize_review_stdout(parse_stdout, fed_prompt)
             if not norm_strip.get("echoOnly"):
                 envelope_error = norm_strip["rawEnvelopeError"]
@@ -3500,7 +3451,7 @@ def _verify_native_schema(opened, run_kind, expected_result_kind=None):
             on_disk = json.load(fh)
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return None, "native-schema-unreadable"
-    # axis: the write schema on disk must equal the declared one, or the attempt refuses native-schema-unreadable.
+    # axis: the schema on disk must equal the declared one for this run kind, or the attempt refuses native-schema-unreadable.
     if on_disk != declared:
         return None, "native-schema-unreadable"
     return declared, None
@@ -3736,7 +3687,10 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     if ended.get("guardRefusal"):
         return _grade_spawn_guard_refusal(ended)
     if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
-        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
+        result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
+        if ended.get("refusal"):
+            result["detail"] = ended["refusal"]
+        return result
 
     try:
         with open(stderr_path, encoding="utf-8", errors="ignore") as fh:
@@ -3758,8 +3712,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     if not stdout and not os.path.exists(stdout_path):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
-    parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt)
-    norm_strip = engine_adapter.normalize_review_stdout(parse_stdout, fed_prompt)
+    norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
     prompt_echo_only = norm_strip["echoOnly"]
     diagnose_stdout = norm_strip["text"]
     envelope_error = norm_strip["rawEnvelopeError"]
@@ -3778,7 +3731,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         }
 
     res = engine_adapter.parse_result(
-        engine, role_kind, parse_stdout, raw_envelope_error=envelope_error,
+        engine, role_kind, stdout, raw_envelope_error=envelope_error,
         echo_nonce=echo_nonce)
     if not _parse_review_has_payload(res):
         stripped_text = norm_strip["text"]
@@ -3838,8 +3791,7 @@ def _grade_write_attempt(run_dir_real, state, attempt):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
     fed_prompt = opened.get("fedPrompt", "")
-    parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt)
-    res = engine_adapter.grade_write_report(engine, role_kind, parse_stdout, fed_prompt)
+    res = engine_adapter.grade_write_report(engine, role_kind, stdout, fed_prompt)
     if res.get("ok") is True:
         return {
             "ok": True,
@@ -4271,7 +4223,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     ))
 
                 reason = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
-                if run_kind == RUN_KIND_WRITE:
+                if run_kind == RUN_KIND_WRITE and _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
                     truncated_bytes = _attempt_stdout_truncated(
                         run_dir_real, state, latest,
                     )
@@ -4325,9 +4277,10 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         payload_shape=grade.get("payloadShape"),
                         detail=grade.get("detail"),
                     )
-                    terminal = _maybe_upgrade_review_terminal_forfeit(
-                        run_dir_real, state, terminal, engine,
-                    )
+                    if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
+                        terminal = _maybe_upgrade_review_terminal_forfeit(
+                            run_dir_real, state, terminal, engine,
+                        )
                     view = opened.get("viewMeta")
                     if view:
                         terminal = _attach_sanitized_view(terminal, view)
@@ -5066,6 +5019,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     except OSError as exc:
         return False, "run-dir-setup-failed:%s" % type(exc).__name__
 
+    echo_nonce = secrets.token_hex(16)
+
     argv, native_err, native_schema_path = _open_native_channel_argv(
         run_dir_real, engine, list(argv), RUN_KIND_WRITE,
     )
@@ -5100,6 +5055,9 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     }
     if native_schema_path is not None:
         record["nativeSchemaPath"] = native_schema_path
+    effective_nonce = review_findings_schema.effective_nonce(echo_nonce)
+    if effective_nonce is not None:
+        record["echoNonce"] = effective_nonce
     if resolved_inputs is not None:
         record["resolvedInputs"] = resolved_inputs
     if not _journal_append(run_dir_real, record):
@@ -5613,13 +5571,12 @@ def _parse_review_attempt(run_dir_real, state, attempt):
         stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
         if not stdout and not os.path.exists(stdout_path):
             return None
-        parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt)
-        norm_strip = engine_adapter.normalize_review_stdout(parse_stdout, fed_prompt)
+        norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
         if norm_strip["echoOnly"]:
             return None
         envelope_error = norm_strip["rawEnvelopeError"]
         res = engine_adapter.parse_result(
-            engine, role_kind, parse_stdout, raw_envelope_error=envelope_error,
+            engine, role_kind, stdout, raw_envelope_error=envelope_error,
             echo_nonce=echo_nonce)
         if not _parse_review_has_payload(res):
             stripped_text = norm_strip["text"]
@@ -5645,8 +5602,7 @@ def _parse_write_attempt(run_dir_real, state, attempt):
         if not stdout and not os.path.exists(stdout_path):
             return None
         fed_prompt = opened.get("fedPrompt", "")
-        parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt)
-        return engine_adapter.grade_write_report(engine, role_kind, parse_stdout, fed_prompt)
+        return engine_adapter.grade_write_report(engine, role_kind, stdout, fed_prompt)
     except Exception:
         return None
 
@@ -5732,7 +5688,6 @@ def _observation_from_attempt(run_dir_real, state, attempt):
         echo_nonce=review_findings_schema.effective_nonce(opened.get("echoNonce")),
         cwd=opened.get("cwd", ""),
         view_meta=opened.get("viewMeta"),
-        last_message_path=_attempt_last_message_path(run_dir_real, attempt),
     )
 
 

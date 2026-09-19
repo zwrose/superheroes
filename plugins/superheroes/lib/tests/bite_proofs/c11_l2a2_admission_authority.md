@@ -31,7 +31,7 @@ before each green run.
 |---|---|---|---|
 | BP-2a2-1 | schema validation is the **only** admission authority — nothing downstream of a schema failure produces `ok` | the validator's verdict at the one call site (it still runs; its answer is discarded) | `test_admit_native_review_schema_invalid_mistyped_investigated_forfeits`, `test_admit_native_review_schema_invalid_mistyped_finding_member_forfeits` |
 | BP-2a2-2 | the schema **on disk** must be the schema the shell declares — a substituted schema refuses | the on-disk/declared comparison | `test_admit_native_review_schema_substitution_refuses` |
-| BP-2a2-3 | a semantic refusal is **final** — marker stdout cannot rescue it on the native path | the finality (a marker-stdout rescue is reinstated on the forfeit path) | `test_admit_native_review_stdout_cannot_rescue_semantic_refusal` |
+| BP-2a2-3 | a semantic refusal is **final** — marker stdout cannot rescue it on the native path | the finality (a marker-stdout rescue is reinstated on the forfeit path) | `test_grade_native_review_attempt_ignores_stdout_on_semantic_refusal` |
 | BP-2a2-4 | each attempt is graded against **its own** result file | the attempt scoping of the result path | `test_grade_attempt2_does_not_read_attempt1_stale_result` (+ `test_native_result_paths_differ_per_attempt_and_attempt1_preserved` on green) |
 
 Common command prefix:
@@ -160,7 +160,7 @@ marker-stdout rescue reinstated on the forfeit path:
         return admitted
 ```
 
-**command:** `…::test_admit_native_review_stdout_cannot_rescue_semantic_refusal -q`
+**command:** `…::test_grade_native_review_attempt_ignores_stdout_on_semantic_refusal -q`
 
 **raw red** (exit 1 — the hollow native result is refused, and the run is then graded `ok` off the
 transcript, which is the salvage tier this child retires):

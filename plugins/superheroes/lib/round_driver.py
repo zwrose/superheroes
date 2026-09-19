@@ -69,6 +69,7 @@ import model_tier_overrides  # noqa: E402
 import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
 import panel_tally  # noqa: E402
+import payload_contracts  # noqa: E402
 import review_base_guard  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
@@ -2937,6 +2938,9 @@ def verifier_results_fault(artifact):
         return ("verifiers artifact `verdicts` is %s, not a list; expected {\"verdicts\": [...]}; "
                 "resubmit the same phase/attempt/state-hash with a corrected artifact"
                 % type(verdicts).__name__)
+    fault = payload_contracts.payload_fault(payload_contracts.P_VERIFIERS, artifact, "hand-submit")
+    if fault is not None:
+        return fault
     return None
 
 

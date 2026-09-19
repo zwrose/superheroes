@@ -1018,6 +1018,22 @@ def test_verifier_results_fault_pure():
     assert RD.verifier_results_fault({"verdicts": {}}) is not None
 
 
+def test_hand_submit_verifier_reasonless_verdict_refused():
+    fault = RD.verifier_results_fault({"verdicts": [{"id": "f-1", "verdict": "CONFIRMED"}]})
+    assert fault is not None
+    assert "reason" in fault
+    assert RD.verifier_results_fault(
+        {"verdicts": [{"id": "f-1", "verdict": "CONFIRMED", "reason": "checked"}]}
+    ) is None
+    assert RD.verifier_results_fault(None) is not None
+    assert RD.verifier_results_fault({}) is not None
+    assert "missing `verdicts`" in RD.verifier_results_fault({}) or \
+        "no `verdicts` key" in RD.verifier_results_fault({})
+    fault_findings = RD.verifier_results_fault({"findings": []})
+    assert fault_findings is not None and "`findings`" in fault_findings
+    assert RD.verifier_results_fault({"verdicts": {}}) is not None
+
+
 def test_submit_verifiers_findings_key_refused(tmp_path):
     d, n = _at(tmp_path, RD.P_VERIFIERS)
     good = {"verdicts": []}

@@ -169,7 +169,13 @@ class FakeRunner:
         if idx >= len(self.responses):
             raise AssertionError("fake called too many times")
         resp = self.responses[idx]
-        if isinstance(resp, tuple) and len(resp) == 4:
+        if callable(resp):
+            out = resp(argv, prompt_bytes, timeout, progress_cb, cwd)
+            if isinstance(out, tuple) and len(out) == 4:
+                stdout, timed_out, rc, stderr_tail = out
+            else:
+                stdout, timed_out, rc, stderr_tail = out, False, 0, ""
+        elif isinstance(resp, tuple) and len(resp) == 4:
             stdout, timed_out, rc, stderr_tail = resp
         else:
             stdout, timed_out, rc, stderr_tail = resp, False, 0, ""
@@ -3298,3 +3304,76 @@ def test_cursor_write_prompt_and_grading_unchanged(tmp_path):
     assert "-o" not in spawn_argv
     assert res["ok"] is True
     assert res["signal"] == "ok"
+
+
+def _invalid_native_write_runner():
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({
+                "ok": True,
+                "signal": "ok",
+                "evidence": {"testFailed": False, "testPassed": True},
+            }, fh, separators=(",", ":"))
+            fh.write("\n")
+        return "", False, 0, ""
+    return runner
+
+
+def test_native_write_exhausted_forfeit_carries_no_salvage(tmp_path):
+    """axis: native write terminal forfeit never attaches marker-channel salvage."""
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([
+        _invalid_native_write_runner(),
+        _invalid_native_write_runner(),
+    ])
+    res = _dispatch_write(tmp_path, fake, cwd=wt)
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-schema-invalid"
+    assert "salvage" not in res
+    assert "itemCheck" not in res
+    assert "salvaged" not in res.get("disclosure", "").lower()
+
+
+def test_native_write_over_cap_stdout_never_forfeits_stdout_capped(tmp_path):
+    """axis: native write ignores stdout-cap forfeit — grades typed file only."""
+    wt, _main = _linked_worktree(tmp_path)
+    over = ED.MAX_STDOUT_CAPTURE + 512
+
+    def over_cap_invalid(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({
+                "ok": True,
+                "signal": "ok",
+                "evidence": {"testFailed": False, "testPassed": True},
+            }, fh, separators=(",", ":"))
+            fh.write("\n")
+        return "x" * over, False, 0, ""
+
+    fake = FakeRunner([over_cap_invalid, over_cap_invalid])
+    res = _dispatch_write(tmp_path, fake, cwd=wt)
+    assert res["forfeited"] is True
+    assert "stdout-capped-by-attempt" not in str(res.get("detail", ""))
+    assert res.get("detail") == "native-result-schema-invalid"
+
+
+def test_write_run_execution_record_carries_runner_nonce(tmp_path):
+    """axis: fresh native write runs record echoNonce and run_execution_record exposes runnerNonce."""
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-nonce")
+    stdout = _build_ok_stdout()
+
+    def ok_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return _finish_codex_write_runner(argv, stdout)
+
+    fake = FakeRunner([ok_runner])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir)
+    assert res["ok"] is True
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    echo_nonce = opened.get("echoNonce")
+    assert isinstance(echo_nonce, str) and len(echo_nonce) == 32
+    record, err = ED.run_execution_record(run_dir)
+    assert err is None
+    assert record["runnerNonce"] == echo_nonce
