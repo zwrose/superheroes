@@ -228,7 +228,7 @@ The journal writes two `engine-launching` records per attempt: the first (from t
 entry) carries `argv`, the opened argv; the second carries `spawnArgv`, the argv the engine actually
 received. A reader trusts `spawnArgv`.
 
-After this layer lands, a second grader or salvage fix — a `fix` commit touching the marker grader or
+A second grader or salvage fix — a `fix` commit touching the marker grader or
 the salvage modules — on an engine still on the marker channel proposes, at the next gardening pass,
 one of two things: move that engine to a native channel, or drop the engine. Patching the marker
 channel a third time is not an option the proposal offers. On an engine on its native channel, a second
@@ -241,8 +241,7 @@ result-channel-per-engine rows — the annex is out-of-repo.
 Cursor stays on the marker channel (stream-json). The stdout capture cap (`MAX_STDOUT_CAPTURE`, 8
 MiB) is an operating parameter recorded in the same annex rows, not a contract row. The cursor JSON
 envelope's `result` string carries every assistant text turn concatenated, so a typed result cannot
-be read from it without the marker parser — which is why the native move for cursor did not pass its
-trial.
+be read from it without the marker parser; cursor therefore has no native channel.
 
 ### The conformance probe
 
@@ -280,7 +279,7 @@ the launcher's `walk_preflight` refuses `preflight-failed:engine-auth`, so nothi
 owner's word → `state: pass` whose evidence names the substitute family per seat, computed by the seat
 map from the **probed cells only** (`live_cells_source: "probed"`) with the maker family derived from
 the calibrated implementer — or `state: fail` with **PARK** when the seat map reports a
-`same-family` degradation. A `preflight-failed:<id>` refusal now carries the walked `checks` including
+`same-family` degradation. A `preflight-failed:<id>` refusal carries the walked `checks` including
 the failing entry, so the refusal record in the launch ledger keeps the probe's evidence.
 
 A drift or auth failure that arrives **mid-wave** forfeits that dispatch with no salvage; nothing
