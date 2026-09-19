@@ -154,7 +154,7 @@ def _wrap_result(branch):
 @pytest.mark.parametrize("vendor,expected", [
     ("codex", ERC.CHANNEL_NATIVE),
     ("cursor", ERC.CHANNEL_NATIVE),
-    ("claude", ERC.CHANNEL_MARKER),
+    ("claude", ERC.CHANNEL_NATIVE),
 ])
 def test_channel_for_registered_engines(vendor, expected):
     assert ERC.channel_for(vendor) == expected
@@ -401,9 +401,9 @@ def test_differential_agreement_with_jsonschema(run_kind):
         )
 
 
-def test_marker_channel_declared_schema_is_none():
-    assert ERC.declared_schema("claude", ERC.RUN_KIND_REVIEW) is None
-    assert ERC.declared_schema("claude", ERC.RUN_KIND_WRITE) is None
+def test_claude_native_channel_declared_schema_matches_codex():
+    for run_kind in (ERC.RUN_KIND_REVIEW, ERC.RUN_KIND_WRITE):
+        assert ERC.declared_schema("claude", run_kind) == ERC.declared_schema("codex", run_kind)
     assert ERC.declared_schema("cursor", ERC.RUN_KIND_REVIEW) is not None
     assert ERC.declared_schema("cursor", ERC.RUN_KIND_WRITE) is not None
 
@@ -425,7 +425,7 @@ def test_file_result_contract_write_permits_worktree_edits():
 def test_result_delivery_registered_engines():
     assert ERC.result_delivery("codex") == ERC.RESULT_DELIVERY_ARGV
     assert ERC.result_delivery("cursor") == ERC.RESULT_DELIVERY_PROMPT
-    assert ERC.result_delivery("claude") is None
+    assert ERC.result_delivery("claude") == ERC.RESULT_DELIVERY_STDOUT
 
 
 def test_result_delivery_unknown_engine_refuses():
@@ -437,6 +437,35 @@ def test_result_delivery_native_missing_from_table(monkeypatch):
     monkeypatch.setitem(ERC._CHANNEL_BY_ENGINE, "testnative", ERC.CHANNEL_NATIVE)
     with pytest.raises(ValueError, match="no result delivery entry"):
         ERC.result_delivery("testnative")
+
+
+def test_review_result_contract_stdout_delivery_exact_sentence():
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW)
+    contract = ERC.review_result_contract_from_schema(schema, delivery=ERC.RESULT_DELIVERY_STDOUT)
+    expected = (
+        "The graded result is your structured output — the typed final response the --json-schema flag governs; "
+        "its root has exactly one property `result` wrapping the graded branch. "
+        "Print nothing else as a result; stdout is telemetry."
+    )
+    assert expected in contract
+    assert "result file named in the typed-file contract" not in contract
+
+
+def test_every_dispatchable_vendor_has_channel_delivery_pin_and_argv():
+    # axis: BUILD_ARGV_VENDORS chokepoint — every member has channel, delivery, and argv (#1273)
+    matrix_cells = {
+        "codex": ("gpt-5.6-terra", "high"),
+        "cursor": ("cursor-grok-4.6", "xhigh"),
+        "claude": ("sonnet-5", "high"),
+    }
+    for vendor in EA.BUILD_ARGV_VENDORS:
+        assert ERC.channel_for(vendor) == ERC.CHANNEL_NATIVE
+        assert ERC.result_delivery(vendor) is not None
+        model_id, effort = matrix_cells[vendor]
+        seat = {"vendor": vendor, "model": model_id, "effort": effort}
+        for role_kind in ("review", "build"):
+            res = EA.build_argv_result(seat, role_kind, {})
+            assert res["reason"] is None, (vendor, role_kind, res)
 
 
 def _all_declared_native_schemas():

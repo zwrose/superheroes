@@ -588,12 +588,13 @@ def test_build_argv_result_untokenizable(monkeypatch):
     assert got["reason"] == "untokenizable"
 
 
-def test_unknown_engine_refusal_lists_only_build_argv_vendors():
+def test_unknown_engine_refusal_lists_all_build_argv_vendors():
+    """Claude is now dispatchable — unknown-engine detail must include it (#1273 WO-A)."""
     res = EA.build_argv_result(_seat("openai", None, "high"), "review", {})
     assert res["reason"] == "unknown-engine"
     assert "codex" in res["detail"]
     assert "cursor" in res["detail"]
-    assert "claude" not in res["detail"]
+    assert "claude" in res["detail"]
 
 
 def test_build_argv_result_fail_closed_edges():
@@ -635,6 +636,115 @@ def test_build_argv_result_fail_closed_edges():
     assert "--mode" not in rev["argv"]
 
 
+def test_build_argv_claude_review_exact_shape():
+    argv = EA.build_argv(_seat("claude", "sonnet-5", "high"), "review", {})
+    assert argv == [
+        "claude", "-p", "--model", "sonnet", "--effort", "high",
+        "--output-format", "stream-json", "--verbose", "--restricted",
+    ]
+
+
+def test_build_argv_claude_write_exact_shape():
+    argv = EA.build_argv(_seat("claude", "sonnet-5", "high"), "build", {})
+    assert argv == [
+        "claude", "-p", "--model", "sonnet", "--effort", "high",
+        "--output-format", "stream-json", "--verbose",
+        "--permission-mode", "acceptEdits", "--allowedTools", "Bash",
+    ]
+
+
+def test_registered_engine_models_detail_claude_lists_every_id():
+    detail = EA._registered_engine_models_detail("claude")
+    for model_id in EA.model_registry.claude_models():
+        assert model_id in detail
+
+
+def test_build_argv_claude_fail_closed_edges():
+    # 1 seat vendor claude with model None/"" → unregistered-engine-model
+    for model in (None, ""):
+        res = EA.build_argv_result(_seat("claude", model, "high"), "review", {})
+        assert res["reason"] == "unregistered-engine-model"
+        assert "haiku-4.5" in res["detail"]
+    # 2 fable-5 or token fable → fable-unrunnable
+    res = EA.build_argv_result(_seat("claude", "fable-5", "high"), "review", {})
+    assert res["reason"] == "fable-unrunnable"
+    res = EA.build_argv_result(_seat("claude", "fable", "high"), "review", {})
+    assert res["reason"] == "fable-unrunnable"
+    # 3 codex id under claude vendor → unregistered-engine-model
+    res = EA.build_argv_result(_seat("claude", "gpt-5.6-sol", "high"), "review", {})
+    assert res["reason"] == "unregistered-engine-model"
+    # 4 effort None or off-enum → invalid-model-effort with claude enum
+    res = EA.build_argv_result(_seat("claude", "sonnet-5", None), "review", {})
+    assert res["reason"] == "invalid-model-effort"
+    assert "low" in res["detail"] and "xhigh" in res["detail"]
+    res = EA.build_argv_result(_seat("claude", "sonnet-5", "max"), "review", {})
+    assert res["reason"] == "invalid-model-effort"
+    # 5 unknown claude tier in opts → unknown-claude-tier (unchanged)
+    res = EA.build_argv_result(_seat("claude", "sonnet-5", "high"), "review", {"model": "bogus"})
+    assert res["reason"] == "unknown-claude-tier"
+
+
+def _claude_event_stream(tool_names=(), result=None, extra_lines=()):
+    """Build a claude stream-json stdout fixture from measured event shapes."""
+    lines = []
+    for index, name in enumerate(tool_names):
+        lines.append(json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-%d" % index,
+                    "name": name,
+                    "input": {},
+                }],
+            },
+        }))
+    if result is not None:
+        lines.append(json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "structured_output": result,
+            "session_id": "sess-1",
+        }))
+    for line in extra_lines:
+        lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
+def test_claude_tool_calls_fail_closed_edges():
+    # 6 empty stdout → None
+    assert EA.claude_tool_calls("") is None
+    assert EA.claude_tool_calls(None) is None
+    # only StructuredOutput → 0
+    stream = _claude_event_stream(tool_names=["StructuredOutput"])
+    assert EA.claude_tool_calls(stream) == 0
+    # 2 Read + 1 StructuredOutput → 2
+    stream = _claude_event_stream(tool_names=["Read", "Read", "StructuredOutput"])
+    assert EA.claude_tool_calls(stream) == 2
+    # duplicate id counted once
+    dup = json.dumps({
+        "type": "assistant",
+        "message": {"content": [
+            {"type": "tool_use", "id": "same-id", "name": "Read", "input": {}},
+            {"type": "tool_use", "id": "same-id", "name": "Read", "input": {}},
+        ]},
+    })
+    stream = dup + "\n" + json.dumps({"type": "system", "content": "init"}) + "\n"
+    assert EA.claude_tool_calls(stream) == 1
+
+
+def test_claude_result_envelope_fail_closed_edges():
+    first = json.dumps({"type": "result", "subtype": "success", "structured_output": {"a": 1}})
+    second = json.dumps({"type": "result", "subtype": "success", "structured_output": {"b": 2}})
+    stream = first + "\n" + second + "\n"
+    env = EA.claude_result_envelope(stream)
+    assert env["structured_output"] == {"b": 2}
+    assert EA.claude_result_envelope("") is None
+    partial = first + "\n{\"type\":\"result\",\"subtype\":\n"
+    assert EA.claude_result_envelope(partial) == json.loads(first)
+
+
 def test_build_argv_matches_build_argv_result_argv():
     samples = [
         (_seat("codex", "gpt-5.6-sol", "high"), "review", {"cwd": "/wt"}),
@@ -642,6 +752,8 @@ def test_build_argv_matches_build_argv_result_argv():
         (_seat("cursor", "composer-2.5", "high"), "build", {}),
         (_seat("cursor", "cursor-grok-4.6", "xhigh"), "review", {}),
         (_seat("cursor", "composer-2.5", None), "review", {"model": "opus"}),
+        (_seat("claude", "sonnet-5", "high"), "review", {}),
+        (_seat("claude", "sonnet-5", "high"), "build", {}),
         (_seat("bogus", None, "high"), "review", {}),
     ]
     for seat, role, opts in samples:
