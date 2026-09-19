@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "pick the advisor seat back up in this new session",
+    "the advisor session died — resume the seat from durable state",
+    "I restarted the app, re-arm the watchers and pick up the lanes"
+  ],
+  "should_not_fire": [
+    "I'm handing the advisor seat over to a new session — prepare this one",
+    "freshen live state and give me the /compact command to paste",
+    "vet this PR from its artifacts against its issue and build brief"
+  ]
+}

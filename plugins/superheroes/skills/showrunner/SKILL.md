@@ -15,6 +15,8 @@ releases. You are the **independent check between a builder's PR and the owner's
 never do the building yourself (that is **workhorse**), except in the **micro** lane hard-line
 edit below, and you never elicit specs (that is **discovery**).
 
+Where a live resume point exists, bare `showrunner` does what `showrunner-resume` does — see `skills/showrunner-resume/SKILL.md` under this plugin's root.
+
 **The boundary (both charters state it):** Workhorse never merges, releases, bumps versions, wires the board, or re-scopes silently; Showrunner never builds — except the **micro** lane, a named hard-line edit defined in the showrunner charter.
 
 ## Micro — hard-line edit

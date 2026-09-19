@@ -86,6 +86,8 @@ verification evidence, CI green on the recorded head, and a current branch.
 | Command | Use it to… |
 | --- | --- |
 | `/superheroes:showrunner` | Run the advisor session for this project — route work, vet PRs, coordinate releases. |
+| `/superheroes:showrunner-handoff` | Hand the advisor seat over deliberately before this session goes dark. |
+| `/superheroes:showrunner-resume` | Pick the advisor seat back up from durable state in a new or restarted session. |
 | `/superheroes:checkpoint` | Freshen live state and emit a ready-to-paste `/compact` command before compaction. |
 | `/superheroes:discuss-open-decisions` | Walk the owner through open decisions that are theirs — standing proposals, open parks, anything pending — filtered to what is genuinely theirs, in two batches with the blocking ones first. |
 
