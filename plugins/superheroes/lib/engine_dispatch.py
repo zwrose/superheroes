@@ -3480,6 +3480,85 @@ def _native_review_parser_refusal_forfeit(engagement, envelope, branch):
     return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
 
 
+def _admit_native_write_result(run_dir_real, attempt, opened):
+    """Single admission authority for codex's native write channel. Never raises."""
+    obj, detail = _load_native_result_json(run_dir_real, attempt)
+    if detail:
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": detail,
+        }
+
+    engine = opened["engine"]
+    schema_path = opened.get("nativeSchemaPath")
+    if not schema_path or not os.path.isfile(schema_path) or os.path.islink(schema_path):
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "native-schema-unreadable",
+        }
+    try:
+        declared = engine_result_channel.declared_schema(engine, RUN_KIND_WRITE)
+    except Exception:
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "native-schema-unreadable",
+        }
+    try:
+        with open(schema_path, encoding="utf-8") as fh:
+            on_disk = json.load(fh)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "native-schema-unreadable",
+        }
+    if on_disk != declared:
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "native-schema-unreadable",
+        }
+
+    ok, validation_reason, _validation_detail = engine_result_channel._validate_with_detail(
+        declared, obj)
+    if not ok:
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "native-result-schema-invalid",
+            "validationReason": validation_reason,
+        }
+
+    report_raw = obj.get("report") if isinstance(obj.get("report"), str) else ""
+    if report_raw.strip() == "":
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "native-result-report-blank",
+        }
+
+    report = engine_adapter._scrub(obj["report"])
+    graded = engine_adapter._grade_build_report_obj(obj)
+    if graded.get("ok") is True:
+        return {
+            "ok": True,
+            "signal": graded["signal"],
+            "evidence": graded["evidence"],
+            "report": report,
+        }
+    return {
+        "ok": False,
+        "terminal_refusal": True,
+        "reason": graded["reason"],
+        "signal": graded["signal"],
+        "evidence": graded["evidence"],
+        "report": report,
+    }
+
+
 def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_nonce):
     """Single admission authority for codex's native review channel. Never raises."""
     loaded = _read_native_review_envelope(run_dir_real, attempt, engagement)
@@ -3759,6 +3838,9 @@ def _grade_write_attempt(run_dir_real, state, attempt):
     if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
+    if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
+        return _admit_native_write_result(run_dir_real, attempt, opened)
+
     stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
     if not stdout and not os.path.exists(stdout_path):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
@@ -3783,7 +3865,7 @@ def _grade_write_attempt(run_dir_real, state, attempt):
     }
 
 
-def _write_terminal_forfeit(engine, attempts, *, run_dir_real=None, state=None):
+def _write_terminal_forfeit(engine, attempts, *, run_dir_real=None, state=None, detail=None):
     terminal = {
         "ok": False,
         "terminal": True,
@@ -3795,10 +3877,13 @@ def _write_terminal_forfeit(engine, attempts, *, run_dir_real=None, state=None):
             "inspect the worktree and retry manually" % engine
         ),
     }
+    if detail:
+        terminal["detail"] = detail
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
 
-def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts=1):
+def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts=1,
+                              attempt_detail=None):
     if attempts < MAX_ATTEMPTS:
         reason_clause = (
             "the retry was refused because a second attempt on a dirtied tree can contaminate or commit "
@@ -3820,6 +3905,8 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
         "forfeited": True,
         "disclosure": disclosure,
     }
+    if attempt_detail:
+        terminal["attemptDetail"] = attempt_detail
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
 
@@ -4098,6 +4185,8 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                                  "evidence": grade.get("evidence", {}), "attempts": latest},
                                 run_dir=run_dir_real, argv=argv,
                             )
+                            if "report" in grade:
+                                result["report"] = grade["report"]
                         elif item_check.get("evidenceUnavailable"):
                             cause = item_check.get("evidenceCause", "unknown")
                             result = _with_run_fields(
@@ -4135,6 +4224,8 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                                  "evidence": grade.get("evidence", {}), "attempts": latest},
                                 run_dir=run_dir_real, argv=argv,
                             )
+                            if "report" in grade:
+                                result["report"] = grade["report"]
                             result["itemCheck"] = item_check
                     else:
                         terminal_ok = {
@@ -4176,6 +4267,8 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                          "attempts": latest, "forfeited": False},
                         run_dir=run_dir_real, argv=argv,
                     )
+                    if "report" in grade:
+                        result["report"] = grade["report"]
                     return _fold_run(run_dir_real, state, result)
 
                 if grade.get("guard_refusal"):
@@ -4210,6 +4303,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                                 _worktree_dirtied_forfeit(
                                     engine, run_dir_real=run_dir_real, state=state,
                                     attempts=latest,
+                                    attempt_detail=grade.get("detail"),
                                 ),
                                 run_dir=run_dir_real, argv=argv,
                             ))
@@ -4230,6 +4324,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                 if run_kind == RUN_KIND_WRITE:
                     terminal = _write_terminal_forfeit(
                         engine, MAX_ATTEMPTS, run_dir_real=run_dir_real, state=state,
+                        detail=grade.get("detail"),
                     )
                 else:
                     terminal = _review_terminal_forfeit(
@@ -4960,10 +5055,17 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
             base = src.read()
         base_prompt_sha256 = hashlib.sha256(base.encode("utf-8")).hexdigest()
-        if base and not base.endswith("\n"):
-            content = base + "\n" + engine_adapter.WRITE_REPORT_CONTRACT
+        channel = engine_result_channel.channel_for(engine)
+        if channel == engine_result_channel.CHANNEL_NATIVE:
+            try:
+                native_schema = engine_result_channel.declared_schema(engine, RUN_KIND_WRITE)
+            except Exception:
+                return False, "native-schema-undeclarable"
+            contract = engine_result_channel.write_result_contract_from_schema(native_schema)
         else:
-            content = base + engine_adapter.WRITE_REPORT_CONTRACT
+            contract = engine_adapter.WRITE_REPORT_CONTRACT
+        prompt_sep = "\n" if base and not base.endswith("\n") else ""
+        content = base + prompt_sep + contract
         with open(dest_prompt, "w", encoding="utf-8") as dst:
             dst.write(content)
         if progress_path:
@@ -4974,10 +5076,11 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     except OSError as exc:
         return False, "run-dir-setup-failed:%s" % type(exc).__name__
 
-    # Write grading still reads marker stdout until layer 2b; do not open native argv here.
-    channel = engine_result_channel.CHANNEL_MARKER
-    argv = list(argv)
-    native_schema_path = None
+    argv, native_err, native_schema_path = _open_native_channel_argv(
+        run_dir_real, engine, list(argv), RUN_KIND_WRITE,
+    )
+    if native_err:
+        return False, native_err
 
     record = {
         "kind": "run-opened",
@@ -5543,6 +5646,8 @@ def _parse_write_attempt(run_dir_real, state, attempt):
     """Parse a completed write attempt's stdout, independent of grading. Never raises."""
     try:
         opened = state["opened"]
+        if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
+            return _admit_native_write_result(run_dir_real, attempt, opened)
         engine = opened["engine"]
         role_kind = opened.get("roleKind", "build")
         stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
@@ -5618,6 +5723,8 @@ def _observation_from_attempt(run_dir_real, state, attempt):
     engagement = _review_attempt_engagement(
         engine, stdout, stderr_tail, elapsed, stdout_bytes)
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
+        if opened.get("runKind") == RUN_KIND_WRITE:
+            return _engagement_with_read(engagement)
         echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
         admitted = _admit_native_review_result(
             run_dir_real, attempt, opened, engagement, echo_nonce)

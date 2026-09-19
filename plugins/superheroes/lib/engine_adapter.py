@@ -124,13 +124,7 @@ ECHO_TAIL_CHARS = 2000
 
 WRITE_REPORT_SENTINEL = "<<<SUPERHEROES-WRITE-REPORT>>>"
 
-WRITE_REPORT_CONTRACT = (
-    "Write-report contract (your graded tail is separate from prose receipts):\n"
-    "Emit the full prose report the order already asks for, first and in full.\n"
-    "The JSON object below is in addition to those receipts, never a replacement.\n"
-    "As the very last thing in your output: a line containing only:\n"
-    + WRITE_REPORT_SENTINEL + "\n"
-    "then a single JSON object on the following line, then nothing at all.\n"
+WRITE_REPORT_FIELD_SEMANTICS = (
     "Field semantics:\n"
     "  ok — true means you ran the order to completion as specified; it is not an acceptance "
     "verdict — you never judge whether the work is good enough and you never mark your own work done.\n"
@@ -138,7 +132,17 @@ WRITE_REPORT_CONTRACT = (
     "is wrong, otherwise \"needs_context\" (only those two values).\n"
     "  evidence.testFailed / evidence.testPassed — booleans for whether you observed a test "
     "failing / passing during this attempt; false when not observed.\n"
-    "Example final two lines (placeholders — compose real JSON literals yourself):\n"
+)
+
+WRITE_REPORT_CONTRACT = (
+    "Write-report contract (your graded tail is separate from prose receipts):\n"
+    "Emit the full prose report the order already asks for, first and in full.\n"
+    "The JSON object below is in addition to those receipts, never a replacement.\n"
+    "As the very last thing in your output: a line containing only:\n"
+    + WRITE_REPORT_SENTINEL + "\n"
+    "then a single JSON object on the following line, then nothing at all.\n"
+    + WRITE_REPORT_FIELD_SEMANTICS
+    + "Example final two lines (placeholders — compose real JSON literals yourself):\n"
     + WRITE_REPORT_SENTINEL + "\n"
     '{"ok": <true or false>, "signal": "<ok | plan_wrong | needs_context>", '
     '"evidence": {"testFailed": <true or false>, "testPassed": <true or false>}}'

@@ -402,6 +402,43 @@ def _legacy_stdout_to_native_review_branch(stdout):
     return _native_review_branch("ruling", investigated=investigated, **ruling)
 
 
+def _write_native_write_result(argv, stdout):
+    if "-o" not in argv or "--output-schema" not in argv:
+        return
+    result_path = argv[argv.index("-o") + 1]
+    text = stdout if isinstance(stdout, str) else ""
+    obj = EA.extract_write_report(text)
+    if obj is None:
+        return
+    lines = text.split("\n")
+    last_idx = None
+    for i, line in enumerate(lines):
+        if line.strip() == EA.WRITE_REPORT_SENTINEL:
+            last_idx = i
+    if last_idx is not None:
+        report = "\n".join(lines[:last_idx]).strip()
+    else:
+        report = ""
+    if not report:
+        report = "Receipt prose."
+    evidence = obj.get("evidence") if isinstance(obj.get("evidence"), dict) else {}
+    signal = obj.get("signal")
+    if signal is None:
+        signal = "ok" if obj.get("ok") else "needs_context"
+    native = {
+        "ok": obj.get("ok"),
+        "signal": signal,
+        "report": report,
+        "evidence": {
+            "testFailed": bool(evidence.get("testFailed")),
+            "testPassed": bool(evidence.get("testPassed")),
+        },
+    }
+    with open(result_path, "w", encoding="utf-8") as fh:
+        json.dump(native, fh, separators=(",", ":"))
+        fh.write("\n")
+
+
 def _write_native_review_result(argv, stdout):
     if "-o" not in argv:
         return
@@ -474,12 +511,15 @@ class FakeRunner:
         else:
             stdout, timed_out, rc, stderr_tail = out, False, 0, ""
         if isinstance(stdout, str) and "-o" in argv and "--output-schema" in argv:
-            payload = stdout
-            if EA.is_codex_event_stream(stdout):
-                extracted = EA.codex_review_payload_text(stdout, None)
-                if extracted:
-                    payload = extracted
-            _write_native_review_result(argv, payload)
+            if EA.extract_write_report(stdout) is not None:
+                _write_native_write_result(argv, stdout)
+            else:
+                payload = stdout
+                if EA.is_codex_event_stream(stdout):
+                    extracted = EA.codex_review_payload_text(stdout, None)
+                    if extracted:
+                        payload = extracted
+                _write_native_review_result(argv, payload)
         wrapped = _wrap_codex_fake_stdout(argv, stdout)
         if wrapped is not stdout and "--output-last-message" in argv:
             _write_codex_last_message(argv, stdout)
@@ -654,6 +694,8 @@ def test_codex_open_argv_is_canonical_spawn_seam_carries_per_attempt_flags(tmp_p
     assert spawn_argv != canonical
     coherent, err = ED._spawn_argv_coherence(opened, canonical)
     assert err is None
+    graded_path = ED._native_result_path(run_dir, 1) + ".graded"
+    os.rename(ED._native_result_path(run_dir, 1), graded_path)
     ok, with_o, _, _ = ED._spawn_native_result_argv(run_dir, 1, opened, coherent)
     assert ok
     expected_spawn = ED._argv_for_attempt(with_o, run_dir, 1, "codex")
@@ -5460,7 +5502,9 @@ def test_legitimate_concurrent_sibling_change_observed_unattributed(tmp_path):
                  "-c", "user.name=t", "commit", "-qm", "concurrent"],
                 check=True,
             )
-            return _build_ok_stdout(), False, 0, ""
+            stdout = _build_ok_stdout()
+            _write_native_write_result(argv, stdout)
+            return stdout, False, 0, ""
 
     res = ED.dispatch_write(
         seat=_codex_seat(role=_WRITE_ROLE),
@@ -11510,23 +11554,23 @@ def test_run_execution_record_native_forfeit_omits_result_binding(tmp_path, monk
     assert "resultKind" not in record
 
 
-def test_codex_write_spawn_argv_uses_last_message_not_native_schema(tmp_path):
-    """WO-2a (e): codex write runs keep marker-channel last-message argv only."""
+def test_codex_write_spawn_argv_uses_native_schema_not_last_message(tmp_path):
+    """WO-2b: codex write runs open on the native channel with schema and -o argv."""
     cwd, _main = _linked_worktree_pair(tmp_path)
     run_dir = str(tmp_path / "write-run")
-    fake = FakeRunner([(json.dumps({"ok": True, "signal": "ok", "evidence": {}}), False, 0, "")])
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     _dispatch_write(tmp_path, fake, cwd=cwd, run_dir=run_dir)
     records, _ = ED._journal_read(run_dir)
     launching = next(
         r for r in records
         if r.get("kind") == "engine-launching" and r.get("attempt") == 1)
     spawn_argv = launching["spawnArgv"]
-    assert "--output-schema" not in spawn_argv
+    assert "--output-schema" in spawn_argv
     assert "--json" in spawn_argv
-    assert "-o" not in spawn_argv
-    assert spawn_argv.count("-o") + spawn_argv.count("--output-last-message") == 1
-    idx = spawn_argv.index("--output-last-message")
-    assert spawn_argv[idx + 1] == os.path.join(run_dir, "attempt-1.last-message")
+    assert "-o" in spawn_argv
+    assert "--output-last-message" not in spawn_argv
+    idx = spawn_argv.index("-o")
+    assert spawn_argv[idx + 1] == ED._native_result_path(run_dir, 1)
 
 
 def test_grade_native_review_attempt_marker_salvage_path_not_reached(tmp_path, monkeypatch):
