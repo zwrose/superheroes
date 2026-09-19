@@ -44,6 +44,9 @@ REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 # literals; engine_dispatch and drift tests import this name, never restate the tuple.
 REVIEW_RESULT_KINDS = ("findings", "verdicts", "grouping", "ruling")
 
+# Write tail signals graded by _grade_build_report_obj (CONVENTIONS §11).
+WRITE_SIGNAL_ENUM = ("ok", "plan_wrong", "needs_context")
+
 # Rubric severity tiers — re-export from review_findings_schema (single home; #1145).
 REVIEW_SEVERITY_TIERS = review_findings_schema.SEVERITY_TIERS
 

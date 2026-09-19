@@ -33,6 +33,10 @@ _EA = importlib.util.spec_from_file_location(
 EA = importlib.util.module_from_spec(_EA)
 _EA.loader.exec_module(EA)
 
+_ERC = importlib.util.spec_from_file_location(
+    "engine_result_channel", os.path.join(_HERE, "..", "engine_result_channel.py"))
+ERC = importlib.util.module_from_spec(_ERC)
+_ERC.loader.exec_module(ERC)
 _RR = importlib.util.spec_from_file_location(
     "round_records", os.path.join(_HERE, "..", "round_records.py"))
 RR = importlib.util.module_from_spec(_RR)
@@ -2776,3 +2780,65 @@ def test_dispatch_write_undeclared_marker_detail_surfaces_guard_message(tmp_path
     assert ED.resolved_inputs_vocab.CALLER in result.get("detail")
     assert "accepted:" in result.get("detail")
     assert result.get("runOpened") is False
+
+
+# --- #1270 WO-B1: native result channel at write open ---
+
+
+def _write_opened_record(run_dir):
+    records, _ = ED._journal_read(run_dir)
+    return next(r for r in records if r.get("kind") == "run-opened")
+
+
+def test_codex_write_open_records_marker_channel_until_native_write_grader(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir)
+    opened = _write_opened_record(run_dir)
+    assert opened["channel"] == ERC.CHANNEL_MARKER
+    assert not os.path.exists(os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME))
+    built = EA.build_argv_result(_codex_seat(), "build", {"cwd": opened["cwd"]})
+    assert opened["argv"] == built["argv"]
+
+
+def test_cursor_write_open_records_marker_channel_unchanged_argv(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    seat = _cursor_seat()
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=seat)
+    opened = _write_opened_record(run_dir)
+    assert opened["channel"] == ERC.CHANNEL_MARKER
+    assert not os.path.exists(os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME))
+    built = EA.build_argv_result(seat, "build", {"cwd": opened["cwd"]})
+    assert opened["argv"] == built["argv"]
+
+
+def test_codex_write_open_skips_native_schema_until_layer_2b(tmp_path, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise ValueError("schema broke")
+
+    monkeypatch.setattr(ED.engine_result_channel, "declared_schema", boom)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    baseline = ED._worktree_baseline(os.path.realpath(wt))
+    ok, detail = ED._open_write_run(
+        run_dir,
+        engine="codex",
+        argv=_codex_argv_for_run(_codex_seat(), "build", os.path.realpath(wt)),
+        cwd=os.path.realpath(wt),
+        timeout=ED.RETRY_MIN_TIMEOUT,
+        retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=_prompt(tmp_path),
+        order_id="order-1",
+        base_sha="abc",
+        worktree_baseline=baseline,
+        progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert ok
+    assert detail == ""
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["channel"] == ERC.CHANNEL_MARKER
+    assert "nativeSchemaPath" not in opened

@@ -15,6 +15,7 @@ Everything here drives the session the way the orchestrator does: land a seat en
 LANDING area, `record-result` it into the durable store, then `advance` — lock, reconcile, sweep,
 completeness, assemble, fold, emit. No `cmd_submit` is ever called by hand.
 """
+import importlib.util
 import json
 import os
 import subprocess
@@ -727,6 +728,61 @@ def _codex_event_stream(payload_text, *, action_items=1):
     return "\n".join(lines)
 
 
+_TD = None
+
+
+def _dispatch_test_helpers():
+    global _TD
+    if _TD is None:
+        spec = importlib.util.spec_from_file_location(
+            "test_engine_dispatch",
+            os.path.join(_HERE, "test_engine_dispatch.py"),
+        )
+        _TD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_TD)
+    return _TD
+
+
+def _ensure_investigated_repo_path(repo_root, rel="reviewed.py"):
+    path = os.path.join(repo_root, rel)
+    if not os.path.isfile(path):
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("# fixture investigated path\n")
+    return rel
+
+
+def _write_native_review_result(run_dir, repo_root, *, findings=None, panel_findings=None):
+    td = _dispatch_test_helpers()
+    if panel_findings is not None:
+        findings = td._legacy_overlay_findings(panel_findings)
+        for member, raw in zip(findings, panel_findings):
+            for key, val in raw.items():
+                if key == "detail" and "body" in member:
+                    member["body"] = val
+                elif key in member:
+                    member[key] = val
+            if member.get("title") and member.get("id") == "example":
+                member["id"] = member["title"]
+    elif findings is None:
+        findings = []
+    if panel_findings:
+        rel = panel_findings[0].get("file") or "reviewed.py"
+    else:
+        rel = "reviewed.py"
+    rel = _ensure_investigated_repo_path(repo_root, rel)
+    branch = td._native_review_branch("findings", findings=findings, investigated=[rel])
+    records, _ = engine_dispatch._journal_read(run_dir)
+    state = engine_dispatch._journal_state(records)
+    native_path = (state.get("opened") or {}).get("nativeResultPath")
+    assert native_path, "nativeResultPath missing from run-opened"
+    with open(native_path, "w", encoding="utf-8") as fh:
+        json.dump({"result": branch}, fh, separators=(",", ":"))
+        fh.write("\n")
+
+
 def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-panel-e2e",
                        telemetry_shape="dispatch-observed"):
     """Build a runner run directory for dispatch-observed evidence tests.
@@ -775,6 +831,9 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
         echo_nonce=echo_nonce, base_prompt=base_prompt,
     )
     assert ok, detail
+    if engine == "codex":
+        _write_native_review_result(
+            run_dir, repo_root, panel_findings=panel_findings)
     engine_dispatch._journal_append(run_dir, {
         "kind": "attempt-ended", "attempt": 1,
         "exit": 0, "timedOut": False, "refusal": None,
@@ -802,12 +861,17 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
     for seat, occurrence in slots:
         payload = _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
         if phase == round_driver.P_PANEL and seat == FINDING_SEAT and state["round"] == 1:
-            _dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence)
             order_path = round_records.order_prompt_path(
                 session_dir, pend["round"], pend["phase"],
                 round_records.storage_key(seat, occurrence), pend["attempt"])
             run_dir = _execution_run_dir(
                 tmp_path, order_path, panel_findings, telemetry_shape=telemetry_shape)
+            records, _ = engine_dispatch._journal_read(run_dir)
+            journal_state = engine_dispatch._journal_state(records)
+            grade = engine_dispatch._grade_review_attempt(run_dir, journal_state, 1)
+            payload = dict(payload)
+            payload["findings"] = grade.get("findings") or []
+            _dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence)
             out = round_driver.cmd_record_result(
                 session_dir, seat, occurrence=occurrence, evidence_run_dir=run_dir)
         else:
