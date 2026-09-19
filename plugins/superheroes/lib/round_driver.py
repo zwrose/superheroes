@@ -1209,6 +1209,13 @@ def _title_clamp_hash_suffix(finding):
     return None
 
 
+def _loop_minted_key(finding):
+    """Key the loop would mint from this row's content (no foreign preset)."""
+    base = session_contract.location_key(finding)
+    suffix = _title_clamp_hash_suffix(finding)
+    return base + ("#" + suffix if suffix else "")
+
+
 def _mint_finding_keys(findings):
     """Stamp findingKey on dict findings that lack a non-empty one; ensure list-wide uniqueness."""
     if not isinstance(findings, list):
@@ -1236,12 +1243,21 @@ def _mint_finding_keys(findings):
         elif len(contents) == 1:
             for _, f, _ in group:
                 f[session_contract.FINDING_KEY_FIELD] = key
-        elif any(had_preset for _, _, had_preset in group):
-            for _, f, _ in group:
-                f[session_contract.FINDING_KEY_FIELD] = key + "#" + _content_hash_suffix(f)
         else:
-            for _, f, _ in group:
-                f[session_contract.FINDING_KEY_FIELD] = key
+            all_loop_owned = (
+                not any(had_preset for _, _, had_preset in group)
+                or all(
+                    _loop_minted_key(f) == key
+                    for _, f, had_preset in group
+                    if had_preset
+                )
+            )
+            if all_loop_owned:
+                for _, f, _ in group:
+                    f[session_contract.FINDING_KEY_FIELD] = key
+            else:
+                for _, f, _ in group:
+                    f[session_contract.FINDING_KEY_FIELD] = key + "#" + _content_hash_suffix(f)
     return findings
 
 

@@ -123,3 +123,69 @@ def test_readers_do_not_mutate_rows_missing_finding_key():
     assert audit_state["fixBatch"] == before_fix_batch
     assert len(targets) == 1
     assert targets[0]["id"] == expected_key
+
+
+def test_finding_key_of_prefers_finding_key_over_id():
+    """T5: _finding_key_of prefers findingKey over legacy id."""
+    minted = SC.location_key({"file": "a.py", "line": 1, "title": "t"})
+    row = {
+        "id": "seat-controlled-id",
+        SC.FINDING_KEY_FIELD: minted,
+        "file": "a.py",
+        "line": 1,
+        "title": "t",
+    }
+    assert RD._finding_key_of(row) == minted
+    assert RD._judgment_row_ids([row]) == [minted]
+    state = RD.new_state(_cfg())
+    state["fixBatch"] = [row]
+    targets = RD._audit_targets(state, state["config"], {})
+    assert len(targets) == 1
+    assert targets[0]["id"] == minted
+
+
+def test_carry_recombination_merges_same_anchor_rows_with_different_severity():
+    """T6: carry concatenation merges loop-owned keys with different severity/dimension."""
+    base = {"file": "a.py", "line": 1, "title": "t"}
+    minor = dict(base, severity="Minor", dimension="Code")
+    important = dict(base, severity="Important", dimension="Security")
+    compiled_a, _ = RD.mechanical_compile([minor], None)
+    compiled_b, _ = RD.mechanical_compile([important], None)
+    expected_key = SC.location_key(base)
+
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, compiled_a + compiled_b)
+    assert len(state["findings"]) == 1
+    survivor = state["findings"][0]
+    assert survivor["severity"] == "Important"
+    assert survivor["dimension"] == "Code + Security"
+    assert survivor[SC.FINDING_KEY_FIELD] == expected_key
+
+    state_rev = RD.new_state(_cfg())
+    RD._set_findings(state_rev, compiled_b + compiled_a)
+    assert len(state_rev["findings"]) == 1
+    assert state_rev["findings"][0][SC.FINDING_KEY_FIELD] == expected_key
+
+
+def test_foreign_preset_key_collision_still_rekeys():
+    """T7: foreign preset keys on different locations stay content-hash re-keyed."""
+    finding1 = {
+        "file": "b.py",
+        "line": 10,
+        "title": "first",
+        "severity": "Important",
+        SC.FINDING_KEY_FIELD: "caller-controlled",
+    }
+    finding2 = {
+        "file": "c.py",
+        "line": 20,
+        "title": "second",
+        "severity": "Important",
+        SC.FINDING_KEY_FIELD: "caller-controlled",
+    }
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, [finding1, finding2])
+    keys = [f[SC.FINDING_KEY_FIELD] for f in state["findings"]]
+    assert len(keys) == 2
+    assert keys[0].startswith("caller-controlled#") and len(keys[0]) == len("caller-controlled#") + 12
+    assert keys[1].startswith("caller-controlled#") and len(keys[1]) == len("caller-controlled#") + 12
