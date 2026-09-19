@@ -100,8 +100,8 @@ overrunning or silently truncating.
   touched."** A test frequently lives at a different path than the code it covers (this file's own
   `tsc` example makes exactly that point), so selecting tests by touched filename silently misses the
   test that matters. Where the order names the tests to run, run those — **except when the order names
-  a full-suite or project-wide gate: precedence rung 5.** The orchestrator re-runs the full suite
-  regardless, so nothing is lost. Long in-dispatch output is what makes an external-engine dispatch
+  a full-suite or project-wide gate: precedence rung 5.** The orchestrator re-runs the calibrated
+gates, and CI runs the suite on the pushed head, so nothing is lost. Long in-dispatch output is what makes an external-engine dispatch
   forfeit mid-report; it characteristically forfeits *after* the files are already written, so the
   run is lost for nothing.
 - **Short structured return — by running less, never by showing less.** This is the **canonical**
@@ -145,7 +145,7 @@ overrunning or silently truncating.
   nothing ran. **A rejected command did not run, and that is different from a command that ran and
   failed.** Never infer, estimate, or describe what a run "would have" shown. **Untested work, clearly labelled
   untested, is a usable result** the orchestrator can verify. **The orchestrator's own re-run of the
-  full gates is what closes the loop** — your missing receipt does not make the work accepted-as-green;
+calibrated gates, with CI on the pushed head, is what closes the loop** — your missing receipt does not make the work accepted-as-green;
   it moves verification to the orchestrator, where authority sits. Two builds in one wave had every implementer shell call rejected; the orchestrator's own
   re-run was then the only verification that existed.
 - **Never mark your own work done.** You do not decide the work is done, correct, or ready — you
