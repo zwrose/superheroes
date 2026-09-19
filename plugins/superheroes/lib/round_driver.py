@@ -3236,9 +3236,13 @@ def _fold_audits(state, config, artifact):
                   "audit result for %s echoed a vendor other than the recorded dispatch provenance "
                   "— advisory only; the manifest governed and the discharge stands" % pid)
     # Provenance rests on the recorded dispatch provenance (never the result echo) — recorded per
-    # round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY).
+    # round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY). The hand path's
+    # collectionManifest is orchestrator-written, so its basis stays collection-manifest; only the
+    # durable-record path derives from the runner record.
     _record_round(state, "auditProvenance",
-                  "runner-record" if _seat_result_schema(state) == round_records.SEAT_RESULT_SCHEMA_V2
+                  "runner-record"
+                  if (_seat_result_schema(state) == round_records.SEAT_RESULT_SCHEMA_V2
+                      and not state.get("_submitUsed"))
                   else "collection-manifest")
     _record_round(state, "audits", outcome["audits"])
     _record_round(state, "auditIndependence",

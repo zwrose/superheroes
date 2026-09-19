@@ -373,3 +373,27 @@ def test_advance_derives_collection_manifest_from_runner_record(tmp_path):
     assert artifact["provenance"]["provenanceSource"][tid0] == "hand-landed-evidence"
     assert artifact["provenance"]["provenanceSource"][tid1] == "hand-landed-evidence"
     assert artifact["provenance"]["dispatchManifestIgnored"] is True
+
+
+def test_audit_provenance_basis_follows_the_fold_path(tmp_path):
+    """auditProvenance names the basis the fold actually used, not the state schema alone."""
+    session_dir, gitdir, _head_path = _drive_to_audits(tmp_path, name="durable-record")
+    seat = _audit_roster(session_dir)[0]
+    evidence = _execution_evidence(source="codex")
+    _land_audits(session_dir, seat, payload=_audit_payload(seat),
+                 provenance=round_records.PROVENANCE_HAND_LANDED, executionEvidence=evidence)
+    assert RD.cmd_record_result(session_dir, seat)["ok"] is True
+    pend = _pending(session_dir)
+    out = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
+    assert out["ok"] is True, out
+    state = _state(session_dir)
+    assert state["rounds"][str(pend["round"])]["auditProvenance"] == "runner-record"
+
+    session_dir2 = _session(tmp_path, name="hand-path")
+    state2 = _state(session_dir2)
+    state2["_submitUsed"] = True
+    state2["_auditTargets"] = []
+    state2["auditRounds"] = []
+    hand_round = state2["round"]
+    RD._fold_audits(state2, state2["config"], {"results": [], "collectionManifest": {}})
+    assert state2["rounds"][str(hand_round)]["auditProvenance"] == "collection-manifest"
