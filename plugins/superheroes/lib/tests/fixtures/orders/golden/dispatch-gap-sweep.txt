@@ -21,7 +21,9 @@ code in `+` or `-` lines of the diff. Context lines (no prefix) and unchanged co
 files are pre-existing — SKIP them, even if they violate conventions.
 
 ## Verification rules
-- `file:line` citation required. No citation → drop your own finding before writing it out.
+- `file:line` citation required. No citation → drop your own finding before writing it out. Cite
+  `line` as an integer (a JSON number, e.g. `"line": 291`), never a string — a string line is
+  refused at compile.
 - Before flagging "missing X", grep the verification root for X under different names.
 - For Important-severity issues, check callers / reachability before asserting.
 - Judge only from the diff and the repo — never the PR description or author narrative.

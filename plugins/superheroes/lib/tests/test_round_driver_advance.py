@@ -2584,7 +2584,9 @@ def test_advance_judgment_auto_applies_calibration_overlay(tmp_path, adapters):
 
 def test_advance_judgment_colliding_identity_severity_policy_dispositions_not_collapse(
         tmp_path, adapters):
-    """Policy advance must not collapse dispositions when two same-location findings differ in severity."""
+    """Fixtures are two tradeoff findings at one location whose long titles agree past the title
+    clamp (alpha/bravo suffixes) and separate by the content-hash disambiguator; severity is what
+    the assertion then reads per row — severity is not the distinguishing axis."""
     repo = _repo_with_gate_policy(tmp_path, [
         {"gate": "present-judgment", "findingClass": "judgment:critical",
          "disposition": "fix-as-suggested"},
