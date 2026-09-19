@@ -491,8 +491,11 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
         cell = results_by_engine[eng][1].get("probedCell")
         if isinstance(cell, list) and len(cell) >= 2:
             live_cells.append(tuple(cell[:3]) if len(cell) >= 3 else (cell[0], cell[1], None))
+    live_vendors = set(passing)
+    if "claude" not in owner_map:
+        live_vendors.add("claude")
     try:
-        sm = seat_map.build(None, sorted(set(passing) | {"claude"}), author_family, None, 0,
+        sm = seat_map.build(None, sorted(live_vendors), author_family, None, 0,
                             live_cells=live_cells, live_cells_source="probed")
     except Exception as exc:
         return {"ok": False, "reason": "seat-map-failed:%s" % type(exc).__name__}, 1

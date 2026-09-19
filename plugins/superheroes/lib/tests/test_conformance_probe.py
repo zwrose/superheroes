@@ -217,6 +217,30 @@ def _probe_result(engine, **overrides):
     return base
 
 
+def _ok_dispatchable_probe_paths(tmp_path, repo, omit=(), **per_engine):
+    """Write one probe JSON per dispatchable engine; values are overrides or full records."""
+    paths = []
+    for engine in CP.DISPATCHABLE_ENGINES:
+        if engine in omit:
+            continue
+        supplied = per_engine.get(engine)
+        if supplied is not None and not isinstance(supplied, dict):
+            data = supplied
+        elif isinstance(supplied, dict):
+            if "legs" in supplied:
+                data = dict(supplied)
+            else:
+                merged = {"repoRoot": repo, **supplied}
+                merged.pop("engine", None)
+                data = _probe_result(engine, **merged)
+        else:
+            data = _probe_result(engine, repoRoot=repo)
+        path = tmp_path / ("probe-%s.json" % engine)
+        path.write_text(json.dumps(data), encoding="utf-8")
+        paths.append(str(path))
+    return paths
+
+
 def _calibration_rows(**prefs):
     merged = dict(_CALIB_PREFS)
     merged.update(prefs)
@@ -227,11 +251,45 @@ def _calibration_rows(**prefs):
 
 
 def test_engine_set_is_derived_from_adapter_and_channel_map():
-    assert CP.DISPATCHABLE_ENGINES == ("codex", "cursor")
-    payload, code, stderr = CP.probe("claude", repo_root="/tmp", run_dir="/tmp/run")
+    assert CP.DISPATCHABLE_ENGINES == ("codex", "cursor", "claude")
+    payload, code, stderr = CP.probe("openai", repo_root="/tmp", run_dir="/tmp/run")
     assert code == 1
     assert payload["legs"]["resultProduction"]["detail"] == "engine-not-dispatchable"
     assert stderr is not None
+
+
+def test_dispatchable_engines_include_claude():
+    assert CP.DISPATCHABLE_ENGINES == ("codex", "cursor", "claude")
+
+
+def _claude_seat():
+    cell = MR.matrix_config("reviewer-deep", "claude")
+    return {"vendor": "claude", "model": cell[0], "effort": cell[1], "role": "reviewer-deep"}
+
+
+def _claude_event_stream(tool_calls=1, structured_output=None):
+    lines = []
+    for i in range(tool_calls):
+        lines.append(json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-%d" % i,
+                    "name": "Glob",
+                    "input": {},
+                }],
+            },
+        }))
+    if structured_output is None:
+        structured_output = {"result": _native_verdicts_branch()}
+    lines.append(json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "structured_output": structured_output,
+    }))
+    return "\n".join(lines) + "\n"
 
 
 def test_run_grades_three_legs_ok_on_valid_native_result(tmp_path):
@@ -258,6 +316,112 @@ def test_run_grades_three_legs_ok_on_valid_native_result(tmp_path):
     assert "reason" in prompt_text
     assert '"result":' not in prompt_text
     assert "plugins/superheroes" not in prompt_text
+
+
+def test_run_grades_three_legs_ok_on_valid_claude_native_result(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    structured = {"result": _native_verdicts_branch()}
+    stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return stdout, False, 0, ""
+
+    fake = FakeRunner([runner, runner], sync_native=False)
+    payload, code, stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["channel"] == ERC.CHANNEL_NATIVE
+    assert payload["legs"]["resultProduction"]["ok"] is True
+    assert payload["legs"]["completionDetection"]["ok"] is True
+    assert payload["legs"]["progressTelemetry"]["ok"] is True
+    assert stderr is None
+
+
+def test_result_production_fails_on_claude_native_schema_invalid(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    invalid = _native_verdicts_branch()
+    invalid["investigated"] = ["path.py", 42]
+    structured = {"result": invalid}
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return _claude_event_stream(structured_output=structured), False, 0, ""
+
+    fake = FakeRunner([runner, runner], sync_native=False)
+    payload, code, _stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert payload["legs"]["resultProduction"]["ok"] is False
+    assert payload["legs"]["resultProduction"]["detail"] == "native-result-schema-invalid"
+    assert payload["legs"]["completionDetection"]["ok"] is True
+    assert payload["legs"]["progressTelemetry"]["ok"] is True
+
+
+def test_claude_telemetry_absent_when_only_the_structured_output_call(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    structured = {"result": _native_verdicts_branch()}
+    stdout = _claude_event_stream(tool_calls=0, structured_output=structured)
+    stdout = json.dumps({
+        "type": "assistant",
+        "message": {"content": [{
+            "type": "tool_use", "id": "so1", "name": "StructuredOutput", "input": {},
+        }]},
+    }) + "\n" + stdout
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return stdout, False, 0, ""
+
+    fake = FakeRunner([runner, runner], sync_native=False)
+    payload, code, _stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert payload["legs"]["resultProduction"]["ok"] is True
+    assert payload["legs"]["progressTelemetry"]["ok"] is False
+    assert payload["legs"]["progressTelemetry"]["detail"] == "telemetry-absent"
+
+
+def test_claude_completion_fails_on_nonzero_exit(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    fake = FakeRunner([("", False, 1, "")])
+    payload, code, _stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    leg = payload["legs"]["completionDetection"]
+    assert leg["ok"] is False
+    assert leg["detail"] == "auth-or-config-refusal"
 
 
 def test_run_grades_three_legs_ok_on_valid_cursor_native_result(tmp_path):
@@ -591,13 +755,9 @@ def test_preflight_entry_hold_when_failed_without_owner_word(tmp_path):
     codex_fail["legs"]["resultProduction"]["ok"] = False
     codex_fail["failed"] = ["resultProduction"]
     codex_fail["preflightCheck"]["state"] = "fail"
-    cursor_ok = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex_fail), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor_ok), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_fail)
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+        repo, paths, calibration_rows=_calibration_rows(),
     )
     assert code == 0
     assert payload["engine-auth"]["state"] == "fail"
@@ -613,23 +773,18 @@ def test_preflight_entry_hold_when_failed_without_owner_word(tmp_path):
 def test_preflight_entry_refuses_missing_duplicate_foreign_stale(tmp_path, case, expect):
   # axis: probe-missing-duplicate-foreign-stale
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo)
-    cursor = _probe_result("cursor", repoRoot=repo)
-    paths = []
-    if case != "missing":
-        cpath = tmp_path / "codex.json"
+    if case == "missing":
+        paths = _ok_dispatchable_probe_paths(tmp_path, repo, omit=("codex",))
+    else:
+        codex_kw = {}
         if case == "foreign":
-            codex["repoRoot"] = "/other/repo"
+            codex_kw["repoRoot"] = "/other/repo"
         if case == "stale":
             old = (datetime.now(timezone.utc) - timedelta(hours=5)).replace(microsecond=0)
-            codex["completedAt"] = old.isoformat().replace("+00:00", "Z")
-        cpath.write_text(json.dumps(codex), encoding="utf-8")
-        paths.append(str(cpath))
+            codex_kw["completedAt"] = old.isoformat().replace("+00:00", "Z")
+        paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_kw)
         if case == "duplicate":
-            paths.append(str(cpath))
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
-    paths.append(str(kpath))
+            paths.append(str(tmp_path / "probe-codex.json"))
     payload, code = CP.preflight_entry(
         repo, paths, calibration_rows=_calibration_rows(), max_age_seconds=3600,
     )
@@ -650,14 +805,10 @@ def test_preflight_entry_launch_without_names_substitutes_from_probed_cells(tmp_
     codex_fail = _probe_result("codex", ok=False, repoRoot=repo, failed=["resultProduction"])
     codex_fail["legs"]["resultProduction"]["ok"] = False
     codex_fail["failed"] = ["resultProduction"]
-    cursor_ok = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex_fail), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor_ok), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_fail)
     payload, code = CP.preflight_entry(
         repo,
-        [str(cpath), str(kpath)],
+        paths,
         launch_without=["codex"],
         owner_words=["owner approves"],
         calibration_rows=cal,
@@ -666,7 +817,77 @@ def test_preflight_entry_launch_without_names_substitutes_from_probed_cells(tmp_
     assert payload["engine-auth"]["state"] == "pass"
     assert "substitutes" in payload["engine-auth"]["evidence"]
     assert captured.get("live_cells_source") == "probed"
-    assert captured.get("live_cells") == [tuple(cursor_ok["probedCell"])]
+    cursor_probe = _probe_result("cursor", repoRoot=repo)
+    claude_probe = _probe_result("claude", repoRoot=repo)
+    assert captured.get("live_cells") == [
+        tuple(claude_probe["probedCell"]),
+        tuple(cursor_probe["probedCell"]),
+    ]
+
+
+def test_preflight_entry_launch_without_claude_excludes_from_live_vendors(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    captured = {}
+
+    def _capture_build(roster, live_vendors, *args, **kwargs):
+        captured["live_vendors"] = list(live_vendors or [])
+        return SM.build(roster, live_vendors, *args, **kwargs)
+
+    monkeypatch.setattr(CP.seat_map, "build", _capture_build)
+    cal = _calibration_rows()
+    claude_fail = _probe_result("claude", ok=False, repoRoot=repo, failed=["resultProduction"])
+    claude_fail["legs"]["resultProduction"]["ok"] = False
+    claude_fail["failed"] = ["resultProduction"]
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, claude=claude_fail)
+    payload, code = CP.preflight_entry(
+        repo,
+        paths,
+        launch_without=["claude"],
+        owner_words=["owner approves"],
+        calibration_rows=cal,
+    )
+    assert code == 0
+    assert "claude" not in captured["live_vendors"]
+    seats = payload.get("seatMap", {}).get("seats") or {}
+    assert all(v.get("vendor") != "claude" for v in seats.values())
+
+
+def test_preflight_entry_launch_without_claude_parks_when_no_other_live(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+
+    def _park_build(*args, **kwargs):
+        sm = SM.build(*args, **kwargs)
+        degradations = list(sm.get("degradations") or [])
+        degradations.append({
+            "constraint": "same-family",
+            "seat": "architecture-reviewer",
+            "reason": (
+                "seat architecture-reviewer seated the maker family xai — "
+                "no alternative family is live"
+            ),
+        })
+        out = dict(sm)
+        out["degradations"] = degradations
+        return out
+
+    monkeypatch.setattr(CP.seat_map, "build", _park_build)
+    cal = _calibration_rows()
+    claude_fail = _probe_result("claude", ok=False, repoRoot=repo, failed=["resultProduction"])
+    claude_fail["legs"]["resultProduction"]["ok"] = False
+    claude_fail["failed"] = ["resultProduction"]
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, claude=claude_fail)
+    payload, code = CP.preflight_entry(
+        repo,
+        paths,
+        launch_without=["claude"],
+        owner_words=["proceed anyway"],
+        calibration_rows=cal,
+    )
+    assert code == 0
+    assert payload["engine-auth"]["state"] == "fail"
+    assert "PARK" in payload["engine-auth"]["reason"]
+    seats = payload.get("seatMap", {}).get("seats") or {}
+    assert all(v.get("vendor") != "claude" for v in seats.values())
 
 
 def test_preflight_entry_parks_on_same_family(tmp_path, monkeypatch):
@@ -692,14 +913,10 @@ def test_preflight_entry_parks_on_same_family(tmp_path, monkeypatch):
     cursor_fail = _probe_result("cursor", ok=False, repoRoot=repo, failed=["resultProduction"])
     cursor_fail["legs"]["resultProduction"]["ok"] = False
     cursor_fail["failed"] = ["resultProduction"]
-    codex_ok = _probe_result("codex", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex_ok), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor_fail), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, cursor=cursor_fail)
     payload, code = CP.preflight_entry(
         repo,
-        [str(cpath), str(kpath)],
+        paths,
         launch_without=["cursor"],
         owner_words=["proceed anyway"],
         calibration_rows=cal,
@@ -749,19 +966,14 @@ def test_preflight_requires_all_dispatchable_engines_not_only_calibrated(tmp_pat
     cal = _calibration_rows(implementation="codex", reviewer="codex", pilot="codex")
     payload, code = CP.preflight_entry(repo, [str(cpath)], calibration_rows=cal)
     assert code == 1
-    assert payload["reason"] == "probe-missing:cursor"
+    assert payload["reason"] == "probe-missing:claude"
 
 
 def test_preflight_entry_wave_binding_none_without_wave_arg(tmp_path):
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo)
-    cursor = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo)
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+        repo, paths, calibration_rows=_calibration_rows(),
     )
     assert code == 0
     assert payload["waveBinding"] == "none"
@@ -769,14 +981,12 @@ def test_preflight_entry_wave_binding_none_without_wave_arg(tmp_path):
 
 def test_preflight_entry_refuses_wave_mismatch(tmp_path):
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo, wave="wave-a")
-    cursor = _probe_result("cursor", repoRoot=repo, wave="wave-a")
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    wave_kw = {"wave": "wave-a"}
+    paths = _ok_dispatchable_probe_paths(
+        tmp_path, repo, codex=wave_kw, cursor=wave_kw, claude=wave_kw,
+    )
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), wave="wave-b",
+        repo, paths, calibration_rows=_calibration_rows(), wave="wave-b",
     )
     assert code == 1
     assert payload["reason"].startswith("probe-wave-mismatch:")
@@ -817,15 +1027,11 @@ def test_preflight_entry_refuses_failed_list_disagreeing_with_legs(tmp_path):
 
 def test_preflight_entry_refuses_record_without_wave_under_wave(tmp_path):
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo)
-    cursor = _probe_result("cursor", repoRoot=repo)
-    assert "wave" not in codex
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo)
+    codex_data = json.loads((tmp_path / "probe-codex.json").read_text(encoding="utf-8"))
+    assert "wave" not in codex_data
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), wave="wave-a",
+        repo, paths, calibration_rows=_calibration_rows(), wave="wave-a",
     )
     assert code == 1
     assert payload["reason"].startswith("probe-wave-mismatch:")
@@ -858,14 +1064,12 @@ def test_preflight_entry_stale_boundary_exact_age_passes(tmp_path, monkeypatch):
     monkeypatch.setattr(CP, "_now_utc", lambda: now)
     completed = (now - timedelta(seconds=3600)).replace(microsecond=0)
     completed_iso = completed.isoformat().replace("+00:00", "Z")
-    codex = _probe_result("codex", repoRoot=repo, completedAt=completed_iso)
-    cursor = _probe_result("cursor", repoRoot=repo, completedAt=completed_iso)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    age_kw = {"completedAt": completed_iso}
+    paths = _ok_dispatchable_probe_paths(
+        tmp_path, repo, codex=age_kw, cursor=age_kw, claude=age_kw,
+    )
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), max_age_seconds=3600,
+        repo, paths, calibration_rows=_calibration_rows(), max_age_seconds=3600,
     )
     assert code == 0
 
@@ -877,14 +1081,16 @@ def test_preflight_entry_stale_boundary_one_past_refuses(tmp_path, monkeypatch):
     monkeypatch.setattr(CP, "_now_utc", lambda: now)
     completed = (now - timedelta(seconds=3601)).replace(microsecond=0)
     completed_iso = completed.isoformat().replace("+00:00", "Z")
-    codex = _probe_result("codex", repoRoot=repo, completedAt=completed_iso)
-    cursor = _probe_result("cursor", repoRoot=repo, completedAt=completed_iso)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    healthy = (now - timedelta(seconds=1800)).replace(microsecond=0)
+    healthy_iso = healthy.isoformat().replace("+00:00", "Z")
+    paths = _ok_dispatchable_probe_paths(
+        tmp_path, repo,
+        codex={"completedAt": completed_iso},
+        cursor={"completedAt": healthy_iso},
+        claude={"completedAt": healthy_iso},
+    )
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), max_age_seconds=3600,
+        repo, paths, calibration_rows=_calibration_rows(), max_age_seconds=3600,
     )
     assert code == 1
     assert payload["reason"] == "probe-stale:codex"
@@ -896,14 +1102,16 @@ def test_preflight_entry_stale_boundary_future_completed_at_refuses(tmp_path, mo
     monkeypatch.setattr(CP, "_now_utc", lambda: now)
     completed = (now + timedelta(seconds=60)).replace(microsecond=0)
     completed_iso = completed.isoformat().replace("+00:00", "Z")
-    codex = _probe_result("codex", repoRoot=repo, completedAt=completed_iso)
-    cursor = _probe_result("cursor", repoRoot=repo, completedAt=completed_iso)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    healthy = (now - timedelta(seconds=1800)).replace(microsecond=0)
+    healthy_iso = healthy.isoformat().replace("+00:00", "Z")
+    paths = _ok_dispatchable_probe_paths(
+        tmp_path, repo,
+        codex={"completedAt": completed_iso},
+        cursor={"completedAt": healthy_iso},
+        claude={"completedAt": healthy_iso},
+    )
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), max_age_seconds=3600,
+        repo, paths, calibration_rows=_calibration_rows(), max_age_seconds=3600,
     )
     assert code == 1
     assert payload["reason"] == "probe-stale:codex"
@@ -917,14 +1125,11 @@ def test_preflight_entry_stale_boundary_future_completed_at_refuses(tmp_path, mo
 ])
 def test_preflight_entry_completed_at_parse_edges(tmp_path, completed_at, expect):
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo, completedAt=completed_at)
-    cursor = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(
+        tmp_path, repo, codex={"completedAt": completed_at},
+    )
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), max_age_seconds=3600,
+        repo, paths, calibration_rows=_calibration_rows(), max_age_seconds=3600,
     )
     assert code == 1
     if expect.endswith(":"):
@@ -935,15 +1140,11 @@ def test_preflight_entry_completed_at_parse_edges(tmp_path, completed_at, expect
 
 def test_preflight_entry_refuses_probe_cell_mismatch(tmp_path):
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo)
-    codex["probedCell"] = ["codex", "wrong-model", None]
-    cursor = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(
+        tmp_path, repo, codex={"probedCell": ["codex", "wrong-model", None]},
+    )
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+        repo, paths, calibration_rows=_calibration_rows(),
     )
     assert code == 1
     assert payload["reason"] == "probe-cell-mismatch:codex"
@@ -1050,14 +1251,10 @@ def test_preflight_entry_refuses_author_family_unresolved(tmp_path):
     codex_fail = _probe_result("codex", ok=False, repoRoot=repo, failed=["resultProduction"])
     codex_fail["legs"]["resultProduction"]["ok"] = False
     codex_fail["failed"] = ["resultProduction"]
-    cursor_ok = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex_fail), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor_ok), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_fail)
     cal = [{"role": "implementer", "engine": "codex"}]
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)],
+        repo, paths,
         launch_without=["codex"], owner_words=["proceed"],
         calibration_rows=cal,
     )
@@ -1075,13 +1272,9 @@ def test_preflight_entry_refuses_seat_map_failed(tmp_path, monkeypatch):
     codex_fail = _probe_result("codex", ok=False, repoRoot=repo, failed=["resultProduction"])
     codex_fail["legs"]["resultProduction"]["ok"] = False
     codex_fail["failed"] = ["resultProduction"]
-    cursor_ok = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex_fail), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor_ok), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_fail)
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)],
+        repo, paths,
         launch_without=["codex"], owner_words=["proceed"],
         calibration_rows=_calibration_rows(),
     )
@@ -1091,21 +1284,16 @@ def test_preflight_entry_refuses_seat_map_failed(tmp_path, monkeypatch):
 
 def test_preflight_entry_refuses_blank_owner_word_and_unfailed_engine(tmp_path):
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo)
-    cursor = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo)
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)],
+        repo, paths,
         launch_without=["codex"], owner_words=["  "],
         calibration_rows=_calibration_rows(),
     )
     assert code == 1
     assert payload["reason"] == "owner-word-blank"
     payload2, code2 = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)],
+        repo, paths,
         launch_without=["cursor"], owner_words=["word"],
         calibration_rows=_calibration_rows(),
     )

@@ -25,6 +25,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import config_dir  # noqa: E402
 import engine_pref  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import launch_doctrine  # noqa: E402
@@ -36,8 +37,9 @@ import pilot_slot  # noqa: E402
 SLOT_REF_ENV = "SUPERHEROES_SLOT_REF"
 WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
 WORKTREES_DIR_NAME = ".superheroes-worktrees"
-CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
-_DEFAULT_CONFIG_DIR_NAME = ".claude"
+CONFIG_DIR_ENV = config_dir.CONFIG_DIR_ENV
+_DEFAULT_CONFIG_DIR_NAME = config_dir.DEFAULT_CONFIG_DIR_NAME
+_expand_home = config_dir._expand_home
 # The CLI's documented input for reasoning effort is CLAUDE_CODE_EFFORT_LEVEL, and an
 # environment variable takes precedence over both the `--effort` flag and the `effortLevel`
 # settings key. CLAUDE_EFFORT is NOT an input: the CLI writes its own resolved effort back
@@ -206,22 +208,6 @@ def worktree_root(env=None):
     return os.path.join(home, WORKTREES_DIR_NAME)
 
 
-def _expand_home(path, env):
-    """expanduser against the SUPPLIED env's HOME, not the ambient process env.
-
-    The child inherits the env passed here, so expanding `~` through the launcher's own
-    HOME would record a root the child never uses.
-    """
-    if not path.startswith("~"):
-        return path
-    home = env.get("HOME")
-    if not isinstance(home, str) or not home:
-        return os.path.expanduser(path)
-    if path == "~" or path.startswith("~" + os.sep):
-        return home + path[1:]
-    return os.path.expanduser(path)
-
-
 def spawn_config_dir(env=None, cwd=None):
     """The absolute config root the spawned child will write its session transcript under.
 
@@ -256,21 +242,7 @@ def spawn_config_dir(env=None, cwd=None):
     without it falls back to its own env root (pre-#1036 behaviour). Recording a
     non-absolute value instead would refuse the whole record.
     """
-    base = dict(env if env is not None else os.environ)
-    configured = base.get(CONFIG_DIR_ENV)
-    if isinstance(configured, str) and configured.strip():
-        path = _expand_home(configured.strip(), base)
-        if os.path.isabs(path):
-            return path
-        if isinstance(cwd, str) and os.path.isabs(cwd):
-            return os.path.normpath(os.path.join(cwd, path))
-        return None
-    home = base.get("HOME")
-    if not isinstance(home, str) or not home.strip():
-        home = os.path.expanduser("~")
-    if not os.path.isabs(home):
-        return None
-    return os.path.join(home, _DEFAULT_CONFIG_DIR_NAME)
+    return config_dir.resolve(env=env, cwd=cwd)
 
 
 _CTL_KERN = 1

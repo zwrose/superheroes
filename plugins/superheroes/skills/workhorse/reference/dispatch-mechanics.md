@@ -201,8 +201,7 @@ the at-dispatch-time summary only. For the full CLI argument surface, read
 
 ### Result channels
 
-Both dispatchable engines — **codex** and **cursor** — use the **native** channel. **Claude** is not
-dispatchable through the shell (`build_argv_result` refuses it); its map entry is historical.
+All three dispatchable engines — **codex**, **cursor**, and **claude** — use the **native** channel.
 
 **Codex** receives the result path as `-o <run-dir>/native-result-<n>.json` with `--output-schema
 <run-dir>/native-schema.json`. **Cursor** receives it in a per-attempt prompt file
@@ -210,7 +209,21 @@ dispatchable through the shell (`build_argv_result` refuses it); its map entry i
 `Result file (write exactly this path; nothing else is graded): <path>` and the declared schema
 quoted in a fenced block) — under the argv `cursor-agent --model <tok> -p --trust -f --sandbox
 enabled --output-format stream-json` for both roles (`--mode plan` is gone: plan mode cannot write
-the file).
+the file). **Claude** receives `--json-schema <declared schema JSON>` on argv at run-open and the
+prompt on stdin under `claude -p --model <tok> --effort <effort> --output-format stream-json
+--verbose`, plus `--restricted` for review or `--permission-mode acceptEdits --restricted`
+for write; a claude write dispatch is edit-only inside the run cwd because no OS sandbox is
+available through this CLI, so an order needing to run commands does not route to claude today.
+The runner materializes the `structured_output` from the last `{"type":"result"}` event
+on stdout to `<run-dir>/native-result-<n>.json` at attempt end. `attempt-ended.stdoutResult`
+records `materialized`, `absent`, `error`, or `occupied` — only `materialized` is loaded;
+`occupied` forfeits `native-result-path-occupied`; `absent` and `error` forfeit
+`native-result-missing`. At run-open the shell resolves `CLAUDE_CONFIG_DIR` through
+`lib/config_dir.resolve(env, cwd)`, records it as `run-opened.configDir`, and refuses at open with
+`config-dir-unusable:<why>` when it is not an existing directory; at spawn the same value is injected
+with `CLAUDE_CODE_EFFORT_LEVEL=<seat effort>` (`engine-started.env` records both pins). Telemetry
+uses `engagement.source: "claude-stream"`, `telemetry: "tool-calls"`; distinct `tool_use` block
+ids across `assistant` events are counted, excluding the `StructuredOutput` call.
 
 On the native channel, the output adapter reads a typed result file validated against the declared
 schema at `<run-dir>/native-schema.json`. Admission is engine-neutral: the schema on disk must equal
@@ -224,19 +237,26 @@ refuses that attempt (`native-result-path-occupied`). Cursor adds attempt-prompt
 dangling symlink, directory — the engine learns the run dir from the result path, so a first attempt
 could plant the second's), `attempt-prompt-unwritable`, and `prompt-tampered` (the staged source
 prompt's bytes no longer match the digest bound at run-open). Every refusal is a forfeit or an attempt
-refusal — the runner never scans stdout for a result and never repairs a malformed file.
+refusal — the runner never scans stdout for a result and never repairs a malformed file. Claude adds
+`config-dir-unusable:<why>` at run-open and the adapter refusals `unregistered-engine-model`,
+`fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
 
-Completion is the process exit plus the typed file; a missing or invalid file forfeits. Progress and
-engagement telemetry come from codex's JSONL event stream on `--json` (`engagement.source:
-"codex-events"`); cursor's stream-json event stream (`engagement.source: "cursor-stream"`,
-`tool_call` events counted by distinct call id). Stdout is telemetry, never a result, on both. The
-`--output-format json` envelope is never used: it emits one object at exit and carries no
-`tool_call` events.
+Completion is the process exit plus the typed file — for codex and cursor the file the engine writes
+directly, for claude the materialized structured output; a missing or invalid file forfeits.
+Progress and engagement telemetry come from codex's JSONL event stream on `--json`
+(`engagement.source: "codex-events"`); cursor's stream-json event stream (`engagement.source:
+"cursor-stream"`, `tool_call` events counted by distinct call id); claude's stream-json event stream
+(`engagement.source: "claude-stream"`, `tool_use` blocks counted by distinct id, excluding
+`StructuredOutput`). Stdout is telemetry for codex and cursor, never a result; on claude stdout
+carries telemetry and the final `{"type":"result"}` envelope from which the runner materializes the
+typed file. The `--output-format json` envelope emits one object at exit and carries no tool-call
+events — codex and cursor never use it; claude reads the identical envelope as the last line of
+`stream-json --verbose`, not through the `json` single-object mode.
 
 Every run the shell opens never receives marker-channel recoveries: no `salvage` block, no
 `forfeit-with-engaged-artifact`, no `stdout-capped-by-attempt` forfeit, and no
 `report-missing-items-delivered` reclassification or `itemCheck` on a forfeit. A run whose opened
-record is marker — a persisted pre-3c journal, codex or cursor — never spawns again: the spawn-side
+record is marker — a persisted pre-upgrade journal — never spawns again: the spawn-side
 check runs before argv coherence, so a stale argv is not what refuses it; its attempt ends
 `marker-channel-retired`. The execution record's `promptSha256` binds the bytes the engine received
 — the attempt prompt for cursor (`attemptPromptSha256`/`attemptPromptPath` on `engine-started`), the
@@ -267,11 +287,12 @@ typed-file trial passed both halves (R9 as amended 2026-09-19). The stdout captu
 
 Wave preflight runs one real review dispatch per dispatchable engine before any builder launches.
 Resolve `ROOT_DIR` as in every other recipe here, then run `python3 -B
-"$ROOT_DIR/lib/conformance_probe.py" run --engine <codex|cursor>` — optional `--repo-root`,
+"$ROOT_DIR/lib/conformance_probe.py" run --engine <codex|cursor|claude>` — optional `--repo-root`,
 `--run-dir`, `--timeout`, and `--wave <id>` (the launcher's wave id, recorded on the result); only
 the engine name is required. Each invocation allocates a unique dispatch order id; a `--run-dir` that
 already holds a folded terminal result refuses `run-dir-reused` with nothing launched. It dispatches through the shell's own
-library entry on the engine's declared native channel (the typed file for both engines), using that
+library entry on the engine's declared native channel (the typed file for codex and cursor, the
+materialized structured output for claude), using that
 engine's `reviewer-deep` cell, and grades three legs **separately**:
 `resultProduction` (the folded result is a typed, validated result), `completionDetection` (the
 attempt ended by natural exit 0 inside the wait and the run folded terminal), and
@@ -282,12 +303,12 @@ failed=<legs> dependent lanes: <…>`; the JSON result carries `legs`, `failed`,
 `probedCell`, `repoRoot`, `completedAt`, and a `preflightCheck` member shaped as the launcher's
 `engine-auth` check entry. Per-leg failure vocabulary: `result-did-not-validate` or the shell's own
 `native-result-*` / parser detail; `no-response-within-wait`, `attempt-ended-missing`, or
-`auth-or-config-refusal`; `telemetry-absent`. `--engine claude` refuses `engine-not-dispatchable` —
-the CLI-Claude engine branch is a later child's; the engine set is the adapter's dispatchable vendors
-intersected with the channel map, by construction, with no separate list.
+`auth-or-config-refusal`; `telemetry-absent`. The engine set is the adapter's dispatchable vendors
+intersected with the channel map — `codex`, `cursor`, and `claude` — by construction, with no
+separate list.
 
 Before launch, compose the walked `engine-auth` check from one probe result per **dispatchable**
-engine (`codex` and `cursor` — not merely the engines the calibration routes to):
+engine (`codex`, `cursor`, and `claude` — not merely the engines the calibration routes to):
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"

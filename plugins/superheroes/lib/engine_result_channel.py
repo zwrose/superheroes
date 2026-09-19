@@ -44,12 +44,17 @@ _STRICT_MODE_REFINEMENTS = {
 _CHANNEL_BY_ENGINE = {
     "codex": CHANNEL_NATIVE,
     "cursor": CHANNEL_NATIVE,
-    "claude": CHANNEL_MARKER,
+    "claude": CHANNEL_NATIVE,
 }
 
 RESULT_DELIVERY_ARGV = "argv"      # the shell appends -o <path> --output-schema <schema>
 RESULT_DELIVERY_PROMPT = "prompt"  # the shell names <path> in a per-attempt prompt block
-_RESULT_DELIVERY_BY_ENGINE = {"codex": RESULT_DELIVERY_ARGV, "cursor": RESULT_DELIVERY_PROMPT}
+RESULT_DELIVERY_STDOUT = "stdout"  # the shell passes --json-schema <schema> on argv; the runner materializes the final result event's structured_output to the result path
+_RESULT_DELIVERY_BY_ENGINE = {
+    "codex": RESULT_DELIVERY_ARGV,
+    "cursor": RESULT_DELIVERY_PROMPT,
+    "claude": RESULT_DELIVERY_STDOUT,
+}
 
 RESULT_FILE_LINE_PREFIX = "Result file (write exactly this path; nothing else is graded): "
 
@@ -771,6 +776,12 @@ def write_result_contract_from_schema(schema, delivery=None):
             "The graded result is the JSON object you write to the result file named in the typed-file "
             "contract at the end of this prompt; it must match the declared output schema."
         )
+    elif delivery == RESULT_DELIVERY_STDOUT:
+        graded_line = (
+            "The graded result is your structured output — the typed final response the --json-schema "
+            "flag governs; it is the report object matching the declared schema. "
+            "Print nothing else as a result; stdout is telemetry."
+        )
     else:
         graded_line = "The final response must be exactly one JSON object matching the declared output schema."
     lines = [
@@ -802,6 +813,12 @@ def review_result_contract_from_schema(schema, delivery=None):
         result_line = (
             "The graded result is the JSON object you write to the result file named in the typed-file "
             "contract at the end of this prompt; its root has exactly one property `result` wrapping the graded branch."
+        )
+    elif delivery == RESULT_DELIVERY_STDOUT:
+        result_line = (
+            "The graded result is your structured output — the typed final response the --json-schema flag governs; "
+            "its root has exactly one property `result` wrapping the graded branch. "
+            "Print nothing else as a result; stdout is telemetry."
         )
     else:
         result_line = (

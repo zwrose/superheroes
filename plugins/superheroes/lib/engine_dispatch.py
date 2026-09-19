@@ -38,6 +38,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cli_contract as cc  # noqa: E402  argparse caller-contract builders
+import config_dir  # noqa: E402  claude config root resolution (#1273)
 import dispatch_guard  # noqa: E402  model allowlist gate (#600, #1269 WO-B)
 import dispatch_outcome  # noqa: E402  outcome vocabulary chokepoint (#747)
 import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
@@ -442,10 +443,9 @@ def _native_schema_path(run_dir_real):
 
 
 def _native_channel_suffix(opened):
-    """Return (--output-schema, schema_path) when this run is native-channel argv-delivery."""
+    """Return native-channel argv suffix for this run's result delivery mode."""
     try:
-        if engine_result_channel.result_delivery(opened.get("engine")) != engine_result_channel.RESULT_DELIVERY_ARGV:
-            return ()
+        delivery = engine_result_channel.result_delivery(opened.get("engine"))
     except Exception:
         return ()
     if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
@@ -453,7 +453,16 @@ def _native_channel_suffix(opened):
     schema_path = opened.get("nativeSchemaPath")
     if not schema_path:
         return ()
-    return ("--output-schema", schema_path)
+    if delivery == engine_result_channel.RESULT_DELIVERY_ARGV:
+        return ("--output-schema", schema_path)
+    if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        try:
+            with open(schema_path, "r", encoding="utf-8") as fh:
+                text = fh.read().rstrip("\n")
+        except OSError:
+            return ()
+        return ("--json-schema", text)
+    return ()
 
 
 def _spawn_native_result_argv(run_dir_real, attempt, opened, spawn_argv):
@@ -573,8 +582,12 @@ def _open_native_channel_argv(run_dir_real, engine, argv, run_kind, expected_res
             fh.write("\n")
     except OSError:
         return None, "native-schema-unwritable", None
-    if engine_result_channel.result_delivery(engine) == engine_result_channel.RESULT_DELIVERY_ARGV:
+    schema_text = json.dumps(schema, separators=(",", ":"))
+    delivery = engine_result_channel.result_delivery(engine)
+    if delivery == engine_result_channel.RESULT_DELIVERY_ARGV:
         argv_out = list(argv) + ["--output-schema", schema_path]
+    elif delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        argv_out = list(argv) + ["--json-schema", schema_text]
     else:
         argv_out = list(argv)
     return argv_out, None, schema_path
@@ -742,6 +755,106 @@ def _scrub_env(env=None):
         base.pop(key, None)
     base.pop(JOURNAL_ROOT_ENV, None)
     return base
+
+
+def _claude_child_env(opened, base=None):
+    """Build the claude child environment and the pins recorded on engine-started. (#1273)"""
+    env = _scrub_env(base)
+    pins = {}
+    if opened.get("engine") != "claude":
+        return env, pins
+    cfg = opened.get("configDir")
+    if isinstance(cfg, str) and cfg:
+        env["CLAUDE_CONFIG_DIR"] = cfg
+        pins["CLAUDE_CONFIG_DIR"] = cfg
+    seat = _seat_dict_from_resolved_snapshot(opened.get("resolvedInputs"))
+    effort = seat.get("effort") if isinstance(seat, dict) else None
+    if isinstance(effort, str) and effort:
+        env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
+        pins["CLAUDE_CODE_EFFORT_LEVEL"] = effort
+    env.pop("CLAUDE_EFFORT", None)
+    return env, pins
+
+
+def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path):
+    """Materialize claude stdout delivery's structured_output to the native result path. (#1273)"""
+    try:
+        delivery = engine_result_channel.result_delivery(opened.get("engine"))
+    except Exception:
+        return None
+    if delivery != engine_result_channel.RESULT_DELIVERY_STDOUT:
+        return None
+    stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+    result_path = _native_result_path(run_dir_real, attempt)
+    if result_path is None:
+        return "error"
+    env = engine_adapter.claude_result_envelope(stdout)
+    if (not isinstance(env, dict)
+            or env.get("is_error") is True
+            or "structured_output" not in env):
+        # axis: a path planted during the run occupies the materializer even without a result event.
+        try:
+            os.lstat(result_path)
+        except FileNotFoundError:
+            return "absent"
+        return "occupied"
+    payload = json.dumps(env["structured_output"], separators=(",", ":")) + "\n"
+    try:
+        fd = os.open(
+            result_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+    except FileExistsError:
+        return "occupied"
+    except OSError:
+        return "error"
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+    except OSError:
+        return "error"
+    return "materialized"
+
+
+def _stdout_delivery_gate(run_dir_real, attempt, opened):
+    """Refuse admission when stdout delivery did not materialize a native result. (#1273)"""
+    try:
+        delivery = engine_result_channel.result_delivery(opened.get("engine"))
+    except Exception:
+        return None
+    if delivery != engine_result_channel.RESULT_DELIVERY_STDOUT:
+        return None
+    records, _corrupt = _journal_read(run_dir_real)
+    state = _journal_state(records)
+    attempt_rec = state.get("attempts", {}).get(attempt)
+    if not isinstance(attempt_rec, dict):
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "native-result-missing",
+        }
+    ended = attempt_rec.get("ended")
+    if not isinstance(ended, dict):
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "native-result-missing",
+        }
+    stdout_result = ended.get("stdoutResult")
+    if stdout_result == "materialized":
+        return None
+    if stdout_result == "occupied":
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "native-result-path-occupied",
+        }
+    return {
+        "forfeit": True,
+        "reason": dispatch_outcome.REASON_FORFEITED,
+        "detail": "native-result-missing",
+    }
 
 
 def _journal_root_for_run_dir(run_dir_real):
@@ -2883,6 +2996,12 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     if prompt_refusal:
         _journal_prep_refusal(run_dir_real, attempt, prompt_refusal)
         return
+    if opened.get("engine") == "claude":
+        cfg = opened.get("configDir")
+        # axis: spawn-time configDir must still be a directory — open-time record is not enough.
+        if not isinstance(cfg, str) or not cfg or not os.path.isdir(cfg):
+            _journal_prep_refusal(run_dir_real, attempt, "config-dir-unusable:not-a-directory")
+            return
     prompt_path = staged_path
     argv, recorded = _derive_and_record_spawn_argv(
         run_dir_real, attempt, spawn_argv, opened.get("engine"))
@@ -2900,6 +3019,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     except OSError:
         prompt_bytes = None
     write_progress = _progress_writer(progress_path)
+    child_env, env_pins = _claude_child_env(opened)
     try:
         with open(prompt_path, "rb") as prompt_fh:
             stdout_fd = os.open(
@@ -2910,7 +3030,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             )
             proc = subprocess.Popen(
                 argv, stdin=prompt_fh, stdout=stdout_fd, stderr=stderr_fd,
-                cwd=cwd, start_new_session=True, env=_scrub_env(),
+                cwd=cwd, start_new_session=True, env=child_env,
             )
     except Exception as exc:
         _journal_append(run_dir_real, {
@@ -2931,6 +3051,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         engine_started["attemptPromptPath"] = staged_path
         if prompt_sha is not None:
             engine_started["attemptPromptSha256"] = prompt_sha
+    if env_pins:
+        engine_started["env"] = env_pins
     if not _journal_append(run_dir_real, engine_started):
         _terminate_process_group(pgid)
         try:
@@ -2988,6 +3110,9 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         stdout_path, stderr_path, prev_stdout, prev_stderr,
         last_activity_at, activity_stream,
     )
+    stdout_result = _materialize_stdout_result(
+        run_dir_real, attempt, opened, stdout_path,
+    )
     _, stdout_observed, stdout_rewrite_failed = _cap_file_tail(
         stdout_path, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT,
     )
@@ -3024,6 +3149,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         ended_record["lastActivityAt"] = None
         ended_record["silenceSeconds"] = None
         ended_record["activityStream"] = None
+    if stdout_result is not None:
+        ended_record["stdoutResult"] = stdout_result
     _journal_append(run_dir_real, ended_record)
 
 
@@ -3127,6 +3254,10 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     except OSError:
         pass
 
+    stdout_result = _materialize_stdout_result(
+        run_dir_real, attempt, opened, stdout_path,
+    )
+
     refusal = None
     if rc == 127 and stderr_tail.startswith("spawn-failed:"):
         refusal = stderr_tail
@@ -3150,6 +3281,8 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         "activityStream": None,
         "activitySource": "injected-seam",
     }
+    if stdout_result is not None:
+        ended["stdoutResult"] = stdout_result
     _journal_append(run_dir_real, ended)
     return True, ""
 
@@ -3350,6 +3483,10 @@ def _review_attempt_engagement(
                 exclude = (native_result_path,)
             tool_calls = engine_adapter.cursor_tool_calls(stdout, exclude_paths=exclude)
             source = "cursor-stream" if tool_calls is not None else "none"
+        elif engine == "claude":
+            tokens = None
+            tool_calls = engine_adapter.claude_tool_calls(stdout)
+            source = "claude-stream" if tool_calls is not None else "none"
         else:
             tokens = None
             tool_calls = None
@@ -3601,6 +3738,9 @@ def _verify_native_schema(opened, run_kind, expected_result_kind=None):
 
 def _admit_native_write_result(run_dir_real, attempt, opened):
     """Single admission authority for the native write channel (codex, cursor). Never raises."""
+    gate = _stdout_delivery_gate(run_dir_real, attempt, opened)
+    if gate is not None:
+        return gate
     obj, detail = _load_native_result_json(run_dir_real, attempt)
     if detail:
         return {
@@ -3659,6 +3799,13 @@ def _admit_native_write_result(run_dir_real, attempt, opened):
 
 def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_nonce):
     """Single admission authority for the native review channel (codex, cursor). Never raises."""
+    gate = _stdout_delivery_gate(run_dir_real, attempt, opened)
+    if gate is not None:
+        return _native_review_forfeit(
+            engagement,
+            gate["detail"],
+            payload_shape=engine_result_channel.native_review_payload_shape(gate["detail"]),
+        )
     loaded = _read_native_review_envelope(run_dir_real, attempt, engagement)
     if not isinstance(loaded, tuple):
         return loaded
@@ -4505,6 +4652,15 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     except OSError as exc:
         return False, "run-dir-setup-failed:%s" % type(exc).__name__
 
+    if engine == "claude":
+        cfg = config_dir.resolve(env=os.environ, cwd=cwd)
+        if cfg is None:
+            return False, "config-dir-unusable:unresolvable"
+        if not os.path.isdir(cfg):
+            return False, "config-dir-unusable:not-a-directory"
+    else:
+        cfg = None
+
     channel = engine_result_channel.channel_for(engine)
     argv, native_err, native_schema_path = _open_native_channel_argv(
         run_dir_real, engine, argv, RUN_KIND_REVIEW, expected_result_kind,
@@ -4539,6 +4695,8 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     }
     if native_schema_path is not None:
         record["nativeSchemaPath"] = native_schema_path
+    if cfg is not None:
+        record["configDir"] = cfg
     if expected_result_kind in REVIEW_RESULT_KINDS:
         record["expectedResultKind"] = expected_result_kind
     effective_nonce = review_findings_schema.effective_nonce(echo_nonce)
@@ -4907,7 +5065,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 fed_prompt += _prompt_section_sep + engine_result_channel.review_result_contract_from_schema(
                     native_schema, delivery=delivery,
                 )
-            if delivery != engine_result_channel.RESULT_DELIVERY_PROMPT:
+            if delivery == engine_result_channel.RESULT_DELIVERY_ARGV:
                 fed_prompt += _prompt_section_sep + engine_adapter.REVIEW_RESULT_CONTRACT(
                     expected_result_kind,
                 )
@@ -5095,6 +5253,15 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     except OSError as exc:
         return False, "run-dir-setup-failed:%s" % type(exc).__name__
 
+    if engine == "claude":
+        cfg = config_dir.resolve(env=os.environ, cwd=cwd)
+        if cfg is None:
+            return False, "config-dir-unusable:unresolvable"
+        if not os.path.isdir(cfg):
+            return False, "config-dir-unusable:not-a-directory"
+    else:
+        cfg = None
+
     echo_nonce = secrets.token_hex(16)
 
     argv, native_err, native_schema_path = _open_native_channel_argv(
@@ -5132,6 +5299,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     }
     if native_schema_path is not None:
         record["nativeSchemaPath"] = native_schema_path
+    if cfg is not None:
+        record["configDir"] = cfg
     effective_nonce = review_findings_schema.effective_nonce(echo_nonce)
     if effective_nonce is not None:
         record["echoNonce"] = effective_nonce
