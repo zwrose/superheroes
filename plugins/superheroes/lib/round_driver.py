@@ -60,6 +60,7 @@ import canary_outcome  # noqa: E402
 import core_md  # noqa: E402
 import circuit_breaker  # noqa: E402
 import mode_registry  # noqa: E402
+import decision_kinds  # noqa: E402
 import delta_surface  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import diff_scope  # noqa: E402
@@ -1787,6 +1788,8 @@ def _record_compile_drops(state, drops):
 
 
 def _decision(state, kind, detail):
+    if kind not in decision_kinds.DECISION_KINDS:
+        raise ValueError("decision-kind-unregistered:%s" % kind)
     state["decisions"].append({"round": state["round"], "kind": kind, "detail": detail})
 
 

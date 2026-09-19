@@ -11,6 +11,7 @@ import re
 import subprocess
 
 import circuit_breaker
+import decision_kinds
 import model_registry
 import record_paths
 import receipt_disclosures
@@ -116,43 +117,7 @@ def _certification_shape(state, seats):
         return shape
     return cert.get("shape")
 
-_DECISION_KEYS = (
-    "audit-echo-mismatch",
-    "audit-provenance-fail",
-    "author-justified-drop",
-    "canary-failed",
-    "canary-outcome-failed",
-    "canary-plant-undetected",
-    "canary-unverified",
-    "cannot-certify",
-    "capped-with-open-blocker",
-    "capped-with-open-critical",
-    "confirmation-rearm",
-    "converged",
-    "fix-batch-split",
-    "judgment-fail-closed",
-    "judgment-gate",
-    "judgment-skip",
-    "not-discharged",
-    "panel-incomplete-canary-gap",
-    "panel-seat-missing",
-    "receipt-missing-seat",
-    "resume-confirmation",
-    "round-ceiling",
-    "scoped-finder-skipped",
-    "seat-engaged-artifact",
-    "seat-map-constraint-violated",
-    "seat-vacuous",
-    "self-recovery",
-    "stall-choice",
-    "stall-menu",
-    "unknown-surface",
-    "verifier-refuted",
-    "verify-fail",
-    "verify-skip-but-configured",
-    "verify-skipped",
-    "verify-unresolved",
-)
+_DECISION_KEYS = decision_kinds.DECISION_KINDS
 
 VERDICT_TO_TERMINAL_STATE = {
     "converged": "certified",

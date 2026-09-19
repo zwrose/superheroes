@@ -44,7 +44,7 @@ def test_p3_round_driver_round_economy_reference():
     economy_start = text.index("## Round economy")
     economy_end = text.index("## Lens coverage beside counts", economy_start)
     economy = text[economy_start:economy_end]
-    assert "default 4" in economy
+    assert "FIX_BATCH_CAP_DEFAULT" in economy
     audits_row_start = text.index("| `dispatch-audits` |")
     audits_row_end = text.index("\n", audits_row_start)
     assert "payload.verify" in text[audits_row_start:audits_row_end]

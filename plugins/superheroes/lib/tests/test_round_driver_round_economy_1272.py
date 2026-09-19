@@ -252,6 +252,11 @@ def _four_findings():
             for i in range(4)]
 
 
+def _five_findings():
+    return [{"title": "bug%d" % i, "severity": "Important", "file": "f%d.py" % i, "line": 1}
+            for i in range(5)]
+
+
 def _multi_head(n):
     return "".join(
         "diff --git a/f%d.py b/f%d.py\nindex 2..3 100644\n--- a/f%d.py\n+++ b/f%d.py\n"
@@ -318,6 +323,26 @@ def test_t5_fix_batch_exact_cap_no_split(tmp_path):
     ok, state = RD.load_state(d)
     assert not any(d_["kind"] == "fix-batch-split" for d_ in state["decisions"])
     assert state["rounds"]["1"]["fixBatches"] == [{"index": 0, "size": 4, "fixes": 1}]
+
+
+# axis: a configured cap below the default governs the slice size
+def test_t5_fix_batch_cap_config_governs_slices(tmp_path):
+    d = str(tmp_path)
+    head = _multi_head(5)
+    cfg = _cfg(verifyCommand="pytest -q", diff=_multi_file_diff(5), fixBatchCap=2)
+    n = _drive_to_phase(d, cfg, _responder(round1_findings=_five_findings(), head=head),
+                        RD.P_FIXER)
+    for expected_attempt, expected_size in enumerate((2, 2, 1)):
+        assert n["attempt"] == expected_attempt
+        assert len(n["payload"]["batch"]) == expected_size
+        s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                          {"fixes": [], "headDiff": head, "changedSubjects": ["Code"]})
+        assert s["ok"], s
+        n = RD.cmd_next(d)
+    assert n["phase"] == RD.P_AUDITS
+    ok, state = RD.load_state(d)
+    assert ok
+    assert [b["size"] for b in state["rounds"]["1"]["fixBatches"]] == [2, 2, 1]
 
 
 # axis: durable path — fix-batch.json and fix-batch.1.json for split slices
@@ -402,15 +427,27 @@ def test_t8_fix_batch_chokepoint_census():
     assert func_name == "_queue_fix_batch"
 
 
+_CAP_DEFAULT_SENTENCE_RE = re.compile(
+    r"round_phases\.FIX_BATCH_CAP_DEFAULT[^0-9]*\((\d+)\)"
+)
+
+
 # axis: default cap constant and reference prose stay aligned
 def test_t9_cap_default_and_reference_aligned():
-    assert round_phases.FIX_BATCH_CAP_DEFAULT == 4
     ref = os.path.join(os.path.dirname(_LIB), "skills", "review-code", "reference",
                        "round-driver.md")
     with open(ref, encoding="utf-8") as fh:
         text = fh.read()
-    assert "fixBatchCap" in text
-    assert "default 4" in text
+    economy_start = text.index("## Round economy")
+    economy_end = text.index("## Lens coverage beside counts", economy_start)
+    economy = text[economy_start:economy_end]
+    m = _CAP_DEFAULT_SENTENCE_RE.search(economy)
+    if not m:
+        raise AssertionError(
+            "§ Round economy must cite round_phases.FIX_BATCH_CAP_DEFAULT with its numeric "
+            "value in parentheses; no match in sentence block starting: %s"
+            % economy.strip()[:200])
+    assert int(m.group(1)) == round_phases.FIX_BATCH_CAP_DEFAULT
 
 
 # axis: VERIFY_BUDGET placeholder — sorted files, no VERIFY_COMMAND
