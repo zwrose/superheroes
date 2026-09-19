@@ -282,8 +282,9 @@ def test_recorded_row_missing_one_identity_field_refused_at_sinks(tmp_path, miss
     before = _journal_bytes(d)
     partial = _complete_recorded_row(pend)
     del partial[missing_field]
-    with pytest.raises(RD.round_records.IncompleteRevisionIdentity):
+    with pytest.raises(RD.round_records.IncompleteRevisionIdentity) as excinfo:
         RD._journal_event(d, "record-result", "recorded", **partial)
+    assert excinfo.value.missing == (missing_field,)
     assert _journal_bytes(d) == before
 
     journal = os.path.join(d, RD.JOURNAL_FILE)
@@ -291,6 +292,7 @@ def test_recorded_row_missing_one_identity_field_refused_at_sinks(tmp_path, miss
         RC.begin(d, "test").add_journal_append(
             journal, {"cmd": "record-result", "outcome": "recorded", **partial})
     assert excinfo.value.reason == "recorded-row-incomplete"
+    assert excinfo.value.detail == missing_field
     assert _journal_bytes(d) == before
 
 
@@ -312,14 +314,19 @@ def test_real_record_paths_carry_complete_revision_identity(tmp_path, adapters):
     assert row["citedHead"] == anchor.get("headSha") == HEAD_SHA
 
     missing_seat = "security-reviewer"
+    sweep_seat = "test-reviewer"
     for other in RD.DIMENSIONS:
-        if other not in (seat, missing_seat):
-            _land(d, other)
-    sweep_out = RD.cmd_record_result(d, sweep=True)
-    assert sweep_out["ok"], sweep_out
-    for row in _recorded_rows(d):
-        if row.get("cmd") == "record-result" and row.get("seat") in sweep_out["recorded"]:
-            _assert_revision_identity(row)
+        if other not in (seat, missing_seat, sweep_seat):
+            _land_and_record(d, other)
+    _land(d, sweep_seat)
+    state = _state(d)
+    anchor = RD._orders_anchor(state, d, pend["round"], pend["phase"], pend["attempt"])
+    schema = RR.seat_result_schema_for_state_version(state.get("schemaVersion"))
+    sweep_results = RR.sweep_landing(
+        d, pend["round"], pend["phase"], current_attempt=pend["attempt"],
+        roster=list(RD.DIMENSIONS), anchor=anchor, seat_result_schema=schema)
+    assert any(r.get("ok") and r.get("seatKey") == sweep_seat and r.get("reason") is None
+               for r in sweep_results), sweep_results
 
     missing_out = RD.cmd_record_missing(d, missing_seat, pend["attempt"], "forfeit")
     assert missing_out["ok"], missing_out
@@ -332,9 +339,10 @@ def test_real_record_paths_carry_complete_revision_identity(tmp_path, adapters):
 
     adv = _advance(d, tmp_path)
     assert adv["ok"], adv
-    for row in _recorded_rows(d):
-        if row.get("cmd") == "advance":
-            _assert_revision_identity(row)
+    rows_from_advance = [r for r in _recorded_rows(d) if r.get("cmd") == "advance"]
+    assert rows_from_advance
+    for row in rows_from_advance:
+        _assert_revision_identity(row)
 
 
 def test_anchor_check_head_sha_edges():
@@ -474,15 +482,9 @@ def test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_h
     certified_head = RCE._certified_head_sha(ctx)
     assert recorded[0]["citedHead"] == certified_head == head_sha
     receipt, refusal = RCE.certify(session_dir)
-    assert (receipt is None) ^ (refusal is None), (receipt, refusal)
-    if receipt is not None:
-        assert isinstance(receipt, dict)
-        assert receipt.get("terminal") is not None
-    else:
-        assert isinstance(refusal, dict)
-        assert refusal.get("class") is not None
-        assert refusal.get("bindingFailure") != RCE.BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND
-        assert refusal.get("bindingFailure") != "execution-evidence-stale-head"
+    assert refusal is None, refusal
+    assert isinstance(receipt, dict)
+    assert receipt.get("terminal") is not None
 
 
 def test_journal_revision_helpers_removed_from_lib():
