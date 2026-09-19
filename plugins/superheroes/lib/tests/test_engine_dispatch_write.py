@@ -3465,3 +3465,144 @@ def test_write_run_execution_record_carries_runner_nonce(tmp_path, vendor):
     record, err = ED.run_execution_record(run_dir)
     assert err is None
     assert record["runnerNonce"] == echo_nonce
+
+
+# --- claude stdout delivery (#1273) ---
+
+_TEA = importlib.util.spec_from_file_location(
+    "test_engine_adapter", os.path.join(_HERE, "test_engine_adapter.py"))
+_TEA_MOD = importlib.util.module_from_spec(_TEA)
+_TEA.loader.exec_module(_TEA_MOD)
+_claude_event_stream = _TEA_MOD._claude_event_stream
+
+_MR = importlib.util.spec_from_file_location(
+    "model_registry", os.path.join(_HERE, "..", "model_registry.py"))
+MR = importlib.util.module_from_spec(_MR)
+_MR.loader.exec_module(MR)
+
+_OFF_ALLOWLIST_CLAUDE = "haiku-4.5"
+
+
+def _claude_seat(model="sonnet", effort="high"):
+    return _seat("claude", model, effort)
+
+
+def _ensure_claude_config_dir(tmp_path, monkeypatch, *, relative=None):
+    if relative is not None:
+        rel_dir = tmp_path / relative
+        rel_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", relative)
+        monkeypatch.delenv("HOME", raising=False)
+        return str(rel_dir.resolve())
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    cfg = home / ".claude"
+    cfg.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    return str(cfg)
+
+
+class _ClaudeStdoutWriteFakeRunner(FakeRunner):
+    def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+        self.calls.append({
+            "argv": list(argv),
+            "prompt_bytes": prompt_bytes,
+            "timeout": timeout,
+            "cwd": cwd,
+        })
+        idx = len(self.calls) - 1
+        if idx >= len(self.responses):
+            raise AssertionError("fake called too many times")
+        resp = self.responses[idx]
+        if callable(resp):
+            out = resp(argv, prompt_bytes, timeout, progress_cb, cwd)
+        elif isinstance(resp, tuple) and len(resp) == 4:
+            out = resp
+        else:
+            out = resp, False, 0, ""
+        if isinstance(out, tuple) and len(out) == 4:
+            stdout, timed_out, rc, stderr_tail = out
+        else:
+            stdout, timed_out, rc, stderr_tail = out, False, 0, ""
+        return stdout, timed_out, rc, stderr_tail
+
+
+def _claude_argv_for_run(seat, cwd):
+    built = EA.build_argv_result(seat, "build", {"cwd": cwd})
+    assert built["reason"] is None, built
+    return built["argv"]
+
+
+def _valid_claude_write_structured(**overrides):
+    obj = _valid_native_write_obj()
+    obj.update(overrides)
+    return obj
+
+
+def _claude_write_runner(structured=None):
+    if structured is None:
+        structured = _valid_claude_write_structured()
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        stream = _claude_event_stream(result=structured)
+        return stream, False, 0, ""
+    return runner
+
+
+def test_claude_write_open_records_native_channel_and_config_dir(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    seat = _claude_seat()
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=seat)
+    opened = _write_opened_record(run_dir)
+    assert opened["channel"] == ERC.CHANNEL_NATIVE
+    assert os.path.isabs(opened["configDir"])
+    with open(opened["nativeSchemaPath"], encoding="utf-8") as fh:
+        schema_text = fh.read().rstrip("\n")
+    assert opened["argv"][-2:] == ["--json-schema", schema_text]
+    built = EA.build_argv_result(seat, "build", {"cwd": opened["cwd"]})
+    assert opened["argv"][:-2] == built["argv"]
+
+
+def test_claude_write_admits_structured_report_through_injected_seam(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    structured = _valid_claude_write_structured(report="Receipt prose.")
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner(structured)])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, seat=_claude_seat())
+    assert res["ok"] is True
+    assert res["signal"] == "ok"
+    assert res["report"] == "Receipt prose."
+    assert "itemCheck" not in res
+    records, _ = ED._journal_read(res["runDir"])
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended["stdoutResult"] == "materialized"
+
+
+def test_claude_write_blank_report_forfeits_native_result_report_blank(tmp_path, monkeypatch):
+    # edge 14
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    structured = _valid_claude_write_structured(report="   ")
+    runner = _claude_write_runner(structured)
+    fake = _ClaudeStdoutWriteFakeRunner([runner, runner])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, seat=_claude_seat())
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-report-blank"
+
+
+def test_claude_off_allowlist_seat_refused_at_spawn_gate_write(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    res = _dispatch_write(
+        tmp_path, _ClaudeStdoutWriteFakeRunner([]),
+        cwd=wt, seat=_claude_seat(model="haiku-4.5", effort="high"),
+    )
+    assert res["ok"] is False
+    assert res["attempts"] == 0
+    assert _OFF_ALLOWLIST_CLAUDE in res["detail"]

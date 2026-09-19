@@ -217,6 +217,25 @@ def _probe_result(engine, **overrides):
     return base
 
 
+def _ok_dispatchable_probe_paths(tmp_path, repo, omit=(), **per_engine):
+    """Write one probe JSON per dispatchable engine; values are overrides or full records."""
+    paths = []
+    for engine in CP.DISPATCHABLE_ENGINES:
+        if engine in omit:
+            continue
+        supplied = per_engine.get(engine)
+        if supplied is not None and not isinstance(supplied, dict):
+            data = supplied
+        elif isinstance(supplied, dict):
+            data = _probe_result(engine, repoRoot=repo, **supplied)
+        else:
+            data = _probe_result(engine, repoRoot=repo)
+        path = tmp_path / ("probe-%s.json" % engine)
+        path.write_text(json.dumps(data), encoding="utf-8")
+        paths.append(str(path))
+    return paths
+
+
 def _calibration_rows(**prefs):
     merged = dict(_CALIB_PREFS)
     merged.update(prefs)
@@ -227,11 +246,45 @@ def _calibration_rows(**prefs):
 
 
 def test_engine_set_is_derived_from_adapter_and_channel_map():
-    assert CP.DISPATCHABLE_ENGINES == ("codex", "cursor")
-    payload, code, stderr = CP.probe("claude", repo_root="/tmp", run_dir="/tmp/run")
+    assert CP.DISPATCHABLE_ENGINES == ("codex", "cursor", "claude")
+    payload, code, stderr = CP.probe("openai", repo_root="/tmp", run_dir="/tmp/run")
     assert code == 1
     assert payload["legs"]["resultProduction"]["detail"] == "engine-not-dispatchable"
     assert stderr is not None
+
+
+def test_dispatchable_engines_include_claude():
+    assert CP.DISPATCHABLE_ENGINES == ("codex", "cursor", "claude")
+
+
+def _claude_seat():
+    cell = MR.matrix_config("reviewer-deep", "claude")
+    return {"vendor": "claude", "model": cell[0], "effort": cell[1], "role": "reviewer-deep"}
+
+
+def _claude_event_stream(tool_calls=1, structured_output=None):
+    lines = []
+    for i in range(tool_calls):
+        lines.append(json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-%d" % i,
+                    "name": "Glob",
+                    "input": {},
+                }],
+            },
+        }))
+    if structured_output is None:
+        structured_output = {"result": _native_verdicts_branch()}
+    lines.append(json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "structured_output": structured_output,
+    }))
+    return "\n".join(lines) + "\n"
 
 
 def test_run_grades_three_legs_ok_on_valid_native_result(tmp_path):
@@ -258,6 +311,112 @@ def test_run_grades_three_legs_ok_on_valid_native_result(tmp_path):
     assert "reason" in prompt_text
     assert '"result":' not in prompt_text
     assert "plugins/superheroes" not in prompt_text
+
+
+def test_run_grades_three_legs_ok_on_valid_claude_native_result(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    structured = {"result": _native_verdicts_branch()}
+    stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return stdout, False, 0, ""
+
+    fake = FakeRunner([runner, runner], sync_native=False)
+    payload, code, stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["channel"] == ERC.CHANNEL_NATIVE
+    assert payload["legs"]["resultProduction"]["ok"] is True
+    assert payload["legs"]["completionDetection"]["ok"] is True
+    assert payload["legs"]["progressTelemetry"]["ok"] is True
+    assert stderr is None
+
+
+def test_result_production_fails_on_claude_native_schema_invalid(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    invalid = _native_verdicts_branch()
+    invalid["investigated"] = ["path.py", 42]
+    structured = {"result": invalid}
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return _claude_event_stream(structured_output=structured), False, 0, ""
+
+    fake = FakeRunner([runner, runner], sync_native=False)
+    payload, code, _stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert payload["legs"]["resultProduction"]["ok"] is False
+    assert payload["legs"]["resultProduction"]["detail"] == "native-result-schema-invalid"
+    assert payload["legs"]["completionDetection"]["ok"] is True
+    assert payload["legs"]["progressTelemetry"]["ok"] is True
+
+
+def test_claude_telemetry_absent_when_only_the_structured_output_call(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    structured = {"result": _native_verdicts_branch()}
+    stdout = _claude_event_stream(tool_calls=0, structured_output=structured)
+    stdout = json.dumps({
+        "type": "assistant",
+        "message": {"content": [{
+            "type": "tool_use", "id": "so1", "name": "StructuredOutput", "input": {},
+        }]},
+    }) + "\n" + stdout
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return stdout, False, 0, ""
+
+    fake = FakeRunner([runner, runner], sync_native=False)
+    payload, code, _stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert payload["legs"]["resultProduction"]["ok"] is True
+    assert payload["legs"]["progressTelemetry"]["ok"] is False
+    assert payload["legs"]["progressTelemetry"]["detail"] == "telemetry-absent"
+
+
+def test_claude_completion_fails_on_nonzero_exit(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    fake = FakeRunner([("", False, 1, "")])
+    payload, code, _stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    leg = payload["legs"]["completionDetection"]
+    assert leg["ok"] is False
+    assert leg["detail"] == "auth-or-config-refusal"
 
 
 def test_run_grades_three_legs_ok_on_valid_cursor_native_result(tmp_path):
@@ -591,13 +750,9 @@ def test_preflight_entry_hold_when_failed_without_owner_word(tmp_path):
     codex_fail["legs"]["resultProduction"]["ok"] = False
     codex_fail["failed"] = ["resultProduction"]
     codex_fail["preflightCheck"]["state"] = "fail"
-    cursor_ok = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex_fail), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor_ok), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_fail)
     payload, code = CP.preflight_entry(
-        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+        repo, paths, calibration_rows=_calibration_rows(),
     )
     assert code == 0
     assert payload["engine-auth"]["state"] == "fail"
@@ -627,9 +782,7 @@ def test_preflight_entry_refuses_missing_duplicate_foreign_stale(tmp_path, case,
         paths.append(str(cpath))
         if case == "duplicate":
             paths.append(str(cpath))
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor), encoding="utf-8")
-    paths.append(str(kpath))
+    paths.extend(_ok_dispatchable_probe_paths(tmp_path, repo, omit=("codex",), cursor=cursor))
     payload, code = CP.preflight_entry(
         repo, paths, calibration_rows=_calibration_rows(), max_age_seconds=3600,
     )
@@ -650,14 +803,10 @@ def test_preflight_entry_launch_without_names_substitutes_from_probed_cells(tmp_
     codex_fail = _probe_result("codex", ok=False, repoRoot=repo, failed=["resultProduction"])
     codex_fail["legs"]["resultProduction"]["ok"] = False
     codex_fail["failed"] = ["resultProduction"]
-    cursor_ok = _probe_result("cursor", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex_fail), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor_ok), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_fail)
     payload, code = CP.preflight_entry(
         repo,
-        [str(cpath), str(kpath)],
+        paths,
         launch_without=["codex"],
         owner_words=["owner approves"],
         calibration_rows=cal,
@@ -692,14 +841,10 @@ def test_preflight_entry_parks_on_same_family(tmp_path, monkeypatch):
     cursor_fail = _probe_result("cursor", ok=False, repoRoot=repo, failed=["resultProduction"])
     cursor_fail["legs"]["resultProduction"]["ok"] = False
     cursor_fail["failed"] = ["resultProduction"]
-    codex_ok = _probe_result("codex", repoRoot=repo)
-    cpath = tmp_path / "codex.json"
-    cpath.write_text(json.dumps(codex_ok), encoding="utf-8")
-    kpath = tmp_path / "cursor.json"
-    kpath.write_text(json.dumps(cursor_fail), encoding="utf-8")
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, cursor=cursor_fail)
     payload, code = CP.preflight_entry(
         repo,
-        [str(cpath), str(kpath)],
+        paths,
         launch_without=["cursor"],
         owner_words=["proceed anyway"],
         calibration_rows=cal,
@@ -749,7 +894,7 @@ def test_preflight_requires_all_dispatchable_engines_not_only_calibrated(tmp_pat
     cal = _calibration_rows(implementation="codex", reviewer="codex", pilot="codex")
     payload, code = CP.preflight_entry(repo, [str(cpath)], calibration_rows=cal)
     assert code == 1
-    assert payload["reason"] == "probe-missing:cursor"
+    assert payload["reason"] == "probe-missing:claude"
 
 
 def test_preflight_entry_wave_binding_none_without_wave_arg(tmp_path):
