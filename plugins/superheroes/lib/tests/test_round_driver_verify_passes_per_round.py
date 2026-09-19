@@ -183,7 +183,7 @@ def test_v2_certified_receipt_omits_verify_passes(tmp_path):
     state["_toVerify"] = staged
     round_driver._fold_verifiers(
         state, state["config"],
-        {"verdicts": [{"id": staged[0]["id"], "verdict": "CONFIRMED", "evidence": "ran"}]})
+        {"verdicts": [{"id": staged[0]["id"], "verdict": "CONFIRMED", "reason": "ran", "evidence": "ran"}]})
     assert state["rounds"]["1"]["verifyPasses"]
     receipt = round_driver.build_receipt(state, str(tmp_path))
     assert receipt["schemaVersion"] == 2
@@ -200,7 +200,7 @@ def _state_with_verify_passes(schema_version):
     state["_toVerify"] = staged
     round_driver._fold_verifiers(
         state, state["config"],
-        {"verdicts": [{"id": staged[0]["id"], "verdict": "CONFIRMED", "evidence": "ran"}]})
+        {"verdicts": [{"id": staged[0]["id"], "verdict": "CONFIRMED", "reason": "ran", "evidence": "ran"}]})
     assert state["rounds"]["1"]["verifyPasses"]
     return state
 

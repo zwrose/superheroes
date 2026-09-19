@@ -409,6 +409,17 @@ def _marker_channel_retired_run(opened):
     return _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE
 
 
+def _marker_channel_retired_terminal(opened, run_dir_real, state, argv, attempts):
+    """Terminal forfeit for a persisted marker-channel run the engine no longer serves."""
+    return _with_run_fields(
+        {"ok": False, "terminal": True,
+         "reason": dispatch_outcome.REASON_FORFEITED,
+         "detail": "marker-channel-retired",
+         "attempts": attempts, "forfeited": True},
+        run_dir=run_dir_real, argv=argv,
+    )
+
+
 def _native_result_path(run_dir_real, attempt):
     """Per-attempt native result file path. attempt must be a positive int."""
     if not isinstance(attempt, int):
@@ -4131,6 +4142,9 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     continue
 
                 latest = max(attempts)
+                if _marker_channel_retired_run(opened):
+                    return _fold_run(run_dir_real, state, _marker_channel_retired_terminal(
+                        opened, run_dir_real, state, argv, latest))
                 if run_kind == RUN_KIND_WRITE:
                     grade = _grade_write_attempt(run_dir_real, state, latest)
                 else:

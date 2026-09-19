@@ -798,6 +798,49 @@ def test_codex_marker_channel_run_refuses_to_spawn(tmp_path):
     assert cursor_fake.calls
 
 
+def test_codex_marker_channel_write_run_refuses_to_spawn(tmp_path):
+    run_dir = str(tmp_path / "marker-retired-codex-write")
+    wt, _main = _linked_worktree_pair(tmp_path)
+    _dispatch_write(tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=0)
+    _strip_opened_to_marker_channel(run_dir)
+    fake = FakeRunner([])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=120)
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "marker-channel-retired"
+    assert fake.calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended1 = next(
+        r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended1.get("refusal") == "marker-channel-retired"
+
+
+def test_codex_marker_channel_write_completed_attempt_refuses_not_stdout_capped(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    run_dir = str(tmp_path / "marker-retired-codex-write-completed")
+    _dispatch_write(tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=0)
+    over = ED.MAX_STDOUT_CAPTURE + 4096
+    truncated = "z" * over + "ungradeable tail without contract"
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(truncated)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": len(truncated), "at": time.time(),
+    })
+    _strip_opened_to_marker_channel(run_dir)
+    fake = FakeRunner([])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=120)
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "marker-channel-retired"
+    assert "stdout-capped" not in str(res.get("detail", ""))
+    assert fake.calls == []
+
+
 def test_codex_open_argv_is_canonical_spawn_seam_carries_per_attempt_flags(tmp_path):
     """Journal at open stores canonical seat argv; spawn seam gets per-attempt codex flags."""
     repo_root = _repo(tmp_path)
