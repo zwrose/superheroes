@@ -2595,8 +2595,8 @@ def test_advance_judgment_colliding_identity_severity_policy_dispositions_not_co
     state = _state(d)
     state["config"]["repoRoot"] = repo
     state["_judgmentFindings"] = [
-        {"title": "widen the API", "severity": "Critical", "file": "f.py", "line": 1, "tradeoff": True},
-        {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1, "tradeoff": True},
+        {"title": "widen the API " + "x" * 205 + " alpha", "severity": "Critical", "file": "f.py", "line": 1, "tradeoff": True},
+        {"title": "widen the API " + "x" * 205 + " bravo", "severity": "Important", "file": "f.py", "line": 1, "tradeoff": True},
     ]
     RD.save_state(d, state)
     out = _advance(d, tmp_path)
@@ -2847,7 +2847,7 @@ def test_advance_owner_gate_fold_refused_leaves_session_unblocked(tmp_path, adap
     pend = RD.cmd_next(d)
     hand = RD.cmd_submit(d, pend["phase"], pend["attempt"], pend["expectedStateHash"],
                          {"dispositions": [
-                             {"id": RD._location_id(state["_judgmentFindings"][0]),
+                             {"id": RD._finding_key_of(state["_judgmentFindings"][0]),
                               "disposition": "fix-as-suggested"},
                          ]})
     assert hand["ok"] is True, hand
@@ -2948,7 +2948,7 @@ def _write_owner_artifact(tmp_path, artifact, name="owner-artifact.json"):
 
 def _judgment_dispositions_artifact(state):
     finding = state["_judgmentFindings"][0]
-    return {"dispositions": [{"id": RD._location_id(finding),
+    return {"dispositions": [{"id": RD._finding_key_of(finding),
                               "disposition": "fix-as-suggested"}]}
 
 
@@ -4055,7 +4055,7 @@ def _commit_dirs_with_done(session_dir):
 def _judgment_submit_artifact(session_dir):
     state = _state(session_dir)
     return {"dispositions": [
-        {"id": RD._location_id(state["_judgmentFindings"][0]), "disposition": "skip"},
+        {"id": RD._finding_key_of(state["_judgmentFindings"][0]), "disposition": "skip"},
     ]}
 
 

@@ -488,3 +488,14 @@ def test_union_dimensions_joins_strings_and_flattens_lists():
 def test_union_dimensions_no_dims_leaves_merge_without_dimension_key():
     merged = V._merge_group([{"severity": "Minor"}, {"severity": "Minor"}])
     assert "dimension" not in merged
+
+
+def test_is_staged_id_shape():
+    """T11b: is_staged_id matches v<N> only."""
+    assert V.is_staged_id("v") is False
+    assert V.is_staged_id("v01x") is False
+    assert V.is_staged_id("V0") is False
+    assert V.is_staged_id(0) is False
+    assert V.is_staged_id(None) is False
+    assert V.is_staged_id("v0") is True
+    assert V.is_staged_id("v12") is True
