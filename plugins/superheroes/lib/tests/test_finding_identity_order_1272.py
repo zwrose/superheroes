@@ -413,6 +413,60 @@ def test_persisted_targets_without_marker_dedupe_by_content():
     assert len(fix_batch) == 1
 
 
+def test_summary_only_long_findings_key_by_label_not_title():
+    """T17: summary-only long findings hash finding_label, not title."""
+    from finding_identity import normalize_title
+
+    prefix = "x" * 165
+    alpha = {"file": "f.py", "line": 5, "summary": prefix + " alpha", "severity": "Important"}
+    beta = {"file": "f.py", "line": 5, "summary": prefix + " beta", "severity": "Important"}
+    bare = SC.location_key(alpha)
+    suffix = SC.sha256_text(normalize_title(prefix + " alpha"))[:12]
+    assert SC.minted_identity_key(alpha) == bare + "#" + suffix
+    assert SC.minted_identity_key(alpha) != bare + "#" + SC.sha256_text("")[:12]
+
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, [alpha, beta])
+    assert len(state["findings"]) == 2
+    keys = {f[SC.FINDING_KEY_FIELD] for f in state["findings"]}
+    assert len(keys) == 2
+
+    titled = dict(alpha, title=alpha["summary"])
+    assert SC.minted_identity_key(alpha) == SC.minted_identity_key(titled)
+
+    empty = {"file": "f.py", "line": 5, "severity": "Important"}
+    assert SC.minted_identity_key(empty) == SC.location_key(empty)
+    assert SC.minted_identity_key("not-a-dict") is None
+
+
+def test_durable_skeleton_carries_finding_key_so_resume_keeps_one_identity():
+    """T18: durable skeleton carries findingKey so resume keeps one identity."""
+    RM = _load("review_memory")
+
+    prefix = "x" * 165
+    finding = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important"}
+    compiled, _ = RD.mechanical_compile([finding], None)
+    long_finding = compiled[0]
+    skeleton = RM.summarize_record({"findings": [dict(long_finding)]})
+    assert skeleton["findings"][0][SC.FINDING_KEY_FIELD] == long_finding[SC.FINDING_KEY_FIELD]
+    assert skeleton["findings"][0]["title"] == RM.clamp_title(long_finding["title"])
+
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, compiled)
+    state["findings"][0]["disposition"] = "refuted"
+    state["_records"] = [RM.summarize_record({"findings": [dict(state["findings"][0])]})]
+    certified = RC._certification_findings(state)
+    assert len(certified) == 1
+    assert certified[0]["disposition"] == "refuted"
+
+    rec = {"findings": [dict(long_finding)]}
+    assert RM.summarize_record(RM.summarize_record(rec)) == RM.summarize_record(rec)
+
+    bare = {"file": "a.py", "line": 1, "title": "short", "severity": "Minor"}
+    bare_skeleton = RM.summarize_record({"findings": [bare]})
+    assert SC.FINDING_KEY_FIELD not in bare_skeleton["findings"][0]
+
+
 def test_identity_derivation_has_one_home_census():
     """Census: identity derivation lives only in session_contract except _mint_finding_keys."""
     import ast

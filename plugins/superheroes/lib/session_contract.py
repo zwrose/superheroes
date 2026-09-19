@@ -112,7 +112,7 @@ def minted_identity_key(finding):
     if not isinstance(finding, dict):
         return None
     base = location_key(finding)
-    full_norm = normalize_title(str(finding.get("title") or ""))
+    full_norm = normalize_title(finding_label(finding))
     clamped_norm = normalize_title(clamp_title(finding_label(finding)))
     if full_norm != clamped_norm:
         return base + "#" + sha256_text(full_norm)[:12]
