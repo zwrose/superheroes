@@ -130,15 +130,14 @@ $ git status --porcelain -- plugins/superheroes/lib/order_lint.py
 ```
 =================================== FAILURES ===================================
 ________ test_result_shape_ambiguous_fires_on_stdout_protocol_literals _________
-plugins/superheroes/lib/tests/test_order_lint.py:476: in test_result_shape_ambiguous_fires_on_stdout_protocol_literals
-    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(r), marker
-E   AssertionError: <<<SUPERHEROES-WRITE-REPORT>>>
-E   assert 'order-result-shape-ambiguous' in []
+plugins/superheroes/lib/tests/test_order_lint.py:484: in test_result_shape_ambiguous_fires_on_stdout_protocol_literals
+    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(r)
+E   AssertionError: assert 'order-result-shape-ambiguous' in []
 E    +  where 'order-result-shape-ambiguous' = OL.TOKEN_RESULT_SHAPE_AMBIGUOUS
-E    +  and   [] = _tokens({'checked': {'paths': 0, 'placeholders': 0}, 'findings': [], 'kind': 'implementer', 'ok': True, ...})
+E    +  and   [] = _tokens({'ok': True, 'kind': 'implementer', 'findings': [], 'checked': {'paths': 0, 'placeholders': 0}, ...})
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_order_lint.py::test_result_shape_ambiguous_fires_on_stdout_protocol_literals
-1 failed in 0.18s
+1 failed in 0.11s
 ```
 
 **Restore:** remove `return None`.
@@ -530,10 +529,14 @@ subagent at the `mechanical` role's registry cell (`haiku-4.5`, effort `medium`;
 check` exit 0), prompt = `rubric/orders/order-lint-semantic.md` at head `0feff589` plus the two
 trailing lines naming the order and the repository root. The seat is a detector with no code to
 neutralize: its bite-proof is a planted-defect order it must flag (red) beside a clean twin it must
-pass (green), plus the real C11 layer 3 specimen the deterministic half cannot catch. The
-deterministic half returns `{"ok": true, "findings": []}` on all three orders (run at head), so what
-fires below is the semantic seat alone. Local paths are the session's scratch directory, kept as
-written; nothing sensitive is in them.
+pass (green), plus the real C11 layer 3 specimen whose R29 prose violations the deterministic half
+does not catch. Deterministic `check` at the worktree root with `--alt-root plugins/superheroes`
+returns `{"ok": true, "findings": []}` on the two session-scratch orders (paths resolve via the
+worktree, not the scratch directory). On `c11_l3_wo_c.md` the same invocation returns
+`order-path-unresolved` for `lib/conformance_probe.py` when that WO-A sibling file is absent
+(`test_fixture_c11_l3_wo_c`); with the probe present, deterministic lint is clean and the semantic
+seat's R29 catch is orthogonal to path resolution. What fires below is the semantic seat alone.
+Local paths are the session's scratch directory, kept as written; nothing sensitive is in them.
 
 | ID | guarded element | axis | order | result |
 |---|---|---|---|---|
@@ -569,8 +572,11 @@ written; nothing sensitive is in them.
  "investigated": [".../plugins/superheroes/lib/tests/fixtures/order_lint/c11_l3_wo_c.md", ".../plugins/superheroes/rubric/prose-standard.md"]}
 ```
 
-The planted order and its clean twin are session scratch (the deterministic half's `check` on both:
-`{"ok": true, "findings": []}`); they are quoted here in full by their defects — two budgets, two
-`check_text` contracts — rather than committed as fixtures, because a fixture the seat has seen
-in the repository is not a control. The `...` in `investigated` elides the worktree's absolute
-prefix only.
+The planted order and its clean twin are session scratch; deterministic `check` on both at the
+worktree root with `--alt-root plugins/superheroes` returns `{"ok": true, "findings": []}` (the
+orders cite plugin paths that resolve only against the worktree). They are quoted here in full by
+their defects — two budgets, two `check_text` contracts — rather than committed as fixtures,
+because a fixture the seat has seen in the repository is not a control. WO-C's deterministic path
+findings when `conformance_probe.py` is absent are expected and exercised by
+`test_fixture_c11_l3_wo_c`; they are not semantic-seat defects. The `...` in `investigated`
+elides the worktree's absolute prefix only.

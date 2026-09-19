@@ -77,6 +77,7 @@ def test_token_unreadable_missing_file(tmp_path):
 
 
 def test_token_unreadable_empty_file(tmp_path):
+    # axis: empty order file maps to order-unreadable
     order = tmp_path / "empty.md"
     order.write_text("\n", encoding="utf-8")
     r = _record(OL.check(str(order), str(tmp_path)))
@@ -85,6 +86,7 @@ def test_token_unreadable_empty_file(tmp_path):
 
 
 def test_token_repo_root_unresolved(tmp_path):
+    # axis: missing --repo-root maps to order-repo-root-unresolved
     order = tmp_path / "order.md"
     order.write_text(_accepted_implementer_text(), encoding="utf-8")
     r = _record(OL.check(str(order), str(tmp_path / "missing")))
@@ -132,6 +134,7 @@ def test_token_budget_missing_implementer(tmp_path):
 
 
 def test_token_kind_unknown(tmp_path):
+    # axis: unknown --kind maps to order-kind-unknown
     repo = _mk_repo(tmp_path)
     r = _record(OL.check_text("budget 1\n", str(repo), kind="pilot"))
     assert _tokens(r) == [OL.TOKEN_KIND_UNKNOWN]
@@ -141,6 +144,7 @@ def test_token_kind_unknown(tmp_path):
 
 
 def test_fixer_skips_budget_token(tmp_path):
+    # axis: fixer kind skips the budget rule
     repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
     text = "# Fix\n\nRun `agents/implementer.md`.\n"
     r = _record(OL.check_text(text, str(repo), kind="fixer"))
@@ -148,6 +152,7 @@ def test_fixer_skips_budget_token(tmp_path):
 
 
 def test_fixer_placeholder_token(tmp_path):
+    # axis: fixer kind still catches unfilled placeholders
     repo = _mk_repo(tmp_path)
     text = "# Fix\n\nValue {bar}.\n"
     r = _record(OL.check_text(text, str(repo), kind="fixer"))
@@ -158,6 +163,7 @@ def test_fixer_placeholder_token(tmp_path):
 
 
 def test_accepted_shape_implementer(tmp_path):
+    # axis: valid implementer order with budget passes clean
     repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
     r = OL.check_text(_accepted_implementer_text(), str(repo), kind="implementer")
     assert r["ok"] is True
@@ -176,12 +182,14 @@ def test_accepted_shape_fixer(tmp_path):
 
 
 def test_edge1_unreadable_stops(tmp_path):
+    # axis: unreadable order yields exactly one finding
     r = _record(OL.check(str(tmp_path / "x.md"), str(tmp_path)))
     assert len(r["findings"]) == 1
     assert r["findings"][0]["token"] == OL.TOKEN_UNREADABLE
 
 
 def test_edge2_bad_repo_root_skips_paths(tmp_path):
+    # axis: bad repo root skips path and budget checks
     repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
     text = "budget 1\n\n`agents/implementer.md`\n"
     r = _record(OL.check_text(text, str(tmp_path / "nope"), kind="implementer"))
@@ -191,6 +199,7 @@ def test_edge2_bad_repo_root_skips_paths(tmp_path):
 
 
 def test_edge3_bad_alt_root_dropped(tmp_path):
+    # axis: unreadable alt-root is dropped, not fatal
     repo = _mk_repo(tmp_path, [("lib/foo.py", "x = 1\n")])
     text = "budget 1\n\n`lib/foo.py`\n"
     r = OL.check_text(
@@ -203,11 +212,13 @@ def test_edge3_bad_alt_root_dropped(tmp_path):
 
 
 def test_edge4_unknown_kind_alone(tmp_path):
+    # axis: unknown kind is the sole finding
     r = _record(OL.check_text("budget 1\n`x/y.py`\n", str(tmp_path), kind="other"))
     assert _tokens(r) == [OL.TOKEN_KIND_UNKNOWN]
 
 
 def test_edge5_path_escapes_root(tmp_path):
+    # axis: parent-relative path is refused with :escapes-root
     repo = _mk_repo(tmp_path)
     text = "budget 1\n\n`../outside.py`\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
@@ -215,6 +226,7 @@ def test_edge5_path_escapes_root(tmp_path):
 
 
 def test_edge6_expect_item_refused(tmp_path):
+    # axis: absolute --expect-item path is refused
     repo = _mk_repo(tmp_path)
     text = "budget 1\n"
     r = _record(OL.check_text(text, str(repo), expect_items=("/abs.py",), kind="implementer"))
@@ -222,6 +234,7 @@ def test_edge6_expect_item_refused(tmp_path):
 
 
 def test_edge7_duplicate_placeholder_once(tmp_path):
+    # axis: duplicate placeholder token fires once
     repo = _mk_repo(tmp_path)
     text = "budget 1\n\n{{X}} and {{X}}.\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
@@ -229,6 +242,7 @@ def test_edge7_duplicate_placeholder_once(tmp_path):
 
 
 def test_edge8_empty_findings_ok(tmp_path):
+    # axis: clean implementer order returns ok with no findings
     repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
     r = OL.check_text(_accepted_implementer_text(), str(repo))
     assert r["ok"] is True
@@ -236,6 +250,7 @@ def test_edge8_empty_findings_ok(tmp_path):
 
 
 def test_edge9_main_argparse_json(capsys):
+    # axis: CLI with no args emits unreadable JSON on stdout
     code = OL.main([])
     out = json.loads(capsys.readouterr().out)
     assert code == 1
@@ -244,6 +259,7 @@ def test_edge9_main_argparse_json(capsys):
 
 
 def test_edge10_not_text():
+    # axis: non-text input maps to not-text detail
     r = _record(OL.check_text(None, "/tmp", kind="implementer"))
     assert r["findings"][0]["detail"] == "not-text"
 
@@ -252,6 +268,7 @@ def test_edge10_not_text():
 
 
 def test_cli_check_exit_codes(tmp_path):
+    # axis: CLI check exits 0 on clean order and 1 on findings
     repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
     good = tmp_path / "good.md"
     good.write_text(_accepted_implementer_text(), encoding="utf-8")
@@ -274,6 +291,7 @@ def test_cli_check_exit_codes(tmp_path):
 
 
 def test_tokens_census():
+    # axis: every canonical token is observed across the suite
     for token in OL.TOKENS:
         assert token.startswith("order-")
     refused = [
@@ -293,6 +311,7 @@ def test_tokens_census():
 
 
 def test_per_token_exemption_does_not_leak_across_the_line(tmp_path):
+    # axis: per-token exemption does not leak past the line
     repo = _mk_repo(tmp_path)
     text = "budget 1\n\nAdd `new/x.py` following `missing/reference.md`\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
@@ -300,6 +319,7 @@ def test_per_token_exemption_does_not_leak_across_the_line(tmp_path):
 
 
 def test_generic_add_verb_does_not_exempt_reference_path(tmp_path):
+    # axis: generic add verb does not exempt a reference path
     repo = _mk_repo(tmp_path)
     text = "Budget: 1 command. Add a test modeled on `tests/reference.py`.\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
@@ -404,6 +424,7 @@ def test_planted_bad_path_in_fixture_order(tmp_path):
 
 
 def test_created_path_exemption_is_order_wide(tmp_path):
+    # axis: created-path exemption applies order-wide and dedupes paths
     repo = _mk_repo(tmp_path)
     semantic = "plugins/superheroes/rubric/orders/order-lint-semantic.md"
     text = (
@@ -425,6 +446,7 @@ def test_created_path_exemption_is_order_wide(tmp_path):
 
 
 def test_path_after_fence_is_checked(tmp_path):
+    # axis: path citation after a fenced block is still checked
     repo = _mk_repo(tmp_path)
     text = (
         "# WO\n\n"
@@ -439,6 +461,7 @@ def test_path_after_fence_is_checked(tmp_path):
 
 
 def test_shell_expansion_is_not_placeholder(tmp_path):
+    # axis: shell ${VAR} expansion is not a placeholder
     repo = _mk_repo(tmp_path)
     text = "# WO\n\nBudget: 1 command.\n\nRun `${PLUGIN_ROOT}/lib/order_lint.py`.\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
@@ -446,6 +469,7 @@ def test_shell_expansion_is_not_placeholder(tmp_path):
 
 
 def test_prose_path_is_checked(tmp_path):
+    # axis: bare prose path without backticks is checked
     repo = _mk_repo(tmp_path)
     text = "# WO\n\nBudget: 1 command.\n\nSee missing/file.py\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
@@ -453,6 +477,7 @@ def test_prose_path_is_checked(tmp_path):
 
 
 def test_http_prefixed_repo_path_is_checked(tmp_path):
+    # axis: http/client.py resolves as a repo path, not a URL
     repo = _mk_repo(tmp_path, [("http/client.py", "# stdlib shim\n")])
     text = "# WO\n\nBudget: 1 command.\n\nSee `http/client.py`.\n"
     r = OL.check_text(text, str(repo), kind="implementer")
@@ -460,6 +485,7 @@ def test_http_prefixed_repo_path_is_checked(tmp_path):
 
 
 def test_stdout_protocol_matches_engine_adapter_and_payload_contracts():
+    # axis: _STDOUT_PROTOCOL matches engine_adapter and payload_contracts
     import engine_adapter
     import payload_contracts
     contract, reason = payload_contracts.payload_contract(payload_contracts.P_FIXER)
@@ -498,6 +524,7 @@ def test_result_shape_ambiguous_fires_on_stdout_protocol_literals(tmp_path):
 
 
 def test_multi_channel_order_does_not_fire_result_shape(tmp_path):
+    # axis: multi-channel prose without literals does not fire result-shape
     repo = _mk_repo(tmp_path)
     text = (
         "Budget: 3 commands.\n"
@@ -509,6 +536,7 @@ def test_multi_channel_order_does_not_fire_result_shape(tmp_path):
 
 
 def test_created_path_exemption_after_fence(tmp_path):
+    # axis: created-path exemption survives a preceding fence
     repo = _mk_repo(tmp_path)
     text = (
         "```sh\n"
@@ -520,6 +548,7 @@ def test_created_path_exemption_after_fence(tmp_path):
 
 
 def test_sentence_ending_path_is_checked(tmp_path):
+    # axis: sentence-ending bare path is checked
     repo = _mk_repo(tmp_path)
     text = "Budget: 1 command. See missing/file.py.\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
@@ -527,6 +556,7 @@ def test_sentence_ending_path_is_checked(tmp_path):
 
 
 def test_sentence_ending_path_with_line_suffix_is_checked(tmp_path):
+    # axis: sentence-ending path with :line suffix strips the suffix
     repo = _mk_repo(tmp_path)
     for text in (
         "Budget: 1 command. See missing/file.py:12.\n",
@@ -537,6 +567,7 @@ def test_sentence_ending_path_with_line_suffix_is_checked(tmp_path):
 
 
 def test_markdown_link_path_is_checked(tmp_path):
+    # axis: markdown link target path is checked
     repo = _mk_repo(tmp_path)
     text = "Budget: 1 command. See [file](missing/file.py).\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
@@ -544,6 +575,7 @@ def test_markdown_link_path_is_checked(tmp_path):
 
 
 def test_markdown_link_to_existing_file_is_not_a_finding(tmp_path):
+    # axis: markdown link to an existing file is not unresolved
     target = "plugins/superheroes/lib/order_lint.py"
     repo = _mk_repo(tmp_path, [(target, "# lint\n")])
     text = "Budget: 1 command. See [lint](%s) for details.\n" % target
@@ -553,6 +585,7 @@ def test_markdown_link_to_existing_file_is_not_a_finding(tmp_path):
 
 
 def test_literal_brace_in_backtick_is_not_placeholder(tmp_path):
+    # axis: literal brace in backticks is not a placeholder
     repo = _mk_repo(tmp_path)
     text = "Budget: 1 command. Preserve literal `s3://bucket/{namespace}/x.json`.\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
@@ -560,6 +593,7 @@ def test_literal_brace_in_backtick_is_not_placeholder(tmp_path):
 
 
 def test_literal_brace_in_fence_is_not_placeholder(tmp_path):
+    # axis: literal brace in a fence is not a placeholder
     repo = _mk_repo(tmp_path)
     text = (
         "Budget: 1 command.\n\n"
@@ -572,6 +606,7 @@ def test_literal_brace_in_fence_is_not_placeholder(tmp_path):
 
 
 def test_double_brace_in_fence_is_still_placeholder(tmp_path):
+    # axis: double-brace placeholder inside a fence is still detected
     repo = _mk_repo(tmp_path)
     text = "Budget: 1 command.\n\n```\n{{NAME}}\n```\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
@@ -579,6 +614,7 @@ def test_double_brace_in_fence_is_still_placeholder(tmp_path):
 
 
 def test_prose_expect_item_exempts_declared_path(tmp_path):
+    # axis: prose expect-item declaration exempts the cited path
     repo = _mk_repo(tmp_path)
     text = "Budget: 1 command. Edit missing/new.py\n"
     r = OL.check_text(text, str(repo), expect_items=["missing/new.py"], kind="implementer")
@@ -586,6 +622,7 @@ def test_prose_expect_item_exempts_declared_path(tmp_path):
 
 
 def test_prose_new_file_marker_exempts_path(tmp_path):
+    # axis: Create ... (new file) marker exempts the path
     repo = _mk_repo(tmp_path)
     text = "Budget: 1 command. Create missing/new.py (new file)\n"
     r = OL.check_text(text, str(repo), kind="implementer")
@@ -593,6 +630,7 @@ def test_prose_new_file_marker_exempts_path(tmp_path):
 
 
 def test_cli_unknown_kind_reports_kind_token(tmp_path):
+    # axis: CLI --kind pilot reports order-kind-unknown
     repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
     order = tmp_path / "order.md"
     order.write_text(_accepted_implementer_text(), encoding="utf-8")
