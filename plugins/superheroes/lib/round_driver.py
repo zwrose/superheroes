@@ -2522,6 +2522,14 @@ def _fix_batch_row_key(row):
     return _finding_key_of(row)
 
 
+def _history_row_key(row):
+    """Identity of one durable history row (judgment log / audit record) — the leaf's one
+    derivation: the stamped marker when present, else the row's own content. Never `id`."""
+    if not isinstance(row, dict):
+        return None
+    return session_contract.finding_identity_key(row)
+
+
 def _finding_history(state):
     """Latest gate and audit rulings per finding key across ``state['rounds']``."""
     history = {}
@@ -2541,10 +2549,9 @@ def _finding_history(state):
             for item in log:
                 if not isinstance(item, dict):
                     continue
-                fid = item.get("id")
-                if not isinstance(fid, str) or not fid.strip():
+                key = _history_row_key(item)
+                if not key:
                     continue
-                fid = fid.strip()
                 gate_ruling = {"round": rnd_num, "disposition": item.get("disposition")}
                 if item.get("reason") is not None:
                     gate_ruling["reason"] = item.get("reason")
@@ -2557,23 +2564,22 @@ def _finding_history(state):
                     gate_ruling["file"] = item.get("file")
                 if item.get("line") is not None:
                     gate_ruling["line"] = item.get("line")
-                slot = history.setdefault(fid, {"gateRuling": None, "priorAudit": None})
+                slot = history.setdefault(key, {"gateRuling": None, "priorAudit": None})
                 slot["gateRuling"] = gate_ruling
         audits = round_entry.get("audits")
         if isinstance(audits, list):
             for item in audits:
                 if not isinstance(item, dict):
                     continue
-                fid = item.get("id")
-                if not isinstance(fid, str) or not fid.strip():
+                key = _history_row_key(item)
+                if not key:
                     continue
-                fid = fid.strip()
                 prior = {"round": rnd_num, "ruling": item.get("ruling")}
                 if item.get("reason") is not None:
                     prior["reason"] = item.get("reason")
                 if item.get("unauthenticatedCause") is not None:
                     prior["unauthenticatedCause"] = item.get("unauthenticatedCause")
-                slot = history.setdefault(fid, {"gateRuling": None, "priorAudit": None})
+                slot = history.setdefault(key, {"gateRuling": None, "priorAudit": None})
                 slot["priorAudit"] = prior
     return history
 
@@ -2598,13 +2604,12 @@ def _validate_gate_guidance_logs(rounds):
             guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
             if not isinstance(guidance, str) or not guidance.strip():
                 continue
-            fid = item.get("id")
-            if not isinstance(fid, str) or not fid.strip():
+            key = _history_row_key(item)
+            if not key:
                 raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
-            fid = fid.strip()
-            if fid in seen_ids:
+            if key in seen_ids:
                 raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
-            seen_ids.add(fid)
+            seen_ids.add(key)
 
 
 def _gate_guidance_entries(state, rnd):
@@ -2627,12 +2632,11 @@ def _gate_guidance_entries(state, rnd):
                 guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
                 if not isinstance(guidance, str) or not guidance.strip():
                     continue
-                fid = item.get("id")
-                if not isinstance(fid, str) or not fid.strip():
+                key = _history_row_key(item)
+                if not key:
                     continue
-                fid = fid.strip()
-                covered_keys.add(fid)
-                out.append({"id": fid, "title": item.get("title"),
+                covered_keys.add(key)
+                out.append({"id": key, "title": item.get("title"),
                             "file": item.get("file"), "line": item.get("line"),
                             "guidance": guidance.strip()})
     batch = state.get("_fixBatch")
@@ -2833,7 +2837,8 @@ def _fold_judgment(state, config, artifact):
             skipped.append({"id": fid, "file": f.get("file"), "line": f.get("line"),
                             "title": f.get("title"), "severity": f.get("severity"),
                             "reason": reason.strip()})
-            disposition_log.append({"id": fid, "title": f.get("title"), "disposition": "skip",
+            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                                    "title": f.get("title"), "disposition": "skip",
                                     "reason": reason.strip()})
             _decision(state, "judgment-skip",
                       "owner skipped judgment blocker %r — reason: %s"
@@ -2843,20 +2848,23 @@ def _fold_judgment(state, config, artifact):
         if disposition == "fix-with-guidance":
             g["judgmentDisposition"] = "fix-with-guidance"
             guidance = d.get("guidance")
-            entry = {"id": fid, "title": f.get("title"), "file": f.get("file"),
+            entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                     "title": f.get("title"), "file": f.get("file"),
                      "line": f.get("line"), "disposition": "fix-with-guidance"}
             if isinstance(guidance, str) and guidance.strip():
                 entry[GATE_GUIDANCE_RECORD_KEY] = guidance.strip()
             disposition_log.append(entry)
         elif disposition == "fix-as-suggested":
             g["judgmentDisposition"] = "fix-as-suggested"
-            disposition_log.append({"id": fid, "title": f.get("title"),
+            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                                    "title": f.get("title"),
                                     "disposition": "fix-as-suggested"})
         else:
             # missing / unknown disposition, or a skip with no citable reason → fail closed to fix.
             g["judgmentDisposition"] = "fix-as-suggested"
             g["judgmentFailClosed"] = True
-            disposition_log.append({"id": fid, "title": f.get("title"),
+            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                                    "title": f.get("title"),
                                     "disposition": "fix-as-suggested", "failClosed": True})
             _decision(state, "judgment-fail-closed",
                       "judgment blocker %r had no valid disposition (%r) — folded as "

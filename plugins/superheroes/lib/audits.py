@@ -184,6 +184,10 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
         base = {"id": fid, "identity": ident, "file": f.get("file"), "line": f.get("line"),
                 "title": f.get("title"), "classKey": f.get("classKey"),
                 "dimension": f.get("dimension"), "taxonomy": f.get("taxonomy")}
+        # "findingKey" mirrors session_contract.FINDING_KEY_FIELD; literal kept to avoid importing session_contract (R28).
+        marker = f.get("findingKey")
+        if isinstance(marker, str) and marker:
+            base["findingKey"] = marker
 
         # No matching result (silence) → fail-closed not-discharged, disclosed as unaudited.
         # An ambiguous id is IN seen_ids OR is a duplicate target id — disclosed via `ambiguous`.

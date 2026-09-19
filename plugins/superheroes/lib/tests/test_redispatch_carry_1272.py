@@ -1,11 +1,14 @@
 """Re-dispatched fixer orders carry prior audit and gate rulings (#1272 WO-4)."""
+import ast
 import json
 import os
 
 import pytest
 
+import audits
 import round_phases as RP
 import round_records as RR
+import session_contract as SC
 
 import round_driver as RD
 
@@ -24,6 +27,7 @@ def _minimal_paths(session_dir):
 def _guidance_disposition(fid, title, guidance, *, file="g.py", line=5):
     return {
         "id": fid,
+        SC.FINDING_KEY_FIELD: fid,
         "title": title,
         "file": file,
         "line": line,
@@ -57,11 +61,12 @@ def _specimen_state(tmp_path, rnd=3):
         "rounds": {
             "1": {"judgmentDispositions": [
                 _guidance_disposition(_K, "guard missing", _GUIDANCE),
-                {"id": _K2, "title": "other issue", "file": "h.py", "line": 2,
-                 "disposition": "fix-as-suggested"},
+                {"id": _K2, SC.FINDING_KEY_FIELD: _K2, "title": "other issue", "file": "h.py",
+                 "line": 2, "disposition": "fix-as-suggested"},
             ]},
             "2": {"audits": [
-                {"id": _K, "ruling": "not-discharged", "reason": _AUDIT_REASON},
+                {"id": _K, SC.FINDING_KEY_FIELD: _K, "ruling": "not-discharged",
+                 "reason": _AUDIT_REASON},
             ]},
         },
         "_fixBatch": [_ROW_K, _ROW_K2],
@@ -194,3 +199,102 @@ def test_row_without_key_serializes_undecorated(tmp_path):
     assert materialized == [row]
     assert "priorAudit" not in materialized[0]
     assert "gateRuling" not in materialized[0]
+
+
+def test_history_row_key_follows_marker_not_row_id(tmp_path):
+    """T6: audit history keys by findingKey even when id disagrees."""
+    marker_other = "h.py::other issue@L2"
+    state = {
+        "_fixBatch": [_ROW_K, _ROW_K2],
+        "rounds": {
+            "2": {"audits": [
+                {"id": "v0", SC.FINDING_KEY_FIELD: _K, "ruling": "not-discharged",
+                 "reason": _AUDIT_REASON},
+                {"id": _K, SC.FINDING_KEY_FIELD: marker_other, "ruling": "discharged",
+                 "reason": "fixed"},
+            ]},
+        },
+    }
+    session_dir = str(tmp_path / "marker-session")
+    os.makedirs(session_dir, exist_ok=True)
+    path = RD._ensure_fix_batch_file(session_dir, 3, state)
+    with open(path, encoding="utf-8") as fh:
+        materialized = json.loads(fh.read())
+    row_k = next(r for r in materialized if r.get("findingKey") == _K)
+    row_k2 = next(r for r in materialized if r.get("findingKey") == _K2)
+    assert row_k["priorAudit"]["reason"] == _AUDIT_REASON
+    assert row_k2["priorAudit"]["ruling"] == "discharged"
+
+
+def test_fold_judgment_stamps_finding_key_on_all_disposition_shapes():
+    """T7: _fold_judgment stamps findingKey on skip, fix-with-guidance, and fail-closed logs."""
+    skip_f = {"title": "defer this", "severity": "Important", "file": "s.py", "line": 1,
+              "tradeoff": True}
+    guidance_f = {"title": "narrow the API", "severity": "Minor", "file": "g.py", "line": 3,
+                  "tradeoff": True}
+    fail_closed_f = {"title": "missing disposition", "severity": "Critical", "file": "f.py",
+                     "line": 5, "tradeoff": True}
+    state = RD.new_state({"leg": "code", "vendors": ["claude", "codex"], "diff": "d",
+                          "fixerVendor": "claude"})
+    RD._route_judgment_blockers(state, [dict(skip_f), dict(guidance_f), dict(fail_closed_f)])
+    ids = RD._judgment_row_ids(state["_judgmentFindings"])
+    assert len(ids) == 3
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": ids[0], "disposition": "skip", "reason": "defer the important one"},
+        {"id": ids[1], "disposition": "fix-with-guidance", "guidance": "narrow only"},
+    ]})
+    log = state["rounds"][str(state["round"])]["judgmentDispositions"]
+    by_disp = {e["disposition"]: e for e in log}
+    for entry in log:
+        assert entry[SC.FINDING_KEY_FIELD] == entry["id"]
+    assert by_disp["skip"][SC.FINDING_KEY_FIELD] == ids[0]
+    assert by_disp["fix-with-guidance"][SC.FINDING_KEY_FIELD] == ids[1]
+    fail_closed = next(e for e in log if e.get("failClosed"))
+    assert fail_closed[SC.FINDING_KEY_FIELD] == ids[2]
+
+
+def test_apply_audit_results_copies_target_finding_key_marker():
+    """T8: apply_audit_results copies findingKey from targets; absent marker → no key on row."""
+    marked = {"id": "v0", SC.FINDING_KEY_FIELD: "f.py::bug@L1", "file": "f.py", "line": 1,
+              "title": "bug", "severity": "Important"}
+    silent = {"id": "v1", SC.FINDING_KEY_FIELD: "g.py::gap@L2", "file": "g.py", "line": 2,
+              "title": "gap", "severity": "Minor"}
+    unmarked = {"id": "v2", "file": "h.py", "line": 3, "title": "plain", "severity": "Minor"}
+    out = audits.apply_audit_results(
+        [marked, silent, unmarked],
+        [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex"}],
+        expected_auditors={"v0": "codex"},
+        collection_manifest={"v0": "codex"},
+    )
+    discharged = next(a for a in out["audits"] if a["id"] == "v0")
+    silent_row = next(a for a in out["audits"] if a["id"] == "v1")
+    unmarked_row = next(a for a in out["audits"] if a["id"] == "v2")
+    assert discharged[SC.FINDING_KEY_FIELD] == marked[SC.FINDING_KEY_FIELD]
+    assert silent_row[SC.FINDING_KEY_FIELD] == silent[SC.FINDING_KEY_FIELD]
+    assert SC.FINDING_KEY_FIELD not in unmarked_row
+
+
+def test_history_readers_never_key_by_row_id_census():
+    """CENSUS: history readers derive keys via the leaf, never row id."""
+    func_names = ("_finding_history", "_validate_gate_guidance_logs", "_gate_guidance_entries")
+    lib_dir = os.path.join(os.path.dirname(__file__), "..")
+    path = os.path.join(lib_dir, "round_driver.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
+    func_nodes = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in func_names:
+            func_nodes[node.name] = node
+    assert set(func_nodes) == set(func_names)
+    for name, fn in func_nodes.items():
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Attribute) and func.attr == "get":
+                    if node.args and isinstance(node.args[0], ast.Constant):
+                        if node.args[0].value == "id":
+                            raise AssertionError("%s uses .get('id') at line %s" % (name, node.lineno))
+            if isinstance(node, ast.Subscript):
+                sl = node.slice
+                if isinstance(sl, ast.Constant) and sl.value == "id":
+                    raise AssertionError("%s uses ['id'] at line %s" % (name, node.lineno))
