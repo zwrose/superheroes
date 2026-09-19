@@ -70,6 +70,7 @@ def _accepted_fixer_text():
 
 
 def test_token_unreadable_missing_file(tmp_path):
+    # axis: check maps read failures to order-unreadable, never raises
     r = _record(OL.check(str(tmp_path / "nope.md"), str(tmp_path)))
     assert r["ok"] is False
     assert _tokens(r) == [OL.TOKEN_UNREADABLE]
@@ -91,6 +92,7 @@ def test_token_repo_root_unresolved(tmp_path):
 
 
 def test_token_path_unresolved(tmp_path):
+    # axis: non-exempt path candidates must resolve under a root
     repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
     text = "# WO\n\nBudget 3.\n\nSee `lib/missing_1339.py`.\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
@@ -101,6 +103,7 @@ def test_token_path_unresolved(tmp_path):
 
 
 def test_token_placeholder_unfilled(tmp_path):
+    # axis: {{NAME}} and {name} placeholders are detected and refused
     repo = _mk_repo(tmp_path)
     text = "# WO\n\nBudget 2.\n\nHello {{NAME}} and {foo}.\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
@@ -109,6 +112,7 @@ def test_token_placeholder_unfilled(tmp_path):
 
 
 def test_token_result_shape_ambiguous(tmp_path):
+    # axis: mixed stdout-report and native-typed literals are ambiguous
     repo = _mk_repo(tmp_path)
     text = (
         "# WO\n\nBudget 1.\n\n"
@@ -119,6 +123,7 @@ def test_token_result_shape_ambiguous(tmp_path):
 
 
 def test_token_budget_missing_implementer(tmp_path):
+    # axis: implementer orders must carry a budget signal
     repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
     text = "# WO\n\nEdit `agents/implementer.md`.\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
@@ -159,6 +164,7 @@ def test_accepted_shape_implementer(tmp_path):
 
 
 def test_accepted_shape_fixer(tmp_path):
+    # axis: fixer kind skips the budget rule
     repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
     r = OL.check_text(_accepted_fixer_text(), str(repo), kind="fixer")
     assert r["ok"] is True
@@ -298,6 +304,7 @@ def test_generic_add_verb_does_not_exempt_reference_path(tmp_path):
 
 
 def test_symlink_escape_is_unresolved(tmp_path):
+    # axis: symlink targets outside the root are refused with :escapes-root
     repo = _mk_repo(tmp_path)
     outside = tmp_path / "outside.py"
     outside.write_text("x = 1\n", encoding="utf-8")
@@ -378,6 +385,7 @@ def test_fixture_c11_l3_wo_a3():
 
 def test_planted_bad_path_in_fixture_order(tmp_path):
     """BP-OL-8 green half: a planted missing path in a fixture copy is unresolved."""
+    # axis: with existence neutralized, a planted missing path is still caught when restore is in place
     repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
     src = _fixture_path("c11_l3_wo_c.md")
     copy = tmp_path / "copy.md"

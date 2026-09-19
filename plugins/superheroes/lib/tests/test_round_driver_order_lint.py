@@ -134,6 +134,7 @@ def test_rendered_fixer_order_lints_clean_at_head(tmp_path):
 
 
 def test_fixer_emission_refuses_on_lint_finding(tmp_path, monkeypatch):
+    # axis: a lint finding's token and detail appear in the order-render-refused string
     session_dir, state = _seed_session(tmp_path, monkeypatch)
     monkeypatch.setattr(
         RD.order_lint, "check_text",
@@ -147,6 +148,7 @@ def test_fixer_emission_refuses_on_lint_finding(tmp_path, monkeypatch):
 
 
 def test_fixer_emission_refuses_on_real_placeholder(tmp_path, monkeypatch):
+    # axis: P_FIXER emission runs order_lint.check_text before committing the manifest
     session_dir, state = _seed_session(tmp_path, monkeypatch)
 
     def _poisoned_render(phase, seat_key, context):
@@ -220,6 +222,7 @@ def test_empty_findings_with_ok_false_refuses_unknown(tmp_path, monkeypatch):
 
 
 def test_fixer_emission_ignores_lint_triggers_inside_gate_guidance(tmp_path, monkeypatch):
+    # axis: owner-gate guidance prose is elided from fixer-emission lint text
     session_dir, state = _seed_session(tmp_path, monkeypatch)
     _seed_gate_guidance(state, _LINT_TRIGGER_GUIDANCE)
     anchor = _emit_fixer(session_dir, state)
@@ -254,6 +257,7 @@ _LINT_TRIGGER_RESIDUALS = (
 
 
 def test_fixer_emission_ignores_lint_triggers_inside_ratified_residuals(tmp_path, monkeypatch):
+    # axis: ratified-residuals quoted data is elided from fixer-emission lint text
     session_dir, state = _seed_session(tmp_path, monkeypatch)
     monkeypatch.setattr(
         RD.round_orders, "resolve_order_residuals",
@@ -266,6 +270,7 @@ def test_fixer_emission_ignores_lint_triggers_inside_ratified_residuals(tmp_path
 
 
 def test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root(tmp_path, monkeypatch):
+    # axis: driver-authored plugin-relative citations resolve via the plugin root at fixer emission
     session_dir, state = _seed_session(tmp_path, monkeypatch)
 
     def _render_with_path(phase, seat_key, context, cited):

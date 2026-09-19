@@ -14,6 +14,9 @@
 | BP-OL-8 | DoD planted bad path | `test_planted_bad_path_in_fixture_order` |
 
 Normalization: `-B -X pycache_prefix=/private/tmp/superheroes-pyc-wo1`, single-node `::test_*`.
+Every proof below was re-run by the auto-fix round; each neutralization was reverted by its inverse
+edit with post-restore `git status --porcelain` over the neutralized path.
+
 
 ## BP-OL-1 — placeholder rule
 
@@ -24,13 +27,29 @@ Normalization: `-B -X pycache_prefix=/private/tmp/superheroes-pyc-wo1`, single-n
 **Red** — `plugins/superheroes/lib/tests/test_order_lint.py::test_token_placeholder_unfilled`:
 
 ```
-FAILED ... AssertionError: assert ('NAME' in details and 'foo' in details)
-1 failed in 0.12s
+=================================== FAILURES ===================================
+_______________________ test_token_placeholder_unfilled ________________________
+plugins/superheroes/lib/tests/test_order_lint.py:111: in test_token_placeholder_unfilled
+    assert "NAME" in details and "foo" in details
+E   AssertionError: assert ('NAME' in [])
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_order_lint.py::test_token_placeholder_unfilled
+1 failed in 0.20s
 ```
 
 **Restore:** remove the inserted `return [], 0` line.
 
-**Green:** `1 passed in 0.12s`
+**Restore receipt:**
+```
+$ git status --porcelain -- plugins/superheroes/lib/order_lint.py
+(empty)
+```
+
+**Green:**
+
+```
+1 passed in 0.18s
+```
 
 ## BP-OL-2 — path rule, existence
 
@@ -41,13 +60,30 @@ FAILED ... AssertionError: assert ('NAME' in details and 'foo' in details)
 **Red** — `::test_token_path_unresolved`:
 
 ```
-FAILED ... AssertionError: assert False
+=================================== FAILURES ===================================
+__________________________ test_token_path_unresolved __________________________
+plugins/superheroes/lib/tests/test_order_lint.py:99: in test_token_path_unresolved
+    assert any(
+E   assert False
+E    +  where False = any(<generator object test_token_path_unresolved.<locals>.<genexpr> at 0x1021bb890>)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_order_lint.py::test_token_path_unresolved
 1 failed in 0.18s
 ```
 
 **Restore:** remove `return True, ""`.
 
-**Green:** `1 passed in 0.12s`
+**Restore receipt:**
+```
+$ git status --porcelain -- plugins/superheroes/lib/order_lint.py
+(empty)
+```
+
+**Green:**
+
+```
+1 passed in 0.17s
+```
 
 ## BP-OL-3 — path rule, escape
 
@@ -58,13 +94,30 @@ FAILED ... AssertionError: assert False
 **Red** — `::test_symlink_escape_is_unresolved`:
 
 ```
-FAILED ... AssertionError: assert False
-1 failed in 0.14s
+=================================== FAILURES ===================================
+______________________ test_symlink_escape_is_unresolved _______________________
+plugins/superheroes/lib/tests/test_order_lint.py:317: in test_symlink_escape_is_unresolved
+    assert any("escapes-root" in d for d in _details(r))
+E   assert False
+E    +  where False = any(<generator object test_symlink_escape_is_unresolved.<locals>.<genexpr> at 0x1060acdd0>)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_order_lint.py::test_symlink_escape_is_unresolved
+1 failed in 0.18s
 ```
 
 **Restore:** restore the `rj != rr and not rj.startswith(rr + os.sep)` guard.
 
-**Green:** `1 passed in 0.13s`
+**Restore receipt:**
+```
+$ git status --porcelain -- plugins/superheroes/lib/order_lint.py
+(empty)
+```
+
+**Green:**
+
+```
+1 passed in 0.15s
+```
 
 ## BP-OL-4 — result-shape rule
 
@@ -75,13 +128,31 @@ FAILED ... AssertionError: assert False
 **Red** — `::test_token_result_shape_ambiguous`:
 
 ```
-FAILED ... AssertionError: assert 'order-result-shape-ambiguous' in []
-1 failed in 0.14s
+=================================== FAILURES ===================================
+______________________ test_token_result_shape_ambiguous _______________________
+plugins/superheroes/lib/tests/test_order_lint.py:122: in test_token_result_shape_ambiguous
+    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(r)
+E   AssertionError: assert 'order-result-shape-ambiguous' in []
+E    +  where 'order-result-shape-ambiguous' = OL.TOKEN_RESULT_SHAPE_AMBIGUOUS
+E    +  and   [] = _tokens({'checked': {'paths': 0, 'placeholders': 0}, 'findings': [], 'kind': 'implementer', 'ok': True, ...})
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_order_lint.py::test_token_result_shape_ambiguous
+1 failed in 0.18s
 ```
 
 **Restore:** remove `return None`.
 
-**Green:** `1 passed in 0.12s`
+**Restore receipt:**
+```
+$ git status --porcelain -- plugins/superheroes/lib/order_lint.py
+(empty)
+```
+
+**Green:**
+
+```
+1 passed in 0.15s
+```
 
 ## BP-OL-5 — budget rule
 
@@ -92,13 +163,31 @@ FAILED ... AssertionError: assert 'order-result-shape-ambiguous' in []
 **Red** — `::test_token_budget_missing_implementer`:
 
 ```
-FAILED ... AssertionError: assert 'order-budget-missing' in []
+=================================== FAILURES ===================================
+____________________ test_token_budget_missing_implementer _____________________
+plugins/superheroes/lib/tests/test_order_lint.py:130: in test_token_budget_missing_implementer
+    assert OL.TOKEN_BUDGET_MISSING in _tokens(r)
+E   AssertionError: assert 'order-budget-missing' in []
+E    +  where 'order-budget-missing' = OL.TOKEN_BUDGET_MISSING
+E    +  and   [] = _tokens({'checked': {'paths': 1, 'placeholders': 0}, 'findings': [], 'kind': 'implementer', 'ok': True, ...})
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_order_lint.py::test_token_budget_missing_implementer
 1 failed in 0.15s
 ```
 
 **Restore:** restore `_budget_ok` regex body.
 
-**Green:** `1 passed in 0.13s`
+**Restore receipt:**
+```
+$ git status --porcelain -- plugins/superheroes/lib/order_lint.py
+(empty)
+```
+
+**Green:**
+
+```
+1 passed in 0.16s
+```
 
 ## BP-OL-6 — per-kind gate
 
@@ -109,13 +198,29 @@ FAILED ... AssertionError: assert 'order-budget-missing' in []
 **Red** — `::test_accepted_shape_fixer`:
 
 ```
-FAILED ... AssertionError: assert False is True
-1 failed in 0.15s
+=================================== FAILURES ===================================
+__________________________ test_accepted_shape_fixer ___________________________
+plugins/superheroes/lib/tests/test_order_lint.py:170: in test_accepted_shape_fixer
+    assert r["ok"] is True
+E   assert False is True
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_order_lint.py::test_accepted_shape_fixer
+1 failed in 0.19s
 ```
 
 **Restore:** restore `kind == "implementer"`.
 
-**Green:** `1 passed in 0.12s`
+**Restore receipt:**
+```
+$ git status --porcelain -- plugins/superheroes/lib/order_lint.py
+(empty)
+```
+
+**Green:**
+
+```
+1 passed in 0.16s
+```
 
 ## BP-OL-7 — unreadable mapping
 
@@ -126,13 +231,31 @@ FAILED ... AssertionError: assert False is True
 **Red** — `::test_token_unreadable_missing_file`:
 
 ```
-FileNotFoundError: [Errno 2] No such file or directory: '.../nope.md'
-1 failed in 0.17s
+=================================== FAILURES ===================================
+______________________ test_token_unreadable_missing_file ______________________
+plugins/superheroes/lib/tests/test_order_lint.py:74: in test_token_unreadable_missing_file
+    r = _record(OL.check(str(tmp_path / "nope.md"), str(tmp_path)))
+plugins/superheroes/lib/order_lint.py:305: in check
+    with open(order_path, encoding="utf-8", errors="strict") as fh:
+E   FileNotFoundError: [Errno 2] No such file or directory: '/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-1449/test_token_unreadable_missing_0/nope.md'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_order_lint.py::test_token_unreadable_missing_file
+1 failed in 0.19s
 ```
 
 **Restore:** restore the `_refuse` handler.
 
-**Green:** `1 passed in 0.17s`
+**Restore receipt:**
+```
+$ git status --porcelain -- plugins/superheroes/lib/order_lint.py
+(empty)
+```
+
+**Green:**
+
+```
+1 passed in 0.23s
+```
 
 ## BP-OL-8 — DoD planted bad path
 
@@ -143,13 +266,30 @@ FileNotFoundError: [Errno 2] No such file or directory: '.../nope.md'
 **Red** — `::test_planted_bad_path_in_fixture_order`:
 
 ```
-FAILED ... AssertionError: assert False
-1 failed in 0.15s
+=================================== FAILURES ===================================
+____________________ test_planted_bad_path_in_fixture_order ____________________
+plugins/superheroes/lib/tests/test_order_lint.py:398: in test_planted_bad_path_in_fixture_order
+    assert any("does_not_exist_1339.py" in d for d in _details(r))
+E   assert False
+E    +  where False = any(<generator object test_planted_bad_path_in_fixture_order.<locals>.<genexpr> at 0x10462f890>)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_order_lint.py::test_planted_bad_path_in_fixture_order
+1 failed in 0.29s
 ```
 
 **Restore:** remove `return True, ""`.
 
-**Green:** `1 passed in 0.12s`
+**Restore receipt:**
+```
+$ git status --porcelain -- plugins/superheroes/lib/order_lint.py
+(empty)
+```
+
+**Green:**
+
+```
+1 passed in 0.26s
+```
 
 ## Appendix — `c11_l3_wo_a.md` findings at repository root
 
@@ -186,6 +326,9 @@ Note: `engine_result_channel.py` is absent from this worktree; in a full tree wh
 | BP-OL-13 | the plugin alt-root | `test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root` |
 
 Normalization: `-B -X pycache_prefix=/private/tmp/superheroes-pyc-wo2`, single-node `::test_*`.
+Every proof below was re-run by the auto-fix round; each neutralization was reverted by its inverse
+edit with post-restore `git status --porcelain` over the neutralized path.
+
 
 ## BP-OL-9 — the hook runs on the fixer phase
 
@@ -196,13 +339,29 @@ Normalization: `-B -X pycache_prefix=/private/tmp/superheroes-pyc-wo2`, single-n
 **Red** — `plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_refuses_on_real_placeholder`:
 
 ```
-FAILED ... AssertionError: Regex pattern did not match.
-1 failed in ...
+=================================== FAILURES ===================================
+_______________ test_fixer_emission_refuses_on_real_placeholder ________________
+plugins/superheroes/lib/tests/test_round_driver_order_lint.py:159: in test_fixer_emission_refuses_on_real_placeholder
+    _emit_fixer(session_dir, state)
+E   Failed: DID NOT RAISE <class 'ValueError'>
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_refuses_on_real_placeholder
+1 failed in 6.40s
 ```
 
 **Restore:** change `if False:` back to `if phase == P_FIXER:`.
 
-**Green:** `1 passed in ...`
+**Restore receipt:**
+```
+$ git status --porcelain -- plugins/superheroes/lib/round_driver.py
+(empty)
+```
+
+**Green:**
+
+```
+1 passed in 6.52s
+```
 
 ## BP-OL-10 — the refusal carries the token
 
@@ -213,13 +372,40 @@ FAILED ... AssertionError: Regex pattern did not match.
 **Red** — `plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_refuses_on_lint_finding`:
 
 ```
-FAILED ... AssertionError: Regex pattern did not match.
-1 failed in ...
+=================================== FAILURES ===================================
+_________________ test_fixer_emission_refuses_on_lint_finding __________________
+plugins/superheroes/lib/tests/test_round_driver_order_lint.py:147: in test_fixer_emission_refuses_on_lint_finding
+    _emit_fixer(session_dir, state)
+plugins/superheroes/lib/tests/test_round_driver_order_lint.py:94: in _emit_fixer
+    return RD._emit_orders_manifest(
+plugins/superheroes/lib/round_driver.py:6774: in _emit_orders_manifest
+    raise ValueError("order-render-refused:%s:order-lint" % skey)
+E   ValueError: order-render-refused:fixer-508e7896192355de:order-lint
+
+During handling of the above exception, another exception occurred:
+plugins/superheroes/lib/tests/test_round_driver_order_lint.py:147: in test_fixer_emission_refuses_on_lint_finding
+    _emit_fixer(session_dir, state)
+E   AssertionError: Regex pattern did not match.
+E    Regex: 'order-render-refused:fixer-508e7896192355de:order-lint:order-placeholder-unfilled:FOO'
+E    Input: 'order-render-refused:fixer-508e7896192355de:order-lint'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_refuses_on_lint_finding
+1 failed in 6.52s
 ```
 
 **Restore:** restore the original `raise ValueError("order-render-refused:%s:order-lint:%s" % (...))` format.
 
-**Green:** `1 passed in ...`
+**Restore receipt:**
+```
+$ git status --porcelain -- plugins/superheroes/lib/round_driver.py
+(empty)
+```
+
+**Green:**
+
+```
+1 passed in 6.66s
+```
 
 ## BP-OL-11 — the guidance elision
 
@@ -231,13 +417,33 @@ paths, braces, or result-shape words never refuse emission.
 **Red** — `plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_ignores_lint_triggers_inside_gate_guidance`:
 
 ```
-FAILED ... ValueError: order-render-refused:fixer-508e7896192355de:order-lint:...
-1 failed in ...
+=================================== FAILURES ===================================
+________ test_fixer_emission_ignores_lint_triggers_inside_gate_guidance ________
+plugins/superheroes/lib/tests/test_round_driver_order_lint.py:228: in test_fixer_emission_ignores_lint_triggers_inside_gate_guidance
+    anchor = _emit_fixer(session_dir, state)
+plugins/superheroes/lib/tests/test_round_driver_order_lint.py:94: in _emit_fixer
+    return RD._emit_orders_manifest(
+plugins/superheroes/lib/round_driver.py:6774: in _emit_orders_manifest
+    raise ValueError("order-render-refused:%s:order-lint:%s" % (
+E   ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-path-unresolved:plugins/superheroes/lib/no_such_file_1339.py
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_ignores_lint_triggers_inside_gate_guidance
+1 failed in 6.63s
 ```
 
 **Restore:** restore `ph.get("GATE_GUIDANCE")` in the `_order_lint_text` quoted tuple.
 
-**Green:** `1 passed in ...`
+**Restore receipt:**
+```
+$ git status --porcelain -- plugins/superheroes/lib/round_driver.py
+(empty)
+```
+
+**Green:**
+
+```
+1 passed in 6.29s
+```
 
 ## BP-OL-12 — the residuals elision
 
@@ -250,13 +456,33 @@ quoted tuple.
 **Red** — `plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_ignores_lint_triggers_inside_ratified_residuals`:
 
 ```
-FAILED ... ValueError: order-render-refused:fixer-508e7896192355de:order-lint:...
-1 failed in ...
+=================================== FAILURES ===================================
+_____ test_fixer_emission_ignores_lint_triggers_inside_ratified_residuals ______
+plugins/superheroes/lib/tests/test_round_driver_order_lint.py:265: in test_fixer_emission_ignores_lint_triggers_inside_ratified_residuals
+    anchor = _emit_fixer(session_dir, state)
+plugins/superheroes/lib/tests/test_round_driver_order_lint.py:94: in _emit_fixer
+    return RD._emit_orders_manifest(
+plugins/superheroes/lib/round_driver.py:6774: in _emit_orders_manifest
+    raise ValueError("order-render-refused:%s:order-lint:%s" % (
+E   ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-path-unresolved:lib/tests/no_such_residual_file_1339.py
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_ignores_lint_triggers_inside_ratified_residuals
+1 failed in 6.13s
 ```
 
 **Restore:** restore `context.get("ratified_residuals")` in the `_order_lint_text` quoted tuple.
 
-**Green:** `1 passed in ...`
+**Restore receipt:**
+```
+$ git status --porcelain -- plugins/superheroes/lib/round_driver.py
+(empty)
+```
+
+**Green:**
+
+```
+1 passed in 5.59s
+```
 
 ## BP-OL-13 — the plugin alt-root
 
@@ -267,10 +493,31 @@ FAILED ... ValueError: order-render-refused:fixer-508e7896192355de:order-lint:..
 **Red** — `plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root`:
 
 ```
-FAILED ... ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-path-unresolved:rubric/review-base.md
-1 failed in ...
+=================================== FAILURES ===================================
+____ test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root _____
+plugins/superheroes/lib/tests/test_round_driver_order_lint.py:283: in test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root
+    anchor = _emit_fixer(session_dir, state)
+plugins/superheroes/lib/tests/test_round_driver_order_lint.py:94: in _emit_fixer
+    return RD._emit_orders_manifest(
+plugins/superheroes/lib/round_driver.py:6774: in _emit_orders_manifest
+    raise ValueError("order-render-refused:%s:order-lint:%s" % (
+E   ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-path-unresolved:rubric/review-base.md
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root
+1 failed in 6.57s
 ```
 
 **Restore:** restore `alt_roots=(_plugin_resource_root(),)` in the `P_FIXER` block.
 
-**Green:** `1 passed in ...`
+**Restore receipt:**
+```
+$ git status --porcelain -- plugins/superheroes/lib/round_driver.py
+(empty)
+```
+
+**Green:**
+
+```
+1 passed in 7.48s
+```
+
