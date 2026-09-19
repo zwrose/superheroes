@@ -954,7 +954,8 @@ Record how
 you handled each finding in a **dispositions table** — a short table of each finding and what you
 did about it — in the PR body, and **link the review results as a durable receipt** posted on the PR
 (a comment or similar, not something that only lives in your session), so the advisor can check
-them without your context. The scope-beats-convention rule (§1 intake) governs review findings too, but only
+them without your context. The receipt names the head commit it reviewed, so a later reader can
+tell whether the PR moved after the review. The scope-beats-convention rule (§1 intake) governs review findings too, but only
 for a proposal *unrelated* to the behavior the diff introduces or worsens; a blocking correctness or
 security finding on that behavior is fixed or honestly parked, never deferred as out of scope.
 
