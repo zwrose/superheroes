@@ -213,6 +213,45 @@ def test_ambiguous_legacy_key_never_collapses_distinct_findings():
     assert "#" in keys_rev[0] and "#" in keys_rev[1]
 
 
+def test_staged_id_is_never_a_finding_identity():
+    """T11: staged v<N> ids are positional — keyed by minted content, not the staged id."""
+    row = {"id": "v0", "file": "a.py", "line": 1, "title": "t", "severity": "Important"}
+    assert RD._finding_key_of(row) == SC.location_key(row)
+    assert RD._judgment_row_ids([row]) == [SC.location_key(row)]
+
+    rowA = row
+    rowB = {"id": "v0", "file": "b.py", "line": 9, "title": "u", "severity": "Important"}
+    state = RD.new_state(_cfg())
+    state["fixBatch"] = [rowA, rowB]
+    before_fix_batch = copy.deepcopy(state["fixBatch"])
+    targets = RD._audit_targets(state, state["config"], {})
+    assert state["fixBatch"] == before_fix_batch
+    assert len(targets) == 2
+    assert targets[0]["id"] != targets[1]["id"]
+    assert targets[0]["id"] != "v0"
+    assert targets[1]["id"] != "v0"
+    assert len(RD._union_open_blockers(targets)) == 2
+
+
+def test_merge_same_finding_rederives_classification_from_merged_tradeoff():
+    """T12: merged classification always follows merged tradeoff."""
+    base = {"file": "a.py", "line": 1, "title": "t"}
+    existing = dict(base, severity="Important", tradeoff=False, classification="mechanical")
+    incoming = dict(base, severity="Minor", tradeoff=True, classification="mechanical")
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, [existing, incoming])
+    survivor = state["findings"][0]
+    assert survivor["tradeoff"] is True
+    assert survivor["classification"] == "judgment"
+
+    both_false_existing = dict(base, severity="Important", tradeoff=False, classification="mechanical")
+    both_false_incoming = dict(base, severity="Minor", tradeoff=False, classification="judgment")
+    state2 = RD.new_state(_cfg())
+    RD._set_findings(state2, [both_false_existing, both_false_incoming])
+    assert state2["findings"][0]["tradeoff"] is False
+    assert state2["findings"][0]["classification"] == "mechanical"
+
+
 def test_foreign_preset_key_collision_still_rekeys():
     """T7: foreign preset keys on different locations stay content-hash re-keyed."""
     finding1 = {

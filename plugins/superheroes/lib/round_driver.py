@@ -738,6 +738,7 @@ def _merge_same_finding(existing, incoming):
         merged = dict(existing)
     merged["dimension"] = dims
     merged["tradeoff"] = bool(existing.get("tradeoff") or incoming.get("tradeoff"))
+    merged["classification"] = "judgment" if merged["tradeoff"] else "mechanical"
     return merged
 
 
@@ -1278,14 +1279,15 @@ def _mint_finding_keys(findings):
 
 
 def _finding_key_of(finding):
-    """Pure read of a finding's disposition key — never mutates finding."""
+    """Pure read of a finding's disposition key — never mutates finding.
+    A staged v<N> id is positional and never an identity."""
     if not isinstance(finding, dict):
         return None
     key = finding.get(session_contract.FINDING_KEY_FIELD)
     if isinstance(key, str) and key:
         return key
     row_id = finding.get("id")
-    if isinstance(row_id, str) and row_id:
+    if isinstance(row_id, str) and row_id and not verification.is_staged_id(row_id):
         return row_id
     copy = dict(finding)
     _mint_finding_keys([copy])
