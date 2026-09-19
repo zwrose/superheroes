@@ -521,31 +521,32 @@ def test_stdout_protocol_matches_engine_adapter_and_payload_contracts():
 
 def test_result_shape_ambiguous_fires_on_stdout_protocol_literals(tmp_path):
     # axis: the protocol literals, not prose aliases, count as a stdout-report contract
-    assert OL._FIXER_LITERAL == '{"fixes"'
-    assert OL._WRITE_SENTINEL == "<<<SUPERHEROES-WRITE-REPORT>>>"
+    write_sentinel, fixer_literal = OL._STDOUT_PROTOCOL
+    fixer_object = f"{fixer_literal}: []}}"
+    fixer_object_spaced = f"{{ {fixer_literal[1:]}: [] }}"
     repo = _mk_repo(tmp_path)
     text = (
         "Budget 1.\n\nPrint %s on stdout; the shell --output-schema carries it.\n"
-        % OL._WRITE_SENTINEL
+        % write_sentinel
     )
     r = OL.check_text(text, str(repo), kind="implementer")
     assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(r)
     r = OL.check_text(
-        'Budget 1.\n\nPrint {"fixes": []} on stdout.\n',
+        f"Budget 1.\n\nPrint {fixer_object} on stdout.\n",
         str(repo),
         expect_items=("lib/new.py",),
         kind="implementer",
     )
-    assert (OL.TOKEN_RESULT_SHAPE_AMBIGUOUS, OL._FIXER_LITERAL + "+expect-item") in _finding_pairs(r)
+    assert (OL.TOKEN_RESULT_SHAPE_AMBIGUOUS, fixer_literal + "+expect-item") in _finding_pairs(r)
     r = OL.check_text(
-        'Budget 1.\n\nReturn { "fixes": [] } on stdout.\n',
+        f"Budget 1.\n\nReturn {fixer_object_spaced} on stdout.\n",
         str(repo),
         expect_items=("lib/new.py",),
         kind="implementer",
     )
-    assert (OL.TOKEN_RESULT_SHAPE_AMBIGUOUS, OL._FIXER_LITERAL + "+expect-item") in _finding_pairs(r)
+    assert (OL.TOKEN_RESULT_SHAPE_AMBIGUOUS, fixer_literal + "+expect-item") in _finding_pairs(r)
     clean = OL.check_text(
-        'Budget 1.\n\nPrint {"fixes": []} on stdout.\n',
+        f"Budget 1.\n\nPrint {fixer_object} on stdout.\n",
         str(repo),
         kind="implementer",
     )
