@@ -336,7 +336,8 @@ def test_fixer_round_record_carries_declared_vendor():
         {"seats": {dim: {"findings": []} for dim in RD.DIMENSIONS}},
     )
     RD._fold_fixer(state, state["config"], {"fixes": [], "headDiff": HEAD})
-    assert state["rounds"][str(state["round"])]["fixerVendor"] == state["config"]["fixerVendor"]
+    # re-pinned (#1272 layer 2d): the fixer fold now advances the round; the vendor is recorded on the fold's own round
+    assert state["rounds"]["1"]["fixerVendor"] == state["config"]["fixerVendor"]
 
 
 def test_duplicate_vendor_entries_do_not_read_independent():
