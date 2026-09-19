@@ -135,6 +135,18 @@ def _codex_event_stream(action_items=1):
     return "\n".join(lines)
 
 
+def _cursor_event_stream(tool_calls=1, verdicts=None):
+    lines = []
+    for i in range(tool_calls):
+        call_id = "c%d" % (i + 1)
+        lines.append(json.dumps({"type": "tool_call", "call_id": call_id, "subtype": "started"}))
+        lines.append(json.dumps({"type": "tool_call", "call_id": call_id, "subtype": "completed"}))
+    if verdicts is None:
+        verdicts = [{"id": "conformance-probe-1", "verdict": "CONFIRMED", "reason": "ok"}]
+    lines.append(json.dumps({"type": "result", "verdicts": verdicts}))
+    return "\n".join(lines)
+
+
 class FakeRunner:
     def __init__(self, responses, *, sync_native=True):
         self.responses = list(responses)
@@ -237,6 +249,26 @@ def test_run_grades_three_legs_ok_on_valid_native_result(tmp_path):
     assert "plugins/superheroes" not in prompt_text
 
 
+def test_run_grades_three_legs_ok_on_valid_cursor_marker_result(tmp_path):
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout = _cursor_event_stream(tool_calls=2)
+    fake = FakeRunner([(stdout, False, 0, "")])
+    payload, code, stderr = CP.probe(
+        "cursor", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["channel"] == ERC.CHANNEL_MARKER
+    assert payload["legs"]["resultProduction"]["ok"] is True
+    assert payload["legs"]["completionDetection"]["ok"] is True
+    assert payload["legs"]["progressTelemetry"]["ok"] is True
+    assert payload["preflightCheck"]["state"] == "pass"
+    assert stderr is None
+
+
 def test_result_production_fails_on_schema_invalid_native_result(tmp_path):
     repo = _repo(tmp_path)
     run_dir = str(tmp_path / "run")
@@ -258,6 +290,24 @@ def test_result_production_fails_on_schema_invalid_native_result(tmp_path):
     )
     assert payload["legs"]["resultProduction"]["ok"] is False
     assert payload["legs"]["resultProduction"]["detail"] == "native-result-schema-invalid"
+    assert payload["legs"]["completionDetection"]["ok"] is True
+    assert payload["legs"]["progressTelemetry"]["ok"] is True
+
+
+def test_result_production_fails_on_cursor_marker_parse_error(tmp_path):
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout = _cursor_event_stream(
+        tool_calls=1,
+        verdicts=[{"id": "", "verdict": "CONFIRMED", "reason": "ok"}],
+    )
+    fake = FakeRunner([(stdout, False, 0, ""), (stdout, False, 0, "")])
+    payload, code, _stderr = CP.probe(
+        "cursor", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert payload["legs"]["resultProduction"]["ok"] is False
     assert payload["legs"]["completionDetection"]["ok"] is True
     assert payload["legs"]["progressTelemetry"]["ok"] is True
 
