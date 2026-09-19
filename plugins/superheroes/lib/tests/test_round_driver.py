@@ -653,11 +653,11 @@ def test_run_verify_payload_leaves_base_ref_token_verbatim_without_a_full_hex_pi
     gate refuses loudly on an unresolvable ref — never a silent substitution of main or of ``.
 
     Bites on: the full-hex guard in `_verify_command` (a `""`/short/None pin does not substitute)."""
-    for pin in (None, "", "abc1234", "not-a-sha"):
+    for i, pin in enumerate((None, "", "abc1234", "not-a-sha", "x" * 40)):
         cfg = _cfg(verifyCommand="gate.py --base {baseRef}")
         if pin is not None:
             cfg["baseRef"] = pin
-        d, n = _at(str(tmp_path / (pin or "none")), RD.P_VERIFY, cfg=cfg)
+        d, n = _at(str(tmp_path / ("case-%d" % i)), RD.P_VERIFY, cfg=cfg)   # one fresh session per case
         assert n["payload"]["command"] == "gate.py --base {baseRef}", (pin, n["payload"])
 
 
