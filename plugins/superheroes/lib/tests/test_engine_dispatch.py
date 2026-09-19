@@ -11448,6 +11448,81 @@ def test_native_dangling_symlink_at_result_path_is_never_handed_to_engine(tmp_pa
     assert fake.calls[0]["argv"][-2:] == ["-o", attempt2_path]
 
 
+def test_journal_line_valid_json_not_object_is_typed_corruption(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(opened, separators=(",", ":")) + "\n")
+        fh.write("[1, 2]\n")
+        fh.write(json.dumps({
+            "kind": "attempt-ended", "attempt": 1,
+            "exit": 0, "timedOut": False, "refusal": None, "at": time.time(),
+        }, separators=(",", ":")) + "\n")
+    records, interior_corrupt, journal_state, corruption_classes = ED._journal_read_raw(run_dir)
+    assert interior_corrupt is True
+    assert len(records) == 2
+    assert records[0].get("kind") == "run-opened"
+    assert records[1].get("kind") == "attempt-ended"
+    ED._journal_state(records)
+    assert corruption_classes == [ED.JOURNAL_LINE_NOT_OBJECT]
+    assert ED._journal_corrupt_detail(corruption_classes) == (
+        "journal-corrupt:%s" % ED.JOURNAL_LINE_NOT_OBJECT
+    )
+
+
+def test_journal_corruption_class_does_not_leak_between_reads(tmp_path):
+    run_dir_a = str(tmp_path / "run-a")
+    run_dir_b = str(tmp_path / "run-b")
+    _manual_open_review_run(tmp_path, run_dir_a)
+    records_a, _ = ED._journal_read(run_dir_a)
+    opened = next(r for r in records_a if r.get("kind") == "run-opened")
+    path_a = ED._journal_path(run_dir_a)
+    with open(path_a, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(opened, separators=(",", ":")) + "\n")
+        fh.write("[1, 2]\n")
+        fh.write(json.dumps({
+            "kind": "attempt-ended", "attempt": 1,
+            "exit": 0, "timedOut": False, "refusal": None, "at": time.time(),
+        }, separators=(",", ":")) + "\n")
+    _manual_open_review_run(tmp_path, run_dir_b)
+    _, corrupt_a, _, classes_a = ED._journal_read_raw(run_dir_a)
+    assert corrupt_a is True
+    assert classes_a == [ED.JOURNAL_LINE_NOT_OBJECT]
+    records_b, corrupt_b, _, classes_b = ED._journal_read_raw(run_dir_b)
+    assert corrupt_b is False
+    assert classes_b == []
+    assert any(r.get("kind") == "run-opened" for r in records_b)
+    polled, _ = ED._dispatch_poll_impl(run_dir_b)
+    detail = str(polled.get("detail", ""))
+    assert "journal-corrupt" not in detail
+
+
+def test_native_result_path_occupied_exhausts_to_terminal_detail(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    path1 = ED._native_result_path(run_dir, 1)
+    path2 = ED._native_result_path(run_dir, 2)
+    with open(path1, "w", encoding="utf-8") as fh:
+        fh.write('{"occupied": 1}\n')
+    with open(path2, "w", encoding="utf-8") as fh:
+        fh.write('{"occupied": 2}\n')
+    fake = FakeRunner([])
+    res = ED._supervise(
+        run_dir,
+        run_kind=ED.RUN_KIND_REVIEW,
+        deadline=time.monotonic() + 30,
+        run_engine=fake,
+    )
+    assert res.get("terminal") is True
+    assert res["ok"] is False
+    assert res["reason"] == ED.dispatch_outcome.REASON_FORFEITED
+    assert "native-result-path-occupied" in str(res.get("detail", ""))
+    assert fake.calls == []
+
+
 @pytest.mark.parametrize("kind", ERC.REVIEW_RESULT_KINDS)
 def test_grade_native_review_attempt_good_result_each_kind(tmp_path, kind):
     branch = _native_review_branch(kind)
