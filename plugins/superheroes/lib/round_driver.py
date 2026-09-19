@@ -1501,6 +1501,37 @@ def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):
     return receipt
 
 
+def _backfill_fixed_disposition_verify_receipts(state, round_no, verify_result):
+    """Stamp verify on fixed receipts when audits folded before verify in the same round."""
+    if verify_result is None:
+        return
+    ledger = _ensure_disposition_ledger(state)
+    seen = _ledger_index_by_key(ledger)
+    for key, idx in list(seen.items()):
+        entry = ledger[idx]
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("disposition") != "fixed":
+            continue
+        if entry.get("dispositionRound") != round_no:
+            continue
+        receipt = entry.get("dispositionReceipt")
+        if not isinstance(receipt, dict) or receipt.get("verifyResult") is not None:
+            continue
+        updated_receipt = dict(receipt)
+        updated_receipt["verifyResult"] = verify_result
+        entry = dict(entry)
+        entry["dispositionReceipt"] = updated_receipt
+        ledger[idx] = entry
+        live = _live_finding_by_key(state, key)
+        if live is not None:
+            live_receipt = live.get("dispositionReceipt")
+            if isinstance(live_receipt, dict) and live_receipt.get("verifyResult") is None:
+                live_receipt = dict(live_receipt)
+                live_receipt["verifyResult"] = verify_result
+                live["dispositionReceipt"] = live_receipt
+
+
 def _archive_departures(state, departing):
     """Write every departing keyed finding into dispositionLedger (replace-by-key)."""
     if not departing:
@@ -3650,6 +3681,8 @@ def _fold_verify(state, config, artifact):
     names the class — never advances into a delta round that could later certify."""
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
+    if result == "pass":
+        _backfill_fixed_disposition_verify_receipts(state, state["round"], result)
     if result == "fail":
         state["terminal"] = "halted"
         state["certification"] = {"shape": None, "reason": "verify gate failed"}

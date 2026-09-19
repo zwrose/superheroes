@@ -864,7 +864,7 @@ def test_real_loop_refuses_dispatch_observed_without_cited_head_until_loop_recor
     C13's producer — when the loop records the cited head on journal rows, this test flips to a
     certifying assertion under R28's classification.
 
-    A review that raised findings is ``test_real_loop_with_finding_records_fixed_disposition_on_the_ledger``.
+    A review that raised findings is ``test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions``.
     """
     seat_map = {
         "seats": {
@@ -972,7 +972,8 @@ def test_real_loop_refuses_dispatch_observed_seat_without_runner_tool_calls(tmp_
     assert refusal["bindingFailure"] == "execution-evidence-no-runner-action"
 
 
-def test_real_loop_with_finding_records_fixed_disposition_on_the_ledger(tmp_path):
+def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions(
+        tmp_path):
     """End-to-end: a converged loop records fixed disposition on the ledger for raised findings."""
     seat_map = {
         "seats": {
