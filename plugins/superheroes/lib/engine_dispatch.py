@@ -2101,23 +2101,9 @@ def _scan_review_engaged_candidates(run_dir_real, state):
         if stdout is None:
             continue
         if engine == "codex":
-            if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
-                result_path = opened.get("nativeResultPath")
-                if not result_path or not os.path.isfile(result_path):
-                    continue
-                try:
-                    with open(result_path, encoding="utf-8") as fh:
-                        envelope = json.load(fh)
-                    branch = envelope.get("result")
-                    if not isinstance(branch, dict):
-                        continue
-                    stdout = json.dumps(branch, separators=(",", ":"))
-                except (OSError, json.JSONDecodeError, TypeError, ValueError):
-                    continue
-            else:
-                stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, att)
-                if not stdout:
-                    continue
+            stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, att)
+            if not stdout:
+                continue
         shape = engine_adapter.review_artifact_shape(stdout, fed_prompt)
         if not shape.get("engaged"):
             continue
@@ -3587,12 +3573,8 @@ def _native_review_forfeit_with_payload_shape(
     return result
 
 
-def _grade_native_review_attempt(
-        opened, cwd, engagement, echo_nonce, *, stdout="", fed_prompt="",
-        stderr_tail="", elapsed=0, stdout_bytes=0):
-    """Grade a native-channel review attempt from the typed result file."""
-    engine = opened["engine"]
-    role_kind = opened.get("roleKind", RUN_KIND_REVIEW)
+def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_nonce):
+    """Typed-file admission for native review: load, validate, scrub. Parse-only; no spot-check."""
     loaded = _read_native_review_envelope(opened, engagement)
     if not isinstance(loaded, tuple):
         return loaded
@@ -3613,13 +3595,14 @@ def _grade_native_review_attempt(
             engagement, "native-result-malformed", payload_shape=placeholder_shape)
     scrub_try = _scrub_native_review_branch(branch, echo_nonce)
     if ok and scrub_try.get("ok"):
-        return _finish_review_grade_from_parse(
-            opened, cwd, engagement, scrub_try, engine, stdout, stderr_tail, elapsed, stdout_bytes)
+        return scrub_try
     if not ok:
         if scrub_try.get("ok") and engine_result_channel.native_schema_allows_scrub_finish(
                 validation_detail, branch=branch):
-            return _finish_review_grade_from_parse(
-            opened, cwd, engagement, scrub_try, engine, stdout, stderr_tail, elapsed, stdout_bytes)
+            return scrub_try
+        fed_prompt = opened.get("fedPrompt", "")
+        stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
         return _native_review_forfeit_with_payload_shape(
             engagement,
             "native-result-schema-invalid",
@@ -3631,9 +3614,21 @@ def _grade_native_review_attempt(
             validationReason=validation_reason,
         )
     if scrub_try.get("ok"):
-        return _finish_review_grade_from_parse(
-            opened, cwd, engagement, scrub_try, engine, stdout, stderr_tail, elapsed, stdout_bytes)
+        return scrub_try
     return _native_review_forfeit(engagement, "native-result-malformed")
+
+
+def _grade_native_review_attempt(
+        opened, cwd, engagement, echo_nonce, *, stdout="", fed_prompt="",
+        stderr_tail="", elapsed=0, stdout_bytes=0, run_dir_real="", attempt=0):
+    """Grade a native-channel review attempt from the typed result file."""
+    engine = opened["engine"]
+    admitted = _admit_native_review_result(
+        run_dir_real, attempt, opened, engagement, echo_nonce)
+    if not admitted.get("ok"):
+        return admitted
+    return _finish_review_grade_from_parse(
+        opened, cwd, engagement, admitted, engine, stdout, stderr_tail, elapsed, stdout_bytes)
 
 
 def _grade_review_attempt(run_dir_real, state, attempt):
@@ -3669,7 +3664,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
         return _grade_native_review_attempt(
             opened, cwd, engagement, echo_nonce, stdout=stdout, fed_prompt=fed_prompt,
-            stderr_tail=stderr_tail, elapsed=elapsed, stdout_bytes=stdout_bytes)
+            stderr_tail=stderr_tail, elapsed=elapsed, stdout_bytes=stdout_bytes,
+            run_dir_real=run_dir_real, attempt=attempt)
 
     if not stdout and not os.path.exists(stdout_path):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
@@ -5468,18 +5464,39 @@ def _parse_review_attempt(run_dir_real, state, attempt):
     try:
         opened = state["opened"]
         if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
-            grade = _grade_review_attempt(run_dir_real, state, attempt)
-            if not grade.get("ok"):
+            engine = opened["engine"]
+            slot = state["attempts"][attempt]
+            ended = slot.get("ended") or {}
+            if ended.get("guardRefusal"):
                 return None
-            kind = grade.get("resultKind")
+            if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
+                return None
+            stderr_path = os.path.join(run_dir_real, "attempt-%d.stderr" % attempt)
+            try:
+                with open(stderr_path, encoding="utf-8", errors="ignore") as fh:
+                    stderr_tail = fh.read()
+            except OSError:
+                stderr_tail = ended.get("stderrTail", "")
+            stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+            stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+            elapsed = ended.get("wallSeconds", 0)
+            stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
+            engagement = _review_attempt_engagement(
+                engine, stdout, stderr_tail, elapsed, stdout_bytes)
+            echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
+            admitted = _admit_native_review_result(
+                run_dir_real, attempt, opened, engagement, echo_nonce)
+            if not admitted.get("ok"):
+                return None
+            kind = admitted.get("resultKind")
             if kind not in REVIEW_RESULT_KINDS:
                 return None
             res = {"ok": True, "resultKind": kind}
-            has_payload, payload = _review_result_payload(grade, kind)
+            has_payload, payload = _review_result_payload(admitted, kind)
             if has_payload:
                 res[kind] = payload
-            if grade.get("investigated") is not None:
-                res["investigated"] = grade["investigated"]
+            if admitted.get("investigated") is not None:
+                res["investigated"] = admitted["investigated"]
             return res
         engine = opened["engine"]
         role_kind = opened.get("roleKind", RUN_KIND_REVIEW)
@@ -5584,6 +5601,19 @@ def _observation_from_attempt(run_dir_real, state, attempt):
     stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
     elapsed = ended.get("wallSeconds", 0)
     stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
+    engagement = _review_attempt_engagement(
+        engine, stdout, stderr_tail, elapsed, stdout_bytes)
+    if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
+        echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
+        admitted = _admit_native_review_result(
+            run_dir_real, attempt, opened, engagement, echo_nonce)
+        if admitted.get("ok"):
+            kind = admitted["resultKind"]
+            has_payload, payload = _review_result_payload(admitted, kind)
+            return _engagement_with_read(
+                engagement, result_kind=kind,
+                items=payload if has_payload else [])
+        return _engagement_with_read(engagement)
     return _review_attempt_engagement(
         engine, stdout, stderr_tail, elapsed, stdout_bytes,
         role_kind=opened.get("roleKind", RUN_KIND_REVIEW),
