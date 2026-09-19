@@ -174,6 +174,19 @@ redacted** path instead. That obligation covers the `configRead` object, the dis
 marker row, and any `compose-liveness` note whose `reason` is the raw read-error line (the probe
 appends one when `configRead.readError` is non-null).
 
+### B.0 — Run the conformance probe per engine
+
+Before launch, run one real review dispatch per dispatchable engine — the wave-preflight liveness
+check the selftest is not:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 -B "$ROOT_DIR/lib/conformance_probe.py" run --engine <codex|cursor>
+```
+
+Compose the walked `engine-auth` check with `preflight-entry` from those results; the launcher reads
+that entry at wave preflight.
+
 ### B.1 — Seed the composition-liveness receipt (write side, #610 leg 2)
 
 When this build will run `review-code` (it always does at handback), seed the short-TTL vendor
