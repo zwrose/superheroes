@@ -2602,7 +2602,38 @@ def test_run_execution_record_write_stamps_evidence_binding(tmp_path):
     assert error is None
     assert isinstance(record, dict)
     assert record["resultKind"] == "evidence"
-    assert record["resultDigest"] == RR.payload_sha256(parsed["evidence"])
+    digest_content = ED._write_result_digest_content(parsed)
+    assert record["resultDigest"] == RR.payload_sha256(digest_content)
+
+
+def test_native_write_run_execution_record_digest_binds_full_result(tmp_path):
+    """Native write resultDigest covers report text and is stable across reads."""
+    def _stdout_with_report(report_text):
+        body = json.dumps({
+            "ok": True, "signal": "ok",
+            "evidence": {"testFailed": False, "testPassed": True},
+        })
+        return report_text + "\n" + EA.WRITE_REPORT_SENTINEL + "\n" + body
+
+    run_dir_a = str(tmp_path / "native-digest-a")
+    run_dir_b = str(tmp_path / "native-digest-b")
+    os.makedirs(run_dir_a, exist_ok=True)
+    os.makedirs(run_dir_b, exist_ok=True)
+    _execution_record_completed_write_attempt(
+        tmp_path / "setup-a", run_dir_a, stdout=_stdout_with_report("First report prose."))
+    _execution_record_completed_write_attempt(
+        tmp_path / "setup-b", run_dir_b, stdout=_stdout_with_report("Second report prose."))
+    record_a1, error_a1 = ED.run_execution_record(run_dir_a)
+    record_a2, error_a2 = ED.run_execution_record(run_dir_a)
+    record_b, error_b = ED.run_execution_record(run_dir_b)
+    assert error_a1 is None and error_a2 is None and error_b is None
+    assert record_a1["resultDigest"] == record_a2["resultDigest"]
+    assert record_a1["resultDigest"] != record_b["resultDigest"]
+    records, _ = ED._journal_read(run_dir_a)
+    state = ED._journal_state(records)
+    parsed = ED._parse_write_attempt(run_dir_a, state, 1)
+    assert record_a1["resultDigest"] == RR.payload_sha256(ED._write_result_digest_content(parsed))
+    assert "report" in ED._write_result_digest_content(parsed)
 
 
 def test_run_execution_record_write_omits_binding_when_parse_yields_nothing(tmp_path):

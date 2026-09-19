@@ -46,6 +46,7 @@ import seat_bundle  # noqa: E402  single dispatch seat entry (#1269 WO-A1)
 import file_lock  # noqa: E402
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
 import model_registry  # noqa: E402  role read_write classification (#1269 WO-FIX1)
+import payload_contracts  # noqa: E402  verdict optional keys — single contract home (#1270 2c)
 import resolved_inputs_vocab  # noqa: E402  resolvedInputs <field>Source marker home (#1296)
 import review_findings_schema  # noqa: E402  findings example renderer (#1145 WO-C)
 import sanitized_view  # noqa: E402
@@ -394,6 +395,30 @@ def _seat_dict_from_resolved_snapshot(snapshot):
 def _opened_channel(opened):
     """Return the channel this run opened on; channel_for answers what a new run would take."""
     return opened.get("channel", engine_result_channel.CHANNEL_MARKER)
+
+
+_LAST_MESSAGE_BASENAME = "attempt-%d.last-message"
+
+
+def _attempt_last_message_path(run_dir_real, attempt):
+    return os.path.join(run_dir_real, _LAST_MESSAGE_BASENAME % attempt)
+
+
+def _review_stdout_for_parse(engine, stdout, run_dir_real, attempt, opened):
+    """Marker-channel codex review payload text for grade/parse compatibility. Never raises."""
+    if engine != "codex":
+        return stdout
+    if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
+        return stdout
+    payload = engine_adapter.codex_review_payload_text(
+        stdout, _attempt_last_message_path(run_dir_real, attempt))
+    if payload is not None:
+        return payload
+    if isinstance(stdout, str):
+        if engine_adapter.is_codex_event_stream(stdout):
+            return ""
+        return stdout
+    return ""
 
 
 def _marker_channel_retired_run(opened):
@@ -3430,7 +3455,8 @@ def _omit_null_optional_fields(obj, optional_keys):
 
 
 def _normalize_native_verdicts(verdicts):
-    optional = ("reason", "severity", "evidence")
+    contract, _ = payload_contracts.payload_contract(payload_contracts.P_VERIFIERS)
+    optional = tuple(contract["elements"]["verdicts"]["optional"])
     return [_omit_null_optional_fields(v, optional) for v in (verdicts or [])]
 
 
@@ -3739,7 +3765,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     if not stdout and not os.path.exists(stdout_path):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
-    norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+    parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt, opened)
+    norm_strip = engine_adapter.normalize_review_stdout(parse_stdout, fed_prompt)
     prompt_echo_only = norm_strip["echoOnly"]
     diagnose_stdout = norm_strip["text"]
     envelope_error = norm_strip["rawEnvelopeError"]
@@ -3758,7 +3785,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         }
 
     res = engine_adapter.parse_result(
-        engine, role_kind, stdout, raw_envelope_error=envelope_error,
+        engine, role_kind, parse_stdout, raw_envelope_error=envelope_error,
         echo_nonce=echo_nonce)
     if not _parse_review_has_payload(res):
         stripped_text = norm_strip["text"]
@@ -4142,20 +4169,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     continue
 
                 latest = max(attempts)
-                latest_ended = (attempts[latest].get("ended") or {})
-                if latest_ended.get("guardRefusal"):
-                    if run_kind == RUN_KIND_WRITE:
-                        grade = _grade_write_attempt(run_dir_real, state, latest)
-                    else:
-                        grade = _grade_review_attempt(run_dir_real, state, latest)
-                elif _marker_channel_retired_run(opened):
-                    terminal = _marker_channel_retired_terminal(
-                        opened, run_dir_real, state, argv, latest)
-                    view = opened.get("viewMeta")
-                    if view:
-                        terminal = _attach_sanitized_view(terminal, view)
-                    return _fold_run(run_dir_real, state, terminal)
-                elif run_kind == RUN_KIND_WRITE:
+                if run_kind == RUN_KIND_WRITE:
                     grade = _grade_write_attempt(run_dir_real, state, latest)
                 else:
                     grade = _grade_review_attempt(run_dir_real, state, latest)
@@ -4294,6 +4308,13 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                                 ),
                                 run_dir=run_dir_real, argv=argv,
                             ))
+                    if _marker_channel_retired_run(opened):
+                        terminal = _marker_channel_retired_terminal(
+                            opened, run_dir_real, state, argv, latest)
+                        view = opened.get("viewMeta")
+                        if view:
+                            terminal = _attach_sanitized_view(terminal, view)
+                        return _fold_run(run_dir_real, state, terminal)
                     ok_spawn, detail = _spawn_attempt(
                         run_dir_real, state, latest + 1, run_engine=run_engine,
                     )
@@ -5617,12 +5638,14 @@ def _parse_review_attempt(run_dir_real, state, attempt):
         stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
         if not stdout and not os.path.exists(stdout_path):
             return None
-        norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+        parse_stdout = _review_stdout_for_parse(
+            engine, stdout, run_dir_real, attempt, opened)
+        norm_strip = engine_adapter.normalize_review_stdout(parse_stdout, fed_prompt)
         if norm_strip["echoOnly"]:
             return None
         envelope_error = norm_strip["rawEnvelopeError"]
         res = engine_adapter.parse_result(
-            engine, role_kind, stdout, raw_envelope_error=envelope_error,
+            engine, role_kind, parse_stdout, raw_envelope_error=envelope_error,
             echo_nonce=echo_nonce)
         if not _parse_review_has_payload(res):
             stripped_text = norm_strip["text"]
@@ -5668,14 +5691,33 @@ def _result_kind_and_content_from_parse(res):
     return kind, []
 
 
-def _result_kind_and_content_from_write_parse(res):
-    """The write-report evidence whose digest binds a stamped envelope to its run. Never raises."""
+def _write_result_digest_content(res):
+    """Canonical native write result whose sha256 binds a stamped envelope to its run. Never raises."""
     if not isinstance(res, dict) or not res.get("ok"):
-        return None, None
+        return None
     evidence = res.get("evidence")
     if not isinstance(evidence, dict) or not evidence:
+        return None
+    content = {
+        "ok": True,
+        "signal": res.get("signal"),
+        "evidence": {
+            "testFailed": bool(evidence.get("testFailed")),
+            "testPassed": bool(evidence.get("testPassed")),
+        },
+    }
+    report = res.get("report")
+    if isinstance(report, str):
+        content["report"] = report
+    return content
+
+
+def _result_kind_and_content_from_write_parse(res):
+    """The write-report content whose digest binds a stamped envelope to its run. Never raises."""
+    content = _write_result_digest_content(res)
+    if content is None:
         return None, None
-    return session_contract.WRITE_RESULT_KIND, evidence
+    return session_contract.WRITE_RESULT_KIND, content
 
 
 def _result_digest_and_kind_from_parse(res):
