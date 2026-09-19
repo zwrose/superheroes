@@ -2416,8 +2416,9 @@ def test_write_legacy_uncontracted_resume_grades_like_parse_result(tmp_path):
             record.pop("nativeSchemaPath", None)
     state = ED._journal_state(records)
     grade = ED._grade_write_attempt(run_dir, state, 1)
-    assert grade["ok"] is True
-    assert grade["signal"] == "ok"
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "ok" not in grade
 
 
 def _execution_record_completed_write_attempt(
@@ -2836,6 +2837,101 @@ def test_codex_marker_channel_write_run_refuses_to_spawn(tmp_path):
     ended1 = next(
         r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
     assert ended1.get("refusal") == "marker-channel-retired"
+
+
+# --- #1270 WO-B: marker-arm collapse detectors (write) ---
+
+
+def _marker_opened_write_attempt_state(tmp_path, *, stdout, engine="cursor"):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "marker-write-grade")
+    wt_real = os.path.realpath(wt)
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {
+            "engine": engine,
+            "roleKind": "build",
+            "cwd": wt_real,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    return run_dir, state, wt
+
+
+def test_grade_write_attempt_marker_opened_returns_retired(tmp_path):
+    run_dir, state, wt = _marker_opened_write_attempt_state(
+        tmp_path, stdout=_build_ok_stdout())
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "ok" not in grade
+
+
+def test_parse_write_attempt_marker_opened_returns_none(tmp_path):
+    run_dir, state, _wt = _marker_opened_write_attempt_state(
+        tmp_path, stdout=_build_ok_stdout(), engine="codex")
+    parsed = ED._parse_write_attempt(run_dir, state, 1)
+    assert parsed is None
+
+
+def test_supervise_write_marker_opened_never_mints_stdout_capped(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "marker-write-supervise-cap")
+    _dispatch_write(
+        tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=0,
+        seat=_cursor_seat(),
+    )
+    over = ED.MAX_STDOUT_CAPTURE + 4096
+    truncated = "z" * over + _build_ok_stdout()
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(truncated)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": len(truncated), "at": time.time(),
+    })
+    _strip_opened_to_marker_channel(run_dir)
+    res = _dispatch_write(
+        tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=120,
+        seat=_cursor_seat(),
+    )
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "marker-channel-retired"
+    assert "stdout-capped-by-attempt" not in str(res.get("detail", ""))
+
+
+def test_finalize_write_forfeit_terminal_passthrough(tmp_path):
+    stdout = _build_ok_stdout()
+    run_dir, state, _wt = _marker_opened_write_attempt_state(tmp_path, stdout=stdout)
+    terminal = {
+        "ok": False,
+        "terminal": True,
+        "reason": "forfeited",
+        "detail": "worktree-dirtied-by-attempt",
+        "attempts": 1,
+        "forfeited": True,
+        "disclosure": "inspect the worktree",
+    }
+    out = ED._finalize_write_forfeit_terminal(
+        terminal, "cursor", run_dir, state, 1,
+    )
+    assert out == terminal
+    assert "itemCheck" not in out
+    assert "salvage" not in out
 
 
 # axis: codex write open records CHANNEL_NATIVE and binds argv to the declared write schema path.

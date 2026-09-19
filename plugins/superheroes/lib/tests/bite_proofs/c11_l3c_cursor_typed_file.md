@@ -141,3 +141,81 @@ assert False is True  (res["ok"] is True)
 - **neutralization:** `_native_channel_suffix` ungated (always appends for native)
 - **detector:** `test_canonical_spawn_argv_matches_opened_argv_both_engines[cursor]`
 - **verdict:** proven
+
+## WO-B — the retirement
+
+### R1 — `_grade_review_attempt` marker arm (`engine_dispatch.py:_grade_review_attempt`)
+
+- **axis:** marker-opened direct grade → `marker-channel-retired`, never `ok`
+- **neutralization:** return `{"ok": True, "resultKind": "findings", "findings": []}` with engagement attached
+- **detector:** `test_grade_review_attempt_marker_opened_returns_retired`
+- **raw red:** `AssertionError: assert None is True` on `grade.get("forfeit")` (got `ok: True`)
+- **restore:** `result = _marker_arm_retired_grade()` / `result["engagement"] = engagement` / `return result`
+- **raw green:** `1 passed in 0.71s`
+- **verdict:** proven
+
+### R2 — `_grade_write_attempt` marker arm
+
+- **axis:** marker-opened direct write grade → retired forfeit, no `ok`
+- **neutralization:** return `{"ok": True, "signal": "ok", "evidence": {}}`
+- **detector:** `test_grade_write_attempt_marker_opened_returns_retired`
+- **raw red:** `AssertionError: assert None is True` on `grade.get("forfeit")` (got `ok: True`)
+- **restore:** `return _marker_arm_retired_grade()`
+- **raw green:** `1 passed in 0.32s`
+- **verdict:** proven
+
+### R3 — `_parse_review_attempt` marker arm
+
+- **axis:** marker-opened parse → `None`
+- **neutralization:** return `{"ok": True, "resultKind": "findings"}`
+- **detector:** `test_parse_review_attempt_marker_opened_returns_none`
+- **raw red:** `AssertionError: assert {'ok': True, 'resultKind': 'findings'} is None`
+- **restore:** `return None`
+- **raw green:** `1 passed in 0.71s`
+- **verdict:** proven
+
+### R4 — `_parse_write_attempt` marker arm
+
+- **axis:** marker-opened write parse → `None`
+- **neutralization:** return `{"ok": True}`
+- **detector:** `test_parse_write_attempt_marker_opened_returns_none`
+- **raw red:** `AssertionError: assert {'ok': True} is None`
+- **restore:** `return None`
+- **raw green:** `1 passed in 0.31s`
+- **verdict:** proven
+
+### R5 — `_observation_from_attempt` marker arm
+
+- **axis:** marker-opened observation → `read: "unknown"`
+- **neutralization:** `return _engagement_with_read(engagement, result_kind="findings", items=[{"x": 1}])`
+- **detector:** `test_observation_marker_opened_read_unknown`
+- **raw red:** `AssertionError: assert 'engaged' == 'unknown'`
+- **restore:** `return _engagement_with_read(engagement)`
+- **raw green:** `1 passed in 0.74s`
+- **verdict:** proven
+
+### R6 — supervise stdout-cap gate (write)
+
+- **axis:** marker-opened supervised write never mints `stdout-capped-by-attempt`
+- **neutralization:** re-add deleted stdout-cap block before retry branch
+- **detector:** `test_supervise_write_marker_opened_never_mints_stdout_capped`
+- **raw red:** `1 passed` (gate unreachable — `_marker_channel_retired_run` chokepoint returns first)
+- **verdict:** Unreachable through this entry point
+
+### R6b — supervise engaged-artifact upgrade gate (review)
+
+- **axis:** marker-opened supervised review never mints `forfeit-with-engaged-artifact`
+- **neutralization:** re-add deleted `_maybe_upgrade_review_terminal_forfeit` block
+- **detector:** `test_supervise_review_marker_opened_never_mints_engaged_artifact_upgrade`
+- **raw red:** `1 passed` (gate unreachable — chokepoint returns first)
+- **verdict:** Unreachable through this entry point
+
+### R7 — `_finalize_write_forfeit_terminal` passthrough
+
+- **axis:** terminal dict passes through unchanged (no classifier/salvage attach)
+- **neutralization:** `terminal = dict(terminal); terminal["itemCheck"] = {}`
+- **detector:** `test_finalize_write_forfeit_terminal_passthrough`
+- **raw red:** `AssertionError` — left dict contains extra `itemCheck`
+- **restore:** `return terminal`
+- **raw green:** `1 passed in 0.32s`
+- **verdict:** proven

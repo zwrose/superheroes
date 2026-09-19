@@ -882,6 +882,92 @@ def test_codex_marker_channel_write_completed_attempt_refuses_not_stdout_capped(
     assert fake.calls == []
 
 
+# --- #1270 WO-B: marker-arm collapse detectors ---
+
+
+def _marker_opened_review_attempt_state(tmp_path, *, stdout, engine="cursor"):
+    run_dir = str(tmp_path / "marker-review-grade")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    state = {
+        "opened": {
+            "engine": engine,
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    return run_dir, state
+
+
+def test_grade_review_attempt_marker_opened_returns_retired(tmp_path):
+    cursor_stream = '{"type":"tool_call","call_id":"c1","subtype":"started"}\n'
+    stdout = cursor_stream + _VALID_FINDINGS_STDOUT
+    run_dir, state = _marker_opened_review_attempt_state(tmp_path, stdout=stdout)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("reason") == "forfeited"
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "ok" not in grade
+    assert grade["engagement"]["source"] == "cursor-stream"
+
+
+def test_parse_review_attempt_marker_opened_returns_none(tmp_path):
+    run_dir, state = _marker_opened_review_attempt_state(
+        tmp_path, stdout=_VALID_FINDINGS_STDOUT, engine="codex")
+    parsed = ED._parse_review_attempt(run_dir, state, 1)
+    assert parsed is None
+
+
+def test_observation_marker_opened_read_unknown(tmp_path):
+    run_dir, state = _marker_opened_review_attempt_state(
+        tmp_path, stdout=_VALID_FINDINGS_STDOUT, engine="codex")
+    observation = ED._observation_from_attempt(run_dir, state, 1)
+    assert observation["read"] == "unknown"
+
+
+def test_supervise_review_marker_opened_never_mints_engaged_artifact_upgrade(tmp_path):
+    repo_root = _git_init(str(tmp_path / "repo-marker-review-engaged"))
+    run_dir = str(tmp_path / "marker-review-supervise")
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    prose = _poster_child_attempt1_stdout()
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(prose)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": len(prose), "at": time.time(),
+    })
+    _strip_opened_to_marker_channel(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_never_build_view, run_dir=run_dir, max_wait=120,
+        order_id="test-order",
+    )
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["reason"] == "forfeited"
+    assert res["detail"] == "marker-channel-retired"
+    assert res["reason"] != "forfeit-with-engaged-artifact"
+    assert "salvage" not in res
+
+
 def test_codex_open_argv_is_canonical_spawn_seam_carries_per_attempt_flags(tmp_path):
     """Journal at open stores canonical seat argv; spawn seam gets per-attempt codex flags."""
     repo_root = _repo(tmp_path)
@@ -3783,9 +3869,8 @@ def test_grade_review_attempt_prompt_echo_payload_shape_prompt_echo_only(tmp_pat
     }
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
-    shape = grade.get("payloadShape")
-    assert shape is not None
-    assert shape["parsed"] == ED.engine_adapter.SHAPE_PROMPT_ECHO_ONLY
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "payloadShape" not in grade
 
 
 @pytest.mark.parametrize(
@@ -4007,7 +4092,7 @@ def test_dispatch_review_continuation_grades_with_stored_echo_nonce(tmp_path):
 
 
 def test_grade_review_attempt_stored_echo_nonce_rejects_keyed_example(tmp_path):
-    # axis: grading with stored nonce refuses verbatim example rendered under that nonce
+    # axis: marker-opened direct grade collapses to retirement (#1270 layer 3c)
     echo_nonce = "stored-nonce-for-grade"
     stdout = json.dumps(RFS.example_findings_object(echo_nonce))
     state = _grade_state_with_echo_nonce(
@@ -4015,25 +4100,26 @@ def test_grade_review_attempt_stored_echo_nonce_rejects_keyed_example(tmp_path):
     )
     grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
     assert grade.get("forfeit") is True
-    shape = grade.get("payloadShape")
-    assert shape is not None
-    assert shape["parsed"] == EA.SHAPE_FINDINGS_HOLLOW_MEMBER
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "payloadShape" not in grade
 
 
 def test_grade_review_attempt_genuine_finding_quoting_sentinel_in_prose_ok(tmp_path):
     # axis: genuine finding with sentinel-free title plus quoting body survives grading under nonce
     echo_nonce = "dispatch-nonce-prose"
     sentinel = RFS.EXAMPLE_SENTINEL
-    member = {
-        "severity": "Important",
-        "title": "quoted example in body",
-        "body": "context:\n" + sentinel + " appears inside prose",
-    }
-    stdout = json.dumps({"findings": [member]})
-    state = _grade_state_with_echo_nonce(
-        tmp_path, str(tmp_path / "run"), echo_nonce=echo_nonce, stdout=stdout,
-    )
-    grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
+    branch = _native_review_branch("findings")
+    member = dict(branch["findings"][0])
+    member["title"] = "quoted example in body"
+    member["body"] = "context:\n" + sentinel + " appears inside prose"
+    branch["findings"] = [member]
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, channel=ERC.CHANNEL_NATIVE)
+    state["opened"]["echoNonce"] = echo_nonce
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+        fh.write("\n")
+    grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
     assert grade["findings"][0]["title"] == member["title"]
 
@@ -4051,9 +4137,8 @@ def test_grade_review_attempt_second_parse_pair_carries_echo_nonce(tmp_path):
     )
     grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
     assert grade.get("forfeit") is True
-    shape = grade.get("payloadShape")
-    assert shape is not None
-    assert shape["parsed"] == EA.SHAPE_FINDINGS_HOLLOW_MEMBER
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "payloadShape" not in grade
 
 
 def test_grade_review_attempt_second_payload_shape_pair_carries_echo_nonce(tmp_path):
@@ -4065,7 +4150,8 @@ def test_grade_review_attempt_second_payload_shape_pair_carries_echo_nonce(tmp_p
     )
     grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
     assert grade.get("forfeit") is True
-    assert grade.get("payloadShape", {}).get("parsed") == EA.SHAPE_FINDINGS_HOLLOW_MEMBER
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "payloadShape" not in grade
 
 
 def _engaged_review_stdout_with_nonce_example(echo_nonce):
@@ -4124,9 +4210,8 @@ def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
     }
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
-    shape = grade.get("payloadShape")
-    assert shape is not None
-    assert shape["parsed"] == ED.engine_adapter.SHAPE_EMPTY_STDOUT
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "payloadShape" not in grade
 
 
 # --- #763: kind-neutral review grading + running graded tail ---
@@ -4150,34 +4235,13 @@ def test_dispatch_review_verdicts_terminal_carries_result_kind(tmp_path):
 
 
 def test_grade_review_attempt_verdicts_payload_grades_ok(tmp_path):
-    run_dir = str(tmp_path / "run-verdicts")
-    repo_root = _repo(tmp_path)
-    os.makedirs(run_dir, exist_ok=True)
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write(_VALID_VERDICTS_STDOUT)
-    state = {
-        "opened": {
-            "engine": "codex",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(_VALID_VERDICTS_STDOUT), "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    branch = _native_review_branch("verdicts")
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
     assert grade["resultKind"] == "verdicts"
-    assert grade["verdicts"] == [{
-        "id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test",
-    }]
+    assert len(grade["verdicts"]) == 1
+    assert grade["verdicts"][0]["verdict"] == branch["verdicts"][0]["verdict"]
     assert "findings" not in grade
 
 
@@ -4222,27 +4286,11 @@ def test_review_result_kind_census_survives_consumers(tmp_path, kind):
     for other_kind in other_kinds:
         assert other_kind not in res
     run_dir = str(tmp_path / ("run-graded-%s" % kind))
-    os.makedirs(run_dir, exist_ok=True)
-    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
-        fh.write(stdout)
-    state = {
-        "opened": {
-            "engine": "codex",
-            "runKind": ED.RUN_KIND_REVIEW,
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
-                },
-            },
-            2: {"ended": None},
-        },
-    }
+    branch = _native_review_branch(kind)
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, channel=ERC.CHANNEL_NATIVE)
+    state["opened"]["runKind"] = ED.RUN_KIND_REVIEW
+    state["attempts"][2] = {"ended": None}
     graded = ED._build_running_graded(run_dir, state)
     assert len(graded) == 1
     assert graded[0]["resultKind"] == kind
@@ -4649,20 +4697,18 @@ def test_journal_state_two_real_attempt_ended_first_wins():
 
 def test_journal_state_legacy_attempt_ended_keys_grade_unchanged(tmp_path):
     """axis: no-raise on 0.23.0-era attempt-ended keys during fold and grade."""
-    run_dir = str(tmp_path / "run")
-    repo_root = _repo(tmp_path)
-    os.makedirs(run_dir)
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write(_VALID_FINDINGS_STDOUT)
+    branch = _native_review_branch("findings")
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
     records = [
         {
             "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
             "roleKind": ED.RUN_KIND_REVIEW, "orderId": "legacy",
-            "argv": [sys.executable, "-c", "x"], "cwd": repo_root,
+            "argv": [sys.executable, "-c", "x"], "cwd": state["opened"]["cwd"],
             "timeout": 30, "retryTimeout": 30,
             "promptPath": os.path.join(run_dir, "prompt.txt"),
             "baseSha": "abc", "supervisorPid": 1, "at": time.time(),
+            "channel": ERC.CHANNEL_NATIVE,
+            "nativeSchemaPath": state["opened"]["nativeSchemaPath"],
         },
         {
             "kind": "attempt-ended", "attempt": 1,
@@ -11228,34 +11274,16 @@ def test_observation_from_attempt_investigated_threading_raise_vs_unknown(tmp_pa
 
 def test_grade_review_attempt_investigated_disclosure_stamps_unknown_read(tmp_path):
     """Grading path: empty findings with accepted investigated paths stamps unknown read."""
-    run_dir = str(tmp_path / "grade-investigated-unknown-read")
     repo_root = _repo(tmp_path)
     rel = "src/main.py"
     real_file = os.path.join(repo_root, rel)
     os.makedirs(os.path.dirname(real_file), exist_ok=True)
     with open(real_file, "w", encoding="utf-8") as fh:
         fh.write("# main\n")
-    stdout = json.dumps({"findings": [], "investigated": [rel]})
-    os.makedirs(run_dir, exist_ok=True)
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write(stdout)
-    state = {
-        "opened": {
-            "engine": "codex",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    branch = _native_review_branch("findings")
+    branch["findings"] = []
+    branch["investigated"] = [rel]
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
     assert grade["engagement"]["read"] == "unknown"
@@ -11706,14 +11734,9 @@ def test_grade_native_review_attempt_marker_channel_skips_native_forfeits(tmp_pa
     )
     os.remove(ED._native_result_path(run_dir, 1))
     grade = ED._grade_review_attempt(run_dir, state, 1)
-    assert grade.get("ok") is True
-    assert grade.get("detail") not in {
-        "native-result-missing",
-        "native-result-oversized",
-        "native-result-malformed",
-        "native-schema-unreadable",
-        "native-result-schema-invalid",
-    }
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "ok" not in grade
 
 
 def test_grade_native_review_attempt_event_stream_tokens_reported_separately(tmp_path):
@@ -12014,51 +12037,19 @@ def test_grade_and_observation_agree_on_engagement(tmp_path):
         fh.write("# main\n")
 
     investigated_stdout = json.dumps({"findings": [], "investigated": [rel]})
-    run_dir_investigated = str(tmp_path / "agree-investigated")
-    os.makedirs(run_dir_investigated, exist_ok=True)
-    with open(os.path.join(run_dir_investigated, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
-        fh.write(investigated_stdout)
-    state_investigated = {
-        "opened": {
-            "engine": "codex",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(investigated_stdout), "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    branch = _native_review_branch("findings")
+    branch["findings"] = []
+    branch["investigated"] = [rel]
+    run_dir_investigated, state_investigated = _native_review_grade_state(
+        tmp_path, branch, stdout=investigated_stdout)
     _assert_agree(run_dir_investigated, state_investigated)
 
     cursor_stream = "\n".join([
         '{"type":"tool_call","call_id":"c1","subtype":"started"}',
     ])
-    run_dir_cursor = str(tmp_path / "agree-cursor")
-    os.makedirs(run_dir_cursor, exist_ok=True)
-    with open(os.path.join(run_dir_cursor, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
-        fh.write(cursor_stream)
-    state_cursor = {
-        "opened": {
-            "engine": "cursor",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(cursor_stream), "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    run_dir_cursor, state_cursor = _native_review_grade_state(
+        tmp_path, _native_review_branch("findings"), stdout=cursor_stream)
+    state_cursor["opened"]["engine"] = "cursor"
     _assert_agree(run_dir_cursor, state_cursor)
 
     branch = _native_review_branch("findings")
@@ -12068,26 +12059,9 @@ def test_grade_and_observation_agree_on_engagement(tmp_path):
         tmp_path, branch, stdout=native_stream, channel=ERC.CHANNEL_NATIVE)
     _assert_agree(run_dir_native, state_native)
 
-    run_dir_unparseable = str(tmp_path / "agree-unparseable")
-    os.makedirs(run_dir_unparseable, exist_ok=True)
-    with open(os.path.join(run_dir_unparseable, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
-        fh.write("not json at all\n")
-    state_unparseable = {
-        "opened": {
-            "engine": "codex",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": 15, "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    run_dir_unparseable, state_unparseable = _native_review_grade_state(
+        tmp_path, branch, stdout="not json at all\n", write_result=False)
+    os.remove(ED._native_result_path(run_dir_unparseable, 1))
     _assert_agree(run_dir_unparseable, state_unparseable)
 
 
@@ -12127,27 +12101,10 @@ def test_graded_review_attempt_spot_check_lists_unchanged(tmp_path):
     good = "good.py"
     with open(os.path.join(repo_root, good), "w", encoding="utf-8") as fh:
         fh.write("x\n")
-    stdout = json.dumps({"findings": [], "investigated": [good, "missing.py", "/abs/path"]})
-    run_dir = str(tmp_path / "spot-check-lists")
-    os.makedirs(run_dir, exist_ok=True)
-    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
-        fh.write(stdout)
-    state = {
-        "opened": {
-            "engine": "codex",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    branch = _native_review_branch("findings")
+    branch["findings"] = []
+    branch["investigated"] = [good, "missing.py", "/abs/path"]
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
     assert grade["investigated"] == [good]
@@ -12208,33 +12165,16 @@ def test_cursor_engagement_construction_carries_telemetry_tool_calls():
 
 def test_payloadless_accepted_investigated_still_lands_engagement_read_unknown(tmp_path):
     """Known I1 boundary: accepted investigated still gates vacuity, not engagement.read."""
-    run_dir = str(tmp_path / "i1-boundary-accepted-investigated")
     repo_root = _repo(tmp_path)
     rel = "src/main.py"
     real_file = os.path.join(repo_root, rel)
     os.makedirs(os.path.dirname(real_file), exist_ok=True)
     with open(real_file, "w", encoding="utf-8") as fh:
         fh.write("# main\n")
-    stdout = json.dumps({"findings": [], "investigated": [rel]})
-    os.makedirs(run_dir, exist_ok=True)
-    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
-        fh.write(stdout)
-    state = {
-        "opened": {
-            "engine": "codex",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    branch = _native_review_branch("findings")
+    branch["findings"] = []
+    branch["investigated"] = [rel]
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
     assert grade.get("forfeit") is not True
@@ -12244,7 +12184,7 @@ def test_payloadless_accepted_investigated_still_lands_engagement_read_unknown(t
 
 
 def test_grade_review_attempt_engaged_by_nonempty_payload_without_investigated(tmp_path):
-    """Non-regression: non-empty payload with no accepted paths stays engaged."""
+    """Marker-opened direct grade collapses to retirement (#1270 layer 3c)."""
     run_dir = str(tmp_path / "grade-payload-only")
     repo_root = _repo(tmp_path)
     os.makedirs(run_dir, exist_ok=True)
@@ -12268,13 +12208,13 @@ def test_grade_review_attempt_engaged_by_nonempty_payload_without_investigated(t
         },
     }
     grade = ED._grade_review_attempt(run_dir, state, 1)
-    assert grade.get("ok") is True
-    assert grade["engagement"]["read"] == "engaged"
-    assert "investigated" not in grade
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "ok" not in grade
 
 
 def test_grade_review_attempt_vacuous_without_investigated_stamps_unknown(tmp_path):
-    """Non-regression: vacuous empty findings with no accepted paths stays unknown."""
+    """Marker-opened direct grade collapses to retirement (#1270 layer 3c)."""
     run_dir = str(tmp_path / "grade-vacuous-unknown")
     repo_root = _repo(tmp_path)
     stdout = json.dumps({"findings": []})
@@ -12300,8 +12240,8 @@ def test_grade_review_attempt_vacuous_without_investigated_stamps_unknown(tmp_pa
     }
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
-    assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
-    assert grade["engagement"]["read"] == "unknown"
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "ok" not in grade
 
 
 def test_run_execution_record_codex_vacuous_prompt_echo(tmp_path):
