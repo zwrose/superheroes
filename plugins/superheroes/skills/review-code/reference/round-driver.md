@@ -8,6 +8,7 @@
 - [Batch concurrency — an independent batch goes out together](#batch-concurrency--an-independent-batch-goes-out-together)
 - [Round economy](#round-economy)
 - [Lens coverage beside counts](#lens-coverage-beside-counts)
+- [Dispositions](#dispositions)
 - [Actions and payloads](#actions-and-payloads)
 - [The re-dispatch carry](#the-re-dispatch-carry)
 - [Journal and receipt](#journal-and-receipt)
@@ -646,6 +647,31 @@ stack's halves, 2026-08-09): two lenses never examined one half across several r
 complete round landed their whole backlog at once and read as a new crop — and leg planning was
 steered by the partial trend line.
 
+## Dispositions
+
+One ledger owns every finding's disposition — the loop seeds it, archives departures there, and the
+certification writer reads it when told to.
+
+- Every compiled candidate that enters verification is **seeded** into `dispositionLedger`, keyed by
+  `findingKey`, carrying `raisedRound`. A finding that leaves the live list is **archived** there
+  whether or not it carries a disposition.
+- A candidate merged into a representative at synthesis carries `mergedInto` and is graded through
+  the representative; a chain that does not resolve refuses `disposition-without-receipt`.
+- The state marker `dispositionLedgerOwner: "ledger"` tells the certification writer to read the
+  **ledger** for the disposition family and the live list for non-disposition content only. A session
+  without the marker is graded on its recorded shape. No stored field is removed and there is **no
+  state-schema version bump**.
+- The three dispositions: `fixed` carries `dispositionReceipt {headSha, verifyResult,
+  fixContentHeadSha, fixContentDigest, fixContentBytes}`; `refuted` carries `refutedReason`;
+  `out-of-scope` carries `outOfScopeReason` plus a `followUp {item, revisitTrigger, classClosure}`.
+- Where each is recorded: `fixed` at the audits fold for every target the independent auditor
+  discharged; `refuted` at the verifiers fold (the verdict's reason) and at synthesis for an
+  author-justified drop (the quoted justification); `out-of-scope` where the owner gives it — an
+  owner-judgment `skip` and an audit-stall `accept-the-disclosed-risk`, both of which now accept an
+  **optional `followUp` object**.
+- Without a `followUp` the disposition is still recorded and the certification writer refuses it
+  under the follow-up rule — **the fail-closed answer, not an error**.
+
 ## Actions and payloads
 
 ### Owner gates and gate policy (`present-judgment`, `present-stall-menu`)
@@ -674,6 +700,11 @@ when policy has not pre-authorized, present the gate and fold the owner's resolu
 `advance --owner-artifact` — the `policyApplied` record carries `source: "owner-supplied"` when the
 artifact's `_provenance` block is well-formed, `source: "owner-unattributed"` otherwise (vs
 `"gate-policy"` for a calibration-resolved fold).
+
+When an owner gives an out-of-scope disposition at the owner-judgment gate (`skip` with reason) or
+the audit-stall gate (`accept-the-disclosed-risk`), the disposition is recorded even when `followUp`
+is absent; the certification writer then refuses under the follow-up rule — the fail-closed answer,
+not an error.
 
 **Advance gate-policy park detail causes** (authoritative list — drift-tested against
 `round_driver.owner_gate_policy_park_detail_causes()`):
@@ -726,8 +757,8 @@ cannot is an overclaim.
 | `dispatch-scoped-finder` | Delta round: scoped scan over `payload.hunks` (the split's computed new surface — file → hunk ranges + text) at `reviewer-deep`. Submit `{findings: [...]}`. Emitted **only when the computed new surface is non-empty**; a genuinely empty new surface (the split returned `unknown: False` with no new hunks) skips this dispatch and records `scopedFinder: skipped-empty-surface` on the round (receipt-visible) — never a vacuous scan over nothing. |
 | `run-verify` | Run `payload.command` from the working tree (non-interactive, timeout). **The verify step may run harness-backgrounded and polled in-turn** — the already-sanctioned shape for long local work — because the host's foreground command-timeout cap bounds a **single call**, not the step; what stays forbidden is unchanged, `&`/setsid/nohup and ending the turn to wait. Hand path: submit `{result: "pass" \| "fail" \| "timeout" \| "skipped" \| "none" \| "unverified"}`. Durable-record path: orchestrator-fulfilled — `advance` folds from the host bare payload at `$SESSION_DIR/round-N/landing/run-verify/<skey>.a<K>.payload.json` where `<skey>` is `round_records.storage_key("verify")` (no orders manifest, no anchor). **The fold writes the durable seat record** for that slot (`seat-result/1` at `$SESSION_DIR/round-N/seats/run-verify/<skey>.a<K>.json`, stamped `fulfilledBy: "orchestrator"`, `orderSha256` / `manifestSha256` = `not-emitted` because there is no anchor to check them against) **in the same commit as the fold**, so a `verifyResult` folded this way reconstructs from the record exactly as a seat-path fold does. **Both artifacts present → `landing-ambiguous`, no fold** — the bare payload and a durable seat record are two claims for one slot, the same invariant the seat path refuses on the envelope/bare-payload pair; delete whichever is not the one you meant. The refusal is **unconditional**: a re-entry after this fold already committed refuses too, rather than re-folding, because recognising "this record is mine" duplicates the already-folded judgment `submit`'s duplicate contract owns. Fail → terminal halt, certification withheld. **Placement.** After a fixer round the gate is the phase after `dispatch-audits` (advertised on the audits payload — see that row), or the phase right after `dispatch-fixer` when the post-fix surface is unknown (the full panel follows its `pass`), or the last phase of the ceiling round (the round at the ceiling completes — fix and gate — before the `round-ceiling` park). Its verdict gates certification exactly as before: `fail`/`timeout` halt before any next panel or scoped finder. **It is the round's one full verify run** — the fixer's order carries a scoped budget, never this command. |
 | `dispatch-fixer` | Dispatch fixer over `payload.batch` (blocking findings the driver selected). Submit `{fixes, headDiff \| headDiffPath, escalated?, coverageDecisions?}` — `coverageDecisions` is a list of coverage-decision objects the driver accumulates into `state["_coverage"]`. The post-fix head diff comes from git via the **guarded per-round command in the SKILL's Setup** (`git diff "$BASE_REF"...HEAD` against the **pinned remote base commit** — never a local branch name, and never a bare copy without Setup's failed-diff and empty-diff halts; if `$BASE_REF` is not in this shell, restore and re-validate it first, #637), never the fixer's self-report. Provide it **inline** (`headDiff`) or, since a real head diff can be hundreds of KB and cannot reasonably inline into a JSON submit artifact, as an **absolute** file path (`headDiffPath`) the driver reads itself (**inline wins if both are present**). A missing / non-absolute / unreadable `headDiffPath` or empty content is treated as an **unknown surface** → the next round runs a full reviewer-deep panel (the unknown→run-everything rule), never an empty diff and never a silent scoped skip; the source used is recorded on the round as `headDiffSource: inline\|path\|unknown`. The changed policy subjects the #174 confirmation re-arm consumes are **derived by the driver itself** from the reviewed-vs-head diff through the accumulated findings (the injectable `changed_subjects` seam — library default + CLI wire the real git derivation, #157/#158); a self-reported `changedSubjects` is ignored on the live path. **Batches.** `payload.batch` carries at most `fixBatchCap` findings (default per § Round economy); a larger blocking set is dispatched as consecutive `dispatch-fixer` attempts in the same round (`fix-batch.json`, `fix-batch.1.json`, …), each folded on its own, and the round's audit targets derive from the whole batch. The emitted order's verify line is the **scoped budget** (`{{VERIFY_BUDGET}}` — the batch's target files, their referencing tests, the static validators), never the full verify command. |
-| `present-judgment` | A tradeoff/product-choice blocker is an **owner-judgment** call routed here — an **intervention gate, not a terminal**. Present each `payload.findings[]` (id, file, line, title, severity) with `payload.findings[].dispositions` (`fix-as-suggested`, `fix-with-guidance`, `skip`). Submit `{dispositions: [{id, disposition, guidance?, reason?}, ...]}` — `skip` needs a citable `reason`. Fixes fold into the round's fix batch and the loop proceeds into the fix leg; skips ride the exit disclosure. Fail-closed: a missing/unknown disposition (or a reasonless skip) folds as `fix-as-suggested` — a judgment blocker is never silently skipped. Never judge the dispute yourself. |
-| `present-stall-menu` | The **audit-stall owner gate** — reached only after one invisible self-recovery (never for a judgment blocker; those go to `present-judgment`). Present `payload.choices` (three-choice menu: `one-more-round`, `accept-the-disclosed-risk`, `hold`; `accept-the-disclosed-risk` only when `payload.acceptRiskEligible` — gated on a stalled audit target that is CONFIRMED with evidence; `one-more-round` only when offered — once per session). Submit `{choice}`. **`hold`** → terminal `held`, certification withheld (absorbs the retired scope-reduction choice). **`accept-the-disclosed-risk`** → certifies when eligible. **`one-more-round`** → not a terminal: clears the stall once, re-enters `dispatch-fixer` → `dispatch-audits` with the stalled targets as the batch (journaled; recorded on the round); an empty/unresolvable stall-target snapshot parks `cannot-certify` instead of re-entering. |
+| `present-judgment` | A tradeoff/product-choice blocker is an **owner-judgment** call routed here — an **intervention gate, not a terminal**. Present each `payload.findings[]` (id, file, line, title, severity) with `payload.findings[].dispositions` (`fix-as-suggested`, `fix-with-guidance`, `skip`). Submit `{dispositions: [{id, disposition, guidance?, reason?, followUp?}, ...]}` — `skip` needs a citable `reason` and may carry an optional `followUp`. Fixes fold into the round's fix batch and the loop proceeds into the fix leg; skips ride the exit disclosure. Fail-closed: a missing/unknown disposition (or a reasonless skip) folds as `fix-as-suggested` — a judgment blocker is never silently skipped. Never judge the dispute yourself. |
+| `present-stall-menu` | The **audit-stall owner gate** — reached only after one invisible self-recovery (never for a judgment blocker; those go to `present-judgment`). Present `payload.choices` (three-choice menu: `one-more-round`, `accept-the-disclosed-risk`, `hold`; `accept-the-disclosed-risk` only when `payload.acceptRiskEligible` — gated on a stalled audit target that is CONFIRMED with evidence; `one-more-round` only when offered — once per session). Submit `{choice, followUp?}` — **`accept-the-disclosed-risk`** may carry an optional `followUp`. **`hold`** → terminal `held`, certification withheld (absorbs the retired scope-reduction choice). **`accept-the-disclosed-risk`** → certifies when eligible. **`one-more-round`** → not a terminal: clears the stall once, re-enters `dispatch-fixer` → `dispatch-audits` with the stalled targets as the batch (journaled; recorded on the round); an empty/unresolvable stall-target snapshot parks `cannot-certify` instead of re-entering. |
 | `terminal` | Stop looping; read `payload.verdict` and `payload.certification`; surface honestly in the End-of-Loop Summary. |
 
 ## The re-dispatch carry

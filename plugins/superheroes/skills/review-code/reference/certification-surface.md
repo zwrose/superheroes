@@ -43,7 +43,7 @@ A successful certification receipt (`_build_receipt`) carries at minimum:
 | `certificationShape` | Writer override — see certification-shape rule below |
 | `certification` | Loop state's `certification` block |
 | `rounds` | Per-round projection with disclosure channels via `receipt_disclosures` |
-| `findings` | Projected findings with dispositions and disposition proofs |
+| `findings` | Projected findings with dispositions and disposition proofs. When state carries `dispositionLedgerOwner: "ledger"`, the writer's finding set is the disposition ledger overlaid by the live list **for non-disposition content only**; a `mergedInto` entry is graded through its representative; a chain that does not resolve refuses `disposition-without-receipt`. |
 | `decisions` | Loop decision log |
 | `seatMap` | Union projection from seat-map receipts |
 | `scriptRan` | Journal summary (`invocations`, `byPhase`) |
