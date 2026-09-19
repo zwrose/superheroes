@@ -102,6 +102,8 @@ def _valid_review_branch(kind):
                 verdict[field] = elem["enums"]["verdict"][0]
             elif field == "id":
                 verdict[field] = "finding-001"
+            elif field == "reason":
+                verdict[field] = "checked"
             else:
                 verdict[field] = None
         return {
@@ -620,6 +622,21 @@ def test_write_result_contract_lists_schema_required_and_omits_sentinel():
         assert "`%s`" % key in contract
     assert EA.WRITE_REPORT_SENTINEL not in contract
     assert EA.WRITE_REPORT_FIELD_SEMANTICS.strip() in contract
+
+
+def test_verdict_reason_required_in_contract_and_schema():
+    contract, _ = PC.payload_contract(PC.P_VERIFIERS)
+    elem = contract["elements"]["verdicts"]
+    assert "reason" in elem["required"]
+    assert elem["types"]["reason"] == "non-empty-string"
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, expected_result_kind="verdicts")
+    branch = _valid_review_branch("verdicts")
+    branch["verdicts"][0].pop("reason", None)
+    ok, _reason = ERC.validate(schema, _wrap_result(branch))
+    assert not ok
+    branch["verdicts"][0]["reason"] = "x"
+    ok, _reason = ERC.validate(schema, _wrap_result(branch))
+    assert ok
 
 
 def test_engine_output_byte_cap_single_home():

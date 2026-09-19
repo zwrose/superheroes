@@ -78,7 +78,22 @@ def _install_fake_codex(monkeypatch, tmp_path, script_body):
     monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
 
 
+def _install_fake_cursor(monkeypatch, tmp_path, script_body):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_cursor = fake_bin / "cursor-agent"
+    fake_cursor.write_text("#!/usr/bin/env python3\n" + script_body, encoding="utf-8")
+    fake_cursor.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+
+
 def _codex_argv_for_run(seat, role_kind, cwd):
+    built = EA.build_argv_result(seat, role_kind, {"cwd": cwd})
+    assert built["reason"] is None, built
+    return built["argv"]
+
+
+def _cursor_argv_for_run(seat, role_kind, cwd):
     built = EA.build_argv_result(seat, role_kind, {"cwd": cwd})
     assert built["reason"] is None, built
     return built["argv"]
@@ -88,14 +103,22 @@ def _journal_codex_run_for_engine_files(
     run_dir, prompt_path, *, seat, role_kind, run_kind,
 ):
     argv = _codex_argv_for_run(seat, role_kind, run_dir)
-    ED._journal_append(run_dir, {
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "codex", list(argv), run_kind,
+    )
+    assert native_err is None, native_err
+    record = {
         "kind": "run-opened", "runKind": run_kind, "engine": "codex",
         "roleKind": role_kind, "orderId": "x", "argv": argv,
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE,
         "supervisorPid": 1, "at": time.time(),
         "resolvedInputs": _spawn_gate_resolved_inputs(seat),
-    })
+    }
+    if native_schema_path is not None:
+        record["nativeSchemaPath"] = native_schema_path
+    ED._journal_append(run_dir, record)
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
     })
@@ -263,6 +286,30 @@ def _is_codex_event_stream(stdout):
     return False
 
 
+def _last_agent_message_text(stdout):
+    """Last item.completed agent_message text from a codex event stream."""
+    if not isinstance(stdout, str) or not stdout:
+        return None
+    last_text = None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(obj, dict) or obj.get("type") != "item.completed":
+            continue
+        item = obj.get("item")
+        if not isinstance(item, dict) or item.get("type") != "agent_message":
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text:
+            last_text = text
+    return last_text
+
+
 def _wrap_codex_fake_stdout(argv, stdout):
     if not isinstance(stdout, str) or not stdout.strip():
         return stdout
@@ -275,21 +322,6 @@ def _wrap_codex_fake_stdout(argv, stdout):
     return _codex_event_stream(stdout)
 
 
-def _write_codex_last_message(argv, payload_text):
-    if "--output-last-message" not in argv:
-        return
-    idx = argv.index("--output-last-message")
-    if idx + 1 >= len(argv):
-        return
-    path = argv[idx + 1]
-    try:
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(payload_text)
-    except OSError:
-        pass
 _VALID_VERDICTS_STDOUT = json.dumps({
     "verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test"}],
 })
@@ -516,14 +548,38 @@ class FakeRunner:
             else:
                 payload = stdout
                 if EA.is_codex_event_stream(stdout):
-                    extracted = EA.codex_review_payload_text(stdout, None)
+                    extracted = _last_agent_message_text(stdout)
                     if extracted:
                         payload = extracted
                 _write_native_review_result(argv, payload)
-        wrapped = _wrap_codex_fake_stdout(argv, stdout)
-        if wrapped is not stdout and "--output-last-message" in argv:
-            _write_codex_last_message(argv, stdout)
-        return wrapped, timed_out, rc, stderr_tail
+        return _wrap_codex_fake_stdout(argv, stdout), timed_out, rc, stderr_tail
+
+
+class _PreservingNativeReviewFakeRunner(FakeRunner):
+    """FakeRunner that does not sync stdout into the native result file (runner owns -o)."""
+
+    def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+        self.calls.append({
+            "argv": list(argv),
+            "prompt_bytes": prompt_bytes,
+            "timeout": timeout,
+            "cwd": cwd,
+        })
+        idx = len(self.calls) - 1
+        if idx >= len(self.responses):
+            raise AssertionError("fake called too many times")
+        resp = self.responses[idx]
+        if callable(resp):
+            out = resp(argv, prompt_bytes, timeout, progress_cb, cwd)
+        else:
+            out = resp
+        if isinstance(out, tuple) and len(out) == 4:
+            stdout, timed_out, rc, stderr_tail = out
+        elif isinstance(out, tuple) and out and isinstance(out[0], str):
+            stdout, timed_out, rc, stderr_tail = out[0], False, 0, ""
+        else:
+            stdout, timed_out, rc, stderr_tail = out, False, 0, ""
+        return stdout, timed_out, rc, stderr_tail
 
 
 def _expect_view_cwd(fake, build_view, expected_repo_realpath):
@@ -663,11 +719,126 @@ def test_argv_for_attempt_injects_codex_json_flags(tmp_path):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
     base = ["codex", "exec", "-m", "gpt-5.6-sol", "-"]
-    argv = ED._argv_for_attempt(base, run_dir, 2, "codex")
-    assert "--json" in argv
-    idx = argv.index("--output-last-message")
-    assert argv[idx + 1] == ED._attempt_last_message_path(run_dir, 2)
-    assert argv[-1] == "-"
+    assert ED._argv_for_attempt(base, run_dir, 2, "codex") == base
+    native = base + ["-o", "/tmp/native.json", "--output-schema", "/tmp/schema.json"]
+    argv = ED._argv_for_attempt(native, run_dir, 2, "codex")
+    assert argv.count("--json") == 1
+    o_idx = argv.index("-o")
+    assert argv[o_idx - 1] == "--json"
+
+
+def test_codex_marker_parser_is_gone():
+    assert hasattr(EA, "codex_review_payload_text") is False
+    assert hasattr(EA, "codex_json_argv_flags") is False
+    assert hasattr(ED, "_review_stdout_for_parse") is False
+    assert hasattr(ED, "_dispatch_allowlist_validate") is False
+
+
+def _strip_opened_to_marker_channel(run_dir):
+    records, _ = ED._journal_read(run_dir)
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            if rec.get("kind") == "run-opened":
+                rec.pop("channel", None)
+                rec.pop("nativeSchemaPath", None)
+                argv = list(rec.get("argv") or [])
+                cleaned = []
+                idx = 0
+                while idx < len(argv):
+                    token = argv[idx]
+                    if token in ("--output-schema", "-o") and idx + 1 < len(argv):
+                        idx += 2
+                        continue
+                    if token == "--json":
+                        idx += 1
+                        continue
+                    cleaned.append(token)
+                    idx += 1
+                rec["argv"] = cleaned
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+
+
+def test_codex_marker_channel_run_refuses_to_spawn(tmp_path):
+    run_dir = str(tmp_path / "marker-retired-codex")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    _strip_opened_to_marker_channel(run_dir)
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_never_build_view, run_dir=run_dir, max_wait=60,
+        order_id="test-order",
+    )
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "marker-channel-retired"
+    assert fake.calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended1 = next(
+        r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended1.get("refusal") == "marker-channel-retired"
+
+    run_dir_cursor = str(tmp_path / "marker-cursor-spawns")
+    repo_root = _repo(tmp_path)
+    first = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir_cursor, max_wait=0,
+        order_id="cursor-marker",
+    )
+    _strip_opened_to_marker_channel(first["runDir"])
+    cursor_fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    second = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=cursor_fake,
+        build_view=_never_build_view, run_dir=first["runDir"], max_wait=60,
+        order_id="cursor-marker",
+    )
+    assert cursor_fake.calls
+
+
+def test_codex_marker_channel_write_run_refuses_to_spawn(tmp_path):
+    run_dir = str(tmp_path / "marker-retired-codex-write")
+    wt, _main = _linked_worktree_pair(tmp_path)
+    _dispatch_write(tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=0)
+    _strip_opened_to_marker_channel(run_dir)
+    fake = FakeRunner([])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=120)
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "marker-channel-retired"
+    assert fake.calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended1 = next(
+        r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended1.get("refusal") == "marker-channel-retired"
+
+
+def test_codex_marker_channel_write_completed_attempt_refuses_not_stdout_capped(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    run_dir = str(tmp_path / "marker-retired-codex-write-completed")
+    _dispatch_write(tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=0)
+    over = ED.MAX_STDOUT_CAPTURE + 4096
+    truncated = "z" * over + "ungradeable tail without contract"
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(truncated)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": len(truncated), "at": time.time(),
+    })
+    _strip_opened_to_marker_channel(run_dir)
+    fake = FakeRunner([])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=120)
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "marker-channel-retired"
+    assert "stdout-capped" not in str(res.get("detail", ""))
+    assert fake.calls == []
 
 
 def test_codex_open_argv_is_canonical_spawn_seam_carries_per_attempt_flags(tmp_path):
@@ -748,12 +919,6 @@ def test_argv_for_attempt_leaves_non_codex_argv_unchanged(tmp_path):
     run_dir = str(tmp_path / "run")
     base = ["cursor-agent", "-p", "-"]
     assert ED._argv_for_attempt(base, run_dir, 1, "cursor") == base
-
-
-def test_codex_json_argv_flags_helper():
-    path = "/tmp/run/attempt-1.last-message"
-    assert EA.codex_json_argv_flags(path) == ["--json", "--output-last-message", path]
-    assert EA.codex_json_argv_flags("") == []
 
 
 def test_dispatch_review_prompt_has_new_preamble(tmp_path):
@@ -1968,17 +2133,9 @@ def _manual_open_review_run(tmp_path, run_dir):
 
 
 def _write_codex_review_attempt_stdout(run_dir, attempt, stdout):
-    """Materialize codex JSONL stdout + last-message companion for grade fixtures."""
+    """Materialize codex JSONL stdout for grade fixtures."""
     if not _is_codex_event_stream(stdout):
-        last_msg_path = ED._attempt_last_message_path(run_dir, attempt)
-        with open(last_msg_path, "w", encoding="utf-8") as fh:
-            fh.write(stdout)
         stdout = _codex_event_stream(stdout)
-    else:
-        payload = EA.codex_review_payload_text(stdout, None)
-        if payload:
-            with open(ED._attempt_last_message_path(run_dir, attempt), "w", encoding="utf-8") as fh:
-                fh.write(payload)
     stdout_path = os.path.join(run_dir, "attempt-%d.stdout" % attempt)
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write(stdout)
@@ -3015,11 +3172,21 @@ def test_run_engine_files_caps_under_live_writer_stdout_and_stderr(tmp_path, mon
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    seat = _codex_seat(role=_WRITE_ROLE)
-    argv = _journal_codex_run_for_engine_files(
-        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
-    )
-    _install_fake_codex(monkeypatch, tmp_path, script)
+    seat = _cursor_seat(role=_WRITE_ROLE)
+    argv = _cursor_argv_for_run(seat, "build", run_dir)
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "cursor",
+        "roleKind": "build", "orderId": "cap-live", "argv": argv,
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1,
+        "argv": argv, "at": time.time(),
+    })
+    _install_fake_cursor(monkeypatch, tmp_path, script)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
     ED._run_engine_files(
         run_dir, 1, argv, run_dir,
@@ -4131,10 +4298,10 @@ def test_dispatch_poll_running_graded_attempt1_ended_attempt2_live(tmp_path):
 
 
 def _wo2_open_run(run_dir, prompt_path, *, seat=None, role_kind=ED.RUN_KIND_REVIEW, **opened_overrides):
-    seat = seat or _codex_seat()
-    argv = _codex_argv_for_run(seat, role_kind, run_dir)
+    seat = seat or _reviewer_cursor_seat()
+    argv = _cursor_argv_for_run(seat, role_kind, run_dir)
     opened = {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "cursor",
         "roleKind": role_kind, "orderId": "wo2",
         "argv": argv,
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
@@ -4159,7 +4326,7 @@ def _wo2_run_engine(run_dir, script, timeout=30, heartbeat=None, monkeypatch=Non
     argv = _wo2_open_run(run_dir, prompt_path)
     if monkeypatch is not None:
         assert tmp_path is not None
-        _install_fake_codex(monkeypatch, tmp_path, script)
+        _install_fake_cursor(monkeypatch, tmp_path, script)
     if monkeypatch is not None and heartbeat is not None:
         monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", heartbeat)
     ED._run_engine_files(
@@ -4489,14 +4656,20 @@ def _poster_child_attempt1_stdout():
     return _artifact_pad("\n".join(lines))
 
 
-def test_poster_child_engaged_artifact_forfeit_plain_path(tmp_path):
-    """axis: which outcome is minted — poster-child regression (attempt-1 engaged, attempt-2 unreadable)."""
+def test_native_review_terminal_forfeit_carries_no_salvage(tmp_path):
+    """axis: native review terminal forfeit never upgrades to forfeit-with-engaged-artifact."""
     repo_root = _git_init(str(tmp_path / "repo"))
-    prose = _poster_child_attempt1_stdout()
-    fake = FakeRunner([
-        (prose, True, 0, ""),
-        ("short echo only", False, 0, ""),
-    ])
+    invalid_branch = _native_review_branch("findings")
+    invalid_branch["investigated"] = ["path/to/file.py", 42]
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({"result": invalid_branch}, fh, separators=(",", ":"))
+            fh.write("\n")
+        return _poster_child_attempt1_stdout(), False, 0, ""
+
+    fake = _PreservingNativeReviewFakeRunner([runner, runner])
     res = ED.dispatch_review(
         seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
@@ -4504,11 +4677,11 @@ def test_poster_child_engaged_artifact_forfeit_plain_path(tmp_path):
     )
     assert res["ok"] is False
     assert res["forfeited"] is True
-    assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
-    assert res["salvage"]["attempt"] == 1
-    assert "findings" not in res
-    assert "not credited" in res["disclosure"].lower()
-    assert "independently verified" in res["disclosure"].lower()
+    assert res["reason"] == "forfeited"
+    assert res["reason"] != _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
+    assert "salvage" not in res
+    assert res["detail"] == "native-result-schema-invalid"
+    assert res["attempts"] == 2
 
 
 def test_poster_child_engaged_artifact_forfeit_plain_path_cursor(tmp_path):
@@ -4533,22 +4706,38 @@ def test_poster_child_engaged_artifact_forfeit_plain_path_cursor(tmp_path):
     assert "independently verified" in res["disclosure"].lower()
 
 
-def test_engaged_artifact_forfeit_from_vacuous_path(tmp_path):
-    """axis: which outcome is minted — vacuous terminal upgraded when earlier attempt engaged."""
-    repo_root = _git_init(str(tmp_path / "repo-vac"))
+def test_native_vacuous_terminal_is_never_upgraded(tmp_path):
+    """axis: native vacuous terminal is never upgraded to forfeit-with-engaged-artifact."""
+    repo_root = _git_init(str(tmp_path / "repo-vac-native"))
     prose = _poster_child_attempt1_stdout()
-    empty = json.dumps({"findings": []})
-    fake = FakeRunner([
-        (prose, False, 0, ""),
-        (empty, False, 0, ""),
+    empty_branch = _native_review_branch(
+        "findings", findings=[], investigated=["path/to/file.py"],
+    )
+
+    def first_attempt_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            fh.write("not-json\n")
+        return prose, False, 0, ""
+
+    def vacuous_terminal_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({"result": empty_branch}, fh, separators=(",", ":"))
+            fh.write("\n")
+        return prose, False, 0, ""
+
+    fake = _PreservingNativeReviewFakeRunner([
+        first_attempt_runner,
+        vacuous_terminal_runner,
     ])
     res = ED.dispatch_review(
         seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
-    assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
-    assert res["salvage"]["attempt"] == 1
+    assert res["reason"] == "vacuous"
+    assert "salvage" not in res
 
 
 def test_engaged_artifact_forfeit_from_vacuous_path_cursor(tmp_path):
@@ -5525,13 +5714,14 @@ def test_legitimate_concurrent_sibling_change_observed_unattributed(tmp_path):
 # --- #1017: dispatch-review --mode brief-check ---------------------------------
 
 
-def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_mode=False, expected_result_kind=None):
+def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_mode=False, expected_result_kind=None, seat=None):
     """Journal run-opened with optional mode key — for continuation tests."""
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
     view = build_view(os.path.realpath(repo_root))
     cwd = os.path.realpath(view["path"])
-    seat = _brief_check_codex_seat() if mode == "brief-check" else _codex_seat()
+    if seat is None:
+        seat = _brief_check_codex_seat() if mode == "brief-check" else _codex_seat()
     built = EA.build_argv_result(
         seat, "review", {"model": "sonnet", "cwd": cwd},
     )
@@ -5547,7 +5737,7 @@ def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_
     record = {
         "kind": "run-opened",
         "runKind": ED.RUN_KIND_REVIEW,
-        "engine": "codex",
+        "engine": seat["vendor"],
         "roleKind": ED.RUN_KIND_REVIEW,
         "orderId": "test-order",
         "argv": argv,
@@ -5720,15 +5910,16 @@ def test_continuation_result_kind_pin_agreeing_proceeds(tmp_path):
 
 def test_continuation_omitted_result_kind_inherits_journal(tmp_path):
     run_dir = str(tmp_path / "run")
+    seat = _reviewer_cursor_seat()
     repo_root, _ = _manual_open_review_run_with_mode(
-        tmp_path, run_dir, expected_result_kind="verdicts",
+        tmp_path, run_dir, expected_result_kind="verdicts", seat=seat,
     )
     fake = FakeRunner([
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
     ])
     res = ED.dispatch_review(
-        seat=_codex_seat(),
+        seat=seat,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
     )
@@ -6838,7 +7029,9 @@ def test_truncated_attempt1_stdout_capped_forfeit_not_dirtied(tmp_path):
         (truncated, False, 0, ""),
         (_build_ok_stdout(), False, 0, ""),
     ])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, max_wait=120)
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, max_wait=120, seat=_cursor_seat(role=_WRITE_ROLE),
+    )
     assert res["terminal"] is True
     assert res["forfeited"] is True
     assert res["detail"].startswith("%s:" % ED.ITEM_DETAIL_STDOUT_CAPPED)
@@ -6855,7 +7048,9 @@ def test_truncated_final_attempt_stdout_capped_forfeit(tmp_path):
         ("not gradeable", True, 0, ""),
         (truncated, False, 0, ""),
     ])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, max_wait=120)
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, max_wait=120, seat=_cursor_seat(role=_WRITE_ROLE),
+    )
     assert res["terminal"] is True
     assert res["forfeited"] is True
     assert res["attempts"] == ED.MAX_ATTEMPTS
@@ -9453,6 +9648,53 @@ def test_wo10_edge2_injected_seam_refuses_argv_snapshot_mismatch(tmp_path):
     assert fake.calls == []
 
 
+def test_marker_channel_retired_run_honors_guard_refusal_over_retirement(tmp_path):
+    # axis: pre-upgrade codex journal without channel/resolvedInputs — spawn-gate guardRefusal
+    # folds as unrunnable, not marker-channel-retired.
+    run_dir = str(tmp_path / "marker-guard-refusal")
+    _manual_open_review_run(tmp_path, run_dir)
+    _strip_opened_to_marker_channel(run_dir)
+    path = ED._journal_path(run_dir)
+    records, _ = ED._journal_read(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            if rec.get("kind") == "run-opened":
+                rec.pop("resolvedInputs", None)
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1,
+        "childPid": os.getpid(), "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1,
+        "childPid": os.getpid(), "argv": list(opened["argv"]), "at": time.time(),
+    })
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended.get("guardRefusal") is True
+    assert "resolvedInputs" in (ended.get("refusal") or "")
+    res = ED._supervise(
+        run_dir, run_kind=ED.RUN_KIND_REVIEW,
+        deadline=time.monotonic() + 5,
+    )
+    assert res["terminal"] is True
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["forfeited"] is False
+    assert "resolvedInputs" in res["detail"]
+    assert res["detail"] != "marker-channel-retired"
+    assert ED.dispatch_outcome.classify_dispatch_result(res) == ED.dispatch_outcome.CLASSIFICATION_REFUSAL
+    assert ED.dispatch_outcome.exit_code(ED.dispatch_outcome.classify_dispatch_result(res)) == 1
+
+
 def test_wo10_edge3_supervise_folds_guard_refusal_terminal_unrunnable_no_retry(tmp_path, monkeypatch):
     # axis: off-allowlist snapshot via production run-child path — terminal unrunnable, no retry
     run_dir = str(tmp_path / "wo10-edge3")
@@ -10874,18 +11116,12 @@ def _execution_record_completed_attempt(
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     payload_for_native = stdout
     if write_stdout:
-        if engine == "codex":
-            if not _is_codex_event_stream(stdout):
-                last_msg_path = ED._attempt_last_message_path(run_dir, 1)
-                with open(last_msg_path, "w", encoding="utf-8") as fh:
-                    fh.write(stdout)
-                stdout = _codex_event_stream(stdout)
-            else:
-                payload = EA.codex_review_payload_text(stdout, None)
-                if payload:
-                    payload_for_native = payload
-                    with open(ED._attempt_last_message_path(run_dir, 1), "w", encoding="utf-8") as fh:
-                        fh.write(payload)
+        if engine == "codex" and not _is_codex_event_stream(stdout):
+            stdout = _codex_event_stream(stdout)
+        if engine == "codex" and _is_codex_event_stream(stdout):
+            extracted = _last_agent_message_text(stdout)
+            if extracted:
+                payload_for_native = extracted
         with open(stdout_path, "w", encoding="utf-8") as fh:
             fh.write(stdout)
     if write_stdout and engine == "codex" and isinstance(payload_for_native, str):
@@ -11862,23 +12098,6 @@ def test_review_attempt_engagement_codex_fail_closed_edges():
     assert eng_d["source"] == "codex-events"
 
 
-def test_codex_review_payload_last_message_wins(tmp_path):
-    stream = _codex_event_stream('{"findings":[{"id":"stream"}]}')
-    last_msg = tmp_path / "last.txt"
-    last_msg.write_text(json.dumps({"findings": [{"id": "file"}]}), encoding="utf-8")
-    assert EA.codex_review_payload_text(stream, str(last_msg)) == last_msg.read_text()
-
-
-def test_codex_review_payload_agent_message_fallback():
-    stream = _codex_event_stream('{"findings":[{"id":"from-stream"}]}')
-    assert EA.codex_review_payload_text(stream, None) == '{"findings":[{"id":"from-stream"}]}'
-
-
-def test_codex_review_payload_both_absent_fail_closed():
-    assert EA.codex_review_payload_text("", None) is None
-    assert EA.codex_review_payload_text('{"type":"turn.completed"}', None) is None
-
-
 def test_cursor_engagement_construction_carries_telemetry_tool_calls():
     stream = '{"type":"tool_call","call_id":"c1","subtype":"started"}\n'
     engagement = ED._review_attempt_engagement("cursor", stream, "", 1.0, len(stream))
@@ -12273,8 +12492,8 @@ def test_admit_native_review_schema_substitution_refuses(tmp_path):
     assert grade.get("detail") == "native-schema-unreadable"
 
 
-def test_admit_native_review_stdout_cannot_rescue_semantic_refusal(tmp_path):
-    # axis: valid stdout cannot override hollow-finding semantic refusal
+def test_grade_native_review_attempt_ignores_stdout_on_semantic_refusal(tmp_path):
+    # axis: attempt-level grade reads the typed file only — marker stdout cannot rescue semantic refusal
     hollow = _native_review_branch("findings")
     for key in RFS.SUBSTANCE_KEYS_CANONICAL:
         hollow["findings"][0][key] = "   "
@@ -12290,7 +12509,7 @@ def test_admit_native_review_stdout_cannot_rescue_semantic_refusal(tmp_path):
 def test_admit_native_review_parser_refusal_forfeit_payload_shape_describes_branch(tmp_path):
     # axis: parser refusal forfeit carries payloadShape describing parsed branch
     branch = _native_review_branch("verdicts")
-    branch["verdicts"][0]["reason"] = None
+    branch["verdicts"][0]["reason"] = "   "
     run_dir, state = _native_review_grade_state(
         tmp_path, branch, expected_result_kind="verdicts",
     )

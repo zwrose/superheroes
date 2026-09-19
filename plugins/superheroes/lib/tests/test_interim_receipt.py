@@ -71,7 +71,7 @@ def test_verify_passes_records_two_waves_without_overwrite():
     # axis: each verifier fold appends one verifyPasses entry; a second wave must not overwrite.
     state = RD.new_state(_cfg())
     f0, f1 = _finding("v0"), _finding("v1", line=2)
-    _fold_verifiers(state, [f0], [{"id": "v0", "verdict": "CONFIRMED", "evidence": "ran"}])
+    _fold_verifiers(state, [f0], [{"id": "v0", "verdict": "CONFIRMED", "reason": "ran", "evidence": "ran"}])
     _fold_verifiers(state, [f1], [{"id": "v0", "verdict": "REFUTED", "reason": "not real"}])
     passes = state["rounds"]["1"]["verifyPasses"]
     assert len(passes) == 2
@@ -90,7 +90,7 @@ def test_verify_passes_absent_from_certified_v2_with_truthy_list(tmp_path):
     """v2 certified receipts omit verifyPasses even when the round recorded a non-empty list."""
     state = RD.new_state(_cfg())
     state["schemaVersion"] = 2
-    _fold_verifiers(state, [_finding()], [{"id": "v0", "verdict": "CONFIRMED", "evidence": "ran"}])
+    _fold_verifiers(state, [_finding()], [{"id": "v0", "verdict": "CONFIRMED", "reason": "ran", "evidence": "ran"}])
     assert state["rounds"]["1"]["verifyPasses"]
     receipt = RD.build_receipt(state, str(tmp_path))
     assert "verifyPasses" not in receipt["rounds"][0]

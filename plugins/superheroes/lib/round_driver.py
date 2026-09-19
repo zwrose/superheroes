@@ -69,6 +69,7 @@ import model_tier_overrides  # noqa: E402
 import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
 import panel_tally  # noqa: E402
+import payload_contracts  # noqa: E402
 import review_base_guard  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
@@ -2956,6 +2957,9 @@ def verifier_results_fault(artifact):
         return ("verifiers artifact `verdicts` is %s, not a list; expected {\"verdicts\": [...]}; "
                 "resubmit the same phase/attempt/state-hash with a corrected artifact"
                 % type(verdicts).__name__)
+    fault = payload_contracts.payload_fault(payload_contracts.P_VERIFIERS, artifact, "hand-submit")
+    if fault is not None:
+        return fault
     return None
 
 
@@ -4345,7 +4349,11 @@ def _run_seam(seams, action, payload, state, config):
                 out["canaryResult"] = cr
         return out
     if action == P_VERIFIERS:
-        return {"verdicts": seams["verifier"](payload.get("clusters"), state["round"])}
+        artifact = {"verdicts": seams["verifier"](payload.get("clusters"), state["round"])}
+        fault = verifier_results_fault(artifact)
+        if fault is not None:
+            return {"verdicts": [], "_verifierArtifactFault": fault}
+        return artifact
     if action == P_SYNTHESIS:
         return {"grouping": seams["synthesis"](payload.get("findings"), state["round"])}
     if action == P_GAPSWEEP:
@@ -4769,6 +4777,17 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     return None
 
 
+def _loop_verifier_artifact_faults(state):
+    """Collect per-round verifierArtifactFault disclosures for run_loop observables."""
+    faults = []
+    for key in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
+        rec = state["rounds"][key]
+        fault = rec.get("verifierArtifactFault")
+        if isinstance(fault, dict):
+            faults.append(fault)
+    return faults
+
+
 def _attach_loop_observables_to_refusal(refusal, state):
     """Add loop observables — what the loop reached, not certification claims.
 
@@ -4782,6 +4801,9 @@ def _attach_loop_observables_to_refusal(refusal, state):
         loop_receipt = build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED)
         refusal["loopCertificationShape"] = loop_receipt.get("certificationShape")
         refusal["loopRounds"] = loop_receipt.get("rounds") or []
+        faults = _loop_verifier_artifact_faults(state)
+        if faults:
+            refusal["verifierArtifactFault"] = faults
     return refusal
 
 
@@ -4847,6 +4869,11 @@ def run_loop(seams, config=None):
                 break
             # handle the gap-sweep re-entry (verifiers → synthesis carries the merge back).
             artifact = _run_seam(seams, action, step["payload"], state, state["config"])
+            if action == P_VERIFIERS and isinstance(artifact, dict):
+                fault = artifact.pop("_verifierArtifactFault", None)
+                if fault is not None:
+                    _record_round(state, "verifierArtifactFault",
+                                  {"fault": fault, "round": state["round"]})
             _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
             _persist_round_records(state, state["config"])
             # a delta round routes scoped candidates through verifiers; when that path is armed the

@@ -61,11 +61,11 @@ Your result must carry a payload matching this shape:
 
 Required keys: verdicts
 verdicts type: list-of-objects
-verdicts[] required keys: id, verdict
-verdicts[] optional keys: reason, severity, evidence
+verdicts[] required keys: id, verdict, reason
+verdicts[] optional keys: severity, evidence
 verdicts[].evidence type: string
 verdicts[].id type: non-empty-string
-verdicts[].reason type: string
+verdicts[].reason type: non-empty-string
 verdicts[].severity type: string
 verdicts[].verdict type: non-empty-string
 verdicts[].verdict enum: CONFIRMED | PLAUSIBLE | REFUTED
