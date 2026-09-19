@@ -1,4 +1,5 @@
 """#1272 layer 2: finding keys are a pure function of content, not list position."""
+import copy
 import importlib.util
 import os
 import sys
@@ -99,3 +100,26 @@ def test_audit_target_preserves_opaque_requeued_id():
     targets = RD._audit_targets(state, state["config"], {})
     assert len(targets) == 1
     assert targets[0]["id"] == "opaque@L1#1"
+
+
+def test_readers_do_not_mutate_rows_missing_finding_key():
+    """T4: _judgment_row_ids and _audit_targets never write findingKey onto caller rows."""
+    row = {"file": "a.py", "line": 1, "title": "bug", "severity": "Important"}
+    mint_state = RD.new_state(_cfg())
+    RD._set_findings(mint_state, [dict(row)])
+    expected_key = mint_state["findings"][0][SC.FINDING_KEY_FIELD]
+
+    judgment_row = copy.deepcopy(row)
+    before_judgment = copy.deepcopy(judgment_row)
+    ids = RD._judgment_row_ids([judgment_row])
+    assert judgment_row == before_judgment
+    assert ids == [expected_key]
+
+    audit_row = copy.deepcopy(row)
+    audit_state = RD.new_state(_cfg())
+    audit_state["fixBatch"] = [audit_row]
+    before_fix_batch = copy.deepcopy(audit_state["fixBatch"])
+    targets = RD._audit_targets(audit_state, audit_state["config"], {})
+    assert audit_state["fixBatch"] == before_fix_batch
+    assert len(targets) == 1
+    assert targets[0]["id"] == expected_key

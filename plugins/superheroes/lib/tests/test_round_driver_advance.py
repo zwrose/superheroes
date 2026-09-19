@@ -2595,8 +2595,8 @@ def test_advance_judgment_colliding_identity_severity_policy_dispositions_not_co
     state = _state(d)
     state["config"]["repoRoot"] = repo
     state["_judgmentFindings"] = [
-        {"title": "widen the API", "severity": "Critical", "file": "f.py", "line": 1, "tradeoff": True},
-        {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1, "tradeoff": True},
+        {"title": "widen the API " + "x" * 205 + " alpha", "severity": "Critical", "file": "f.py", "line": 1, "tradeoff": True},
+        {"title": "widen the API " + "x" * 205 + " bravo", "severity": "Important", "file": "f.py", "line": 1, "tradeoff": True},
     ]
     RD.save_state(d, state)
     out = _advance(d, tmp_path)

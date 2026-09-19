@@ -1245,6 +1245,21 @@ def _mint_finding_keys(findings):
     return findings
 
 
+def _finding_key_of(finding):
+    """Pure read of a finding's disposition key — never mutates finding."""
+    if not isinstance(finding, dict):
+        return None
+    key = finding.get(session_contract.FINDING_KEY_FIELD)
+    if isinstance(key, str) and key:
+        return key
+    row_id = finding.get("id")
+    if isinstance(row_id, str) and row_id:
+        return row_id
+    copy = dict(finding)
+    _mint_finding_keys([copy])
+    return session_contract.finding_identity_key(copy)
+
+
 def _archive_disposition_findings(state, departing):
     """Append findings leaving the live list that carry disposition into dispositionLedger."""
     if not departing:
@@ -2431,11 +2446,7 @@ def _judgment_row_ids(findings):
     """Per-row disposition keys for judgment findings — each row's minted findingKey."""
     ids = []
     for f in findings:
-        if not isinstance(f, dict):
-            ids.append(None)
-            continue
-        _mint_finding_keys([f])
-        ids.append(session_contract.finding_identity_key(f))
+        ids.append(_finding_key_of(f))
     return ids
 
 
@@ -3251,13 +3262,7 @@ def _audit_targets(state, config, audit_targets_map):
     for f in state.get("fixBatch") or []:
         if not isinstance(f, dict):
             continue
-        row_id = f.get("id")
-        key = f.get(session_contract.FINDING_KEY_FIELD)
-        if row_id and not (isinstance(key, str) and key):
-            f[session_contract.FINDING_KEY_FIELD] = row_id
-        else:
-            _mint_finding_keys([f])
-        tid = session_contract.finding_identity_key(f)
+        tid = _finding_key_of(f)
         if tid in seen_keys:
             continue
         seen_keys.add(tid)
