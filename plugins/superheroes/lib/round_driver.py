@@ -1489,6 +1489,25 @@ def _park_cannot_certify(state, detail):
     state["step"] = P_TERMINAL
 
 
+VERIFY_BASE_TOKEN = "{baseRef}"
+_FULL_HEX_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def _verify_command(config):
+    """The command `run-verify` hands the orchestrator, with `{baseRef}` bound to the session's
+    pinned base commit. A touched-tests gate that diffs against main selects a stacked branch's
+    whole stack (PR #1332 vet 244, collector @244-3); the token lets the calibrated command diff
+    against the pinned base instead. Without a full-hex pin the token stays verbatim — the gate's
+    own `base ref does not resolve` refusal is the loud failure, never a silent fall-back to main."""
+    cmd = config.get("verifyCommand", "none")
+    if not isinstance(cmd, str) or VERIFY_BASE_TOKEN not in cmd:
+        return cmd
+    base = config.get("baseRef")
+    if isinstance(base, str) and _FULL_HEX_ID.fullmatch(base):
+        return cmd.replace(VERIFY_BASE_TOKEN, base)
+    return cmd
+
+
 def _shard_payload(diff_text, dimensions):
     """The panel dispatch payload: dims + tiers, and — when shard_plan says big — per-lens shards.
     The cross-cutting lenses always carry the whole diff."""
@@ -1535,7 +1554,7 @@ def _advance(state, config):
     elif step == P_SCOPED:
         payload = {"hunks": state.get("_newSurface") or {}, "tier": DEEP}
     elif step == P_VERIFY:
-        payload = {"command": config.get("verifyCommand", "none")}
+        payload = {"command": _verify_command(config)}
     elif step == P_FIXER:
         payload = {"batch": state.get("_fixBatch") or []}
         if state.get("_escalatedRung"):
