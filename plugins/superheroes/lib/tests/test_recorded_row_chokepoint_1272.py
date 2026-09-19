@@ -474,8 +474,15 @@ def test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_h
     certified_head = RCE._certified_head_sha(ctx)
     assert recorded[0]["citedHead"] == certified_head == head_sha
     receipt, refusal = RCE.certify(session_dir)
-    if refusal is not None:
+    assert (receipt is None) ^ (refusal is None), (receipt, refusal)
+    if receipt is not None:
+        assert isinstance(receipt, dict)
+        assert receipt.get("terminal") is not None
+    else:
+        assert isinstance(refusal, dict)
+        assert refusal.get("class") is not None
         assert refusal.get("bindingFailure") != RCE.BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND
+        assert refusal.get("bindingFailure") != "execution-evidence-stale-head"
 
 
 def test_journal_revision_helpers_removed_from_lib():

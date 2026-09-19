@@ -211,6 +211,77 @@ def test_edge_e4_non_dict_skipped_by_mint_and_identity_key_returns_none():
 
 # --- T5: legacy id-only ledger and live entries key by location ------------------------------
 
+def test_separate_batches_clamped_title_collision_merged_distinct_keys_and_certified():
+    """v0: independently compiled batches merged via _set_findings stay certification-distinct."""
+    prefix = "x" * 165
+    finding1 = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important"}
+    finding2 = {"file": "f.py", "line": 5, "title": prefix + " beta", "severity": "Important"}
+    compiled1, _ = RD.mechanical_compile([finding1], None)
+    compiled2, _ = RD.mechanical_compile([finding2], None)
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, compiled1 + compiled2)
+    keys = [SC.finding_identity_key(f) for f in state["findings"]]
+    assert len(keys) == 2
+    assert keys[0] != keys[1]
+    certified = RC._certification_findings(state)
+    cert_keys = {SC.finding_identity_key(f) for f in certified}
+    assert keys[0] in cert_keys
+    assert keys[1] in cert_keys
+    assert len(cert_keys) == 2
+
+
+def test_clamped_collision_departing_disposition_archived_to_ledger():
+    """v0+E3: merged collision re-keyed; departing disposition-bearing finding lands in ledger."""
+    prefix = "x" * 165
+    finding1 = {
+        "file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important",
+        "disposition": "refuted",
+    }
+    finding2 = {"file": "f.py", "line": 5, "title": prefix + " beta", "severity": "Important"}
+    compiled1, _ = RD.mechanical_compile([finding1], None)
+    compiled2, _ = RD.mechanical_compile([finding2], None)
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, compiled1 + compiled2)
+    key1 = SC.finding_identity_key(state["findings"][0])
+    surviving = state["findings"][1]
+    RD._set_findings(state, [surviving])
+    ledger = state.get("dispositionLedger") or []
+    assert len(ledger) == 1
+    assert ledger[0]["disposition"] == "refuted"
+    assert SC.finding_identity_key(ledger[0]) == key1
+
+
+def test_duplicate_keys_in_one_set_findings_list_rekeyed_both_live():
+    """E1: two findings with equal pre-set keys in one _set_findings call — later one re-keyed."""
+    finding1 = {
+        "file": "b.py", "line": 10, "title": "first", "severity": "Important",
+        SC.FINDING_KEY_FIELD: "caller-controlled",
+    }
+    finding2 = {
+        "file": "c.py", "line": 20, "title": "second", "severity": "Important",
+        SC.FINDING_KEY_FIELD: "caller-controlled",
+    }
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, [finding1, finding2])
+    keys = [SC.finding_identity_key(f) for f in state["findings"]]
+    assert len(keys) == 2
+    assert keys[0] != keys[1]
+    assert keys[0] == "caller-controlled"
+    assert keys[1] == "caller-controlled#1"
+
+
+def test_set_findings_idempotent_on_same_list():
+    """E2: unchanged re-assignment of the same list keeps every key stable."""
+    finding = {"file": "a.py", "line": 1, "title": "t", "severity": "Minor"}
+    compiled, _ = RD.mechanical_compile([finding], None)
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, compiled)
+    keys_after_first = [SC.finding_identity_key(f) for f in state["findings"]]
+    RD._set_findings(state, compiled)
+    keys_after_second = [SC.finding_identity_key(f) for f in state["findings"]]
+    assert keys_after_first == keys_after_second
+
+
 def test_legacy_id_only_entries_key_by_location_not_v3():
     state = RD.new_state(_cfg())
     legacy_ledger = {"id": "v3", "file": "old.py", "line": 5, "title": "legacy", "disposition": "fixed"}

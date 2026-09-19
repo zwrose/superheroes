@@ -1162,7 +1162,7 @@ def _finding_identity_key(finding):
 
 
 def _mint_finding_keys(findings):
-    """Stamp findingKey on dict findings that lack a non-empty one."""
+    """Stamp findingKey on dict findings that lack a non-empty one; ensure list-wide uniqueness."""
     if not isinstance(findings, list):
         return findings
     used = set()
@@ -1171,16 +1171,15 @@ def _mint_finding_keys(findings):
             continue
         key = f.get(session_contract.FINDING_KEY_FIELD)
         if isinstance(key, str) and key:
-            used.add(key)
-            continue
-        base = session_contract.location_key(f)
-        if base in used:
+            base = key.rsplit("#", 1)[0] if "#" in key else key
+        else:
+            base = session_contract.location_key(f)
+            key = base
+        if key in used:
             n = 1
             while "%s#%d" % (base, n) in used:
                 n += 1
             key = "%s#%d" % (base, n)
-        else:
-            key = base
         used.add(key)
         f[session_contract.FINDING_KEY_FIELD] = key
     return findings
