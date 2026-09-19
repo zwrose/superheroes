@@ -857,7 +857,7 @@ def _resolved_inputs_echo_from_run_dir(run_dir_real):
             "resolvedInputs": _resolved_inputs_from_opened(opened),
         }
         if corrupt:
-            echo["resolvedInputsStatus"] = "journal-corrupt"
+            echo["resolvedInputsStatus"] = _journal_corrupt_detail()
         elif status is not None:
             echo["resolvedInputsStatus"] = status
         return echo
@@ -902,11 +902,24 @@ def _journal_append(run_dir_real, record):
         return False
 
 
+JOURNAL_LINE_NOT_OBJECT = "journal-line-not-object"
+
+_journal_corruption_classes = []
+
+
+def _journal_corrupt_detail():
+    if _journal_corruption_classes:
+        return "journal-corrupt:%s" % ",".join(_journal_corruption_classes)
+    return "journal-corrupt"
+
+
 def _journal_read_raw(run_dir_real):
     """Return (records, interior_corrupt, journal_state).
 
     journal_state is one of: absent, empty, ok, unreadable. Never raises.
     """
+    global _journal_corruption_classes
+    _journal_corruption_classes = []
     path = _journal_path(run_dir_real)
     records = []
     interior_corrupt = False
@@ -926,9 +939,16 @@ def _journal_read_raw(run_dir_real):
         if not line.strip():
             continue
         try:
-            records.append(json.loads(line))
+            rec = json.loads(line)
         except (ValueError, TypeError):
             interior_corrupt = True
+            continue
+        if not isinstance(rec, dict):
+            interior_corrupt = True
+            if JOURNAL_LINE_NOT_OBJECT not in _journal_corruption_classes:
+                _journal_corruption_classes.append(JOURNAL_LINE_NOT_OBJECT)
+            continue
+        records.append(rec)
     return records, interior_corrupt, "ok"
 
 
@@ -4037,7 +4057,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                 state = _journal_state(records)
                 return _fold_run(run_dir_real, state, _with_run_fields(
                     {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                     "detail": "journal-corrupt", "attempts": 0, "forfeited": False},
+                     "detail": _journal_corrupt_detail(), "attempts": 0, "forfeited": False},
                     run_dir=run_dir_real, argv=(state.get("opened") or {}).get("argv") or [],
                 ))
 
@@ -5768,7 +5788,7 @@ def run_execution_record(run_dir):
         run_dir_real = detail
         records, interior_corrupt = _journal_read(run_dir_real)
         if interior_corrupt:
-            return None, "journal-corrupt"
+            return None, _journal_corrupt_detail()
         state = _journal_state(records)
         opened = state.get("opened")
         if not isinstance(opened, dict):
@@ -5847,7 +5867,7 @@ def _dispatch_poll_impl(run_dir):
         if interior_corrupt:
             return _with_run_fields(
                 {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                 "detail": "journal-corrupt", "attempts": 0, "forfeited": False,
+                 "detail": _journal_corrupt_detail(), "attempts": 0, "forfeited": False,
                  "poll": projection},
                 run_dir=detail, argv=argv,
             ), _refusal
@@ -5943,7 +5963,7 @@ def _dispatch_abandon_impl(run_dir):
             state = _journal_state(records)
             return _with_run_fields(
                 {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                 "detail": "journal-corrupt", "attempts": 0, "forfeited": False},
+                 "detail": _journal_corrupt_detail(), "attempts": 0, "forfeited": False},
                 run_dir=run_dir_real, argv=(state.get("opened") or {}).get("argv") or [],
             ), _refusal
         state = _journal_state(records)

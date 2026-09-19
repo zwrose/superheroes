@@ -164,9 +164,8 @@ def _check_element_fields(list_field, index, element, elem_contract, extra_conte
     _ = extra_context
     where = _element_where(list_field, index)
     for req in elem_contract.get("required") or []:
-        value = element.get(req)
-        missing_or_blank = req not in element or (isinstance(value, str) and value.strip() == "")
-        if missing_or_blank:
+        if req not in element:
+            value = element.get(req)
             label = _element_field_label(list_field, index, req)
             types = elem_contract.get("types") or {}
             tok = types.get(req, "any")
