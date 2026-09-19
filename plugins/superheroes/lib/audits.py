@@ -80,7 +80,8 @@ def _resolve_expected_auditor(fid, finding, expected_auditors):
     return None, False
 
 
-def apply_audit_results(audited, results, expected_auditors=None, collection_manifest=None):
+def apply_audit_results(audited, results, expected_auditors=None, collection_manifest=None,
+                        carry_fields=()):
     """Consume per-finding fix-audit rulings; fail-closed on ambiguity, silence, and malformation.
 
     `audited`  — findings already carrying a unique staged `id` (via verification.stage_ids)
@@ -184,10 +185,10 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
         base = {"id": fid, "identity": ident, "file": f.get("file"), "line": f.get("line"),
                 "title": f.get("title"), "classKey": f.get("classKey"),
                 "dimension": f.get("dimension"), "taxonomy": f.get("taxonomy")}
-        # "findingKey" mirrors session_contract.FINDING_KEY_FIELD; literal kept to avoid importing session_contract (R28).
-        marker = f.get("findingKey")
-        if isinstance(marker, str) and marker:
-            base["findingKey"] = marker
+        for name in carry_fields:
+            marker = f.get(name)
+            if isinstance(marker, str) and marker:
+                base[name] = marker
 
         # No matching result (silence) → fail-closed not-discharged, disclosed as unaudited.
         # An ambiguous id is IN seen_ids OR is a duplicate target id — disclosed via `ambiguous`.

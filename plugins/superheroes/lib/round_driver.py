@@ -718,8 +718,11 @@ def _coerce_line(value):
         return True, value
     if isinstance(value, str):
         stripped = value.strip()
-        if stripped and all(ch.isdigit() for ch in stripped):
-            return True, int(stripped)
+        if stripped and stripped.isascii() and stripped.isdecimal():
+            try:
+                return True, int(stripped)
+            except ValueError:
+                return False, value
         return False, value
     return False, value
 
@@ -2625,14 +2628,21 @@ def _finding_history(state):
     return history
 
 
-def _validate_gate_guidance_logs(rounds):
+def _validate_gate_guidance_logs(rounds, rnd, batch_keys):
     """Refuse untrustworthy fold-owned guidance ids in any round's judgment log."""
     if not isinstance(rounds, dict):
         return
+    if batch_keys is None:
+        batch_keys = set()
     for rnd_key in sorted(rounds.keys(), key=_round_record_sort_key):
         round_entry = rounds[rnd_key]
         if not isinstance(round_entry, dict):
             continue
+        try:
+            rnd_num = int(rnd_key)
+        except (TypeError, ValueError):
+            continue
+        is_current = rnd_num == rnd
         log = round_entry.get("judgmentDispositions")
         if not isinstance(log, list):
             continue
@@ -2647,9 +2657,12 @@ def _validate_gate_guidance_logs(rounds):
                 continue
             key = _history_row_key(item)
             if not key:
-                raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
+                if is_current:
+                    raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
+                continue
             if key in seen_ids:
-                raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
+                if is_current or key in batch_keys:
+                    raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
             seen_ids.add(key)
 
 
@@ -2658,7 +2671,17 @@ def _gate_guidance_entries(state, rnd):
     rounds = state.get("rounds") if isinstance(state, dict) else None
     if not isinstance(rounds, dict):
         return []
-    _validate_gate_guidance_logs(rounds)
+    batch = state.get("_fixBatch")
+    if not isinstance(batch, list):
+        batch = state.get("fixBatch")
+    if not isinstance(batch, list):
+        batch = []
+    batch_keys = set()
+    for row in batch:
+        key = _fix_batch_row_key(row)
+        if key:
+            batch_keys.add(key)
+    _validate_gate_guidance_logs(rounds, rnd, batch_keys)
     out = []
     covered_keys = set()
     round_entry = rounds.get(str(rnd))
@@ -2680,16 +2703,6 @@ def _gate_guidance_entries(state, rnd):
                 out.append({"id": key, "title": item.get("title"),
                             "file": item.get("file"), "line": item.get("line"),
                             "guidance": guidance.strip()})
-    batch = state.get("_fixBatch")
-    if not isinstance(batch, list):
-        batch = state.get("fixBatch")
-    if not isinstance(batch, list):
-        batch = []
-    batch_keys = set()
-    for row in batch:
-        key = _fix_batch_row_key(row)
-        if key:
-            batch_keys.add(key)
     history = _finding_history(state)
     for key in sorted(batch_keys):
         if key in covered_keys:
@@ -3534,7 +3547,8 @@ def _fold_audits(state, config, artifact):
     if not isinstance(collection_manifest, dict):
         collection_manifest = None
     outcome = audits.apply_audit_results(targets, results, expected_auditors=expected_auditors,
-                                         collection_manifest=collection_manifest)
+                                         collection_manifest=collection_manifest,
+                                         carry_fields=(session_contract.FINDING_KEY_FIELD,))
     state["_auditOutcome"] = outcome
     # the audit round for check_audit_breaker: identity + effective ruling PLUS the recurrence class
     # keys the alias-tolerant stall match consumes (#507 v0) — carried straight off each audit entry
@@ -6628,6 +6642,9 @@ def _ensure_round_head_diff(session_dir, rnd, state):
     return _ensure_bytes_at_path(session_dir, head_path, head_text.encode("utf-8"))
 
 
+FIX_BATCH_HISTORY_FIELDS = ("priorAudit", "gateRuling")
+
+
 def _ensure_fix_batch_file(session_dir, rnd, state):
     """Materialize fix-batch.json from state for fixer orders.
 
@@ -6647,13 +6664,18 @@ def _ensure_fix_batch_file(session_dir, rnd, state):
             materialized.append(row)
             continue
         row_copy = dict(row)
+        for field in FIX_BATCH_HISTORY_FIELDS:
+            row_copy.pop(field, None)
         key = _fix_batch_row_key(row_copy)
         if key and key in history:
             slot = history[key]
             if isinstance(slot, dict):
                 prior = slot.get("priorAudit")
                 if isinstance(prior, dict):
-                    row_copy["priorAudit"] = dict(prior)
+                    row_prior = {"round": prior.get("round"), "ruling": prior.get("ruling")}
+                    if prior.get("reason") is not None:
+                        row_prior["reason"] = prior.get("reason")
+                    row_copy["priorAudit"] = row_prior
                 gate_ruling = slot.get("gateRuling")
                 if isinstance(gate_ruling, dict):
                     row_gate = {"round": gate_ruling.get("round"),

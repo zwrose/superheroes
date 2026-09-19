@@ -72,7 +72,10 @@ def test_t3_coerced_line_out_of_scope_gets_scope_reason():
     assert drops[0]["line"] == 291
 
 
-@pytest.mark.parametrize("bad_line", ["291a", "12-14", 29.1, [291]])
+@pytest.mark.parametrize("bad_line", [
+    "291a", "12-14", 29.1, [291],
+    "²", "①", "１２",  # fullwidth １２ refused under ASCII rule
+])
 def test_t4_non_integer_lines_dropped_with_citation_reason(bad_line):
     finding = dict(_FINDING, line=bad_line)
     compiled, drops = RD.mechanical_compile([finding], DIFF_291)
