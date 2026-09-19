@@ -360,6 +360,11 @@ _GATE_POLICY_SKIP_REASON = "pre-authorized by gate policy (calibration)"
 
 # Named refusal when a submit artifact lists the same judgment id with conflicting dispositions.
 JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
+STAGED_ID_UNRESOLVABLE_CAUSE = "staged-id-unresolvable"
+FOLLOWUP_MALFORMED_CAUSE = "follow-up-malformed"
+FIX_FINALIZATION_FIX_ABSENT_CAUSE = "fixed-disposition-fix-absent-at-certified-head"
+FIX_FINALIZATION_VERIFY_NOT_PASS_CAUSE = "fixed-disposition-finalization-verify-not-pass"
+WRITE_EXECUTION_BINDING = "execution-only"
 
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
 POLICY_APPLIED_SOURCE_OWNER_SUPPLIED = "owner-supplied"
@@ -1480,6 +1485,268 @@ def _verify_result_for_disposition(state, round_no):
     return None
 
 
+def _final_round_verify_result(state):
+    """The current round's verify result only — finalization never falls back to a prior round."""
+    rnd = state.get("round")
+    rec = (state.get("rounds") or {}).get(str(rnd)) or {}
+    return rec.get("verifyResult")
+
+
+def _staged_by_id_map(staged):
+    """Build staged-id → finding; refuse duplicate ids."""
+    by_id = {}
+    for finding in staged:
+        if not isinstance(finding, dict):
+            continue
+        staged_id = finding.get("id")
+        if staged_id is None:
+            continue
+        if staged_id in by_id:
+            return None, "%s: duplicate staged id %r" % (STAGED_ID_UNRESOLVABLE_CAUSE, staged_id)
+        by_id[staged_id] = finding
+    return by_id, None
+
+
+def _staged_id_resolution_fault(staged, staged_id):
+    """None when staged_id resolves to exactly one keyed finding; otherwise a named cause."""
+    if staged_id is None:
+        return "%s: missing staged id" % STAGED_ID_UNRESOLVABLE_CAUSE
+    by_id, map_fault = _staged_by_id_map(staged)
+    if map_fault:
+        return map_fault
+    finding = by_id.get(staged_id)
+    if finding is None:
+        return "%s: staged id %r maps to no entry" % (STAGED_ID_UNRESOLVABLE_CAUSE, staged_id)
+    if not _finding_identity_key(finding):
+        return "%s: staged id %r has no derivable finding key" % (STAGED_ID_UNRESOLVABLE_CAUSE,
+                                                                  staged_id)
+    return None
+
+
+def _resolve_staged_finding(staged, staged_id):
+    """Return (finding, fault). fault is None on success."""
+    fault = _staged_id_resolution_fault(staged, staged_id)
+    if fault:
+        return None, fault
+    by_id, _ = _staged_by_id_map(staged)
+    return by_id.get(staged_id), None
+
+
+def _follow_up_shape_fault(follow_up):
+    """None when followUp is absent or fully shaped; otherwise a named refusal cause."""
+    if follow_up is None:
+        return None
+    if not isinstance(follow_up, dict):
+        return "%s: followUp must be an object" % FOLLOWUP_MALFORMED_CAUSE
+    item = follow_up.get("item")
+    if not isinstance(item, str) or not item.strip():
+        return "%s: followUp.item must be a non-empty string" % FOLLOWUP_MALFORMED_CAUSE
+    trigger = follow_up.get("revisitTrigger")
+    if not isinstance(trigger, str) or not trigger.strip():
+        return "%s: followUp.revisitTrigger must be a non-empty string" % FOLLOWUP_MALFORMED_CAUSE
+    if "documented" in trigger.lower():
+        return "%s: followUp.revisitTrigger must not be the word documented" % FOLLOWUP_MALFORMED_CAUSE
+    closure = follow_up.get("classClosure")
+    if not isinstance(closure, str) or not closure.strip():
+        return "%s: followUp.classClosure must be a non-empty string" % FOLLOWUP_MALFORMED_CAUSE
+    return None
+
+
+def judgment_follow_up_fault(artifact):
+    """Refuse malformed followUp on present-judgment skip dispositions before fold."""
+    if not isinstance(artifact, dict):
+        return None
+    for disp in artifact.get("dispositions") or []:
+        if not isinstance(disp, dict) or disp.get("disposition") != "skip":
+            continue
+        follow_up = disp.get("followUp")
+        if follow_up is None:
+            continue
+        fault = _follow_up_shape_fault(follow_up)
+        if fault:
+            return fault
+    return None
+
+
+def stall_follow_up_fault(artifact):
+    """Refuse malformed followUp on accept-the-disclosed-risk before fold."""
+    if not isinstance(artifact, dict):
+        return None
+    if artifact.get("choice") != ACCEPT_RISK_CHOICE:
+        return None
+    follow_up = artifact.get("followUp")
+    if follow_up is None:
+        return None
+    return _follow_up_shape_fault(follow_up)
+
+
+def verifier_drop_staged_id_fault(state, artifact):
+    """Refuse verifier drops whose staged ids do not resolve before fold."""
+    if verifier_results_fault(artifact) is not None:
+        return None
+    staged = verification.stage_ids(state.get("_toVerify") or [])
+    verdicts = artifact.get("verdicts") if isinstance(artifact.get("verdicts"), list) else []
+    applied = verification.apply_verdicts(staged, verdicts)
+    for drop in applied["drops"]:
+        fault = _staged_id_resolution_fault(staged, drop.get("id"))
+        if fault:
+            return fault
+    by_id = {}
+    for verdict in verdicts:
+        if isinstance(verdict, dict) and isinstance(verdict.get("id"), str):
+            by_id[verdict["id"]] = verdict
+    for staged_id in applied.get("unmatched") or []:
+        verdict = by_id.get(staged_id)
+        if isinstance(verdict, dict) and verdict.get("verdict") == "REFUTED":
+            fault = _staged_id_resolution_fault(staged, staged_id)
+            if fault:
+                return fault
+    for staged_id in applied.get("ambiguous") or []:
+        fault = _staged_id_resolution_fault(staged, staged_id)
+        if fault:
+            return fault
+    return None
+
+
+def synthesis_staged_id_fault(state, artifact):
+    """Refuse synthesis author-justified drops and merge members whose ids do not resolve."""
+    verified = state.get("_verified") or []
+    grouping = artifact.get("grouping") if isinstance(artifact.get("grouping"), list) else None
+    if isinstance(grouping, list):
+        for group in grouping:
+            if not isinstance(group, dict):
+                continue
+            for member_id in group.get("member_ids") or []:
+                fault = _staged_id_resolution_fault(verified, member_id)
+                if fault:
+                    return fault
+    merged = verification.merge_and_rank(verified, grouping)
+    findings = merged["findings"]
+    config = state.get("config") or {}
+    _kept, aj_drops = author_justification_filter(findings, config.get("priorComments"))
+    for drop in aj_drops:
+        fault = _staged_id_resolution_fault(verified, drop.get("id"))
+        if fault:
+            return fault
+    for merge in merged.get("merges") or []:
+        if not isinstance(merge, dict):
+            continue
+        kept_id = merge.get("kept_id")
+        kept_finding, fault = _resolve_staged_finding(verified, kept_id)
+        if fault:
+            return fault
+        if kept_finding is None:
+            continue
+        for member_id in merge.get("member_ids") or []:
+            if member_id == kept_id:
+                continue
+            fault = _staged_id_resolution_fault(verified, member_id)
+            if fault:
+                return fault
+    return None
+
+
+def _execution_evidence_satisfies_payload_proof(result_kind):
+    """Write-run execution records prove the run happened only — never the transported payload."""
+    return result_kind != session_contract.WRITE_RESULT_KIND
+
+
+def _fix_still_present_at_certified_head(session_dir, finding, receipt, certified_head):
+    """Mirror round_certification._fix_still_present_at_head — driver finalization only."""
+    import base64
+    import binascii
+    import hashlib
+    path = finding.get("file") if isinstance(finding, dict) else None
+    if not isinstance(path, str) or not path:
+        return FIX_FINALIZATION_FIX_ABSENT_CAUSE
+    head = receipt.get("headSha") if isinstance(receipt, dict) else None
+    if not isinstance(head, str) or not head:
+        head = certified_head
+    if not isinstance(head, str) or not head:
+        return FIX_FINALIZATION_FIX_ABSENT_CAUSE
+    data = _read_head_content_blobs_file(session_dir) if session_dir else None
+    if not isinstance(data, dict):
+        return FIX_FINALIZATION_FIX_ABSENT_CAUSE
+    if data.get("schema") != HEAD_CONTENT_BLOBS_SCHEMA:
+        return FIX_FINALIZATION_FIX_ABSENT_CAUSE
+    reads = data.get("reads")
+    if not isinstance(reads, list):
+        reads = []
+    matching = [
+        row for row in reads
+        if isinstance(row, dict) and row.get("headSha") == head and row.get("path") == path
+    ]
+    if not matching:
+        return FIX_FINALIZATION_FIX_ABSENT_CAUSE
+    row = matching[-1]
+    if row.get("readError") is not None or not row.get("contentDigest"):
+        return FIX_FINALIZATION_FIX_ABSENT_CAUSE
+    content_digest = row["contentDigest"]
+    files = data.get("files")
+    file_b64 = files.get(path) if isinstance(files, dict) else None
+    if file_b64 is None:
+        return FIX_FINALIZATION_FIX_ABSENT_CAUSE
+    try:
+        raw = base64.b64decode(file_b64, validate=True)
+    except (binascii.Error, ValueError):
+        return FIX_FINALIZATION_FIX_ABSENT_CAUSE
+    if hashlib.sha256(raw).hexdigest() != content_digest:
+        return FIX_FINALIZATION_FIX_ABSENT_CAUSE
+    fix_content_digest = receipt.get("fixContentDigest") if isinstance(receipt, dict) else None
+    if not isinstance(fix_content_digest, str) or not fix_content_digest:
+        return FIX_FINALIZATION_FIX_ABSENT_CAUSE
+    if content_digest != fix_content_digest:
+        return FIX_FINALIZATION_FIX_ABSENT_CAUSE
+    return None
+
+
+def _finalize_fixed_disposition_receipts(state, session_dir, config):
+    """Re-bind every fixed ledger entry to the certified head before terminal certify (#1272 J1).
+
+    Folds the prior `_backfill_fixed_disposition_verify_receipts` path: finalization is the one
+    re-stamp that uses the final round's own verify result (no prior-round fallback)."""
+    ledger = _ensure_disposition_ledger(state)
+    seen = _ledger_index_by_key(ledger)
+    fixed_keys = [
+        key for key, idx in seen.items()
+        if isinstance(ledger[idx], dict) and ledger[idx].get("disposition") == "fixed"
+    ]
+    if not fixed_keys:
+        return None
+    certified_head = _session_certified_head(session_dir, state) if session_dir else None
+    if not isinstance(certified_head, str) or not certified_head:
+        cfg = config if isinstance(config, dict) else {}
+        certified_head = cfg.get(FIX_FOLD_HEAD_KEY)
+    if not isinstance(certified_head, str) or not certified_head:
+        return FIX_FINALIZATION_FIX_ABSENT_CAUSE
+    verify_result = _final_round_verify_result(state)
+    if verify_result != "pass":
+        return FIX_FINALIZATION_VERIFY_NOT_PASS_CAUSE
+    for key in fixed_keys:
+        idx = seen[key]
+        entry = ledger[idx]
+        receipt = entry.get("dispositionReceipt")
+        if not isinstance(receipt, dict):
+            return FIX_FINALIZATION_FIX_ABSENT_CAUSE
+        new_receipt = dict(receipt)
+        new_receipt["headSha"] = certified_head
+        file_path = entry.get("file")
+        if session_dir and isinstance(file_path, str):
+            new_receipt.update(_fix_receipt_content_fields(session_dir, certified_head, file_path))
+        fault = _fix_still_present_at_certified_head(session_dir, entry, new_receipt,
+                                                     certified_head)
+        if fault:
+            return fault
+        new_receipt["verifyResult"] = verify_result
+        entry = dict(entry)
+        entry["dispositionReceipt"] = new_receipt
+        ledger[idx] = entry
+        live = _live_finding_by_key(state, key)
+        if live is not None:
+            live["dispositionReceipt"] = new_receipt
+    return None
+
+
 def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):
     cfg = state.get("config") or {}
     head = cfg.get(FIX_FOLD_HEAD_KEY) if isinstance(cfg, dict) else None
@@ -1499,37 +1766,6 @@ def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):
     if session_dir and isinstance(head, str) and head and isinstance(file_path, str):
         receipt.update(_fix_receipt_content_fields(session_dir, head, file_path))
     return receipt
-
-
-def _backfill_fixed_disposition_verify_receipts(state, round_no, verify_result):
-    """Stamp verify on fixed receipts when audits folded before verify in the same round."""
-    if verify_result is None:
-        return
-    ledger = _ensure_disposition_ledger(state)
-    seen = _ledger_index_by_key(ledger)
-    for key, idx in list(seen.items()):
-        entry = ledger[idx]
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("disposition") != "fixed":
-            continue
-        if entry.get("dispositionRound") != round_no:
-            continue
-        receipt = entry.get("dispositionReceipt")
-        if not isinstance(receipt, dict) or receipt.get("verifyResult") is not None:
-            continue
-        updated_receipt = dict(receipt)
-        updated_receipt["verifyResult"] = verify_result
-        entry = dict(entry)
-        entry["dispositionReceipt"] = updated_receipt
-        ledger[idx] = entry
-        live = _live_finding_by_key(state, key)
-        if live is not None:
-            live_receipt = live.get("dispositionReceipt")
-            if isinstance(live_receipt, dict) and live_receipt.get("verifyResult") is None:
-                live_receipt = dict(live_receipt)
-                live_receipt["verifyResult"] = verify_result
-                live["dispositionReceipt"] = live_receipt
 
 
 def _archive_departures(state, departing):
@@ -2039,6 +2275,8 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     eval harness replays the fixture's subjects); the CLI submit path passes None so the fixer fold
     wires the real git derivation. It is inert for every other phase."""
     artifact = artifact if isinstance(artifact, dict) else {}
+    if session_dir is not None:
+        state["_foldSessionDir"] = session_dir
     _record_adapter_provenance(state, artifact, phase)
     if phase == P_PANEL:
         _fold_panel(state, config, artifact)
@@ -2659,8 +2897,6 @@ def _fold_verifiers(state, config, artifact):
     """Apply per-finding verification verdicts deterministically (verification.apply_verdicts)."""
     verdicts = artifact.get("verdicts") if isinstance(artifact.get("verdicts"), list) else []
     staged = verification.stage_ids(state.get("_toVerify") or [])
-    staged_by_id = {f.get("id"): f for f in staged
-                    if isinstance(f, dict) and f.get("id") is not None}
     applied = verification.apply_verdicts(staged, verdicts)
     state["_verified"] = applied["findings"]
     _record_round(state, "verify", {"drops": applied["drops"], "downgrades": applied["downgrades"],
@@ -2677,9 +2913,13 @@ def _fold_verifiers(state, config, artifact):
     })
     for d in applied["drops"]:
         _decision(state, "verifier-refuted", d.get("reason"))
-        staged = staged_by_id.get(d.get("id"))
-        if isinstance(staged, dict):
-            key = _finding_identity_key(staged)
+        staged_finding, fault = _resolve_staged_finding(staged, d.get("id"))
+        if fault:
+            _park_cannot_certify(state, fault)
+            state["step"] = P_TERMINAL
+            return
+        if isinstance(staged_finding, dict):
+            key = _finding_identity_key(staged_finding)
             if key:
                 reason = d.get("reason") or "verifier refuted (no reason recorded)"
                 _record_disposition(state, key, "refuted", state["round"], refutedReason=reason)
@@ -2693,16 +2933,18 @@ def _fold_synthesis(state, config, artifact):
     author-justification POST-filter, then decide gap-sweep / fix / terminal."""
     grouping = artifact.get("grouping") if isinstance(artifact.get("grouping"), list) else None
     verified = state.get("_verified") or []
-    verified_by_id = {f.get("id"): f for f in verified
-                      if isinstance(f, dict) and f.get("id") is not None}
     merged = verification.merge_and_rank(verified, grouping)
     findings = merged["findings"]
     kept, aj_drops = author_justification_filter(findings, config.get("priorComments"))
     for d in aj_drops:
         _decision(state, "author-justified-drop", d.get("justification"))
-        staged = verified_by_id.get(d.get("id"))
-        if isinstance(staged, dict):
-            key = _finding_identity_key(staged)
+        staged_finding, fault = _resolve_staged_finding(verified, d.get("id"))
+        if fault:
+            _park_cannot_certify(state, fault)
+            state["step"] = P_TERMINAL
+            return
+        if isinstance(staged_finding, dict):
+            key = _finding_identity_key(staged_finding)
             if key:
                 justification = d.get("justification") or ""
                 _record_disposition(
@@ -2712,14 +2954,25 @@ def _fold_synthesis(state, config, artifact):
         if not isinstance(merge, dict):
             continue
         kept_id = merge.get("kept_id")
-        kept_finding = verified_by_id.get(kept_id)
+        kept_finding, kept_fault = _resolve_staged_finding(verified, kept_id)
+        if kept_fault:
+            _park_cannot_certify(state, kept_fault)
+            state["step"] = P_TERMINAL
+            return
         kept_key = _finding_identity_key(kept_finding) if isinstance(kept_finding, dict) else None
         if not kept_key:
-            continue
+            _park_cannot_certify(state, "%s: staged id %r has no derivable finding key"
+                                % (STAGED_ID_UNRESOLVABLE_CAUSE, kept_id))
+            state["step"] = P_TERMINAL
+            return
         for member_id in merge.get("member_ids") or []:
             if member_id == kept_id:
                 continue
-            member = verified_by_id.get(member_id)
+            member, member_fault = _resolve_staged_finding(verified, member_id)
+            if member_fault:
+                _park_cannot_certify(state, member_fault)
+                state["step"] = P_TERMINAL
+                return
             if isinstance(member, dict):
                 key = _finding_identity_key(member)
                 if key:
@@ -3681,8 +3934,6 @@ def _fold_verify(state, config, artifact):
     names the class — never advances into a delta round that could later certify."""
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
-    if result == "pass":
-        _backfill_fixed_disposition_verify_receipts(state, state["round"], result)
     if result == "fail":
         state["terminal"] = "halted"
         state["certification"] = {"shape": None, "reason": "verify gate failed"}
@@ -4541,6 +4792,11 @@ def _terminal_converged(state, config, full_panel, note=None):
     success (the exit_skipped invariant): the certification `reason` leads with
     `clean-except-skipped: N blocker(s) skipped with citable reasons` (shape unchanged) so the
     terminal reads unmistakably non-plain, and the skips also ride the top-level receipt channel."""
+    session_dir = state.get("_foldSessionDir")
+    fault = _finalize_fixed_disposition_receipts(state, session_dir, config)
+    if fault:
+        _park_cannot_certify(state, fault)
+        return
     # An OUTSTANDING incomplete panel (a configured lens never ran, never recovered by a later
     # complete panel) cannot certify clean — a zero-finding finish over a coverage gap is "we did not
     # look", not "audited-chain". Silence never certifies: withhold + park (#507 R2 residual-1).
@@ -6069,6 +6325,26 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "verifier-results-shape"})
             return {"ok": False, "reason": fault}
+        fault = verifier_drop_staged_id_fault(state, artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "staged-id-unresolvable"})
+            return {"ok": False, "reason": fault}
+    if phase == P_SYNTHESIS:
+        fault = synthesis_staged_id_fault(state, artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "staged-id-unresolvable"})
+            return {"ok": False, "reason": fault}
+    if phase == P_JUDGMENT:
+        fault = judgment_follow_up_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "follow-up-malformed"})
+            return {"ok": False, "reason": fault}
     if phase == P_STALL:
         choice = artifact.get("choice") if isinstance(artifact, dict) else None
         if isinstance(choice, str) and choice in RETIRED_STALL_CHOICES:
@@ -6100,6 +6376,12 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": STALL_ACCEPT_RISK_NOT_ELIGIBLE})
             return {"ok": False, "reason": STALL_ACCEPT_RISK_NOT_ELIGIBLE}
+        fault = stall_follow_up_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "follow-up-malformed"})
+            return {"ok": False, "reason": fault}
 
     # #977: the record-submit interleave fence — mirror image of `advance-submit-interleaved`.
     # `cmd_submit` never reads the durable store, so `record-result` (or `--sweep`) followed by a
@@ -8026,30 +8308,34 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
         return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}
     envelope_payload = envelope.get("payload")
     if result_kind == session_contract.WRITE_RESULT_KIND:
-        pass
-    else:
-        if not isinstance(envelope_payload, dict):
-            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "resultKind": result_kind}
-        shaped = _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload)
-        carried, adapter_subject = engine_adapter.review_payload_carried(shaped, result_kind)
-        digest_carried, digest_subject = session_contract.evidence_digest_subject(
-            envelope_payload, result_kind)
-        # Leaf rule (session_contract.evidence_digest_subject) is the writer's rule; drift test
-        # pins it equal to review_payload_carried on the runner-shaped result.
-        if not carried or not digest_carried:
-            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "resultKind": result_kind}
-        if round_records.payload_sha256(adapter_subject) != round_records.payload_sha256(
-                digest_subject):
-            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "resultKind": result_kind,
-                                                       "subjectDisagreement": True}
-        payload_digest = round_records.payload_sha256(digest_subject)
-        if result_digest != payload_digest:
-            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "payloadSha256": payload_digest,
-                                                       "resultKind": result_kind}
+        evidence = {key: record[key] for key in round_records.EXECUTION_EVIDENCE_FIELDS}
+        out = dict(envelope)
+        out["executionEvidence"] = evidence
+        out["executionBinding"] = WRITE_EXECUTION_BINDING
+        out["envelopeSha256"] = round_records.envelope_sha256(out.get("payload"), evidence)
+        return out, None, {}
+    if not isinstance(envelope_payload, dict):
+        return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                   "resultKind": result_kind}
+    shaped = _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload)
+    carried, adapter_subject = engine_adapter.review_payload_carried(shaped, result_kind)
+    digest_carried, digest_subject = session_contract.evidence_digest_subject(
+        envelope_payload, result_kind)
+    # Leaf rule (session_contract.evidence_digest_subject) is the writer's rule; drift test
+    # pins it equal to review_payload_carried on the runner-shaped result.
+    if not carried or not digest_carried:
+        return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                   "resultKind": result_kind}
+    if round_records.payload_sha256(adapter_subject) != round_records.payload_sha256(
+            digest_subject):
+        return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                   "resultKind": result_kind,
+                                                   "subjectDisagreement": True}
+    payload_digest = round_records.payload_sha256(digest_subject)
+    if result_digest != payload_digest:
+        return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                   "payloadSha256": payload_digest,
+                                                   "resultKind": result_kind}
     evidence = {key: record[key] for key in round_records.EXECUTION_EVIDENCE_FIELDS}
     out = dict(envelope)
     out["executionEvidence"] = evidence

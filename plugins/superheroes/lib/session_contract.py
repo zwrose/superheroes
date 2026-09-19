@@ -36,6 +36,8 @@ __all__ = (
 TRANSIENT_FINDING_FIELDS = frozenset({
     "id", "findingKey", "verdict", "evidence", "challenge", "unverified", "reason",
     "disposition", "dispositionReceipt",
+    "dispositionRound", "refutedReason", "outOfScopeReason", "followUp", "mergedInto",
+    "raisedRound",
 })
 
 # Result kind a write run's execution record carries — binds the run's own report, not a payload key.
