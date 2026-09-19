@@ -5956,6 +5956,23 @@ def test_walk_preflight_failed_check_carries_checks(tmp_path):
     assert "codex" in auth["evidence"]
 
 
+def test_walk_preflight_later_walked_failure_carries_every_earlier_pass(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    ids = [cid for cid, _ in LD.PREFLIGHT_CHECKS if cid not in LD.LAUNCHER_OWNED_CHECKS]
+    checks = _all_checks()
+    checks[ids[-1]] = {"state": "fail", "reason": "late"}
+    result = L.walk_preflight(checks, repo)
+    assert result["reason"] == "preflight-failed:" + ids[-1]
+    walked_ids = [cid for cid, _ in LD.PREFLIGHT_CHECKS]
+    fail_idx = walked_ids.index(ids[-1])
+    expected_ids = walked_ids[:fail_idx + 1]
+    check_ids = [c["id"] for c in result["checks"]]
+    assert check_ids == expected_ids
+    for c in result["checks"][:-1]:
+        assert c["state"] == "pass"
+    assert result["checks"][-1]["state"] == "fail"
+
+
 def test_launch_refusal_record_keeps_failed_check(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)

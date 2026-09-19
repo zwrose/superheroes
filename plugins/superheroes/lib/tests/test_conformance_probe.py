@@ -240,7 +240,7 @@ def test_run_grades_three_legs_ok_on_valid_native_result(tmp_path):
     assert payload["legs"]["progressTelemetry"]["ok"] is True
     assert payload["preflightCheck"]["state"] == "pass"
     assert stderr is None
-    prompt_path = os.path.join(os.path.dirname(run_dir), "probe-prompt.md")
+    prompt_path = os.path.join(os.path.dirname(run_dir), os.path.basename(run_dir) + ".probe-prompt.md")
     prompt_text = open(prompt_path, encoding="utf-8").read()
     assert "at least one regular file at its top level" in prompt_text
     assert '"verdicts"' in prompt_text
@@ -326,6 +326,7 @@ def test_completion_fails_on_timeout(tmp_path):
 
 
 def test_completion_fails_on_refusal_names_auth_or_config(tmp_path):
+  # axis: auth-or-config-refusal
     repo = _repo(tmp_path)
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
@@ -394,6 +395,81 @@ def test_grade_legs_rejects_missing_production_last_activity():
     assert legs["progressTelemetry"]["detail"] == "telemetry-absent"
 
 
+def test_grade_legs_rejects_injected_seam_record_without_stamp():
+    terminal = {
+        "ok": True, "terminal": True, "attempts": 1,
+        "resultKind": "verdicts", "verdicts": [{"id": "conformance-probe-1"}],
+        "engagement": {"source": "codex-events", "telemetry": "tool-calls", "toolCalls": 2},
+        "runDir": "/tmp/run",
+    }
+    state = {
+        "attempts": {
+            1: {"ended": {
+                "exit": 0, "timedOut": False, "attempt": 1,
+                "lastActivityAt": None, "activitySource": "injected-seam", "at": 1700000000.0,
+            }},
+        },
+    }
+    legs = CP._grade_legs(terminal, state, False)
+    assert legs["progressTelemetry"]["ok"] is False
+    assert legs["progressTelemetry"]["detail"] == "telemetry-absent"
+
+
+def test_probe_injected_seam_stamps_last_activity_at(tmp_path):
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout = _codex_event_stream(action_items=2)
+    fake = FakeRunner([(stdout, False, 0, "")])
+    payload, code, _stderr = CP.probe(
+        "codex", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert code == 0
+    assert payload["legs"]["progressTelemetry"]["ok"] is True
+    records, _ = ED._journal_read(run_dir)
+    ended = next(r for r in records if r.get("kind") == "attempt-ended")
+    assert isinstance(ended["lastActivityAt"], float)
+    assert ended["activitySource"] == "injected-seam"
+
+
+def test_probe_prompt_lands_beside_a_given_run_dir(tmp_path):
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout = _codex_event_stream(action_items=2)
+    fake = FakeRunner([(stdout, False, 0, "")])
+    CP.probe(
+        "codex", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    sibling = os.path.join(os.path.dirname(run_dir), os.path.basename(run_dir) + ".probe-prompt.md")
+    assert os.path.isfile(sibling)
+    assert not os.path.exists(os.path.join(os.path.dirname(run_dir), "probe-prompt.md"))
+
+
+def test_probe_without_run_dir_uses_a_private_parent(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    parent = str(tmp_path / "probe-parent")
+    os.makedirs(parent, exist_ok=True)
+    calls = []
+
+    def _mkdtemp(*_a, **_k):
+        calls.append(parent)
+        return parent
+
+    monkeypatch.setattr(CP.tempfile, "mkdtemp", _mkdtemp)
+    stdout = _codex_event_stream(action_items=2)
+    fake = FakeRunner([(stdout, False, 0, "")])
+    payload, code, _stderr = CP.probe(
+        "codex", repo_root=repo, run_dir=None, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert code == 0
+    assert payload["runDir"] == os.path.realpath(os.path.join(parent, "run"))
+    assert os.path.isfile(os.path.join(parent, "probe-prompt.md"))
+
+
 def test_telemetry_fails_when_stream_has_no_tool_calls(tmp_path):
     repo = _repo(tmp_path)
     run_dir = str(tmp_path / "run")
@@ -454,6 +530,7 @@ def test_dependent_roles_from_calibration():
 
 
 def test_preflight_entry_hold_when_failed_without_owner_word(tmp_path):
+  # axis: hold-without-owner-word
     repo = _repo(tmp_path)
     codex_fail = _probe_result("codex", ok=False, repoRoot=repo, failed=["resultProduction"])
     codex_fail["legs"]["resultProduction"]["ok"] = False
@@ -479,6 +556,7 @@ def test_preflight_entry_hold_when_failed_without_owner_word(tmp_path):
     ("stale", "probe-stale:codex"),
 ])
 def test_preflight_entry_refuses_missing_duplicate_foreign_stale(tmp_path, case, expect):
+  # axis: probe-missing-duplicate-foreign-stale
     repo = _repo(tmp_path)
     codex = _probe_result("codex", repoRoot=repo)
     cursor = _probe_result("cursor", repoRoot=repo)
@@ -647,6 +725,141 @@ def test_preflight_entry_refuses_wave_mismatch(tmp_path):
     )
     assert code == 1
     assert payload["reason"].startswith("probe-wave-mismatch:")
+
+
+def test_preflight_entry_refuses_ok_disagreeing_with_legs(tmp_path):
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo, ok=True)
+    codex["legs"]["resultProduction"]["ok"] = False
+    codex["failed"] = ["resultProduction"]
+    cursor = _probe_result("cursor", repoRoot=repo)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+    )
+    assert code == 1
+    assert payload["reason"] == "probe-result-malformed:%s" % cpath
+
+
+def test_preflight_entry_refuses_failed_list_disagreeing_with_legs(tmp_path):
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo, ok=True)
+    codex["failed"] = ["progressTelemetry"]
+    cursor = _probe_result("cursor", repoRoot=repo)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+    )
+    assert code == 1
+    assert payload["reason"] == "probe-result-malformed:%s" % cpath
+
+
+def test_preflight_entry_refuses_record_without_wave_under_wave(tmp_path):
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo)
+    cursor = _probe_result("cursor", repoRoot=repo)
+    assert "wave" not in codex
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), wave="wave-a",
+    )
+    assert code == 1
+    assert payload["reason"].startswith("probe-wave-mismatch:")
+
+
+def test_expected_probe_cell_reads_the_registry_home(monkeypatch):
+    monkeypatch.setattr(CP.model_registry, "matrix_config", lambda role, eng: ("m-x", "e-x"))
+    monkeypatch.setattr(CP.seat_map, "matrix_config", lambda role, eng: ("m-y", "e-y"))
+    assert CP._expected_probe_cell("codex") == ["codex", "m-x", "e-x"]
+
+
+def test_preflight_entry_stale_boundary_exact_age_passes(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    now = datetime(2026, 9, 19, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(CP, "_now_utc", lambda: now)
+    completed = (now - timedelta(seconds=3600)).replace(microsecond=0)
+    completed_iso = completed.isoformat().replace("+00:00", "Z")
+    codex = _probe_result("codex", repoRoot=repo, completedAt=completed_iso)
+    cursor = _probe_result("cursor", repoRoot=repo, completedAt=completed_iso)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), max_age_seconds=3600,
+    )
+    assert code == 0
+
+
+def test_preflight_entry_stale_boundary_one_past_refuses(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    now = datetime(2026, 9, 19, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(CP, "_now_utc", lambda: now)
+    completed = (now - timedelta(seconds=3601)).replace(microsecond=0)
+    completed_iso = completed.isoformat().replace("+00:00", "Z")
+    codex = _probe_result("codex", repoRoot=repo, completedAt=completed_iso)
+    cursor = _probe_result("cursor", repoRoot=repo, completedAt=completed_iso)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), max_age_seconds=3600,
+    )
+    assert code == 1
+    assert payload["reason"] == "probe-stale:codex"
+
+
+def test_preflight_entry_stale_boundary_future_completed_at_refuses(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    now = datetime(2026, 9, 19, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(CP, "_now_utc", lambda: now)
+    completed = (now + timedelta(seconds=60)).replace(microsecond=0)
+    completed_iso = completed.isoformat().replace("+00:00", "Z")
+    codex = _probe_result("codex", repoRoot=repo, completedAt=completed_iso)
+    cursor = _probe_result("cursor", repoRoot=repo, completedAt=completed_iso)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), max_age_seconds=3600,
+    )
+    assert code == 1
+    assert payload["reason"] == "probe-stale:codex"
+
+
+@pytest.mark.parametrize("completed_at,expect", [
+    ("", "probe-stale:codex"),
+    ("not-a-date", "probe-stale:codex"),
+    ("2026-09-19T12:00:00", "probe-stale:codex"),
+    (12345, "probe-result-malformed:"),
+])
+def test_preflight_entry_completed_at_parse_edges(tmp_path, completed_at, expect):
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo, completedAt=completed_at)
+    cursor = _probe_result("cursor", repoRoot=repo)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(), max_age_seconds=3600,
+    )
+    assert code == 1
+    if expect.endswith(":"):
+        assert payload["reason"].startswith(expect)
+    else:
+        assert payload["reason"] == expect
 
 
 def test_preflight_entry_refuses_probe_cell_mismatch(tmp_path):

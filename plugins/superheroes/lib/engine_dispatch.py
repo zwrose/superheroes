@@ -3014,12 +3014,13 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     if rc == 127 and stderr_tail.startswith("spawn-failed:"):
         refusal = stderr_tail
     dispatch_path = _dispatch_path_from_opened(opened)
+    ended_at = time.time()
     ended = {
         "kind": "attempt-ended", "attempt": attempt,
         "exit": rc, "timedOut": timed_out,
         "signal": _signal_from_returncode(rc),
         "signalSource": _signal_source(timed_out, rc if not timed_out else None),
-        "refusal": refusal, "at": time.time(),
+        "refusal": refusal, "at": ended_at,
         "wallSeconds": round(elapsed, 1),
         "stdoutBytes": len(stdout or ""),
         "stderrBytes": len(stderr_tail or ""),
@@ -3027,7 +3028,7 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         "capSeconds": timeout,
         "promptBytes": len(prompt_bytes),
         "dispatchPath": dispatch_path,
-        "lastActivityAt": None,
+        "lastActivityAt": ended_at,
         "silenceSeconds": None,
         "activityStream": None,
         "activitySource": "injected-seam",
