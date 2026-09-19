@@ -741,34 +741,6 @@ def codex_tool_calls(stdout):
         return None
 
 
-def codex_review_payload_text(stdout, last_message_path=None):
-    """Legacy marker-channel review payload: last-message file, else last agent_message. Never raises."""
-    try:
-        if isinstance(last_message_path, str) and last_message_path:
-            try:
-                with open(last_message_path, encoding="utf-8", errors="ignore") as fh:
-                    text = fh.read()
-                if isinstance(text, str) and text.strip():
-                    return text
-            except OSError:
-                pass
-        if not isinstance(stdout, str) or not stdout:
-            return None
-        last_text = None
-        for obj in _iter_codex_event_lines(stdout):
-            if not _is_codex_event_object(obj) or obj.get("type") != "item.completed":
-                continue
-            item = obj.get("item")
-            if not isinstance(item, dict) or item.get("type") != "agent_message":
-                continue
-            text = item.get("text")
-            if isinstance(text, str) and text:
-                last_text = text
-        return last_text
-    except Exception:
-        return None
-
-
 def codex_event_tokens(stdout):
     """Sum token parts from the last turn.completed usage in JSONL stdout; int or None. Never raises."""
     try:

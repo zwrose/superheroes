@@ -397,30 +397,6 @@ def _opened_channel(opened):
     return opened.get("channel", engine_result_channel.CHANNEL_MARKER)
 
 
-_LAST_MESSAGE_BASENAME = "attempt-%d.last-message"
-
-
-def _attempt_last_message_path(run_dir_real, attempt):
-    return os.path.join(run_dir_real, _LAST_MESSAGE_BASENAME % attempt)
-
-
-def _review_stdout_for_parse(engine, stdout, run_dir_real, attempt, opened):
-    """Marker-channel codex review payload text for grade/parse compatibility. Never raises."""
-    if engine != "codex":
-        return stdout
-    if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
-        return stdout
-    payload = engine_adapter.codex_review_payload_text(
-        stdout, _attempt_last_message_path(run_dir_real, attempt))
-    if payload is not None:
-        return payload
-    if isinstance(stdout, str):
-        if engine_adapter.is_codex_event_stream(stdout):
-            return ""
-        return stdout
-    return ""
-
-
 def _marker_channel_retired_run(opened):
     """True when a persisted run opened on marker but the engine now declares native channel."""
     if not isinstance(opened, dict):
@@ -3765,8 +3741,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     if not stdout and not os.path.exists(stdout_path):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
-    parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt, opened)
-    norm_strip = engine_adapter.normalize_review_stdout(parse_stdout, fed_prompt)
+    norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
     prompt_echo_only = norm_strip["echoOnly"]
     diagnose_stdout = norm_strip["text"]
     envelope_error = norm_strip["rawEnvelopeError"]
@@ -3785,7 +3760,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         }
 
     res = engine_adapter.parse_result(
-        engine, role_kind, parse_stdout, raw_envelope_error=envelope_error,
+        engine, role_kind, stdout, raw_envelope_error=envelope_error,
         echo_nonce=echo_nonce)
     if not _parse_review_has_payload(res):
         stripped_text = norm_strip["text"]
@@ -4169,7 +4144,20 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     continue
 
                 latest = max(attempts)
-                if run_kind == RUN_KIND_WRITE:
+                latest_ended = (attempts[latest].get("ended") or {})
+                if latest_ended.get("guardRefusal"):
+                    if run_kind == RUN_KIND_WRITE:
+                        grade = _grade_write_attempt(run_dir_real, state, latest)
+                    else:
+                        grade = _grade_review_attempt(run_dir_real, state, latest)
+                elif _marker_channel_retired_run(opened):
+                    terminal = _marker_channel_retired_terminal(
+                        opened, run_dir_real, state, argv, latest)
+                    view = opened.get("viewMeta")
+                    if view:
+                        terminal = _attach_sanitized_view(terminal, view)
+                    return _fold_run(run_dir_real, state, terminal)
+                elif run_kind == RUN_KIND_WRITE:
                     grade = _grade_write_attempt(run_dir_real, state, latest)
                 else:
                     grade = _grade_review_attempt(run_dir_real, state, latest)
@@ -4308,13 +4296,6 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                                 ),
                                 run_dir=run_dir_real, argv=argv,
                             ))
-                    if _marker_channel_retired_run(opened):
-                        terminal = _marker_channel_retired_terminal(
-                            opened, run_dir_real, state, argv, latest)
-                        view = opened.get("viewMeta")
-                        if view:
-                            terminal = _attach_sanitized_view(terminal, view)
-                        return _fold_run(run_dir_real, state, terminal)
                     ok_spawn, detail = _spawn_attempt(
                         run_dir_real, state, latest + 1, run_engine=run_engine,
                     )
@@ -5638,14 +5619,12 @@ def _parse_review_attempt(run_dir_real, state, attempt):
         stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
         if not stdout and not os.path.exists(stdout_path):
             return None
-        parse_stdout = _review_stdout_for_parse(
-            engine, stdout, run_dir_real, attempt, opened)
-        norm_strip = engine_adapter.normalize_review_stdout(parse_stdout, fed_prompt)
+        norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
         if norm_strip["echoOnly"]:
             return None
         envelope_error = norm_strip["rawEnvelopeError"]
         res = engine_adapter.parse_result(
-            engine, role_kind, parse_stdout, raw_envelope_error=envelope_error,
+            engine, role_kind, stdout, raw_envelope_error=envelope_error,
             echo_nonce=echo_nonce)
         if not _parse_review_has_payload(res):
             stripped_text = norm_strip["text"]

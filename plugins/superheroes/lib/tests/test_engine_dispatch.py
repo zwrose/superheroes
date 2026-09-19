@@ -728,9 +728,9 @@ def test_argv_for_attempt_injects_codex_json_flags(tmp_path):
 
 
 def test_codex_marker_parser_is_gone():
-    assert hasattr(EA, "codex_review_payload_text") is True
+    assert hasattr(EA, "codex_review_payload_text") is False
     assert hasattr(EA, "codex_json_argv_flags") is False
-    assert hasattr(ED, "_review_stdout_for_parse") is True
+    assert hasattr(ED, "_review_stdout_for_parse") is False
     assert hasattr(ED, "_dispatch_allowlist_validate") is False
 
 
@@ -9693,58 +9693,6 @@ def test_marker_channel_retired_run_honors_guard_refusal_over_retirement(tmp_pat
     assert res["detail"] != "marker-channel-retired"
     assert ED.dispatch_outcome.classify_dispatch_result(res) == ED.dispatch_outcome.CLASSIFICATION_REFUSAL
     assert ED.dispatch_outcome.exit_code(ED.dispatch_outcome.classify_dispatch_result(res)) == 1
-
-
-def test_marker_channel_retired_grades_completed_legacy_attempt_before_retirement(tmp_path):
-    # axis: pre-upgrade codex marker run with JSONL stdout + last-message payload grades
-    # before marker-channel-retired; run_execution_record stamps result binding.
-    run_dir = str(tmp_path / "legacy-marker-completed")
-    _manual_open_review_run(tmp_path, run_dir)
-    _strip_opened_to_marker_channel(run_dir)
-    records, _ = ED._journal_read(run_dir)
-    opened = next(r for r in records if r.get("kind") == "run-opened")
-    opened["echoNonce"] = "legacy-review-nonce"
-    path = ED._journal_path(run_dir)
-    with open(path, "w", encoding="utf-8") as fh:
-        for rec in records:
-            if rec.get("kind") == "run-opened":
-                rec["echoNonce"] = "legacy-review-nonce"
-            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
-    stream = _CODEX_FINDINGS_STDOUT
-    _write_codex_review_attempt_stdout(run_dir, 1, stream)
-    last_message_path = ED._attempt_last_message_path(run_dir, 1)
-    with open(last_message_path, "w", encoding="utf-8") as fh:
-        fh.write(_VALID_FINDINGS_STDOUT)
-    ED._journal_append(run_dir, {
-        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
-        "exit": 0, "timedOut": False, "refusal": None,
-        "wallSeconds": 1.0, "stdoutBytes": len(stream),
-        "at": time.time(),
-    })
-    res = ED._supervise(
-        run_dir, run_kind=ED.RUN_KIND_REVIEW,
-        deadline=time.monotonic() + 5,
-    )
-    assert res["terminal"] is True
-    assert res["ok"] is True
-    assert res.get("findings")
-    assert res.get("detail") != "marker-channel-retired"
-    record, error = ED.run_execution_record(run_dir)
-    assert error is None
-    assert record.get("resultDigest")
-    assert record.get("resultKind") == "findings"
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
-    parsed = ED._parse_review_attempt(run_dir, state, 1)
-    assert parsed.get("ok") is True
-    round_records_spec = importlib.util.spec_from_file_location(
-        "round_records", os.path.join(_HERE, "..", "round_records.py"))
-    round_records = importlib.util.module_from_spec(round_records_spec)
-    round_records_spec.loader.exec_module(round_records)
-    assert record["resultDigest"] == round_records.payload_sha256(parsed["findings"])
 
 
 def test_wo10_edge3_supervise_folds_guard_refusal_terminal_unrunnable_no_retry(tmp_path, monkeypatch):
