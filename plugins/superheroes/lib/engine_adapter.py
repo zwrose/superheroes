@@ -812,6 +812,7 @@ def cursor_tool_calls(stdout, exclude_paths=()):
         excluded_call_ids = set()
         call_ids = set()
         object_count = 0
+        events = []
         for line in stdout.splitlines():
             line = line.strip()
             if not line:
@@ -826,19 +827,22 @@ def cursor_tool_calls(stdout, exclude_paths=()):
             cid = obj.get("call_id")
             if not (isinstance(cid, str) and cid):
                 continue
-            if cid not in excluded_call_ids:
-                write_path = _cursor_tool_call_write_path(obj.get("tool_call"))
-                if write_path is not None and excluded_realpaths:
-                    try:
-                        if os.path.realpath(write_path) in excluded_realpaths:
-                            excluded_call_ids.add(cid)
-                            continue
-                    except OSError:
-                        pass
-            if cid not in excluded_call_ids:
-                call_ids.add(cid)
+            events.append((cid, obj.get("tool_call")))
         if object_count == 0:
             return 0
+        if excluded_realpaths:
+            for cid, tool_call in events:
+                write_path = _cursor_tool_call_write_path(tool_call)
+                if write_path is None:
+                    continue
+                try:
+                    if os.path.realpath(write_path) in excluded_realpaths:
+                        excluded_call_ids.add(cid)
+                except OSError:
+                    pass
+        for cid, _tool_call in events:
+            if cid not in excluded_call_ids:
+                call_ids.add(cid)
         if call_ids:
             return len(call_ids)
         return 0

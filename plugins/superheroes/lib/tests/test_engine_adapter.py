@@ -1873,6 +1873,18 @@ def test_cursor_tool_calls_excludes_result_path(tmp_path):
     assert EA.cursor_tool_calls(shell_named, exclude_paths=(result_path,)) == 1
 
 
+def test_cursor_tool_calls_excludes_late_discovered_result_path(tmp_path):
+    result_path = str(tmp_path / "native-result-1.json")
+    lines = [
+        json.dumps({"type": "tool_call", "call_id": "w1", "subtype": "started"}),
+        json.dumps({
+            "type": "tool_call", "call_id": "w1", "subtype": "completed",
+            "tool_call": {"editToolCall": {"args": {"path": result_path}}},
+        }),
+    ]
+    assert EA.cursor_tool_calls("\n".join(lines), exclude_paths=(result_path,)) == 0
+
+
 # ---------------------------------------------------------------------------
 # #666: investigated propagation + spot_check_investigated floor
 
