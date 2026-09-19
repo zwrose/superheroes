@@ -453,7 +453,7 @@ def _bootstrap_head_before_next(tmp_path, name="pre-head", **cfg_over):
 
 
 def test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_head(tmp_path):
-    """Real-loop producer: pre-next meta head binds citedHead; the refusal the session gets is the hand-landed read-engagement bar, never a head binding."""
+    """Real-loop producer: the pre-next meta head binds `citedHead`; with every seat's evidence engaged the zero-finding loop certifies on that head."""
     seat_map = {
         "seats": {
             dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
@@ -482,15 +482,10 @@ def test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_h
     certified_head = RCE._certified_head_sha(ctx)
     assert recorded[0]["citedHead"] == certified_head == head_sha
     receipt, refusal = RCE.certify(session_dir)
-    # This session refuses on the shared harness's hand-landed read-engagement bar, not on the
-    # head: the harness lands non-finding seats with observation.read == "unknown". Pin that
-    # refusal exactly (never receipt-XOR-refusal), and pin that it is not a head-binding refusal.
-    assert receipt is None
-    assert isinstance(refusal, dict), refusal
-    assert refusal["class"] == "unrun-review", refusal
-    assert refusal["bindingFailure"] == "execution-evidence-not-engaged", refusal
-    assert refusal["bindingFailure"] != RCE.BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND
-    assert refusal["bindingFailure"] != "execution-evidence-stale-head"
+    assert refusal is None, refusal
+    assert isinstance(receipt, dict)
+    assert certified_head == head_sha
+    assert receipt["terminalState"] == "certified"
 
 
 def test_journal_revision_helpers_removed_from_lib():
