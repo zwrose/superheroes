@@ -555,6 +555,67 @@ def _decorated_review_fed_prompt(base_prompt, view_meta, echo_nonce="nonce-1",
   return fed_prompt
 
 
+_TD = None
+
+
+def _dispatch_test_helpers():
+  global _TD
+  if _TD is None:
+    spec = importlib.util.spec_from_file_location(
+        "test_engine_dispatch",
+        os.path.join(_HERE, "test_engine_dispatch.py"))
+    _TD = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(_TD)
+  return _TD
+
+
+def _codex_turn_completed_stdout():
+  return json.dumps({
+      "type": "turn.completed",
+      "usage": {
+          "input_tokens": 100,
+          "cached_input_tokens": 0,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+      },
+  })
+
+
+def _codex_event_stream_with_tool_call():
+  lines = [
+      json.dumps({"type": "item.completed",
+                  "item": {"id": "ce_0", "type": "command_execution"}}),
+      _codex_turn_completed_stdout(),
+  ]
+  return "\n".join(lines)
+
+
+def _ensure_investigated_repo_path(repo_root, rel="reviewed.py"):
+  path = os.path.join(repo_root, rel)
+  if not os.path.isfile(path):
+    parent = os.path.dirname(path)
+    if parent:
+      os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+      fh.write("# fixture investigated path\n")
+  return rel
+
+
+def _write_native_review_result(run_dir, repo_root, *, findings=None):
+  td = _dispatch_test_helpers()
+  rel = _ensure_investigated_repo_path(repo_root)
+  if findings is None:
+    findings = []
+  branch = td._native_review_branch("findings", findings=findings, investigated=[rel])
+  records, _ = ED._journal_read(run_dir)
+  state = ED._journal_state(records)
+  native_path = (state.get("opened") or {}).get("nativeResultPath")
+  assert native_path, "nativeResultPath missing from run-opened"
+  with open(native_path, "w", encoding="utf-8") as fh:
+    json.dump({"result": branch}, fh, separators=(",", ":"))
+    fh.write("\n")
+
+
 def _execution_run_dir(tmp_path, order_path, echo_nonce="nonce-1", name="run",
                        decorated=True, expected_result_kind=None):
   run_dir = str(tmp_path / name)
@@ -581,7 +642,8 @@ def _execution_run_dir(tmp_path, order_path, echo_nonce="nonce-1", name="run",
     echo_nonce=echo_nonce, base_prompt=base_prompt,
   )
   assert ok, detail
-  stdout = json.dumps({"findings": []})
+  _write_native_review_result(run_dir, repo_root, findings=[])
+  stdout = _codex_event_stream_with_tool_call()
   ED._journal_append(run_dir, {
     "kind": "attempt-ended", "attempt": 1,
     "exit": 0, "timedOut": False, "refusal": None,
@@ -807,7 +869,11 @@ def test_seam_a_evidence_result_binding_incomplete_refuses(tmp_path, adapters):
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
                                      RR.storage_key("code-reviewer"), pend["attempt"])
   run_dir = _execution_run_dir(tmp_path, order_path, name="ev-binding-incomplete-run")
-  open(os.path.join(run_dir, "attempt-1.stdout"), "wb").write(b"not parseable review output\n")
+  records, _ = ED._journal_read(run_dir)
+  journal_state = ED._journal_state(records)
+  native_path = (journal_state.get("opened") or {}).get("nativeResultPath")
+  assert native_path, "nativeResultPath missing from run-opened"
+  open(native_path, "wb").write(b"not parseable review output\n")
   out = RD.cmd_record_result(d, "code-reviewer", evidence_run_dir=run_dir)
   assert out["ok"] is False
   assert out["reason"] == "evidence-run-dir-unreadable"
