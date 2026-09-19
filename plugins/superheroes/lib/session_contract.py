@@ -3,6 +3,8 @@
 import hashlib
 import json
 
+from finding_identity import finding_identity
+
 __all__ = (
     "STATE_FILE",
     "JOURNAL_FILE",
@@ -14,9 +16,11 @@ __all__ = (
     "SEAT_MISSING_SCHEMA",
     "FIX_FOLD_HEAD_KEY",
     "WRITE_RESULT_KIND",
+    "FINDING_KEY_FIELD",
     "canonical",
     "payload_sha256",
     "finding_identity_key",
+    "location_key",
 )
 
 # Result kind a write run's execution record carries — binds the run's own report, not a payload key.
@@ -31,6 +35,14 @@ HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
 HEAD_CONTENT_BLOBS_SCHEMA = "head-content-blobs/2"
 SEAT_MISSING_SCHEMA = "seat-missing/1"
 FIX_FOLD_HEAD_KEY = "fixFoldHeadSha"
+FINDING_KEY_FIELD = "findingKey"
+
+
+def location_key(finding):
+    """Per-LOCATION key: line-less finding_identity plus line — total for any dict."""
+    if not isinstance(finding, dict):
+        return None
+    return "%s@L%s" % (finding_identity(finding), finding.get("line"))
 
 
 def canonical(obj):
@@ -49,14 +61,9 @@ def payload_sha256(payload):
 
 def finding_identity_key(finding):
     """Stable identity for disposition-ledger entries — shared by driver and writer."""
-    fid = finding.get("id")
-    if isinstance(fid, str) and fid:
-        return fid
-    title = finding.get("title")
-    if isinstance(title, str) and title:
-        return title
-    path = finding.get("file")
-    line = finding.get("line")
-    if isinstance(path, str) and path:
-        return "%s@L%s" % (path, line)
-    return None
+    if not isinstance(finding, dict):
+        return None
+    key = finding.get(FINDING_KEY_FIELD)
+    if isinstance(key, str) and key:
+        return key
+    return location_key(finding)
