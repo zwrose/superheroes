@@ -38,11 +38,8 @@ calibration (FR-18).
 Present, inline beneath the view, the things the owner can change — each routed to the **smallest**
 action that owns it, leaving the rest of the calibration untouched:
 
-- **Change a single discrete field that has no write verb of its own** (the verify command) → edit
-  that field in the calibration file directly, then run the view again and confirm the new value
-  reads back exactly; a value that is not a non-empty string reads as no verify command at all, and
-  the gate then runs nothing rather than refusing. The threat model is a project-configuration item
-  and takes the next bullet's path.
+- **Change a single discrete field** (the verify command, the threat model) → a focused guided edit
+  through `core_md`.
 - **Change one project-configuration item** → write only that item's home through `project_config`.
   Show the current value from the view first, then pipe the new value on stdin. A refusal is
   reported to the owner and never worked around.
