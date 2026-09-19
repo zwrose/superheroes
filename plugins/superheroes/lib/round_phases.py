@@ -3,21 +3,16 @@
 layers (#723).
 
 Single home for the `P_*` action strings so `round_driver`, `round_adapters`, and
-`round_records` agree without import cycles. Stdlib-only.
-
-`P_PANEL`, `P_FIXER`, and `P_AUDITS` are homed in `session_contract` because the driverless writer
-reads them there; this module derives those three and keeps the remaining phase literals."""
-import session_contract
-
+`round_records` agree without import cycles. Stdlib-only."""
 # Phases (the `action` a `next` emits; each is fulfilled by exactly one orchestrator dispatch).
-P_PANEL = session_contract.PANEL_PHASE
+P_PANEL = "dispatch-panel"
 P_VERIFIERS = "dispatch-verifiers"
 P_SYNTHESIS = "dispatch-synthesis"
-P_AUDITS = session_contract.AUDITS_PHASE
+P_AUDITS = "dispatch-audits"
 P_SCOPED = "dispatch-scoped-finder"
 P_GAPSWEEP = "dispatch-gap-sweep"
 P_VERIFY = "run-verify"
-P_FIXER = session_contract.FIXER_PHASE
+P_FIXER = "dispatch-fixer"
 P_JUDGMENT = "present-judgment"
 P_STALL = "present-stall-menu"
 P_TERMINAL = "terminal"
