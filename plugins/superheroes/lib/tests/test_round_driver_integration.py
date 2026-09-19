@@ -816,6 +816,14 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
             _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
             out = _record(session_dir, seat, occurrence=occurrence)
         assert out["ok"], (phase, seat, occurrence, out)
+    if phase == round_driver.P_PANEL and telemetry_shape != "no-telemetry":
+        # The runner record names the seat's real vendor (codex), so the harness owes
+        # the control probe a real codex seat would have landed before advance.
+        probe = {"engine": "codex", "outcome": "ok", "engaged": True, "detectedPlant": True,
+                 "evidence": {"probe": "seat_canary"}}
+        round_records.atomic_write_json(
+            round_records.canary_path(session_dir, pend["round"], "codex", pend["attempt"]),
+            probe)
     out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
     return phase, out
 
