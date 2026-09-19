@@ -654,7 +654,7 @@ def test_codex_open_argv_is_canonical_spawn_seam_carries_per_attempt_flags(tmp_p
     assert spawn_argv != canonical
     coherent, err = ED._spawn_argv_coherence(opened, canonical)
     assert err is None
-    ok, with_o, _, _, _ = ED._spawn_native_result_argv(run_dir, 1, opened, coherent)
+    ok, with_o, _, _ = ED._spawn_native_result_argv(run_dir, 1, opened, coherent)
     assert ok
     expected_spawn = ED._argv_for_attempt(with_o, run_dir, 1, "codex")
     assert spawn_argv == expected_spawn
@@ -10595,7 +10595,7 @@ def test_opened_channel_defaults_missing_key_to_marker():
     assert ED._opened_channel(opened) == ERC.CHANNEL_MARKER
 
 
-def test_native_stale_result_removed_before_second_spawn(tmp_path):
+def test_native_stale_result_file_refuses_second_spawn(tmp_path):
     run_dir = str(tmp_path / "run")
     _manual_open_review_run(tmp_path, run_dir)
     attempt1_path = ED._native_result_path(run_dir, 1)
@@ -10606,27 +10606,33 @@ def test_native_stale_result_removed_before_second_spawn(tmp_path):
         "exit": 0, "timedOut": False, "refusal": None, "at": time.time(),
     })
     attempt2_path = ED._native_result_path(run_dir, 2)
+    stale_content = '{"stale": true}\n'
     with open(attempt2_path, "w", encoding="utf-8") as fh:
-        fh.write('{"stale": true}\n')
+        fh.write(stale_content)
     records, _ = ED._journal_read(run_dir)
     state = ED._journal_state(records)
-    existence_checks = []
+    runner_called = []
 
     def fake_run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
-        existence_checks.append(os.path.exists(attempt2_path))
+        runner_called.append(list(argv))
         return (_VALID_FINDINGS_STDOUT, False, 0, "")
 
     ok, detail = ED._spawn_attempt(run_dir, state, 2, run_engine=fake_run_engine)
     assert ok, detail
-    assert existence_checks == [False]
+    assert runner_called == []
+    assert open(attempt2_path, encoding="utf-8").read() == stale_content
     assert os.path.isfile(attempt1_path)
     records, _ = ED._journal_read(run_dir)
-    started = next(
-        r for r in records
-        if r.get("kind") == "engine-started" and r.get("attempt") == 2
+    assert not any(
+        r.get("kind") == "engine-started" and r.get("attempt") == 2
+        for r in records
     )
-    assert started["staleNativeResultRemoved"] is True
-    assert started["nativeResultPath"] == attempt2_path
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 2
+    )
+    assert ended["exit"] == 127
+    assert ended["refusal"] == "native-result-path-occupied"
 
 
 # --- WO-B2 (#1270 L2): native-channel review grading --------------------------------
@@ -10957,6 +10963,188 @@ def _codex_native_runner(branch, stderr_tail=""):
             fh.write("\n")
         return ("", False, 0, stderr_tail)
     return runner
+
+
+def test_load_native_result_json_reads_regular_file(tmp_path):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    payload = {"result": {"resultKind": "findings", "findings": []}}
+    result_path = ED._native_result_path(run_dir, 1)
+    with open(result_path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert detail is None
+    assert obj == payload
+
+
+def test_load_native_result_json_refuses_symlink_to_valid_file(tmp_path):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    real_path = tmp_path / "real.json"
+    real_path.write_text('{"result": {"ok": true}}\n', encoding="utf-8")
+    result_path = ED._native_result_path(run_dir, 1)
+    os.symlink(str(real_path), result_path)
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert obj is None
+    assert detail == "native-result-missing"
+
+
+def test_load_native_result_json_fifo_returns_missing_without_blocking(tmp_path):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    result_path = ED._native_result_path(run_dir, 1)
+    os.mkfifo(result_path)
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert obj is None
+    assert detail == "native-result-missing"
+
+
+@pytest.mark.parametrize("plant", ["directory", "dangling_symlink"])
+def test_load_native_result_json_directory_and_dangling_symlink_are_missing(tmp_path, plant):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    result_path = ED._native_result_path(run_dir, 1)
+    if plant == "directory":
+        os.makedirs(result_path)
+    else:
+        os.symlink(str(tmp_path / "missing-target"), result_path)
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert obj is None
+    assert detail == "native-result-missing"
+
+
+def test_load_native_result_json_oversized(tmp_path):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    result_path = ED._native_result_path(run_dir, 1)
+    with open(result_path, "wb") as fh:
+        fh.write(b"x" * (ERC.NATIVE_RESULT_MAX_BYTES + 1))
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert obj is None
+    assert detail == "native-result-oversized"
+
+    run_dir2 = str(tmp_path / "run2")
+    os.makedirs(run_dir2)
+    result_path2 = ED._native_result_path(run_dir2, 1)
+    with open(result_path2, "wb") as fh:
+        fh.write(b"x" * ERC.NATIVE_RESULT_MAX_BYTES)
+        fh.write(b"y")
+    obj2, detail2 = ED._load_native_result_json(run_dir2, 1)
+    assert obj2 is None
+    assert detail2 == "native-result-oversized"
+
+
+def test_load_native_result_json_malformed_utf8_and_json(tmp_path):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    result_path = ED._native_result_path(run_dir, 1)
+    with open(result_path, "wb") as fh:
+        fh.write(b"\xff\xfe")
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert obj is None
+    assert detail == "native-result-malformed"
+
+    run_dir2 = str(tmp_path / "run2")
+    os.makedirs(run_dir2)
+    result_path2 = ED._native_result_path(run_dir2, 1)
+    with open(result_path2, "w", encoding="utf-8") as fh:
+        fh.write("not-json\n")
+    obj2, detail2 = ED._load_native_result_json(run_dir2, 1)
+    assert obj2 is None
+    assert detail2 == "native-result-malformed"
+
+
+def test_grade_native_review_attempt_symlinked_result_forfeits_missing(tmp_path):
+    branch = _native_review_branch("findings")
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    result_path = ED._native_result_path(run_dir, 1)
+    os.remove(result_path)
+    real_path = tmp_path / "valid.json"
+    with open(real_path, "w", encoding="utf-8") as fh:
+        json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+        fh.write("\n")
+    os.symlink(str(real_path), result_path)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-missing"
+
+
+@pytest.mark.parametrize("occupant", ["dangling_symlink", "symlink_to_file", "regular_file", "directory"])
+def test_spawn_native_result_argv_refuses_occupied_path(tmp_path, occupant):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    opened = {"channel": ERC.CHANNEL_NATIVE, "engine": "codex"}
+    coherent = ["codex", "exec"]
+    result_path = ED._native_result_path(run_dir, 1)
+    regular_content = '{"occupied": true}\n'
+    symlink_target = tmp_path / "target.json"
+    dangling_target = tmp_path / "missing-target"
+    if occupant == "dangling_symlink":
+        os.symlink(str(dangling_target), result_path)
+    elif occupant == "symlink_to_file":
+        symlink_target.write_text('{"x": 1}\n', encoding="utf-8")
+        os.symlink(str(symlink_target), result_path)
+    elif occupant == "regular_file":
+        with open(result_path, "w", encoding="utf-8") as fh:
+            fh.write(regular_content)
+    else:
+        os.makedirs(result_path)
+    before = os.lstat(result_path)
+    before_link = (
+        os.readlink(result_path)
+        if occupant in ("dangling_symlink", "symlink_to_file")
+        else None
+    )
+    ok, argv, path, refusal = ED._spawn_native_result_argv(run_dir, 1, opened, coherent)
+    after = os.lstat(result_path)
+    assert ok is False
+    assert refusal == "native-result-path-occupied"
+    assert "-o" not in argv
+    assert path == result_path
+    assert after.st_mode == before.st_mode
+    assert after.st_ino == before.st_ino
+    if occupant == "dangling_symlink":
+        assert os.readlink(result_path) == before_link
+        assert not dangling_target.exists()
+    elif occupant == "symlink_to_file":
+        assert os.readlink(result_path) == before_link
+    elif occupant == "regular_file":
+        assert open(result_path, encoding="utf-8").read() == regular_content
+
+
+def test_native_dangling_symlink_at_result_path_is_never_handed_to_engine(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    attempt1_path = ED._native_result_path(run_dir, 1)
+    dangling_target = tmp_path / "never-created-target"
+    os.symlink(str(dangling_target), attempt1_path)
+    branch = _native_review_branch("findings")
+    fake = FakeRunner([_codex_native_runner(branch)])
+    res = ED._supervise(
+        run_dir,
+        run_kind=ED.RUN_KIND_REVIEW,
+        deadline=time.monotonic() + 30,
+        run_engine=fake,
+    )
+    assert res.get("terminal") is True
+    attempt1_path_after = ED._native_result_path(run_dir, 1)
+    assert os.path.islink(attempt1_path_after)
+    assert os.readlink(attempt1_path_after) == str(dangling_target)
+    assert not dangling_target.exists()
+    for call in fake.calls:
+        argv = call["argv"]
+        if "-o" in argv:
+            o_path = argv[argv.index("-o") + 1]
+            assert o_path != attempt1_path
+    records, _ = ED._journal_read(run_dir)
+    ended1 = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended1["refusal"] == "native-result-path-occupied"
+    assert fake.calls
+    attempt2_path = ED._native_result_path(run_dir, 2)
+    assert fake.calls[0]["argv"][-2:] == ["-o", attempt2_path]
 
 
 @pytest.mark.parametrize("kind", ERC.REVIEW_RESULT_KINDS)
