@@ -231,6 +231,9 @@ def test_run_grades_three_legs_ok_on_valid_native_result(tmp_path):
     prompt_path = os.path.join(os.path.dirname(run_dir), "probe-prompt.md")
     prompt_text = open(prompt_path, encoding="utf-8").read()
     assert "at least one regular file at its top level" in prompt_text
+    assert '"verdicts"' in prompt_text
+    assert "reason" in prompt_text
+    assert '"result":' not in prompt_text
     assert "plugins/superheroes" not in prompt_text
 
 

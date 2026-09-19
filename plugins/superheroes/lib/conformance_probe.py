@@ -37,10 +37,16 @@ _PROBE_PROMPT = (
     "file at its top level (list it to check).\n\n"
     "You must open the directory listing (use a tool call).\n\n"
     "Respond with a single JSON object of the form "
-    '`{"result": {"resultKind": "verdicts", "verdicts": [...]}}` '
-    'containing exactly one verdict with id `"conformance-probe-1"`. '
+    '`{"verdicts": [{"id": "conformance-probe-1", "verdict": "CONFIRMED" | "REFUTED", '
+    '"reason": "<one sentence>", "severity": null, "evidence": "<the file name, or why none>"}], '
+    '"investigated": ["<the path you listed>"]}` '
+    "with nothing before or after the object and no code fence. "
+    "The reason field is required and must be a non-empty sentence; "
+    "investigated lists the directory you listed. "
     'Use verdict `"CONFIRMED"` with evidence naming one such file when true, '
-    'or verdict `"REFUTED"` when the listing is empty.\n')
+    'or verdict `"REFUTED"` when the listing is empty.\n\n'
+    "When a result schema was supplied to you, it governs the outer shape; "
+    "the verdict fields above are the same.\n")
 
 
 def _utc_now_iso():
