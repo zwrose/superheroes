@@ -2851,6 +2851,7 @@ def _write_opened_record(run_dir):
     return next(r for r in records if r.get("kind") == "run-opened")
 
 
+# axis: codex write open records CHANNEL_NATIVE and binds argv to the declared write schema path.
 def test_codex_write_open_records_native_channel_and_schema(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")
@@ -2880,6 +2881,7 @@ def test_cursor_write_open_records_marker_channel_unchanged_argv(tmp_path):
     assert opened["argv"] == built["argv"]
 
 
+# axis: declared_schema failure at open refuses before any attempt journal or engine spawn.
 def test_codex_write_open_refuses_when_schema_undeclarable(tmp_path, monkeypatch):
     def boom(*_args, **_kwargs):
         raise ValueError("schema broke")
@@ -2976,6 +2978,7 @@ def _write_native_obj_at_argv(argv, obj):
         fh.write("\n")
 
 
+# axis: _admit_native_write_result admits a schema-valid typed file as terminal ok with report.
 def test_native_write_result_production_typed_file(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     obj = _valid_native_write_obj()
@@ -2992,6 +2995,7 @@ def test_native_write_result_production_typed_file(tmp_path):
     assert res["report"] == obj["report"]
 
 
+# axis: native write grades from the typed result file, not stdout presence.
 def test_native_write_completion_detected_with_empty_stdout(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     obj = _valid_native_write_obj()
@@ -3005,6 +3009,7 @@ def test_native_write_completion_detected_with_empty_stdout(tmp_path):
     assert res["attempts"] == 1
 
 
+# axis: progress_cb telemetry is recorded per attempt on the native write path.
 def test_native_write_progress_telemetry_recorded(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")
@@ -3031,6 +3036,7 @@ def test_native_write_progress_telemetry_recorded(tmp_path):
     assert 2.0 in elapsed_values
 
 
+# axis: admitted write report threads through the delivered-items success terminal.
 def test_native_write_report_threaded_with_declared_items(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     target = os.path.join(wt, "delivered.txt")
@@ -3051,6 +3057,64 @@ def test_native_write_report_threaded_with_declared_items(tmp_path):
     assert res["report"] == obj["report"]
 
 
+# axis: _supervise threads admitted report through items-undelivered forfeit terminal.
+def test_native_write_report_survives_undelivered_items(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    obj = _valid_native_write_obj(report="Work completed but item missing.")
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        _write_native_obj_at_argv(argv, obj)
+        return "", False, 0, ""
+
+    res = _dispatch_write(
+        tmp_path, runner, cwd=wt, expected_items=["undelivered.txt"],
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == ED.ITEM_DETAIL_UNDELIVERED
+    assert res["report"] == obj["report"]
+
+
+# axis: _supervise threads admitted report through item-evidence-unavailable terminal.
+def test_native_write_report_survives_item_evidence_unavailable(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+    obj = _valid_native_write_obj(report="Evidence probe failed.")
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        _write_native_obj_at_argv(argv, obj)
+        return "", False, 0, ""
+
+    monkeypatch.setattr(ED, "_item_delivery_check", lambda *_a, **_k: {
+        "evidenceUnavailable": True, "evidenceCause": "probe",
+    })
+
+    res = _dispatch_write(tmp_path, runner, cwd=wt, expected_items=["item.txt"])
+    assert res["forfeited"] is True
+    assert res["detail"].startswith(ED.ITEM_DETAIL_EVIDENCE_UNAVAILABLE)
+    assert res["report"] == obj["report"]
+
+
+# axis: native codex write without result file forfeits dirtied, not report-missing-items-delivered.
+def test_native_write_delivered_items_without_result_is_not_report_missing(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    target = os.path.join(wt, "delivered.txt")
+
+    class DeliverNoResultRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            with open(target, "w", encoding="utf-8") as fh:
+                fh.write("done\n")
+            return "", False, 0, ""
+
+    res = _dispatch_write(
+        tmp_path, DeliverNoResultRunner(), cwd=wt,
+        expected_items=["delivered.txt"],
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "worktree-dirtied-by-attempt"
+    assert res["attemptDetail"] == "native-result-missing"
+    assert res["detail"] != ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
+
+
+# axis: terminal_refusal from _admit_native_write_result carries report without forfeit.
 def test_native_write_refusal_carries_report(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     obj = {
@@ -3072,6 +3136,7 @@ def test_native_write_refusal_carries_report(tmp_path):
     assert res["report"] == obj["report"]
 
 
+# axis: _admit_native_write_result schema validation forfeits native-result-schema-invalid.
 @pytest.mark.parametrize("obj", [
     {"ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": True}},
     {"ok": True, "signal": "ok", "report": "x", "evidence": {"testFailed": False, "testPassed": True}, "extra": 1},
@@ -3087,6 +3152,7 @@ def test_native_write_schema_invalid_forfeits(tmp_path, obj):
     assert grade.get("ok") is not True
 
 
+# axis: _admit_native_write_result refuses blank or whitespace-only report text.
 @pytest.mark.parametrize("report", ["", "   \n"])
 def test_native_write_blank_report_forfeits(tmp_path, report):
     obj = _valid_native_write_obj(report=report)
@@ -3096,6 +3162,7 @@ def test_native_write_blank_report_forfeits(tmp_path, report):
     assert grade.get("detail") == "native-result-report-blank"
 
 
+# axis: _verify_native_schema refuses when on-disk schema differs from declared.
 def test_native_write_schema_substitution_refuses(tmp_path):
     obj = _valid_native_write_obj()
 
@@ -3109,6 +3176,7 @@ def test_native_write_schema_substitution_refuses(tmp_path):
     assert grade.get("detail") == "native-schema-unreadable"
 
 
+# axis: admitted write report egress scrubs secrets from terminal and journal.
 def test_native_write_secret_in_report_scrubbed_from_terminal_and_journal(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")
@@ -3130,6 +3198,7 @@ def test_native_write_secret_in_report_scrubbed_from_terminal_and_journal(tmp_pa
     assert res["report"] != planted_report
 
 
+# axis: missing native result file forfeits with native-result-missing detail.
 def test_native_write_exhausted_forfeit_carries_native_detail(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
 
@@ -3141,6 +3210,7 @@ def test_native_write_exhausted_forfeit_carries_native_detail(tmp_path):
     assert res["detail"] == "native-result-missing"
 
 
+# axis: dirty worktree on retry forfeits worktree-dirtied-by-attempt with attemptDetail.
 def test_native_write_dirtied_forfeit_carries_attempt_detail(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     invalid = _valid_native_write_obj()
@@ -3159,6 +3229,7 @@ def test_native_write_dirtied_forfeit_carries_attempt_detail(tmp_path):
     assert res["attemptDetail"] == "native-result-schema-invalid"
 
 
+# axis: _spawn_native_result_argv refuses occupied result path; engine never receives -o symlink.
 def test_native_write_dangling_symlink_at_result_path_never_handed_to_engine(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")
@@ -3199,6 +3270,7 @@ def test_native_write_dangling_symlink_at_result_path_never_handed_to_engine(tmp
     assert calls[-1][-2:] == ["-o", attempt2_path]
 
 
+# axis: run_execution_record binds completed native write attempt to evidence digest.
 def test_native_write_run_execution_record_binds_result(tmp_path):
     run_dir = str(tmp_path / "native-exec-record")
     os.makedirs(run_dir, exist_ok=True)
@@ -3211,6 +3283,7 @@ def test_native_write_run_execution_record_binds_result(tmp_path):
     assert isinstance(record.get("observation"), dict)
 
 
+# axis: cursor marker channel keeps WRITE_REPORT_CONTRACT prompt and marker grading unchanged.
 def test_cursor_write_prompt_and_grading_unchanged(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")

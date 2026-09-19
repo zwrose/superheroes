@@ -536,6 +536,15 @@ def _journal_spawn_guard_refusal(run_dir_real, attempt, reason):
     })
 
 
+def _journal_prep_refusal(run_dir_real, attempt, refusal):
+    """Record a spawn-prep refusal that ends the attempt without invoking the engine."""
+    return _journal_append(run_dir_real, {
+        "kind": "attempt-ended", "attempt": attempt,
+        "exit": 127, "timedOut": False, "signal": None,
+        "refusal": refusal[:_STDERR_TAIL], "at": time.time(),
+    })
+
+
 def _grade_spawn_guard_refusal(ended):
     return {
         "guard_refusal": True,
@@ -2750,11 +2759,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         run_dir_real, attempt, opened, spawn_argv,
     )
     if not ok_prep:
-        _journal_append(run_dir_real, {
-            "kind": "attempt-ended", "attempt": attempt,
-            "exit": 127, "timedOut": False, "signal": None,
-            "refusal": prep_refusal[:_STDERR_TAIL], "at": time.time(),
-        })
+        _journal_prep_refusal(run_dir_real, attempt, prep_refusal)
         return
     argv, recorded = _derive_and_record_spawn_argv(
         run_dir_real, attempt, spawn_argv, opened.get("engine"))
@@ -2923,11 +2928,7 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
             "childPid": os.getpid(), "at": time.time(),
         }):
             return False, "journal-append-failed"
-        if not _journal_append(run_dir_real, {
-            "kind": "attempt-ended", "attempt": attempt,
-            "exit": 127, "timedOut": False, "signal": None,
-            "refusal": prep_refusal[:_STDERR_TAIL], "at": time.time(),
-        }):
+        if not _journal_prep_refusal(run_dir_real, attempt, prep_refusal):
             return False, "journal-append-failed"
         return True, ""
     argv, recorded = _derive_and_record_spawn_argv(
@@ -3483,6 +3484,28 @@ def _native_review_parser_refusal_forfeit(engagement, envelope, branch):
     return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
 
 
+def _verify_native_schema(opened, run_kind, expected_result_kind=None):
+    """Return (declared_schema, None) or (None, native-schema-unreadable)."""
+    engine = opened["engine"]
+    schema_path = opened.get("nativeSchemaPath")
+    if not schema_path or not os.path.isfile(schema_path) or os.path.islink(schema_path):
+        return None, "native-schema-unreadable"
+    try:
+        declared = engine_result_channel.declared_schema(
+            engine, run_kind, expected_result_kind)
+    except Exception:
+        return None, "native-schema-unreadable"
+    try:
+        with open(schema_path, encoding="utf-8") as fh:
+            on_disk = json.load(fh)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None, "native-schema-unreadable"
+    # axis: the write schema on disk must equal the declared one, or the attempt refuses native-schema-unreadable.
+    if on_disk != declared:
+        return None, "native-schema-unreadable"
+    return declared, None
+
+
 def _admit_native_write_result(run_dir_real, attempt, opened):
     """Single admission authority for codex's native write channel. Never raises."""
     obj, detail = _load_native_result_json(run_dir_real, attempt)
@@ -3493,37 +3516,12 @@ def _admit_native_write_result(run_dir_real, attempt, opened):
             "detail": detail,
         }
 
-    engine = opened["engine"]
-    schema_path = opened.get("nativeSchemaPath")
-    if not schema_path or not os.path.isfile(schema_path) or os.path.islink(schema_path):
+    declared, schema_err = _verify_native_schema(opened, RUN_KIND_WRITE)
+    if schema_err:
         return {
             "forfeit": True,
             "reason": dispatch_outcome.REASON_FORFEITED,
-            "detail": "native-schema-unreadable",
-        }
-    try:
-        declared = engine_result_channel.declared_schema(engine, RUN_KIND_WRITE)
-    except Exception:
-        return {
-            "forfeit": True,
-            "reason": dispatch_outcome.REASON_FORFEITED,
-            "detail": "native-schema-unreadable",
-        }
-    try:
-        with open(schema_path, encoding="utf-8") as fh:
-            on_disk = json.load(fh)
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return {
-            "forfeit": True,
-            "reason": dispatch_outcome.REASON_FORFEITED,
-            "detail": "native-schema-unreadable",
-        }
-    # axis: the write schema on disk must equal the declared one, or the attempt refuses native-schema-unreadable.
-    if on_disk != declared:
-        return {
-            "forfeit": True,
-            "reason": dispatch_outcome.REASON_FORFEITED,
-            "detail": "native-schema-unreadable",
+            "detail": schema_err,
         }
 
     ok, validation_reason, _validation_detail = engine_result_channel._validate_with_detail(
@@ -3588,23 +3586,10 @@ def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_
             "engagement": engagement,
         }
 
-    engine = opened["engine"]
     run_kind = opened.get("roleKind", RUN_KIND_REVIEW)
-    schema_path = opened.get("nativeSchemaPath")
-    if not schema_path or not os.path.isfile(schema_path) or os.path.islink(schema_path):
-        return _native_review_forfeit(engagement, "native-schema-unreadable")
-    try:
-        declared = engine_result_channel.declared_schema(
-            engine, run_kind, expected_result_kind)
-    except Exception:
-        return _native_review_forfeit(engagement, "native-schema-unreadable")
-    try:
-        with open(schema_path, encoding="utf-8") as fh:
-            on_disk = json.load(fh)
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return _native_review_forfeit(engagement, "native-schema-unreadable")
-    if on_disk != declared:
-        return _native_review_forfeit(engagement, "native-schema-unreadable")
+    declared, schema_err = _verify_native_schema(opened, run_kind, expected_result_kind)
+    if schema_err:
+        return _native_review_forfeit(engagement, schema_err)
 
     ok, validation_reason, _validation_detail = engine_result_channel._validate_with_detail(
         declared, envelope)
@@ -4192,8 +4177,6 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                                  "evidence": grade.get("evidence", {}), "attempts": latest},
                                 run_dir=run_dir_real, argv=argv,
                             )
-                            if "report" in grade:
-                                result["report"] = grade["report"]
                         elif item_check.get("evidenceUnavailable"):
                             cause = item_check.get("evidenceCause", "unknown")
                             result = _with_run_fields(
@@ -4231,9 +4214,9 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                                  "evidence": grade.get("evidence", {}), "attempts": latest},
                                 run_dir=run_dir_real, argv=argv,
                             )
-                            if "report" in grade:
-                                result["report"] = grade["report"]
                             result["itemCheck"] = item_check
+                        if "report" in grade:
+                            result["report"] = grade["report"]
                     else:
                         terminal_ok = {
                             "ok": True, "terminal": True,

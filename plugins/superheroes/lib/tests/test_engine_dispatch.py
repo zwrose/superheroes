@@ -10639,6 +10639,7 @@ def test_opened_channel_defaults_missing_key_to_marker():
     assert ED._opened_channel(opened) == ERC.CHANNEL_MARKER
 
 
+# axis: stale native result at attempt-2 path refuses spawn without mutating occupant.
 def test_native_stale_result_file_refuses_second_spawn(tmp_path):
     run_dir = str(tmp_path / "run")
     _manual_open_review_run(tmp_path, run_dir)
@@ -11009,6 +11010,7 @@ def _codex_native_runner(branch, stderr_tail=""):
     return runner
 
 
+# axis: _load_native_result_json reads a regular file with O_NOFOLLOW open.
 def test_load_native_result_json_reads_regular_file(tmp_path):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
@@ -11021,6 +11023,7 @@ def test_load_native_result_json_reads_regular_file(tmp_path):
     assert obj == payload
 
 
+# axis: _load_native_result_json O_NOFOLLOW open treats symlink as native-result-missing.
 def test_load_native_result_json_refuses_symlink_to_valid_file(tmp_path):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
@@ -11033,6 +11036,7 @@ def test_load_native_result_json_refuses_symlink_to_valid_file(tmp_path):
     assert detail == "native-result-missing"
 
 
+# axis: _load_native_result_json returns missing for fifo without blocking read.
 def test_load_native_result_json_fifo_returns_missing_without_blocking(tmp_path):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
@@ -11043,6 +11047,7 @@ def test_load_native_result_json_fifo_returns_missing_without_blocking(tmp_path)
     assert detail == "native-result-missing"
 
 
+# axis: _load_native_result_json treats directory and dangling symlink as native-result-missing.
 @pytest.mark.parametrize("plant", ["directory", "dangling_symlink"])
 def test_load_native_result_json_directory_and_dangling_symlink_are_missing(tmp_path, plant):
     run_dir = str(tmp_path / "run")
@@ -11057,6 +11062,7 @@ def test_load_native_result_json_directory_and_dangling_symlink_are_missing(tmp_
     assert detail == "native-result-missing"
 
 
+# axis: _load_native_result_json fstat size over NATIVE_RESULT_MAX_BYTES refuses oversized.
 def test_load_native_result_json_oversized(tmp_path):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
@@ -11067,17 +11073,29 @@ def test_load_native_result_json_oversized(tmp_path):
     assert obj is None
     assert detail == "native-result-oversized"
 
-    run_dir2 = str(tmp_path / "run2")
-    os.makedirs(run_dir2)
-    result_path2 = ED._native_result_path(run_dir2, 1)
-    with open(result_path2, "wb") as fh:
-        fh.write(b"x" * ERC.NATIVE_RESULT_MAX_BYTES)
-        fh.write(b"y")
-    obj2, detail2 = ED._load_native_result_json(run_dir2, 1)
-    assert obj2 is None
-    assert detail2 == "native-result-oversized"
+
+# axis: _load_native_result_json in-loop read-length guard refuses when fstat under-reports size.
+def test_load_native_result_json_oversized_by_read_length(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    result_path = ED._native_result_path(run_dir, 1)
+    with open(result_path, "wb") as fh:
+        fh.write(b"x" * (ERC.NATIVE_RESULT_MAX_BYTES + 1))
+    real_fstat = ED.os.fstat
+
+    def fake_fstat(fd):
+        st = real_fstat(fd)
+        fields = list(st)
+        fields[6] = ERC.NATIVE_RESULT_MAX_BYTES
+        return os.stat_result(fields)
+
+    monkeypatch.setattr(ED.os, "fstat", fake_fstat)
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert obj is None
+    assert detail == "native-result-oversized"
 
 
+# axis: _load_native_result_json malformed utf-8 and invalid json return native-result-malformed.
 def test_load_native_result_json_malformed_utf8_and_json(tmp_path):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
@@ -11098,6 +11116,7 @@ def test_load_native_result_json_malformed_utf8_and_json(tmp_path):
     assert detail2 == "native-result-malformed"
 
 
+# axis: _load_native_result_json symlink at result path forfeits review as native-result-missing.
 def test_grade_native_review_attempt_symlinked_result_forfeits_missing(tmp_path):
     branch = _native_review_branch("findings")
     run_dir, state = _native_review_grade_state(tmp_path, branch)
@@ -11113,6 +11132,7 @@ def test_grade_native_review_attempt_symlinked_result_forfeits_missing(tmp_path)
     assert grade.get("detail") == "native-result-missing"
 
 
+# axis: _spawn_native_result_argv os.lstat occupancy refusal leaves occupant inode untouched.
 @pytest.mark.parametrize("occupant", ["dangling_symlink", "symlink_to_file", "regular_file", "directory"])
 def test_spawn_native_result_argv_refuses_occupied_path(tmp_path, occupant):
     run_dir = str(tmp_path / "run")
@@ -11156,6 +11176,7 @@ def test_spawn_native_result_argv_refuses_occupied_path(tmp_path, occupant):
         assert open(result_path, encoding="utf-8").read() == regular_content
 
 
+# axis: review supervise never hands dangling symlink result path to engine via -o argv.
 def test_native_dangling_symlink_at_result_path_is_never_handed_to_engine(tmp_path):
     run_dir = str(tmp_path / "run")
     _manual_open_review_run(tmp_path, run_dir)
