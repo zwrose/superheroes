@@ -522,3 +522,55 @@ $ git status --porcelain -- plugins/superheroes/lib/round_driver.py
 1 passed in 7.48s
 ```
 
+
+## The semantic half — recorded seat runs (orchestrator, 2026-09-19)
+
+**Provenance:** the workhorse orchestrator (Claude Opus 5) dispatching the semantic seat as a native
+subagent at the `mechanical` role's registry cell (`haiku-4.5`, effort `medium`; `dispatch_guard.py
+check` exit 0), prompt = `rubric/orders/order-lint-semantic.md` at head `0feff589` plus the two
+trailing lines naming the order and the repository root. The seat is a detector with no code to
+neutralize: its bite-proof is a planted-defect order it must flag (red) beside a clean twin it must
+pass (green), plus the real C11 layer 3 specimen the deterministic half cannot catch. The
+deterministic half returns `{"ok": true, "findings": []}` on all three orders (run at head), so what
+fires below is the semantic seat alone. Local paths are the session's scratch directory, kept as
+written; nothing sensitive is in them.
+
+| ID | guarded element | axis | order | result |
+|---|---|---|---|---|
+| BP-OL-14 | item (b) — contradictory paragraphs; item (a) — duplicated items | a planted order carrying two budgets (4 vs 9 invocations) and two contradictory `check_text` contracts (raise vs never-raise) is flagged Important | `planted-semantic-order.md` (session scratch) | **red**: 2 Important findings, 29 s wall, 4 tool uses |
+| BP-OL-14 (green) | the same seat on the clean twin | the twin with the duplicate and the contradiction removed is passed | `clean-semantic-order.md` (session scratch) | **green**: 0 findings, non-empty `investigated`, 50 s wall, 6 tool uses |
+| BP-OL-15 | item (d) — dictated build provenance on a shipped surface | C11 layer 3's WO-C (the WO-C2 rework's cause: "did not pass its trial" dictated into `dispatch-mechanics.md`) is flagged Important | `lib/tests/fixtures/order_lint/c11_l3_wo_c.md` | **red (caught)**: 1 Important finding, 84 s wall, 15 tool uses |
+
+### BP-OL-14 — raw red (planted order)
+
+```json
+{"findings": [
+ {"severity": "Important", "title": "Contradictory requirements for check_text behavior",
+  "body": "Item 4 demands: 'Change `check_text` so that an unknown `kind` value raises `ValueError` immediately — a caller that passes a bad kind should see the exception, never a result dict.' Item 5 demands: '`check_text` must keep its never-raises contract: every failure, including an unknown `kind`, maps to a finding token and a result dict; the function never raises.' These requirements are mutually exclusive.",
+  "paragraph": "Item 4 — the module's public entry and Item 5 — the never-raises contract"},
+ {"severity": "Important", "title": "Conflicting budget constraints",
+  "body": "Item 1 states: 'Run at most 4 command invocations in total; the two pytest runs sit inside that budget.' Item 3 contradicts this: 'You may spend up to 9 command invocations; the budget is generous because the suite is slow.' The Commands section reiterates 'budget: at most 4 invocations' matching Item 1, creating ambiguity about which constraint applies.",
+  "paragraph": "Item 1 — the budget and Item 3 — the budget, restated"}],
+ "investigated": ["/tmp/review-KbCr0yBV/planted-semantic-order.md", "/tmp/review-KbCr0yBV/semantic-prompt-head.md", ".../plugins/superheroes/lib/order_lint.py", ".../plugins/superheroes/lib/tests/test_order_lint.py"]}
+```
+
+### BP-OL-14 — raw green (clean twin)
+
+```json
+{"findings": [], "investigated": ["/tmp/review-KbCr0yBV/clean-semantic-order.md", ".../plugins/superheroes/lib/order_lint.py", ".../plugins/superheroes/agents/implementer.md", ".../plugins/superheroes/lib/tests/test_order_lint.py"]}
+```
+
+### BP-OL-15 — raw red (C11 layer 3 WO-C, the WO-C2 rework's cause)
+
+```json
+{"findings": [{"severity": "Important", "title": "Order directs prose provenance to shipped surfaces, violating R29",
+  "body": "Item 1(b) orders adding to dispatch-mechanics.md: 'which is why the native move for cursor did not pass its trial' — a past trial outcome. Item 2 orders adding to TRANSITION.md: 'the two-dispatch trial's write dispatch validated, the review dispatch did not' — references to past experimental results. Both are project provenance forbidden by R29 (prose-standard.md \":210\"). The order cites R29 but then directs violations of it.",
+  "paragraph": "Item 1(b) and Item 2: prose provisions"}],
+ "investigated": [".../plugins/superheroes/lib/tests/fixtures/order_lint/c11_l3_wo_c.md", ".../plugins/superheroes/rubric/prose-standard.md"]}
+```
+
+The planted order and its clean twin are session scratch (the deterministic half's `check` on both:
+`{"ok": true, "findings": []}`); they are quoted here in full by their defects — two budgets, two
+`check_text` contracts — rather than committed as fixtures, because a fixture the seat has seen
+in the repository is not a control. The `...` in `investigated` elides the worktree's absolute
+prefix only.
