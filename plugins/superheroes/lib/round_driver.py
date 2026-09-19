@@ -2523,9 +2523,17 @@ def _fix_batch_row_key(row):
 
 
 def _history_row_key(row):
-    """Identity of one durable history row (judgment log / audit record) — the leaf's one
-    derivation: the stamped marker when present, else the row's own content. Never `id`."""
+    """Identity of one durable history row (judgment log / audit record): the stamped
+    findingKey marker when present; else the leaf's content derivation when the row carries a
+    location and a label; else None. Never `id`."""
     if not isinstance(row, dict):
+        return None
+    marker = row.get(session_contract.FINDING_KEY_FIELD)
+    if isinstance(marker, str) and marker:
+        return marker
+    if row.get("file") is None or row.get("line") is None:
+        return None
+    if not finding_label(row):
         return None
     return session_contract.finding_identity_key(row)
 

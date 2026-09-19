@@ -274,6 +274,31 @@ def test_apply_audit_results_copies_target_finding_key_marker():
     assert SC.FINDING_KEY_FIELD not in unmarked_row
 
 
+def test_history_row_key_refuses_unkeyable_guidance_and_content_keys_legacy_audit(tmp_path):
+    """T9: guided row without marker/location refuses; marker-less audit keys by content."""
+    state = _specimen_state(tmp_path)
+    state["rounds"]["1"]["judgmentDispositions"] = [
+        {"id": "x", "title": "t", "disposition": "fix-with-guidance",
+         RD.GATE_GUIDANCE_RECORD_KEY: "g"},
+    ]
+    with pytest.raises(ValueError, match="order-render-refused:gate-guidance-unusable"):
+        _fixer_render(tmp_path, state)
+
+    legacy_audit = {"id": "v0", "ruling": "not-discharged", "reason": "legacy reason",
+                    "file": "g.py", "line": 5, "title": "guard missing"}
+    state2 = {
+        "_fixBatch": [{"title": "guard missing", "file": "g.py", "line": 5}],
+        "rounds": {"2": {"audits": [legacy_audit]}},
+    }
+    session_dir = str(tmp_path / "legacy-audit-session")
+    os.makedirs(session_dir, exist_ok=True)
+    path = RD._ensure_fix_batch_file(session_dir, 3, state2)
+    with open(path, encoding="utf-8") as fh:
+        materialized = json.loads(fh.read())
+    assert materialized[0]["priorAudit"]["ruling"] == "not-discharged"
+    assert materialized[0]["priorAudit"]["reason"] == "legacy reason"
+
+
 def test_history_readers_never_key_by_row_id_census():
     """CENSUS: history readers derive keys via the leaf, never row id."""
     func_names = ("_finding_history", "_validate_gate_guidance_logs", "_gate_guidance_entries")
