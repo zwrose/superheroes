@@ -1362,9 +1362,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 #### S1 — Dispatch stdout cap
 
 - **Component.** Not a census row. The engine write dispatch stdout capture cap in
-  `engine_dispatch.py` (`MAX_STDOUT_CAPTURE`, 8 MiB): when engine stdout exceeds the budget, the
-  terminal forfeit carries `stdout-capped-by-attempt` and declared-item grading never runs on work
-  that already landed.
+  `engine_dispatch.py` (`MAX_STDOUT_CAPTURE`, 8 MiB) for **marker-channel engines only (cursor,
+  claude)**: when engine stdout exceeds the budget, the terminal forfeit carries
+  `stdout-capped-by-attempt` and declared-item grading never runs on work that already landed.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite the
   stdout capture cap or `stdout-capped-by-attempt` as the loss mechanism — a zero count means long
   dispatches are staying inside the budget, not that the cap is gone. On firing, a proposal to the
@@ -1375,14 +1375,17 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — external engines paste long receipts; the cap bounds what the runner
-  can grade (Cursor-family implementers observed on weekly-eats dispatches).
+  can grade (Cursor-family implementers observed on weekly-eats dispatches). Retired for codex
+  2026-09-19 — codex's result is a typed file on its native channel; the cap forfeit never runs for
+  a native-channel run.
 
 #### S2 — Dispatch salvage paths
 
-- **Component.** Not a census row. The salvage recoveries when a dispatch ends in a forfeit but left
-  a readable artifact: review `forfeit-with-engaged-artifact` salvage, write-report salvage
-  (structured tail and prose tier), and `report-missing-items-delivered` work-on-disk doctrine
-  (`engine_dispatch.py`, `engine_adapter.py`, `dispatch-mechanics.md`).
+- **Component.** Not a census row. The salvage recoveries for **marker-channel engines only (cursor,
+  claude)** when a dispatch ends in a forfeit but left a readable artifact: review
+  `forfeit-with-engaged-artifact` salvage, write-report salvage (structured tail and prose tier),
+  and `report-missing-items-delivered` work-on-disk doctrine (`engine_dispatch.py`,
+  `engine_adapter.py`, `dispatch-mechanics.md`).
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite a
   salvage block or manual artifact read recovering work from a terminal forfeit. On firing, a
   proposal to the owner at a gardening pass.
@@ -1392,7 +1395,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — salvage exists because engine stdout and host turn limits destroy
-  gradeable reports while work survives on disk (Cursor `NonRetriableError` class).
+  gradeable reports while work survives on disk (Cursor `NonRetriableError` class). Retired for codex
+  2026-09-19 — codex's result is a typed file on its native channel; the salvage tiers and the
+  engaged-artifact upgrade never run for a native-channel run.
 
 #### S3 — Dirty-tree probe
 
@@ -1699,6 +1704,29 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** structural — a seat will always have to pick up from durable state, whatever the host does.
   Arrives with issue #1311. S16's duplicate-loop check retires with the wave watcher if reset child
   C15 (#1274) deletes it.
+
+#### S17 — Codex native result-channel admission
+
+- **Component.** Not a census row; the one admission authority for a codex run's result — the
+  declared schema per run kind (`engine_result_channel.declared_schema`), written to the run dir at
+  open and re-compared at grade; the fd-based result loader; schema validation; the semantic refusals
+  (`native-result-report-blank`, the hollow-member checks the adapter owns); the spawn-side
+  `native-result-path-occupied` and `marker-channel-retired` refusals (`engine_dispatch.py`,
+  `engine_result_channel.py`, `engine_adapter.py`). Scope is by construction: the engine set is the
+  closed `_CHANNEL_BY_ENGINE` map.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute or incident receipts that cite a
+  `native-result-*` or `native-schema-unreadable` refusal as the reason a live codex dispatch was
+  lost, **or** a second schema or adapter fix on the native channel within one release — either
+  fires a proposal at the next gardening pass (drop the channel, or accept the cost); a zero count
+  means codex is returning typed results that validate.
+- **Last demonstrated benefit.** Live codex review and write dispatches through the build checkout's
+  runner returned typed, schema-valid results; a blank write `report` returned by the live engine was
+  refused rather than graded.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — the engine's own structured-output flag replaces our marker parser; the
+  adapter's non-blank checks remain because the strict-mode schema dialect cannot express a minimum
+  length. Tag the entry `native-channel`.
 
 
 ## The workaround-marker inventory

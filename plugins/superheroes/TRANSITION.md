@@ -152,13 +152,38 @@ if "class" in result:
     ...
 ```
 
-### Codex dispatch channel
+### Codex result channel
 
-Codex review and write dispatches now run with **`--json`** and **`--output-last-message`**. Engagement
-is read from codex's own JSONL event stream (`engagement.source` is `codex-events` when tool-call
-telemetry parses). The review findings payload is read from the **last-message file**
-(`codex_review_payload_text`); the event stream's last `agent_message` item is the fallback when the
-file is absent.
+Codex review and write dispatches now return their result as a **typed JSON file** on
+`--output-schema` and `-o`. The spawn argv is the opened argv plus `--json` (inserted once, before
+`-o`) and `-o <run-dir>/native-result-<N>.json --output-schema <run-dir>/native-schema.json`, where
+`N` is the attempt number. Stdout is telemetry only — the runner never scans it for a result.
 
-Consumers that parsed review output from codex stdout must read the last-message file (or the
-structured event stream) instead of treating raw stdout as the findings payload.
+The `run-opened` journal record carries `channel` (`"native"` or `"marker"`) and, on native,
+`nativeSchemaPath` (`<run-dir>/native-schema.json`, the declared schema written at open). A resumed
+run that predates the field reads as marker.
+
+On a successful codex write, the terminal result carries `report` (the scrubbed report text). On
+forfeit, it carries `detail` from the native admission vocabulary: `native-schema-unreadable`,
+`native-result-missing`, `native-result-oversized`, `native-result-malformed`,
+`native-result-schema-invalid`, `native-result-report-blank`, `native-result-path-occupied`, or
+`marker-channel-retired`. The dirty-tree forfeit keeps `detail: worktree-dirtied-by-attempt` and
+carries `attemptDetail`.
+
+A codex consumer will no longer see: a `salvage` block, `forfeit-with-engaged-artifact` (the
+terminal stays `forfeited` with its `native-result-*` detail), `stdout-capped-by-attempt`,
+`report-missing-items-delivered` reclassification, or `itemCheck` on a forfeit. `--output-last-message`
+and the `attempt-N.last-message` file are gone. A codex run whose opened record is marker (a persisted
+pre-upgrade run) never spawns again — its attempt ends with `marker-channel-retired` and the run
+forfeits.
+
+Every write run now records `echoNonce` at open, so `run_execution_record` returns `runnerNonce` for
+a write run (a resumed pre-upgrade write run without it still answers `runner-nonce-missing`).
+
+The verifier verdict contract requires `reason` as a non-blank string on every ingest path
+(`payload_contracts` P_VERIFIERS); hand-submitted verifier artifacts are checked against the same
+contract. A whitespace-only `id`, `verdict`, or `reason` faults.
+
+Consumers that read codex findings from the last-message file or the event stream read the typed
+result file (or the folded `dispatch-review` result) instead; consumers that relied on a write
+salvage block on codex reconstruct from the worktree diff.

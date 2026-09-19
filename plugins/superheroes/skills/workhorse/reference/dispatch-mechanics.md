@@ -6,6 +6,7 @@
 4. [Mutation probes — own detached worktree](#mutation-probes--own-detached-worktree)
 5. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
 6. [Supervised review dispatch](#supervised-review-dispatch)
+   - [Result channels](#result-channels)
 7. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
 8. [Supervised write dispatch](#supervised-write-dispatch)
 9. [Declared items](#declared-items)
@@ -197,6 +198,35 @@ documents the runner's result mechanics — read both before authoring seat prom
 the at-dispatch-time summary only. For the full CLI argument surface, read
 `skills/workhorse/reference/dispatch-entry.md`.
 
+### Result channels
+
+Dispatch runs on one of two result channels. **Codex** uses the **native** channel; **cursor** and
+**claude** use the **marker** channel.
+
+On the native channel, the output adapter reads a typed result file validated against the declared
+schema at `<run-dir>/native-schema.json`. Admission requires: the schema on disk must equal the
+declared one (`native-schema-unreadable` otherwise); the file must be a regular file within the size
+cap that decodes as JSON (`native-result-missing`, `native-result-oversized`,
+`native-result-malformed`); it must validate against the declared schema
+(`native-result-schema-invalid`); on a write, its `report` must be non-blank
+(`native-result-report-blank`); and an entry already at the result path when an attempt would spawn
+refuses that attempt (`native-result-path-occupied`). Every refusal is a forfeit or an attempt
+refusal — the runner never scans stdout for a result and never repairs a malformed file.
+
+Completion is the process exit plus the typed file; a missing or invalid file forfeits. Progress and
+engagement telemetry come from codex's JSONL event stream on `--json` (`engagement.source:
+"codex-events"`, `telemetry: "tool-calls"`). Stdout is telemetry, never a result, on native.
+
+A native-channel run never receives marker-channel recoveries: no `salvage` block, no
+`forfeit-with-engaged-artifact`, no `stdout-capped-by-attempt` forfeit, and no
+`report-missing-items-delivered` reclassification or `itemCheck` on a forfeit. A codex run whose
+opened record is marker (a persisted pre-upgrade run) never spawns again — its attempt ends with
+`marker-channel-retired` and the run forfeits.
+
+The journal writes two `engine-launching` records per attempt: the first (from the run child's
+entry) carries `argv`, the opened argv; the second carries `spawnArgv`, the argv the engine actually
+received. A reader trusts `spawnArgv`.
+
 ### Findings-only review prompts
 
 A review prompt that constrains the seat's stdout to a **single JSON object** must also require a
@@ -277,8 +307,10 @@ dispatch produced a Critical finding.
 carry. It **is a forfeit** (`ok: false`, `forfeited: true`, `terminal: true`) and every existing
 rule about a terminal forfeit applies unchanged — including the three-case reviewer-loss rule in
 `rubric/review-discipline.md` (a `forfeit-with-engaged-artifact` is one of those terminal forfeits,
-not an exception to them). What is different is what you know: the result carries **`salvage`** with
-the artifact's location and shape (`stdoutPath`, `shape`, and when structured, `findings`).
+not an exception to them). This outcome and its `salvage` block exist for marker-channel seats only;
+a native-channel seat's forfeit carries its `native-result-*` detail and no salvage. What is
+different is what you know: the result carries **`salvage`** with the artifact's location and shape
+(`stdoutPath`, `shape`, and when structured, `findings`).
 
 **Salvage rule — findings only, never the seat.** The seat is not credited, not counted toward panel
 composition, and not a substitute for a re-dispatch. Each claim you take from the artifact is
@@ -483,6 +515,9 @@ implementer path and not review-code's in-place fixer path.
 
 ### Write-report contract
 
+This contract is the **marker channel's**; on the native channel the runner appends a contract
+derived from the declared write schema instead and the sentinel plays no part.
+
 On every `dispatch-write` call, the runner **appends** a write-report contract to the caller's
 prompt — the caller does not author it and cannot opt out. It is **additional to** the prose receipts
 the order asks for, never a replacement: the engine still returns those receipts, then ends with a
@@ -514,19 +549,20 @@ a forfeit but never upgrade or relabel a failure. When nothing was declared, beh
 no `baselineDirty` capture, no `itemCheck` key. When declared, a passing result includes
 `itemCheck` (`declared`, `expected`, `delivered`, `missing`). Terminal detail tokens:
 `items-undelivered` (one or more paths missing; this forfeit **does** carry `itemCheck`);
-`report-missing-items-delivered` (the attempt ended cleanly — exit 0, not timed out, not refused — on
-a contracted prompt with no readable report, a **non-empty** declared set via `--expect-item` /
-`--expect-items-file`, and **every** declared path present in the delivery evidence; this forfeit
-**does** carry `itemCheck` with all paths delivered); and `item-evidence-unavailable:<cause>` (git
+`report-missing-items-delivered` on marker-channel runs (the attempt ended cleanly — exit 0, not
+timed out, not refused — on a contracted prompt with no readable report, a **non-empty** declared
+set via `--expect-item` / `--expect-items-file`, and **every** declared path present in the delivery
+evidence; this forfeit **does** carry `itemCheck` with all paths delivered); and
+`item-evidence-unavailable:<cause>` (git
 evidence could not be collected — causes include `falsy-base-sha`, `diff-timeout`, `diff-failed`,
 `status-timeout`, `status-failed`). Open-time `unrunnable` detail `base-sha-unresolvable` refuses
 when a declared run's `--base-sha` does not resolve. A dispatch that declares nothing cannot earn
 `report-missing-items-delivered` and keeps the ordinary fail-closed details (`worktree-dirtied-by-attempt`
 and the rest) — declaring items is what buys the distinction. Other forfeits, `unrunnable`, and
-`worktree-dirtied-by-attempt` never carry `itemCheck`. When engine stdout exceeds the **8 MiB
-capture cap**, the terminal forfeit carries a **stdout-capture-cap** reason class of its own (exact
-detail token pinned by sibling order WO-B) with an explicit truncation marker in the captured stdout —
-it no longer surfaces under `worktree-dirtied-by-attempt`. Every forfeit detail above remains `ok: false`,
+`worktree-dirtied-by-attempt` never carry `itemCheck`. On marker-channel runs, when engine stdout
+exceeds the **8 MiB capture cap**, the terminal forfeit carries a **stdout-capture-cap** reason class
+of its own (exact detail token pinned by sibling order WO-B) with an explicit truncation marker in
+the captured stdout — it no longer surfaces under `worktree-dirtied-by-attempt`. Every forfeit detail above remains `ok: false`,
 `forfeited: true` — `report-missing-items-delivered` renames a condition; it never converts a forfeit
 into a success.
 
@@ -544,9 +580,10 @@ completeness, or that the order's intent was met. Its purpose is to tell an orch
 re-run work that already landed** — reconstruct the change from the diff and re-verify it, never
 assume the order is done.
 
-When a terminal write result includes `salvage`, it carries a recoverable implementer report from an
-ended attempt's stdout — the contracted final tail when the runner appended the write-report contract,
-or a prose tier when strict tail grading could not extract structured JSON. The outcome remains a
+On marker-channel runs, when a terminal write result includes `salvage`, it carries a recoverable
+implementer report from an ended attempt's stdout — the contracted final tail when the runner
+appended the write-report contract, or a prose tier when strict tail grading could not extract
+structured JSON. The outcome remains a
 forfeit; its contents are the implementer's claims and must be independently re-verified before use.
 Write salvage has two tiers: a structured report is gradeable only after that independent
 verification, while a prose-tier block has `requiresManualRead: true` and a scrubbed `excerpt` for a
