@@ -7332,6 +7332,9 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
     if result_kind == session_contract.WRITE_RESULT_KIND:
         pass
     else:
+        if not isinstance(envelope_payload, dict):
+            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                       "resultKind": result_kind}
         carried, subject = engine_adapter.review_payload_carried(
             _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload),
             result_kind)

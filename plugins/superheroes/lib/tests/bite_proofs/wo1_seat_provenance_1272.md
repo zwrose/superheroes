@@ -548,3 +548,89 @@ assert 'no dispatch-manifest entry for this target' in "audit result for f.py::b
 .                                                                        [100%]
 1 passed in 5.85s
 ```
+
+
+## G10 (WO-R6) — `_assemble_dispatch_evidence` non-object payload guard
+
+**Guarded element:** `round_driver._assemble_dispatch_evidence`, the `isinstance(envelope_payload, dict)` guard before `_runner_shaped_result`. **Axis:** a dispatch-observed envelope whose payload is not an object is refused `evidence-result-mismatch`, never raised as `TypeError`. Proof run by the WO-R6 implementer (cursor composer-2.5) with the detector unedited; captures carried here from its return.
+
+**Red** (guard deleted):
+
+**Rule:** Budget slot 2 / bite-proof red half.
+
+Neutralization (deleted guard in `_assemble_dispatch_evidence`):
+
+```python
+        if not isinstance(envelope_payload, dict):
+            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                       "resultKind": result_kind}
+```
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_dispatch_observed_non_object_payload_refuses_evidence_binding ______
+
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-490/test_dispatch_observed_non_obj0')
+
+    def test_dispatch_observed_non_object_payload_refuses_evidence_binding(tmp_path):
+        """A dispatch-observed envelope whose payload is not a dict is refused, never raised."""
+        order_path = str(tmp_path / "panel-order.txt")
+        with open(order_path, "w", encoding="utf-8") as fh:
+            fh.write("Review the panel findings.\n")
+        panel_findings = [{"dimension": "d", "taxonomy": "t", "title": "x"}]
+        run_dir = _TDI._execution_run_dir(tmp_path, order_path, panel_findings)
+        record, err = engine_dispatch.run_execution_record(run_dir)
+        assert err is None, err
+        session_dir = str(tmp_path / "session")
+        os.makedirs(session_dir, exist_ok=True)
+        base_envelope = {"phase": RD.P_PANEL, "orderSha256": record["orderPromptSha256"]}
+        for bad_payload in ([], "x", None):
+            envelope = dict(base_envelope, payload=bad_payload)
+>           assembled, refusal, extra = RD._assemble_dispatch_evidence(
+                session_dir, envelope, run_dir)
+
+plugins/superheroes/lib/tests/test_seat_provenance_1272.py:512: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+plugins/superheroes/lib/round_driver.py:7336: in _assemble_dispatch_evidence
+    _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload),
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+phase = 'dispatch-panel', result_kind = 'findings', envelope_payload = []
+
+    def _runner_shaped_result(phase, result_kind, envelope_payload):
+        ...
+        if declared in ("list-of-objects", "nullable-list-of-objects"):
+>           return {"ok": True, "resultKind": result_kind, **envelope_payload}
+E           TypeError: 'list' object is not a mapping
+
+plugins/superheroes/lib/round_driver.py:7308: TypeError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_dispatch_observed_non_object_payload_refuses_evidence_binding
+1 failed in 0.45s
+```
+
+**Green** (guard restored by the inverse edit):
+
+**Rule:** Budget slot 3 / bite-proof green half.
+
+**Restore receipt (quoted lines):**
+
+```python
+        if not isinstance(envelope_payload, dict):
+            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                       "resultKind": result_kind}
+```
+
+```
+.                                                                        [100%]
+1 passed in 0.34s
+```
+
+**Supplementary `git status --porcelain` after restore:**
+
+```
+ M plugins/superheroes/lib/round_driver.py
+ M plugins/superheroes/lib/tests/test_seat_provenance_1272.py
+```
+

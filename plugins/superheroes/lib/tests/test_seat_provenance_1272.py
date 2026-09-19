@@ -495,6 +495,27 @@ def test_evidence_digest_subject_follows_runner_semantics():
         assert round_records.payload_sha256(subject) == digest
 
 
+def test_dispatch_observed_non_object_payload_refuses_evidence_binding(tmp_path):
+    """A dispatch-observed envelope whose payload is not a dict is refused, never raised."""
+    order_path = str(tmp_path / "panel-order.txt")
+    with open(order_path, "w", encoding="utf-8") as fh:
+        fh.write("Review the panel findings.\n")
+    panel_findings = [{"dimension": "d", "taxonomy": "t", "title": "x"}]
+    run_dir = _TDI._execution_run_dir(tmp_path, order_path, panel_findings)
+    record, err = engine_dispatch.run_execution_record(run_dir)
+    assert err is None, err
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir, exist_ok=True)
+    base_envelope = {"phase": RD.P_PANEL, "orderSha256": record["orderPromptSha256"]}
+    for bad_payload in ([], "x", None):
+        envelope = dict(base_envelope, payload=bad_payload)
+        assembled, refusal, extra = RD._assemble_dispatch_evidence(
+            session_dir, envelope, run_dir)
+        assert assembled is None
+        assert refusal == "evidence-result-mismatch"
+        assert extra == {"resultDigest": record["resultDigest"], "resultKind": record["resultKind"]}
+
+
 def test_dispatch_observed_audit_seat_binds_runner_evidence_end_to_end(tmp_path):
     """Positive-path dispatch-observed audits test the round-1 test seat asked for."""
     session_dir, gitdir, _head_path = _drive_to_audits(tmp_path, name="dispatch-audit-bind")
