@@ -7,8 +7,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
-
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -71,17 +69,10 @@ def _expected_subcommand_labels():
 
 def test_generated_doc_matches_committed_file():
     # bite-axis: the generated doc matches the declaration.
-    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".md") as fh:
-        tmp_path = fh.name
-    try:
-        text = DED.generate()
-        with open(tmp_path, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        with open(_COMMITTED, encoding="utf-8") as fh:
-            committed = fh.read()
-        assert text == committed
-    finally:
-        os.unlink(tmp_path)
+    text = DED.generate()
+    with open(_COMMITTED, encoding="utf-8") as fh:
+        committed = fh.read()
+    assert text == committed
 
 
 def test_generator_idempotent():
@@ -241,4 +232,5 @@ def test_format_default_param_unset_distinct_from_none():
             self.default = default
 
     assert DED._format_default(_Action(None)) == "none"
+    assert repr(DED.engine_dispatch._PARAM_UNSET) != "none"
     assert DED._format_default(_Action(DED.engine_dispatch._PARAM_UNSET)) == "runtime (see Variance envelope)"

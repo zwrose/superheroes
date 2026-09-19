@@ -70,6 +70,7 @@ import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
 import order_lint  # noqa: E402
 import panel_tally  # noqa: E402
+import payload_contracts  # noqa: E402
 import review_base_guard  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
@@ -1893,6 +1894,32 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
     return {"byDim": by_dim, "byVendor": by_vendor}
 
 
+def _canary_by_dim(live):
+    """Per-dimension canary plan from ``canary_liveness``; empty when unreadable."""
+    if not isinstance(live, dict):
+        return {}
+    raw = live.get("byDim")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _canary_dims_for_status(live, by_vendor, status):
+    """Dimensions with ``status`` in the canary plan; vendor fallback when byDim is unreadable."""
+    by_dim = _canary_by_dim(live)
+    vendor_dims = []
+    for info in (by_vendor or {}).values():
+        if not isinstance(info, dict) or info.get("status") != status:
+            continue
+        seats = info.get("seats") if isinstance(info.get("seats"), list) else []
+        vendor_dims.extend(d for d in seats if isinstance(d, str))
+    if by_dim:
+        from_dim = {
+            dim for dim, st in by_dim.items()
+            if isinstance(dim, str) and st == status
+        }
+        return sorted(from_dim | set(vendor_dims))
+    return sorted(set(vendor_dims))
+
+
 def _normalize_canary_probes(canary_raw):
     if isinstance(canary_raw, dict):
         return [canary_raw]
@@ -2033,23 +2060,20 @@ def _fold_panel(state, config, artifact):
     live = canary_liveness(
         _panel_dimensions(config), seat_status, seats, _sm_for_canary,
         ran_manifest_canary, artifact.get("canaryResult"))
-    unverified_dims = []
+    by_vendor = live.get("byVendor") if isinstance(live, dict) else {}
+    if not isinstance(by_vendor, dict):
+        by_vendor = {}
+    unverified_dims = _canary_dims_for_status(live, by_vendor, "unproven")
+    dead_dims = _canary_dims_for_status(live, by_vendor, "dead")
     failed_vendors = {}
     outcome_failed_vendors = {}
     plant_undetected_vendors = {}
     verified_by_vendor = {}
-    for vendor, info in (live.get("byVendor") or {}).items():
+    for vendor, info in by_vendor.items():
         if not isinstance(info, dict):
             continue
         st = info.get("status")
-        vdims = info.get("seats") if isinstance(info.get("seats"), list) else []
-        if st == "unproven":
-            unverified_dims.extend(vdims)
-        elif st == "dead":
-            for dim in vdims:
-                if dim not in missing_dims:
-                    missing_dims.append(dim)
-                seat_status[dim] = "missing"
+        if st == "dead":
             failed_vendors[vendor] = info
         elif st == "outcome-failed":
             outcome_failed_vendors[vendor] = info
@@ -2059,6 +2083,10 @@ def _fold_panel(state, config, artifact):
         elif st == "proven":
             ev = info.get("evidence")
             verified_by_vendor[vendor] = ev if isinstance(ev, dict) else {}
+    for dim in dead_dims:
+        if dim not in missing_dims:
+            missing_dims.append(dim)
+        seat_status[dim] = "missing"
     if unverified_dims:
         canary_panel_gap = True
         _record_round(state, "canaryUnverified", sorted(set(unverified_dims)))
@@ -2941,6 +2969,9 @@ def verifier_results_fault(artifact):
         return ("verifiers artifact `verdicts` is %s, not a list; expected {\"verdicts\": [...]}; "
                 "resubmit the same phase/attempt/state-hash with a corrected artifact"
                 % type(verdicts).__name__)
+    fault = payload_contracts.payload_fault(payload_contracts.P_VERIFIERS, artifact, "hand-submit")
+    if fault is not None:
+        return fault
     return None
 
 
@@ -4330,7 +4361,11 @@ def _run_seam(seams, action, payload, state, config):
                 out["canaryResult"] = cr
         return out
     if action == P_VERIFIERS:
-        return {"verdicts": seams["verifier"](payload.get("clusters"), state["round"])}
+        artifact = {"verdicts": seams["verifier"](payload.get("clusters"), state["round"])}
+        fault = verifier_results_fault(artifact)
+        if fault is not None:
+            return {"verdicts": [], "_verifierArtifactFault": fault}
+        return artifact
     if action == P_SYNTHESIS:
         return {"grouping": seams["synthesis"](payload.get("findings"), state["round"])}
     if action == P_GAPSWEEP:
@@ -4754,6 +4789,19 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     return None
 
 
+def _loop_verifier_artifact_faults(state):
+    """Collect per-round verifierArtifactFault disclosures for run_loop observables."""
+    faults = []
+    for key in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
+        rec = state["rounds"][key]
+        fault = rec.get("verifierArtifactFault")
+        if isinstance(fault, list):
+            faults.extend(fault)
+        elif isinstance(fault, dict):
+            faults.append(fault)
+    return faults
+
+
 def _attach_loop_observables_to_refusal(refusal, state):
     """Add loop observables — what the loop reached, not certification claims.
 
@@ -4767,6 +4815,9 @@ def _attach_loop_observables_to_refusal(refusal, state):
         loop_receipt = build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED)
         refusal["loopCertificationShape"] = loop_receipt.get("certificationShape")
         refusal["loopRounds"] = loop_receipt.get("rounds") or []
+        faults = _loop_verifier_artifact_faults(state)
+        if faults:
+            refusal["verifierArtifactFault"] = faults
     return refusal
 
 
@@ -4832,6 +4883,11 @@ def run_loop(seams, config=None):
                 break
             # handle the gap-sweep re-entry (verifiers → synthesis carries the merge back).
             artifact = _run_seam(seams, action, step["payload"], state, state["config"])
+            if action == P_VERIFIERS and isinstance(artifact, dict):
+                fault = artifact.pop("_verifierArtifactFault", None)
+                if fault is not None:
+                    _record_round_append(state, "verifierArtifactFault",
+                                         {"fault": fault, "round": state["round"]})
             _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
             _persist_round_records(state, state["config"])
             # a delta round routes scoped candidates through verifiers; when that path is armed the

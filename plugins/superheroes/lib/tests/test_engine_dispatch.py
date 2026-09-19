@@ -78,7 +78,22 @@ def _install_fake_codex(monkeypatch, tmp_path, script_body):
     monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
 
 
+def _install_fake_cursor(monkeypatch, tmp_path, script_body):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_cursor = fake_bin / "cursor-agent"
+    fake_cursor.write_text("#!/usr/bin/env python3\n" + script_body, encoding="utf-8")
+    fake_cursor.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+
+
 def _codex_argv_for_run(seat, role_kind, cwd):
+    built = EA.build_argv_result(seat, role_kind, {"cwd": cwd})
+    assert built["reason"] is None, built
+    return built["argv"]
+
+
+def _cursor_argv_for_run(seat, role_kind, cwd):
     built = EA.build_argv_result(seat, role_kind, {"cwd": cwd})
     assert built["reason"] is None, built
     return built["argv"]
@@ -88,24 +103,72 @@ def _journal_codex_run_for_engine_files(
     run_dir, prompt_path, *, seat, role_kind, run_kind,
 ):
     argv = _codex_argv_for_run(seat, role_kind, run_dir)
-    ED._journal_append(run_dir, {
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "codex", list(argv), run_kind,
+    )
+    assert native_err is None, native_err
+    record = {
         "kind": "run-opened", "runKind": run_kind, "engine": "codex",
         "roleKind": role_kind, "orderId": "x", "argv": argv,
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE,
         "supervisorPid": 1, "at": time.time(),
         "resolvedInputs": _spawn_gate_resolved_inputs(seat),
-    })
+    }
+    if native_schema_path is not None:
+        record["nativeSchemaPath"] = native_schema_path
+    ED._journal_append(run_dir, record)
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
     })
     return argv
 
 
+def _journal_cursor_run_for_engine_files(
+    run_dir, prompt_path, *, seat, role_kind, run_kind,
+):
+    argv = _cursor_argv_for_run(seat, role_kind, run_dir)
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", list(argv), run_kind,
+    )
+    assert native_err is None, native_err
+    record = {
+        "kind": "run-opened", "runKind": run_kind, "engine": "cursor",
+        "roleKind": role_kind, "orderId": "x", "argv": argv,
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    if native_schema_path is not None:
+        record["nativeSchemaPath"] = native_schema_path
+    ED._journal_append(run_dir, record)
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    return argv
+
+
+def _resolve_native_result_path(argv, prompt_bytes=None):
+    if "-o" in argv:
+        return argv[argv.index("-o") + 1]
+    if prompt_bytes is not None:
+        return ERC.result_file_path_from_prompt(
+            prompt_bytes.decode("utf-8", "ignore"))
+    return None
+
+
 _EA = importlib.util.spec_from_file_location(
     "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
 EA = importlib.util.module_from_spec(_EA)
 _EA.loader.exec_module(EA)
+
+_ERC = importlib.util.spec_from_file_location(
+    "engine_result_channel", os.path.join(_HERE, "..", "engine_result_channel.py"))
+ERC = importlib.util.module_from_spec(_ERC)
+_ERC.loader.exec_module(ERC)
 
 _SV = importlib.util.spec_from_file_location(
     "sanitized_view", os.path.join(_HERE, "..", "sanitized_view.py"))
@@ -258,6 +321,30 @@ def _is_codex_event_stream(stdout):
     return False
 
 
+def _last_agent_message_text(stdout):
+    """Last item.completed agent_message text from a codex event stream."""
+    if not isinstance(stdout, str) or not stdout:
+        return None
+    last_text = None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(obj, dict) or obj.get("type") != "item.completed":
+            continue
+        item = obj.get("item")
+        if not isinstance(item, dict) or item.get("type") != "agent_message":
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text:
+            last_text = text
+    return last_text
+
+
 def _wrap_codex_fake_stdout(argv, stdout):
     if not isinstance(stdout, str) or not stdout.strip():
         return stdout
@@ -270,21 +357,6 @@ def _wrap_codex_fake_stdout(argv, stdout):
     return _codex_event_stream(stdout)
 
 
-def _write_codex_last_message(argv, payload_text):
-    if "--output-last-message" not in argv:
-        return
-    idx = argv.index("--output-last-message")
-    if idx + 1 >= len(argv):
-        return
-    path = argv[idx + 1]
-    try:
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(payload_text)
-    except OSError:
-        pass
 _VALID_VERDICTS_STDOUT = json.dumps({
     "verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test"}],
 })
@@ -308,6 +380,175 @@ def _repo(tmp_path, git_as_file=True):
     return str(root)
 
 
+def _legacy_investigated(obj):
+    value = obj.get("investigated")
+    return value if isinstance(value, list) else None
+
+
+def _legacy_overlay_findings(raw_list):
+    template_fs = _native_review_branch("findings")["findings"]
+    findings = []
+    for index, raw in enumerate(raw_list or []):
+        if not isinstance(raw, dict):
+            findings.append(raw)
+            continue
+        member = dict(template_fs[min(index, len(template_fs) - 1)])
+        for key, val in raw.items():
+            if key == "message":
+                member["body"] = val
+            elif key in member:
+                member[key] = val
+        findings.append(member)
+    return findings
+
+
+def _legacy_overlay_verdicts(raw_list):
+    template_vs = _native_review_branch("verdicts")["verdicts"]
+    verdicts = []
+    for index, raw in enumerate(raw_list or []):
+        member = dict(template_vs[min(index, len(template_vs) - 1)])
+        if isinstance(raw, dict):
+            member.update(raw)
+        verdicts.append(member)
+    return verdicts
+
+
+def _legacy_stdout_to_native_review_branch(stdout):
+    """Map legacy marker-channel stdout JSON into a native review branch envelope."""
+    if not isinstance(stdout, str):
+        raise TypeError("stdout must be str")
+    stripped = stdout.strip()
+    if not stripped:
+        raise ValueError("empty-stdout")
+    if stripped == "not json":
+        raise ValueError("not-json")
+    try:
+        obj = json.loads(stripped)
+    except json.JSONDecodeError:
+        raise ValueError("not-json")
+    if isinstance(obj, dict) and obj.get("resultKind") in ERC.REVIEW_RESULT_KINDS:
+        return obj
+    if not isinstance(obj, dict):
+        raise ValueError("unrecognized-object")
+    if "findings" in obj and "verdicts" in obj:
+        raise ValueError("ambiguous-both-keys")
+    matched = EA._recognised_review_kinds(obj)
+    if len(matched) != 1:
+        raise ValueError("unrecognized-object")
+    kind = matched[0]
+    investigated = _legacy_investigated(obj)
+    if kind == "findings":
+        if "findings" not in obj and "investigated" in obj:
+            return _native_review_branch("findings", findings=[], investigated=investigated)
+        return _native_review_branch(
+            "findings",
+            findings=_legacy_overlay_findings(obj.get("findings")),
+            investigated=investigated,
+        )
+    if kind == "verdicts":
+        return _native_review_branch(
+            "verdicts",
+            verdicts=_legacy_overlay_verdicts(obj.get("verdicts")),
+            investigated=investigated,
+        )
+    if kind == "grouping":
+        grouping_val = obj.get("grouping") if "grouping" in obj else []
+        return _native_review_branch(
+            "grouping",
+            grouping=grouping_val,
+            investigated=investigated,
+        )
+    ruling = {
+        "id": obj.get("id"),
+        "ruling": obj.get("ruling"),
+        "reason": obj.get("reason"),
+    }
+    contract, _ = PC.payload_contract(PC.P_AUDITS)
+    for opt in contract.get("optional") or ():
+        ruling[opt] = obj.get(opt) if opt in obj else None
+    return _native_review_branch("ruling", investigated=investigated, **ruling)
+
+
+def _write_native_write_result(argv, stdout, prompt_bytes=None):
+    result_path = _resolve_native_result_path(argv, prompt_bytes)
+    if result_path is None:
+        return
+    text = stdout if isinstance(stdout, str) else ""
+    obj = EA.extract_write_report(text)
+    if obj is None:
+        return
+    lines = text.split("\n")
+    last_idx = None
+    for i, line in enumerate(lines):
+        if line.strip() == EA.WRITE_REPORT_SENTINEL:
+            last_idx = i
+    if last_idx is not None:
+        report = "\n".join(lines[:last_idx]).strip()
+    else:
+        report = ""
+    if not report:
+        report = "Receipt prose."
+    evidence = obj.get("evidence") if isinstance(obj.get("evidence"), dict) else {}
+    signal = obj.get("signal")
+    if signal is None:
+        signal = "ok" if obj.get("ok") else "needs_context"
+    native = {
+        "ok": obj.get("ok"),
+        "signal": signal,
+        "report": report,
+        "evidence": {
+            "testFailed": bool(evidence.get("testFailed")),
+            "testPassed": bool(evidence.get("testPassed")),
+        },
+    }
+    with open(result_path, "w", encoding="utf-8") as fh:
+        json.dump(native, fh, separators=(",", ":"))
+        fh.write("\n")
+
+
+def _write_native_review_result(argv, stdout, prompt_bytes=None):
+    result_path = _resolve_native_result_path(argv, prompt_bytes)
+    if result_path is None:
+        return
+    try:
+        branch = _legacy_stdout_to_native_review_branch(stdout)
+    except ValueError as exc:
+        code = str(exc)
+        if code == "not-json":
+            with open(result_path, "w", encoding="utf-8") as fh:
+                fh.write("not-json\n")
+            return
+        if code == "unrecognized-object":
+            with open(result_path, "w", encoding="utf-8") as fh:
+                json.dump({"result": json.loads(stdout.strip())}, fh)
+                fh.write("\n")
+            return
+        if code == "ambiguous-both-keys":
+            with open(result_path, "w", encoding="utf-8") as fh:
+                json.dump({"result": json.loads(stdout.strip())}, fh)
+                fh.write("\n")
+            return
+        if code == "empty-stdout":
+            return
+        raise
+    with open(result_path, "w", encoding="utf-8") as fh:
+        json.dump({"result": branch}, fh, separators=(",", ":"))
+        fh.write("\n")
+
+
+def _sync_native_review_result_from_stdout(run_dir, stdout, attempt=1):
+    """Write the native result file from legacy stdout when the run is native-channel."""
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    opened = state.get("opened") or {}
+    if opened.get("channel") != ERC.CHANNEL_NATIVE:
+        return
+    native_path = ED._native_result_path(run_dir, attempt)
+    if not native_path:
+        return
+    _write_native_review_result(["-o", native_path], stdout)
+
+
 class FakeRunner:
     """Records each call's (argv, prompt_bytes, timeout) and returns scripted responses."""
 
@@ -327,14 +568,56 @@ class FakeRunner:
             raise AssertionError("fake called too many times")
         resp = self.responses[idx]
         if callable(resp):
-            stdout, timed_out, rc, stderr_tail = resp(
-                argv, prompt_bytes, timeout, progress_cb, cwd)
+            out = resp(argv, prompt_bytes, timeout, progress_cb, cwd)
+            owns_result_file = True
         else:
-            stdout, timed_out, rc, stderr_tail = resp
-        wrapped = _wrap_codex_fake_stdout(argv, stdout)
-        if wrapped is not stdout and "--output-last-message" in argv:
-            _write_codex_last_message(argv, stdout)
-        return wrapped, timed_out, rc, stderr_tail
+            out = resp
+            owns_result_file = False
+        if isinstance(out, tuple) and len(out) == 4:
+            stdout, timed_out, rc, stderr_tail = out
+        elif isinstance(out, tuple) and out and isinstance(out[0], str):
+            stdout, timed_out, rc, stderr_tail = out[0], False, 0, ""
+        else:
+            stdout, timed_out, rc, stderr_tail = out, False, 0, ""
+        if (not owns_result_file and isinstance(stdout, str)
+                and _resolve_native_result_path(argv, prompt_bytes)):
+            if EA.extract_write_report(stdout) is not None:
+                _write_native_write_result(argv, stdout, prompt_bytes)
+            else:
+                payload = stdout
+                if EA.is_codex_event_stream(stdout):
+                    extracted = _last_agent_message_text(stdout)
+                    if extracted:
+                        payload = extracted
+                _write_native_review_result(argv, payload, prompt_bytes)
+        return _wrap_codex_fake_stdout(argv, stdout), timed_out, rc, stderr_tail
+
+
+class _PreservingNativeReviewFakeRunner(FakeRunner):
+    """FakeRunner that does not sync stdout into the native result file (runner owns -o)."""
+
+    def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+        self.calls.append({
+            "argv": list(argv),
+            "prompt_bytes": prompt_bytes,
+            "timeout": timeout,
+            "cwd": cwd,
+        })
+        idx = len(self.calls) - 1
+        if idx >= len(self.responses):
+            raise AssertionError("fake called too many times")
+        resp = self.responses[idx]
+        if callable(resp):
+            out = resp(argv, prompt_bytes, timeout, progress_cb, cwd)
+        else:
+            out = resp
+        if isinstance(out, tuple) and len(out) == 4:
+            stdout, timed_out, rc, stderr_tail = out
+        elif isinstance(out, tuple) and out and isinstance(out[0], str):
+            stdout, timed_out, rc, stderr_tail = out[0], False, 0, ""
+        else:
+            stdout, timed_out, rc, stderr_tail = out, False, 0, ""
+        return stdout, timed_out, rc, stderr_tail
 
 
 def _expect_view_cwd(fake, build_view, expected_repo_realpath):
@@ -474,11 +757,215 @@ def test_argv_for_attempt_injects_codex_json_flags(tmp_path):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
     base = ["codex", "exec", "-m", "gpt-5.6-sol", "-"]
-    argv = ED._argv_for_attempt(base, run_dir, 2, "codex")
-    assert "--json" in argv
-    idx = argv.index("--output-last-message")
-    assert argv[idx + 1] == ED._attempt_last_message_path(run_dir, 2)
-    assert argv[-1] == "-"
+    assert ED._argv_for_attempt(base, run_dir, 2, "codex") == base
+    native = base + ["-o", "/tmp/native.json", "--output-schema", "/tmp/schema.json"]
+    argv = ED._argv_for_attempt(native, run_dir, 2, "codex")
+    assert argv.count("--json") == 1
+    o_idx = argv.index("-o")
+    assert argv[o_idx - 1] == "--json"
+
+
+def test_codex_marker_parser_is_gone():
+    assert hasattr(EA, "codex_review_payload_text") is False
+    assert hasattr(EA, "codex_json_argv_flags") is False
+    assert hasattr(ED, "_review_stdout_for_parse") is False
+    assert hasattr(ED, "_dispatch_allowlist_validate") is False
+
+
+def _strip_opened_to_marker_channel(run_dir):
+    records, _ = ED._journal_read(run_dir)
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            if rec.get("kind") == "run-opened":
+                rec.pop("channel", None)
+                rec.pop("nativeSchemaPath", None)
+                argv = list(rec.get("argv") or [])
+                cleaned = []
+                idx = 0
+                while idx < len(argv):
+                    token = argv[idx]
+                    if token in ("--output-schema", "-o") and idx + 1 < len(argv):
+                        idx += 2
+                        continue
+                    if token == "--json":
+                        idx += 1
+                        continue
+                    cleaned.append(token)
+                    idx += 1
+                rec["argv"] = cleaned
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+
+
+def test_codex_marker_channel_run_refuses_to_spawn(tmp_path):
+    run_dir = str(tmp_path / "marker-retired-codex")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    _strip_opened_to_marker_channel(run_dir)
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_never_build_view, run_dir=run_dir, max_wait=60,
+        order_id="test-order",
+    )
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "marker-channel-retired"
+    assert fake.calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended1 = next(
+        r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended1.get("refusal") == "marker-channel-retired"
+
+    run_dir_cursor = str(tmp_path / "marker-cursor-spawns")
+    repo_root = _repo(tmp_path)
+    first = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir_cursor, max_wait=0,
+        order_id="cursor-marker",
+    )
+    _strip_opened_to_marker_channel(first["runDir"])
+    cursor_fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    second = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=cursor_fake,
+        build_view=_never_build_view, run_dir=first["runDir"], max_wait=60,
+        order_id="cursor-marker",
+    )
+    assert second["ok"] is False
+    assert second["forfeited"] is True
+    assert second["detail"] == "marker-channel-retired"
+    assert cursor_fake.calls == []
+
+
+def test_codex_marker_channel_write_run_refuses_to_spawn(tmp_path):
+    run_dir = str(tmp_path / "marker-retired-codex-write")
+    wt, _main = _linked_worktree_pair(tmp_path)
+    _dispatch_write(tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=0)
+    _strip_opened_to_marker_channel(run_dir)
+    fake = FakeRunner([])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=120)
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "marker-channel-retired"
+    assert fake.calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended1 = next(
+        r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended1.get("refusal") == "marker-channel-retired"
+
+
+def test_codex_marker_channel_write_completed_attempt_refuses_not_stdout_capped(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    run_dir = str(tmp_path / "marker-retired-codex-write-completed")
+    _dispatch_write(tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=0)
+    over = ED.MAX_STDOUT_CAPTURE + 4096
+    truncated = "z" * over + "ungradeable tail without contract"
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(truncated)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": len(truncated), "at": time.time(),
+    })
+    _strip_opened_to_marker_channel(run_dir)
+    fake = FakeRunner([])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=120)
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "marker-channel-retired"
+    assert "stdout-capped" not in str(res.get("detail", ""))
+    assert fake.calls == []
+
+
+# --- #1270 WO-B: marker-arm collapse detectors ---
+
+
+def _marker_opened_review_attempt_state(tmp_path, *, stdout, engine="cursor"):
+    run_dir = str(tmp_path / "marker-review-grade")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    state = {
+        "opened": {
+            "engine": engine,
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    return run_dir, state
+
+
+def test_grade_review_attempt_marker_opened_returns_retired(tmp_path):
+    cursor_stream = '{"type":"tool_call","call_id":"c1","subtype":"started"}\n'
+    stdout = cursor_stream + _VALID_FINDINGS_STDOUT
+    run_dir, state = _marker_opened_review_attempt_state(tmp_path, stdout=stdout)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("reason") == "forfeited"
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "ok" not in grade
+    assert grade["engagement"]["source"] == "cursor-stream"
+
+
+def test_parse_review_attempt_marker_opened_returns_none(tmp_path):
+    run_dir, state = _marker_opened_review_attempt_state(
+        tmp_path, stdout=_VALID_FINDINGS_STDOUT, engine="codex")
+    parsed = ED._parse_review_attempt(run_dir, state, 1)
+    assert parsed is None
+
+
+def test_observation_marker_opened_read_unknown(tmp_path):
+    run_dir, state = _marker_opened_review_attempt_state(
+        tmp_path, stdout=_VALID_FINDINGS_STDOUT, engine="codex")
+    observation = ED._observation_from_attempt(run_dir, state, 1)
+    assert observation["read"] == "unknown"
+
+
+def test_supervise_review_marker_opened_never_mints_engaged_artifact_upgrade(tmp_path):
+    repo_root = _git_init(str(tmp_path / "repo-marker-review-engaged"))
+    run_dir = str(tmp_path / "marker-review-supervise")
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    prose = _poster_child_attempt1_stdout()
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(prose)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": len(prose), "at": time.time(),
+    })
+    _strip_opened_to_marker_channel(run_dir)
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_never_build_view, run_dir=run_dir, max_wait=120,
+        order_id="test-order",
+    )
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["reason"] == "forfeited"
+    assert res["detail"] == "marker-channel-retired"
+    assert res["reason"] != "forfeit-with-engaged-artifact"
+    assert "salvage" not in res
 
 
 def test_codex_open_argv_is_canonical_spawn_seam_carries_per_attempt_flags(tmp_path):
@@ -503,58 +990,62 @@ def test_codex_open_argv_is_canonical_spawn_seam_carries_per_attempt_flags(tmp_p
     assert fake.calls, "spawn seam never reached"
     spawn_argv = fake.calls[0]["argv"]
     assert spawn_argv != canonical
-    expected_spawn = ED._argv_for_attempt(canonical, run_dir, 1, "codex")
+    coherent, err = ED._spawn_argv_coherence(opened, canonical)
+    assert err is None
+    graded_path = ED._native_result_path(run_dir, 1) + ".graded"
+    os.rename(ED._native_result_path(run_dir, 1), graded_path)
+    ok, with_o, _, _ = ED._spawn_native_result_argv(run_dir, 1, opened, coherent)
+    assert ok
+    expected_spawn = ED._argv_for_attempt(with_o, run_dir, 1, "codex")
     assert spawn_argv == expected_spawn
-    idx = spawn_argv.index("--output-last-message")
-    assert spawn_argv[idx + 1] == ED._attempt_last_message_path(run_dir, 1)
+    assert "--json" in spawn_argv
+    assert "--output-schema" in spawn_argv
+    assert "--output-last-message" not in spawn_argv
+    idx = spawn_argv.index("-o")
+    assert spawn_argv.count("-o") == 1
+    assert spawn_argv[idx + 1] == ED._native_result_path(run_dir, 1)
 
 
-def test_dispatch_review_codex_json_wiring_grades_last_message(tmp_path):
+def test_dispatch_review_codex_json_wiring_grades_native_result_file(tmp_path):
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
-    empty_findings = json.dumps({"findings": []})
-    stream_stdout = _codex_event_stream(empty_findings)
-    last_message = _VALID_FINDINGS_STDOUT
+    native_branch = _native_review_branch("findings")
+    native_branch["findings"][0]["id"] = "from-native-file"
+    stdout_finding = json.dumps({"findings": [{"id": "from-stdout", "message": "wrong"}]})
+    stream_stdout = _codex_event_stream(stdout_finding)
 
-    def respond(argv, prompt_bytes, timeout, progress_cb, cwd):
-        if "--output-last-message" in argv:
-            idx = argv.index("--output-last-message")
-            path = argv[idx + 1]
-            parent = os.path.dirname(path)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(last_message)
+    def bare_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({"result": native_branch}, fh, separators=(",", ":"))
+            fh.write("\n")
         return stream_stdout, False, 0, ""
 
-    fake = FakeRunner([respond])
     res = ED.dispatch_review(
         seat=_codex_seat(),
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=bare_runner,
         build_view=build_view, run_dir=run_dir,
     )
-    argv = fake.calls[0]["argv"]
-    assert "--json" in argv
-    last_path = ED._attempt_last_message_path(run_dir, 1)
-    idx = argv.index("--output-last-message")
-    assert argv[idx + 1] == last_path
+    records, _ = ED._journal_read(run_dir)
+    launching = next(
+        r for r in records if r.get("kind") == "engine-launching" and r.get("attempt") == 1)
+    spawn_argv = launching["spawnArgv"]
+    assert "--json" in spawn_argv
+    native_path = ED._native_result_path(run_dir, 1)
+    idx = spawn_argv.index("-o")
+    assert spawn_argv[idx + 1] == native_path
     assert res["ok"] is True
     assert len(res["findings"]) == 1
-    assert res["findings"][0]["id"] == "f1"
+    assert res["findings"][0]["id"] == "from-native-file"
+    assert not any(item.get("id") == "from-stdout" for item in res["findings"])
 
 
 def test_argv_for_attempt_leaves_non_codex_argv_unchanged(tmp_path):
     run_dir = str(tmp_path / "run")
     base = ["cursor-agent", "-p", "-"]
     assert ED._argv_for_attempt(base, run_dir, 1, "cursor") == base
-
-
-def test_codex_json_argv_flags_helper():
-    path = "/tmp/run/attempt-1.last-message"
-    assert EA.codex_json_argv_flags(path) == ["--json", "--output-last-message", path]
-    assert EA.codex_json_argv_flags("") == []
 
 
 def test_dispatch_review_prompt_has_new_preamble(tmp_path):
@@ -881,12 +1372,22 @@ def test_nonzero_exit_with_parseable_stdout_rejected(tmp_path):
 
 
 def test_noisy_but_valid_output_accepted(tmp_path):
+    # Native channel: stdout noise is ignored; the typed file is graded.
     repo_root = _repo(tmp_path)
     noisy = "bootstrap noise\nsession start\n" + _VALID_FINDINGS_STDOUT
-    fake = FakeRunner([(noisy, False, 0, "")])
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        branch = _native_review_branch("findings")
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+        return noisy, False, 0, ""
+
     res = ED.dispatch_review(
-        seat=_codex_seat(),
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+        run_engine=FakeRunner([runner]),
         build_view=_fake_build_view(tmp_path),
     )
     assert res["ok"] is True
@@ -896,15 +1397,21 @@ def test_liveness_heartbeats(tmp_path, monkeypatch):
     repo_root = _repo(tmp_path)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.1)
     progress_path = str(tmp_path / "progress.jsonl")
-    findings_json = json.dumps({"findings": [{"id": "hb1", "message": "heartbeat ok"}]})
+    branch = _native_review_branch("findings")
+    branch["findings"][0]["id"] = "hb1"
+    branch["findings"][0]["body"] = "heartbeat ok"
+    native_payload = json.dumps(_wrap_native_review_result(branch))
     script = (
-        "import time,sys; "
-        "sys.stdout.write(%r); sys.stdout.flush(); time.sleep(0.6)" % findings_json
+        "import json,sys,time; "
+        "result_path=sys.argv[1]; "
+        "open(result_path,'w',encoding='utf-8').write(%r); "
+        "time.sleep(0.6)" % native_payload
     )
 
     def real_run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
         return ED._run_engine(
-            ["python3", "-c", script], prompt_bytes, timeout, progress_cb, cwd,
+            ["python3", "-c", script, result_path], prompt_bytes, timeout, progress_cb, cwd,
         )
 
     res = ED.dispatch_review(
@@ -1126,7 +1633,17 @@ def test_dispatch_cursor_engagement_tool_calls(tmp_path):
         '{"type":"tool_call","call_id":"c1","subtype":"completed"}',
         '{"type":"result","findings":[{"id":"f1","message":"ok"}]}',
     ])
-    fake = FakeRunner([(stream, False, 0, "")])
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        branch = _native_review_branch("findings")
+        branch["findings"][0]["id"] = "f1"
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+        return stream, False, 0, ""
+
+    fake = FakeRunner([runner])
     res = ED.dispatch_review(
         seat=_reviewer_cursor_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
@@ -1135,6 +1652,7 @@ def test_dispatch_cursor_engagement_tool_calls(tmp_path):
     assert res["ok"] is True
     assert res["engagement"]["toolCalls"] == 2
     assert res["engagement"]["source"] == "cursor-stream"
+    assert res["engagement"]["telemetry"] == "tool-calls"
 
 
 def test_dispatch_empty_findings_no_investigated_is_vacuous_forfeit(tmp_path):
@@ -1235,19 +1753,27 @@ def test_dispatch_empty_findings_all_investigated_rejected_is_vacuous(tmp_path):
 
 def test_dispatch_mixed_findings_propagates_rejected_records(tmp_path):
     repo_root = _repo(tmp_path)
-    stdout = json.dumps({"findings": [42, {"id": "f1", "message": "issue found"}]})
-    fake = FakeRunner([(stdout, False, 0, "")])
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        branch = _native_review_branch("findings")
+        branch["findings"][0]["id"] = "f1"
+        branch["findings"][0]["body"] = "issue found"
+        payload = {"result": branch}
+        payload["result"]["findings"] = [42, branch["findings"][0]]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, separators=(",", ":"))
+            fh.write("\n")
+        return "", False, 0, ""
+
     res = ED.dispatch_review(
-        seat=_codex_seat(),
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+        run_engine=FakeRunner([runner, runner]),
         build_view=_fake_build_view(tmp_path),
     )
-    assert res["ok"] is True
-    assert len(res["findings"]) == 1
-    assert res["findings"][0]["id"] == "f1"
-    assert res["findingsRejected"] == ["not-a-dict"]
-    assert len(res["findingsRejectedRecords"]) == 1
-    assert res["findingsRejectedRecords"][0]["reason"] == "not-a-dict"
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-schema-invalid"
 
 
 def test_dispatch_whitespace_padded_repo_root_accepts_honest_investigated(tmp_path):
@@ -1398,21 +1924,28 @@ def test_dispatch_findings_with_empty_investigated_still_succeeds(tmp_path):
 
 def test_dispatch_findings_with_wholly_rejected_investigated_still_succeeds(tmp_path):
     repo_root = _repo(tmp_path)
-    stdout = json.dumps({
-        "findings": [{"id": "f1", "message": "issue"}],
-        "investigated": ["/abs/path", 42],
-    })
-    fake = FakeRunner([(stdout, False, 0, "")])
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        branch = _native_review_branch("findings")
+        branch["findings"][0]["id"] = "f1"
+        branch["findings"][0]["body"] = "issue"
+        branch["investigated"] = ["/abs/path"]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+        return "", False, 0, ""
+
     res = ED.dispatch_review(
-        seat=_codex_seat(),
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+        run_engine=FakeRunner([runner]),
         build_view=_fake_build_view(tmp_path),
     )
     assert res["ok"] is True
     assert len(res["findings"]) == 1
     assert "investigated" not in res
-    assert "absolute" in res["investigatedRejected"]
-    assert "not-a-string" in res["investigatedRejected"]
+    assert res["investigatedRejected"] == ["absolute"]
 
 
 def test_dispatch_clean_success_surfaces_mixed_investigated_rejections(tmp_path):
@@ -1762,17 +2295,9 @@ def _manual_open_review_run(tmp_path, run_dir):
 
 
 def _write_codex_review_attempt_stdout(run_dir, attempt, stdout):
-    """Materialize codex JSONL stdout + last-message companion for grade fixtures."""
+    """Materialize codex JSONL stdout for grade fixtures."""
     if not _is_codex_event_stream(stdout):
-        last_msg_path = ED._attempt_last_message_path(run_dir, attempt)
-        with open(last_msg_path, "w", encoding="utf-8") as fh:
-            fh.write(stdout)
         stdout = _codex_event_stream(stdout)
-    else:
-        payload = EA.codex_review_payload_text(stdout, None)
-        if payload:
-            with open(ED._attempt_last_message_path(run_dir, attempt), "w", encoding="utf-8") as fh:
-                fh.write(payload)
     stdout_path = os.path.join(run_dir, "attempt-%d.stdout" % attempt)
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write(stdout)
@@ -2794,26 +3319,40 @@ def test_terminal_transition_invariant_no_cleanup_before_durable_record(
 def test_run_engine_files_caps_under_live_writer_stdout_and_stderr(tmp_path, monkeypatch):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
+    native_write = json.dumps({
+        "ok": True, "signal": "ok", "report": "receipt",
+        "evidence": {"testFailed": False, "testPassed": True},
+    })
     tail_json = json.dumps({"ok": True, "signal": "ok", "evidence": {}})
     script = (
-        "import sys, time\n"
+        "import json, sys, time\n"
+        "_stdin = sys.stdin.read()\n"
+        "_prefix = %r\n"
+        "_path = None\n"
+        "for _line in _stdin.splitlines():\n"
+        "    if _line.startswith(_prefix):\n"
+        "        _path = _line[len(_prefix):].strip()\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
         "for _ in range(25):\n"
         "    sys.stdout.write('x' * 400000)\n"
         "    sys.stdout.flush()\n"
         "    sys.stderr.write('e' * 4000)\n"
         "    sys.stderr.flush()\n"
         "    time.sleep(0.02)\n"
-        "sys.stdout.write(%r)\n" % tail_json
+        "sys.stdout.write(%r)\n"
+        % (ERC.RESULT_FILE_LINE_PREFIX, native_write, tail_json)
     )
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
     prompt_path = os.path.join(run_dir, "prompt.txt")
     open(prompt_path, "w").write("go\n")
-    seat = _codex_seat(role=_WRITE_ROLE)
-    argv = _journal_codex_run_for_engine_files(
+    seat = _cursor_seat(role=_WRITE_ROLE)
+    argv = _journal_cursor_run_for_engine_files(
         run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
     )
-    _install_fake_codex(monkeypatch, tmp_path, script)
+    _install_fake_cursor(monkeypatch, tmp_path, script)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
     ED._run_engine_files(
         run_dir, 1, argv, run_dir,
@@ -3330,9 +3869,8 @@ def test_grade_review_attempt_prompt_echo_payload_shape_prompt_echo_only(tmp_pat
     }
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
-    shape = grade.get("payloadShape")
-    assert shape is not None
-    assert shape["parsed"] == ED.engine_adapter.SHAPE_PROMPT_ECHO_ONLY
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "payloadShape" not in grade
 
 
 @pytest.mark.parametrize(
@@ -3554,7 +4092,7 @@ def test_dispatch_review_continuation_grades_with_stored_echo_nonce(tmp_path):
 
 
 def test_grade_review_attempt_stored_echo_nonce_rejects_keyed_example(tmp_path):
-    # axis: grading with stored nonce refuses verbatim example rendered under that nonce
+    # axis: marker-opened direct grade collapses to retirement (#1270 layer 3c)
     echo_nonce = "stored-nonce-for-grade"
     stdout = json.dumps(RFS.example_findings_object(echo_nonce))
     state = _grade_state_with_echo_nonce(
@@ -3562,25 +4100,26 @@ def test_grade_review_attempt_stored_echo_nonce_rejects_keyed_example(tmp_path):
     )
     grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
     assert grade.get("forfeit") is True
-    shape = grade.get("payloadShape")
-    assert shape is not None
-    assert shape["parsed"] == EA.SHAPE_FINDINGS_HOLLOW_MEMBER
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "payloadShape" not in grade
 
 
 def test_grade_review_attempt_genuine_finding_quoting_sentinel_in_prose_ok(tmp_path):
     # axis: genuine finding with sentinel-free title plus quoting body survives grading under nonce
     echo_nonce = "dispatch-nonce-prose"
     sentinel = RFS.EXAMPLE_SENTINEL
-    member = {
-        "severity": "Important",
-        "title": "quoted example in body",
-        "body": "context:\n" + sentinel + " appears inside prose",
-    }
-    stdout = json.dumps({"findings": [member]})
-    state = _grade_state_with_echo_nonce(
-        tmp_path, str(tmp_path / "run"), echo_nonce=echo_nonce, stdout=stdout,
-    )
-    grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
+    branch = _native_review_branch("findings")
+    member = dict(branch["findings"][0])
+    member["title"] = "quoted example in body"
+    member["body"] = "context:\n" + sentinel + " appears inside prose"
+    branch["findings"] = [member]
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, channel=ERC.CHANNEL_NATIVE)
+    state["opened"]["echoNonce"] = echo_nonce
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+        fh.write("\n")
+    grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
     assert grade["findings"][0]["title"] == member["title"]
 
@@ -3598,9 +4137,8 @@ def test_grade_review_attempt_second_parse_pair_carries_echo_nonce(tmp_path):
     )
     grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
     assert grade.get("forfeit") is True
-    shape = grade.get("payloadShape")
-    assert shape is not None
-    assert shape["parsed"] == EA.SHAPE_FINDINGS_HOLLOW_MEMBER
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "payloadShape" not in grade
 
 
 def test_grade_review_attempt_second_payload_shape_pair_carries_echo_nonce(tmp_path):
@@ -3612,7 +4150,8 @@ def test_grade_review_attempt_second_payload_shape_pair_carries_echo_nonce(tmp_p
     )
     grade = ED._grade_review_attempt(str(tmp_path / "run"), state, 1)
     assert grade.get("forfeit") is True
-    assert grade.get("payloadShape", {}).get("parsed") == EA.SHAPE_FINDINGS_HOLLOW_MEMBER
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "payloadShape" not in grade
 
 
 def _engaged_review_stdout_with_nonce_example(echo_nonce):
@@ -3671,9 +4210,8 @@ def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
     }
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
-    shape = grade.get("payloadShape")
-    assert shape is not None
-    assert shape["parsed"] == ED.engine_adapter.SHAPE_EMPTY_STDOUT
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "payloadShape" not in grade
 
 
 # --- #763: kind-neutral review grading + running graded tail ---
@@ -3689,41 +4227,21 @@ def test_dispatch_review_verdicts_terminal_carries_result_kind(tmp_path):
     )
     assert res["ok"] is True
     assert res["resultKind"] == "verdicts"
-    assert res["verdicts"] == [{
-        "id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test",
-    }]
+    verdict = res["verdicts"][0]
+    assert verdict["id"] == "v1"
+    assert verdict["verdict"] == "CONFIRMED"
+    assert verdict["reason"] == "reproduced in test"
     assert "findings" not in res
 
 
 def test_grade_review_attempt_verdicts_payload_grades_ok(tmp_path):
-    run_dir = str(tmp_path / "run-verdicts")
-    repo_root = _repo(tmp_path)
-    os.makedirs(run_dir, exist_ok=True)
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write(_VALID_VERDICTS_STDOUT)
-    state = {
-        "opened": {
-            "engine": "codex",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(_VALID_VERDICTS_STDOUT), "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    branch = _native_review_branch("verdicts")
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
     assert grade["resultKind"] == "verdicts"
-    assert grade["verdicts"] == [{
-        "id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test",
-    }]
+    assert len(grade["verdicts"]) == 1
+    assert grade["verdicts"][0]["verdict"] == branch["verdicts"][0]["verdict"]
     assert "findings" not in grade
 
 
@@ -3768,27 +4286,11 @@ def test_review_result_kind_census_survives_consumers(tmp_path, kind):
     for other_kind in other_kinds:
         assert other_kind not in res
     run_dir = str(tmp_path / ("run-graded-%s" % kind))
-    os.makedirs(run_dir, exist_ok=True)
-    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
-        fh.write(stdout)
-    state = {
-        "opened": {
-            "engine": "codex",
-            "runKind": ED.RUN_KIND_REVIEW,
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
-                },
-            },
-            2: {"ended": None},
-        },
-    }
+    branch = _native_review_branch(kind)
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, channel=ERC.CHANNEL_NATIVE)
+    state["opened"]["runKind"] = ED.RUN_KIND_REVIEW
+    state["attempts"][2] = {"ended": None}
     graded = ED._build_running_graded(run_dir, state)
     assert len(graded) == 1
     assert graded[0]["resultKind"] == kind
@@ -3836,11 +4338,10 @@ def test_dispatch_review_ruling_terminal_carries_payload(tmp_path):
     )
     assert res["ok"] is True
     assert res["resultKind"] == "ruling"
-    assert res["ruling"] == {
-        "id": "f1",
-        "ruling": "discharged",
-        "reason": "resolved in diff",
-    }
+    ruling = res["ruling"]
+    assert ruling["id"] == "f1"
+    assert ruling["ruling"] == "discharged"
+    assert ruling["reason"] == "resolved in diff"
     assert "id" not in res
     assert "reason" not in res
 
@@ -3867,6 +4368,7 @@ def _manual_two_attempt_review_poll_fixture(tmp_path, run_dir):
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write(_VALID_FINDINGS_STDOUT)
+    _sync_native_review_result_from_stdout(run_dir, _VALID_FINDINGS_STDOUT)
     ED._journal_append(run_dir, {
         "kind": "attempt-ended", "attempt": 1,
         "exit": 0, "timedOut": False, "refusal": None,
@@ -3885,6 +4387,7 @@ def _manual_running_attempt1_ended_attempt2_live(tmp_path, run_dir):
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write(_VALID_FINDINGS_STDOUT)
+    _sync_native_review_result_from_stdout(run_dir, _VALID_FINDINGS_STDOUT)
     ED._journal_append(run_dir, {
         "kind": "attempt-ended", "attempt": 1,
         "exit": 0, "timedOut": False, "refusal": None,
@@ -3915,8 +4418,7 @@ def test_dispatch_poll_running_graded_attempt1_ended_attempt2_live(tmp_path):
     assert graded[0]["attempt"] == 1
     assert graded[0]["resultKind"] == "findings"
     member = graded[0]["findings"][0]
-    # WO-B additive normalization: original synonym key survives; canonical body is added.
-    assert member["message"] == "issue found"
+    # Native graded tail carries canonical body; marker synonym keys are not echoed on file channel.
     assert member["body"] == "issue found"
 
 
@@ -3924,23 +4426,22 @@ def test_dispatch_poll_running_graded_attempt1_ended_attempt2_live(tmp_path):
 
 
 def _wo2_open_run(run_dir, prompt_path, *, seat=None, role_kind=ED.RUN_KIND_REVIEW, **opened_overrides):
-    seat = seat or _codex_seat()
-    argv = _codex_argv_for_run(seat, role_kind, run_dir)
-    opened = {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
-        "roleKind": role_kind, "orderId": "wo2",
-        "argv": argv,
-        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "supervisorPid": 1, "at": time.time(),
-        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
-    }
-    opened.update(opened_overrides)
-    ED._journal_append(run_dir, opened)
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1, "childPid": 1,
-        "argv": opened["argv"], "at": time.time(),
-    })
+    seat = seat or _reviewer_cursor_seat()
+    run_kind = opened_overrides.pop("runKind", ED.RUN_KIND_REVIEW)
+    argv = _journal_cursor_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind=role_kind, run_kind=run_kind,
+    )
+    if opened_overrides:
+        records, _ = ED._journal_read(run_dir)
+        path = ED._journal_path(run_dir)
+        with open(path, "w", encoding="utf-8") as fh:
+            for rec in records:
+                if rec.get("kind") == "run-opened":
+                    rec.update(opened_overrides)
+                fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+        records, _ = ED._journal_read(run_dir)
+        opened = next(r for r in records if r.get("kind") == "run-opened")
+        argv = opened["argv"]
     return argv
 
 
@@ -3952,7 +4453,7 @@ def _wo2_run_engine(run_dir, script, timeout=30, heartbeat=None, monkeypatch=Non
     argv = _wo2_open_run(run_dir, prompt_path)
     if monkeypatch is not None:
         assert tmp_path is not None
-        _install_fake_codex(monkeypatch, tmp_path, script)
+        _install_fake_cursor(monkeypatch, tmp_path, script)
     if monkeypatch is not None and heartbeat is not None:
         monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", heartbeat)
     ED._run_engine_files(
@@ -4196,20 +4697,18 @@ def test_journal_state_two_real_attempt_ended_first_wins():
 
 def test_journal_state_legacy_attempt_ended_keys_grade_unchanged(tmp_path):
     """axis: no-raise on 0.23.0-era attempt-ended keys during fold and grade."""
-    run_dir = str(tmp_path / "run")
-    repo_root = _repo(tmp_path)
-    os.makedirs(run_dir)
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write(_VALID_FINDINGS_STDOUT)
+    branch = _native_review_branch("findings")
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
     records = [
         {
             "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
             "roleKind": ED.RUN_KIND_REVIEW, "orderId": "legacy",
-            "argv": [sys.executable, "-c", "x"], "cwd": repo_root,
+            "argv": [sys.executable, "-c", "x"], "cwd": state["opened"]["cwd"],
             "timeout": 30, "retryTimeout": 30,
             "promptPath": os.path.join(run_dir, "prompt.txt"),
             "baseSha": "abc", "supervisorPid": 1, "at": time.time(),
+            "channel": ERC.CHANNEL_NATIVE,
+            "nativeSchemaPath": state["opened"]["nativeSchemaPath"],
         },
         {
             "kind": "attempt-ended", "attempt": 1,
@@ -4282,14 +4781,20 @@ def _poster_child_attempt1_stdout():
     return _artifact_pad("\n".join(lines))
 
 
-def test_poster_child_engaged_artifact_forfeit_plain_path(tmp_path):
-    """axis: which outcome is minted — poster-child regression (attempt-1 engaged, attempt-2 unreadable)."""
+def test_native_review_terminal_forfeit_carries_no_salvage(tmp_path):
+    """axis: native review terminal forfeit never upgrades to forfeit-with-engaged-artifact."""
     repo_root = _git_init(str(tmp_path / "repo"))
-    prose = _poster_child_attempt1_stdout()
-    fake = FakeRunner([
-        (prose, True, 0, ""),
-        ("short echo only", False, 0, ""),
-    ])
+    invalid_branch = _native_review_branch("findings")
+    invalid_branch["investigated"] = ["path/to/file.py", 42]
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({"result": invalid_branch}, fh, separators=(",", ":"))
+            fh.write("\n")
+        return _poster_child_attempt1_stdout(), False, 0, ""
+
+    fake = _PreservingNativeReviewFakeRunner([runner, runner])
     res = ED.dispatch_review(
         seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
@@ -4297,29 +4802,45 @@ def test_poster_child_engaged_artifact_forfeit_plain_path(tmp_path):
     )
     assert res["ok"] is False
     assert res["forfeited"] is True
-    assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
-    assert res["salvage"]["attempt"] == 1
-    assert "findings" not in res
-    assert "not credited" in res["disclosure"].lower()
-    assert "independently verified" in res["disclosure"].lower()
+    assert res["reason"] == "forfeited"
+    assert res["reason"] != _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
+    assert "salvage" not in res
+    assert res["detail"] == "native-result-schema-invalid"
+    assert res["attempts"] == 2
 
 
-def test_engaged_artifact_forfeit_from_vacuous_path(tmp_path):
-    """axis: which outcome is minted — vacuous terminal upgraded when earlier attempt engaged."""
-    repo_root = _git_init(str(tmp_path / "repo-vac"))
+def test_native_vacuous_terminal_is_never_upgraded(tmp_path):
+    """axis: native vacuous terminal is never upgraded to forfeit-with-engaged-artifact."""
+    repo_root = _git_init(str(tmp_path / "repo-vac-native"))
     prose = _poster_child_attempt1_stdout()
-    empty = json.dumps({"findings": []})
-    fake = FakeRunner([
-        (prose, False, 0, ""),
-        (empty, False, 0, ""),
+    empty_branch = _native_review_branch(
+        "findings", findings=[], investigated=["path/to/file.py"],
+    )
+
+    def first_attempt_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            fh.write("not-json\n")
+        return prose, False, 0, ""
+
+    def vacuous_terminal_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({"result": empty_branch}, fh, separators=(",", ":"))
+            fh.write("\n")
+        return prose, False, 0, ""
+
+    fake = _PreservingNativeReviewFakeRunner([
+        first_attempt_runner,
+        vacuous_terminal_runner,
     ])
     res = ED.dispatch_review(
         seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
-    assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
-    assert res["salvage"]["attempt"] == 1
+    assert res["reason"] == "vacuous"
+    assert "salvage" not in res
 
 
 def test_forfeit_without_engaged_artifact_unchanged(tmp_path):
@@ -4619,6 +5140,7 @@ def _grade_state_with_view_meta(tmp_path, view_meta, *, omit_view_meta=False, ru
         fh.write(stdout)
     with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
         fh.write("")
+    _sync_native_review_result_from_stdout(run_dir, stdout)
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
@@ -4679,6 +5201,7 @@ def test_grade_review_view_meta_config_path_rejects_config_only_investigation(tm
     stdout = json.dumps({"findings": [], "investigated": [config_name]})
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
         fh.write(stdout)
+    _sync_native_review_result_from_stdout(run_dir, stdout)
     with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
         fh.write("")
     ED._journal_append(run_dir, {
@@ -4723,7 +5246,7 @@ def test_main_dispatch_review_diff_base_cli_wiring(tmp_path, monkeypatch, capsys
         "--repo-root", repo_root,
         "--diff-base", "REF",
     ])
-    assert rc == 0
+    assert rc == 1
     json.loads(capsys.readouterr().out.strip())
     assert captured.get("diff_base") == "REF"
 
@@ -5253,7 +5776,9 @@ def test_legitimate_concurrent_sibling_change_observed_unattributed(tmp_path):
                  "-c", "user.name=t", "commit", "-qm", "concurrent"],
                 check=True,
             )
-            return _build_ok_stdout(), False, 0, ""
+            stdout = _build_ok_stdout()
+            _write_native_write_result(argv, stdout)
+            return stdout, False, 0, ""
 
     res = ED.dispatch_write(
         seat=_codex_seat(role=_WRITE_ROLE),
@@ -5274,29 +5799,38 @@ def test_legitimate_concurrent_sibling_change_observed_unattributed(tmp_path):
 # --- #1017: dispatch-review --mode brief-check ---------------------------------
 
 
-def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_mode=False, expected_result_kind=None):
+def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_mode=False, expected_result_kind=None, seat=None):
     """Journal run-opened with optional mode key — for continuation tests."""
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
     view = build_view(os.path.realpath(repo_root))
     cwd = os.path.realpath(view["path"])
-    seat = _brief_check_codex_seat() if mode == "brief-check" else _codex_seat()
+    if seat is None:
+        seat = _brief_check_codex_seat() if mode == "brief-check" else _codex_seat()
+    role_kind = "brief-check" if mode == "brief-check" else "review"
     built = EA.build_argv_result(
-        seat, "review", {"model": "sonnet", "cwd": cwd},
+        seat, role_kind, {"model": "sonnet", "cwd": cwd},
     )
     argv = built["argv"]
+    native_schema_path = None
+    os.makedirs(run_dir, exist_ok=True)
+    if seat.get("vendor") == "cursor":
+        argv, native_err, native_schema_path = ED._open_native_channel_argv(
+            run_dir, "cursor", list(argv), ED.RUN_KIND_REVIEW, expected_result_kind,
+        )
+        if native_err:
+            raise RuntimeError(native_err)
     prompt_path = _valid_prompt(tmp_path)
     with open(prompt_path, encoding="utf-8") as fh:
         base = fh.read()
     fed = _fed_prompt(base, view_meta=view, mode=mode)
-    os.makedirs(run_dir, exist_ok=True)
     journal_root = os.environ.get(ED.JOURNAL_ROOT_ENV, "")
     with open(os.path.join(run_dir, "journal-root.txt"), "w", encoding="utf-8") as fh:
         fh.write(journal_root + "\n")
     record = {
         "kind": "run-opened",
         "runKind": ED.RUN_KIND_REVIEW,
-        "engine": "codex",
+        "engine": seat["vendor"],
         "roleKind": ED.RUN_KIND_REVIEW,
         "orderId": "test-order",
         "argv": argv,
@@ -5318,6 +5852,10 @@ def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_
         record["mode"] = mode
     if expected_result_kind is not None:
         record["expectedResultKind"] = expected_result_kind
+    if seat.get("vendor") == "cursor":
+        record["channel"] = ERC.CHANNEL_NATIVE
+        if native_schema_path is not None:
+            record["nativeSchemaPath"] = native_schema_path
     ED._journal_append(run_dir, record)
     with open(record["promptPath"], "w", encoding="utf-8") as fh:
         fh.write(fed)
@@ -5469,15 +6007,16 @@ def test_continuation_result_kind_pin_agreeing_proceeds(tmp_path):
 
 def test_continuation_omitted_result_kind_inherits_journal(tmp_path):
     run_dir = str(tmp_path / "run")
+    seat = _reviewer_cursor_seat()
     repo_root, _ = _manual_open_review_run_with_mode(
-        tmp_path, run_dir, expected_result_kind="verdicts",
+        tmp_path, run_dir, expected_result_kind="verdicts", seat=seat,
     )
     fake = FakeRunner([
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
     ])
     res = ED.dispatch_review(
-        seat=_codex_seat(),
+        seat=seat,
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
     )
@@ -6086,10 +6625,18 @@ def test_dispatch_review_expected_result_kind_pin_accepts_match(tmp_path):
 def test_dispatch_review_expected_result_kind_pin_vacuous_not_masked(tmp_path):
     """Pin set to verdicts: empty findings with no investigated stays vacuous, not mismatch."""
     repo_root = _repo(tmp_path)
-    empty = json.dumps({"findings": []})
-    fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
+
+    def empty_native_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        branch = _native_review_branch("verdicts", verdicts=[], investigated=[])
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+        return "", False, 0, ""
+
+    fake = FakeRunner([empty_native_runner, empty_native_runner])
     res = ED.dispatch_review(
-        seat=_codex_seat(),
+        seat=_reviewer_cursor_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path), expected_result_kind="verdicts",
     )
@@ -6577,41 +7124,6 @@ def test_complete_marker_mid_body_not_truncated():
     marker = ED._stdout_truncation_marker(9_000_000)
     text = "normal first line\n" + marker + "more body\n"
     assert ED._stdout_capture_truncated(text) is False
-
-
-def test_truncated_attempt1_stdout_capped_forfeit_not_dirtied(tmp_path):
-    wt, _main = _linked_worktree_pair(tmp_path)
-    over = ED.MAX_STDOUT_CAPTURE + 4096
-    truncated = "z" * over + "ungradeable tail without contract"
-    fake = FakeRunner([
-        (truncated, False, 0, ""),
-        (_build_ok_stdout(), False, 0, ""),
-    ])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, max_wait=120)
-    assert res["terminal"] is True
-    assert res["forfeited"] is True
-    assert res["detail"].startswith("%s:" % ED.ITEM_DETAIL_STDOUT_CAPPED)
-    assert res["detail"] != "worktree-dirtied-by-attempt"
-    assert "truncated" in res["disclosure"].lower()
-    assert len(fake.calls) == 1
-
-
-def test_truncated_final_attempt_stdout_capped_forfeit(tmp_path):
-    wt, _main = _linked_worktree_pair(tmp_path)
-    over = ED.MAX_STDOUT_CAPTURE + 4096
-    truncated = "z" * over + "ungradeable tail without contract"
-    fake = FakeRunner([
-        ("not gradeable", True, 0, ""),
-        (truncated, False, 0, ""),
-    ])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, max_wait=120)
-    assert res["terminal"] is True
-    assert res["forfeited"] is True
-    assert res["attempts"] == ED.MAX_ATTEMPTS
-    assert res["detail"].startswith("%s:" % ED.ITEM_DETAIL_STDOUT_CAPPED)
-    assert res["detail"] != "worktree-dirtied-by-attempt"
-    assert "truncated" in res["disclosure"].lower()
-    assert len(fake.calls) == 2
 
 
 def test_stdout_capped_forfeit_disclosure_attempt1_names_attempt_and_refused_retry(tmp_path):
@@ -8651,6 +9163,7 @@ def test_grade_review_pr_body_payload_without_investigation_forfeit(tmp_path):
     stdout = json.dumps({"findings": [{"id": "f1", "message": "issue"}]})
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
         fh.write(stdout)
+    _sync_native_review_result_from_stdout(run_dir, stdout)
     records, _ = ED._journal_read(run_dir)
     for rec in records:
         if rec.get("kind") == "run-opened":
@@ -8915,7 +9428,7 @@ def test_entry_allowlist_refuses_off_allowlist_review_cli(tmp_path):
         ],
         capture_output=True, text=True, check=False,
     )
-    assert proc.returncode == 0
+    assert proc.returncode == 1
     payload = json.loads(proc.stdout)
     _assert_allowlist_refusal(payload)
     assert _OFF_ALLOWLIST_CODEX in payload["detail"]
@@ -8938,9 +9451,71 @@ def test_entry_allowlist_refuses_brief_check_cli(tmp_path):
         ],
         capture_output=True, text=True, check=False,
     )
-    assert proc.returncode == 0
+    assert proc.returncode == 1
     payload = json.loads(proc.stdout)
     _assert_allowlist_refusal(payload)
+
+
+def test_dispatch_review_cli_non_terminal_running_exits_0(tmp_path, monkeypatch, capsys):
+    run_dir = str(tmp_path / "run-running-cli")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    _running_slice_capture(monkeypatch)
+    rc = ED.main([
+        "dispatch-review",
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--prompt-path", _valid_prompt(tmp_path),
+        "--repo-root", repo_root,
+        "--run-dir", run_dir,
+        "--max-wait", "1",
+    ])
+    assert rc == 0
+    res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert res["terminal"] is False
+    assert res["reason"] == ED.dispatch_outcome.REASON_RUNNING
+
+
+def test_dispatch_poll_cli_exits_0(tmp_path, capsys):
+    run_dir = str(tmp_path / "run-poll-cli")
+    _manual_open_review_run(tmp_path, run_dir)
+    rc = ED.main(["dispatch-poll", "--run-dir", run_dir])
+    assert rc == 0
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res["reason"] == ED.dispatch_outcome.REASON_RUNNING
+
+
+def test_dispatch_poll_cli_run_dir_symlink_refused_exits_1(tmp_path, capsys):
+    real_dir = tmp_path / "real-run"
+    real_dir.mkdir()
+    symlink = tmp_path / "run-link"
+    symlink.symlink_to(real_dir)
+    rc = ED.main(["dispatch-poll", "--run-dir", str(symlink)])
+    assert rc == 1
+    result = json.loads(capsys.readouterr().out.strip())
+    assert result["ok"] is False
+    assert result["detail"] == "run-dir-is-symlink"
+
+
+def test_dispatch_abandon_cli_run_dir_symlink_refused_exits_1(tmp_path, capsys):
+    real_dir = tmp_path / "real-run"
+    real_dir.mkdir()
+    symlink = tmp_path / "run-link"
+    symlink.symlink_to(real_dir)
+    rc = ED.main(["dispatch-abandon", "--run-dir", str(symlink)])
+    assert rc == 1
+    result = json.loads(capsys.readouterr().out.strip())
+    assert result["ok"] is False
+    assert result["detail"] == "run-dir-is-symlink"
+
+
+def test_dispatch_abandon_cli_exits_0_despite_unrunnable_json(tmp_path, capsys):
+    run_dir = str(tmp_path / "run-abandon-cli")
+    _manual_open_review_run(tmp_path, run_dir)
+    rc = ED.main(["dispatch-abandon", "--run-dir", run_dir])
+    assert rc == 0
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res["terminal"] is True
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["detail"] == "run-abandoned"
 
 
 def test_spawn_gate_refuses_pre_upgrade_journal_without_resolved_inputs(tmp_path):
@@ -9137,6 +9712,53 @@ def test_wo10_edge2_injected_seam_refuses_argv_snapshot_mismatch(tmp_path):
     assert "does not match resolvedInputs snapshot" in detail
     assert _OFF_ALLOWLIST_CODEX in detail
     assert fake.calls == []
+
+
+def test_marker_channel_retired_run_honors_guard_refusal_over_retirement(tmp_path):
+    # axis: pre-upgrade codex journal without channel/resolvedInputs — spawn-gate guardRefusal
+    # folds as unrunnable, not marker-channel-retired.
+    run_dir = str(tmp_path / "marker-guard-refusal")
+    _manual_open_review_run(tmp_path, run_dir)
+    _strip_opened_to_marker_channel(run_dir)
+    path = ED._journal_path(run_dir)
+    records, _ = ED._journal_read(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            if rec.get("kind") == "run-opened":
+                rec.pop("resolvedInputs", None)
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1,
+        "childPid": os.getpid(), "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1,
+        "childPid": os.getpid(), "argv": list(opened["argv"]), "at": time.time(),
+    })
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended.get("guardRefusal") is True
+    assert "resolvedInputs" in (ended.get("refusal") or "")
+    res = ED._supervise(
+        run_dir, run_kind=ED.RUN_KIND_REVIEW,
+        deadline=time.monotonic() + 5,
+    )
+    assert res["terminal"] is True
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["forfeited"] is False
+    assert "resolvedInputs" in res["detail"]
+    assert res["detail"] != "marker-channel-retired"
+    assert ED.dispatch_outcome.classify_dispatch_result(res) == ED.dispatch_outcome.CLASSIFICATION_REFUSAL
+    assert ED.dispatch_outcome.exit_code(ED.dispatch_outcome.classify_dispatch_result(res)) == 1
 
 
 def test_wo10_edge3_supervise_folds_guard_refusal_terminal_unrunnable_no_retry(tmp_path, monkeypatch):
@@ -10164,6 +10786,382 @@ def test_sm2_1269_unreadable_journal_preserves_run_dir_on_refusal(tmp_path):
     assert res["runDir"] == os.path.realpath(run_dir)
 
 
+# --- #1270 WO-3: marker-guard detail on review path --------------------------------
+
+
+def _undeclared_marker_guard_detail(field, marker, source_markers):
+    vocabulary = ", ".join(sorted(source_markers))
+    return (
+        "resolvedInputs field %r source marker %r is not declared; accepted: %s"
+        % (field, marker, vocabulary)
+    )
+
+
+def test_dispatch_review_undeclared_marker_detail_surfaces_guard_message(tmp_path, monkeypatch):
+    shrunk = frozenset(
+        m for m in ED.resolved_inputs_vocab.SOURCE_MARKERS
+        if m != ED.resolved_inputs_vocab.CALLER
+    )
+    monkeypatch.setattr(ED.resolved_inputs_vocab, "SOURCE_MARKERS", shrunk)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "review-marker-guard")
+    result = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+        order_id="order-1",
+    )
+    expected_detail = _undeclared_marker_guard_detail(
+        "engine", ED.resolved_inputs_vocab.CALLER, shrunk,
+    )
+    assert result.get("ok") is False
+    assert result.get("terminal") is True
+    assert result.get("reason") == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert result.get("entryReason") == "internal-error"
+    assert result.get("detail") == expected_detail
+    assert "engine" in result.get("detail")
+    assert ED.resolved_inputs_vocab.CALLER in result.get("detail")
+    assert "accepted:" in result.get("detail")
+    assert result.get("runOpened") is False
+
+
+# --- #1270 WO-B1: native result channel at review open + stale result lifecycle ---
+
+
+def _review_opened_record(run_dir):
+    records, _ = ED._journal_read(run_dir)
+    return next(r for r in records if r.get("kind") == "run-opened")
+
+
+def test_codex_review_open_records_native_channel(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    opened = _review_opened_record(run_dir)
+    assert opened["channel"] == ERC.CHANNEL_NATIVE
+    schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
+    assert os.path.isfile(schema_path)
+    with open(schema_path, encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    assert on_disk == ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW)
+    built = EA.build_argv_result(_codex_seat(), "review", {"cwd": opened["cwd"]})
+    schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
+    assert opened["argv"] == built["argv"] + [
+        "--output-schema", schema_path,
+    ]
+
+
+def test_cursor_review_open_records_native_channel(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    seat = _reviewer_cursor_seat()
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        seat=seat,
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    opened = _review_opened_record(run_dir)
+    assert opened["channel"] == ERC.CHANNEL_NATIVE
+    schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
+    assert os.path.isfile(schema_path)
+    with open(schema_path, encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    assert on_disk == ERC.declared_schema("cursor", ERC.RUN_KIND_REVIEW)
+    built = EA.build_argv_result(seat, "review", {"cwd": opened["cwd"]})
+    assert opened["argv"] == built["argv"]
+    assert "-o" not in opened["argv"]
+    assert "--output-schema" not in opened["argv"]
+
+
+def test_codex_review_open_refuses_undeclarable_schema(tmp_path, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise ValueError("schema broke")
+
+    monkeypatch.setattr(ED.engine_result_channel, "declared_schema", boom)
+    run_dir = str(tmp_path / "run")
+    ok, detail = ED._open_review_run(
+        run_dir,
+        engine="codex",
+        argv=_codex_argv_for_run(_codex_seat(), "review", run_dir),
+        cwd=run_dir,
+        timeout=ED.RETRY_MIN_TIMEOUT,
+        retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=_valid_prompt(tmp_path),
+        view_path=None,
+        view_meta={"headSha": "abc"},
+        fed_prompt="go\n",
+        order_id="order-1",
+        progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert not ok
+    assert detail == "native-schema-undeclarable"
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") == "run-opened" for r in records)
+
+
+def test_codex_review_open_refuses_unwritable_schema(tmp_path, monkeypatch):
+    real_open = open
+    schema_name = ED.NATIVE_SCHEMA_NAME
+
+    def patched_open(path, *args, **kwargs):
+        if isinstance(path, str) and path.endswith(schema_name) and "w" in args:
+            raise OSError("simulated")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", patched_open)
+    run_dir = str(tmp_path / "run")
+    ok, detail = ED._open_review_run(
+        run_dir,
+        engine="codex",
+        argv=_codex_argv_for_run(_codex_seat(), "review", run_dir),
+        cwd=run_dir,
+        timeout=ED.RETRY_MIN_TIMEOUT,
+        retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=_valid_prompt(tmp_path),
+        view_path=None,
+        view_meta={"headSha": "abc"},
+        fed_prompt="go\n",
+        order_id="order-1",
+        progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert not ok
+    assert detail == "native-schema-unwritable"
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") == "run-opened" for r in records)
+
+
+def test_opened_channel_defaults_missing_key_to_marker():
+    opened = {"engine": "codex"}
+    assert ED._opened_channel(opened) == ERC.CHANNEL_MARKER
+
+
+# axis: stale native result at attempt-2 path refuses spawn without mutating occupant.
+def test_native_stale_result_file_refuses_second_spawn(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    attempt1_path = ED._native_result_path(run_dir, 1)
+    with open(attempt1_path, "w", encoding="utf-8") as fh:
+        fh.write('{"stub": true}\n')
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None, "at": time.time(),
+    })
+    attempt2_path = ED._native_result_path(run_dir, 2)
+    stale_content = '{"stale": true}\n'
+    with open(attempt2_path, "w", encoding="utf-8") as fh:
+        fh.write(stale_content)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    runner_called = []
+
+    def fake_run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
+        runner_called.append(list(argv))
+        return (_VALID_FINDINGS_STDOUT, False, 0, "")
+
+    ok, detail = ED._spawn_attempt(run_dir, state, 2, run_engine=fake_run_engine)
+    assert ok, detail
+    assert runner_called == []
+    assert open(attempt2_path, encoding="utf-8").read() == stale_content
+    assert os.path.isfile(attempt1_path)
+    records, _ = ED._journal_read(run_dir)
+    assert not any(
+        r.get("kind") == "engine-started" and r.get("attempt") == 2
+        for r in records
+    )
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 2
+    )
+    assert ended["exit"] == 127
+    assert ended["refusal"] == "native-result-path-occupied"
+
+
+# --- WO-B2 (#1270 L2): native-channel review grading --------------------------------
+
+
+_PC = importlib.util.spec_from_file_location(
+    "payload_contracts", os.path.join(_HERE, "..", "payload_contracts.py"))
+PC = importlib.util.module_from_spec(_PC)
+_PC.loader.exec_module(PC)
+
+_NATIVE_REVIEW_SECRET = "sk-EXAMPLEfakenotarealsecret0"
+
+
+def _native_review_branch(kind, **overrides):
+    investigated = ["path/to/file.py"]
+    if kind == "findings":
+        member = {}
+        for key in RFS.CANONICAL_MEMBER_KEYS:
+            schema = RFS.FINDING_PROPERTY_SCHEMAS[key]
+            if "enum" in schema:
+                member[key] = next(v for v in schema["enum"] if v is not None)
+            elif schema.get("type") == ["integer", "null"]:
+                member[key] = None
+            elif schema.get("type") == ["boolean", "null"]:
+                member[key] = None
+            elif schema.get("type") == ["string", "null"]:
+                member[key] = "example"
+            else:
+                member[key] = "example"
+        branch = {
+            "resultKind": "findings",
+            "findings": [member],
+            "verdicts": None,
+            "grouping": None,
+            "id": None,
+            "ruling": None,
+            "reason": None,
+            "newIssues": None,
+            "evidence": None,
+            "auditorVendor": None,
+            "investigated": investigated,
+        }
+    elif kind == "verdicts":
+        contract, _ = PC.payload_contract(PC.P_VERIFIERS)
+        elem = contract["elements"]["verdicts"]
+        verdict = {}
+        for field in list(elem.get("required") or []) + list(elem.get("optional") or ()):
+            if field == "verdict":
+                verdict[field] = elem["enums"]["verdict"][0]
+            elif field == "id":
+                verdict[field] = "finding-001"
+            elif field == "reason":
+                verdict[field] = "grounds"
+            else:
+                verdict[field] = None
+        branch = {
+            "resultKind": "verdicts",
+            "findings": None,
+            "verdicts": [verdict],
+            "grouping": None,
+            "id": None,
+            "ruling": None,
+            "reason": None,
+            "newIssues": None,
+            "evidence": None,
+            "auditorVendor": None,
+            "investigated": investigated,
+        }
+    elif kind == "grouping":
+        branch = {
+            "resultKind": "grouping",
+            "findings": None,
+            "verdicts": None,
+            "grouping": [{"member_ids": ["a-001", "b-002"]}],
+            "id": None,
+            "ruling": None,
+            "reason": None,
+            "newIssues": None,
+            "evidence": None,
+            "auditorVendor": None,
+            "investigated": investigated,
+        }
+    else:
+        contract, _ = PC.payload_contract(PC.P_AUDITS)
+        ruling = {
+            "id": "audit-seat",
+            "ruling": contract["enums"]["ruling"][0],
+            "reason": "grounds",
+        }
+        for opt in contract.get("optional") or ():
+            ruling[opt] = None
+        branch = {
+            "resultKind": "ruling",
+            "findings": None,
+            "verdicts": None,
+            "grouping": None,
+            "investigated": investigated,
+            **ruling,
+        }
+    branch.update(overrides)
+    return branch
+
+
+def _wrap_native_review_result(branch):
+    return {"result": branch}
+
+
+def _native_review_grade_state(
+    tmp_path,
+    branch,
+    *,
+    expected_result_kind=None,
+    stderr_tail="",
+    stdout="",
+    channel=ERC.CHANNEL_NATIVE,
+    schema=None,
+    result_path=None,
+    schema_path=None,
+    write_result=True,
+    write_schema=True,
+    attempt=1,
+):
+    run_dir = str(tmp_path / "run")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    if schema is None:
+        schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, expected_result_kind)
+    if schema_path is None:
+        schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
+    if result_path is None:
+        result_path = ED._native_result_path(run_dir, attempt)
+    if write_schema:
+        with open(schema_path, "w", encoding="utf-8") as fh:
+            json.dump(schema, fh, separators=(",", ":"))
+            fh.write("\n")
+    if write_result:
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+    with open(os.path.join(run_dir, "attempt-%d.stdout" % attempt), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    with open(os.path.join(run_dir, "attempt-%d.stderr" % attempt), "w", encoding="utf-8") as fh:
+        fh.write(stderr_tail)
+    opened = {
+        "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW,
+        "cwd": repo_root,
+        "fedPrompt": "",
+        "channel": channel,
+        "nativeSchemaPath": schema_path,
+    }
+    if expected_result_kind is not None:
+        opened["expectedResultKind"] = expected_result_kind
+    state = {
+        "opened": opened,
+        "attempts": {
+            attempt: {
+                "ended": {
+                    "exit": 0,
+                    "timedOut": False,
+                    "refusal": None,
+                    "stdoutBytes": len(stdout),
+                    "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    return run_dir, state
+
+
 # --- #1271 WO-L1-F: run_execution_record engagement.read round-trip ---
 
 
@@ -10188,20 +11186,18 @@ def _execution_record_completed_attempt(
             fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    payload_for_native = stdout
     if write_stdout:
-        if engine == "codex":
-            if not _is_codex_event_stream(stdout):
-                last_msg_path = ED._attempt_last_message_path(run_dir, 1)
-                with open(last_msg_path, "w", encoding="utf-8") as fh:
-                    fh.write(stdout)
-                stdout = _codex_event_stream(stdout)
-            else:
-                payload = EA.codex_review_payload_text(stdout, None)
-                if payload:
-                    with open(ED._attempt_last_message_path(run_dir, 1), "w", encoding="utf-8") as fh:
-                        fh.write(payload)
+        if engine == "codex" and not _is_codex_event_stream(stdout):
+            stdout = _codex_event_stream(stdout)
+        if engine == "codex" and _is_codex_event_stream(stdout):
+            extracted = _last_agent_message_text(stdout)
+            if extracted:
+                payload_for_native = extracted
         with open(stdout_path, "w", encoding="utf-8") as fh:
             fh.write(stdout)
+    if write_stdout and engine == "codex" and isinstance(payload_for_native, str):
+        _sync_native_review_result_from_stdout(run_dir, payload_for_native)
     with open(stderr_path, "w", encoding="utf-8") as fh:
         fh.write(stderr)
     ended = {
@@ -10278,38 +11274,750 @@ def test_observation_from_attempt_investigated_threading_raise_vs_unknown(tmp_pa
 
 def test_grade_review_attempt_investigated_disclosure_stamps_unknown_read(tmp_path):
     """Grading path: empty findings with accepted investigated paths stamps unknown read."""
-    run_dir = str(tmp_path / "grade-investigated-unknown-read")
     repo_root = _repo(tmp_path)
     rel = "src/main.py"
     real_file = os.path.join(repo_root, rel)
     os.makedirs(os.path.dirname(real_file), exist_ok=True)
     with open(real_file, "w", encoding="utf-8") as fh:
         fh.write("# main\n")
-    stdout = json.dumps({"findings": [], "investigated": [rel]})
-    os.makedirs(run_dir, exist_ok=True)
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write(stdout)
-    state = {
-        "opened": {
-            "engine": "codex",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    branch = _native_review_branch("findings")
+    branch["findings"] = []
+    branch["investigated"] = [rel]
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
     assert grade["engagement"]["read"] == "unknown"
     assert grade["investigated"] == [rel]
+
+
+def _codex_native_runner(branch, stderr_tail=""):
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+        return ("", False, 0, stderr_tail)
+    return runner
+
+
+# axis: _load_native_result_json reads a regular file with O_NOFOLLOW open.
+def test_load_native_result_json_reads_regular_file(tmp_path):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    payload = {"result": {"resultKind": "findings", "findings": []}}
+    result_path = ED._native_result_path(run_dir, 1)
+    with open(result_path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert detail is None
+    assert obj == payload
+
+
+# axis: _load_native_result_json O_NOFOLLOW open treats symlink as native-result-missing.
+def test_load_native_result_json_refuses_symlink_to_valid_file(tmp_path):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    real_path = tmp_path / "real.json"
+    real_path.write_text('{"result": {"ok": true}}\n', encoding="utf-8")
+    result_path = ED._native_result_path(run_dir, 1)
+    os.symlink(str(real_path), result_path)
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert obj is None
+    assert detail == "native-result-missing"
+
+
+# axis: _load_native_result_json returns missing for fifo without blocking read.
+def test_load_native_result_json_fifo_returns_missing_without_blocking(tmp_path):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    result_path = ED._native_result_path(run_dir, 1)
+    os.mkfifo(result_path)
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert obj is None
+    assert detail == "native-result-missing"
+
+
+# axis: _load_native_result_json treats directory and dangling symlink as native-result-missing.
+@pytest.mark.parametrize("plant", ["directory", "dangling_symlink"])
+def test_load_native_result_json_directory_and_dangling_symlink_are_missing(tmp_path, plant):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    result_path = ED._native_result_path(run_dir, 1)
+    if plant == "directory":
+        os.makedirs(result_path)
+    else:
+        os.symlink(str(tmp_path / "missing-target"), result_path)
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert obj is None
+    assert detail == "native-result-missing"
+
+
+# axis: _load_native_result_json fstat size over NATIVE_RESULT_MAX_BYTES refuses oversized.
+def test_load_native_result_json_oversized(tmp_path):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    result_path = ED._native_result_path(run_dir, 1)
+    with open(result_path, "wb") as fh:
+        fh.write(b"x" * (ERC.NATIVE_RESULT_MAX_BYTES + 1))
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert obj is None
+    assert detail == "native-result-oversized"
+
+
+# axis: _load_native_result_json in-loop read-length guard refuses when fstat under-reports size.
+def test_load_native_result_json_oversized_by_read_length(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    result_path = ED._native_result_path(run_dir, 1)
+    with open(result_path, "wb") as fh:
+        fh.write(b"x" * (ERC.NATIVE_RESULT_MAX_BYTES + 1))
+    real_fstat = ED.os.fstat
+
+    def fake_fstat(fd):
+        st = real_fstat(fd)
+        fields = list(st)
+        fields[6] = ERC.NATIVE_RESULT_MAX_BYTES
+        return os.stat_result(fields)
+
+    monkeypatch.setattr(ED.os, "fstat", fake_fstat)
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert obj is None
+    assert detail == "native-result-oversized"
+
+
+# axis: _load_native_result_json malformed utf-8 and invalid json return native-result-malformed.
+def test_load_native_result_json_malformed_utf8_and_json(tmp_path):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    result_path = ED._native_result_path(run_dir, 1)
+    with open(result_path, "wb") as fh:
+        fh.write(b"\xff\xfe")
+    obj, detail = ED._load_native_result_json(run_dir, 1)
+    assert obj is None
+    assert detail == "native-result-malformed"
+
+    run_dir2 = str(tmp_path / "run2")
+    os.makedirs(run_dir2)
+    result_path2 = ED._native_result_path(run_dir2, 1)
+    with open(result_path2, "w", encoding="utf-8") as fh:
+        fh.write("not-json\n")
+    obj2, detail2 = ED._load_native_result_json(run_dir2, 1)
+    assert obj2 is None
+    assert detail2 == "native-result-malformed"
+
+
+# axis: _load_native_result_json symlink at result path forfeits review as native-result-missing.
+def test_grade_native_review_attempt_symlinked_result_forfeits_missing(tmp_path):
+    branch = _native_review_branch("findings")
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    result_path = ED._native_result_path(run_dir, 1)
+    os.remove(result_path)
+    real_path = tmp_path / "valid.json"
+    with open(real_path, "w", encoding="utf-8") as fh:
+        json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+        fh.write("\n")
+    os.symlink(str(real_path), result_path)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-missing"
+
+
+# axis: _spawn_native_result_argv os.lstat occupancy refusal leaves occupant inode untouched.
+@pytest.mark.parametrize("occupant", ["dangling_symlink", "symlink_to_file", "regular_file", "directory"])
+def test_spawn_native_result_argv_refuses_occupied_path(tmp_path, occupant):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    opened = {"channel": ERC.CHANNEL_NATIVE, "engine": "codex"}
+    coherent = ["codex", "exec"]
+    result_path = ED._native_result_path(run_dir, 1)
+    regular_content = '{"occupied": true}\n'
+    symlink_target = tmp_path / "target.json"
+    dangling_target = tmp_path / "missing-target"
+    if occupant == "dangling_symlink":
+        os.symlink(str(dangling_target), result_path)
+    elif occupant == "symlink_to_file":
+        symlink_target.write_text('{"x": 1}\n', encoding="utf-8")
+        os.symlink(str(symlink_target), result_path)
+    elif occupant == "regular_file":
+        with open(result_path, "w", encoding="utf-8") as fh:
+            fh.write(regular_content)
+    else:
+        os.makedirs(result_path)
+    before = os.lstat(result_path)
+    before_link = (
+        os.readlink(result_path)
+        if occupant in ("dangling_symlink", "symlink_to_file")
+        else None
+    )
+    ok, argv, path, refusal = ED._spawn_native_result_argv(run_dir, 1, opened, coherent)
+    after = os.lstat(result_path)
+    assert ok is False
+    assert refusal == "native-result-path-occupied"
+    assert "-o" not in argv
+    assert path == result_path
+    assert after.st_mode == before.st_mode
+    assert after.st_ino == before.st_ino
+    if occupant == "dangling_symlink":
+        assert os.readlink(result_path) == before_link
+        assert not dangling_target.exists()
+    elif occupant == "symlink_to_file":
+        assert os.readlink(result_path) == before_link
+    elif occupant == "regular_file":
+        assert open(result_path, encoding="utf-8").read() == regular_content
+
+
+# axis: review supervise never hands dangling symlink result path to engine via -o argv.
+def test_native_dangling_symlink_at_result_path_is_never_handed_to_engine(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    attempt1_path = ED._native_result_path(run_dir, 1)
+    dangling_target = tmp_path / "never-created-target"
+    os.symlink(str(dangling_target), attempt1_path)
+    branch = _native_review_branch("findings")
+    fake = FakeRunner([_codex_native_runner(branch)])
+    res = ED._supervise(
+        run_dir,
+        run_kind=ED.RUN_KIND_REVIEW,
+        deadline=time.monotonic() + 30,
+        run_engine=fake,
+    )
+    assert res.get("terminal") is True
+    attempt1_path_after = ED._native_result_path(run_dir, 1)
+    assert os.path.islink(attempt1_path_after)
+    assert os.readlink(attempt1_path_after) == str(dangling_target)
+    assert not dangling_target.exists()
+    for call in fake.calls:
+        argv = call["argv"]
+        if "-o" in argv:
+            o_path = argv[argv.index("-o") + 1]
+            assert o_path != attempt1_path
+    records, _ = ED._journal_read(run_dir)
+    ended1 = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended1["refusal"] == "native-result-path-occupied"
+    assert fake.calls
+    attempt2_path = ED._native_result_path(run_dir, 2)
+    assert fake.calls[0]["argv"][-2:] == ["-o", attempt2_path]
+
+
+def test_journal_line_valid_json_not_object_is_typed_corruption(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(opened, separators=(",", ":")) + "\n")
+        fh.write("[1, 2]\n")
+        fh.write(json.dumps({
+            "kind": "attempt-ended", "attempt": 1,
+            "exit": 0, "timedOut": False, "refusal": None, "at": time.time(),
+        }, separators=(",", ":")) + "\n")
+    records, interior_corrupt, journal_state, corruption_classes = ED._journal_read_raw(run_dir)
+    assert interior_corrupt is True
+    assert len(records) == 2
+    assert records[0].get("kind") == "run-opened"
+    assert records[1].get("kind") == "attempt-ended"
+    ED._journal_state(records)
+    assert corruption_classes == [ED.JOURNAL_LINE_NOT_OBJECT]
+    assert ED._journal_corrupt_detail(corruption_classes) == (
+        "journal-corrupt:%s" % ED.JOURNAL_LINE_NOT_OBJECT
+    )
+
+
+def test_journal_corruption_class_does_not_leak_between_reads(tmp_path):
+    run_dir_a = str(tmp_path / "run-a")
+    run_dir_b = str(tmp_path / "run-b")
+    _manual_open_review_run(tmp_path, run_dir_a)
+    records_a, _ = ED._journal_read(run_dir_a)
+    opened = next(r for r in records_a if r.get("kind") == "run-opened")
+    path_a = ED._journal_path(run_dir_a)
+    with open(path_a, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(opened, separators=(",", ":")) + "\n")
+        fh.write("[1, 2]\n")
+        fh.write(json.dumps({
+            "kind": "attempt-ended", "attempt": 1,
+            "exit": 0, "timedOut": False, "refusal": None, "at": time.time(),
+        }, separators=(",", ":")) + "\n")
+    _manual_open_review_run(tmp_path, run_dir_b)
+    _, corrupt_a, _, classes_a = ED._journal_read_raw(run_dir_a)
+    assert corrupt_a is True
+    assert classes_a == [ED.JOURNAL_LINE_NOT_OBJECT]
+    records_b, corrupt_b, _, classes_b = ED._journal_read_raw(run_dir_b)
+    assert corrupt_b is False
+    assert classes_b == []
+    assert any(r.get("kind") == "run-opened" for r in records_b)
+    polled, _ = ED._dispatch_poll_impl(run_dir_b)
+    detail = str(polled.get("detail", ""))
+    assert "journal-corrupt" not in detail
+
+
+def test_native_result_path_occupied_exhausts_to_terminal_detail(tmp_path):
+    """axis: terminal forfeit detail after both native result paths are occupied, engine never invoked."""
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    path1 = ED._native_result_path(run_dir, 1)
+    path2 = ED._native_result_path(run_dir, 2)
+    with open(path1, "w", encoding="utf-8") as fh:
+        fh.write('{"occupied": 1}\n')
+    with open(path2, "w", encoding="utf-8") as fh:
+        fh.write('{"occupied": 2}\n')
+    fake = FakeRunner([])
+    res = ED._supervise(
+        run_dir,
+        run_kind=ED.RUN_KIND_REVIEW,
+        deadline=time.monotonic() + 30,
+        run_engine=fake,
+    )
+    assert res.get("terminal") is True
+    assert res["ok"] is False
+    assert res["reason"] == ED.dispatch_outcome.REASON_FORFEITED
+    assert "native-result-path-occupied" in str(res.get("detail", ""))
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("kind", ERC.REVIEW_RESULT_KINDS)
+def test_grade_native_review_attempt_good_result_each_kind(tmp_path, kind):
+    branch = _native_review_branch(kind)
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade["resultKind"] == kind
+
+
+def test_grade_native_review_attempt_result_missing(tmp_path):
+    run_dir, state = _native_review_grade_state(
+        tmp_path,
+        _native_review_branch("findings"),
+        write_result=False,
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-missing"
+
+
+def test_grade_native_review_attempt_result_symlink(tmp_path):
+    branch = _native_review_branch("findings")
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    result_path = ED._native_result_path(run_dir, 1)
+    os.remove(result_path)
+    os.symlink("/etc/hosts", result_path)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-missing"
+
+
+def test_grade_native_review_attempt_result_oversized(tmp_path):
+    branch = _native_review_branch("findings")
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    result_path = ED._native_result_path(run_dir, 1)
+    with open(result_path, "wb") as fh:
+        fh.write(b"x" * (ERC.NATIVE_RESULT_MAX_BYTES + 1))
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-oversized"
+
+
+def test_grade_native_review_attempt_result_malformed_json(tmp_path):
+    run_dir, state = _native_review_grade_state(tmp_path, _native_review_branch("findings"))
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        fh.write("not-json\n")
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-malformed"
+
+
+def test_grade_native_review_attempt_result_malformed_no_result_key(tmp_path):
+    run_dir, state = _native_review_grade_state(tmp_path, _native_review_branch("findings"))
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump({"findings": []}, fh)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-malformed"
+
+
+def test_grade_native_review_attempt_schema_unreadable(tmp_path):
+    run_dir, state = _native_review_grade_state(
+        tmp_path,
+        _native_review_branch("findings"),
+        schema_path=str(tmp_path / "missing-schema.json"),
+        write_schema=False,
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-schema-unreadable"
+
+
+def test_grade_native_review_attempt_schema_invalid(tmp_path):
+    branch = _native_review_branch("findings")
+    branch["findings"] = None
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-schema-invalid"
+    assert grade.get("validationReason")
+
+
+def test_grade_native_review_attempt_schema_invalid_severity_enum_injection(tmp_path):
+    branch = _native_review_branch("findings")
+    branch["findings"][0]["severity"] = "Critical (investigated)"
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-schema-invalid"
+
+
+def test_grade_native_review_attempt_kind_before_validation(tmp_path):
+    branch = _native_review_branch("verdicts")
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, expected_result_kind="findings",
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == ED.RESULT_KIND_MISMATCH_DETAIL
+    assert grade.get("detail") != "native-result-schema-invalid"
+
+
+def test_grade_native_review_attempt_unrecognised_kind_not_kind_mismatch(tmp_path):
+    # axis: unrecognised resultKind forfeits schema-invalid, not RESULT_KIND_MISMATCH_DETAIL
+    branch = _native_review_branch("findings")
+    branch["resultKind"] = "summary"
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, expected_result_kind="findings",
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") != ED.RESULT_KIND_MISMATCH_DETAIL
+    assert grade.get("detail") == "native-result-schema-invalid"
+
+
+def test_grade_native_review_attempt_scrubs_secret_from_result_and_journal(tmp_path):
+    finding = {}
+    for key in RFS.CANONICAL_MEMBER_KEYS:
+        schema = RFS.FINDING_PROPERTY_SCHEMAS[key]
+        if "enum" in schema:
+            finding[key] = next(v for v in schema["enum"] if v is not None)
+        elif schema.get("type") == ["integer", "null"]:
+            finding[key] = None
+        elif schema.get("type") == ["boolean", "null"]:
+            finding[key] = None
+        elif schema.get("type") == ["string", "null"]:
+            finding[key] = "example"
+        else:
+            finding[key] = "example"
+    finding["body"] = "log shows Authorization: Bearer %s" % _NATIVE_REVIEW_SECRET
+    branch = _native_review_branch("findings", findings=[finding])
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([_codex_native_runner(branch)])
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res.get("ok") is True
+    assert _NATIVE_REVIEW_SECRET not in json.dumps(res)
+    records, _ = ED._journal_read(res["runDir"])
+    assert _NATIVE_REVIEW_SECRET not in json.dumps(records)
+
+
+def test_grade_native_review_attempt_marker_channel_skips_native_forfeits(tmp_path):
+    branch = _native_review_branch("findings")
+    run_dir, state = _native_review_grade_state(
+        tmp_path,
+        branch,
+        channel=ERC.CHANNEL_MARKER,
+        stdout=_VALID_FINDINGS_STDOUT,
+    )
+    os.remove(ED._native_result_path(run_dir, 1))
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "ok" not in grade
+
+
+def test_grade_native_review_attempt_event_stream_tokens_reported_separately(tmp_path):
+    branch = _native_review_branch("findings")
+    stream = _codex_event_stream(
+        json.dumps({"findings": []}),
+        tokens_usage={
+            "input_tokens": 40000, "cached_input_tokens": 2000,
+            "output_tokens": 0, "reasoning_output_tokens": 0,
+        },
+    )
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, stdout=stream, stderr_tail="tokens used\n99,999\n")
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade["engagement"]["tokens"] == 42000
+    assert grade["engagement"]["source"] == "codex-events"
+    assert len(grade["findings"]) == 1
+
+
+def test_grade_native_review_attempt_stderr_without_tokens_reports_none(tmp_path):
+    branch = _native_review_branch("findings")
+    run_dir, state = _native_review_grade_state(tmp_path, branch, stderr_tail="no token line\n")
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade["engagement"]["tokens"] is None
+    assert grade["engagement"]["source"] == "none"
+
+
+def test_codex_native_review_spawn_argv_journals_single_output_flag(tmp_path):
+    """WO-2a (a): native codex review journals one -o path plus --json and --output-schema."""
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+    )
+    records, _ = ED._journal_read(run_dir)
+    launching = next(
+        r for r in records
+        if r.get("kind") == "engine-launching" and r.get("attempt") == 1)
+    spawn_argv = launching["spawnArgv"]
+    assert spawn_argv.count("-o") + spawn_argv.count("--output-last-message") == 1
+    o_idx = spawn_argv.index("-o")
+    assert spawn_argv[o_idx + 1] == ED._native_result_path(run_dir, 1)
+    assert "--json" in spawn_argv
+    assert "--output-schema" in spawn_argv
+
+
+def test_native_review_missing_result_with_stdout_agent_message_forfeits(tmp_path):
+    """WO-2a (b): stdout agent_message cannot admit when the typed native file is absent."""
+    stream = _codex_event_stream(_VALID_FINDINGS_STDOUT)
+    run_dir, state = _native_review_grade_state(
+        tmp_path,
+        _native_review_branch("findings"),
+        write_result=False,
+        stdout=stream,
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-missing"
+    assert "findings" not in grade
+
+
+def test_run_execution_record_native_parse_binding_survives_view_removal(tmp_path):
+    """F1: parse-only native binding keeps resultDigest after sanitized view is destroyed."""
+    round_records_spec = importlib.util.spec_from_file_location(
+        "round_records", os.path.join(_HERE, "..", "round_records.py"))
+    round_records = importlib.util.module_from_spec(round_records_spec)
+    round_records_spec.loader.exec_module(round_records)
+    rel = "src/main.py"
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, rel)
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    branch = _native_review_branch("findings", findings=[], investigated=[rel])
+    stream = _codex_event_stream(json.dumps({"resultKind": "findings", **branch}))
+    run_dir = str(tmp_path / "native-parse-binding-fold")
+    _repo_root, view = _manual_open_review_run(tmp_path, run_dir)
+    schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
+    result_path = ED._native_result_path(run_dir, 1)
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW)
+    with open(schema_path, "w", encoding="utf-8") as fh:
+        json.dump(schema, fh, separators=(",", ":"))
+        fh.write("\n")
+    with open(result_path, "w", encoding="utf-8") as fh:
+        json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+        fh.write("\n")
+    journal_path = ED._journal_path(run_dir)
+    records, _ = ED._journal_read(run_dir)
+    with open(journal_path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            if rec.get("kind") == "run-opened":
+                rec = dict(rec)
+                rec["channel"] = ERC.CHANNEL_NATIVE
+                rec["nativeSchemaPath"] = schema_path
+                rec["nativeResultPath"] = result_path
+                rec["echoNonce"] = "native-parse-binding-nonce"
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stream)
+    with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "signal": None,
+        "refusal": None, "at": time.time(),
+        "wallSeconds": 1.0, "stdoutBytes": len(stream),
+    })
+    state = ED._journal_state(ED._journal_read(run_dir)[0])
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    _SV_MOD.destroy_sanitized_view(view["path"])
+    record, err = ED.run_execution_record(run_dir)
+    assert err is None
+    assert record.get("resultKind") == "findings"
+    assert record.get("resultDigest") == round_records.payload_sha256([])
+
+
+def test_run_execution_record_native_review_evidence_binding(tmp_path):
+    """WO-2a (c): native admission digest matches round_driver evidence assembly."""
+    round_driver_spec = importlib.util.spec_from_file_location(
+        "round_driver", os.path.join(_HERE, "..", "round_driver.py"))
+    round_driver = importlib.util.module_from_spec(round_driver_spec)
+    round_driver_spec.loader.exec_module(round_driver)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    branch = _native_review_branch("findings")
+    stream = _codex_event_stream(json.dumps({"resultKind": "findings", **branch}))
+    fake = FakeRunner([(stream, False, 0, "")])
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+    )
+    assert res["ok"] is True
+    record, err = ED.run_execution_record(run_dir)
+    assert err is None
+    assert record.get("resultDigest")
+    assert record.get("resultKind") == "findings"
+    envelope = {
+        "orderSha256": record["orderPromptSha256"],
+        "payload": {"findings": res["findings"]},
+    }
+    assembled, refusal, _extra = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir)
+    assert refusal is None
+    assert assembled is not None
+    mutated = [dict(res["findings"][0], id="mutated-id")]
+    bad_envelope = {
+        "orderSha256": record["orderPromptSha256"],
+        "payload": {"findings": mutated},
+    }
+    assembled_bad, refusal_bad, _extra_bad = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), bad_envelope, run_dir)
+    assert assembled_bad is None
+    assert refusal_bad == "evidence-result-mismatch"
+
+
+def test_run_execution_record_native_forfeit_omits_result_binding(tmp_path, monkeypatch):
+    """WO-2a (c): forfeited native review yields no execution-record result binding."""
+    monkeypatch.setattr(
+        sys.modules[__name__], "_write_native_review_result", lambda *_a, **_k: None)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    stream = _codex_event_stream(_VALID_FINDINGS_STDOUT)
+    fake = FakeRunner([(stream, False, 0, ""), (stream, False, 0, "")])
+    res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+    )
+    assert res.get("forfeit") or not res.get("ok")
+    assert res["forfeited"] is True
+    assert res["reason"] == _DO_MOD.REASON_FORFEITED
+    assert res["attempts"] == 2
+    assert len(fake.calls) == 2
+    record, err = ED.run_execution_record(run_dir)
+    assert err is None
+    assert isinstance(record, dict)
+    assert "resultDigest" not in record
+    assert "resultKind" not in record
+
+
+def test_codex_write_spawn_argv_uses_native_schema_not_last_message(tmp_path):
+    """WO-2b: codex write runs open on the native channel with schema and -o argv."""
+    cwd, _main = _linked_worktree_pair(tmp_path)
+    run_dir = str(tmp_path / "write-run")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    _dispatch_write(tmp_path, fake, cwd=cwd, run_dir=run_dir)
+    records, _ = ED._journal_read(run_dir)
+    launching = next(
+        r for r in records
+        if r.get("kind") == "engine-launching" and r.get("attempt") == 1)
+    spawn_argv = launching["spawnArgv"]
+    assert "--output-schema" in spawn_argv
+    assert "--json" in spawn_argv
+    assert "-o" in spawn_argv
+    assert "--output-last-message" not in spawn_argv
+    idx = spawn_argv.index("-o")
+    assert spawn_argv[idx + 1] == ED._native_result_path(run_dir, 1)
+
+
+def test_grade_native_review_attempt_marker_salvage_path_not_reached(tmp_path, monkeypatch):
+    branch = _native_review_branch("findings")
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("marker parser must not run on native review grade")
+
+    monkeypatch.setattr(ED.engine_adapter, "parse_result", boom)
+    monkeypatch.setattr(ED.engine_adapter, "normalize_review_stdout", boom)
+    monkeypatch.setattr(ED.engine_adapter, "review_payload_shape", boom)
+    monkeypatch.setattr(ED.engine_adapter, "review_artifact_shape", boom)
+    monkeypatch.setattr(ED.engine_adapter, "salvage_from_artifact", boom)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+
+
+def test_codex_review_open_appends_native_schema_contract(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([_codex_native_runner(_native_review_branch("findings"))])
+    ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    prompt_text = opened["fedPrompt"]
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW)
+    native_contract = ERC.review_result_contract_from_schema(schema)
+    legacy_contract = EA.REVIEW_RESULT_CONTRACT(None)
+    assert native_contract in prompt_text
+    assert legacy_contract in prompt_text
+    assert prompt_text.endswith(legacy_contract)
+    assert prompt_text.index(native_contract) < prompt_text.index(legacy_contract)
+
+
+def test_cursor_review_open_fed_prompt_omits_stdout_contract(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    prompt_text = opened["fedPrompt"]
+    assert "graded stdout" not in prompt_text
+    assert EA.REVIEW_RESULT_CONTRACT(opened.get("expectedResultKind")) not in prompt_text
+    schema = ERC.declared_schema("cursor", ERC.RUN_KIND_REVIEW)
+    native_contract = ERC.review_result_contract_from_schema(
+        schema, delivery=ERC.RESULT_DELIVERY_PROMPT)
+    assert native_contract in prompt_text
 
 
 def test_grade_and_observation_agree_on_engagement(tmp_path):
@@ -10329,73 +12037,31 @@ def test_grade_and_observation_agree_on_engagement(tmp_path):
         fh.write("# main\n")
 
     investigated_stdout = json.dumps({"findings": [], "investigated": [rel]})
-    run_dir_investigated = str(tmp_path / "agree-investigated")
-    os.makedirs(run_dir_investigated, exist_ok=True)
-    with open(os.path.join(run_dir_investigated, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
-        fh.write(investigated_stdout)
-    state_investigated = {
-        "opened": {
-            "engine": "codex",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(investigated_stdout), "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    branch = _native_review_branch("findings")
+    branch["findings"] = []
+    branch["investigated"] = [rel]
+    run_dir_investigated, state_investigated = _native_review_grade_state(
+        tmp_path, branch, stdout=investigated_stdout)
     _assert_agree(run_dir_investigated, state_investigated)
 
     cursor_stream = "\n".join([
         '{"type":"tool_call","call_id":"c1","subtype":"started"}',
     ])
-    run_dir_cursor = str(tmp_path / "agree-cursor")
-    os.makedirs(run_dir_cursor, exist_ok=True)
-    with open(os.path.join(run_dir_cursor, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
-        fh.write(cursor_stream)
-    state_cursor = {
-        "opened": {
-            "engine": "cursor",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(cursor_stream), "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    run_dir_cursor, state_cursor = _native_review_grade_state(
+        tmp_path, _native_review_branch("findings"), stdout=cursor_stream)
+    state_cursor["opened"]["engine"] = "cursor"
     _assert_agree(run_dir_cursor, state_cursor)
 
-    run_dir_unparseable = str(tmp_path / "agree-unparseable")
-    os.makedirs(run_dir_unparseable, exist_ok=True)
-    with open(os.path.join(run_dir_unparseable, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
-        fh.write("not json at all\n")
-    state_unparseable = {
-        "opened": {
-            "engine": "codex",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": 15, "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    branch = _native_review_branch("findings")
+    wrapped_stdout_payload = json.dumps({"result": branch})
+    native_stream = _codex_event_stream(wrapped_stdout_payload)
+    run_dir_native, state_native = _native_review_grade_state(
+        tmp_path, branch, stdout=native_stream, channel=ERC.CHANNEL_NATIVE)
+    _assert_agree(run_dir_native, state_native)
+
+    run_dir_unparseable, state_unparseable = _native_review_grade_state(
+        tmp_path, branch, stdout="not json at all\n", write_result=False)
+    os.remove(ED._native_result_path(run_dir_unparseable, 1))
     _assert_agree(run_dir_unparseable, state_unparseable)
 
 
@@ -10435,27 +12101,10 @@ def test_graded_review_attempt_spot_check_lists_unchanged(tmp_path):
     good = "good.py"
     with open(os.path.join(repo_root, good), "w", encoding="utf-8") as fh:
         fh.write("x\n")
-    stdout = json.dumps({"findings": [], "investigated": [good, "missing.py", "/abs/path"]})
-    run_dir = str(tmp_path / "spot-check-lists")
-    os.makedirs(run_dir, exist_ok=True)
-    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
-        fh.write(stdout)
-    state = {
-        "opened": {
-            "engine": "codex",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    branch = _native_review_branch("findings")
+    branch["findings"] = []
+    branch["investigated"] = [good, "missing.py", "/abs/path"]
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
     assert grade["investigated"] == [good]
@@ -10508,23 +12157,6 @@ def test_review_attempt_engagement_codex_fail_closed_edges():
     assert eng_d["source"] == "codex-events"
 
 
-def test_codex_review_payload_last_message_wins(tmp_path):
-    stream = _codex_event_stream('{"findings":[{"id":"stream"}]}')
-    last_msg = tmp_path / "last.txt"
-    last_msg.write_text(json.dumps({"findings": [{"id": "file"}]}), encoding="utf-8")
-    assert EA.codex_review_payload_text(stream, str(last_msg)) == last_msg.read_text()
-
-
-def test_codex_review_payload_agent_message_fallback():
-    stream = _codex_event_stream('{"findings":[{"id":"from-stream"}]}')
-    assert EA.codex_review_payload_text(stream, None) == '{"findings":[{"id":"from-stream"}]}'
-
-
-def test_codex_review_payload_both_absent_fail_closed():
-    assert EA.codex_review_payload_text("", None) is None
-    assert EA.codex_review_payload_text('{"type":"turn.completed"}', None) is None
-
-
 def test_cursor_engagement_construction_carries_telemetry_tool_calls():
     stream = '{"type":"tool_call","call_id":"c1","subtype":"started"}\n'
     engagement = ED._review_attempt_engagement("cursor", stream, "", 1.0, len(stream))
@@ -10533,33 +12165,16 @@ def test_cursor_engagement_construction_carries_telemetry_tool_calls():
 
 def test_payloadless_accepted_investigated_still_lands_engagement_read_unknown(tmp_path):
     """Known I1 boundary: accepted investigated still gates vacuity, not engagement.read."""
-    run_dir = str(tmp_path / "i1-boundary-accepted-investigated")
     repo_root = _repo(tmp_path)
     rel = "src/main.py"
     real_file = os.path.join(repo_root, rel)
     os.makedirs(os.path.dirname(real_file), exist_ok=True)
     with open(real_file, "w", encoding="utf-8") as fh:
         fh.write("# main\n")
-    stdout = json.dumps({"findings": [], "investigated": [rel]})
-    os.makedirs(run_dir, exist_ok=True)
-    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
-        fh.write(stdout)
-    state = {
-        "opened": {
-            "engine": "codex",
-            "roleKind": ED.RUN_KIND_REVIEW,
-            "cwd": repo_root,
-            "fedPrompt": "",
-        },
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0, "timedOut": False, "refusal": None,
-                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
-                },
-            },
-        },
-    }
+    branch = _native_review_branch("findings")
+    branch["findings"] = []
+    branch["investigated"] = [rel]
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
     assert grade.get("forfeit") is not True
@@ -10569,7 +12184,7 @@ def test_payloadless_accepted_investigated_still_lands_engagement_read_unknown(t
 
 
 def test_grade_review_attempt_engaged_by_nonempty_payload_without_investigated(tmp_path):
-    """Non-regression: non-empty payload with no accepted paths stays engaged."""
+    """Marker-opened direct grade collapses to retirement (#1270 layer 3c)."""
     run_dir = str(tmp_path / "grade-payload-only")
     repo_root = _repo(tmp_path)
     os.makedirs(run_dir, exist_ok=True)
@@ -10593,13 +12208,13 @@ def test_grade_review_attempt_engaged_by_nonempty_payload_without_investigated(t
         },
     }
     grade = ED._grade_review_attempt(run_dir, state, 1)
-    assert grade.get("ok") is True
-    assert grade["engagement"]["read"] == "engaged"
-    assert "investigated" not in grade
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "ok" not in grade
 
 
 def test_grade_review_attempt_vacuous_without_investigated_stamps_unknown(tmp_path):
-    """Non-regression: vacuous empty findings with no accepted paths stays unknown."""
+    """Marker-opened direct grade collapses to retirement (#1270 layer 3c)."""
     run_dir = str(tmp_path / "grade-vacuous-unknown")
     repo_root = _repo(tmp_path)
     stdout = json.dumps({"findings": []})
@@ -10625,8 +12240,8 @@ def test_grade_review_attempt_vacuous_without_investigated_stamps_unknown(tmp_pa
     }
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
-    assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
-    assert grade["engagement"]["read"] == "unknown"
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "ok" not in grade
 
 
 def test_run_execution_record_codex_vacuous_prompt_echo(tmp_path):
@@ -10837,4 +12452,1153 @@ def test_run_execution_record_omits_result_binding_when_parse_yields_nothing(tmp
     assert isinstance(record, dict)
     assert "resultDigest" not in record
     assert "resultKind" not in record
+
+
+# --- #1270 WO-2a2-A: the one admission authority ----
+
+
+def _native_findings_branch_from_example(example_obj):
+    branch = _native_review_branch("findings")
+    branch["findings"] = example_obj["findings"]
+    branch["investigated"] = example_obj["investigated"]
+    return branch
+
+
+def test_admit_native_review_schema_invalid_mistyped_investigated_forfeits(tmp_path):
+    # axis: mistyped investigated member → native-result-schema-invalid forfeit
+    branch = _native_review_branch("findings")
+    branch["investigated"] = ["path/to/file.py", 42]
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-schema-invalid"
+
+
+def test_admit_native_review_schema_invalid_mistyped_finding_member_forfeits(tmp_path):
+    # axis: mistyped finding member type → native-result-schema-invalid forfeit
+    branch = _native_review_branch("findings")
+    branch["findings"][0]["line"] = "not-an-integer"
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-schema-invalid"
+
+
+def test_admit_native_review_nonce_echo_validates_then_refuses(tmp_path):
+    # axis: schema-valid nonce echo still forfeits at grade as native-result-malformed
+    echo_nonce = "wo-2a2-a-nonce"
+    example = RFS.example_findings_object(echo_nonce)
+    branch = _native_findings_branch_from_example(example)
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, "findings")
+    ok, reason = ERC.validate(schema, _wrap_native_review_result(branch))
+    assert ok, reason
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, expected_result_kind="findings",
+    )
+    state["opened"]["echoNonce"] = echo_nonce
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-malformed"
+
+
+def test_admit_native_review_semantic_guards_use_adapter_not_scrub_branch(tmp_path):
+    # axis: admission path no longer exposes _scrub_native_review_branch
+    # axis: hollow finding (whitespace-only substance keys) → native-result-malformed
+    # axis: placeholder template id → native-result-malformed
+    assert not hasattr(ED, "_scrub_native_review_branch")
+    hollow = _native_review_branch("findings")
+    for key in RFS.SUBSTANCE_KEYS_CANONICAL:
+        hollow["findings"][0][key] = "   "
+    run_dir, state = _native_review_grade_state(tmp_path, hollow)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-malformed"
+    placeholder = _native_review_branch("findings")
+    placeholder["findings"][0]["id"] = EA.REVIEW_BASE_TEMPLATE_ID
+    run_dir2, state2 = _native_review_grade_state(tmp_path, placeholder)
+    grade2 = ED._grade_review_attempt(run_dir2, state2, 1)
+    assert grade2.get("forfeit") is True
+    assert grade2.get("detail") == "native-result-malformed"
+
+
+def test_admit_native_review_schema_substitution_refuses(tmp_path):
+    # axis: schema file substituted with empty object → native-schema-unreadable
+    branch = _native_review_branch("findings")
+    branch["findings"] = None
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    schema_path = state["opened"]["nativeSchemaPath"]
+    with open(schema_path, "w", encoding="utf-8") as fh:
+        json.dump({}, fh)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-schema-unreadable"
+
+
+def test_grade_native_review_attempt_ignores_stdout_on_semantic_refusal(tmp_path):
+    # axis: attempt-level grade reads the typed file only — marker stdout cannot rescue semantic refusal
+    hollow = _native_review_branch("findings")
+    for key in RFS.SUBSTANCE_KEYS_CANONICAL:
+        hollow["findings"][0][key] = "   "
+    run_dir, state = _native_review_grade_state(
+        tmp_path, hollow, stdout=_VALID_FINDINGS_STDOUT,
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("ok") is not True
+    assert grade.get("detail") == "native-result-malformed"
+
+
+def test_admit_native_review_parser_refusal_forfeit_payload_shape_describes_branch(tmp_path):
+    # axis: parser refusal forfeit carries payloadShape describing parsed branch
+    branch = _native_review_branch("verdicts")
+    branch["verdicts"][0]["reason"] = "   "
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, expected_result_kind="verdicts",
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-malformed"
+    shape = grade.get("payloadShape")
+    assert shape is not None
+    assert shape["parsed"] != EA.SHAPE_NO_PARSEABLE_JSON
+    assert shape["topLevelKeys"]
+    assert "resultKind" in shape["topLevelKeys"]
+
+
+# --- #1270 WO-2a2-B: one native result file per attempt ----
+
+
+def _native_two_attempt_spawn_fixture(tmp_path, run_dir):
+    """Open a native review run and end attempt 1 so attempt 2 can spawn."""
+    _manual_open_review_run(tmp_path, run_dir)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None, "at": time.time(),
+    })
+    records, _ = ED._journal_read(run_dir)
+    return ED._journal_state(records)
+
+
+def test_native_result_paths_differ_per_attempt_and_attempt1_preserved(tmp_path):
+    # axis: per-attempt native result paths differ; attempt-1 file preserved on attempt-2 spawn
+    run_dir = str(tmp_path / "run")
+    state = _native_two_attempt_spawn_fixture(tmp_path, run_dir)
+    path1 = ED._native_result_path(run_dir, 1)
+    path2 = ED._native_result_path(run_dir, 2)
+    assert path1 != path2
+    assert path1 == os.path.join(run_dir, "native-result-1.json")
+    assert path2 == os.path.join(run_dir, "native-result-2.json")
+    with open(path1, "w", encoding="utf-8") as fh:
+        fh.write('{"attempt": 1}\n')
+    before = open(path1, encoding="utf-8").read()
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        idx = argv.index("-o")
+        assert argv[idx + 1] == path2
+        with open(path2, "w", encoding="utf-8") as fh:
+            fh.write('{"attempt": 2}\n')
+        return ("", False, 0, "")
+
+    ok, detail = ED._spawn_attempt(run_dir, state, 2, run_engine=runner)
+    assert ok, detail
+    assert open(path1, encoding="utf-8").read() == before
+    assert os.path.isfile(path2)
+
+
+def test_grade_attempt2_does_not_read_attempt1_stale_result(tmp_path):
+    # axis: grading attempt 2 reads attempt-2 path only, not attempt-1 stale result
+    run_dir = str(tmp_path / "run")
+    branch = _native_review_branch("findings")
+    run_dir, state = _native_review_grade_state(tmp_path, branch, attempt=1)
+    attempt1_path = ED._native_result_path(run_dir, 1)
+    assert os.path.isfile(attempt1_path)
+    state["attempts"][2] = {
+        "ended": {
+            "exit": 0,
+            "timedOut": False,
+            "refusal": None,
+            "stdoutBytes": 0,
+            "wallSeconds": 1.0,
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 2)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-missing"
+
+
+def test_native_spawn_injected_seam_appends_attempt_o(tmp_path):
+    # axis: injected spawn seam appends -o with per-attempt native result path
+    run_dir = str(tmp_path / "run")
+    state = _native_two_attempt_spawn_fixture(tmp_path, run_dir)
+    captured = []
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        captured.append(list(argv))
+        return ("", False, 0, "")
+
+    ok, detail = ED._spawn_attempt(run_dir, state, 2, run_engine=runner)
+    assert ok, detail
+    assert captured[0][-2:] == ["-o", ED._native_result_path(run_dir, 2)]
+
+
+def test_native_spawn_production_path_appends_attempt_o(tmp_path, monkeypatch):
+    # axis: production run-child path appends -o with per-attempt native result path
+    run_dir = str(tmp_path / "run")
+    opened = _production_run_child_setup(tmp_path, run_dir)
+    captured = []
+
+    def fake_popen(argv, **kwargs):
+        captured.append(list(argv))
+
+        class _Proc:
+            pid = 4242
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        return _Proc()
+
+    monkeypatch.setattr(ED.subprocess, "Popen", fake_popen)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    assert captured[0][-2:] == ["-o", ED._native_result_path(run_dir, 1)]
+
+
+def test_native_review_retry_isolation_admits_attempt2_result_only(tmp_path):
+    """WO-2a2 merge (d): retry isolates per-attempt native result admission and binding."""
+    import round_records
+
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["echoNonce"] = "retry-isolation-nonce"
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+
+    branch1 = _native_review_branch("findings")
+    branch1["findings"][0]["id"] = "finding-attempt-one"
+    branch2 = _native_review_branch("findings")
+    branch2["findings"][0]["id"] = "finding-attempt-two"
+    attempt1_path = ED._native_result_path(run_dir, 1)
+    with open(attempt1_path, "w", encoding="utf-8") as fh:
+        json.dump(_wrap_native_review_result(branch1), fh, separators=(",", ":"))
+        fh.write("\n")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 1, "timedOut": False, "refusal": None,
+        "wallSeconds": 1.0, "stdoutBytes": 0, "at": time.time(),
+    })
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    attempt2_path = ED._native_result_path(run_dir, 2)
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        assert argv.count("-o") == 1
+        assert argv[argv.index("-o") + 1] == attempt2_path
+        with open(attempt2_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch2), fh, separators=(",", ":"))
+            fh.write("\n")
+        stream = _codex_event_stream(json.dumps({"resultKind": "findings", **branch2}))
+        return (stream, False, 0, "")
+
+    ok, detail = ED._spawn_attempt(run_dir, state, 2, run_engine=runner)
+    assert ok, detail
+    records, _ = ED._journal_read(run_dir)
+    launching = next(
+        r for r in records
+        if r.get("kind") == "engine-launching" and r.get("attempt") == 2)
+    assert launching["spawnArgv"].count("-o") == 1
+    assert launching["spawnArgv"][launching["spawnArgv"].index("-o") + 1] == attempt2_path
+    record, err = ED.run_execution_record(run_dir)
+    assert err is None
+    assert record.get("resultKind") == "findings"
+    expected_digest = round_records.payload_sha256(branch2["findings"])
+    assert record.get("resultDigest") == expected_digest
+    assert record.get("resultDigest") != round_records.payload_sha256(branch1["findings"])
+
+    run_dir2 = str(tmp_path / "run-inverse")
+    _manual_open_review_run(tmp_path, run_dir2)
+    records2, _ = ED._journal_read(run_dir2)
+    for rec in records2:
+        if rec.get("kind") == "run-opened":
+            rec["echoNonce"] = "retry-isolation-nonce-2"
+    with open(ED._journal_path(run_dir2), "w", encoding="utf-8") as fh:
+        for rec in records2:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    attempt1_only = ED._native_result_path(run_dir2, 1)
+    with open(attempt1_only, "w", encoding="utf-8") as fh:
+        json.dump(_wrap_native_review_result(branch1), fh, separators=(",", ":"))
+        fh.write("\n")
+    ED._journal_append(run_dir2, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 1, "timedOut": False, "refusal": None,
+        "wallSeconds": 1.0, "stdoutBytes": 0, "at": time.time(),
+    })
+    stream2 = _codex_event_stream(_VALID_FINDINGS_STDOUT)
+    with open(os.path.join(run_dir2, "attempt-2.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stream2)
+    records2, _ = ED._journal_read(run_dir2)
+    state2 = ED._journal_state(records2)
+    state2["attempts"][2] = {
+        "ended": {
+            "exit": 0, "timedOut": False, "refusal": None,
+            "stdoutBytes": len(stream2), "wallSeconds": 1.0,
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir2, state2, 2)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-missing"
+    assert "findings" not in grade
+    ED._journal_append(run_dir2, {
+        "kind": "attempt-ended", "attempt": 2,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "wallSeconds": 1.0, "stdoutBytes": len(stream2), "at": time.time(),
+    })
+    record2, err2 = ED.run_execution_record(run_dir2)
+    assert err2 is None
+    assert "resultDigest" not in record2
+    assert "resultKind" not in record2
+
+
+def test_native_spawn_g2_still_refuses_argv_snapshot_mismatch(tmp_path):
+    # axis: G2 argv coherence still refuses snapshot mismatch after per-attempt -o
+    run_dir = str(tmp_path / "wo2a2b-g2")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["argv"] = [
+                "codex", "exec", "--sandbox", "read-only",
+                "-m", _OFF_ALLOWLIST_CODEX, "-c", "model_reasoning_effort=high", "-",
+            ]
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    assert ok is False
+    assert "does not match resolvedInputs snapshot" in detail
+    assert _OFF_ALLOWLIST_CODEX in detail
+    assert fake.calls == []
+
+
+# --- #1270 WO-A layer 3c: cursor typed-file native channel --------------------
+
+
+_LAYER_3B_CURSOR_REVIEW_ARGV = [
+    "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust",
+    "--mode", "plan", "--output-format", "stream-json",
+]
+
+
+def _cursor_stream_with_tool_calls(count):
+    lines = []
+    for i in range(count):
+        call_id = "c%d" % (i + 1)
+        lines.append(json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+        }))
+        lines.append(json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "completed",
+        }))
+    return "\n".join(lines)
+
+
+def _cursor_native_findings_runner(tool_calls=0):
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        branch = _native_review_branch("findings")
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+        return _cursor_stream_with_tool_calls(tool_calls), False, 0, ""
+    return runner
+
+
+def _cursor_edit_tool_call_stream(path, call_id="tool_edit1"):
+    return "\n".join([
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"editToolCall": {"args": {"path": path}}},
+        }),
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "completed",
+            "tool_call": {"editToolCall": {"args": {"path": path}}},
+        }),
+    ])
+
+
+def _cursor_shell_tool_call_stream(command, call_id="tool_shell1"):
+    return "\n".join([
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"shellToolCall": {"args": {"command": command}}},
+        }),
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "completed",
+            "tool_call": {"shellToolCall": {"args": {"command": command}}},
+        }),
+    ])
+
+
+def _plant_layer_3b_cursor_review_journal(tmp_path, run_dir, repo_root):
+    os.makedirs(run_dir, exist_ok=True)
+    prompt_path = _valid_prompt(tmp_path)
+    seat = _reviewer_cursor_seat()
+    fed = _fed_prompt(open(prompt_path, encoding="utf-8").read(), view_meta={"headSha": "abc"})
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "cursor",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "layer-3b",
+        "argv": list(_LAYER_3B_CURSOR_REVIEW_ARGV),
+        "cwd": repo_root, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+        "fedPrompt": fed,
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+
+
+def _plant_native_cursor_review_journal(tmp_path, run_dir, repo_root):
+    os.makedirs(run_dir, exist_ok=True)
+    prompt_path = _valid_prompt(tmp_path)
+    seat = _reviewer_cursor_seat()
+    fed = _fed_prompt(open(prompt_path, encoding="utf-8").read(), view_meta={"headSha": "abc"})
+    argv = _cursor_argv_for_run(seat, "review", run_dir)
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", list(argv), ED.RUN_KIND_REVIEW,
+    )
+    assert native_err is None, native_err
+    opened = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "cursor",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "native-occupied",
+        "argv": argv,
+        "cwd": repo_root, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE,
+        "supervisorPid": 1, "at": time.time(),
+        "fedPrompt": fed,
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    if native_schema_path is not None:
+        opened["nativeSchemaPath"] = native_schema_path
+    ED._journal_append(run_dir, opened)
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+
+
+def _journal_with_non_object_line(run_dir):
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(opened, separators=(",", ":")) + "\n")
+        fh.write("[]\n")
+
+
+def test_cursor_review_admits_typed_file_through_injected_seam(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([_cursor_native_findings_runner(tool_calls=2)])
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["resultKind"] == "findings"
+    assert res["engagement"]["source"] == "cursor-stream"
+    assert res["engagement"]["toolCalls"] == 2
+    assert res["engagement"]["telemetry"] == "tool-calls"
+    opened = _review_opened_record(res["runDir"])
+    assert opened["channel"] == ERC.CHANNEL_NATIVE
+    argv = opened["argv"]
+    assert "-f" in argv
+    assert "--sandbox" in argv
+    assert "enabled" in argv
+    assert "--mode" not in argv
+    assert "-o" not in argv
+    assert "--output-schema" not in argv
+    records, _ = ED._journal_read(res["runDir"])
+    launching = next(
+        r for r in records
+        if r.get("kind") == "engine-launching" and r.get("attempt") == 1)
+    assert "-o" not in launching["spawnArgv"]
+    assert "--output-schema" not in launching["spawnArgv"]
+    started = next(r for r in records if r.get("kind") == "engine-started")
+    assert started["attemptPromptPath"].endswith("prompt-attempt-1.md")
+    attempt_prompt = open(started["attemptPromptPath"], encoding="utf-8").read()
+    result_path = os.path.join(res["runDir"], "native-result-1.json")
+    assert ERC.RESULT_FILE_LINE_PREFIX + result_path in attempt_prompt
+    with open(os.path.join(res["runDir"], ED.NATIVE_SCHEMA_NAME), encoding="utf-8") as fh:
+        schema_on_disk = fh.read().rstrip("\n")
+    assert schema_on_disk in attempt_prompt
+
+
+def test_cursor_result_file_write_is_not_engagement(tmp_path):
+    repo_root = _repo(tmp_path)
+    rel = "path/to/file.py"
+    os.makedirs(os.path.join(repo_root, os.path.dirname(rel)), exist_ok=True)
+    with open(os.path.join(repo_root, rel), "w", encoding="utf-8") as fh:
+        fh.write("# investigated\n")
+    branch = _native_review_branch("findings", findings=[])
+
+    def write_only_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+        return _cursor_edit_tool_call_stream(result_path), False, 0, ""
+
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([write_only_runner]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["engagement"]["toolCalls"] == 0
+    assert res["engagement"]["read"] == "unknown"
+
+    def write_plus_shell_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+        stream = _cursor_edit_tool_call_stream(result_path, "w1")
+        stream += "\n" + _cursor_shell_tool_call_stream("ls", "s1")
+        return stream, False, 0, ""
+
+    res2 = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([write_plus_shell_runner]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res2["ok"] is True
+    assert res2["engagement"]["toolCalls"] == 1
+    assert res2["engagement"]["read"] == "engaged"
+
+
+def test_stage_attempt_prompt_unreadable_prompt_refuses_prompt_unreadable(tmp_path):
+    run_dir = str(tmp_path / "unreadable-prompt")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    seat = _reviewer_cursor_seat()
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", _cursor_argv_for_run(seat, "review", run_dir), ED.RUN_KIND_REVIEW,
+    )
+    assert native_err is None
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "cursor",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "unreadable-prompt",
+        "argv": argv, "cwd": repo_root, "timeout": 30, "retryTimeout": 30,
+        "promptPath": str(tmp_path / "missing-prompt.md"),
+        "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "nativeSchemaPath": native_schema_path,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    })
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    assert ok is True
+    assert detail == ""
+    assert fake.calls == []
+    ended = next(
+        r for r in ED._journal_read(run_dir)[0]
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "prompt-unreadable"
+
+
+def test_stage_attempt_prompt_refuses_prompt_tampered(tmp_path):
+    run_dir = str(tmp_path / "prompt-tampered")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    prompt_path = os.path.join(run_dir, ED.PROMPT_NAME)
+    with open(prompt_path, "w", encoding="utf-8") as fh:
+        fh.write("original prompt\n")
+    seat = _reviewer_cursor_seat()
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", _cursor_argv_for_run(seat, "review", run_dir), ED.RUN_KIND_REVIEW,
+    )
+    assert native_err is None
+    opened = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "cursor",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "prompt-tampered",
+        "argv": argv, "cwd": repo_root, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "nativeSchemaPath": native_schema_path,
+        "stagedPromptSha256": hashlib.sha256(b"trusted-at-open\n").hexdigest(),
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    result_path = ED._native_result_path(run_dir, 1)
+    staged_path, prompt_sha, refusal = ED._stage_attempt_prompt(
+        run_dir, 1, opened, result_path,
+    )
+    assert staged_path is None
+    assert prompt_sha is None
+    assert refusal == "prompt-tampered"
+
+
+@pytest.mark.parametrize("schema_arm", ["absent", "directory", "symlink"])
+def test_stage_attempt_prompt_refusal_arms(tmp_path, schema_arm):
+    run_dir = str(tmp_path / ("schema-arm-" + schema_arm))
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    prompt_path = _valid_prompt(tmp_path)
+    seat = _reviewer_cursor_seat()
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", _cursor_argv_for_run(seat, "review", run_dir), ED.RUN_KIND_REVIEW,
+    )
+    assert native_err is None
+    if schema_arm == "absent":
+        schema_path = None
+    elif schema_arm == "directory":
+        schema_path = os.path.join(run_dir, "schema-dir")
+        os.makedirs(schema_path)
+    else:
+        schema_path = os.path.join(run_dir, "schema-link")
+        real = tmp_path / "real-schema.json"
+        real.write_text('{"type":"object"}\n', encoding="utf-8")
+        os.symlink(str(real), schema_path)
+    opened = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "cursor",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "schema-arm",
+        "argv": argv, "cwd": repo_root, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    if schema_path is not None:
+        opened["nativeSchemaPath"] = schema_path
+    ED._journal_append(run_dir, opened)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    assert ok is True
+    assert detail == ""
+    ended = next(
+        r for r in ED._journal_read(run_dir)[0]
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "native-schema-unreadable"
+
+
+def test_stage_attempt_prompt_refusal_readonly_run_dir(tmp_path):
+    run_dir = str(tmp_path / "readonly-run")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    prompt_path = _valid_prompt(tmp_path)
+    seat = _reviewer_cursor_seat()
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", _cursor_argv_for_run(seat, "review", run_dir), ED.RUN_KIND_REVIEW,
+    )
+    assert native_err is None
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "cursor",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "readonly-run",
+        "argv": argv, "cwd": repo_root, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "nativeSchemaPath": native_schema_path,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    })
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    try:
+        os.chmod(run_dir, 0o500)
+        ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    finally:
+        os.chmod(run_dir, 0o755)
+    assert ok is True
+    assert detail == ""
+    ended = next(
+        r for r in ED._journal_read(run_dir)[0]
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "attempt-prompt-unwritable"
+
+
+def test_engine_started_always_carries_attempt_prompt_sha_for_cursor(tmp_path):
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([_cursor_native_findings_runner()]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    records, _ = ED._journal_read(res["runDir"])
+    started = next(r for r in records if r.get("kind") == "engine-started")
+    assert "attemptPromptSha256" in started
+    assert started["attemptPromptSha256"] == hashlib.sha256(
+        open(started["attemptPromptPath"], "rb").read(),
+    ).hexdigest()
+
+
+def test_cursor_write_admits_typed_file_through_injected_seam(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    native = {
+        "ok": True, "signal": "ok", "report": "Receipt prose.",
+        "evidence": {"testFailed": False, "testPassed": True},
+    }
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(native, fh, separators=(",", ":"))
+            fh.write("\n")
+        return _cursor_stream_with_tool_calls(1), False, 0, ""
+
+    fake = FakeRunner([runner])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, seat=_cursor_seat(role=_WRITE_ROLE),
+    )
+    assert res["ok"] is True
+    assert res["signal"] == "ok"
+    assert res["evidence"]["testPassed"] is True
+    spawn_argv = fake.calls[0]["argv"]
+    assert "-f" in spawn_argv
+    assert "--sandbox" in spawn_argv
+    assert "enabled" in spawn_argv
+    assert "-o" not in spawn_argv
+    assert "--output-schema" not in spawn_argv
+
+
+def test_cursor_review_missing_typed_file_forfeits_native_result_missing(tmp_path):
+    repo_root = _repo(tmp_path)
+
+    def noop_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return _cursor_stream_with_tool_calls(1), False, 0, ""
+
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([noop_runner, noop_runner]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-missing"
+    assert res.get("payloadShape", {}).get("parsed") == EA.SHAPE_EMPTY_STDOUT
+
+
+def test_cursor_review_prompt_tamper_on_retry_refuses_prompt_tampered(tmp_path):
+    repo_root = _repo(tmp_path)
+
+    def tamper_attempt1(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        run_dir = os.path.dirname(result_path)
+        with open(os.path.join(run_dir, ED.PROMPT_NAME), "w", encoding="utf-8") as fh:
+            fh.write("attacker-controlled retry prompt\n")
+        return _cursor_stream_with_tool_calls(1), False, 0, ""
+
+    fake = FakeRunner([tamper_attempt1])
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "prompt-tampered"
+    assert len(fake.calls) == 1
+    records, _ = ED._journal_read(res["runDir"])
+    ended2 = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 2
+    )
+    assert ended2["refusal"] == "prompt-tampered"
+
+
+def test_cursor_review_schema_invalid_file_forfeits(tmp_path):
+    repo_root = _repo(tmp_path)
+
+    def invalid_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({
+                "result": {"resultKind": "findings", "findings": "nope"},
+            }, fh, separators=(",", ":"))
+            fh.write("\n")
+        return "", False, 0, ""
+
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([invalid_runner, invalid_runner]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-schema-invalid"
+
+
+def test_cursor_write_schema_invalid_file_forfeits(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+
+    def invalid_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({"ok": True}, fh, separators=(",", ":"))
+            fh.write("\n")
+        return "", False, 0, ""
+
+    res = _dispatch_write(
+        tmp_path, FakeRunner([invalid_runner, invalid_runner]),
+        cwd=wt, seat=_cursor_seat(role=_WRITE_ROLE),
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-schema-invalid"
+
+
+def test_cursor_typed_file_secret_scrubbed_from_result_and_journal(tmp_path):
+    finding = {}
+    for key in RFS.CANONICAL_MEMBER_KEYS:
+        schema = RFS.FINDING_PROPERTY_SCHEMAS[key]
+        if "enum" in schema:
+            finding[key] = next(v for v in schema["enum"] if v is not None)
+        elif schema.get("type") == ["integer", "null"]:
+            finding[key] = None
+        elif schema.get("type") == ["boolean", "null"]:
+            finding[key] = None
+        elif schema.get("type") == ["string", "null"]:
+            finding[key] = "example"
+        else:
+            finding[key] = "example"
+    secret = "ghp_" + ("a" * 36)
+    finding["body"] = "log shows %s" % secret
+    branch = _native_review_branch("findings", findings=[finding])
+    stream = _cursor_stream_with_tool_calls(1) + "\n" + secret
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+        return stream, False, 0, ""
+
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=FakeRunner([runner]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res.get("ok") is True
+    assert secret not in json.dumps(res)
+    records, _ = ED._journal_read(res["runDir"])
+    assert secret not in json.dumps(records)
+    polled = ED.dispatch_poll(res["runDir"])
+    assert secret not in json.dumps(polled)
+
+
+def test_cursor_native_result_path_occupied_refuses_attempt(tmp_path):
+    run_dir = str(tmp_path / "occupied-result")
+    repo_root = _repo(tmp_path)
+    _plant_native_cursor_review_journal(tmp_path, run_dir, repo_root)
+    occupied = ED._native_result_path(run_dir, 1)
+    with open(occupied, "w", encoding="utf-8") as fh:
+        fh.write('{"occupied": true}\n')
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    assert ok is True
+    assert detail == ""
+    assert fake.calls == []
+    ended = next(
+        r for r in ED._journal_read(run_dir)[0]
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "native-result-path-occupied"
+
+
+@pytest.mark.parametrize("plant", ["regular_file", "symlink", "dangling_symlink", "directory"])
+def test_cursor_attempt_prompt_occupied_refuses_attempt(tmp_path, plant):
+    run_dir = str(tmp_path / ("occupied-prompt-" + plant))
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    prompt_path = _valid_prompt(tmp_path)
+    seat = _reviewer_cursor_seat()
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", _cursor_argv_for_run(seat, "review", run_dir), ED.RUN_KIND_REVIEW,
+    )
+    assert native_err is None
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "cursor",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "occupied-prompt",
+        "argv": argv, "cwd": repo_root, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "nativeSchemaPath": native_schema_path,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    })
+    attempt_prompt = os.path.join(run_dir, "prompt-attempt-1.md")
+    if plant == "regular_file":
+        with open(attempt_prompt, "w", encoding="utf-8") as fh:
+            fh.write("occupied\n")
+    elif plant == "symlink":
+        real = tmp_path / "real-prompt.md"
+        real.write_text("target\n", encoding="utf-8")
+        os.symlink(str(real), attempt_prompt)
+        target_before = real.read_text(encoding="utf-8")
+    elif plant == "dangling_symlink":
+        os.symlink(str(tmp_path / "missing-prompt-target"), attempt_prompt)
+    else:
+        os.makedirs(attempt_prompt)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    assert ok is True
+    assert detail == ""
+    assert fake.calls == []
+    ended = next(
+        r for r in ED._journal_read(run_dir)[0]
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "attempt-prompt-occupied"
+    if plant == "symlink":
+        assert real.read_text(encoding="utf-8") == target_before
+
+
+def test_cursor_marker_opened_run_ends_marker_channel_retired(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "marker-retired-cursor-injected")
+    repo_root = _repo(tmp_path)
+    _plant_layer_3b_cursor_review_journal(tmp_path, run_dir, repo_root)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("injected run_engine must not run")
+
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=boom,
+        build_view=_never_build_view,
+        run_dir=run_dir,
+        max_wait=60,
+        order_id="layer-3b",
+    )
+    assert res["detail"] == "marker-channel-retired"
+    assert "coherence" not in str(res.get("detail", "")).lower()
+
+    production_run_dir = str(tmp_path / "marker-retired-cursor-production")
+    _plant_layer_3b_cursor_review_journal(tmp_path, production_run_dir, repo_root)
+    marker = tmp_path / "engine-ran.marker"
+    script = (
+        "import pathlib\n"
+        "pathlib.Path(%r).write_text('ran', encoding='utf-8')\n"
+        % str(marker)
+    )
+    _install_fake_cursor(monkeypatch, tmp_path, script)
+    stdout_path = os.path.join(production_run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(production_run_dir, "attempt-1.stderr")
+    records, _ = ED._journal_read(production_run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    ED._run_engine_files(
+        production_run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path, 30,
+        os.path.join(production_run_dir, "progress.jsonl"),
+    )
+    assert not marker.exists()
+    records, _ = ED._journal_read(production_run_dir)
+    ended = [
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    ][-1]
+    assert ended.get("guardRefusal") is not True
+    assert "resolvedInputs snapshot" not in ended.get("refusal", "")
+    assert ended.get("refusal") == "marker-channel-retired"
+
+
+@pytest.mark.parametrize("engine", ["codex", "cursor"])
+def test_canonical_spawn_argv_matches_opened_argv_both_engines(tmp_path, engine):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / ("canonical-" + engine))
+    if engine == "codex":
+        seat = _codex_seat()
+        fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    else:
+        seat = _reviewer_cursor_seat()
+        fake = FakeRunner([_cursor_native_findings_runner()])
+    ED.dispatch_review(
+        seat=seat,
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    opened = _review_opened_record(run_dir)
+    canonical, _suffix = ED._canonical_spawn_argv(opened)
+    assert canonical == opened["argv"]
+    if engine == "codex":
+        assert "--output-schema" in opened["argv"]
+        assert "-o" not in opened["argv"]
+    else:
+        assert "--output-schema" not in opened["argv"]
+        assert "-o" not in opened["argv"]
+
+
+def test_execution_record_binds_attempt_prompt_for_cursor(tmp_path):
+    repo_root = _repo(tmp_path)
+    prompt_path = _valid_prompt(tmp_path)
+    base_prompt = open(prompt_path, encoding="utf-8").read()
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=prompt_path,
+        repo_root=repo_root,
+        run_engine=FakeRunner([_cursor_native_findings_runner()]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    record, err = ED.run_execution_record(res["runDir"])
+    assert err is None
+    assert "attemptPromptPath" in record
+    attempt_bytes = open(record["attemptPromptPath"], "rb").read()
+    assert record["promptSha256"] == hashlib.sha256(attempt_bytes).hexdigest()
+    assert record["promptSha256"] != hashlib.sha256(base_prompt.encode("utf-8")).hexdigest()
+
+    codex_res = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path, "Codex prompt.\n"),
+        repo_root=repo_root,
+        run_engine=FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    codex_record, codex_err = ED.run_execution_record(codex_res["runDir"])
+    assert codex_err is None
+    assert "attemptPromptPath" not in codex_record
+    codex_prompt_path = next(
+        r["promptPath"] for r in ED._journal_read(codex_res["runDir"])[0]
+        if r.get("kind") == "run-opened"
+    )
+    assert codex_record["promptSha256"] == hashlib.sha256(
+        open(codex_prompt_path, "rb").read(),
+    ).hexdigest()
+
+
+def test_cursor_fed_prompt_has_one_output_instruction(tmp_path):
+    repo_root = _repo(tmp_path)
+    review_res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_PreservingNativeReviewFakeRunner([
+            lambda *_a, **_k: ("", False, 0, ""),
+        ]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    review_opened = _review_opened_record(review_res["runDir"])
+    review_fed = review_opened["fedPrompt"]
+    assert "result file named in the typed-file contract" in review_fed
+    assert "graded stdout" not in review_fed
+    assert "as your final stdout" not in review_fed
+    records, _ = ED._journal_read(review_res["runDir"])
+    started = next(r for r in records if r.get("kind") == "engine-started")
+    assert started["attemptPromptPath"].endswith("prompt-attempt-1.md")
+    review_attempt_prompt = open(started["attemptPromptPath"], encoding="utf-8").read()
+    assert ERC.RESULT_FILE_LINE_PREFIX in review_attempt_prompt
+    assert 'sole exception to "do not edit anything"' in review_attempt_prompt
+
+    wt, _main = _linked_worktree_pair(tmp_path)
+    write_res = _dispatch_write(
+        tmp_path,
+        _PreservingNativeReviewFakeRunner([lambda *_a, **_k: ("", False, 0, "")]),
+        cwd=wt, seat=_cursor_seat(role=_WRITE_ROLE),
+    )
+    write_opened = next(
+        r for r in ED._journal_read(write_res["runDir"])[0] if r.get("kind") == "run-opened")
+    write_fed = write_opened["fedPrompt"]
+    assert "result file named in the typed-file contract" in write_fed
+    assert "The final response must be" not in write_fed
+    write_started = next(
+        r for r in ED._journal_read(write_res["runDir"])[0]
+        if r.get("kind") == "engine-started")
+    write_attempt_prompt = open(write_started["attemptPromptPath"], encoding="utf-8").read()
+    assert "in addition to the repository changes your order asks for" in write_attempt_prompt
+    assert 'sole exception to "do not edit anything"' not in write_attempt_prompt
+
+    codex_review = ED.dispatch_review(
+        seat=_codex_seat(),
+        prompt_path=_valid_prompt(tmp_path, "Codex review.\n"),
+        repo_root=repo_root,
+        run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path),
+        max_wait=0,
+    )
+    codex_review_fed = _review_opened_record(codex_review["runDir"])["fedPrompt"]
+    assert EA.REVIEW_RESULT_CONTRACT(None) in codex_review_fed
+
+    codex_write = _dispatch_write(
+        tmp_path, FakeRunner([]), cwd=wt, max_wait=0,
+        run_dir=str(tmp_path / "run-codex-write"),
+    )
+    codex_write_fed = next(
+        r for r in ED._journal_read(codex_write["runDir"])[0] if r.get("kind") == "run-opened")["fedPrompt"]
+    assert "The final response must be" in codex_write_fed
+
+
+@pytest.mark.parametrize("site", [
+    "resolved_inputs_echo",
+    "supervision",
+    "execution_record",
+    "polling",
+    "abandonment",
+])
+def test_journal_line_not_object_refused_at_every_consumer_site(tmp_path, site):
+    run_dir = str(tmp_path / ("corrupt-" + site))
+    _manual_open_review_run(tmp_path, run_dir)
+    _journal_with_non_object_line(run_dir)
+    token = "journal-corrupt:%s" % ED.JOURNAL_LINE_NOT_OBJECT
+    if site == "resolved_inputs_echo":
+        echo = ED._resolved_inputs_echo_from_run_dir(run_dir)
+        assert token in echo.get("resolvedInputsStatus", "")
+    elif site == "supervision":
+        res = ED._supervise(
+            run_dir, run_kind=ED.RUN_KIND_REVIEW, deadline=time.monotonic() + 5,
+        )
+        assert token in str(res.get("detail", ""))
+    elif site == "execution_record":
+        record, err = ED.run_execution_record(run_dir)
+        assert record is None
+        assert token in (err or "")
+    elif site == "polling":
+        polled = ED.dispatch_poll(run_dir)
+        assert token in str(polled.get("detail", ""))
+    else:
+        abandoned = ED.dispatch_abandon(run_dir)
+        assert token in str(abandoned.get("detail", ""))
 

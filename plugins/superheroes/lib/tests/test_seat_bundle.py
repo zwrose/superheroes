@@ -84,7 +84,7 @@ def test_entry_clis_route_through_chokepoint_and_expose_seat_flag(cli_module, su
         payload = json.loads(out.splitlines()[0])
         assert payload["reason"] == "chokepoint-sentinel"
     else:
-        assert rc == 0
+        assert rc == 1
         result = json.loads(out.splitlines()[-1])
         assert result["detail"] == "sentinel"
 
@@ -636,6 +636,22 @@ def test_allowlist_guard_raise_refused(monkeypatch):
     )
     assert resolved["ok"] is False
     assert resolved["entryReason"] == "allowlist-raised"
+    assert resolved["detail"].startswith("allowlist guard raised unexpectedly")
+    assert "RuntimeError" in resolved["detail"]
+    assert "guard exploded" in resolved["detail"]
+
+
+def test_build_argv_vendors_public_name_matches_refusal_roster():
+    import engine_adapter as EA
+
+    assert set(EA.BUILD_ARGV_VENDORS) == {"codex", "cursor"}
+    resolved = SB.resolve_entry(
+        _seat_json("claude", "opus-5", "xhigh", _REVIEW_ROLE),
+        verb="dispatch-review",
+    )
+    assert resolved["ok"] is False
+    for vendor in EA.BUILD_ARGV_VENDORS:
+        assert vendor in resolved["detail"]
 
 
 def test_dict_seat_without_ok_promotion_refused():

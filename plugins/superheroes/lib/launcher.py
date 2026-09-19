@@ -891,8 +891,16 @@ def walk_preflight(
         if check_class == "always" and state == "na":
             return _fail("preflight-always-check-na:%s" % check_id)
 
+        entry_out = {
+            "id": check_id,
+            "class": check_class,
+            "state": state,
+            "reason": reason,
+            "evidence": entry.get("evidence", "") if isinstance(entry.get("evidence"), str) else "",
+        }
         if state == "fail":
-            return _fail("preflight-failed:%s" % check_id)
+            out_checks.append(entry_out)
+            return _fail("preflight-failed:%s" % check_id, checks=out_checks)
 
         if check_id == "disjoint-surfaces":
             if state == "na":
@@ -914,13 +922,7 @@ def walk_preflight(
             if slot_refusal is not None:
                 return slot_refusal
 
-        out_checks.append({
-            "id": check_id,
-            "class": check_class,
-            "state": state,
-            "reason": reason,
-            "evidence": entry.get("evidence", "") if isinstance(entry.get("evidence"), str) else "",
-        })
+        out_checks.append(entry_out)
 
     return {"ok": True, "reason": None, "checks": out_checks, "go": True, "doctrine": doctrine}
 

@@ -108,7 +108,7 @@ def _check_scalar_type(field, value, type_token, expected_phrase):
         if not isinstance(value, str):
             return _field_type(field, value, "a string")
     elif type_token == "non-empty-string":
-        if not isinstance(value, str) or not value:
+        if not isinstance(value, str) or not value or value.strip() == "":
             return _field_type(field, value, "a non-empty string")
     elif type_token == "boolean":
         if not isinstance(value, bool):
@@ -194,7 +194,7 @@ def _check_element_fields(list_field, index, element, elem_contract, extra_conte
         _assert_type_token(tok, "elements.%s.types" % list_field)
         label = _element_field_label(list_field, index, elem_field)
         if tok == "non-empty-string":
-            if not isinstance(value, str) or not value:
+            if not isinstance(value, str) or not value or value.strip() == "":
                 detail = "%s is %s, not a non-empty string" % (label, _type_name(value))
                 if (list_field == "verdicts" and elem_field == "id"
                         and "findingId" in element):
@@ -459,12 +459,12 @@ _PAYLOAD_FIELD_BINDINGS = {
         "types": {"verdicts": "list-of-objects"},
         "elements": {
             "verdicts": {
-                "required": ["id", "verdict"],
-                "optional": ["reason", "severity", "evidence"],
+                "required": ["id", "verdict", "reason"],
+                "optional": ["severity", "evidence"],
                 "types": {
                     "id": "non-empty-string",
                     "verdict": "non-empty-string",
-                    "reason": "string",
+                    "reason": "non-empty-string",
                     "severity": "string",
                     "evidence": "string",
                 },

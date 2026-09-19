@@ -55,18 +55,18 @@ def test_we511_shape_parks():
     assert result["resolved_model"] is None
 
 
-def test_listed_models_pass():
-    r1 = DG.validate("implementer", "cursor", "composer-2.5")
-    assert r1["ok"] is True
-    assert r1["resolved_model"] == "composer-2.5"
-
-    r2 = DG.validate("implementer", "cursor", "cursor-grok-4.6-xhigh")
-    assert r2["ok"] is True
-    assert r2["resolved_model"] == "cursor-grok-4.6-xhigh"
-
-    r3 = DG.validate("implementer", "codex", "gpt-5.6-terra")
-    assert r3["ok"] is True
-    assert r3["resolved_model"] == "gpt-5.6-terra"
+@pytest.mark.parametrize(
+    "vendor,model,expected",
+    [
+        ("cursor", "composer-2.5", "composer-2.5"),
+        ("cursor", "cursor-grok-4.6-xhigh", "cursor-grok-4.6-xhigh"),
+        ("codex", "gpt-5.6-terra", "gpt-5.6-terra"),
+    ],
+)
+def test_listed_models_pass(vendor, model, expected):
+    result = DG.validate("implementer", vendor, model)
+    assert result["ok"] is True
+    assert result["resolved_model"] == expected
 
 
 def test_registry_model_id_form_passes():

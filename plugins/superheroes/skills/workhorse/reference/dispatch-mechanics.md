@@ -6,6 +6,8 @@
 4. [Mutation probes — own detached worktree](#mutation-probes--own-detached-worktree)
 5. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
 6. [Supervised review dispatch](#supervised-review-dispatch)
+   - [Result channels](#result-channels)
+   - [The conformance probe](#the-conformance-probe)
 7. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
 8. [Supervised write dispatch](#supervised-write-dispatch)
 9. [Declared items](#declared-items)
@@ -20,7 +22,9 @@ Read this at dispatch time, before you invoke a long dispatch. **Channel and wai
 A long-running external dispatch the builder invokes directly from a headless session is **awaited
 in-turn** through the **authorized entrypoint** (`dispatch-review` / `dispatch-write` with
 `--max-wait`, re-invoked on the same `--run-dir` until its structured result is terminal) — never an
-external `setsid`/`nohup` wrapper or an exit-code sentinel. Harness-tracked background-and-poll is
+external `setsid`/`nohup` wrapper or an exit-code sentinel. A dispatch-shell entry point exits **1**
+when it refuses (returns without doing the work it was asked to do), **0** otherwise; exit **0** still
+never means success — the JSON `ok`/`terminal` fields stay authoritative. Harness-tracked background-and-poll is
 **not** the normal path for those dispatches — tracked background work dies when the turn ends. The
 **native-shape contract** (files not pipes, `--max-wait` slices with non-terminal `running`,
 originating-verb continuation, structured terminal result as the only completion signal,
@@ -36,7 +40,8 @@ workhorse charter §7 — not restated here. Mechanics by dispatch kind:
   ending**. Give the dispatch that room by invoking through **`dispatch-review`/`dispatch-write
   --max-wait`** (≤ 540 s) and **re-invoking the originating verb on the same `--run-dir` until
   terminal** — never by trying to raise a foreground timeout, by wrapping in `setsid`/`nohup`, or by
-  harness-tracked background-and-poll (tracked background dies when the turn ends). Redirect its
+  harness-tracked background-and-poll (tracked background dies when the turn ends). On
+  **`dispatch-write`**, an abbreviated `--base-sha` refuses with nothing opened. Redirect its
   output to a **file, never a pipe or `| tail`** — pipes die with the reader and make a stall look
   like progress. Watch that
   **output/transcript file growing as your primary stall signal**: a growing file is live; use the
@@ -194,6 +199,121 @@ documents the runner's result mechanics — read both before authoring seat prom
 the at-dispatch-time summary only. For the full CLI argument surface, read
 `skills/workhorse/reference/dispatch-entry.md`.
 
+### Result channels
+
+Both dispatchable engines — **codex** and **cursor** — use the **native** channel. **Claude** is not
+dispatchable through the shell (`build_argv_result` refuses it); its map entry is historical.
+
+**Codex** receives the result path as `-o <run-dir>/native-result-<n>.json` with `--output-schema
+<run-dir>/native-schema.json`. **Cursor** receives it in a per-attempt prompt file
+`<run-dir>/prompt-attempt-<n>.md` — the staged prompt plus the typed-file contract (the prefix line
+`Result file (write exactly this path; nothing else is graded): <path>` and the declared schema
+quoted in a fenced block) — under the argv `cursor-agent --model <tok> -p --trust -f --sandbox
+enabled --output-format stream-json` for both roles (`--mode plan` is gone: plan mode cannot write
+the file).
+
+On the native channel, the output adapter reads a typed result file validated against the declared
+schema at `<run-dir>/native-schema.json`. Admission is engine-neutral: the schema on disk must equal
+the declared one (`native-schema-unreadable` otherwise); the file must be a regular file within the
+size cap that decodes as JSON (`native-result-missing`, `native-result-oversized`,
+`native-result-malformed`); it must validate against the declared schema
+(`native-result-schema-invalid`); on a write, its `report` must be non-blank
+(`native-result-report-blank`); and an entry already at the result path when an attempt would spawn
+refuses that attempt (`native-result-path-occupied`). Cursor adds attempt-prompt refusals:
+`attempt-prompt-occupied` (any pre-existing entry at the attempt-prompt path — file, symlink,
+dangling symlink, directory — the engine learns the run dir from the result path, so a first attempt
+could plant the second's), `attempt-prompt-unwritable`, and `prompt-tampered` (the staged source
+prompt's bytes no longer match the digest bound at run-open). Every refusal is a forfeit or an attempt
+refusal — the runner never scans stdout for a result and never repairs a malformed file.
+
+Completion is the process exit plus the typed file; a missing or invalid file forfeits. Progress and
+engagement telemetry come from codex's JSONL event stream on `--json` (`engagement.source:
+"codex-events"`); cursor's stream-json event stream (`engagement.source: "cursor-stream"`,
+`tool_call` events counted by distinct call id). Stdout is telemetry, never a result, on both. The
+`--output-format json` envelope is never used: it emits one object at exit and carries no
+`tool_call` events.
+
+Every run the shell opens never receives marker-channel recoveries: no `salvage` block, no
+`forfeit-with-engaged-artifact`, no `stdout-capped-by-attempt` forfeit, and no
+`report-missing-items-delivered` reclassification or `itemCheck` on a forfeit. A run whose opened
+record is marker — a persisted pre-3c journal, codex or cursor — never spawns again: the spawn-side
+check runs before argv coherence, so a stale argv is not what refuses it; its attempt ends
+`marker-channel-retired`. The execution record's `promptSha256` binds the bytes the engine received
+— the attempt prompt for cursor (`attemptPromptSha256`/`attemptPromptPath` on `engine-started`), the
+staged prompt for codex; `orderPromptSha256` is the caller's order in both.
+
+The journal writes two `engine-launching` records per attempt: the first (from the run child's
+entry) carries `argv`, the opened argv; the second carries `spawnArgv`, the argv the engine actually
+received. A reader trusts `spawnArgv`.
+
+A second grader or salvage fix — a `fix` commit touching the marker grader or
+the salvage modules — on an engine still on the marker channel proposes, at the next gardening pass,
+one of two things: move that engine to a native channel, or drop the engine; no dispatchable engine
+is on the marker channel since layer 3c, so today only the native-channel half can fire. Patching
+the marker channel a third time is not an option the proposal offers. On an engine on its native
+channel, a second schema or adapter fix after landing — a `fix` commit touching that engine's
+declared schema or its output or completion adapter — proposes dropping the engine or accepting the
+cost in the record. The fix commits are read by their `fix` type and touched paths; no new
+instrument; the proposal is the owner's judgment at the pass. The readout the pass reads is the
+project's C1 values annex, its result-channel-per-engine rows — the annex is out-of-repo.
+
+Cursor moved to the native channel in layer 3c. The `json`-envelope trial failed on the review half
+(the envelope's `result` string joins every assistant text turn, so it is never the result). The
+typed-file trial passed both halves (R9 as amended 2026-09-19). The stdout capture cap
+(`MAX_STDOUT_CAPTURE`, 8 MiB) stays an operating parameter — it bounds the telemetry capture; the
+`stdout-capped-by-attempt` forfeit no longer runs for any engine.
+
+### The conformance probe
+
+Wave preflight runs one real review dispatch per dispatchable engine before any builder launches.
+Resolve `ROOT_DIR` as in every other recipe here, then run `python3 -B
+"$ROOT_DIR/lib/conformance_probe.py" run --engine <codex|cursor>` — optional `--repo-root`,
+`--run-dir`, `--timeout`, and `--wave <id>` (the launcher's wave id, recorded on the result); only
+the engine name is required. Each invocation allocates a unique dispatch order id; a `--run-dir` that
+already holds a folded terminal result refuses `run-dir-reused` with nothing launched. It dispatches through the shell's own
+library entry on the engine's declared native channel (the typed file for both engines), using that
+engine's `reviewer-deep` cell, and grades three legs **separately**:
+`resultProduction` (the folded result is a typed, validated result), `completionDetection` (the
+attempt ended by natural exit 0 inside the wait and the run folded terminal), and
+`progressTelemetry` (runner-observed tool-call telemetry with a named source and a last-activity
+stamp). Failure is loud: exit **1** and one stderr line `CONFORMANCE PROBE FAILED engine=<e>
+failed=<legs> dependent lanes: <…>`; the JSON result carries `legs`, `failed`, `dependentRoles` /
+`dependentLanes` (derived from the project's dispatch calibration — the roles routed to that engine),
+`probedCell`, `repoRoot`, `completedAt`, and a `preflightCheck` member shaped as the launcher's
+`engine-auth` check entry. Per-leg failure vocabulary: `result-did-not-validate` or the shell's own
+`native-result-*` / parser detail; `no-response-within-wait`, `attempt-ended-missing`, or
+`auth-or-config-refusal`; `telemetry-absent`. `--engine claude` refuses `engine-not-dispatchable` —
+the CLI-Claude engine branch is a later child's; the engine set is the adapter's dispatchable vendors
+intersected with the channel map, by construction, with no separate list.
+
+Before launch, compose the walked `engine-auth` check from one probe result per **dispatchable**
+engine (`codex` and `cursor` — not merely the engines the calibration routes to):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 -B "$ROOT_DIR/lib/conformance_probe.py" preflight-entry --repo-root <abs> --result <probe.json>… \
+  [--wave <id>] [--launch-without <engine> --owner-word "<text>"]… [--max-age-seconds N]
+```
+
+Without `--wave`, binding is repository path plus age only and the entry records
+`waveBinding: none`. With `--wave`, each result's `wave` must match or the entry refuses
+`probe-wave-mismatch:<e>`. Each result's `probedCell` must match the engine's current
+`reviewer-deep` matrix cell or the entry refuses `probe-cell-mismatch:<e>`.
+
+It refuses `probe-missing:<e>`, `probe-duplicate:<e>`, `probe-foreign-repo:<e>`,
+`probe-stale:<e>` (default max age 86400 s, one day — owner-ruled 2026-09-19; future `completedAt` timestamps count as stale),
+`probe-result-malformed:<path>`, `probe-channel-mismatch:<e>` (the record's channel is not the channel the engine dispatches on today — a probe taken before a channel move proves nothing about the new channel), `calibration-unreadable`, `author-family-unresolved`,
+`owner-word-missing`, and `seat-map-failed:<type>`. A failed engine with no owner word → `state: fail` (hold;
+the launcher's `walk_preflight` refuses `preflight-failed:engine-auth`, so nothing launches). With the
+owner's word → `state: pass` whose evidence names the substitute family per seat, computed by the seat
+map from the **probed cells only** (`live_cells_source: "probed"`) with the maker family derived from
+the calibrated implementer — or `state: fail` with **PARK** when the seat map reports a
+`same-family` degradation. A `preflight-failed:<id>` refusal carries the walked `checks` including
+the failing entry, so the refusal record in the launch ledger keeps the probe's evidence.
+
+A drift or auth failure that arrives **mid-wave** forfeits that dispatch with no salvage; nothing
+re-probes mid-wave.
+
 ### Findings-only review prompts
 
 A review prompt that constrains the seat's stdout to a **single JSON object** must also require a
@@ -274,8 +394,10 @@ dispatch produced a Critical finding.
 carry. It **is a forfeit** (`ok: false`, `forfeited: true`, `terminal: true`) and every existing
 rule about a terminal forfeit applies unchanged — including the three-case reviewer-loss rule in
 `rubric/review-discipline.md` (a `forfeit-with-engaged-artifact` is one of those terminal forfeits,
-not an exception to them). What is different is what you know: the result carries **`salvage`** with
-the artifact's location and shape (`stdoutPath`, `shape`, and when structured, `findings`).
+not an exception to them). This outcome and its `salvage` block exist for marker-channel seats only;
+a native-channel seat's forfeit carries its `native-result-*` detail and no salvage. What is
+different is what you know: the result carries **`salvage`** with the artifact's location and shape
+(`stdoutPath`, `shape`, and when structured, `findings`).
 
 **Salvage rule — findings only, never the seat.** The seat is not credited, not counted toward panel
 composition, and not a substitute for a re-dispatch. Each claim you take from the artifact is
@@ -480,6 +602,9 @@ implementer path and not review-code's in-place fixer path.
 
 ### Write-report contract
 
+This contract is the **marker channel's**; on the native channel the runner appends a contract
+derived from the declared write schema instead and the sentinel plays no part.
+
 On every `dispatch-write` call, the runner **appends** a write-report contract to the caller's
 prompt — the caller does not author it and cannot opt out. It is **additional to** the prose receipts
 the order asks for, never a replacement: the engine still returns those receipts, then ends with a
@@ -511,19 +636,20 @@ a forfeit but never upgrade or relabel a failure. When nothing was declared, beh
 no `baselineDirty` capture, no `itemCheck` key. When declared, a passing result includes
 `itemCheck` (`declared`, `expected`, `delivered`, `missing`). Terminal detail tokens:
 `items-undelivered` (one or more paths missing; this forfeit **does** carry `itemCheck`);
-`report-missing-items-delivered` (the attempt ended cleanly — exit 0, not timed out, not refused — on
-a contracted prompt with no readable report, a **non-empty** declared set via `--expect-item` /
-`--expect-items-file`, and **every** declared path present in the delivery evidence; this forfeit
-**does** carry `itemCheck` with all paths delivered); and `item-evidence-unavailable:<cause>` (git
+`report-missing-items-delivered` on marker-channel runs (the attempt ended cleanly — exit 0, not
+timed out, not refused — on a contracted prompt with no readable report, a **non-empty** declared
+set via `--expect-item` / `--expect-items-file`, and **every** declared path present in the delivery
+evidence; this forfeit **does** carry `itemCheck` with all paths delivered); and
+`item-evidence-unavailable:<cause>` (git
 evidence could not be collected — causes include `falsy-base-sha`, `diff-timeout`, `diff-failed`,
 `status-timeout`, `status-failed`). Open-time `unrunnable` detail `base-sha-unresolvable` refuses
 when a declared run's `--base-sha` does not resolve. A dispatch that declares nothing cannot earn
 `report-missing-items-delivered` and keeps the ordinary fail-closed details (`worktree-dirtied-by-attempt`
 and the rest) — declaring items is what buys the distinction. Other forfeits, `unrunnable`, and
-`worktree-dirtied-by-attempt` never carry `itemCheck`. When engine stdout exceeds the **8 MiB
-capture cap**, the terminal forfeit carries a **stdout-capture-cap** reason class of its own (exact
-detail token pinned by sibling order WO-B) with an explicit truncation marker in the captured stdout —
-it no longer surfaces under `worktree-dirtied-by-attempt`. Every forfeit detail above remains `ok: false`,
+`worktree-dirtied-by-attempt` never carry `itemCheck`. On marker-channel runs, when engine stdout
+exceeds the **8 MiB capture cap**, the terminal forfeit carries a **stdout-capture-cap** reason class
+of its own (exact detail token pinned by sibling order WO-B) with an explicit truncation marker in
+the captured stdout — it no longer surfaces under `worktree-dirtied-by-attempt`. Every forfeit detail above remains `ok: false`,
 `forfeited: true` — `report-missing-items-delivered` renames a condition; it never converts a forfeit
 into a success.
 
@@ -541,9 +667,10 @@ completeness, or that the order's intent was met. Its purpose is to tell an orch
 re-run work that already landed** — reconstruct the change from the diff and re-verify it, never
 assume the order is done.
 
-When a terminal write result includes `salvage`, it carries a recoverable implementer report from an
-ended attempt's stdout — the contracted final tail when the runner appended the write-report contract,
-or a prose tier when strict tail grading could not extract structured JSON. The outcome remains a
+On marker-channel runs, when a terminal write result includes `salvage`, it carries a recoverable
+implementer report from an ended attempt's stdout — the contracted final tail when the runner
+appended the write-report contract, or a prose tier when strict tail grading could not extract
+structured JSON. The outcome remains a
 forfeit; its contents are the implementer's claims and must be independently re-verified before use.
 Write salvage has two tiers: a structured report is gradeable only after that independent
 verification, while a prose-tier block has `requiresManualRead: true` and a scrubbed `excerpt` for a

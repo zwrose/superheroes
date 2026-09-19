@@ -36,6 +36,34 @@ ATTRIBUTIONS = frozenset({
 STAGE_ENGAGED = "engaged"
 STAGE_DELIVERED = "delivered"
 
+CLASSIFICATION_REFUSAL = "refusal"
+CLASSIFICATION_RESULT = "result"
+
+
+def exit_code(classification):
+    """axis: refusal-vs-result — a refusal must never be readable as success by exit code."""
+    if classification == CLASSIFICATION_RESULT:
+        return 0
+    return 1
+
+
+def classify_dispatch_result(result):
+    """Classify a dispatch-review / dispatch-write structured result."""
+    if not isinstance(result, dict):
+        return CLASSIFICATION_REFUSAL
+    if result.get("terminal") and result.get("reason") == REASON_UNRUNNABLE:
+        return CLASSIFICATION_REFUSAL
+    return CLASSIFICATION_RESULT
+
+
+def classify_payload(payload):
+    """Classify a dispatch_guard check / build-argv payload."""
+    if not isinstance(payload, dict):
+        return CLASSIFICATION_REFUSAL
+    if payload.get("ok") is not True:
+        return CLASSIFICATION_REFUSAL
+    return CLASSIFICATION_RESULT
+
 
 def is_forfeit(reason):
     """True when reason is a terminal non-result forfeit."""
