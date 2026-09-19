@@ -1,0 +1,197 @@
+"""Round driver order lint at emission (#1339 WO-2)."""
+import importlib.util
+import os
+import shlex
+
+import pytest
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_LIB = os.path.dirname(_HERE)
+_PLUGIN_ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
+_PLUGIN_RUBRIC = os.path.join(_PLUGIN_ROOT, "rubric", "review-base.md")
+_SESSION = "/tmp/superheroes-session-wo2-order-lint"
+_REPO = "/home/user/proj"
+
+
+def _load(name):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(_LIB, name + ".py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+RD = _load("round_driver")
+RO = _load("round_orders")
+RP = _load("round_phases")
+OL = _load("order_lint")
+
+# Copied from test_round_orders.py — golden fixer render context helpers.
+def _base_context(**over):
+    ctx = {
+        "session_dir": _SESSION,
+        "round": 2,
+        "attempt": 0,
+        "diff_path": os.path.join(_SESSION, "round-2", "diff.txt"),
+        "rubric_path": _PLUGIN_RUBRIC,
+        "core_path": "",
+        "layer_path": "",
+        "repo_root": _REPO,
+        "landing_path": os.path.join(_SESSION, "round-2", "landing", "seat.a0.json"),
+        "envelope_stub_path": os.path.join(_SESSION, "round-2", "stubs", "seat.json"),
+        "ratified_residuals": "- Flaky integration test in CI lane B is accepted",
+        "residuals_provenance": "Residuals below are read from the review base commit (base-pinned).",
+        "residuals_read_failure": None,
+        "payload": {},
+        "host_seat": False,
+        "placeholders": {},
+    }
+    ctx.update(over)
+    return ctx
+
+
+def _fixer_placeholders():
+    return {
+        "FIX_BATCH_PATH": os.path.join(_SESSION, "round-2", "fix-batch.json"),
+        "PROFILE_PATH": "(Project profile not resolved for this project)",
+        "RUBRIC_PATH": _PLUGIN_RUBRIC,
+        "CWD": _REPO,
+        "REPO_ROOT": shlex.quote(_REPO),
+        "VERIFY_COMMAND": "npm test",
+        "ROUND": "2",
+        "GATE_GUIDANCE": "No owner-gate guidance is attached to this batch.",
+    }
+
+
+def _section(path, third):
+    return ("diff --git a/%s b/%s\n" % (path, path)
+            + "index 1111111..2222222 100644\n"
+            + "--- a/%s\n" % path
+            + "+++ b/%s\n" % path
+            + "@@ -1,2 +1,4 @@\n alpha\n+beta\n+%s\n delta\n" % third)
+
+
+DIFF = "".join(_section("src/f%02d.py" % i, "gamma") for i in range(3))
+_FIXER_SKEY = "fixer-508e7896192355de"
+
+
+def _seed_session(tmp_path, monkeypatch):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir, exist_ok=True)
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", lambda _root: {})
+    monkeypatch.setattr(RD.engine_pref, "resolve_engine", lambda _role, _prefs: "claude")
+    out = RD.cmd_next(session_dir, {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF,
+                                    "fixerVendor": "claude", "verifyCommand": "none"})
+    assert out["ok"], out
+    ok, state = RD.load_state(session_dir)
+    assert ok, state
+    state["headDiff"] = DIFF
+    state["fixBatch"] = []
+    return session_dir, state
+
+
+def _emit_fixer(session_dir, state, pending_payload=None):
+    return RD._emit_orders_manifest(
+        session_dir, state, state["round"], RD.P_FIXER, 0, ["fixer"],
+        journal_cmd="next", pending_payload=pending_payload or {}, seat_map={})
+
+
+def test_rendered_fixer_order_lints_clean_at_head(tmp_path):
+    repo = str(tmp_path / "proj")
+    os.makedirs(repo)
+    ph = _fixer_placeholders()
+    ph["CWD"] = repo
+    ph["REPO_ROOT"] = shlex.quote(repo)
+    text, reason = RO.render_order(
+        RP.P_FIXER, "seat", _base_context(repo_root=repo, placeholders=ph))
+    assert reason is None, reason
+    lint = OL.check_text(text, repo, kind="fixer")
+    assert lint["ok"] is True
+    assert lint["kind"] == "fixer"
+    assert lint["findings"] == []
+    assert lint["checked"] == {"paths": 0, "placeholders": 0}
+
+
+def test_fixer_emission_refuses_on_lint_finding(tmp_path, monkeypatch):
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        RD.order_lint, "check_text",
+        lambda _text, _root, kind="fixer": {
+            "ok": False, "kind": "fixer",
+            "findings": [{"token": "order-placeholder-unfilled", "detail": "FOO"}],
+            "checked": {"paths": 0, "placeholders": 1},
+        })
+    with pytest.raises(ValueError, match=r"order-render-refused:%s:order-lint:order-placeholder-unfilled:FOO" % _FIXER_SKEY):
+        _emit_fixer(session_dir, state)
+
+
+def test_fixer_emission_refuses_on_real_placeholder(tmp_path, monkeypatch):
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+
+    def _poisoned_render(phase, seat_key, context):
+        return ("You are the fixer.\n\nRepo root: " + "{{" + "REPO_ROOT" + "}}" + "\n", None)
+
+    monkeypatch.setattr(RD.round_orders, "render_order", _poisoned_render)
+    with pytest.raises(ValueError, match=r"order-render-refused:%s:order-lint:order-placeholder-unfilled:REPO_ROOT" % _FIXER_SKEY):
+        _emit_fixer(session_dir, state)
+
+
+def test_fixer_emission_passes_when_lint_clean(tmp_path, monkeypatch):
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    anchor = _emit_fixer(session_dir, state)
+    assert "manifestSha256" in anchor
+
+
+def test_non_fixer_phase_is_not_linted(tmp_path, monkeypatch):
+    session_dir = str(tmp_path / "verifier-lint")
+    os.makedirs(session_dir, exist_ok=True)
+    out = RD.cmd_next(session_dir, {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF,
+                                    "fixerVendor": "claude", "verifyCommand": "none",
+                                    "seatMap": {"seats": {}}})
+    assert out["ok"], out
+    ok, state = RD.load_state(session_dir)
+    assert ok, state
+    state["headDiff"] = DIFF
+    rnd_key = str(state["round"])
+    state["rounds"].setdefault(rnd_key, {}).pop("orderVendorProvenanceGaps", None)
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", lambda _root: {})
+    monkeypatch.setattr(RD.engine_pref, "resolve_engine", lambda _role, _prefs: "claude")
+
+    def _raise_on_lint(*_args, **_kwargs):
+        raise AssertionError("linted a non-fixer phase")
+
+    monkeypatch.setattr(RD.order_lint, "check_text", _raise_on_lint)
+    seat = "verifier:c1"
+    RD._emit_orders_manifest(
+        session_dir, state, state["round"], RD.P_VERIFIERS, 0, [seat],
+        journal_cmd="next", pending_payload={"clusters": [{"key": "c1", "issues": []}]},
+        seat_map={})
+
+
+def test_lint_refusal_names_first_finding_only(tmp_path, monkeypatch):
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        RD.order_lint, "check_text",
+        lambda _text, _root, kind="fixer": {
+            "ok": False, "kind": "fixer",
+            "findings": [
+                {"token": "order-placeholder-unfilled", "detail": "FIRST"},
+                {"token": "order-path-unresolved", "detail": "second/path.py"},
+            ],
+            "checked": {"paths": 1, "placeholders": 1},
+        })
+    with pytest.raises(ValueError) as exc:
+        _emit_fixer(session_dir, state)
+    msg = str(exc.value)
+    assert "order-lint:order-placeholder-unfilled:FIRST" in msg
+    assert "order-path-unresolved" not in msg
+
+
+def test_empty_findings_with_ok_false_refuses_unknown(tmp_path, monkeypatch):
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        RD.order_lint, "check_text",
+        lambda _text, _root, kind="fixer": {
+            "ok": False, "kind": "fixer", "findings": [], "checked": {"paths": 0, "placeholders": 0},
+        })
+    with pytest.raises(ValueError, match=r"order-render-refused:%s:order-lint:unknown" % _FIXER_SKEY):
+        _emit_fixer(session_dir, state)

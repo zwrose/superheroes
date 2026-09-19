@@ -68,6 +68,7 @@ import engine_pref  # noqa: E402
 import model_tier_overrides  # noqa: E402
 import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
+import order_lint  # noqa: E402
 import panel_tally  # noqa: E402
 import review_base_guard  # noqa: E402
 import review_loop_plan  # noqa: E402
@@ -6741,6 +6742,20 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         order_text, render_reason = round_orders.render_order(phase, seat_key, context)
         if render_reason is not None or not isinstance(order_text, str):
             raise ValueError("order-render-refused:%s:%s" % (skey, render_reason or "empty"))
+        # Order lint (#1339): the rendered fixer order is the one driver-authored order an engine
+        # acts on; an unfilled placeholder (order-placeholder-unfilled), a dangling path
+        # (order-path-unresolved), or two result contracts named at once
+        # (order-result-shape-ambiguous) refuses the emission here and never reaches a dispatch.
+        # Deterministic half only — a driver-rendered order has no author for the semantic seat
+        # to send a finding back to.
+        if phase == P_FIXER:
+            lint = order_lint.check_text(order_text, repo_root, kind="fixer")
+            if not lint.get("ok"):
+                first = (lint.get("findings") or [{}])[0]
+                token = first.get("token") or "unknown"
+                detail = first.get("detail") or ""
+                raise ValueError("order-render-refused:%s:order-lint:%s" % (
+                    skey, token + (":" + detail if detail else "")))
         order_sha = round_records.sha256_text(order_text)
         order_hashes[skey] = order_sha
         seats[skey] = {

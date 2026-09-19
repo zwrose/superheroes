@@ -29,7 +29,11 @@ _DECOMPOSITION_REF = "skills/showrunner/reference/decomposition.md"
 # content census, exactly as detector self-paths are. A proof must be free to quote the literal
 # it proves — a census that polices its own evidence re-fires on every new proof.
 # Standing advisor ruling, 2026-08-25 (#1136 shipped the code half; #1158 the doctrine half).
-_CENSUS_EXCLUDED_DIRS = ("lib/tests/bite_proofs",)
+_CENSUS_EXCLUDED_DIRS = (
+    "lib/tests/bite_proofs",
+    # order-lint fixtures are dispatched-order specimens (#1339), receipts like bite-proof records.
+    "lib/tests/fixtures/order_lint",
+)
 
 
 def _census_excluded(rel):
