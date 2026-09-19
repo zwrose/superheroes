@@ -34,6 +34,10 @@ import posixpath
 import re
 import sys
 
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
 TOKEN_UNREADABLE = "order-unreadable"
 TOKEN_REPO_ROOT_UNRESOLVED = "order-repo-root-unresolved"
 TOKEN_PATH_UNRESOLVED = "order-path-unresolved"
@@ -53,16 +57,43 @@ EXTENSIONS = (
 )
 _EMPTY = {"paths": 0, "placeholders": 0}
 _DBL_PH = re.compile(r"\{\{([A-Z][A-Z0-9_]*)\}\}")
-_SGL_PH = re.compile(r"(?<!\{)\{([A-Za-z_][A-Za-z0-9_.-]*)\}(?!\})")
-_BTICK = re.compile(r"`([^`]+)`")
+_SGL_PH = re.compile(r"(?<![{$])\{([A-Za-z_][A-Za-z0-9_.-]*)\}(?!\})")
+_BTICK = re.compile(r"`([^`\n]+)`")
 _FENCE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 _SUFFIX = re.compile(r":(?:\d+(?:-\d+)?|:[\w.-]+)$")
 _EX_AFTER = re.compile(r"\((?:new file|new|create|created)\)", re.I)
-_EX_BEFORE = re.compile(r"\b(?:create|creates|new file|add|adds|write|writes|writing)\b", re.I)
 _BUDGET = re.compile(r"budget.{0,60}(\d+)|(\d+).{0,60}budget", re.I | re.DOTALL)
 _BUDGET_AT = re.compile(r"at most \d+ (?:command|invocation)", re.I)
-_STDOUT = ("<<<SUPERHEROES-WRITE-REPORT>>>", '{"fixes"', "marker channel", "marker parser")
+# Prose aliases for result-channel lint — not protocol values.
+_STDOUT_ALIASES = ("marker channel", "marker parser")
 _NATIVE = ('"resultKind"', "--output-schema")
+# Driver-bound verify-command token — not an unfilled order placeholder.
+_DRIVER_PH = frozenset({"baseRef"})
+
+
+def _load_result_vocab():
+    try:
+        import engine_adapter
+        import payload_contracts
+        contract, reason = payload_contracts.payload_contract(payload_contracts.P_FIXER)
+        if reason:
+            raise RuntimeError(reason)
+        key = contract["required"][0]
+        return (
+            engine_adapter.WRITE_REPORT_SENTINEL,
+            '{"' + key + '"',
+            "canonical",
+        )
+    except Exception:
+        return "<<<SUPERHEROES-WRITE-REPORT>>>", '{"fixes"', "fallback"
+
+
+_WRITE_SENTINEL, _FIXER_LITERAL, _VOCAB_SOURCE = _load_result_vocab()
+_STDOUT_PROTOCOL = (_WRITE_SENTINEL, _FIXER_LITERAL)
+
+
+def _mask_fences(text):
+    return _FENCE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
 
 
 def _f(token, detail=""):
@@ -90,7 +121,9 @@ def _norm_item(raw):
 
 
 def _cand(tok):
-    if "/" not in tok or tok.startswith(("/", "~", "$", "{", "<", "-", "http")):
+    if tok.startswith(("http://", "https://")):
+        return False
+    if "/" not in tok or tok.startswith(("/", "~", "$", "{", "<", "-")):
         return False
     if any(c in tok for c in "*?<>{}|`"):
         return False
@@ -118,14 +151,13 @@ def _resolve(rel, roots):
 def _exempt(line, o, c, tok, expect):
     if posixpath.normpath(tok) in expect:
         return True
-    if _EX_AFTER.search(line[c:c + 12]):
-        return True
-    return bool(_EX_BEFORE.search(line[max(0, o - 24):o]))
+    return bool(_EX_AFTER.search(line[c:c + 12]))
 
 
 def _gather_exempt(text, expect):
     exempt = set()
-    for m in _BTICK.finditer(text):
+    inline = _mask_fences(text)
+    for m in _BTICK.finditer(inline):
         ls = text.rfind("\n", 0, m.start()) + 1
         le = text.find("\n", m.end())
         line = text[ls:le if le >= 0 else len(text)]
@@ -175,15 +207,19 @@ def _region(text, expect, roots, skip, out, seen, exempt, line=None, o=None, c=N
 def _paths(text, expect, roots, skip):
     exempt = _gather_exempt(text, expect)
     out, seen = [], set()
-    for m in _BTICK.finditer(text):
-        ls = text.rfind("\n", 0, m.start()) + 1
-        le = text.find("\n", m.end())
-        line = text[ls:le if le >= 0 else len(text)]
+    inline = _mask_fences(text)
+    for m in _BTICK.finditer(inline):
+        ls = inline.rfind("\n", 0, m.start()) + 1
+        le = inline.find("\n", m.end())
+        line = inline[ls:le if le >= 0 else len(inline)]
         _region(m.group(1), expect, roots, skip, out, seen, exempt,
                 line, m.start() - ls, m.end() - ls)
     for m in _FENCE.finditer(text):
         for ln in m.group(1).splitlines():
             _region(ln, expect, roots, skip, out, seen, exempt)
+    prose = _BTICK.sub(" ", inline)
+    for ln in prose.splitlines():
+        _region(ln, expect, roots, skip, out, seen, exempt)
     return out, len(seen)
 
 
@@ -193,19 +229,20 @@ def _placeholders(text):
     hits.sort()
     out, seen = [], set()
     for _, name in hits:
-        if name not in seen:
-            seen.add(name)
-            out.append(_f(TOKEN_PLACEHOLDER_UNFILLED, name))
+        if name in _DRIVER_PH or name in seen:
+            continue
+        seen.add(name)
+        out.append(_f(TOKEN_PLACEHOLDER_UNFILLED, name))
     return out, len(seen)
 
 
 def _shape(text, expect_items):
-    sh = [s for s in _STDOUT if s in text]
+    sh = [s for s in _STDOUT_PROTOCOL + _STDOUT_ALIASES if s in text]
     nt = [s for s in _NATIVE if s in text]
     if sh and nt:
         return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, "+".join(sh + nt))
-    if '{"fixes"' in text and expect_items:
-        return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, '{"fixes"+expect-item')
+    if _FIXER_LITERAL in text and expect_items:
+        return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, _FIXER_LITERAL + "+expect-item")
     return None
 
 
@@ -252,7 +289,8 @@ def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer
     if kind == "implementer" and not _budget_ok(text):
         findings.append(_f(TOKEN_BUDGET_MISSING, ""))
     return {"ok": not findings, "kind": kind, "findings": findings,
-            "checked": {"paths": path_n, "placeholders": pc}}
+            "checked": {"paths": path_n, "placeholders": pc},
+            "vocabSource": _VOCAB_SOURCE}
 
 
 def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implementer"):

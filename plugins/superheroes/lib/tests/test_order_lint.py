@@ -290,6 +290,13 @@ def test_per_token_exemption_does_not_leak_across_the_line(tmp_path):
     assert any("missing/reference.md" in d for d in _details(r))
 
 
+def test_generic_add_verb_does_not_exempt_reference_path(tmp_path):
+    repo = _mk_repo(tmp_path)
+    text = "Budget: 1 command. Add a test modeled on `tests/reference.py`.\n"
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert any("tests/reference.py" in d for d in _details(r))
+
+
 def test_symlink_escape_is_unresolved(tmp_path):
     repo = _mk_repo(tmp_path)
     outside = tmp_path / "outside.py"
@@ -316,41 +323,49 @@ def _finding_pairs(result):
 
 def test_fixture_c11_l3_wo_a(tmp_path):
     """At a consuming-project root, ``plugins/superheroes/lib/engine_result_channel.py`` is
-    unresolved (WO-A2). At this repository's root the same path is unresolved here because the
-    file is absent from this worktree; when present it would resolve and this half would not
-    catch the defect. ``order-result-shape-ambiguous`` fires at both roots (WO-A3)."""
+    unresolved when the plugin alt-root lacks that file (WO-A2). The deterministic half catches the
+    plugin-only path only when linted against a root where it does not exist.
+    ``order-result-shape-ambiguous`` fires (WO-A3)."""
     path = _fixture_path("c11_l3_wo_a.md")
     consume = tmp_path / "consume"
     consume.mkdir()
     (consume / "README.md").write_text("hi\n", encoding="utf-8")
-    alt = (_PLUGIN,)
-    consume_r = OL.check(path, str(consume), alt_roots=alt)
-    assert (
-        OL.TOKEN_PATH_UNRESOLVED,
-        "plugins/superheroes/lib/engine_result_channel.py",
-    ) in _finding_pairs(consume_r)
-    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(consume_r)
-    repo_r = OL.check(path, REPO_ROOT, alt_roots=alt)
-    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(repo_r)
     eng_path = "plugins/superheroes/lib/engine_result_channel.py"
-    if os.path.exists(os.path.join(REPO_ROOT, eng_path)):
-        assert not any(eng_path in d for d in _details(repo_r))
-    else:
-        assert (OL.TOKEN_PATH_UNRESOLVED, eng_path) in _finding_pairs(repo_r)
+    eng_file = consume / "plugins" / "superheroes" / "lib" / "engine_result_channel.py"
+    absent_r = OL.check(path, str(consume))
+    assert (OL.TOKEN_PATH_UNRESOLVED, eng_path) in _finding_pairs(absent_r)
+    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(absent_r)
+    eng_file.parent.mkdir(parents=True, exist_ok=True)
+    eng_file.write_text("# channel\n", encoding="utf-8")
+    present_r = OL.check(path, str(consume))
+    assert (OL.TOKEN_PATH_UNRESOLVED, eng_path) not in _finding_pairs(present_r)
+    assert OL.TOKEN_RESULT_SHAPE_AMBIGUOUS in _tokens(present_r)
 
 
-def test_fixture_c11_l3_wo_c():
-    """At this repository's root ``lib/conformance_probe.py`` is unresolved (WO-C cites a sibling
-    file that does not exist). Forbidden phrases are not caught — a phrase is not a path,
-    placeholder, contract, or budget (semantic half)."""
+def test_fixture_c11_l3_wo_c(tmp_path):
+    """``lib/conformance_probe.py`` is unresolved when the plugin alt-root lacks that file (WO-C
+    cites a sibling file that does not exist). Forbidden phrases are not caught — a phrase is not a
+    path, placeholder, contract, or budget (semantic half)."""
     path = _fixture_path("c11_l3_wo_c.md")
-    r = OL.check(path, REPO_ROOT, alt_roots=(_PLUGIN,))
+    consume = tmp_path / "consume"
+    consume.mkdir()
+    alt_plugin = tmp_path / "plugins" / "superheroes"
+    alt_plugin.mkdir(parents=True)
+    absent_r = OL.check(path, str(consume), alt_roots=(str(alt_plugin),))
     assert (
         OL.TOKEN_PATH_UNRESOLVED,
         "lib/conformance_probe.py",
-    ) in _finding_pairs(r)
-    joined = " ".join(_details(r))
+    ) in _finding_pairs(absent_r)
+    joined = " ".join(_details(absent_r))
     assert "this layer" not in joined
+    probe = alt_plugin / "lib" / "conformance_probe.py"
+    probe.parent.mkdir(parents=True, exist_ok=True)
+    probe.write_text("# probe\n", encoding="utf-8")
+    present_r = OL.check(path, str(consume), alt_roots=(str(alt_plugin),))
+    assert (
+        OL.TOKEN_PATH_UNRESOLVED,
+        "lib/conformance_probe.py",
+    ) not in _finding_pairs(present_r)
 
 
 def test_fixture_c11_l3_wo_a3():
@@ -394,6 +409,41 @@ def test_created_path_exemption_is_order_wide(tmp_path):
     r2 = _record(OL.check_text(repeat, str(repo), kind="implementer"))
     assert _tokens(r2).count(OL.TOKEN_PATH_UNRESOLVED) == 1
     assert "missing_twice.py" in _details(r2)[0]
+
+
+def test_path_after_fence_is_checked(tmp_path):
+    repo = _mk_repo(tmp_path)
+    text = (
+        "# WO\n\n"
+        "Budget: at most 1 command.\n\n"
+        "```sh\n"
+        "echo ok\n"
+        "```\n"
+        "Then read `lib/missing_after_fence.py`.\n"
+    )
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert any("missing_after_fence.py" in d for d in _details(r))
+
+
+def test_shell_expansion_is_not_placeholder(tmp_path):
+    repo = _mk_repo(tmp_path)
+    text = "# WO\n\nBudget: 1 command.\n\nRun `${PLUGIN_ROOT}/lib/order_lint.py`.\n"
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert OL.TOKEN_PLACEHOLDER_UNFILLED not in _tokens(r)
+
+
+def test_prose_path_is_checked(tmp_path):
+    repo = _mk_repo(tmp_path)
+    text = "# WO\n\nBudget: 1 command.\n\nSee missing/file.py\n"
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert any("missing/file.py" in d for d in _details(r))
+
+
+def test_http_prefixed_repo_path_is_checked(tmp_path):
+    repo = _mk_repo(tmp_path, [("http/client.py", "# stdlib shim\n")])
+    text = "# WO\n\nBudget: 1 command.\n\nSee `http/client.py`.\n"
+    r = OL.check_text(text, str(repo), kind="implementer")
+    assert OL.TOKEN_PATH_UNRESOLVED not in _tokens(r)
 
 
 def test_cli_unknown_kind_reports_kind_token(tmp_path):
