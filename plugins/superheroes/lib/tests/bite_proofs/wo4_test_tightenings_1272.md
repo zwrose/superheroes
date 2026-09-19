@@ -58,16 +58,13 @@ assert False
 
 ---
 
-## T2 — certifying case certifies (`Unprovable as placed` at base)
+## T2 (WO-4b) — pinned refusal is read-engagement, not head binding
 
-**Base refusal (no neutralization)** — pinned `assert refusal is None` is red before any bite-proof:
+**Guarded element:** `round_certification._observation_qualifies` cited-head compare (line ~903).
 
-```
-AssertionError: {'artifact': '...', 'bindingFailure': 'execution-evidence-not-engaged', 'class': 'unrun-review', 'detail': 'hand-landed seat lacks qualifying execution-evidence read engagement'}
-```
+**Axis:** the pinned refusal is the read-engagement one (`execution-evidence-not-engaged`) and not a head one.
 
-**Neutralization** (`round_certification.py` `_observation_qualifies` — order cited
-`check_evidence_head_bound` but that function has no `!=` compare):
+**Neutralization** (`round_certification.py` `_observation_qualifies`):
 
 ```python
 -    if cited_head and certified_head and cited_head != certified_head:
@@ -78,10 +75,14 @@ AssertionError: {'artifact': '...', 'bindingFailure': 'execution-evidence-not-en
 **Raw red** — `test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_head`:
 
 ```
-FAILED plugins/superheroes/lib/tests/test_recorded_row_chokepoint_1272.py::test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_head
-AssertionError: {'artifact': 'code-reviewer', 'bindingFailure': 'execution-evidence-stale-head', 'class': 'unrun-review', 'detail': 'dispatch-observed seat lacks qualifying execution telemetry'}
-assert {'artifact': 'code-reviewer', 'bindingFailure': 'execution-evidence-stale-head', ...} is None
-1 failed in 18.41s
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_head _
+
+    assert refusal["bindingFailure"] == "execution-evidence-not-engaged", refusal
+E       AssertionError: {'artifact': 'code-reviewer', 'bindingFailure': 'execution-evidence-stale-head', 'class': 'unrun-review', 'detail': 'dispatch-observed seat lacks qualifying execution telemetry'}
+E       assert 'execution-ev...ce-stale-head' == 'execution-ev...e-not-engaged'
+1 failed in 3.41s
 ```
 
 **Restore:** reverted `==` to `!=`.
@@ -93,8 +94,14 @@ assert {'artifact': 'code-reviewer', 'bindingFailure': 'execution-evidence-stale
         return False, "execution-evidence-stale-head"
 ```
 
-**Green half:** not runnable — base test remains red after restore (hand-landed read-engagement
-refusal). Disclosure: **Unprovable as placed**.
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 3.33s
+```
+
+**Post-restore `git status --porcelain`:** only `plugins/superheroes/lib/tests/test_recorded_row_chokepoint_1272.py` modified (production file restored).
 
 ---
 
