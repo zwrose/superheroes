@@ -459,3 +459,11 @@ def test_t10_fixer_verify_budget_placeholder():
     assert "NOT yours to run" in budget
     assert budget.endswith("pytest -q")
     assert RD._fixer_verify_budget(batch, {}).endswith("none")
+
+
+# axis: unregistered decision kind — _decision refuses before append
+def test_t11_decision_refuses_unregistered_kind():
+    state = RD.new_state()
+    with pytest.raises(ValueError, match="decision-kind-unregistered:not-a-registered-kind"):
+        RD._decision(state, "not-a-registered-kind", "x")
+    RD._decision(state, "fix-batch-split", "detail")
