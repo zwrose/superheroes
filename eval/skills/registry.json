@@ -92,6 +92,14 @@
       "coordinates releases",
       "Not the builder (that is workhorse)"
     ],
+    "superheroes/showrunner-handoff": [
+      "showrunner advisor seat you are leaving",
+      "Emits no paste block"
+    ],
+    "superheroes/showrunner-resume": [
+      "restarted, or compacted showrunner advisor seat",
+      "Reads durable state only"
+    ],
     "superheroes/workhorse": [
       "Workhorse is the entry point that takes a routed issue all the way to a ready PR",
       "work still needing discovery or diagnosis is routed back, never elicited in-session",

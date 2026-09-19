@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "I'm handing the advisor seat over to a new session — prepare this one",
+    "this account is going dark, get the advisor seat ready to hand over",
+    "park the builders and hand this advisor seat off deliberately"
+  ],
+  "should_not_fire": [
+    "freshen live state and give me the /compact command to paste",
+    "pick the advisor seat back up in this new session",
+    "build this approved issue and take it to a ready PR"
+  ]
+}
