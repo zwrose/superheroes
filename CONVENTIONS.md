@@ -85,7 +85,9 @@ still produced by The Architect.
   evidence, CI green on the recorded head, and a current branch, and reports each merge in
   the thread that gave the word. **A force-push proceeds on its own word once the reason is stated. A release or
   publication never rides inside a merge word; it stays the owner's click unless
-  handed over in the moment with a word for that release.**
+  handed over in the moment with a word for that release.** The seat moves between sessions by
+  `/superheroes:showrunner-handoff` (deliberate handover before the seat goes dark) and
+  `/superheroes:showrunner-resume` (pick up durable state); a new seat runs resume first.
 - **Workhorse** — the builder session: issue-scoped, disposable, parallelizable. Takes a
   routed issue, writes and gets the build brief checked, delegates all implementation to
   tiered subagents or engines, verifies every receipt itself, runs test-pilot and

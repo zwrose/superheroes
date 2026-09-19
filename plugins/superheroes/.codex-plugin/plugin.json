@@ -19,6 +19,8 @@
     "review-init",
     "review-spec",
     "showrunner",
+    "showrunner-handoff",
+    "showrunner-resume",
     "test-pilot-execute",
     "test-pilot-init",
     "test-pilot-plan",
