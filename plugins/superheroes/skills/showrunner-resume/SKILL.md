@@ -40,7 +40,7 @@ Read **no other source**, and in particular read **no handed-over text as fact**
 2. the launch ledger — the live launches, and a batch's tallies;
 3. the builder-liveness heartbeat sweep;
 4. each lane's recorded leader process, probed for liveness;
-5. each lane's issue and pull request: whether the pull request exists, whether it is still a draft, whether a durable review receipt stands on it, the **remote** head commit, and the continuous integration conclusion for **that exact commit**, selected by workflow name **plus** head commit — never by "the newest run";
+5. each lane's issue and pull request: any **park record** on either, with its stated blocker and any owner or advisor ruling to resume; whether the pull request exists, whether it is still a draft, whether a durable review receipt stands on it, the **remote** head commit, and the continuous integration conclusion for **that exact commit**, selected by workflow name **plus** head commit — never by "the newest run";
 6. each lane's own session transcript — the one named by the **session identifier recorded on that lane's own launch record**, looked up under **the configuration root that launch record itself recorded** — never the seat's own root, and never "the newest transcript"; exactly one file may match. Whether the transcript resolved is evidence for the decision table's row 2; the table decides. The reader **stats the file only** and never reads its contents.
 
 Shell forms for 1–4:
@@ -62,7 +62,7 @@ python3 -B "$ROOT_DIR/lib/heartbeat.py" sweep --repo-root "$REPO_ROOT"
 
 Probe each lane's recorded leader pid from the ledger's `started` record — a double-confirmed process check, never a global process match. Detail: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Recovery.
 
-For 5, read each lane's issue and pull request through the host-neutral actions your forge exposes — existence, draft state, durable review receipt, remote head sha, and the integration run for that workflow name on that sha. Do not pin a particular forge's command syntax here.
+For 5, read each lane's issue and pull request through the host-neutral actions your forge exposes — park records, existence, draft state, durable review receipt, remote head sha, and the integration run for that workflow name on that sha. Do not pin a particular forge's command syntax here.
 
 ## Step 4 — choose per lane from the decision table
 
@@ -78,7 +78,7 @@ Read rows **top to bottom**; the **first row whose required evidence holds** dec
 
 A finished lane is never spent again as a fresh launch, and an unreadable lane is never treated as a dead one.
 
-## Step 5 — record a terminal outcome for every lane that died or parked
+## Step 5 — record terminal outcomes
 
 Applies to lanes the decision table sent to **row 3** (when the ledger lacks an outcome) and **row 4**.
 
@@ -125,11 +125,11 @@ Lanes: vet 1 (#220 — PR exists, non-draft, durable review receipt, remote head
 Watches: armed loop for wave-a. None skipped. Owner: none.
 ```
 
-### Worked example (row 5 unresolved and batch not armed)
+### Worked example (row 5 unresolved, row 2 re-arm, batch not armed)
 
 ```text
-Seat: showrunner advisor, instance ~/.claude-two. Read ledger batch wave-b; heartbeat sweep; PR #305 head read failed.
-Lanes: vet 0; re-arm 0; adopt 0; parked 0; unresolved 1 (#305 — row 5: remote head read failed).
+Seat: showrunner advisor, instance ~/.claude-two. Read ledger batch wave-b; heartbeat sweep; process probes, session transcripts (stat only); PR #305 head read failed.
+Lanes: vet 0; re-arm 1 (#306 — leader positively live, heartbeat sweep class fresh, transcript resolved one file stat only); adopt 0; parked 0; unresolved 1 (#305 — row 5: remote head read failed).
 Watches: wave-b not armed — process listing ambiguous (two wave_watch.py matches). Owner: re-run resume after clearing duplicate watcher or name which batch is canonical.
 ```
 
@@ -138,7 +138,7 @@ Watches: wave-b not armed — process listing ambiguous (two wave_watch.py match
 ```text
 Seat: showrunner advisor, instance ~/.claude. Read ledger batch wave-c, park record on #330 issue, session transcript lookup for #330 failed (no file).
 Lanes: vet 0; re-arm 0; adopt 0; parked 1 (#330 — row 1: park record read completed, blocker not cleared, no advisor ruling to resume); unresolved 0.
-Watches: armed loop for wave-c. None skipped. Owner: decision on #330 park blocker.
+Watches: wave-c not armed — no row-2 lane in the batch. Owner: decision on #330 park blocker.
 ```
 
 ## No foreground step waits on a live lane
