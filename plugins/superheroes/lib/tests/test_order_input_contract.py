@@ -317,6 +317,7 @@ def _minimal_render_ctx(session_dir, repo_root, ph, paths):
 def _guidance_disposition(entry_id, title, guidance, file=None, line=None):
     entry = {
         "id": entry_id,
+        "findingKey": entry_id,
         "title": title,
         "disposition": "fix-with-guidance",
         RD.GATE_GUIDANCE_RECORD_KEY: guidance,
@@ -673,7 +674,8 @@ def test_fix_with_guidance_blank_entry_is_not_render_refusal(tmp_path):
         "reviewedDiff": "diff --git a/f b/f\n",
         "round": 2,
         "rounds": {"2": {"judgmentDispositions": [
-            {"id": _TRADEOFF_ID, "title": "widen the API", "disposition": "fix-with-guidance"},
+            {"id": _TRADEOFF_ID, "findingKey": _TRADEOFF_ID, "title": "widen the API",
+             "file": "f.py", "line": 1, "disposition": "fix-with-guidance"},
         ]}},
         "_fixBatch": [{"title": "widen the API", "file": "f.py", "line": 1}],
     }
@@ -792,6 +794,7 @@ def test_gate_guidance_header_field_cannot_emit_second_line(tmp_path, field, inj
     evil = "INJECTED%sSECOND-LINE" % inject
     base = {
         "id": "f.py::safe@L1",
+        "findingKey": "f.py::safe@L1",
         "title": "safe title",
         "disposition": "fix-with-guidance",
         RD.GATE_GUIDANCE_RECORD_KEY: "guidance body",
@@ -960,6 +963,7 @@ def test_gate_guidance_header_empty_title_renders_no_title(tmp_path):
     """Edge 4: missing/empty title → (no title) through the normalizer."""
     entry = {
         "id": "f.py::blank-title@L1",
+        "findingKey": "f.py::blank-title@L1",
         "title": "",
         "disposition": "fix-with-guidance",
         RD.GATE_GUIDANCE_RECORD_KEY: "g",

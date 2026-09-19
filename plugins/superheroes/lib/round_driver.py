@@ -706,6 +706,27 @@ def _diff_scope_ok(finding, valid):
     return finding.get("line") in file_lines
 
 
+COMPILE_DROP_LINE_NOT_INTEGER = "line is not an integer"
+
+
+def _coerce_line(value):
+    """Return ``(ok, line)``: an int (never a bool) passes as itself; a numeric string
+    (``"291"``, surrounding whitespace tolerated) coerces to its int; anything else refuses."""
+    if isinstance(value, bool):
+        return False, value
+    if isinstance(value, int):
+        return True, value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and stripped.isascii() and stripped.isdecimal():
+            try:
+                return True, int(stripped)
+            except ValueError:
+                return False, value
+        return False, value
+    return False, value
+
+
 def _nit_cap(findings):
     """After dedupe, keep at most 5 Nits; the overflow collapses to ONE summary entry so the
     readout isn't buried (the base rubric's severity cap)."""
@@ -784,11 +805,17 @@ def mechanical_compile(findings, diff_text=None):
             drops.append({"file": f.get("file"), "title": f.get("title"),
                           "reason": "uncited — no file:line"})
             continue
-        if not _diff_scope_ok(f, valid):
+        ok, line = _coerce_line(f.get("line"))
+        if not ok:
             drops.append({"file": f.get("file"), "line": f.get("line"),
-                          "title": f.get("title"), "reason": "outside the round diff scope"})
+                          "title": f.get("title"), "reason": COMPILE_DROP_LINE_NOT_INTEGER})
             continue
         fc = dict(f)
+        fc["line"] = line
+        if not _diff_scope_ok(fc, valid):
+            drops.append({"file": fc.get("file"), "line": fc.get("line"),
+                          "title": fc.get("title"), "reason": "outside the round diff scope"})
+            continue
         fc.pop(session_contract.FINDING_KEY_FIELD, None)
         fc["severity"] = circuit_breaker.effective_severity(fc.get("severity"))
         if "dimension" in fc:
@@ -1719,6 +1746,14 @@ def _record_round_append(state, key, value):
         rec[key] = [existing, value]
 
 
+def _record_compile_drops(state, drops):
+    """Extend the round's `compileDrops` list — never overwrite an existing panel write."""
+    if not drops:
+        return
+    for drop in drops:
+        _record_round_append(state, "compileDrops", drop)
+
+
 def _decision(state, kind, detail):
     state["decisions"].append({"round": state["round"], "kind": kind, "detail": detail})
 
@@ -2422,7 +2457,8 @@ def _fold_gapsweep(state, config, artifact):
     """Big-diff gap sweep: candidate findings from the full-diff pass fold through the same
     stage/cluster/verify path, then re-settle."""
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
-    compiled, _drops = mechanical_compile(candidates, state.get("reviewedDiff"))
+    compiled, drops = mechanical_compile(candidates, state.get("reviewedDiff"))
+    _record_compile_drops(state, drops)
     if compiled:
         # route candidates through verification like any other findings.
         state["_toVerify"] = compiled
@@ -2507,36 +2543,184 @@ def _gate_guidance_record_id_line(fid):
         _normalize_gate_guidance_header_field(label))
 
 
+def _round_record_sort_key(rnd_key):
+    """Numeric round order for ``state['rounds']`` keys; non-numeric keys sort last."""
+    try:
+        return (0, int(rnd_key))
+    except (TypeError, ValueError):
+        return (1, str(rnd_key))
+
+
+def _fix_batch_row_key(row):
+    """Disposition key for one fix-batch row — content-derived via ``_finding_key_of``."""
+    if not isinstance(row, dict):
+        return None
+    return _finding_key_of(row)
+
+
+def _history_row_key(row):
+    """Identity of one durable history row (judgment log / audit record): the stamped
+    findingKey marker when present; else the leaf's content derivation when the row carries a
+    location and a label; else None. Never `id`."""
+    if not isinstance(row, dict):
+        return None
+    marker = row.get(session_contract.FINDING_KEY_FIELD)
+    if isinstance(marker, str) and marker:
+        return marker
+    if row.get("file") is None or row.get("line") is None:
+        return None
+    if not finding_label(row):
+        return None
+    return session_contract.finding_identity_key(row)
+
+
+def _finding_history(state):
+    """Latest gate and audit rulings per finding key across ``state['rounds']``."""
+    history = {}
+    rounds = state.get("rounds") if isinstance(state, dict) else None
+    if not isinstance(rounds, dict):
+        return history
+    for rnd_key in sorted(rounds.keys(), key=_round_record_sort_key):
+        round_entry = rounds[rnd_key]
+        if not isinstance(round_entry, dict):
+            continue
+        try:
+            rnd_num = int(rnd_key)
+        except (TypeError, ValueError):
+            continue
+        log = round_entry.get("judgmentDispositions")
+        if isinstance(log, list):
+            for item in log:
+                if not isinstance(item, dict):
+                    continue
+                key = _history_row_key(item)
+                if not key:
+                    continue
+                gate_ruling = {"round": rnd_num, "disposition": item.get("disposition")}
+                if item.get("reason") is not None:
+                    gate_ruling["reason"] = item.get("reason")
+                guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+                if isinstance(guidance, str) and guidance.strip():
+                    gate_ruling["guidance"] = guidance.strip()
+                if item.get("title") is not None:
+                    gate_ruling["title"] = item.get("title")
+                if item.get("file") is not None:
+                    gate_ruling["file"] = item.get("file")
+                if item.get("line") is not None:
+                    gate_ruling["line"] = item.get("line")
+                slot = history.setdefault(key, {"gateRuling": None, "priorAudit": None})
+                slot["gateRuling"] = gate_ruling
+        audits = round_entry.get("audits")
+        if isinstance(audits, list):
+            for item in audits:
+                if not isinstance(item, dict):
+                    continue
+                key = _history_row_key(item)
+                if not key:
+                    continue
+                prior = {"round": rnd_num, "ruling": item.get("ruling")}
+                if item.get("reason") is not None:
+                    prior["reason"] = item.get("reason")
+                if item.get("unauthenticatedCause") is not None:
+                    prior["unauthenticatedCause"] = item.get("unauthenticatedCause")
+                slot = history.setdefault(key, {"gateRuling": None, "priorAudit": None})
+                slot["priorAudit"] = prior
+    return history
+
+
+def _validate_gate_guidance_logs(rounds, rnd, batch_keys):
+    """Refuse untrustworthy fold-owned guidance ids in any round's judgment log."""
+    if not isinstance(rounds, dict):
+        return
+    if batch_keys is None:
+        batch_keys = set()
+    for rnd_key in sorted(rounds.keys(), key=_round_record_sort_key):
+        round_entry = rounds[rnd_key]
+        if not isinstance(round_entry, dict):
+            continue
+        try:
+            rnd_num = int(rnd_key)
+        except (TypeError, ValueError):
+            continue
+        is_current = rnd_num == rnd
+        log = round_entry.get("judgmentDispositions")
+        if not isinstance(log, list):
+            continue
+        seen_ids = set()
+        for item in log:
+            if not isinstance(item, dict):
+                continue
+            if item.get("disposition") != "fix-with-guidance":
+                continue
+            guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+            if not isinstance(guidance, str) or not guidance.strip():
+                continue
+            key = _history_row_key(item)
+            if not key:
+                if is_current:
+                    raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
+                continue
+            if key in seen_ids:
+                if is_current or key in batch_keys:
+                    raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
+            seen_ids.add(key)
+
+
 def _gate_guidance_entries(state, rnd):
     """Return validated fold-owned guidance records for order rendering."""
     rounds = state.get("rounds") if isinstance(state, dict) else None
     if not isinstance(rounds, dict):
         return []
-    round_entry = rounds.get(str(rnd))
-    if not isinstance(round_entry, dict):
-        return []
-    log = round_entry.get("judgmentDispositions")
-    if not isinstance(log, list):
-        return []
+    batch = state.get("_fixBatch")
+    if not isinstance(batch, list):
+        batch = state.get("fixBatch")
+    if not isinstance(batch, list):
+        batch = []
+    batch_keys = set()
+    for row in batch:
+        key = _fix_batch_row_key(row)
+        if key:
+            batch_keys.add(key)
+    _validate_gate_guidance_logs(rounds, rnd, batch_keys)
     out = []
-    seen_ids = set()
-    for item in log:
-        if not isinstance(item, dict):
+    covered_keys = set()
+    round_entry = rounds.get(str(rnd))
+    if isinstance(round_entry, dict):
+        log = round_entry.get("judgmentDispositions")
+        if isinstance(log, list):
+            for item in log:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("disposition") != "fix-with-guidance":
+                    continue
+                guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+                if not isinstance(guidance, str) or not guidance.strip():
+                    continue
+                key = _history_row_key(item)
+                if not key:
+                    continue
+                covered_keys.add(key)
+                out.append({"id": key, "title": item.get("title"),
+                            "file": item.get("file"), "line": item.get("line"),
+                            "guidance": guidance.strip()})
+    history = _finding_history(state)
+    for key in sorted(batch_keys):
+        if key in covered_keys:
             continue
-        if item.get("disposition") != "fix-with-guidance":
+        slot = history.get(key)
+        if not isinstance(slot, dict):
             continue
-        guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+        gate_ruling = slot.get("gateRuling")
+        if not isinstance(gate_ruling, dict):
+            continue
+        if gate_ruling.get("disposition") != "fix-with-guidance":
+            continue
+        guidance = gate_ruling.get("guidance")
         if not isinstance(guidance, str) or not guidance.strip():
             continue
-        fid = item.get("id")
-        if not isinstance(fid, str) or not fid.strip():
-            raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
-        fid = fid.strip()
-        if fid in seen_ids:
-            raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
-        seen_ids.add(fid)
-        out.append({"id": fid, "title": item.get("title"), "file": item.get("file"),
-                    "line": item.get("line"), "guidance": guidance.strip()})
+        out.append({"id": key, "title": gate_ruling.get("title"),
+                    "file": gate_ruling.get("file"), "line": gate_ruling.get("line"),
+                    "guidance": guidance.strip(), "round": gate_ruling.get("round")})
     return out
 
 
@@ -2573,6 +2757,9 @@ def _gate_guidance_block(entries):
             omitted = len(guided) - idx
             break
         header_lines = [identity_line]
+        entry_round = entry.get("round")
+        if entry_round is not None:
+            header_lines.append("Ruled in round %s" % entry_round)
         if identity_counts[identity_line] >= 2:
             header_lines.append(
                 "Note: %d guided findings share this identity (file, line, title) — "
@@ -2704,7 +2891,8 @@ def _fold_judgment(state, config, artifact):
             skipped.append({"id": fid, "file": f.get("file"), "line": f.get("line"),
                             "title": f.get("title"), "severity": f.get("severity"),
                             "reason": reason.strip()})
-            disposition_log.append({"id": fid, "title": f.get("title"), "disposition": "skip",
+            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                                    "title": f.get("title"), "disposition": "skip",
                                     "reason": reason.strip()})
             _decision(state, "judgment-skip",
                       "owner skipped judgment blocker %r — reason: %s"
@@ -2714,20 +2902,23 @@ def _fold_judgment(state, config, artifact):
         if disposition == "fix-with-guidance":
             g["judgmentDisposition"] = "fix-with-guidance"
             guidance = d.get("guidance")
-            entry = {"id": fid, "title": f.get("title"), "file": f.get("file"),
+            entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                     "title": f.get("title"), "file": f.get("file"),
                      "line": f.get("line"), "disposition": "fix-with-guidance"}
             if isinstance(guidance, str) and guidance.strip():
                 entry[GATE_GUIDANCE_RECORD_KEY] = guidance.strip()
             disposition_log.append(entry)
         elif disposition == "fix-as-suggested":
             g["judgmentDisposition"] = "fix-as-suggested"
-            disposition_log.append({"id": fid, "title": f.get("title"),
+            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                                    "title": f.get("title"),
                                     "disposition": "fix-as-suggested"})
         else:
             # missing / unknown disposition, or a skip with no citable reason → fail closed to fix.
             g["judgmentDisposition"] = "fix-as-suggested"
             g["judgmentFailClosed"] = True
-            disposition_log.append({"id": fid, "title": f.get("title"),
+            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                                    "title": f.get("title"),
                                     "disposition": "fix-as-suggested", "failClosed": True})
             _decision(state, "judgment-fail-closed",
                       "judgment blocker %r had no valid disposition (%r) — folded as "
@@ -3356,7 +3547,8 @@ def _fold_audits(state, config, artifact):
     if not isinstance(collection_manifest, dict):
         collection_manifest = None
     outcome = audits.apply_audit_results(targets, results, expected_auditors=expected_auditors,
-                                         collection_manifest=collection_manifest)
+                                         collection_manifest=collection_manifest,
+                                         carry_fields=(session_contract.FINDING_KEY_FIELD,))
     state["_auditOutcome"] = outcome
     # the audit round for check_audit_breaker: identity + effective ruling PLUS the recurrence class
     # keys the alias-tolerant stall match consumes (#507 v0) — carried straight off each audit entry
@@ -3433,7 +3625,8 @@ def _fold_scoped(state, config, artifact):
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
     new_issues = state.get("_newIssues") or []
     combined = list(candidates) + [ni for ni in new_issues if isinstance(ni, dict)]
-    compiled, _drops = mechanical_compile(combined, state.get("reviewedDiff"))
+    compiled, drops = mechanical_compile(combined, state.get("reviewedDiff"))
+    _record_compile_drops(state, drops)
     state["_postAudit"] = True
     if compiled:
         state["_toVerify"] = compiled
@@ -6449,6 +6642,9 @@ def _ensure_round_head_diff(session_dir, rnd, state):
     return _ensure_bytes_at_path(session_dir, head_path, head_text.encode("utf-8"))
 
 
+FIX_BATCH_HISTORY_FIELDS = ("priorAudit", "gateRuling")
+
+
 def _ensure_fix_batch_file(session_dir, rnd, state):
     """Materialize fix-batch.json from state for fixer orders.
 
@@ -6461,9 +6657,37 @@ def _ensure_fix_batch_file(session_dir, rnd, state):
         batch = state.get("fixBatch")
     if not isinstance(batch, list):
         raise ValueError("order-render-refused:fix-batch-unavailable")
+    history = _finding_history(state)
+    materialized = []
+    for row in batch:
+        if not isinstance(row, dict):
+            materialized.append(row)
+            continue
+        row_copy = dict(row)
+        for field in FIX_BATCH_HISTORY_FIELDS:
+            row_copy.pop(field, None)
+        key = _fix_batch_row_key(row_copy)
+        if key and key in history:
+            slot = history[key]
+            if isinstance(slot, dict):
+                prior = slot.get("priorAudit")
+                if isinstance(prior, dict):
+                    row_prior = {"round": prior.get("round"), "ruling": prior.get("ruling")}
+                    if prior.get("reason") is not None:
+                        row_prior["reason"] = prior.get("reason")
+                    row_copy["priorAudit"] = row_prior
+                gate_ruling = slot.get("gateRuling")
+                if isinstance(gate_ruling, dict):
+                    row_gate = {"round": gate_ruling.get("round"),
+                                "disposition": gate_ruling.get("disposition")}
+                    if gate_ruling.get("reason") is not None:
+                        row_gate["reason"] = gate_ruling.get("reason")
+                    row_copy["gateRuling"] = row_gate
+        materialized.append(row_copy)
     rdir = round_records.round_dir(session_dir, rnd)
     path = os.path.join(rdir, "fix-batch.json")
-    return _ensure_bytes_at_path(session_dir, path, round_records.canonical(batch).encode("utf-8"))
+    return _ensure_bytes_at_path(session_dir, path,
+                                 round_records.canonical(materialized).encode("utf-8"))
 
 
 # Round-relative paths the driver materializes for order templates — production reads this registry.
