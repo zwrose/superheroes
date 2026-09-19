@@ -7278,6 +7278,31 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
         return _lock_held_refusal(session_dir, "record-result", held)
 
 
+def _evidence_digest_subject(result_kind, envelope_payload):
+    """Return (digest_subject, refusal) matching engine_dispatch._result_kind_and_content_from_parse."""
+    if not isinstance(envelope_payload, dict):
+        return None, "evidence-result-mismatch"
+    if result_kind == "findings":
+        # engine_dispatch._result_kind_and_content_from_parse hashes the findings list.
+        if "findings" not in envelope_payload:
+            return None, "evidence-result-mismatch"
+        return envelope_payload["findings"], None
+    if result_kind == "verdicts":
+        # engine_dispatch._result_kind_and_content_from_parse hashes the verdicts list.
+        if "verdicts" not in envelope_payload:
+            return None, "evidence-result-mismatch"
+        return envelope_payload["verdicts"], None
+    if result_kind == "grouping":
+        # engine_dispatch._result_kind_and_content_from_parse hashes the grouping list.
+        if "grouping" not in envelope_payload:
+            return None, "evidence-result-mismatch"
+        return envelope_payload["grouping"], None
+    if result_kind == "ruling":
+        # engine_dispatch._result_kind_and_content_from_parse hashes res["ruling"], the whole scrubbed record.
+        return envelope_payload, None
+    return None, "evidence-result-mismatch"
+
+
 def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
     """Bind runner telemetry to the driver's order hash. Returns (envelope, refusal_reason, extra)."""
     if not evidence_run_dir:
@@ -7301,10 +7326,11 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
     if result_kind == session_contract.WRITE_RESULT_KIND:
         pass
     else:
-        if not isinstance(envelope_payload, dict) or result_kind not in envelope_payload:
-            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "resultKind": result_kind}
-        payload_digest = round_records.payload_sha256(envelope_payload[result_kind])
+        subject, subject_refusal = _evidence_digest_subject(result_kind, envelope_payload)
+        if subject_refusal is not None:
+            return None, subject_refusal, {"resultDigest": result_digest,
+                                           "resultKind": result_kind}
+        payload_digest = round_records.payload_sha256(subject)
         if result_digest != payload_digest:
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "payloadSha256": payload_digest,

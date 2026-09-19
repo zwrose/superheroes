@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import sys
+import time
 
 import pytest
 
@@ -11,9 +12,12 @@ _LIB = os.path.dirname(_HERE)
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import engine_adapter  # noqa: E402
+import engine_dispatch  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import round_adapters  # noqa: E402
 import round_records  # noqa: E402
+import sanitized_view  # noqa: E402
 
 from test_recorded_row_chokepoint_1272 import (  # noqa: E402
     DIFF,
@@ -399,6 +403,96 @@ def test_advance_derives_collection_manifest_from_runner_record(tmp_path):
     assert artifact["provenance"]["dispatchManifestIgnored"] is True
 
 
+def _audit_execution_run_dir(tmp_path, order_path, seat, echo_nonce="nonce-audit-e2e"):
+    """Build a codex run directory whose parsed ruling binds to an audit seat envelope."""
+    run_dir = str(tmp_path / "audit-evidence-run")
+    journal_root = str(tmp_path / "audit-journal-root")
+    os.makedirs(journal_root, exist_ok=True)
+    os.environ[engine_dispatch.JOURNAL_ROOT_ENV] = journal_root
+    repo_root = str(tmp_path / "audit-evidence-repo")
+    os.makedirs(repo_root, exist_ok=True)
+    with open(os.path.join(repo_root, ".git"), "w", encoding="utf-8") as fh:
+        fh.write("gitdir: /fake/worktree\n")
+    view_path = str(tmp_path / "audit-evidence-view")
+    os.makedirs(view_path, exist_ok=True)
+    view_meta = {"headSha": "abc123fake", "stripped": [], "path": view_path}
+    with open(order_path, encoding="utf-8") as fh:
+        base_prompt = fh.read()
+    notice = sanitized_view.sanitized_view_notice(view_meta, mode="review")
+    fed_prompt = (
+        engine_dispatch.ANTIHIJACK_PREAMBLE + notice + base_prompt + "\n\n"
+        + engine_adapter.REVIEW_RESULT_CONTRACT("ruling")
+    )
+    ruling_text = json.dumps({
+        "id": seat,
+        "ruling": "discharged",
+        "reason": "re-read the hunk; the defect is gone",
+        "auditorVendor": "codex",
+    })
+    stdout = _TDI._codex_event_stream(ruling_text, action_items=1)
+    ok, detail = engine_dispatch._open_review_run(
+        run_dir, engine="codex", argv=[sys.executable, "-c", "pass"], cwd=repo_root,
+        timeout=30, retry_timeout=30, prompt_path=order_path, view_path=view_path,
+        view_meta=view_meta, fed_prompt=fed_prompt, order_id="audit-e2e-order",
+        progress_path=os.path.join(run_dir, "progress.jsonl"), repo_root=repo_root,
+        echo_nonce=echo_nonce, base_prompt=base_prompt,
+    )
+    assert ok, detail
+    engine_dispatch._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "wallSeconds": 0.1, "stdoutBytes": len(stdout),
+        "at": time.time(),
+    })
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "wb") as fh:
+        fh.write(stdout.encode("utf-8"))
+    with open(os.path.join(run_dir, "attempt-1.stderr"), "wb") as fh:
+        fh.write(b"")
+    return run_dir
+
+
+def test_dispatch_observed_audit_seat_binds_runner_evidence_end_to_end(tmp_path):
+    """Positive-path dispatch-observed audits test the round-1 test seat asked for."""
+    session_dir, gitdir, _head_path = _drive_to_audits(tmp_path, name="dispatch-audit-bind")
+    state = _state(session_dir)
+    pend = state["pending"]
+    roster = _audit_roster(session_dir)
+    seat = roster[0]
+    order_path = round_records.order_prompt_path(
+        session_dir, pend["round"], pend["phase"],
+        round_records.storage_key(seat), pend["attempt"])
+    assert os.path.isfile(order_path), order_path
+    run_dir = _audit_execution_run_dir(tmp_path, order_path, seat)
+    record, err = engine_dispatch.run_execution_record(run_dir)
+    assert err is None, err
+    assert record["resultKind"] == "ruling"
+    journal_records, _ = engine_dispatch._journal_read(run_dir)
+    run_state = engine_dispatch._journal_state(journal_records)
+    parse_res = engine_dispatch._parse_review_attempt(run_dir, run_state, 1)
+    assert parse_res["ok"] is True, parse_res
+    ruling_payload = parse_res["ruling"]
+    assert round_records.payload_sha256(ruling_payload) == record["resultDigest"]
+    _TDI._dispatch_observed_land(session_dir, state, pend, seat, ruling_payload)
+    out = RD.cmd_record_result(session_dir, seat, evidence_run_dir=run_dir)
+    assert out["ok"] is True, out
+    stored, read_err = round_records.read_json(out["storePath"])
+    assert read_err is None
+    assert stored["executionEvidence"]["source"] == "codex"
+    for other in roster[1:]:
+        _land_audits(session_dir, other, payload=_audit_payload(other))
+        assert RD.cmd_record_result(session_dir, other)["ok"] is True
+    adv = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
+    assert adv["ok"] is True, adv
+    state_after = _state(session_dir)
+    assert state_after["rounds"][str(pend["round"])]["auditProvenance"] == "runner-record"
+    artifact, why = round_adapters.assemble(
+        RD.P_AUDITS,
+        [round_records.read_json(_store_path(session_dir, s, pend))[0] for s in roster],
+        state_after, state_after.get("config") or {}, dispatch_manifest=None)
+    assert why is None, why
+    assert artifact["provenance"]["provenanceSource"][seat] == "runner-record"
+
+
 def test_audit_provenance_basis_follows_the_fold_path(tmp_path):
     """auditProvenance names the adapter-recorded seat sources, not the fold path alone."""
     session_dir, gitdir, _head_path = _drive_to_audits(tmp_path, name="durable-record")
@@ -430,8 +524,15 @@ def test_audit_provenance_basis_follows_the_fold_path(tmp_path):
     session_dir2 = _session(tmp_path, name="hand-path")
     state2 = _state(session_dir2)
     state2["_submitUsed"] = True
-    state2["_auditTargets"] = []
+    hand_target = {"id": seat, "identity": "unchecked index", "auditorVendor": "claude",
+                   "independence": "cross-vendor", "verdict": "blocking",
+                   "evidence": "unchecked index at src/f00.py:2"}
+    state2["_auditTargets"] = [hand_target]
     state2["auditRounds"] = []
     hand_round = state2["round"]
-    RD._fold_audits(state2, state2["config"], {"results": [], "collectionManifest": {}})
+    RD._fold_audits(state2, state2["config"], {
+        "results": [],
+        "collectionManifest": {seat: "claude"},
+        "provenance": {"provenanceSource": {seat: "runner-record"}},
+    })
     assert state2["rounds"][str(hand_round)]["auditProvenance"] == "collection-manifest"

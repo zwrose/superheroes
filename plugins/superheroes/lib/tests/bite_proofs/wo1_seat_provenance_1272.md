@@ -229,52 +229,94 @@ AssertionError: assert {'src/f00.py:...L3': 'claude'} == {'src/f00.py:...L3': 'c
 
 ---
 
-## G5 (WO-1f) — auditProvenance basis follows the fold path
+## G5 (WO-R4) — hand-submit `_submitUsed` guard yields collection-manifest
+
+**Guarded element.** `_audit_provenance_basis` — axis: hand-submit fold returns `collection-manifest` only when `_submitUsed` is set, even if adapter provenance names `runner-record`.
 
 **Neutralization** (`round_driver.py`):
 
 ```python
--                  if (_seat_result_schema(state) == round_records.SEAT_RESULT_SCHEMA_V2
--                      and not state.get("_submitUsed"))
-+                  if (_seat_result_schema(state) == round_records.SEAT_RESULT_SCHEMA_V2)
+-    if state.get("_submitUsed"):
+-        return AUDIT_PROVENANCE_COLLECTION_MANIFEST
 ```
 
-**Raw red** — `test_audit_provenance_basis_follows_the_fold_path` (second half):
+**Raw red** — `test_audit_provenance_basis_follows_the_fold_path` (hand-submit leg):
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ______________ test_audit_provenance_basis_follows_the_fold_path _______________
 
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-454/test_audit_provenance_basis_fo0')
+
     def test_audit_provenance_basis_follows_the_fold_path(tmp_path):
-        ...
-        RD._fold_audits(state2, state2["config"], {"results": [], "collectionManifest": {}})
+        """auditProvenance names the adapter-recorded seat sources, not the fold path alone."""
+        session_dir, gitdir, _head_path = _drive_to_audits(tmp_path, name="durable-record")
+        seat = _audit_roster(session_dir)[0]
+        evidence = _execution_evidence(source="codex")
+        _land_audits(session_dir, seat, payload=_audit_payload(seat),
+                     provenance=round_records.PROVENANCE_HAND_LANDED, executionEvidence=evidence)
+        assert RD.cmd_record_result(session_dir, seat)["ok"] is True
+        pend = _pending(session_dir)
+        out = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
+        assert out["ok"] is True, out
+        state = _state(session_dir)
+        assert state["rounds"][str(pend["round"])]["auditProvenance"] == "hand-landed-evidence"
+    
+        session_dir3 = _session(tmp_path, name="runner-record")
+        state3 = _state(session_dir3)
+        state3["_auditTargets"] = [{"id": seat, "identity": "unchecked index", "auditorVendor": "claude",
+                                    "independence": "cross-vendor", "verdict": "blocking",
+                                    "evidence": "unchecked index at src/f00.py:2"}]
+        state3["auditRounds"] = []
+        runner_round = state3["round"]
+        RD._fold(state3, state3.get("config") or {}, RD.P_AUDITS, {
+            "results": [{"id": seat, "ruling": "discharged", "reason": "r", "auditorVendor": "claude"}],
+            "collectionManifest": {seat: "claude"},
+            "provenance": {"provenanceSource": {seat: "runner-record"}},
+        })
+        assert state3["rounds"][str(runner_round)]["auditProvenance"] == "runner-record"
+    
+        session_dir2 = _session(tmp_path, name="hand-path")
+        state2 = _state(session_dir2)
+        state2["_submitUsed"] = True
+        hand_target = {"id": seat, "identity": "unchecked index", "auditorVendor": "claude",
+                       "independence": "cross-vendor", "verdict": "blocking",
+                       "evidence": "unchecked index at src/f00.py:2"}
+        state2["_auditTargets"] = [hand_target]
+        state2["auditRounds"] = []
+        hand_round = state2["round"]
+        RD._fold_audits(state2, state2["config"], {
+            "results": [],
+            "collectionManifest": {seat: "claude"},
+            "provenance": {"provenanceSource": {seat: "runner-record"}},
+        })
 >       assert state2["rounds"][str(hand_round)]["auditProvenance"] == "collection-manifest"
 E       AssertionError: assert 'runner-record' == 'collection-manifest'
 E         
 E         - collection-manifest
 E         + runner-record
 
-plugins/superheroes/lib/tests/test_seat_provenance_1272.py:399: AssertionError
+plugins/superheroes/lib/tests/test_seat_provenance_1272.py:538: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_audit_provenance_basis_follows_the_fold_path
-1 failed in 8.43s
+1 failed in 6.14s
 ```
 
-**Restore:** re-add `and not state.get("_submitUsed")` to the v2 branch condition.
+**Restore:** reinstate the `_submitUsed` guard at the top of `_audit_provenance_basis`.
 
 **Restore receipt (quoted lines):**
 
 ```python
-                  if (_seat_result_schema(state) == round_records.SEAT_RESULT_SCHEMA_V2
-                      and not state.get("_submitUsed"))
+    if state.get("_submitUsed"):
+        return AUDIT_PROVENANCE_COLLECTION_MANIFEST
 ```
 
 **Raw green:**
 
 ```
 .                                                                        [100%]
-1 passed in 7.05s
+1 passed in 6.61s
 ```
 
 ---
@@ -326,4 +368,80 @@ FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_audit_pr
 ```
 .                                                                        [100%]
 1 passed in 7.07s
+```
+
+---
+
+## G7 (WO-R4) — ruling evidence digest is the whole ruling record
+
+**Guarded element.** `_evidence_digest_subject` — axis: a ruling's evidence digest is over the whole ruling record, not the `ruling` string token.
+
+**Neutralization** (`round_driver.py`):
+
+```python
+     if result_kind == "ruling":
+         # engine_dispatch._result_kind_and_content_from_parse hashes res["ruling"], the whole scrubbed record.
+-        return envelope_payload, None
++        if "ruling" not in envelope_payload:
++            return None, "evidence-result-mismatch"
++        return envelope_payload["ruling"], None
+```
+
+**Raw red** — `test_dispatch_observed_audit_seat_binds_runner_evidence_end_to_end`:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_dispatch_observed_audit_seat_binds_runner_evidence_end_to_end ______
+
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-456/test_dispatch_observed_audit_s0')
+
+    def test_dispatch_observed_audit_seat_binds_runner_evidence_end_to_end(tmp_path):
+        """Positive-path dispatch-observed audits test the round-1 test seat asked for."""
+        session_dir, gitdir, _head_path = _drive_to_audits(tmp_path, name="dispatch-audit-bind")
+        state = _state(session_dir)
+        pend = state["pending"]
+        roster = _audit_roster(session_dir)
+        seat = roster[0]
+        order_path = round_records.order_prompt_path(
+            session_dir, pend["round"], pend["phase"],
+            round_records.storage_key(seat), pend["attempt"])
+        assert os.path.isfile(order_path), order_path
+        run_dir = _audit_execution_run_dir(tmp_path, order_path, seat)
+        record, err = engine_dispatch.run_execution_record(run_dir)
+        assert err is None, err
+        assert record["resultKind"] == "ruling"
+        journal_records, _ = engine_dispatch._journal_read(run_dir)
+        run_state = engine_dispatch._journal_state(journal_records)
+        parse_res = engine_dispatch._parse_review_attempt(run_dir, run_state, 1)
+        assert parse_res["ok"] is True, parse_res
+        ruling_payload = parse_res["ruling"]
+        assert round_records.payload_sha256(ruling_payload) == record["resultDigest"]
+        _TDI._dispatch_observed_land(session_dir, state, pend, seat, ruling_payload)
+        out = RD.cmd_record_result(session_dir, seat, evidence_run_dir=run_dir)
+>       assert out["ok"] is True, out
+E       AssertionError: {'ok': False, 'payloadSha256': '137d378e05a91ef222682c55822d4c9efe3dbc6d167cbfd0d887ae0f22281e1d', 'reason': 'evidence-result-mismatch', 'resultDigest': '35960e668b7f1d6d23551afed1c6b048469b8e260d75d80a4c2bfedbefb589bf', ...}
+E       assert False is True
+
+plugins/superheroes/lib/tests/test_seat_provenance_1272.py:477: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_dispatch_observed_audit_seat_binds_runner_evidence_end_to_end
+1 failed in 3.71s
+```
+
+**Restore:** return the whole audit-seat payload for the `ruling` kind.
+
+**Restore receipt (quoted lines):**
+
+```python
+    if result_kind == "ruling":
+        # engine_dispatch._result_kind_and_content_from_parse hashes res["ruling"], the whole scrubbed record.
+        return envelope_payload, None
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 3.58s
 ```
