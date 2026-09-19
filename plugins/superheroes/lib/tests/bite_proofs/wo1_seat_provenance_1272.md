@@ -26,17 +26,20 @@ reverted by its exact inverse.
 **Raw red** — `test_audit_seat_missing_journal_record_refuses_at_record_time`:
 
 ```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_audit_seat_missing_journal_record_refuses_at_record_time _________
+
+    def test_audit_seat_missing_journal_record_refuses_at_record_time(tmp_path):
+        ...
+        out = RD.cmd_record_result(session_dir, seat)
+>       assert out["ok"] is False
+E       assert True is False
+
+plugins/superheroes/lib/tests/test_seat_provenance_1272.py:133: AssertionError
+=========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_audit_seat_missing_journal_record_refuses_at_record_time
-AssertionError: assert 'head-anchor-mismatch' == 'provenance-underivable'
-1 failed in 3.97s
-```
-
-**Raw red** — `test_advance_sweep_refuses_dispatch_observed_audits_without_minted_evidence` (E3):
-
-```
-FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_advance_sweep_refuses_dispatch_observed_audits_without_minted_evidence
-AssertionError: assert (False is False and 'head-anchor-mismatch' == 'provenance-underivable')
-1 failed in 4.03s
+1 failed in 3.28s
 ```
 
 **Restore:** `and False` → `and not evidence_minted`.
@@ -50,8 +53,8 @@ AssertionError: assert (False is False and 'head-anchor-mismatch' == 'provenance
 **Raw green:**
 
 ```
-..                                                                       [100%]
-2 passed in 7.62s
+.                                                                        [100%]
+1 passed in 3.23s
 ```
 
 ---
@@ -68,9 +71,20 @@ AssertionError: assert (False is False and 'head-anchor-mismatch' == 'provenance
 **Raw red** — `test_hand_landed_audits_without_evidence_refuses`:
 
 ```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_hand_landed_audits_without_evidence_refuses _______________
+
+    def test_hand_landed_audits_without_evidence_refuses(tmp_path):
+        ...
+        out = RD.cmd_record_result(session_dir, seat)
+>       assert out["ok"] is False and out["reason"] == "provenance-underivable"
+E       assert (True is False)
+
+plugins/superheroes/lib/tests/test_seat_provenance_1272.py:177: AssertionError
+=========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_hand_landed_audits_without_evidence_refuses
-AssertionError: assert (False is False and 'head-anchor-mismatch' == 'provenance-underivable')
-1 failed in 3.63s
+1 failed in 3.29s
 ```
 
 **Restore:** `and False` → `and "executionEvidence" not in envelope`.
@@ -85,7 +99,7 @@ AssertionError: assert (False is False and 'head-anchor-mismatch' == 'provenance
 
 ```
 .                                                                        [100%]
-1 passed in 3.67s
+1 passed in 3.21s
 ```
 
 ---
@@ -102,9 +116,20 @@ AssertionError: assert (False is False and 'head-anchor-mismatch' == 'provenance
 **Raw red** — `test_audit_source_not_in_vendor_registry_refuses`:
 
 ```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_audit_source_not_in_vendor_registry_refuses _______________
+
+    def test_audit_source_not_in_vendor_registry_refuses(tmp_path):
+        ...
+        out = RD.cmd_record_result(session_dir, seat)
+>       assert out["ok"] is False and out["reason"] == "provenance-underivable"
+E       assert (True is False)
+
+plugins/superheroes/lib/tests/test_seat_provenance_1272.py:203: AssertionError
+=========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_seat_provenance_1272.py::test_audit_source_not_in_vendor_registry_refuses
-AssertionError: assert (False is False and 'head-anchor-mismatch' == 'provenance-underivable')
-1 failed in 3.62s
+1 failed in 3.25s
 ```
 
 **Restore:** `if False:` → `if source not in model_registry.VENDORS:`.
@@ -119,7 +144,7 @@ AssertionError: assert (False is False and 'head-anchor-mismatch' == 'provenance
 
 ```
 .                                                                        [100%]
-1 passed in 3.60s
+1 passed in 3.23s
 ```
 
 ---

@@ -323,11 +323,11 @@ def _trusted_vendors(roster, indexed, dispatch_manifest, disclosures):
                 if isinstance(candidate, str) and candidate:
                     vendor = candidate
             if vendor is None:
-                if seat not in unusable:
-                    unusable.append(seat)
+                if isinstance(dispatch_manifest, dict):
+                    if seat not in unusable:
+                        unusable.append(seat)
                 continue
             trusted[seat] = vendor
-            disclosures.setdefault("provenanceSource", {})[seat] = "dispatch-manifest"
             echo = envelope.get("vendor")
             if isinstance(echo, str) and echo and echo != vendor:
                 mismatch.append({"seat": seat, "occurrence": occurrence, "echo": echo,

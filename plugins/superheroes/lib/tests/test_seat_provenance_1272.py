@@ -127,8 +127,8 @@ def test_audit_seat_missing_journal_record_refuses_at_record_time(tmp_path):
     session_dir, _gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
     evidence = _execution_evidence(source="codex")
-    _land(session_dir, seat, payload=_audit_payload(seat),
-          provenance=round_records.PROVENANCE_DISPATCH_OBSERVED, executionEvidence=evidence)
+    _land_audits(session_dir, seat, payload=_audit_payload(seat),
+                 provenance=round_records.PROVENANCE_DISPATCH_OBSERVED, executionEvidence=evidence)
     out = RD.cmd_record_result(session_dir, seat)
     assert out["ok"] is False
     assert out["reason"] == "provenance-underivable"
@@ -144,11 +144,12 @@ def test_audit_dispatch_observed_landed_evidence_without_run_dir_refuses(tmp_pat
     session_dir, _gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
     evidence = _execution_evidence(source="codex")
-    _land(session_dir, seat, payload=_audit_payload(seat),
-          provenance=round_records.PROVENANCE_DISPATCH_OBSERVED, executionEvidence=evidence,
-          envelopeSha256=round_records.envelope_sha256(_audit_payload(seat), evidence))
+    _land_audits(session_dir, seat, payload=_audit_payload(seat),
+                 provenance=round_records.PROVENANCE_DISPATCH_OBSERVED, executionEvidence=evidence,
+                 envelopeSha256=round_records.envelope_sha256(_audit_payload(seat), evidence))
     out = RD.cmd_record_result(session_dir, seat)
     assert out["ok"] is False and out["reason"] == "provenance-underivable"
+    assert not os.path.exists(_store_path(session_dir, seat))
 
 
 def test_advance_sweep_refuses_dispatch_observed_audits_without_minted_evidence(tmp_path):
@@ -156,25 +157,25 @@ def test_advance_sweep_refuses_dispatch_observed_audits_without_minted_evidence(
     session_dir, gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
     evidence = _execution_evidence(source="codex")
-    _land(session_dir, seat, payload=_audit_payload(seat),
-          provenance=round_records.PROVENANCE_DISPATCH_OBSERVED, executionEvidence=evidence)
+    _land_audits(session_dir, seat, payload=_audit_payload(seat),
+                 provenance=round_records.PROVENANCE_DISPATCH_OBSERVED, executionEvidence=evidence)
     out = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
     assert out["ok"] is False and out["reason"] == "provenance-underivable"
+    assert not os.path.exists(_store_path(session_dir, seat))
 
 
 def test_hand_landed_audits_without_evidence_refuses(tmp_path):
     """E4 — hand-landed audits envelope without executionEvidence refuses."""
     session_dir, _gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
-    env = _result_envelope(session_dir, seat, payload=_audit_payload(seat),
-                           provenance=round_records.PROVENANCE_HAND_LANDED)
+    path, env = _land_audits(session_dir, seat, payload=_audit_payload(seat),
+                             provenance=round_records.PROVENANCE_HAND_LANDED)
     del env["executionEvidence"]
     env["envelopeSha256"] = round_records.envelope_sha256(env["payload"], None)
-    path = round_records.landing_path(session_dir, env["round"], env["phase"],
-                                      round_records.storage_key(seat), env["attempt"])
     round_records.atomic_write_json(path, env)
     out = RD.cmd_record_result(session_dir, seat)
     assert out["ok"] is False and out["reason"] == "provenance-underivable"
+    assert not os.path.exists(_store_path(session_dir, seat))
 
 
 def test_hand_landed_audits_with_vendor_source_stores(tmp_path):
@@ -196,10 +197,11 @@ def test_audit_source_not_in_vendor_registry_refuses(tmp_path):
     session_dir, _gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
     evidence = _execution_evidence(source="runner")
-    _land(session_dir, seat, payload=_audit_payload(seat),
-          provenance=round_records.PROVENANCE_HAND_LANDED, executionEvidence=evidence)
+    _land_audits(session_dir, seat, payload=_audit_payload(seat),
+                 provenance=round_records.PROVENANCE_HAND_LANDED, executionEvidence=evidence)
     out = RD.cmd_record_result(session_dir, seat)
     assert out["ok"] is False and out["reason"] == "provenance-underivable"
+    assert not os.path.exists(_store_path(session_dir, seat))
 
 
 def test_panel_dispatch_observed_without_evidence_stores_provenance_underived(tmp_path):
@@ -328,10 +330,11 @@ def test_record_result_sweep_refuses_dispatch_observed_audits(tmp_path):
     session_dir, _gitdir, _head_path = _drive_to_audits(tmp_path)
     seat = _audit_roster(session_dir)[0]
     evidence = _execution_evidence(source="codex")
-    _land(session_dir, seat, payload=_audit_payload(seat),
-          provenance=round_records.PROVENANCE_DISPATCH_OBSERVED, executionEvidence=evidence)
+    _land_audits(session_dir, seat, payload=_audit_payload(seat),
+                 provenance=round_records.PROVENANCE_DISPATCH_OBSERVED, executionEvidence=evidence)
     out = RD.cmd_record_result(session_dir, sweep=True)
     assert out["ok"] is False and out["reason"] == "provenance-underivable"
+    assert not os.path.exists(_store_path(session_dir, seat))
 
 
 def test_advance_derives_collection_manifest_from_runner_record(tmp_path):
