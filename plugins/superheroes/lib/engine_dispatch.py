@@ -502,10 +502,15 @@ def _stage_attempt_prompt(run_dir_real, attempt, opened, result_path):
     if result_path is None or delivery != engine_result_channel.RESULT_DELIVERY_PROMPT:
         return opened["promptPath"], None, None
     try:
-        with open(opened["promptPath"], "r", encoding="utf-8", errors="ignore") as fh:
-            staged = fh.read()
+        with open(opened["promptPath"], "rb") as fh:
+            prompt_bytes = fh.read()
     except OSError:
         return None, None, "prompt-unreadable"
+    bound_sha = opened.get("stagedPromptSha256")
+    if bound_sha is not None:
+        if hashlib.sha256(prompt_bytes).hexdigest() != bound_sha:
+            return None, None, "prompt-tampered"
+    staged = prompt_bytes.decode("utf-8", errors="ignore")
     schema_path = opened.get("nativeSchemaPath")
     if not schema_path:
         return None, None, "native-schema-unreadable"
@@ -4488,8 +4493,10 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
             with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
                 base_prompt = src.read()
         base_prompt_sha256 = hashlib.sha256(base_prompt.encode("utf-8")).hexdigest()
+        staged_prompt = fed_prompt if fed_prompt else base_prompt
         with open(dest_prompt, "w", encoding="utf-8") as dst:
-            dst.write(fed_prompt if fed_prompt else base_prompt)
+            dst.write(staged_prompt)
+        staged_prompt_sha256 = hashlib.sha256(staged_prompt.encode("utf-8")).hexdigest()
         if progress_path:
             try:
                 open(progress_path, "a").close()
@@ -4524,6 +4531,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "baseSha": view_meta.get("headSha"),
         "fedPrompt": fed_prompt,
         "basePromptSha256": base_prompt_sha256,
+        "stagedPromptSha256": staged_prompt_sha256,
         "repoRoot": repo_root_real,
         "repoId": repo_id,
         "supervisorPid": os.getpid(),
@@ -5078,6 +5086,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         content = base + prompt_sep + contract
         with open(dest_prompt, "w", encoding="utf-8") as dst:
             dst.write(content)
+        staged_prompt_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
         if progress_path:
             try:
                 open(progress_path, "a").close()
@@ -5108,6 +5117,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "promptPath": os.path.join(run_dir_real, PROMPT_NAME),
         "fedPrompt": content,
         "basePromptSha256": base_prompt_sha256,
+        "stagedPromptSha256": staged_prompt_sha256,
         "progressPath": progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
         "viewPath": None,
         "baseSha": base_sha,

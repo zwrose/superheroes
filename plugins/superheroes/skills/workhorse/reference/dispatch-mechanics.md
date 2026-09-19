@@ -222,7 +222,8 @@ size cap that decodes as JSON (`native-result-missing`, `native-result-oversized
 refuses that attempt (`native-result-path-occupied`). Cursor adds attempt-prompt refusals:
 `attempt-prompt-occupied` (any pre-existing entry at the attempt-prompt path — file, symlink,
 dangling symlink, directory — the engine learns the run dir from the result path, so a first attempt
-could plant the second's) and `attempt-prompt-unwritable`. Every refusal is a forfeit or an attempt
+could plant the second's), `attempt-prompt-unwritable`, and `prompt-tampered` (the staged source
+prompt's bytes no longer match the digest bound at run-open). Every refusal is a forfeit or an attempt
 refusal — the runner never scans stdout for a result and never repairs a malformed file.
 
 Completion is the process exit plus the typed file; a missing or invalid file forfeits. Progress and

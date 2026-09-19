@@ -13035,6 +13035,37 @@ def test_stage_attempt_prompt_unreadable_prompt_refuses_prompt_unreadable(tmp_pa
     assert ended["refusal"] == "prompt-unreadable"
 
 
+def test_stage_attempt_prompt_refuses_prompt_tampered(tmp_path):
+    run_dir = str(tmp_path / "prompt-tampered")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    prompt_path = os.path.join(run_dir, ED.PROMPT_NAME)
+    with open(prompt_path, "w", encoding="utf-8") as fh:
+        fh.write("original prompt\n")
+    seat = _reviewer_cursor_seat()
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", _cursor_argv_for_run(seat, "review", run_dir), ED.RUN_KIND_REVIEW,
+    )
+    assert native_err is None
+    opened = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "cursor",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "prompt-tampered",
+        "argv": argv, "cwd": repo_root, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "nativeSchemaPath": native_schema_path,
+        "stagedPromptSha256": hashlib.sha256(b"trusted-at-open\n").hexdigest(),
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    result_path = ED._native_result_path(run_dir, 1)
+    staged_path, prompt_sha, refusal = ED._stage_attempt_prompt(
+        run_dir, 1, opened, result_path,
+    )
+    assert staged_path is None
+    assert prompt_sha is None
+    assert refusal == "prompt-tampered"
+
+
 @pytest.mark.parametrize("schema_arm", ["absent", "directory", "symlink"])
 def test_stage_attempt_prompt_refusal_arms(tmp_path, schema_arm):
     run_dir = str(tmp_path / ("schema-arm-" + schema_arm))
@@ -13179,6 +13210,35 @@ def test_cursor_review_missing_typed_file_forfeits_native_result_missing(tmp_pat
     assert res["forfeited"] is True
     assert res["detail"] == "native-result-missing"
     assert res.get("payloadShape", {}).get("parsed") == EA.SHAPE_EMPTY_STDOUT
+
+
+def test_cursor_review_prompt_tamper_on_retry_refuses_prompt_tampered(tmp_path):
+    repo_root = _repo(tmp_path)
+
+    def tamper_attempt1(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        run_dir = os.path.dirname(result_path)
+        with open(os.path.join(run_dir, ED.PROMPT_NAME), "w", encoding="utf-8") as fh:
+            fh.write("attacker-controlled retry prompt\n")
+        return _cursor_stream_with_tool_calls(1), False, 0, ""
+
+    fake = FakeRunner([tamper_attempt1])
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "prompt-tampered"
+    assert len(fake.calls) == 1
+    records, _ = ED._journal_read(res["runDir"])
+    ended2 = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 2
+    )
+    assert ended2["refusal"] == "prompt-tampered"
 
 
 def test_cursor_review_schema_invalid_file_forfeits(tmp_path):

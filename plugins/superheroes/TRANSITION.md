@@ -205,6 +205,7 @@ Refusal tokens a consumer can now meet on cursor: `native-result-missing`,
 `native-result-oversized`, `native-result-malformed`, `native-result-schema-invalid`,
 `native-result-report-blank`, `native-result-path-occupied`, `attempt-prompt-occupied`,
 `attempt-prompt-unwritable`, `native-schema-unreadable`, `prompt-unreadable`,
+`prompt-tampered`,
 `marker-channel-retired`. Tokens that
 never mint again for any engine: `stdout-capped-by-attempt`, `report-missing-items-delivered`,
 `forfeit-with-engaged-artifact`, and the `salvage` block. No engine remains on the marker channel;
