@@ -1117,6 +1117,23 @@ def _write_execution_run_dir(tmp_path, order_path, echo_nonce="nonce-fixer-e2e")
     })
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
         fh.write(stdout)
+    records, _ = engine_dispatch._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    if opened.get("channel") == "native":
+        native_obj = {
+            "ok": True,
+            "signal": "ok",
+            "report": "Receipt prose.",
+            "evidence": {"testFailed": False, "testPassed": True},
+        }
+        native_path = engine_dispatch._native_result_path(run_dir, 1)
+        with open(native_path, "w", encoding="utf-8") as fh:
+            json.dump(native_obj, fh)
+            fh.write("\n")
+        assert os.path.isfile(native_path) and not os.path.islink(native_path)
+        schema = engine_dispatch.engine_result_channel.declared_schema("codex", "write")
+        ok, reason = engine_dispatch.engine_result_channel.validate(schema, native_obj)
+        assert ok is True, reason
     with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
         fh.write("")
     engine_dispatch._journal_append(run_dir, {
