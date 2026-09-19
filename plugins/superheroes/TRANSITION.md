@@ -184,6 +184,6 @@ The verifier verdict contract requires `reason` as a non-blank string on every i
 (`payload_contracts` P_VERIFIERS); hand-submitted verifier artifacts are checked against the same
 contract. A whitespace-only `id`, `verdict`, or `reason` faults.
 
-Consumers that read codex findings from the last-message file or the event stream read the typed
-result file (or the folded `dispatch-review` result) instead; consumers that relied on a write
-salvage block on codex reconstruct from the worktree diff.
+Consumers that read codex findings from the last-message file or the event stream read the folded
+`dispatch-review` result instead; consumers that relied on a write salvage block on codex reconstruct
+from the worktree diff.

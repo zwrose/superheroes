@@ -4142,10 +4142,20 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     continue
 
                 latest = max(attempts)
-                if _marker_channel_retired_run(opened):
-                    return _fold_run(run_dir_real, state, _marker_channel_retired_terminal(
-                        opened, run_dir_real, state, argv, latest))
-                if run_kind == RUN_KIND_WRITE:
+                latest_ended = (attempts[latest].get("ended") or {})
+                if latest_ended.get("guardRefusal"):
+                    if run_kind == RUN_KIND_WRITE:
+                        grade = _grade_write_attempt(run_dir_real, state, latest)
+                    else:
+                        grade = _grade_review_attempt(run_dir_real, state, latest)
+                elif _marker_channel_retired_run(opened):
+                    terminal = _marker_channel_retired_terminal(
+                        opened, run_dir_real, state, argv, latest)
+                    view = opened.get("viewMeta")
+                    if view:
+                        terminal = _attach_sanitized_view(terminal, view)
+                    return _fold_run(run_dir_real, state, terminal)
+                elif run_kind == RUN_KIND_WRITE:
                     grade = _grade_write_attempt(run_dir_real, state, latest)
                 else:
                     grade = _grade_review_attempt(run_dir_real, state, latest)

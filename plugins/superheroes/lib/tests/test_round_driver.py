@@ -1427,6 +1427,48 @@ def test_run_loop_refusal_only_contract_journal_fault_unrecordable():
     _assert_run_loop_refusal_only(RD.run_loop(_seams(reviewer=boom), _cfg_cert()))
 
 
+def _panel_finding_reviewer():
+    finding = {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}
+
+    def reviewer(dim, tier, rnd, ctx):
+        if rnd == 1 and dim == "code-reviewer":
+            return {"findings": [finding]}
+        return []
+
+    return reviewer
+
+
+def test_run_loop_verifier_reasonless_verdict_keeps_findings_plausible():
+    def bad_verifier(clusters, rnd):
+        return [{"id": i, "verdict": "CONFIRMED"}
+                for c in (clusters or []) for i in (c.get("ids") or [])]
+
+    refusal, loop_receipt = _run_loop_with_loop_receipt(
+        _seams(reviewer=_panel_finding_reviewer(), verifier=bad_verifier),
+        _cfg_cert(),
+    )
+    assert refusal["loopTerminal"] != "cannot-certify"
+    assert refusal.get("verifierArtifactFault")
+    assert any("reason" in entry["fault"] for entry in refusal["verifierArtifactFault"])
+    r1 = [r for r in refusal["loopRounds"] if r["round"] == 1][0]
+    assert r1["verifyPasses"][0]["PLAUSIBLE"] >= 1
+    assert r1["verifyPasses"][0]["CONFIRMED"] == 0
+
+
+def test_run_loop_verifier_valid_reason_control():
+    def good_verifier(clusters, rnd):
+        return [{"id": i, "verdict": "CONFIRMED", "reason": "checked", "evidence": "ran"}
+                for c in (clusters or []) for i in (c.get("ids") or [])]
+
+    refusal, loop_receipt = _run_loop_with_loop_receipt(
+        _seams(reviewer=_panel_finding_reviewer(), verifier=good_verifier),
+        _cfg_cert(),
+    )
+    assert refusal.get("verifierArtifactFault") is None
+    r1 = [r for r in refusal["loopRounds"] if r["round"] == 1][0]
+    assert r1["verifyPasses"][0]["CONFIRMED"] >= 1
+    assert r1["verifyPasses"][0]["PLAUSIBLE"] == 0
+
 
 def test_run_loop_certification_refusal_not_legacy_receipt():
     """Without a checked base guard the loop still terminates; run_loop never mints a legacy receipt."""

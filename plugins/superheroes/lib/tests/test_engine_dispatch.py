@@ -9648,6 +9648,53 @@ def test_wo10_edge2_injected_seam_refuses_argv_snapshot_mismatch(tmp_path):
     assert fake.calls == []
 
 
+def test_marker_channel_retired_run_honors_guard_refusal_over_retirement(tmp_path):
+    # axis: pre-upgrade codex journal without channel/resolvedInputs — spawn-gate guardRefusal
+    # folds as unrunnable, not marker-channel-retired.
+    run_dir = str(tmp_path / "marker-guard-refusal")
+    _manual_open_review_run(tmp_path, run_dir)
+    _strip_opened_to_marker_channel(run_dir)
+    path = ED._journal_path(run_dir)
+    records, _ = ED._journal_read(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            if rec.get("kind") == "run-opened":
+                rec.pop("resolvedInputs", None)
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1,
+        "childPid": os.getpid(), "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1,
+        "childPid": os.getpid(), "argv": list(opened["argv"]), "at": time.time(),
+    })
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened["progressPath"],
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = next(r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended.get("guardRefusal") is True
+    assert "resolvedInputs" in (ended.get("refusal") or "")
+    res = ED._supervise(
+        run_dir, run_kind=ED.RUN_KIND_REVIEW,
+        deadline=time.monotonic() + 5,
+    )
+    assert res["terminal"] is True
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["forfeited"] is False
+    assert "resolvedInputs" in res["detail"]
+    assert res["detail"] != "marker-channel-retired"
+    assert ED.dispatch_outcome.classify_dispatch_result(res) == ED.dispatch_outcome.CLASSIFICATION_REFUSAL
+    assert ED.dispatch_outcome.exit_code(ED.dispatch_outcome.classify_dispatch_result(res)) == 1
+
+
 def test_wo10_edge3_supervise_folds_guard_refusal_terminal_unrunnable_no_retry(tmp_path, monkeypatch):
     # axis: off-allowlist snapshot via production run-child path — terminal unrunnable, no retry
     run_dir = str(tmp_path / "wo10-edge3")
