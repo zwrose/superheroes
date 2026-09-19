@@ -8,6 +8,7 @@
 - [Batch concurrency — an independent batch goes out together](#batch-concurrency--an-independent-batch-goes-out-together)
 - [Lens coverage beside counts](#lens-coverage-beside-counts)
 - [Actions and payloads](#actions-and-payloads)
+- [The re-dispatch carry](#the-re-dispatch-carry)
 - [Journal and receipt](#journal-and-receipt)
 - [Certification shapes](#certification-shapes)
 - [Invariants](#invariants)
@@ -468,7 +469,9 @@ The driver materializes them before order emit (see also the inline comment at
   orders render (the orchestrator supplies `headDiff` inline or via `headDiffPath` at fixer
   `submit`; the driver then materializes the file the audit/scoped order cites).
 - **`round-<N>/fix-batch.json`** — `_ensure_fix_batch_file` from state `_fixBatch` / `fixBatch` when
-  the fixer order renders. If the orchestrator pre-writes this file and the bytes differ from the
+  the fixer order renders. Each row carries `priorAudit {round, ruling, reason}` (the last audit
+  ruling on that finding) and `gateRuling {round, disposition, reason}` (the last owner-gate ruling),
+  derived at render time from the loop record by finding key. If the orchestrator pre-writes this file and the bytes differ from the
   driver's re-derivation, the driver **replaces** it silently — do not treat a hand-written
   `fix-batch.json` as authoritative over loop state.
 
@@ -684,6 +687,20 @@ cannot is an overclaim.
 | `present-judgment` | A tradeoff/product-choice blocker is an **owner-judgment** call routed here — an **intervention gate, not a terminal**. Present each `payload.findings[]` (id, file, line, title, severity) with `payload.findings[].dispositions` (`fix-as-suggested`, `fix-with-guidance`, `skip`). Submit `{dispositions: [{id, disposition, guidance?, reason?}, ...]}` — `skip` needs a citable `reason`. Fixes fold into the round's fix batch and the loop proceeds into the fix leg; skips ride the exit disclosure. Fail-closed: a missing/unknown disposition (or a reasonless skip) folds as `fix-as-suggested` — a judgment blocker is never silently skipped. Never judge the dispute yourself. |
 | `present-stall-menu` | The **audit-stall owner gate** — reached only after one invisible self-recovery (never for a judgment blocker; those go to `present-judgment`). Present `payload.choices` (three-choice menu: `one-more-round`, `accept-the-disclosed-risk`, `hold`; `accept-the-disclosed-risk` only when `payload.acceptRiskEligible` — gated on a stalled audit target that is CONFIRMED with evidence; `one-more-round` only when offered — once per session). Submit `{choice}`. **`hold`** → terminal `held`, certification withheld (absorbs the retired scope-reduction choice). **`accept-the-disclosed-risk`** → certifies when eligible. **`one-more-round`** → not a terminal: clears the stall once, re-enters `dispatch-fixer` → `dispatch-audits` with the stalled targets as the batch (journaled; recorded on the round); an empty/unresolvable stall-target snapshot parks `cannot-certify` instead of re-entering. |
 | `terminal` | Stop looping; read `payload.verdict` and `payload.certification`; surface honestly in the End-of-Loop Summary. |
+
+## The re-dispatch carry
+
+A finding the loop re-dispatches in a later round never reaches the fixer as its original text alone —
+every fixer order's `fix-batch.json` row carries `priorAudit` and `gateRuling` as above; the
+owner-gate guidance block renders the latest `fix-with-guidance` ruling on any finding in the batch
+from any earlier round, marked `Ruled in round N`; the routing sites (`_fold_judgment`,
+`_fold_stall`, `_fold_audits`) do not know about it — the materializer does; history rows are keyed
+by `findingKey` (the marker the writers stamp on `judgmentDispositions` entries and audit rows;
+`session_contract.finding_identity_key` is the one derivation), never by a row's `id`. **Limitation,
+stated plainly:** the carry reads the live loop record (`state.rounds`); across a `recordsPath`
+resume the gate ruling is restored (`judgmentDispositions` is a resumable channel) and the prior
+audit is not (`audits` is not), until the disposition ledger owns a finding's history (layer 2c).
+DoD: a fixer never receives the original finding text alone.
 
 ## Journal and receipt
 
