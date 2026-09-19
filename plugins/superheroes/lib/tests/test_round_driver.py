@@ -1463,6 +1463,58 @@ def _panel_finding_reviewer():
     return reviewer
 
 
+def test_run_seam_verifier_reason_less_verdict_returns_fault_directly():
+    """axis: a reason-less verifier verdict is converted into _verifierArtifactFault, not a ruling."""
+    def bad_verifier(clusters, rnd):
+        return [{"id": i, "verdict": "CONFIRMED"}
+                for c in (clusters or []) for i in (c.get("ids") or [])]
+
+    state = RD.new_state(_cfg())
+    result = RD._run_seam(
+        _seams(verifier=bad_verifier),
+        RD.P_VERIFIERS,
+        {"clusters": [{"ids": ["f-1"]}]},
+        state,
+        state["config"],
+    )
+    fault = RD.verifier_results_fault({"verdicts": [{"id": "f-1", "verdict": "CONFIRMED"}]})
+    assert result == {"verdicts": [], "_verifierArtifactFault": fault}
+    assert "reason" in fault
+
+
+def test_two_verifier_faults_in_one_round_are_both_recorded():
+    wave = {"n": 0}
+
+    def wave_verifier(clusters, rnd):
+        wave["n"] += 1
+        ids = [i for c in (clusters or []) for i in (c.get("ids") or [])]
+        if wave["n"] == 1:
+            return [{"id": i, "verdict": "CONFIRMED"} for i in ids]
+        return [{"verdict": "CONFIRMED", "reason": "checked"} for _i in ids]
+
+    finding = {"title": "bug", "severity": "Important", "file": "f0.py", "line": 1}
+    gap_finding = {"title": "gap", "severity": "Important", "file": "f1.py", "line": 1}
+
+    def reviewer(dim, tier, rnd, ctx):
+        if dim == "gap-sweep":
+            return {"findings": [gap_finding]}
+        if rnd == 1 and dim == "code-reviewer":
+            return {"findings": [finding]}
+        return []
+
+    refusal, _loop_receipt = _run_loop_with_loop_receipt(
+        _seams(reviewer=reviewer, verifier=wave_verifier),
+        _cfg_cert(diff=_big_diff(25)),
+    )
+    faults = refusal.get("verifierArtifactFault") or []
+    assert len(faults) == 2
+    assert faults[0]["round"] == 1
+    assert faults[1]["round"] == 1
+    assert "reason" in faults[0]["fault"]
+    assert "id" in faults[1]["fault"]
+    assert faults[0]["fault"] != faults[1]["fault"]
+
+
 def test_run_loop_verifier_reasonless_verdict_keeps_findings_plausible():
     def bad_verifier(clusters, rnd):
         return [{"id": i, "verdict": "CONFIRMED"}

@@ -52,6 +52,10 @@ _PROBE_PROMPT = (
 
 def _utc_now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+def _now_utc():
+    return datetime.now(timezone.utc)
+
 def _parse_completed_at(value):
     if not isinstance(value, str) or not value.strip():
         return None
@@ -59,9 +63,12 @@ def _parse_completed_at(value):
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed
 def _scrub_text(text):
     if not isinstance(text, str) or not text:
         return text
@@ -150,13 +157,7 @@ def _read_stderr_tail(run_dir_real, attempt):
         return ""
 
 def _effective_last_activity(ended, engagement):
-    last_at = ended.get("lastActivityAt")
-    if last_at is not None:
-        return last_at
-    # Shell injected-seam path records lastActivityAt: None (engine_dispatch.py).
-    if ended.get("activitySource") == "injected-seam" and engagement.get("telemetry") == "tool-calls":
-        return ended.get("at")
-    return None
+    return ended.get("lastActivityAt")
 
 def _grade_legs(terminal, state, bound_exceeded):
     attempts = state.get("attempts") or {}
@@ -252,9 +253,11 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
     seat, cell_err = _seat_for_engine(engine)
     if cell_err:
         return _refuse(engine, cell_err, repo_real, seat=seat)
+    run_dir_given = run_dir is not None
     if run_dir is None:
         try:
-            run_dir = tempfile.mkdtemp(prefix="conformance-probe-")
+            parent = tempfile.mkdtemp(prefix="conformance-probe-")
+            run_dir = os.path.join(parent, "run")
         except OSError as exc:
             return _refuse(engine, "run-dir-setup-failed:%s" % type(exc).__name__, repo_real, seat=seat)
     run_dir_real = os.path.realpath(run_dir)
@@ -264,7 +267,13 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
             return _refuse(engine, "run-dir-reused", repo_real, seat=seat)
     except OSError:
         pass
-    prompt_path = os.path.join(os.path.dirname(run_dir_real), "probe-prompt.md")
+    if run_dir_given:
+        prompt_path = os.path.join(
+            os.path.dirname(run_dir_real),
+            os.path.basename(run_dir_real) + ".probe-prompt.md",
+        )
+    else:
+        prompt_path = os.path.join(os.path.dirname(run_dir_real), "probe-prompt.md")
     try:
         _write_probe_prompt(prompt_path, repo_real)
     except OSError:
@@ -313,7 +322,7 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
     return payload, (0 if all_ok else 1), (_stderr_failure_line(engine, legs, dep_lanes) if not all_ok else None)
 
 def _expected_probe_cell(engine):
-    cell = seat_map.matrix_config(PROBE_ROLE, engine)
+    cell = model_registry.matrix_config(PROBE_ROLE, engine)
     if cell is None or cell[0] is None:
         return None
     return [engine, cell[0], cell[1]]
@@ -419,7 +428,7 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
     for eng in required:
         if eng not in results_by_engine:
             return {"ok": False, "reason": "probe-missing:%s" % eng}, 1
-    now = datetime.now(timezone.utc)
+    now = _now_utc()
     failed, passing = [], []
     for eng in required:
         _path, res = results_by_engine[eng]

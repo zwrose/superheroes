@@ -4783,7 +4783,9 @@ def _loop_verifier_artifact_faults(state):
     for key in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         rec = state["rounds"][key]
         fault = rec.get("verifierArtifactFault")
-        if isinstance(fault, dict):
+        if isinstance(fault, list):
+            faults.extend(fault)
+        elif isinstance(fault, dict):
             faults.append(fault)
     return faults
 
@@ -4872,8 +4874,8 @@ def run_loop(seams, config=None):
             if action == P_VERIFIERS and isinstance(artifact, dict):
                 fault = artifact.pop("_verifierArtifactFault", None)
                 if fault is not None:
-                    _record_round(state, "verifierArtifactFault",
-                                  {"fault": fault, "round": state["round"]})
+                    _record_round_append(state, "verifierArtifactFault",
+                                         {"fault": fault, "round": state["round"]})
             _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
             _persist_round_records(state, state["config"])
             # a delta round routes scoped candidates through verifiers; when that path is armed the
