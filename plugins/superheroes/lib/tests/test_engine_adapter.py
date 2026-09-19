@@ -1869,8 +1869,21 @@ def test_cursor_tool_calls_excludes_result_path(tmp_path):
     assert EA.cursor_tool_calls(write_plus_read, exclude_paths=(result_path,)) == 1
 
     shell_named = "\n".join(
-        _cursor_shell_tool_call_lines("cat %s" % result_path, "s1"))
+        _cursor_shell_tool_call_lines("cat %s" % other_path, "s1"))
     assert EA.cursor_tool_calls(shell_named, exclude_paths=(result_path,)) == 1
+
+    shell_write = "\n".join(
+        _cursor_shell_tool_call_lines("printf x > %s" % result_path, "s2"))
+    assert EA.cursor_tool_calls(shell_write, exclude_paths=(result_path,)) == 0
+
+    shell_investigate = "\n".join(
+        _cursor_shell_tool_call_lines("ls -la", "s3"))
+    assert EA.cursor_tool_calls(shell_investigate, exclude_paths=(result_path,)) == 1
+
+    shell_list_and_deliver = "\n".join(
+        _cursor_shell_tool_call_lines(
+            "ls -la %s && printf x > %s" % (result_path, result_path), "s4"))
+    assert EA.cursor_tool_calls(shell_list_and_deliver, exclude_paths=(result_path,)) == 0
 
 
 def test_cursor_tool_calls_excludes_late_discovered_result_path(tmp_path):
