@@ -91,7 +91,7 @@ def test_mechanical_compile_mints_finding_key_equal_to_location_id():
     ]
     compiled, _ = RD.mechanical_compile(findings, None)
     for f in compiled:
-        assert f.get(SC.FINDING_KEY_FIELD) == RD._location_id(f)
+        assert f.get(SC.FINDING_KEY_FIELD) == SC.location_key(f)
 
 
 def test_mechanical_compile_discards_inbound_finding_key():
@@ -190,7 +190,7 @@ def test_finding_identity_key_never_returns_positional_id():
     f = {"id": "v3", "file": "z.py", "line": 1, "title": "only id"}
     key = SC.finding_identity_key(f)
     assert key != "v3"
-    assert key == RD._location_id(f)
+    assert key == SC.location_key(f)
 
 
 # --- T4: fail-closed edges E1–E3, E6 ---------------------------------------------------------

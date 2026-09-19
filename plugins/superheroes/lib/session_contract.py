@@ -3,7 +3,7 @@
 import hashlib
 import json
 
-from finding_identity import finding_identity
+from finding_identity import clamp_title, finding_identity, finding_label, normalize_title
 
 __all__ = (
     "STATE_FILE",
@@ -21,12 +21,22 @@ __all__ = (
     "RECORD_RESULT_KINDS",
     "REVIEW_LIST_RESULT_KINDS",
     "FINDING_KEY_FIELD",
+    "TRANSIENT_FINDING_FIELDS",
     "evidence_digest_subject",
     "canonical",
     "payload_sha256",
     "finding_identity_key",
     "location_key",
+    "minted_identity_key",
+    "finding_content_canonical",
+    "content_hash_suffix",
 )
+
+# Fields the loop stamps onto a finding row after a seat reported it — excluded from content hash.
+TRANSIENT_FINDING_FIELDS = frozenset({
+    "id", "findingKey", "verdict", "evidence", "challenge", "unverified", "reason",
+    "disposition", "dispositionReceipt",
+})
 
 # Result kind a write run's execution record carries — binds the run's own report, not a payload key.
 WRITE_RESULT_KIND = "evidence"
@@ -97,11 +107,35 @@ def evidence_digest_subject(payload, result_kind):
     return False, None
 
 
+def minted_identity_key(finding):
+    """Identity the loop mints from content — no foreign preset."""
+    if not isinstance(finding, dict):
+        return None
+    base = location_key(finding)
+    full_norm = normalize_title(str(finding.get("title") or ""))
+    clamped_norm = normalize_title(clamp_title(finding_label(finding)))
+    if full_norm != clamped_norm:
+        return base + "#" + sha256_text(full_norm)[:12]
+    return base
+
+
+def finding_content_canonical(finding):
+    """Canonical JSON of a finding row with transient loop-stamped fields removed."""
+    if not isinstance(finding, dict):
+        return None
+    body = {k: v for k, v in finding.items() if k not in TRANSIENT_FINDING_FIELDS}
+    return canonical(body)
+
+
+def content_hash_suffix(finding):
+    return sha256_text(finding_content_canonical(finding))[:12]
+
+
 def finding_identity_key(finding):
-    """Stable identity for disposition-ledger entries — shared by driver and writer."""
+    """The one derivation of a finding's identity. Never reads `id`."""
     if not isinstance(finding, dict):
         return None
     key = finding.get(FINDING_KEY_FIELD)
     if isinstance(key, str) and key:
         return key
-    return location_key(finding)
+    return minted_identity_key(finding)

@@ -4923,9 +4923,9 @@ def test_judgment_row_ids_same_finding_same_id():
 def test_judgment_colliding_identity_different_severity_dispositions_not_collapse():
     """Two tradeoff findings at the same location with different severities must each receive their
     disposition — a skip for one must not silently override fix-as-suggested for a Critical."""
-    loc_id_prefix = RD._location_id({"title": "same choice " + "x" * 205 + " alpha",
-                                     "severity": "Critical", "file": "f.py", "line": 10,
-                                     "tradeoff": True})
+    loc_id_prefix = RD.session_contract.location_key({"title": "same choice " + "x" * 205 + " alpha",
+                                                      "severity": "Critical", "file": "f.py", "line": 10,
+                                                      "tradeoff": True})
     critical = {"title": "same choice " + "x" * 205 + " alpha", "severity": "Critical",
                 "file": "f.py", "line": 10, "tradeoff": True}
     important = {"title": "same choice " + "x" * 205 + " bravo", "severity": "Important",

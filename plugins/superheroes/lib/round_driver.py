@@ -1187,36 +1187,6 @@ def _finding_identity_key(finding):
     return session_contract.finding_identity_key(finding)
 
 
-def _finding_content_canonical(finding):
-    """Canonical JSON of a finding without findingKey."""
-    if not isinstance(finding, dict):
-        return None
-    body = dict(finding)
-    body.pop(session_contract.FINDING_KEY_FIELD, None)
-    return session_contract.canonical(body)
-
-
-def _content_hash_suffix(finding):
-    return session_contract.sha256_text(_finding_content_canonical(finding))[:12]
-
-
-def _title_clamp_hash_suffix(finding):
-    """12-hex suffix when the clamped title in location_key lost information."""
-    title = str(finding.get("title") or "")
-    full_norm = normalize_title(title)
-    clamped_norm = normalize_title(review_memory.clamp_title(finding_label(finding)))
-    if full_norm != clamped_norm:
-        return session_contract.sha256_text(full_norm)[:12]
-    return None
-
-
-def _loop_minted_key(finding):
-    """Key the loop would mint from this row's content (no foreign preset)."""
-    base = session_contract.location_key(finding)
-    suffix = _title_clamp_hash_suffix(finding)
-    return base + ("#" + suffix if suffix else "")
-
-
 def _mint_finding_keys(findings):
     """Stamp findingKey on dict findings that lack a non-empty one; ensure list-wide uniqueness."""
     if not isinstance(findings, list):
@@ -1225,7 +1195,7 @@ def _mint_finding_keys(findings):
     for f in findings:
         if not isinstance(f, dict):
             continue
-        minted = _loop_minted_key(f)
+        minted = session_contract.minted_identity_key(f)
         bare = session_contract.location_key(f)
         preset_raw = f.get(session_contract.FINDING_KEY_FIELD)
         preset = preset_raw if isinstance(preset_raw, str) and preset_raw else None
@@ -1249,49 +1219,43 @@ def _mint_finding_keys(findings):
     by_identity = {}
     for idx, (f, kind, identity, legacy_key) in enumerate(entries):
         by_identity.setdefault(identity, []).append((idx, f, kind, legacy_key))
-    legacy_claims = {}
+    claimants = {}
     for identity, group in by_identity.items():
-        legacy_keys_in_group = [lk for _, _, kind, lk in group if kind == "legacy-owned" and lk]
-        if legacy_keys_in_group:
-            lk = legacy_keys_in_group[0]
-            legacy_claims[lk] = legacy_claims.get(lk, 0) + 1
+        for _, f, kind, legacy_key in group:
+            bare = session_contract.location_key(f)
+            if kind in ("unkeyed", "loop-owned") and identity == bare:
+                claimants.setdefault(bare, set()).add(identity)
+            elif kind == "foreign":
+                claimants.setdefault(identity, set()).add(identity)
+            elif kind == "legacy-owned" and legacy_key:
+                claimants.setdefault(legacy_key, set()).add(identity)
     for identity, group in by_identity.items():
         has_foreign = any(kind == "foreign" for _, _, kind, _ in group)
         if not has_foreign:
             legacy_keys = [lk for _, _, kind, lk in group if kind == "legacy-owned" and lk]
             # Parent build minted list-wide-unique keys; two bare legacy rows cannot come from
             # stored state — this branch is fail-closed hardening when claims collide.
-            if legacy_keys and legacy_claims.get(legacy_keys[0], 0) == 1:
+            if legacy_keys and len(claimants.get(legacy_keys[0], set())) == 1:
                 chosen_key = legacy_keys[0]
             else:
                 chosen_key = identity
             for _, f, _, _ in group:
                 f[session_contract.FINDING_KEY_FIELD] = chosen_key
         else:
-            contents = {_finding_content_canonical(f) for _, f, _, _ in group}
+            contents = {session_contract.finding_content_canonical(f) for _, f, _, _ in group}
             if len(group) == 1 or len(contents) == 1:
                 for _, f, _, _ in group:
                     f[session_contract.FINDING_KEY_FIELD] = identity
             else:
                 for _, f, _, _ in group:
-                    f[session_contract.FINDING_KEY_FIELD] = identity + "#" + _content_hash_suffix(f)
+                    f[session_contract.FINDING_KEY_FIELD] = (
+                        identity + "#" + session_contract.content_hash_suffix(f))
     return findings
 
 
 def _finding_key_of(finding):
-    """Pure read of a finding's disposition key — never mutates finding.
-    A staged v<N> id is positional and never an identity."""
-    if not isinstance(finding, dict):
-        return None
-    key = finding.get(session_contract.FINDING_KEY_FIELD)
-    if isinstance(key, str) and key:
-        return key
-    row_id = finding.get("id")
-    if isinstance(row_id, str) and row_id and not verification.is_staged_id(row_id):
-        return row_id
-    copy = dict(finding)
-    _mint_finding_keys([copy])
-    return session_contract.finding_identity_key(copy)
+    """Pure read of a finding's identity — the leaf's one derivation."""
+    return session_contract.finding_identity_key(finding)
 
 
 def _archive_disposition_findings(state, departing):
@@ -1373,14 +1337,14 @@ def _set_findings(state, new_findings):
 
 
 def _park_finding_key(finding):
-    """Stable dedupe identity for the park-time findings merge — the module's EXISTING per-location
-    key (`_location_id`: `finding_identity` plus line), so two same-title candidates at different
-    lines stay distinct. Returns None when no key can be derived, and an unidentifiable candidate is
-    KEPT rather than dropped: a halted receipt owes over-reporting before under-reporting."""
+    """Stable dedupe identity for the park-time findings merge — the leaf's per-location key, so two
+    same-title candidates at different lines stay distinct. Returns None when no key can be derived,
+    and an unidentifiable candidate is KEPT rather than dropped: a halted receipt owes
+    over-reporting before under-reporting."""
     if not isinstance(finding, dict):
         return None
     try:
-        return _location_id(finding)
+        return session_contract.finding_identity_key(finding)
     except Exception:
         return None
 
@@ -2470,12 +2434,6 @@ def _fold_gapsweep(state, config, artifact):
     _after_findings_settled(state, config)
 
 
-def _location_id(finding):
-    """Per-LOCATION key: line-less `finding_identity` plus line. Two same-title findings at
-    DIFFERENT lines get DISTINCT keys (#507 R2 v5)."""
-    return session_contract.location_key(finding)
-
-
 def _judgment_row_ids(findings):
     """Per-row disposition keys for judgment findings — each row's minted findingKey."""
     ids = []
@@ -3286,7 +3244,7 @@ def _audit_targets(state, config, audit_targets_map):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
     hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
-    occurrence wins."""
+    occurrence wins. A re-queued target keys by its findingKey marker, never by id."""
     fixer_vendor = config.get("fixerVendor")
     auditor_vendor, independence = _auditor_vendor(config, fixer_vendor)
     if independence == "degraded":
@@ -3302,6 +3260,7 @@ def _audit_targets(state, config, audit_targets_map):
         seen_keys.add(tid)
         targets.append({
             "id": tid,
+            session_contract.FINDING_KEY_FIELD: tid,
             "identity": finding_identity(f),
             "file": f.get("file"), "line": f.get("line"), "title": f.get("title"),
             "severity": f.get("severity"),
@@ -3804,39 +3763,23 @@ def _commit_stall_self_recovery(state, config, breaker):
 
 
 def _union_open_blockers(*groups):
-    """Union open blockers into one fix batch — deduped by id when present (#507 R2 residual-3).
+    """Union open blockers into one fix batch — deduped by the leaf's identity key.
 
     First-wins: an admitted entry is never replaced, removed, or downgraded by a later group.
-    Id-bearing audit targets dedupe on ``id`` so occurrence-suffixed siblings at one location stay
-    distinct. An id-less item and any item at the same per-location key (line-less identity + line)
-    represent each other — whichever arrives first is kept. ``_settle_delta`` passes id-less
-    ``new_blocking`` before id-bearing ``nd_targets``; that ordering depends on first-wins."""
+    ``_settle_delta`` passes id-less ``new_blocking`` before id-bearing ``nd_targets``; that
+    ordering depends on first-wins."""
     batch = []
-    seen_ids = set()
-    seen_locs = set()
-    idless_locs = set()
+    seen_keys = set()
     for group in groups:
         for item in group:
             f = dict(item)
-            ident = f.get("identity") or finding_identity(f)
-            if ident is None:
+            key = session_contract.finding_identity_key(f)
+            if key is None:
                 continue
-            loc_key = (ident, f.get("line"))
-            tid = f.get("id")
-            if tid:
-                if tid in seen_ids:
-                    continue
-                if loc_key in idless_locs:
-                    continue
-                batch.append(f)
-                seen_ids.add(tid)
-                seen_locs.add(loc_key)
-            else:
-                if loc_key in seen_locs:
-                    continue
-                batch.append(f)
-                seen_locs.add(loc_key)
-                idless_locs.add(loc_key)
+            if key in seen_keys:
+                continue
+            batch.append(f)
+            seen_keys.add(key)
     return batch
 
 

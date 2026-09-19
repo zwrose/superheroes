@@ -19,10 +19,13 @@ def _load(name):
 
 RD = _load("round_driver")
 SC = _load("session_contract")
+RC = _load("round_certification")
 
 
-def _cfg():
-    return {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "codex"}
+def _cfg(**over):
+    base = {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "codex"}
+    base.update(over)
+    return base
 
 
 def _clamped_collision_pair():
@@ -86,8 +89,8 @@ def test_set_findings_merges_identical_content_same_key():
     assert survivor["dimension"] == "Code + Security"
 
 
-def test_audit_target_preserves_opaque_requeued_id():
-    """T3: fix-batch row with id and no findingKey keeps that id as audit target id."""
+def test_audit_target_keys_opaque_id_row_by_content_and_stamps_marker():
+    """T3: fix-batch row with opaque id and no findingKey keys by content, stamps marker."""
     row = {
         "id": "opaque@L1#1",
         "file": "f.py",
@@ -95,11 +98,14 @@ def test_audit_target_preserves_opaque_requeued_id():
         "title": "legacy",
         "severity": "Important",
     }
+    before = copy.deepcopy(row)
     state = RD.new_state(_cfg())
     state["fixBatch"] = [row]
     targets = RD._audit_targets(state, state["config"], {})
     assert len(targets) == 1
-    assert targets[0]["id"] == "opaque@L1#1"
+    assert targets[0]["id"] == SC.finding_identity_key(row)
+    assert targets[0][SC.FINDING_KEY_FIELD] == targets[0]["id"]
+    assert row == before
 
 
 def test_readers_do_not_mutate_rows_missing_finding_key():
@@ -274,3 +280,166 @@ def test_foreign_preset_key_collision_still_rekeys():
     assert len(keys) == 2
     assert keys[0].startswith("caller-controlled#") and len(keys[0]) == len("caller-controlled#") + 12
     assert keys[1].startswith("caller-controlled#") and len(keys[1]) == len("caller-controlled#") + 12
+
+
+def test_legacy_bare_key_with_clamp_exact_new_finding_keeps_two_rows():
+    """T13: legacy bare K plus clamp-exact new row at same location keeps two rows."""
+    from finding_identity import clamp_title, finding_label
+
+    prefix = "x" * 165
+    long = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Critical"}
+    bare = SC.location_key(long)
+    legacy = dict(long, **{SC.FINDING_KEY_FIELD: bare})
+    short_title = clamp_title(finding_label(long))
+    short = dict(long, title=short_title, severity="Important")
+    assert SC.location_key(short) == bare
+    assert SC.minted_identity_key(short) == bare
+
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, [legacy, short])
+    assert len(state["findings"]) == 2
+    keys = {f[SC.FINDING_KEY_FIELD] for f in state["findings"]}
+    assert keys == {bare, SC.minted_identity_key(long)}
+
+    state_rev = RD.new_state(_cfg())
+    RD._set_findings(state_rev, [short, legacy])
+    assert len(state_rev["findings"]) == 2
+    keys_rev = {f[SC.FINDING_KEY_FIELD] for f in state_rev["findings"]}
+    assert keys_rev == {bare, SC.minted_identity_key(long)}
+
+    foreign = {
+        "file": "g.py", "line": 1, "title": "other", "severity": "Important",
+        SC.FINDING_KEY_FIELD: bare,
+    }
+    state_foreign = RD.new_state(_cfg())
+    RD._set_findings(state_foreign, [legacy, foreign])
+    assert len(state_foreign["findings"]) == 2
+    by_file = {f["file"]: f[SC.FINDING_KEY_FIELD] for f in state_foreign["findings"]}
+    assert by_file["g.py"] == bare
+    assert by_file["f.py"] == SC.minted_identity_key(long)
+
+
+def test_foreign_collision_keys_are_staging_order_independent():
+    """T14: foreign preset collision keys are independent of staging order and transient fields."""
+    V = _load("verification")
+    finding1 = {
+        "file": "b.py", "line": 10, "title": "first", "severity": "Important",
+        SC.FINDING_KEY_FIELD: "caller-controlled",
+    }
+    finding2 = {
+        "file": "c.py", "line": 20, "title": "second", "severity": "Important",
+        SC.FINDING_KEY_FIELD: "caller-controlled",
+    }
+    staged_a = V.stage_ids([finding1, finding2])
+    staged_b = V.stage_ids([finding2, finding1])
+    state_a = RD.new_state(_cfg())
+    RD._set_findings(state_a, staged_a)
+    state_b = RD.new_state(_cfg())
+    RD._set_findings(state_b, staged_b)
+    keys_a = {f[SC.FINDING_KEY_FIELD] for f in state_a["findings"]}
+    keys_b = {f[SC.FINDING_KEY_FIELD] for f in state_b["findings"]}
+    assert keys_a == keys_b
+
+    stamped_a = [dict(f, verdict="CONFIRMED", evidence="a") for f in staged_a]
+    stamped_b = [dict(f, verdict="REFUTED", evidence="b") for f in staged_b]
+    state_sa = RD.new_state(_cfg())
+    RD._set_findings(state_sa, stamped_a)
+    state_sb = RD.new_state(_cfg())
+    RD._set_findings(state_sb, stamped_b)
+    assert {f[SC.FINDING_KEY_FIELD] for f in state_sa["findings"]} == keys_a
+    assert {f[SC.FINDING_KEY_FIELD] for f in state_sb["findings"]} == keys_b
+
+
+def test_finding_identity_has_one_home_driver_and_certification_agree():
+    """T15: two unkeyed long-title siblings stay distinct; driver and certification agree."""
+    alpha, beta = _clamped_collision_pair()
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, [alpha, beta])
+    assert len(state["findings"]) == 2
+    certified = RC._certification_findings(state)
+    assert len(certified) == 2
+    a, b = state["findings"][0], state["findings"][1]
+    assert SC.finding_identity_key(a) != SC.finding_identity_key(b)
+    assert RD._finding_key_of(a) == SC.finding_identity_key(a)
+    assert RD._finding_key_of(b) == SC.finding_identity_key(b)
+
+
+def test_persisted_targets_without_marker_dedupe_by_content():
+    """T16: persisted audit targets without findingKey dedupe by content identity."""
+    ident = SC.finding_identity_key({"file": "f.py", "line": 4, "title": "same"})
+    target_k = {
+        "id": ident, "identity": ident.split("@L")[0], "file": "f.py", "line": 4,
+        "title": "same", "severity": "Important",
+    }
+    target_suffix = {
+        "id": ident + "#1", "identity": ident.split("@L")[0], "file": "f.py", "line": 4,
+        "title": "same", "severity": "Important",
+    }
+    batch = RD._union_open_blockers([target_k], [target_suffix])
+    assert len(batch) == 1
+
+    marker_a = ident + "@L1"
+    marker_b = ident + "@L1#abcdef012345"
+    target_marked_a = dict(target_k, id=marker_a, **{SC.FINDING_KEY_FIELD: marker_a})
+    target_marked_b = dict(target_k, id=marker_b, **{SC.FINDING_KEY_FIELD: marker_b})
+    batch_marked = RD._union_open_blockers([target_marked_a], [target_marked_b])
+    assert len(batch_marked) == 2
+
+    state = RD.new_state(_cfg(maxRounds=20))
+    state["_auditTargets"] = [target_k, target_suffix]
+    state["_auditOutcome"] = {"notDischarged": [target_k["id"], target_suffix["id"]], "discharged": []}
+    state["auditRounds"] = [{"round": 2, "outcomes": []}]
+    state["findings"] = []
+    RD._settle_delta(state, state["config"])
+    assert state.get("step") == RD.P_FIXER
+    fix_batch = state.get("_fixBatch") or []
+    assert len(fix_batch) == 1
+
+
+def test_identity_derivation_has_one_home_census():
+    """Census: identity derivation lives only in session_contract except _mint_finding_keys."""
+    import ast
+
+    forbidden_calls = {
+        "location_key", "clamp_title", "_loop_minted_key", "_title_clamp_hash_suffix",
+        "_location_id", "_finding_content_canonical", "_content_hash_suffix",
+    }
+    forbidden_defs = {
+        "_loop_minted_key", "_title_clamp_hash_suffix", "_location_id",
+        "_finding_content_canonical", "_content_hash_suffix",
+    }
+    modules = ("round_driver", "round_certification", "round_records", "verification")
+    for mod_name in modules:
+        path = os.path.join(_LIB, mod_name + ".py")
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read(), filename=path)
+        mint_fn = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "_mint_finding_keys":
+                mint_fn = node
+                break
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name in forbidden_defs:
+                raise AssertionError("%s defines forbidden %s" % (mod_name, node.name))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if mint_fn is not None and hasattr(node, "lineno"):
+                if mint_fn.lineno <= node.lineno <= getattr(mint_fn, "end_lineno", mint_fn.lineno):
+                    continue
+            func = node.func
+            name = None
+            if isinstance(func, ast.Name):
+                name = func.id
+            elif isinstance(func, ast.Attribute):
+                name = func.attr
+            if name in forbidden_calls:
+                raise AssertionError("%s calls forbidden %s at line %s" % (mod_name, name, node.lineno))
+    rd_path = os.path.join(_LIB, "round_driver.py")
+    with open(rd_path, encoding="utf-8") as fh:
+        rd_src = fh.read()
+    assert "session_contract.finding_identity_key" in rd_src
+    rc_path = os.path.join(_LIB, "round_certification.py")
+    with open(rc_path, encoding="utf-8") as fh:
+        rc_src = fh.read()
+    assert "finding_identity_key" in rc_src
