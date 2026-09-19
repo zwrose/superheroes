@@ -459,6 +459,17 @@ class RoundCeilingRefusal(ValueError):
         self.value = value
 
 
+class FixBatchCapRefusal(ValueError):
+    """Load-time refusal for an invalid ``fixBatchCap`` — sibling of ``RoundCeilingRefusal``.
+
+    Raised only from ``_default_config`` when ``fixBatchCap`` is present, not ``None``, and not a
+    positive non-bool ``int``."""
+    def __init__(self, reason, value=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.value = value
+
+
 RECEIPT_FAULT_WRITE = "receipt-write"                 # round-receipt.json could not be written
 RECEIPT_FAULT_CERTIFICATION = "certification-artifact"  # certification receipt/refusal artifact could not be written
 RECEIPT_FAULT_VERIFY = "receipt-verify"               # the on-disk receipt failed re-verification
@@ -1017,6 +1028,7 @@ def _default_config(overrides=None):
         # was populated ONLY by `_fold_panel` off the panel artifact; receipt list (#681) stores
         # each round's submission in `seatMapReceipts` instead.
         "seatMap": None,
+        "fixBatchCap": None,
     }
     if isinstance(overrides, dict):
         cfg.update({k: v for k, v in overrides.items() if v is not None})
@@ -1024,12 +1036,29 @@ def _default_config(overrides=None):
     cfg["code"] = cfg.get("leg") != "panel"
     if not isinstance(cfg.get("dimensions"), list) or not cfg["dimensions"]:
         cfg["dimensions"] = list(DIMENSIONS)
+    cap_val = cfg.get("fixBatchCap")
+    if cap_val is not None:
+        if not isinstance(cap_val, int) or isinstance(cap_val, bool) or cap_val < 1:
+            raise FixBatchCapRefusal("fix-batch-cap-invalid", cap_val)
     ceiling, refusal = circuit_breaker.resolve_round_ceiling(
         cfg["maxRounds"], cfg.get("maxRoundsAbsolute"))
     if refusal is not None:
         raise RoundCeilingRefusal(refusal, cfg.get("maxRoundsAbsolute"))
     cfg["maxRoundsAbsolute"] = ceiling
     return cfg
+
+
+def _fix_batch_cap(config):
+    """Return the configured fix-batch cap, or ``FIX_BATCH_CAP_DEFAULT`` when unset/invalid."""
+    val = config.get("fixBatchCap") if isinstance(config, dict) else None
+    if isinstance(val, int) and not isinstance(val, bool) and val >= 1:
+        return val
+    return round_phases.FIX_BATCH_CAP_DEFAULT
+
+
+VERIFY_THEN_CEILING = "ceiling"
+VERIFY_THEN_PANEL = "full-panel"
+VERIFY_THEN_POST_AUDITS = "post-audits"
 
 
 def _round_ceiling(config):
@@ -1687,6 +1716,9 @@ def _advance(state, config):
                    "fullDiff": True}
     elif step == P_AUDITS:
         payload = {"targets": state.get("_auditTargets") or []}
+        if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
+            payload["verify"] = {"phase": P_VERIFY,
+                                 "command": config.get("verifyCommand", "none")}
     elif step == P_SCOPED:
         payload = {"hunks": state.get("_newSurface") or {}, "tier": DEEP}
     elif step == P_VERIFY:
@@ -2932,8 +2964,7 @@ def _fold_judgment(state, config, artifact):
     state.pop("_judgmentFindings", None)
     state.pop("_judgmentMechanical", None)
     if fix_batch:
-        state["_fixBatch"] = fix_batch
-        state["step"] = P_FIXER
+        _queue_fix_batch(state, config, fix_batch)
         return
     # Everything skipped and no mechanical blocker: settle. The skipped blockers are owner-accepted
     # product-choice tradeoffs (cited in the ledger) — converge, naming them on the exit disclosure.
@@ -2962,13 +2993,23 @@ def _after_findings_settled(state, config):
     if blocking:
         if _route_judgment_blockers(state, blocking):
             return
-        state["_fixBatch"] = [dict(f) for f in blocking]
-        state["step"] = P_FIXER
+        _queue_fix_batch(state, config, [dict(f) for f in blocking])
     else:
         _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
 
 
 # ---- fix + verify legs ----------------------------------------------------------------------
+
+def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index=0):
+    """The ONE writer of ``state["_fixBatch"]`` — slice the round's blocking batch by cap."""
+    cap = _fix_batch_cap(config)
+    if reset_accumulator:
+        state["fixBatch"] = []
+    state["_fixBatch"] = rows[:cap]
+    state["_fixQueue"] = rows[cap:]
+    state["_fixBatchIndex"] = batch_index
+    state["step"] = P_FIXER
+
 
 def _subjects_for_dimension(dimension):
     """Policy subjects mentioned by a compiled finding's dimension label — a single label
@@ -3053,7 +3094,12 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     self-report. The derivation is an injectable seam symmetrical with reviewer/fixer/verify:
     run_loop may inject a scripted replay (the eval harness); the library default + the CLI path
     wire the real git derivation. Unknown/unparseable surface → None → the run-everything rule."""
-    state["fixBatch"] = state.get("_fixBatch") or []
+    index = state.get("_fixBatchIndex") or 0
+    slice_ = state.get("_fixBatch") or []
+    if index == 0:
+        state["fixBatch"] = list(slice_)
+    else:
+        state["fixBatch"] = (state.get("fixBatch") or []) + list(slice_)
     head, head_source = _resolve_head_diff(artifact)
     state["headDiff"] = head
     state["_headDiffSource"] = head_source
@@ -3081,8 +3127,20 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     cds = artifact.get("coverageDecisions")
     if isinstance(cds, list):
         state.setdefault("_coverage", []).extend(d for d in cds if isinstance(d, dict))
-    _record_round(state, "fix", {"fixes": artifact.get("fixes") or [],
-                                 "escalated": bool(artifact.get("escalated") or state.get("_escalatedRung"))})
+    rec = state.get("rounds", {}).get(str(state["round"]), {})
+    prior_fix = rec.get("fix") if isinstance(rec, dict) else None
+    if index >= 1 and isinstance(prior_fix, dict):
+        fixes = list(prior_fix.get("fixes") or []) + list(artifact.get("fixes") or [])
+        escalated = bool(prior_fix.get("escalated")) or bool(
+            artifact.get("escalated") or state.get("_escalatedRung"))
+        _record_round(state, "fix", {"fixes": fixes, "escalated": escalated})
+    else:
+        _record_round(state, "fix", {"fixes": artifact.get("fixes") or [],
+                                     "escalated": bool(artifact.get("escalated")
+                                                       or state.get("_escalatedRung"))})
+    _record_round_append(state, "fixBatches",
+                         {"index": index, "size": len(slice_),
+                          "fixes": len(artifact.get("fixes") or [])})
     _record_round(state, "fixerVendor", config.get("fixerVendor"))
     state.pop("_escalatedRung", None)
     if session_dir:
@@ -3092,7 +3150,16 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         else:
             _record_fix_content_on_findings(state, session_dir, artifact, head)
             _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
-    state["step"] = P_VERIFY
+    queue = state.get("_fixQueue") or []
+    if queue:
+        _queue_fix_batch(state, config, queue, reset_accumulator=False, batch_index=index + 1)
+        _decision(state, "fix-batch-split",
+                  "fix batch slice %d of this round dispatched (%d findings; %d queued)"
+                  % (index + 1, len(state["_fixBatch"]), len(state["_fixQueue"])))
+        return
+    state.pop("_fixQueue", None)
+    state.pop("_fixBatchIndex", None)
+    _enter_post_fix(state, config)
 
 
 _VERIFY_SKIP = ("skipped", "none", "unverified")
@@ -3383,12 +3450,36 @@ def _fold_verify(state, config, artifact):
                   "verify result %r is not pass/skip — fail closed, certification withheld" % (result,))
         state["step"] = P_TERMINAL
         return
-    # advance to the next (delta) round. The diff the just-finished round's panel/audit saw is the
-    # `reviewed` side of the next split_fix_surface; the fixer's head diff is the `head` side.
+    then = state.pop("_verifyThen", None)
+    if then == VERIFY_THEN_POST_AUDITS:
+        _after_audits(state, config)
+        return
+    if then == VERIFY_THEN_PANEL:
+        state["step"] = P_PANEL
+        return
+    # VERIFY_THEN_CEILING, and the legacy position (a gate pending with no flag): the round advance
+    # is here — at the ceiling it parks `round-ceiling`; otherwise it enters the delta round.
     if not _advance_round(state, config, reason="post-verify-advance"):
         return
     state["_priorReviewedDiff"] = state.get("reviewedDiff")
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
+    _enter_delta_round(state, config)
+
+
+def _enter_post_fix(state, config):
+    """After the round's last fix-batch slice folds: advance or run the gate at the ceiling."""
+    next_round = state["round"] + 1
+    if circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config)).get("halt"):
+        # The round at the ceiling completes — fix AND gate — before the boundary refuses the next
+        # round (owner ruling 19-c, #1030). The gate runs alone here; its fold parks.
+        state["_verifyThen"] = VERIFY_THEN_CEILING
+        state["step"] = P_VERIFY
+        return
+    if not _advance_round(state, config, reason="post-fix-advance"):
+        return
+    state["_priorReviewedDiff"] = state.get("reviewedDiff")
+    state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
+    state["_postFixEntry"] = True
     _enter_delta_round(state, config)
 
 
@@ -3407,6 +3498,7 @@ def _enter_delta_round(state, config):
     """Rounds 2+: split_fix_surface(reviewed, head, fixBatch). unknown → schedule a FULL panel
     (the existing unknown→run-everything rule). Else audit the fixed findings + scoped-find the new
     surface."""
+    post_fix = bool(state.pop("_postFixEntry", False))
     # An unresolvable post-fix head diff (a missing/unreadable `headDiffPath`, no inline diff) is an
     # unknown surface BEFORE the split runs — never fold it through as an empty diff (#507). This is
     # the honest recovery for the field defect: a lost head diff now runs a full panel, not a vacuous
@@ -3415,12 +3507,18 @@ def _enter_delta_round(state, config):
         _schedule_full_panel_unknown(
             state, "post-fix head diff unresolvable (source %r) — full reviewer-deep panel"
             % state.get("_headDiffSource"))
+        if post_fix:
+            state["_verifyThen"] = VERIFY_THEN_PANEL
+            state["step"] = P_VERIFY
         return
     split = delta_surface.split_fix_surface(
         state.get("_priorReviewedDiff") or state.get("reviewedDiff"),
         state.get("headDiff"), state.get("fixBatch") or [])
     if split.get("unknown"):
         _schedule_full_panel_unknown(state, "delta surface unknown — full reviewer-deep panel")
+        if post_fix:
+            state["_verifyThen"] = VERIFY_THEN_PANEL
+            state["step"] = P_VERIFY
         return
     # a delta (scoped) round is NOT a full panel — reset the flag so a scoped certifying finish is
     # `audited-chain`, not `full-panel-confirmed`. A re-armed confirmation panel re-sets it True.
@@ -3428,6 +3526,8 @@ def _enter_delta_round(state, config):
     state["_auditTargets"] = _audit_targets(state, config, split.get("auditTargets") or {})
     state["_newSurface"] = split.get("newSurface") or {}
     _record_round(state, "roundKind", "delta")
+    if post_fix:
+        state["_verifyThen"] = VERIFY_THEN_POST_AUDITS
     state["step"] = P_AUDITS
 
 
@@ -3603,6 +3703,14 @@ def _fold_audits(state, config, artifact):
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
         _decision(state, "not-discharged", aid)
+    if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
+        state["step"] = P_VERIFY
+        return
+    _after_audits(state, config)
+
+
+def _after_audits(state, config):
+    """Scoped-finder routing after audits fold — or after the post-audits verify gate passes."""
     # Scoped-finder routing (#507 WO-R2b). Dispatch the scoped new-finding scan ONLY when the delta
     # split computed a NON-EMPTY new surface (`_newSurface`, set by `_enter_delta_round`). A
     # genuinely empty new surface (`unknown` was False — an unknown surface never reaches audits, it
@@ -3729,8 +3837,7 @@ def _settle_delta(state, config):
         batch = _union_open_blockers(new_blocking, nd_targets)
         if _route_judgment_blockers(state, batch):
             return
-        state["_fixBatch"] = batch
-        state["step"] = P_FIXER
+        _queue_fix_batch(state, config, batch)
         return
 
     _settle_delta_converged(state, config)
@@ -4021,8 +4128,7 @@ def _route_stall_self_recovery(state, config, batch, refusal, breaker):
     if batch:
         if _route_judgment_blockers(state, batch):
             return
-        state["_fixBatch"] = batch
-        state["step"] = P_FIXER
+        _queue_fix_batch(state, config, batch)
     elif refusal == REFUSAL_UNRESOLVABLE_OPEN_SET:
         _park_cannot_certify(
             state,
@@ -4125,8 +4231,7 @@ def _fold_stall(state, config, artifact):
             state["step"] = P_TERMINAL
             return
         state["_oneMoreRoundUsed"] = True
-        state["_fixBatch"] = [dict(t) for t in targets]
-        state["step"] = P_FIXER
+        _queue_fix_batch(state, config, [dict(t) for t in targets])
         return
     else:
         # an ineligible accept-the-risk or an unknown choice fails closed to a park.
@@ -5154,7 +5259,7 @@ def run_loop(seams, config=None):
         raise ValueError("run_loop requires a seams dict")
     try:
         state = new_state(config)
-    except RoundCeilingRefusal as refusal:
+    except (RoundCeilingRefusal, FixBatchCapRefusal) as refusal:
         state = new_state()
         _park_cannot_certify(state, refusal.reason)
         return _run_loop_certified_receipt(state, 0)
@@ -5238,6 +5343,11 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                           "attempt": None, "outcome": "refused-round-ceiling",
                                           "reason": refusal.reason})
             return {"ok": False, "reason": refusal.reason, "value": refusal.value}
+        except FixBatchCapRefusal as refusal:
+            _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
+                                          "attempt": None, "outcome": "refused-fix-batch-cap",
+                                          "reason": refusal.reason})
+            return {"ok": False, "reason": refusal.reason, "value": refusal.value}
         if state.get("_resumeCorrupt"):
             _park_cannot_certify(state, state["_resumeCorrupt"])
             pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
@@ -5299,6 +5409,18 @@ def _cmd_next_locked(session_dir, config_overrides=None):
     attempt = _next_dispatch_attempt(session_dir, step["round"], step["phase"], state)
     pending = {"action": step["action"], "round": step["round"], "phase": step["phase"],
                "attempt": attempt, "payload": step["payload"]}
+    verify = pending.get("payload", {}).get("verify") if isinstance(pending.get("payload"), dict) else None
+    if pending["phase"] == P_AUDITS and isinstance(verify, dict):
+        # attempt is allocated here from the same counter run-verify will use on submit — a mismatch
+        # cannot arise when nothing was submitted for that phase in that round.
+        attempt = _next_dispatch_attempt(session_dir, pending["round"], P_VERIFY, state)
+        verify.update({
+            "round": pending["round"],
+            "attempt": attempt,
+            "landingPath": round_records.bare_payload_path(
+                session_dir, pending["round"], P_VERIFY,
+                round_records.storage_key("verify"), attempt),
+        })
     state["pending"] = pending
     phase = pending.get("phase")
     if isinstance(phase, str) and phase.startswith("dispatch-"):
@@ -6526,7 +6648,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "VERIFICATION_ROOT",
     "CWD",
     "REPO_ROOT",
-    "VERIFY_COMMAND",
+    "VERIFY_BUDGET",
     "ROUND",
     "TARGET_ID",
     "GATE_GUIDANCE",
@@ -6645,6 +6767,20 @@ def _ensure_round_head_diff(session_dir, rnd, state):
 FIX_BATCH_HISTORY_FIELDS = ("priorAudit", "gateRuling")
 
 
+def _fixer_verify_budget(batch, cfg):
+    """Scoped verify prose for one fix-batch slice — never the project's full verify command."""
+    files = sorted({row.get("file") for row in (batch or [])
+                    if isinstance(row, dict) and isinstance(row.get("file"), str)})
+    files_str = ", ".join(files) if files else "(none named)"
+    full = cfg.get("verifyCommand") or "none"
+    return ("Scoped verify budget for this batch — target files: %s. "
+            "Run the tests that reference those files (select by reading the test files' own text "
+            "for the target path, never by test-file name) plus the project's static validators, "
+            "at most once each. The project's full verify command is NOT yours to run inside this "
+            "attempt — the orchestrator runs it once after the round's fixes land: %s"
+            % (files_str, full))
+
+
 def _ensure_fix_batch_file(session_dir, rnd, state):
     """Materialize fix-batch.json from state for fixer orders.
 
@@ -6685,7 +6821,11 @@ def _ensure_fix_batch_file(session_dir, rnd, state):
                     row_copy["gateRuling"] = row_gate
         materialized.append(row_copy)
     rdir = round_records.round_dir(session_dir, rnd)
-    path = os.path.join(rdir, "fix-batch.json")
+    batch_index = state.get("_fixBatchIndex") or 0
+    if batch_index >= 1:
+        path = os.path.join(rdir, "fix-batch.%d.json" % batch_index)
+    else:
+        path = os.path.join(rdir, "fix-batch.json")
     return _ensure_bytes_at_path(session_dir, path,
                                  round_records.canonical(materialized).encode("utf-8"))
 
@@ -6941,7 +7081,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "RUBRIC_PATH": rubric_path,
             "CWD": repo_root,
             "REPO_ROOT": _shell_quote_path(repo_root),
-            "VERIFY_COMMAND": cfg.get("verifyCommand") or "none",
+            "VERIFY_BUDGET": _fixer_verify_budget(fix_batch, cfg),
             "ROUND": str(rnd),
             "GATE_GUIDANCE": _gate_guidance_block(guidance_entries),
         }
@@ -9408,6 +9548,7 @@ def build_parser():
                                    "state → fails loud (nonzero), never a silent default")
     cli_contract.add_argument(pn, "--verify-command", contract="free-text", default=None)
     cli_contract.add_argument(pn, "--max-rounds", contract="integer", default=None, type=int)
+    cli_contract.add_argument(pn, "--fix-batch-cap", contract="integer", default=None, type=int)
     cli_contract.add_argument(pn, "--max-rounds-absolute", contract="integer", default=None,
                               type=int,
                               help="hard round ceiling (fresh state only): owner-tunable like "
@@ -9562,6 +9703,20 @@ def _dispatch(args):
             overrides["verifyCommand"] = args.verify_command
         if args.max_rounds is not None:
             overrides["maxRounds"] = args.max_rounds
+        if args.fix_batch_cap is not None:
+            st_ok, st = load_state(args.session_dir)
+            if not (st_ok and st is None):
+                sys.stdout.write(json.dumps({"ok": False,
+                                             "reason": "fix-batch-cap-not-fresh-state",
+                                             "value": args.fix_batch_cap}) + "\n")
+                return 1
+            overrides["fixBatchCap"] = args.fix_batch_cap
+            try:
+                _default_config(dict(overrides))
+            except FixBatchCapRefusal as refusal:
+                sys.stdout.write(json.dumps({"ok": False, "reason": refusal.reason,
+                                             "value": refusal.value}) + "\n")
+                return 1
         if args.max_rounds_absolute is not None:
             st_ok, st = load_state(args.session_dir)
             if not (st_ok and st is None):

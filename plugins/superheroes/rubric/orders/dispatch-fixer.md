@@ -9,7 +9,7 @@ You are the fixer for one round of an auto-fix code-review loop.
   severity/format from the base rubric ({{RUBRIC_PATH}})
 - Work in the current branch's working tree at {{CWD}}
 - Repo root: {{REPO_ROOT}}
-- Verify command: {{VERIFY_COMMAND}}
+- Verify budget: {{VERIFY_BUDGET}}
 
 ## Owner-gate guidance
 

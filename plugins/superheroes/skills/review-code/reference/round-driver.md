@@ -48,6 +48,8 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" next \
   --max-rounds 7
 ```
 
+`--fix-batch-cap N` (config `fixBatchCap`, **default 4**, a positive integer; fresh-state only, refused `fix-batch-cap-invalid` otherwise) is the most findings one `dispatch-fixer` order carries — § Round economy states the split.
+
 Every step thereafter:
 
 ```bash
