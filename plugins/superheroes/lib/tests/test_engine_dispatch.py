@@ -555,6 +555,33 @@ class FakeRunner:
         return _wrap_codex_fake_stdout(argv, stdout), timed_out, rc, stderr_tail
 
 
+class _PreservingNativeReviewFakeRunner(FakeRunner):
+    """FakeRunner that does not sync stdout into the native result file (runner owns -o)."""
+
+    def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+        self.calls.append({
+            "argv": list(argv),
+            "prompt_bytes": prompt_bytes,
+            "timeout": timeout,
+            "cwd": cwd,
+        })
+        idx = len(self.calls) - 1
+        if idx >= len(self.responses):
+            raise AssertionError("fake called too many times")
+        resp = self.responses[idx]
+        if callable(resp):
+            out = resp(argv, prompt_bytes, timeout, progress_cb, cwd)
+        else:
+            out = resp
+        if isinstance(out, tuple) and len(out) == 4:
+            stdout, timed_out, rc, stderr_tail = out
+        elif isinstance(out, tuple) and out and isinstance(out[0], str):
+            stdout, timed_out, rc, stderr_tail = out[0], False, 0, ""
+        else:
+            stdout, timed_out, rc, stderr_tail = out, False, 0, ""
+        return stdout, timed_out, rc, stderr_tail
+
+
 def _expect_view_cwd(fake, build_view, expected_repo_realpath):
     cwd = fake.calls[0]["cwd"]
     assert cwd == build_view.meta["view_path"]
@@ -4597,9 +4624,9 @@ def test_native_review_terminal_forfeit_carries_no_salvage(tmp_path):
         with open(result_path, "w", encoding="utf-8") as fh:
             json.dump({"result": invalid_branch}, fh, separators=(",", ":"))
             fh.write("\n")
-        return "", False, 0, ""
+        return _poster_child_attempt1_stdout(), False, 0, ""
 
-    fake = FakeRunner([runner, runner])
+    fake = _PreservingNativeReviewFakeRunner([runner, runner])
     res = ED.dispatch_review(
         seat=_codex_seat(),
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
@@ -4640,10 +4667,26 @@ def test_native_vacuous_terminal_is_never_upgraded(tmp_path):
     """axis: native vacuous terminal is never upgraded to forfeit-with-engaged-artifact."""
     repo_root = _git_init(str(tmp_path / "repo-vac-native"))
     prose = _poster_child_attempt1_stdout()
-    empty = json.dumps({"findings": [], "investigated": ["path/to/file.py"]})
-    fake = FakeRunner([
-        (prose, False, 0, ""),
-        (empty, False, 0, ""),
+    empty_branch = _native_review_branch(
+        "findings", findings=[], investigated=["path/to/file.py"],
+    )
+
+    def first_attempt_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            fh.write("not-json\n")
+        return prose, False, 0, ""
+
+    def vacuous_terminal_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = argv[argv.index("-o") + 1]
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({"result": empty_branch}, fh, separators=(",", ":"))
+            fh.write("\n")
+        return prose, False, 0, ""
+
+    fake = _PreservingNativeReviewFakeRunner([
+        first_attempt_runner,
+        vacuous_terminal_runner,
     ])
     res = ED.dispatch_review(
         seat=_codex_seat(),

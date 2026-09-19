@@ -1,8 +1,9 @@
 # Layer 2c (#1270) bite-proof — native-channel retirements and verifier reason contract
 
 **Provenance:** produced by **WO-2c-A** (code, committed at `9cc1733e`) and **WO-2c-A2** (test migration +
-this record), cursor / composer-2.5. Code head for proofs: `9cc1733e`; working tree dirty with
-test-only edits at record time (`git rev-parse HEAD` unchanged).
+this record), cursor / composer-2.5. **WO-2c-A3** (specimen stdout + BP-2c-1/2 proofs), cursor /
+composer-2.5, head `6e2d665d` + uncommitted test edits. Code head for proofs: `6e2d665d`; working
+tree dirty with test-only edits at record time (`git rev-parse HEAD` unchanged).
 
 **Method.** Each guarded element is neutralized on its own — the thing the detector guards, never the
 detector — by a targeted edit, reverted by the exact inverse edit. Tests are selected by **exact
@@ -34,9 +35,14 @@ Common command prefix:
 
 - **axis:** a native review terminal is never upgraded to `forfeit-with-engaged-artifact`.
 - **neutralization:** delete the `if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:` guard so `_maybe_upgrade_review_terminal_forfeit` always runs.
-- **disclosure:** **Unprovable as placed** — with the listed native specimens the neutralization does not
-  red (engaged-candidate preconditions for the upgrade are not met on the native typed-result path).
-  The gate is still the shipped guard at the call site; marker-channel specimens discriminate elsewhere.
+- **raw red** (exit 1):
+```
+FAILED …/test_engine_dispatch.py::test_native_review_terminal_forfeit_carries_no_salvage
+E   AssertionError: assert 'forfeit-with-engaged-artifact' == 'forfeited'
+FAILED …/test_engine_dispatch.py::test_native_vacuous_terminal_is_never_upgraded
+E   AssertionError: assert 'forfeit-with-engaged-artifact' == 'vacuous'
+```
+- **restore:** inverse edit (re-insert guard); `git status --porcelain -- plugins/superheroes/lib/engine_dispatch.py` empty.
 
 ---
 
@@ -44,8 +50,12 @@ Common command prefix:
 
 - **axis:** native write terminal forfeit never attaches marker-channel salvage.
 - **neutralization:** delete the early `return terminal` when `_opened_channel(...) == CHANNEL_NATIVE` in `_finalize_write_forfeit_terminal`.
-- **disclosure:** **Unprovable as placed** — the listed native write specimen does not red when the gate
-  is removed (no salvage block is attachable on that path without marker-channel write-report tail).
+- **raw red** (exit 1):
+```
+FAILED …/test_engine_dispatch_write.py::test_native_write_exhausted_forfeit_carries_no_salvage
+E   assert 'salvage' not in {'argv': ['codex', 'exec', …], 'attempts': 2, 'detail': 'native-result-schema-invalid', …, 'salvage': {…}, …}
+```
+- **restore:** inverse edit (re-insert early return); `git status --porcelain -- plugins/superheroes/lib/engine_dispatch.py` empty.
 
 ---
 

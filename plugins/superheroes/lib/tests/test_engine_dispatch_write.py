@@ -184,6 +184,33 @@ class FakeRunner:
         return stdout, timed_out, rc, stderr_tail
 
 
+class _PreservingNativeWriteFakeRunner(FakeRunner):
+    """FakeRunner that does not sync stdout into the native result file (runner owns -o)."""
+
+    def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+        self.calls.append({
+            "argv": list(argv),
+            "prompt_bytes": prompt_bytes,
+            "timeout": timeout,
+            "cwd": cwd,
+        })
+        idx = len(self.calls) - 1
+        if idx >= len(self.responses):
+            raise AssertionError("fake called too many times")
+        resp = self.responses[idx]
+        if callable(resp):
+            out = resp(argv, prompt_bytes, timeout, progress_cb, cwd)
+            if isinstance(out, tuple) and len(out) == 4:
+                stdout, timed_out, rc, stderr_tail = out
+            else:
+                stdout, timed_out, rc, stderr_tail = out, False, 0, ""
+        elif isinstance(resp, tuple) and len(resp) == 4:
+            stdout, timed_out, rc, stderr_tail = resp
+        else:
+            stdout, timed_out, rc, stderr_tail = resp, False, 0, ""
+        return stdout, timed_out, rc, stderr_tail
+
+
 _NO_CWD = object()
 
 
@@ -3321,14 +3348,14 @@ def _invalid_native_write_runner():
                 "evidence": {"testFailed": False, "testPassed": True},
             }, fh, separators=(",", ":"))
             fh.write("\n")
-        return "", False, 0, ""
+        return _build_ok_stdout(), False, 0, ""
     return runner
 
 
 def test_native_write_exhausted_forfeit_carries_no_salvage(tmp_path):
     """axis: native write terminal forfeit never attaches marker-channel salvage."""
     wt, _main = _linked_worktree(tmp_path)
-    fake = FakeRunner([
+    fake = _PreservingNativeWriteFakeRunner([
         _invalid_native_write_runner(),
         _invalid_native_write_runner(),
     ])
