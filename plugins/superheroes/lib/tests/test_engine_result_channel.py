@@ -606,6 +606,22 @@ def test_review_result_contract_from_schema_lists_active_payload_properties():
         assert "`%s`" % field in contract
 
 
+def test_write_report_contract_bytes_unchanged_by_field_semantics_lift():
+    import hashlib
+    assert hashlib.sha256(EA.WRITE_REPORT_CONTRACT.encode()).hexdigest() == (
+        "09e850054142c4f2eee6daee3481061799e4f0584184769f3f9f6b9ebebbd911"
+    )
+
+
+def test_write_result_contract_lists_schema_required_and_omits_sentinel():
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_WRITE)
+    contract = ERC.write_result_contract_from_schema(schema)
+    for key in schema.get("required") or []:
+        assert "`%s`" % key in contract
+    assert EA.WRITE_REPORT_SENTINEL not in contract
+    assert EA.WRITE_REPORT_FIELD_SEMANTICS.strip() in contract
+
+
 def test_engine_output_byte_cap_single_home():
     # axis: ENGINE_OUTPUT_MAX_BYTES is the single literal home for the 8 MiB cap
     home = EA.ENGINE_OUTPUT_MAX_BYTES

@@ -691,6 +691,23 @@ def native_review_payload_shape(detail, envelope=None, branch=None):
     return None
 
 
+def write_result_contract_from_schema(schema):
+    """Derive native-channel write prompt contract prose from a declared schema dict."""
+    if not isinstance(schema, dict):
+        return ""
+    required = schema.get("required") or []
+    req_list = ", ".join("`%s`" % k for k in required)
+    lines = [
+        "Write result contract (your graded result file must match the declared output schema):",
+        "The final response must be exactly one JSON object matching the declared output schema.",
+        "Root required properties: %s." % req_list,
+        "`report` is a non-blank plain-language summary of what was done and the receipts "
+        "observed; an empty `report` is refused.",
+        engine_adapter.WRITE_REPORT_FIELD_SEMANTICS.rstrip("\n"),
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def review_result_contract_from_schema(schema):
     """Derive native-channel review prompt contract prose from a declared schema dict."""
     if not isinstance(schema, dict):
