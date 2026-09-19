@@ -765,6 +765,7 @@ def mechanical_compile(findings, diff_text=None):
         kept.append(fc)
     compiled = _compile_by_anchor(kept)
     compiled = _nit_cap(compiled)
+    _mint_finding_keys(compiled)
     return compiled, drops
 
 
@@ -1158,6 +1159,20 @@ def _finding_identity_key(finding):
     return session_contract.finding_identity_key(finding)
 
 
+def _mint_finding_keys(findings):
+    """Stamp findingKey on dict findings that lack a non-empty one."""
+    if not isinstance(findings, list):
+        return findings
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        key = f.get(session_contract.FINDING_KEY_FIELD)
+        if isinstance(key, str) and key:
+            continue
+        f[session_contract.FINDING_KEY_FIELD] = session_contract.location_key(f)
+    return findings
+
+
 def _archive_disposition_findings(state, departing):
     """Append findings leaving the live list that carry disposition into dispositionLedger."""
     if not departing:
@@ -1191,6 +1206,7 @@ def _set_findings(state, new_findings):
     if not isinstance(prior, list):
         prior = []
     new_list = list(new_findings) if new_findings is not None else []
+    _mint_finding_keys(new_list)
     new_keys = set()
     for finding in new_list:
         if isinstance(finding, dict):
@@ -2310,7 +2326,7 @@ def _location_id(finding):
     """Per-LOCATION key: line-less `finding_identity` plus line. Two same-title findings at
     DIFFERENT lines get DISTINCT keys (#507 R2 v5); audit target ids reuse this form with an
     occurrence suffix when the same file+title+line repeats in one batch."""
-    return "%s@L%s" % (finding_identity(finding), finding.get("line"))
+    return session_contract.location_key(finding)
 
 
 def _judgment_row_ids(findings):
