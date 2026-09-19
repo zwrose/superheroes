@@ -171,6 +171,12 @@ overrunning or silently truncating.
   **not** substitute your own memory, a similar-looking file, or a guess at what it said. This is
   **never proceed on a guessed premise** applied to a document instead of a command, and it is not a
   seventh validity rule — the six below are unchanged.
+- **Your order was linted before it reached you — say so when it plainly was not.** The orchestrator
+  runs `lib/order_lint.py check` and the semantic seat over every order before dispatch. An order
+  that still carries an unfilled `{{NAME}}` or `{name}` placeholder, cites a slashed path that does
+  not resolve, names two result contracts, or (an implementer order) names no command budget reached
+  you unlinted — report that as an order defect in your findings, alongside whatever the defect
+  itself costs you; this is not a seventh validity rule and does not change the six below.
 
 ## Validating your work order
 
