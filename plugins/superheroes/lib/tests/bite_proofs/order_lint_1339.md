@@ -580,3 +580,23 @@ because a fixture the seat has seen in the repository is not a control. WO-C's d
 findings when `conformance_probe.py` is absent are expected and exercised by
 `test_fixture_c11_l3_wo_c`; they are not semantic-seat defects. The `...` in `investigated`
 elides the worktree's absolute prefix only.
+
+## Orchestrator re-run on the final head `60568e76` (2026-09-19)
+
+Every code proof above was re-run by the orchestrator on the final head after the review loop halted, each neutralization applied as a targeted `Edit`, the single test node run, the inverse `Edit` applied, `git status --porcelain` confirmed empty (the restore receipt), and the node run again. Normalization: `/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-1339 -m pytest <node> -q -p no:cacheprovider`. Raw captures are quoted by their decisive lines (the full pytest output is in the session's scratch and is not needed to grade the proof: each red is the named node failing, each green is `1 passed`).
+
+| ID | element | red (decisive line) | restore receipt | green |
+|---|---|---|---|---|
+| BP-OL-1 | placeholder rule — `test_order_lint.py::test_token_placeholder_unfilled` | `1 failed in 0.99s`; `E       AssertionError: assert ('NAME' in [])` | `git status --porcelain` empty | `1 passed in 0.89s` |
+| BP-OL-2 | path rule, existence — `test_order_lint.py::test_token_path_unresolved` | `1 failed in 0.12s`; `E       assert False` | `git status --porcelain` empty | `2 passed in 1.00s` |
+| BP-OL-3 | path rule, escape — `test_order_lint.py::test_symlink_escape_is_unresolved` | `1 failed in 1.01s`; `E       assert False` | `git status --porcelain` empty | `1 passed in 0.54s` |
+| BP-OL-4 | result-shape rule — `test_order_lint.py::test_result_shape_ambiguous_fires_on_stdout_protocol_literals` | `1 failed in 0.13s`; `E       AssertionError: assert 'order-result-shape-ambiguous' in []` | `git status --porcelain` empty | `1 passed in 0.16s` |
+| BP-OL-5 | budget rule — `test_order_lint.py::test_token_budget_missing_implementer` | `1 failed in 0.19s`; `E       AssertionError: assert 'order-budget-missing' in []` | `git status --porcelain` empty | `1 passed in 0.20s` |
+| BP-OL-6 | per-kind gate — `test_order_lint.py::test_accepted_shape_fixer` | `1 failed in 0.20s`; `E       assert False is True` | `git status --porcelain` empty | `1 passed in 0.18s` |
+| BP-OL-7 | unreadable mapping — `test_order_lint.py::test_token_unreadable_missing_file` | `1 failed in 0.23s`; `E           FileNotFoundError: [Errno 2] No such file or directory: '/private/var/folders/dy/s097fm_n7tldcbdtt` | `git status --porcelain` empty | `1 passed in 0.12s` |
+| BP-OL-8 | DoD planted bad path (BP-OL-2 neutralization) — `test_order_lint.py::test_planted_bad_path_in_fixture_order` | `1 failed in 0.91s`; `E       assert False` | `git status --porcelain` empty | `2 passed in 1.00s` |
+| BP-OL-9 | the hook runs on the fixer phase — `test_round_driver_order_lint.py::test_fixer_emission_refuses_on_real_placeholder` | `1 failed in 2.51s`; `E           Failed: DID NOT RAISE <class 'ValueError'>` | `git status --porcelain` empty | `1 passed in 3.97s` |
+| BP-OL-10 | the refusal carries the token — `test_round_driver_order_lint.py::test_fixer_emission_refuses_on_lint_finding` | `1 failed in 7.78s`; `E                   ValueError: order-render-refused:fixer-508e7896192355de:order-lint` | `git status --porcelain` empty | `1 passed in 7.35s` |
+| BP-OL-11 | the guidance elision — `test_round_driver_order_lint.py::test_fixer_emission_ignores_lint_triggers_inside_gate_guidance` | `1 failed in 4.91s`; `E                   ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-path-unresolved:p` | `git status --porcelain` empty | `1 passed in 4.47s` |
+| BP-OL-12 | the residuals elision — `test_round_driver_order_lint.py::test_fixer_emission_ignores_lint_triggers_inside_ratified_residuals` | `1 failed in 4.11s`; `E                   ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-path-unresolved:l` | `git status --porcelain` empty | `1 passed in 3.83s` |
+| BP-OL-13 | the plugin alt-root — `test_round_driver_order_lint.py::test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root` | `1 failed in 4.53s`; `E                   ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-path-unresolved:r` | `git status --porcelain` empty | `1 passed in 5.10s` |
