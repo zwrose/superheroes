@@ -1362,9 +1362,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 #### S1 — Dispatch stdout cap
 
 - **Component.** Not a census row. The engine write dispatch stdout capture cap in
-  `engine_dispatch.py` (`MAX_STDOUT_CAPTURE`, 8 MiB) for **marker-channel engines only (cursor,
-  claude)**: when engine stdout exceeds the budget, the terminal forfeit carries
-  `stdout-capped-by-attempt` and declared-item grading never runs on work that already landed.
+  `engine_dispatch.py` (`MAX_STDOUT_CAPTURE`, 8 MiB): the capture stays capped for codex (telemetry
+  on its native channel); only the `stdout-capped-by-attempt` forfeit is retired for codex. For
+  marker-channel engines (cursor, claude), when engine stdout exceeds the budget, the terminal forfeit
+  carries `stdout-capped-by-attempt` and declared-item grading never runs on work that already landed.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite the
   stdout capture cap or `stdout-capped-by-attempt` as the loss mechanism — a zero count means long
   dispatches are staying inside the budget, not that the cap is gone. On firing, a proposal to the
@@ -1726,7 +1727,24 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** capability-gap — the engine's own structured-output flag replaces our marker parser; the
   adapter's non-blank checks remain because the strict-mode schema dialect cannot express a minimum
-  length. Tag the entry `native-channel`.
+  length. Tag: `native-channel`.
+
+#### S18 — Conformance probe
+
+- **Component.** Not a census row. `lib/conformance_probe.py`: one `run --engine <e>` command per
+  dispatchable engine per wave (the adapter's dispatchable vendor set intersected with the channel
+  map, by construction); three graded legs (`resultProduction`, `completionDetection`,
+  `progressTelemetry`); the `engine-auth` check entry via `preflight-entry` composing one result per
+  routed engine.
+- **Condition.** Citation-based, 45 days: a probe that passed in the same wave a live seat then
+  failed on a channel or auth cause the probe covers, twice, proposes redesign; a probe never run in
+  45 days of waves proposes retirement — the record is the launch ledger's `engine-auth` evidence. On
+  firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Wave preflight catches dead engines and channel drift before any
+  builder launches — the dispatch selftest validates configuration only, not liveness.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — detection replaces version pinning. Tag: `wave-preflight`.
 
 
 ## The workaround-marker inventory

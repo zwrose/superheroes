@@ -187,3 +187,18 @@ contract. A whitespace-only `id`, `verdict`, or `reason` faults.
 Consumers that read codex findings from the last-message file or the event stream read the folded
 `dispatch-review` result instead; consumers that relied on a write salvage block on codex reconstruct
 from the worktree diff.
+
+### Cursor result channel and the conformance probe
+
+Cursor stays on stream-json with the marker parser. The stdout capture cap (`MAX_STDOUT_CAPTURE`, 8
+MiB) is an operating parameter, not a contract row — recorded in the project's C1 values annex like
+codex's native channel. A two-dispatch trial validated the write dispatch on cursor's envelope; the
+review dispatch did not — the envelope's `result` concatenates narration with the JSON, so consumers
+see no cursor result-shape change. Wave preflight now runs `lib/conformance_probe.py` once per
+dispatchable engine; its result is recorded as the launcher's `engine-auth` check — the liveness
+check the dispatch selftest is not.
+
+A runner-journal line that is valid JSON but not an object now counts as interior corruption under
+the class `journal-line-not-object`. The launcher's `preflight-failed:<id>` refusal now carries the
+walked `checks`, including the failing entry, so the launch ledger keeps the probe's evidence on
+refusal.

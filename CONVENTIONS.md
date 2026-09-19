@@ -828,7 +828,8 @@ encode it. Every refusal at the dispatch boundary is **named**
 a nameless fall-open is a defect. The round-trip self-test (`lib/dispatch_selftest.py`
 `run()` / its preflight probe) keeps the three shapes honest. It proves configuration only, never
 engine liveness — a green selftest says nothing about whether an engine answers; the wave preflight's
-live probe does.
+live probe does. That probe is `lib/conformance_probe.py`; its result is recorded in the launcher's
+`engine-auth` check.
 
 ---
 
