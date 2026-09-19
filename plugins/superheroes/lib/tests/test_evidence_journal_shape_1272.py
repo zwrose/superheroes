@@ -17,12 +17,12 @@ import sanitized_view  # noqa: E402
 import test_round_driver_integration as TRI  # noqa: E402
 
 
-def _run_dir_with_non_object_journal_line(tmp_path, order_path):
+def _run_dir_with_non_object_journal_line(tmp_path, order_path, monkeypatch):
     """Build a dispatch run dir, then corrupt the journal with a non-object JSON line."""
     run_dir = str(tmp_path / "journal-shape-run")
     journal_root = str(tmp_path / "dispatch-journal-root")
     os.makedirs(journal_root, exist_ok=True)
-    os.environ[engine_dispatch.JOURNAL_ROOT_ENV] = journal_root
+    monkeypatch.setenv(engine_dispatch.JOURNAL_ROOT_ENV, journal_root)
     repo_root = str(tmp_path / "journal-shape-repo")
     os.makedirs(repo_root, exist_ok=True)
     with open(os.path.join(repo_root, ".git"), "w", encoding="utf-8") as fh:
@@ -64,12 +64,12 @@ def _run_dir_with_non_object_journal_line(tmp_path, order_path):
     return run_dir
 
 
-def test_journal_line_not_an_object_refuses_evidence_binding(tmp_path):
+def test_journal_line_not_an_object_refuses_evidence_binding(tmp_path, monkeypatch):
     """A journal line that is valid JSON but not an object is refused at both seams."""
     order_path = str(tmp_path / "journal-shape-order.txt")
     with open(order_path, "w", encoding="utf-8") as fh:
         fh.write("Review the change.\n")
-    run_dir = _run_dir_with_non_object_journal_line(tmp_path, order_path)
+    run_dir = _run_dir_with_non_object_journal_line(tmp_path, order_path, monkeypatch)
     record, err = engine_dispatch.run_execution_record(run_dir)
     assert record is None
     assert err == "internal-error"  # runner-side class; dispatch shell not narrowed here

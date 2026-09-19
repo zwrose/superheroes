@@ -8139,9 +8139,12 @@ def test_write_certification_artifacts_refusal_write_failure_returns_fault(tmp_p
 def test_write_certification_artifacts_fault_strings_match_terminal_receipt_gate_coupling(
         tmp_path, monkeypatch):
     """_terminal_receipt_gate distinguishes certification-write faults from every other fault by
-    matching the substring 'certification' in the fault string (_receiptFinalized is set only when
-    fault is None or 'certification' not in fault). A reworded message here would silently re-open
-    the replay fall-open over a missing certification artifact."""
+    the typed fault class RECEIPT_FAULT_CERTIFICATION (layer 1b), not by substring matching on the
+    message. _receiptFinalized is set only when fault is None or fault.kind is not
+    RECEIPT_FAULT_CERTIFICATION. This test still pins that the certification-write fault path is
+    the only non-None return from _write_certification_artifacts and that the fault carries that
+    class; a reworded message must not silently re-open the replay fall-open over a missing
+    certification artifact."""
     _COUPLING_SUBSTRING = "certification"
 
     # Census of every non-None return from _write_certification_artifacts — only one path exists:
