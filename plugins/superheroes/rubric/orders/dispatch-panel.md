@@ -37,8 +37,9 @@ positives.
 
 ## Verification rules
 - `file:line` citation required. No citation → drop your own finding
-  before writing it out. Cite `line` as an integer (a JSON number, e.g. `"line": 291`), never a
-  string — a string line is refused at compile.
+  before writing it out. Cite `line` as an integer (a JSON number, e.g. `"line": 291`). A numeric
+  string (`"291"`) is coerced to its integer; any other non-integer line is refused at compile
+  (`line is not an integer`) and the finding is dropped.
 - Before flagging "missing X", grep the codebase (PR checkout, in PR mode)
   for X under different names.
 - For Important-severity issues, check callers / reachability before asserting.
