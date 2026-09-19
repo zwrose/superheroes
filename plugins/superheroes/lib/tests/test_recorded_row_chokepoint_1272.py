@@ -1,5 +1,6 @@
 """#1272 WO-2: one chokepoint for every `recorded` journal row."""
 import glob
+import importlib
 import importlib.util
 import json
 import os
@@ -21,6 +22,8 @@ def _load(name):
 RD = _load("round_driver")
 RR = _load("round_records")
 RC = _load("round_commit")
+RCE = _load("round_certification")
+TRI = importlib.import_module("test_round_driver_integration")
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
         "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
@@ -253,23 +256,40 @@ def _assert_revision_identity(row):
         assert field in row, "recorded row missing %r: %r" % (field, row)
 
 
-def test_recorded_row_missing_identity_refused_at_journal_sinks(tmp_path):
-    """T1 — partial `recorded` rows are refused at both journal sinks with bytes unchanged."""
+def _complete_recorded_row(pend, **over):
+    row = {
+        "phase": pend["phase"],
+        "round": pend["round"],
+        "attempt": pend["attempt"],
+        "seat": "code-reviewer",
+        "payloadSha256": "x" * 64,
+        "casToken": RR.MISSING_CAS_TOKEN,
+        "executionEvidence": _execution_evidence(),
+        "provenance": RR.PROVENANCE_HAND_LANDED,
+        "envelopeSha256": "y" * 64,
+        "executionEvidencePresent": True,
+        "citedHead": HEAD_SHA,
+    }
+    row.update(over)
+    return row
+
+
+@pytest.mark.parametrize("missing_field", RR.REVISION_IDENTITY_FIELDS)
+def test_recorded_row_missing_one_identity_field_refused_at_sinks(tmp_path, missing_field):
+    """T1 — omitting any one revision-identity field is refused at both sinks; journal unchanged."""
     d = _session(tmp_path)
     pend = _pending(d)
     before = _journal_bytes(d)
+    partial = _complete_recorded_row(pend)
+    del partial[missing_field]
     with pytest.raises(RD.round_records.IncompleteRevisionIdentity):
-        RD._journal_event(d, "record-result", "recorded", phase=pend["phase"],
-                          round=pend["round"], attempt=pend["attempt"],
-                          seat="code-reviewer", payloadSha256="x" * 64)
+        RD._journal_event(d, "record-result", "recorded", **partial)
     assert _journal_bytes(d) == before
 
     journal = os.path.join(d, RD.JOURNAL_FILE)
-    partial = {"cmd": "record-result", "outcome": "recorded", "phase": pend["phase"],
-               "round": pend["round"], "attempt": pend["attempt"], "seat": "code-reviewer",
-               "payloadSha256": "x" * 64}
     with pytest.raises(RC.CommitRefused) as excinfo:
-        RC.begin(d, "test").add_journal_append(journal, dict(partial))
+        RC.begin(d, "test").add_journal_append(
+            journal, {"cmd": "record-result", "outcome": "recorded", **partial})
     assert excinfo.value.reason == "recorded-row-incomplete"
     assert _journal_bytes(d) == before
 
@@ -403,6 +423,59 @@ def test_reappend_slotless_missing_store_refuses(tmp_path, adapters, monkeypatch
     assert out["ok"] is False
     assert out["reason"] == "recorded-row-store-unreadable"
     assert len(_recorded_rows(d)) == before_rows
+
+
+def _bootstrap_head_before_next(tmp_path, name="pre-head", **cfg_over):
+    """Session bootstrap with meta headSha present before the first `next` (production shape)."""
+    session_dir = str(tmp_path / name)
+    os.makedirs(session_dir, exist_ok=True)
+    gitdir = str(tmp_path / (name + "-gitdir"))
+    os.makedirs(gitdir, exist_ok=True)
+    head_diff_path = str(tmp_path / (name + "-head.diff"))
+    with open(head_diff_path, "w", encoding="utf-8") as fh:
+        fh.write(TRI.HEAD_DIFF)
+    head_sha = TRI._fake_git(gitdir)(session_dir, "rev-parse", "HEAD")
+    meta_path = os.path.join(session_dir, RR.META_FILE)
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump({"headSha": head_sha}, fh, sort_keys=True)
+        fh.write("\n")
+    out = RD.cmd_next(session_dir, TRI._cfg(**cfg_over))
+    assert out["ok"], out
+    return session_dir, gitdir, head_diff_path, head_sha
+
+
+def test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_head(tmp_path):
+    """Real-loop producer: pre-next meta head binds citedHead; certification does not refuse unbound."""
+    seat_map = {
+        "seats": {
+            dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
+            for dim in RD.DIMENSIONS
+        }
+    }
+    session_dir, gitdir, head_path, head_sha = _bootstrap_head_before_next(
+        tmp_path,
+        name="cited-head-producer",
+        seatMap=seat_map,
+        vendors=["codex"],
+        baseGuard=RCE.BASE_GUARD_CHECKED,
+    )
+    folded = TRI._drive_to_terminal_with_panel_dispatch_evidence(
+        session_dir, tmp_path, gitdir, [], head_path)
+    assert RD.P_PANEL in folded
+    journal = RD.read_journal(session_dir)
+    recorded = [row for row in journal
+                if row.get("outcome") == "recorded"
+                and row.get("seat") == TRI.FINDING_SEAT
+                and row.get("phase") == RD.P_PANEL
+                and row.get("provenance") == RR.PROVENANCE_DISPATCH_OBSERVED]
+    assert recorded, journal
+    ctx, load_refusal = RCE._load_context(session_dir)
+    assert load_refusal is None, load_refusal
+    certified_head = RCE._certified_head_sha(ctx)
+    assert recorded[0]["citedHead"] == certified_head == head_sha
+    receipt, refusal = RCE.certify(session_dir)
+    if refusal is not None:
+        assert refusal.get("bindingFailure") != RCE.BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND
 
 
 def test_journal_revision_helpers_removed_from_lib():

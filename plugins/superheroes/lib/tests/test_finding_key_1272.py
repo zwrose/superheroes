@@ -94,6 +94,56 @@ def test_mechanical_compile_mints_finding_key_equal_to_location_id():
         assert f.get(SC.FINDING_KEY_FIELD) == RD._location_id(f)
 
 
+def test_mechanical_compile_discards_inbound_finding_key():
+    findings = [
+        {"file": "f.py", "line": 5, "title": "leak", "severity": "Important",
+         SC.FINDING_KEY_FIELD: "caller-controlled"},
+        {"file": "g.py", "line": 2, "title": "race", "severity": "Minor",
+         SC.FINDING_KEY_FIELD: "caller-controlled"},
+    ]
+    compiled, _ = RD.mechanical_compile(findings, None)
+    keys = [f[SC.FINDING_KEY_FIELD] for f in compiled]
+    assert "caller-controlled" not in keys
+    assert len(set(keys)) == 2
+
+
+def test_mechanical_compile_mints_distinct_keys_when_location_collides():
+    prefix = "x" * 165
+    findings = [
+        {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important"},
+        {"file": "f.py", "line": 5, "title": prefix + " beta", "severity": "Important"},
+    ]
+    compiled, _ = RD.mechanical_compile(findings, None)
+    keys = [f[SC.FINDING_KEY_FIELD] for f in compiled]
+    assert len(keys) == 2
+    assert keys[0] != keys[1]
+    assert keys[1] == keys[0] + "#1"
+
+
+def test_seat_supplied_duplicate_finding_keys_do_not_collide_in_ledger():
+    finding1 = {
+        "file": "b.py", "line": 10, "title": "first defect", "severity": "Important",
+        "disposition": "refuted", SC.FINDING_KEY_FIELD: "caller-controlled",
+    }
+    finding2 = {
+        "file": "c.py", "line": 20, "title": "second defect", "severity": "Important",
+        SC.FINDING_KEY_FIELD: "caller-controlled",
+    }
+    compiled1, _ = RD.mechanical_compile([finding1], None)
+    compiled2, _ = RD.mechanical_compile([finding2], None)
+    state = RD.new_state(_cfg())
+    RD._set_findings(state, compiled1)
+    key1 = SC.finding_identity_key(state["findings"][0])
+    RD._set_findings(state, compiled2)
+    key2 = SC.finding_identity_key(state["findings"][0])
+    assert key1 != "caller-controlled"
+    assert key2 != "caller-controlled"
+    assert key1 != key2
+    ledger = state.get("dispositionLedger") or []
+    assert len(ledger) == 1
+    assert SC.finding_identity_key(ledger[0]) == key1
+
+
 def test_stage_ids_preserves_finding_key_while_rewriting_id():
     raw = {"file": "h.py", "line": 7, "title": "x", "severity": "Minor"}
     compiled, _ = RD.mechanical_compile([raw], None)

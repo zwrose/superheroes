@@ -9,6 +9,7 @@ reverted by its exact inverse.
 | G1 | `round_driver._journal_append` → `require_complete_revision` | a partial `recorded` row cannot reach the journal file |
 | G2 | `round_commit.Commit.add_journal_append` → `require_complete_revision` | a partial `recorded` row cannot enter a commit |
 | G3 | `round_records._head_anchor_check` mismatch branch | envelope `headSha` ≠ anchor `headSha` → `head-anchor-mismatch` |
+| G4 | each field of `REVISION_IDENTITY_FIELDS` (representative: `citedHead`) | omitting one identity field is refused at both journal sinks |
 
 ---
 
@@ -122,4 +123,39 @@ AssertionError: assert None == 'head-anchor-mismatch'
 ```
 .                                                                        [100%]
 1 passed in 0.27s
+```
+
+---
+
+## G4 — per-field revision identity (`citedHead` representative)
+
+**Neutralization** (`round_records.py` `require_complete_revision`):
+
+```python
+-    missing = tuple(field for field in REVISION_IDENTITY_FIELDS if field not in entry)
++    missing = tuple(field for field in REVISION_IDENTITY_FIELDS
++                    if field not in entry and field != "citedHead")
+```
+
+**Raw red** — `test_recorded_row_missing_one_identity_field_refused_at_sinks[citedHead]`:
+
+```
+FAILED plugins/superheroes/lib/tests/test_recorded_row_chokepoint_1272.py::test_recorded_row_missing_one_identity_field_refused_at_sinks[citedHead]
+Failed: DID NOT RAISE <class 'round_records.IncompleteRevisionIdentity'>
+1 failed in 3.12s
+```
+
+**Restore:** restored the unfiltered `missing = tuple(...)` comprehension.
+
+**Restore receipt (quoted lines):**
+
+```python
+    missing = tuple(field for field in REVISION_IDENTITY_FIELDS if field not in entry)
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 2.48s
 ```

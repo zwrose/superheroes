@@ -38,27 +38,11 @@ FIX_FOLD_HEAD_KEY = "fixFoldHeadSha"
 FINDING_KEY_FIELD = "findingKey"
 
 
-def _safe_identity_finding(finding):
-    """Coerce label/file to strings so location_key never raises on bad types."""
-    safe = {}
-    file_val = finding.get("file")
-    safe["file"] = file_val if isinstance(file_val, str) else ""
-    label = ""
-    for key in ("title", "summary"):
-        val = finding.get(key)
-        if isinstance(val, str) and val:
-            label = val
-            break
-    safe["title"] = label
-    return safe
-
-
 def location_key(finding):
     """Per-LOCATION key: line-less finding_identity plus line — total for any dict."""
     if not isinstance(finding, dict):
         return None
-    safe = _safe_identity_finding(finding)
-    return "%s@L%s" % (finding_identity(safe), finding.get("line"))
+    return "%s@L%s" % (finding_identity(finding), finding.get("line"))
 
 
 def canonical(obj):

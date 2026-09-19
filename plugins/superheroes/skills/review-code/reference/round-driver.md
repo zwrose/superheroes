@@ -448,7 +448,8 @@ file.
 The manifest and per-order hashes are mirrored into state (`_ordersAnchors`) and journaled as
 `orders-emitted`; ingestion checks envelopes against that anchor (`manifest-anchor-mismatch` when
 they disagree). The anchor and the hashed manifest also carry the emission head as `headSha`, which
-every `recorded` journal row carries as `citedHead`.
+every `recorded` journal row carries as `citedHead` — the head the order was bound to at emission,
+not a runner-observed view head.
 
 **Order-input ownership.** Orders cite round-scoped paths that must exist before a seat can run.
 The driver materializes them before order emit (see also the inline comment at

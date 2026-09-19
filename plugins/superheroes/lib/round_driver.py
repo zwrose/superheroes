@@ -756,6 +756,7 @@ def mechanical_compile(findings, diff_text=None):
                           "title": f.get("title"), "reason": "outside the round diff scope"})
             continue
         fc = dict(f)
+        fc.pop(session_contract.FINDING_KEY_FIELD, None)
         fc["severity"] = circuit_breaker.effective_severity(fc.get("severity"))
         if "dimension" in fc:
             norm = panel_tally.normalize_dimension(fc["dimension"])
@@ -1164,13 +1165,24 @@ def _mint_finding_keys(findings):
     """Stamp findingKey on dict findings that lack a non-empty one."""
     if not isinstance(findings, list):
         return findings
+    used = set()
     for f in findings:
         if not isinstance(f, dict):
             continue
         key = f.get(session_contract.FINDING_KEY_FIELD)
         if isinstance(key, str) and key:
+            used.add(key)
             continue
-        f[session_contract.FINDING_KEY_FIELD] = session_contract.location_key(f)
+        base = session_contract.location_key(f)
+        if base in used:
+            n = 1
+            while "%s#%d" % (base, n) in used:
+                n += 1
+            key = "%s#%d" % (base, n)
+        else:
+            key = base
+        used.add(key)
+        f[session_contract.FINDING_KEY_FIELD] = key
     return findings
 
 
@@ -4436,10 +4448,6 @@ def _session_certified_head(session_dir, state):
     head = cfg.get("headSha")
     if isinstance(head, str) and head:
         return head
-    if isinstance(state, dict) and state.get("headDiff") is not None:
-        return hashlib.sha256(
-            json.dumps(state.get("headDiff") or "run-loop", sort_keys=True).encode()
-        ).hexdigest()[:40]
     return None
 
 
