@@ -649,8 +649,13 @@ def test_build_argv_claude_write_exact_shape():
     assert argv == [
         "claude", "-p", "--model", "sonnet", "--effort", "high",
         "--output-format", "stream-json", "--verbose",
-        "--permission-mode", "acceptEdits", "--allowedTools", "Bash",
+        "--permission-mode", "acceptEdits", "--restricted",
     ]
+
+
+def test_build_argv_claude_write_omits_allowed_tools():
+    argv = EA.build_argv(_seat("claude", "sonnet-5", "high"), "build", {})
+    assert "--allowedTools" not in argv
 
 
 def test_registered_engine_models_detail_claude_lists_every_id():

@@ -539,7 +539,7 @@ def build_argv_result(seat, role_kind, opts):
         if is_read:
             argv += ["--restricted"]
         else:
-            argv += ["--permission-mode", "acceptEdits", "--allowedTools", "Bash"]
+            argv += ["--permission-mode", "acceptEdits", "--restricted"]
         return _ok(argv)
     return _refuse("unknown-engine", detail=_unknown_engine_detail(vendor))
 

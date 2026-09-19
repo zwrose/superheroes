@@ -825,6 +825,71 @@ def test_preflight_entry_launch_without_names_substitutes_from_probed_cells(tmp_
     ]
 
 
+def test_preflight_entry_launch_without_claude_excludes_from_live_vendors(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    captured = {}
+
+    def _capture_build(roster, live_vendors, *args, **kwargs):
+        captured["live_vendors"] = list(live_vendors or [])
+        return SM.build(roster, live_vendors, *args, **kwargs)
+
+    monkeypatch.setattr(CP.seat_map, "build", _capture_build)
+    cal = _calibration_rows()
+    claude_fail = _probe_result("claude", ok=False, repoRoot=repo, failed=["resultProduction"])
+    claude_fail["legs"]["resultProduction"]["ok"] = False
+    claude_fail["failed"] = ["resultProduction"]
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, claude=claude_fail)
+    payload, code = CP.preflight_entry(
+        repo,
+        paths,
+        launch_without=["claude"],
+        owner_words=["owner approves"],
+        calibration_rows=cal,
+    )
+    assert code == 0
+    assert "claude" not in captured["live_vendors"]
+    seats = payload.get("seatMap", {}).get("seats") or {}
+    assert all(v.get("vendor") != "claude" for v in seats.values())
+
+
+def test_preflight_entry_launch_without_claude_parks_when_no_other_live(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+
+    def _park_build(*args, **kwargs):
+        sm = SM.build(*args, **kwargs)
+        degradations = list(sm.get("degradations") or [])
+        degradations.append({
+            "constraint": "same-family",
+            "seat": "architecture-reviewer",
+            "reason": (
+                "seat architecture-reviewer seated the maker family xai — "
+                "no alternative family is live"
+            ),
+        })
+        out = dict(sm)
+        out["degradations"] = degradations
+        return out
+
+    monkeypatch.setattr(CP.seat_map, "build", _park_build)
+    cal = _calibration_rows()
+    claude_fail = _probe_result("claude", ok=False, repoRoot=repo, failed=["resultProduction"])
+    claude_fail["legs"]["resultProduction"]["ok"] = False
+    claude_fail["failed"] = ["resultProduction"]
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, claude=claude_fail)
+    payload, code = CP.preflight_entry(
+        repo,
+        paths,
+        launch_without=["claude"],
+        owner_words=["proceed anyway"],
+        calibration_rows=cal,
+    )
+    assert code == 0
+    assert payload["engine-auth"]["state"] == "fail"
+    assert "PARK" in payload["engine-auth"]["reason"]
+    seats = payload.get("seatMap", {}).get("seats") or {}
+    assert all(v.get("vendor") != "claude" for v in seats.values())
+
+
 def test_preflight_entry_parks_on_same_family(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
 

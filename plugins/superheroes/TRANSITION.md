@@ -28,10 +28,12 @@ with `{"vendor":"claude", …}` no longer refuse `undispatchable-vendor`. A cons
 claude as undispatchable must route it through the sanctioned verbs like codex and cursor.
 
 The argv is `claude -p --model <tok> --effort <effort> --output-format stream-json --verbose`,
-plus `--restricted` for the review role or `--permission-mode acceptEdits --allowedTools Bash` for
-the write role (the first-cut permission shape for implementer dispatches), with `--json-schema
-<declared schema JSON>` appended at run-open; the prompt arrives on stdin. `<tok>` is the registry's
-claude dispatch token (`haiku`, `sonnet`, `opus`); `fable` refuses `fable-unrunnable`.
+plus `--restricted` for the review role or `--permission-mode acceptEdits --restricted` for
+the write role, with `--json-schema
+<declared schema JSON>` appended at run-open; the prompt arrives on stdin. A claude write dispatch
+is edit-only inside the run cwd because no OS sandbox is available through this CLI, so an order
+needing to run commands does not route to claude today. `<tok>` is the registry's claude dispatch
+token (`haiku`, `sonnet`, `opus`); `fable` refuses `fable-unrunnable`.
 
 The typed result is the `structured_output` member of the **last** `{"type":"result"}` event on
 stdout — the final response `--json-schema` governs. The runner **materializes** it to
