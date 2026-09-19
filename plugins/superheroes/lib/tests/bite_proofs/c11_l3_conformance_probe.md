@@ -226,3 +226,146 @@ Module compacted to 450 lines; grading consolidated into `_grade_legs`; probe cl
 - **raw red:** `test_preflight_entry_refuses_missing_duplicate_foreign_stale[missing-probe-missing:codex]` — `KeyError: 'codex'`
 - **restore:** uncomment missing-engine loop
 - **raw green:** `.` — 1 passed in 0.16s
+
+---
+
+## Orchestrator re-run on the final code head `d120e16f` (2026-09-19, adopting lane `launch-d23bec7c893a0ac8`)
+
+Run by the orchestrator in a detached probe worktree pinned at `d120e16f` (`git status --porcelain` empty before and after every element). Method: exact-string mutation through a file edit (`count(old) == 1` asserted), the named test selected by its exact node id (never `-k`), red captured, inverse edit, green captured. Elements G1–G8 are the implementer's originals re-proved on the final head; **G9–G15 are the detectors the review's fix round 1 added** (`f7edaf67`): the toolCalls ≥ 1 gate, the run-dir-reused and run-dir-setup-failed refusals, the every-dispatchable-engine required set, the field-by-field record validation, and the wave and cell bindings. Round 2's fix (`24e5aba5`) added tests only (the cursor marker-channel probe path), no detector. G8's neutralization on this head plants a synthetic passing record for the missing engine (the 'missing' loop can no longer be simply removed, because the later loop indexes `results_by_engine`), which is the same axis: a missing engine must refuse `probe-missing`.
+
+### G1 — result-production leg
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `elif not terminal.get("ok"):` with `elif False:`
+- **raw red:** `test_result_production_fails_on_schema_invalid_native_result` — E         + result-did-not-validate | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_result_production_fails_on_schema_invalid_native_result
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.19s
+- **verdict:** RED->GREEN
+
+### G2 — completion leg (timedOut)
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `elif ended.get("timedOut"):` with `elif False:`
+- **raw red:** `test_completion_fails_on_timeout` — E       assert True is False | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_completion_fails_on_timeout
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.19s
+- **verdict:** RED->GREEN
+
+### G3 — telemetry leg (telemetry-absent)
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `if (telemetry == "tool-calls" and source not in (None, "none") and last_at is not None` with `if True:`
+- **raw red:** `test_telemetry_fails_when_stream_has_no_tool_calls` — E       assert True is False | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_telemetry_fails_when_stream_has_no_tool_calls
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.19s
+- **verdict:** RED->GREEN
+
+### G9 — telemetry leg requires toolCalls >= 1 (fix r1)
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `tool_count_ok = isinstance(tool_calls, (int, float)) and not isinstance(tool_calls, bool) ` with `tool_count_ok = True`
+- **raw red:** `test_telemetry_fails_on_zero_tool_call_count` — E       assert True is False | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_telemetry_fails_on_zero_tool_call_count
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.19s
+- **verdict:** RED->GREEN
+
+### G4 — loud failure (exit 1 + stderr)
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `return payload, (0 if all_ok else 1), (_stderr_failure_line(engine, legs, dep_lanes) if no` with `return payload, 0, None`
+- **raw red:** `test_cli_failure_is_loud` — E       assert 0 == 1 | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_cli_failure_is_loud
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.20s
+- **verdict:** RED->GREEN
+
+### G5 — owner-word blank gate
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `if not isinstance(word, str) or not word.strip():` with `if False:`
+- **raw red:** `test_preflight_entry_refuses_blank_owner_word_and_unfailed_engine` — E         + launch-without-not-failed:codex | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_preflight_entry_refuses_blank_owner_word_and_unfailed_engine
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.16s
+- **verdict:** RED->GREEN
+
+### G6 — same-family park
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `if same_family:` with `if False and same_family:`
+- **raw red:** `test_preflight_entry_parks_on_same_family` — E         + pass | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_preflight_entry_parks_on_same_family
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.16s
+- **verdict:** RED->GREEN
+
+### G7 — launcher fail branch carries checks
+
+- **site:** `plugins/superheroes/lib/launcher.py`
+- **neutralization:** replace `return _fail("preflight-failed:%s" % check_id, checks=out_checks)` with `return _fail("preflight-failed:%s" % check_id)`
+- **raw red:** `test_walk_preflight_failed_check_carries_checks` — E       AssertionError: assert 'checks' in {'ok': False, 'reason': 'preflight-failed:engine-auth'} | FAILED plugins/superheroes/lib/tests/test_launcher.py::test_walk_preflight_failed_check_carries_che
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.35s
+- **verdict:** RED->GREEN
+
+### G8 — missing required engine
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `for eng in required:` with `for eng in required:`
+- **raw red:** `test_preflight_entry_refuses_missing_duplicate_foreign_stale[missing-probe-missing:codex]` — E       assert 0 == 1 | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_preflight_entry_refuses_missing_duplicate_foreign_stale[missing-probe-missing:codex]
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.16s
+- **verdict:** RED->GREEN
+
+### G10 — run-dir-reused refusal (fix r1)
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `if engine_dispatch._journal_state(records).get("folded") is not None:` with `if False:`
+- **raw red:** `test_probe_refuses_reused_run_dir_with_folded_result` — E         + auth-or-config-refusal | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_probe_refuses_reused_run_dir_with_folded_result
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.19s
+- **verdict:** RED->GREEN
+
+### G11 — run-dir setup never raises (fix r1)
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `try:` with `run_dir = tempfile.mkdtemp(prefix="conformance-probe-")`
+- **raw red:** `test_probe_run_dir_setup_failure_never_raises` — E       OSError: disk full | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_probe_run_dir_setup_failure_never_raises
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.17s
+- **verdict:** RED->GREEN
+
+### G12 — required set = every dispatchable engine (fix r1)
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `return sorted(DISPATCHABLE_ENGINES), None` with `return sorted({row["engine"] for row in rows if isinstance(row, dict) and row.get("engine"`
+- **raw red:** `test_preflight_requires_all_dispatchable_engines_not_only_calibrated` — E       assert 0 == 1 | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_preflight_requires_all_dispatchable_engines_not_only_calibrated
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.16s
+- **verdict:** RED->GREEN
+
+### G13 — probe record validated before pass (fix r1)
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `malformed = _validate_probe_record(raw, path)` with `malformed = None if raw.get("schema") == SCHEMA else "probe-result-malformed:%s" % path`
+- **raw red:** `test_preflight_entry_refuses_truthy_ok_without_legs` — E       assert 0 == 1 | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_preflight_entry_refuses_truthy_ok_without_legs
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.16s
+- **verdict:** RED->GREEN
+
+### G14 — wave binding (fix r1, owner-gate guidance)
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `if not result_wave or result_wave != wave:` with `if False:`
+- **raw red:** `test_preflight_entry_refuses_wave_mismatch` — E       assert 0 == 1 | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_preflight_entry_refuses_wave_mismatch
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.16s
+- **verdict:** RED->GREEN
+
+### G15 — probed cell vs selected cell (fix r1, owner-gate guidance)
+
+- **site:** `plugins/superheroes/lib/conformance_probe.py`
+- **neutralization:** replace `if expected_cell is None or list(probed_cell[:len(expected_cell)]) != expected_cell:` with `if False:`
+- **raw red:** `test_preflight_entry_refuses_probe_cell_mismatch` — E       assert 0 == 1 | FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_preflight_entry_refuses_probe_cell_mismatch
+- **restore:** inverse replace (tree clean: `git status --porcelain` empty = True)
+- **raw green:** 1 passed in 0.16s
+- **verdict:** RED->GREEN
+
+**Summary:** 15 of 15 elements RED→GREEN on `d120e16f`; no disclosure owed.
