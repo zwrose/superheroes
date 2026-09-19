@@ -191,7 +191,7 @@ _stage_out_file = %(stage_out_file)s
 _stdout_payload = %(stdout)r
 _native_review_result = %(native_review_result)r
 _native_write_result = %(native_write_result)r
-_RESULT_FILE_PREFIX = "Result file (write exactly this path; nothing else is graded): "
+_RESULT_FILE_PREFIX = %(result_file_prefix)r
 _sleep_s = %(sleep)s
 _exit_code = %(exit_code)s
 
@@ -256,6 +256,7 @@ sys.exit(_exit_code)
         "stdout": stdout,
         "native_review_result": native_review_result,
         "native_write_result": native_write_result,
+        "result_file_prefix": ED.engine_result_channel.RESULT_FILE_LINE_PREFIX,
         "sleep": sleep_s,
         "exit_code": exit_code,
     }

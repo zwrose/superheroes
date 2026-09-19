@@ -37,11 +37,12 @@ _PROBE_PROMPT = (
     "Claim: The working directory you were given contains at least one regular "
     "file at its top level (list it to check).\n\n"
     "You must open the directory listing (use a tool call).\n\n"
-    "Respond with a single JSON object of the form "
+    "Return exactly one JSON object of the form "
     '`{"verdicts": [{"id": "conformance-probe-1", "verdict": "CONFIRMED" | "REFUTED", '
     '"reason": "<one sentence>", "severity": null, "evidence": "<the file name, or why none>"}], '
     '"investigated": ["<the path you listed>"]}` '
-    "with nothing before or after the object and no code fence. "
+    "on the runner's declared result channel (the contract appended at the end of this prompt "
+    "says whether that is a result file or your final response); no code fence. "
     "The reason field is required and must be a non-empty sentence; "
     "investigated lists the directory you listed. "
     'Use verdict `"CONFIRMED"` with evidence naming one such file when true, '

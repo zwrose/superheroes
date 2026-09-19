@@ -13124,7 +13124,7 @@ def test_cursor_attempt_prompt_occupied_refuses_attempt(tmp_path, plant):
 
 
 def test_cursor_marker_opened_run_ends_marker_channel_retired(tmp_path, monkeypatch):
-    run_dir = str(tmp_path / "marker-retired-cursor")
+    run_dir = str(tmp_path / "marker-retired-cursor-injected")
     repo_root = _repo(tmp_path)
     _plant_layer_3b_cursor_review_journal(tmp_path, run_dir, repo_root)
 
@@ -13144,6 +13144,8 @@ def test_cursor_marker_opened_run_ends_marker_channel_retired(tmp_path, monkeypa
     assert res["detail"] == "marker-channel-retired"
     assert "coherence" not in str(res.get("detail", "")).lower()
 
+    production_run_dir = str(tmp_path / "marker-retired-cursor-production")
+    _plant_layer_3b_cursor_review_journal(tmp_path, production_run_dir, repo_root)
     marker = tmp_path / "engine-ran.marker"
     script = (
         "import pathlib\n"
@@ -13151,19 +13153,23 @@ def test_cursor_marker_opened_run_ends_marker_channel_retired(tmp_path, monkeypa
         % str(marker)
     )
     _install_fake_cursor(monkeypatch, tmp_path, script)
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
-    records, _ = ED._journal_read(run_dir)
+    stdout_path = os.path.join(production_run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(production_run_dir, "attempt-1.stderr")
+    records, _ = ED._journal_read(production_run_dir)
     opened = next(r for r in records if r.get("kind") == "run-opened")
     ED._run_engine_files(
-        run_dir, 1, opened["argv"], opened["cwd"],
+        production_run_dir, 1, opened["argv"], opened["cwd"],
         opened["promptPath"], stdout_path, stderr_path, 30,
-        os.path.join(run_dir, "progress.jsonl"),
+        os.path.join(production_run_dir, "progress.jsonl"),
     )
     assert not marker.exists()
-    records, _ = ED._journal_read(run_dir)
-    ended = next(
-        r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    records, _ = ED._journal_read(production_run_dir)
+    ended = [
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    ][-1]
+    assert ended.get("guardRefusal") is not True
+    assert "resolvedInputs snapshot" not in ended.get("refusal", "")
     assert ended.get("refusal") == "marker-channel-retired"
 
 
@@ -13253,8 +13259,9 @@ def test_cursor_fed_prompt_has_one_output_instruction(tmp_path):
     records, _ = ED._journal_read(review_res["runDir"])
     started = next(r for r in records if r.get("kind") == "engine-started")
     assert started["attemptPromptPath"].endswith("prompt-attempt-1.md")
-    assert ERC.RESULT_FILE_LINE_PREFIX in open(
-        started["attemptPromptPath"], encoding="utf-8").read()
+    review_attempt_prompt = open(started["attemptPromptPath"], encoding="utf-8").read()
+    assert ERC.RESULT_FILE_LINE_PREFIX in review_attempt_prompt
+    assert 'sole exception to "do not edit anything"' in review_attempt_prompt
 
     wt, _main = _linked_worktree_pair(tmp_path)
     write_res = _dispatch_write(
@@ -13267,6 +13274,12 @@ def test_cursor_fed_prompt_has_one_output_instruction(tmp_path):
     write_fed = write_opened["fedPrompt"]
     assert "result file named in the typed-file contract" in write_fed
     assert "The final response must be" not in write_fed
+    write_started = next(
+        r for r in ED._journal_read(write_res["runDir"])[0]
+        if r.get("kind") == "engine-started")
+    write_attempt_prompt = open(write_started["attemptPromptPath"], encoding="utf-8").read()
+    assert "in addition to the repository changes your order asks for" in write_attempt_prompt
+    assert 'sole exception to "do not edit anything"' not in write_attempt_prompt
 
     codex_review = ED.dispatch_review(
         seat=_codex_seat(),

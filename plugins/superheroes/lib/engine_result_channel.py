@@ -180,16 +180,31 @@ def result_delivery(engine):
     return delivery
 
 
-def file_result_contract(schema_text, result_path):
+def file_result_contract(schema_text, result_path, run_kind=RUN_KIND_REVIEW):
     """Prompt block for RESULT_DELIVERY_PROMPT engines: the one file to write and the schema it must match."""
+    if run_kind == RUN_KIND_REVIEW:
+        edit_clause = (
+            "Writing this one file is the sole exception to \"do not edit anything\" — "
+            "create no other file and change nothing else. "
+        )
+    elif run_kind == RUN_KIND_WRITE:
+        edit_clause = (
+            "Writing this result file is in addition to the repository changes your order asks for; "
+            "never add the result file itself to the repository. "
+        )
+    else:
+        raise ValueError(
+            "unknown run_kind %r; expected %r or %r"
+            % (run_kind, RUN_KIND_REVIEW, RUN_KIND_WRITE)
+        )
     return (
         "Typed-file result contract (this run is graded ONLY from the file named on the next line):\n"
         + RESULT_FILE_LINE_PREFIX
         + result_path
         + "\n"
         "Write that one file, containing exactly one JSON object that validates against the declared schema below. "
-        "Writing this one file is the sole exception to \"do not edit anything\" — create no other file and change nothing else. "
-        "The JSON is graded from the file only: your final chat reply is never read, so do not print the object to stdout; "
+        + edit_clause
+        + "The JSON is graded from the file only: your final chat reply is never read, so do not print the object to stdout; "
         "when the file is written, reply with the single word DONE.\n"
         "Declared schema (JSON Schema; every listed property is required; additionalProperties is false throughout):\n"
         "```json\n"

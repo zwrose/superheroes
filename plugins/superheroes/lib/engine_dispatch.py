@@ -520,6 +520,7 @@ def _stage_attempt_prompt(run_dir_real, attempt, opened, result_path):
         return None, "native-schema-unreadable"
     contract = engine_result_channel.file_result_contract(
         schema_text.rstrip("\n"), result_path,
+        opened.get("runKind", RUN_KIND_REVIEW),
     )
     if staged and not staged.endswith("\n"):
         staged = staged + "\n"

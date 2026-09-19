@@ -37,6 +37,11 @@ _TIERS = {
 _CALIB_PREFS = {"implementation": "cursor", "reviewer": "codex"}
 
 
+def test_probe_prompt_is_result_channel_neutral():
+    assert "runner's declared result channel" in CP._PROBE_PROMPT
+    assert "with nothing before or after the object" not in CP._PROBE_PROMPT
+
+
 def _repo(tmp_path, git_as_file=True):
     root = tmp_path / "repo"
     root.mkdir(exist_ok=True)
