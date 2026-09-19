@@ -159,12 +159,12 @@ def _execution_evidence(**over):
 def _execution_evidence_for_payload(payload, source="runner"):
     observation = {
         "tokens": None,
-        "toolCalls": None,
+        "toolCalls": 1,
         "stdoutBytes": 0,
         "wallSeconds": 0.0,
-        "source": "none",
-        "read": "unknown",
-        "telemetry": "none",
+        "source": "codex-events",
+        "read": "engaged",
+        "telemetry": "tool-calls",
     }
     for kind in engine_adapter.REVIEW_RESULT_KINDS + ("fixes", "result"):
         if kind in payload:
@@ -864,7 +864,7 @@ def test_real_loop_refuses_dispatch_observed_without_cited_head_until_loop_recor
     C13's producer — when the loop records the cited head on journal rows, this test flips to a
     certifying assertion under R28's classification.
 
-    A review that raised findings is ``test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions``.
+    A review that raised findings is ``test_real_loop_with_finding_records_fixed_disposition_on_the_ledger``.
     """
     seat_map = {
         "seats": {
@@ -972,16 +972,8 @@ def test_real_loop_refuses_dispatch_observed_seat_without_runner_tool_calls(tmp_
     assert refusal["bindingFailure"] == "execution-evidence-no-runner-action"
 
 
-def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions(
-        tmp_path):
-    """Seam between this child (the writer's disposition-without-receipt check) and C13.
-
-    C13 lands the loop's disposition recording at ``round_driver.py`` :2349, :2720, and :3318,
-    all routed through ``_set_findings``. When that producer lands, this test flips to a certifying
-    assertion in C13 under R28's first clause (the behavior is fixed and the test is kept). This
-    is not a statement that refusing is desirable — only that refusing is what the code correctly
-    does while no producer exists.
-    """
+def test_real_loop_with_finding_records_fixed_disposition_on_the_ledger(tmp_path):
+    """End-to-end: a converged loop records fixed disposition on the ledger for raised findings."""
     seat_map = {
         "seats": {
             dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
@@ -1001,12 +993,22 @@ def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_r
     assert round_driver.P_PANEL in folded
     state = _state(session_dir)
     assert state["terminal"] == "converged", state.get("certification")
-    receipt, refusal = round_certification.certify(session_dir)
-    assert receipt is None
-    assert refusal is not None
-    assert refusal["class"] == "disposition-without-receipt"
-    assert refusal["artifact"] == finding["title"]
-    assert refusal["detail"] == "finding has no disposition recorded"
+    compiled, _ = round_driver.mechanical_compile([finding], None)
+    key = session_contract.finding_identity_key(compiled[0])
+    ledger = {session_contract.finding_identity_key(e): e
+              for e in (state.get("dispositionLedger") or []) if isinstance(e, dict)}
+    assert key in ledger
+    entry = ledger[key]
+    assert entry["disposition"] == "fixed"
+    assert entry["dispositionRound"] == 2
+    receipt = entry["dispositionReceipt"]
+    assert isinstance(receipt.get("headSha"), str) and receipt["headSha"]
+    assert receipt["verifyResult"] == "pass"
+    cert_receipt, refusal = round_certification.certify(session_dir)
+    if refusal is not None:
+        assert (refusal["class"] != "disposition-without-receipt"
+                or refusal["detail"] != "finding has no disposition recorded"), (
+            "unexpected disposition-without-receipt: %r" % refusal)
 
 
 def _git(cwd, *args, check=True):
