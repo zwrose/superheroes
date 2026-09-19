@@ -699,8 +699,7 @@ by `findingKey` (the marker the writers stamp on `judgmentDispositions` entries 
 `session_contract.finding_identity_key` is the one derivation), never by a row's `id`. **Limitation,
 stated plainly:** the carry reads the live loop record (`state.rounds`); across a `recordsPath`
 resume the gate ruling is restored (`judgmentDispositions` is a resumable channel) and the prior
-audit is not (`audits` is not), until the disposition ledger owns a finding's history (layer 2c).
-DoD: a fixer never receives the original finding text alone.
+audit is not (`audits` is not), until a disposition ledger owns a finding's history.
 
 ## Journal and receipt
 
