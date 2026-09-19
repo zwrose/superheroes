@@ -101,8 +101,8 @@ def _mask_code_spans(text):
 
 
 def _strip_tok(raw):
-    s = _SUFFIX.sub("", raw.strip().strip("\"'`,()"))
-    return _TRAIL_PUNCT.sub("", s)
+    s = _TRAIL_PUNCT.sub("", raw.strip().strip("\"'`,()"))
+    return _SUFFIX.sub("", s)
 
 
 def _f(token, detail=""):
@@ -134,7 +134,7 @@ def _cand(tok):
         return False
     if "/" not in tok or tok.startswith(("/", "~", "$", "{", "<", "-")):
         return False
-    if any(c in tok for c in "*?<>{}|`"):
+    if any(c in tok for c in "*?<>{}|`[]("):
         return False
     base = tok.rsplit("/", 1)[-1]
     i = base.rfind(".")

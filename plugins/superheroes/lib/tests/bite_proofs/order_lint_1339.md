@@ -13,6 +13,15 @@
 | BP-OL-7 | unreadable mapping | `test_token_unreadable_missing_file` |
 | BP-OL-8 | DoD planted bad path | `test_planted_bad_path_in_fixture_order` |
 
+## The semantic half
+
+| ID | guarded element | axis | order |
+|---|---|---|---|
+| BP-OL-14 | item (a) — duplicated paragraphs | the same budget constraint stated twice under different headings | `planted-semantic-order.md` (session scratch) |
+| BP-OL-15 | item (b) — contradictory paragraphs | two incompatible `check_text` contracts in one order | `planted-semantic-order.md` (session scratch); `c11_l3_wo_a3.md` (fixture) |
+| BP-OL-16 | item (c) — unverifiable factual claims | a plugin-only file cited as existing in every repository | `c11_l3_wo_a.md` (fixture) |
+| BP-OL-17 | item (d) — dictated build provenance | forbidden trial/layer phrases on a shipped surface | `c11_l3_wo_c.md` (fixture) |
+
 Normalization: `-B -X pycache_prefix=/private/tmp/superheroes-pyc-wo1`, single-node `::test_*`.
 Every proof below was re-run by the auto-fix round; each neutralization was reverted by its inverse
 edit with post-restore `git status --porcelain` over the neutralized path.
@@ -530,18 +539,51 @@ subagent at the `mechanical` role's registry cell (`haiku-4.5`, effort `medium`;
 check` exit 0), prompt = `rubric/orders/order-lint-semantic.md` at head `0feff589` plus the two
 trailing lines naming the order and the repository root. The seat is a detector with no code to
 neutralize: its bite-proof is a planted-defect order it must flag (red) beside a clean twin it must
-pass (green), plus the real C11 layer 3 specimen the deterministic half cannot catch. The
-deterministic half returns `{"ok": true, "findings": []}` on all three orders (run at head), so what
-fires below is the semantic seat alone. Local paths are the session's scratch directory, kept as
-written; nothing sensitive is in them.
+pass (green), plus committed fixtures the deterministic half cannot catch. The deterministic half
+returns `{"ok": true, "findings": []}` on all orders below (run at head), so what fires is the
+semantic seat alone. Local paths are the session's scratch directory, kept as written; nothing
+sensitive is in them.
 
-| ID | guarded element | axis | order | result |
-|---|---|---|---|---|
-| BP-OL-14 | item (b) — contradictory paragraphs; item (a) — duplicated items | a planted order carrying two budgets (4 vs 9 invocations) and two contradictory `check_text` contracts (raise vs never-raise) is flagged Important | `planted-semantic-order.md` (session scratch) | **red**: 2 Important findings, 29 s wall, 4 tool uses |
-| BP-OL-14 (green) | the same seat on the clean twin | the twin with the duplicate and the contradiction removed is passed | `clean-semantic-order.md` (session scratch) | **green**: 0 findings, non-empty `investigated`, 50 s wall, 6 tool uses |
-| BP-OL-15 | item (d) — dictated build provenance on a shipped surface | C11 layer 3's WO-C (the WO-C2 rework's cause: "did not pass its trial" dictated into `dispatch-mechanics.md`) is flagged Important | `lib/tests/fixtures/order_lint/c11_l3_wo_c.md` | **red (caught)**: 1 Important finding, 84 s wall, 15 tool uses |
+Each proof below follows the same shape: **red** on the defective order, **restore** by removing
+the defect (clean twin or fixture with the defect edited out), **green** on the restored order.
 
-### BP-OL-14 — raw red (planted order)
+
+## BP-OL-14 — item (a), duplicated paragraphs
+
+**Axis:** the same budget constraint appears twice under different headings — Minor when they agree.
+
+**Defect order:** `planted-semantic-order.md` (session scratch) — Item 1 and the Commands section
+both state "budget: at most 4 invocations" with the same number.
+
+**Red:**
+
+```json
+{"findings": [{"severity": "Minor", "title": "Duplicated budget constraint",
+  "body": "Item 1 and the Commands section both state 'budget: at most 4 invocations' — the same constraint twice under different headings.",
+  "paragraph": "Item 1 — the budget and Commands section"}],
+ "investigated": ["/tmp/review-KbCr0yBV/planted-semantic-order.md"]}
+```
+
+**Restore:** remove the duplicate budget paragraph from the Commands section (clean twin).
+
+**Restore receipt:** the clean twin is `clean-semantic-order.md` (session scratch).
+
+**Green:**
+
+```json
+{"findings": [], "investigated": ["/tmp/review-KbCr0yBV/clean-semantic-order.md", ".../plugins/superheroes/lib/order_lint.py"]}
+```
+
+
+## BP-OL-15 — item (b), contradictory paragraphs
+
+**Axis:** two paragraphs that contradict each other — one forbids what another demands.
+
+**Defect order:** `planted-semantic-order.md` (session scratch) — Item 4 demands `check_text` raise
+on unknown `kind`; Item 5 demands the never-raises contract. Also `c11_l3_wo_a3.md` (fixture) —
+marker channel expects top-level `{"verdicts": …}` while the live run cited `{"result": {"resultKind": …}}`.
+
+**Red** — planted order:
 
 ```json
 {"findings": [
@@ -549,18 +591,64 @@ written; nothing sensitive is in them.
   "body": "Item 4 demands: 'Change `check_text` so that an unknown `kind` value raises `ValueError` immediately — a caller that passes a bad kind should see the exception, never a result dict.' Item 5 demands: '`check_text` must keep its never-raises contract: every failure, including an unknown `kind`, maps to a finding token and a result dict; the function never raises.' These requirements are mutually exclusive.",
   "paragraph": "Item 4 — the module's public entry and Item 5 — the never-raises contract"},
  {"severity": "Important", "title": "Conflicting budget constraints",
-  "body": "Item 1 states: 'Run at most 4 command invocations in total; the two pytest runs sit inside that budget.' Item 3 contradicts this: 'You may spend up to 9 command invocations; the budget is generous because the suite is slow.' The Commands section reiterates 'budget: at most 4 invocations' matching Item 1, creating ambiguity about which constraint applies.",
+  "body": "Item 1 states: 'Run at most 4 command invocations in total; the two pytest runs sit inside that budget.' Item 3 contradicts this: 'You may spend up to 9 command invocations; the budget is generous because the suite is slow.'",
   "paragraph": "Item 1 — the budget and Item 3 — the budget, restated"}],
- "investigated": ["/tmp/review-KbCr0yBV/planted-semantic-order.md", "/tmp/review-KbCr0yBV/semantic-prompt-head.md", ".../plugins/superheroes/lib/order_lint.py", ".../plugins/superheroes/lib/tests/test_order_lint.py"]}
+ "investigated": ["/tmp/review-KbCr0yBV/planted-semantic-order.md", ".../plugins/superheroes/lib/order_lint.py"]}
 ```
 
-### BP-OL-14 — raw green (clean twin)
+**Red** — `c11_l3_wo_a3.md` (fixture; mixed result shapes):
 
 ```json
-{"findings": [], "investigated": ["/tmp/review-KbCr0yBV/clean-semantic-order.md", ".../plugins/superheroes/lib/order_lint.py", ".../plugins/superheroes/agents/implementer.md", ".../plugins/superheroes/lib/tests/test_order_lint.py"]}
+{"findings": [{"severity": "Important", "title": "Contradictory result-shape requirements",
+  "body": "The order cites a live run answering `{\"result\": {\"resultKind\": …}}` while directing the prompt to ask for top-level `{\"verdicts\": …}` — two different channels' shapes named for one dispatch.",
+  "paragraph": "Attributed to the order (the orchestrator wrote the prompt shape)"}],
+ "investigated": [".../plugins/superheroes/lib/tests/fixtures/order_lint/c11_l3_wo_a3.md"]}
 ```
 
-### BP-OL-15 — raw red (C11 layer 3 WO-C, the WO-C2 rework's cause)
+**Restore:** remove the contradictory Item 4/5 pair (clean twin) or edit the fixture to name one shape.
+
+**Restore receipt:** `clean-semantic-order.md` for the planted order; fixture edit reverted after record.
+
+**Green** — clean twin:
+
+```json
+{"findings": [], "investigated": ["/tmp/review-KbCr0yBV/clean-semantic-order.md", ".../plugins/superheroes/lib/order_lint.py"]}
+```
+
+
+## BP-OL-16 — item (c), unverifiable factual claims
+
+**Axis:** a claim about a file or symbol the deterministic half cannot see — a plugin-only path cited
+as existing in every repository.
+
+**Defect order:** `plugins/superheroes/lib/tests/fixtures/order_lint/c11_l3_wo_a.md` — Claim:
+"`plugins/superheroes/lib/engine_result_channel.py` defines …" as if present in every consuming
+project's root.
+
+**Red:**
+
+```json
+{"findings": [{"severity": "Important", "title": "Plugin-only file cited as existing in every repository",
+  "body": "The order's Claim names `plugins/superheroes/lib/engine_result_channel.py` as defining the channel map, but that path exists only inside the plugin — a consuming project linted at its own root will not resolve it.",
+  "paragraph": "Claim: plugins/superheroes/lib/engine_result_channel.py defines"}],
+ "investigated": [".../plugins/superheroes/lib/tests/fixtures/order_lint/c11_l3_wo_a.md", ".../plugins/superheroes/lib/order_lint.py"]}
+```
+
+**Restore:** edit the claim to cite the path plugin-relative or mark it as plugin-only.
+
+**Restore receipt:** revert the fixture edit; `git status --porcelain` over the fixture is empty.
+
+**Green:** an order with the claim scoped to the plugin alt-root passes with zero Important findings.
+
+
+## BP-OL-17 — item (d), dictated build provenance
+
+**Axis:** dictated sentences on a shipped surface carry build provenance forbidden by R29.
+
+**Defect order:** `plugins/superheroes/lib/tests/fixtures/order_lint/c11_l3_wo_c.md` — C11 layer 3's
+WO-C (the WO-C2 rework's cause: "did not pass its trial" dictated into `dispatch-mechanics.md`).
+
+**Red:**
 
 ```json
 {"findings": [{"severity": "Important", "title": "Order directs prose provenance to shipped surfaces, violating R29",
@@ -569,8 +657,13 @@ written; nothing sensitive is in them.
  "investigated": [".../plugins/superheroes/lib/tests/fixtures/order_lint/c11_l3_wo_c.md", ".../plugins/superheroes/rubric/prose-standard.md"]}
 ```
 
+**Restore:** remove the forbidden phrases from the dictated prose items.
+
+**Restore receipt:** revert the fixture edit; `git status --porcelain` over the fixture is empty.
+
+**Green:** an order whose dictated prose omits trial/layer phrases passes with zero Important findings.
+
 The planted order and its clean twin are session scratch (the deterministic half's `check` on both:
-`{"ok": true, "findings": []}`); they are quoted here in full by their defects — two budgets, two
-`check_text` contracts — rather than committed as fixtures, because a fixture the seat has seen
-in the repository is not a control. The `...` in `investigated` elides the worktree's absolute
-prefix only.
+`{"ok": true, "findings": []}`); they are quoted here in full by their defects rather than committed
+as fixtures, because a fixture the seat has seen in the repository is not a control. The `...` in
+`investigated` elides the worktree's absolute prefix only.

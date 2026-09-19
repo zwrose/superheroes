@@ -526,11 +526,30 @@ def test_sentence_ending_path_is_checked(tmp_path):
     assert any("missing/file.py" in d for d in _details(r))
 
 
+def test_sentence_ending_path_with_line_suffix_is_checked(tmp_path):
+    repo = _mk_repo(tmp_path)
+    for text in (
+        "Budget: 1 command. See missing/file.py:12.\n",
+        "Budget: 1 command. See missing/file.py:12-14.\n",
+    ):
+        r = _record(OL.check_text(text, str(repo), kind="implementer"))
+        assert any(d == "missing/file.py" for d in _details(r))
+
+
 def test_markdown_link_path_is_checked(tmp_path):
     repo = _mk_repo(tmp_path)
     text = "Budget: 1 command. See [file](missing/file.py).\n"
     r = _record(OL.check_text(text, str(repo), kind="implementer"))
-    assert any("missing/file.py" in d for d in _details(r))
+    assert _details(r) == ["missing/file.py"]
+
+
+def test_markdown_link_to_existing_file_is_not_a_finding(tmp_path):
+    target = "plugins/superheroes/lib/order_lint.py"
+    repo = _mk_repo(tmp_path, [(target, "# lint\n")])
+    text = "Budget: 1 command. See [lint](%s) for details.\n" % target
+    r = _record(OL.check_text(text, str(repo), kind="implementer"))
+    assert r["ok"] is True
+    assert OL.TOKEN_PATH_UNRESOLVED not in _tokens(r)
 
 
 def test_literal_brace_in_backtick_is_not_placeholder(tmp_path):
