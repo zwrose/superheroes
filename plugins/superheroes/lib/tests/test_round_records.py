@@ -409,10 +409,10 @@ def test_refusal_landing_torn_when_the_file_is_unparseable(tmp_path):
 
 def test_refusal_schema_unknown(tmp_path):
     sd = _session(tmp_path)
-    _land(sd, _env(schema="seat-result/2"))
+    _land(sd, _env(schema="seat-result/3"))
     out = _ingest(sd)
     assert out["reason"] == "schema-unknown"
-    assert out["schema"] == "seat-result/2"
+    assert out["schema"] == "seat-result/3"
 
 
 def test_refusal_schema_unknown_when_schema_key_absent(tmp_path):
@@ -961,6 +961,83 @@ def test_reconcile_reappends_when_the_store_revision_is_newer_than_the_journal(t
     assert out["reappend"][0]["payloadSha256"] == stored["payloadSha256"]
 
 
+def test_reconcile_reappends_when_identical_payload_differs_in_execution_evidence(tmp_path):
+    """Comparing payloadSha256 on both sides would report clean here — only envelopeSha256
+    separates the two revisions."""
+    # axis: reconcile separates two revisions that differ only in execution evidence — comparing
+    # payload hashes on both sides could not
+    sd = _session(tmp_path)
+    payload = {"findings": ["f1"]}
+    e1 = _execution_evidence(runnerNonce="nonce-1")
+    e2 = _execution_evidence(runnerNonce="nonce-2")
+    first = _v2_env(payload=payload, execution_evidence=e1)
+    _land(sd, first)
+    assert _ingest(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)["ok"] is True
+    second = _v2_env(payload=payload, execution_evidence=e2)
+    _land(sd, second)
+    out = _ingest(sd, supersede=True, expect_sha256=first["envelopeSha256"],
+                  seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert out["ok"] is True
+    stored, _err = RR.read_json(out["storePath"])
+    assert _err is None
+    journal = [RR.record_identity(PHASE, SEAT, 0, 1)]
+    journal[0]["casToken"] = first["envelopeSha256"]
+    journal[0]["payloadSha256"] = first["payloadSha256"]
+    rec = RR.reconcile(sd, 1, PHASE, journal)
+    assert len(rec["reappend"]) == 1
+    assert rec["reappend"][0]["casToken"] == stored["envelopeSha256"]
+    journal_current = [RR.record_identity(PHASE, SEAT, 0, 1)]
+    journal_current[0]["casToken"] = stored["envelopeSha256"]
+    journal_current[0]["payloadSha256"] = stored["payloadSha256"]
+    assert RR.reconcile(sd, 1, PHASE, journal_current)["reappend"] == []
+
+
+def test_reconcile_bounded_two_pass_transition_for_v2_without_journal_cas_token(tmp_path):
+    # axis: the pre-transition v2 row reappends once and the second pass is clean — bounded, not
+    # perpetual
+    # The transition is bounded at two passes by construction: pass 1 journals casToken; pass 2
+    # compares token to token and stops.
+    sd = _session(tmp_path)
+    env = _v2_env()
+    _land(sd, env)
+    assert _ingest(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)["ok"] is True
+    spath = RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    stored, _err = RR.read_json(spath)
+    assert _err is None
+    store_token = RR.envelope_cas_token(stored)
+    journal = [RR.record_identity(PHASE, SEAT, 0, 1)]
+    journal[0]["payloadSha256"] = stored["payloadSha256"]
+    rec = RR.reconcile(sd, 1, PHASE, journal)
+    assert len(rec["reappend"]) == 1
+    journal[0]["casToken"] = store_token
+    assert RR.reconcile(sd, 1, PHASE, journal)["reappend"] == []
+
+
+def test_reconcile_v1_without_cas_token_matching_payload_is_clean(tmp_path):
+    # axis: the v1 fallback without casToken leaves pre-existing matching-payload behaviour clean
+    sd = _session(tmp_path)
+    env = _env()
+    _land(sd, env)
+    assert _ingest(sd)["ok"] is True
+    stored, _err = RR.read_json(RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1))
+    assert _err is None
+    journal = [RR.record_identity(PHASE, SEAT, 0, 1)]
+    journal[0]["payloadSha256"] = stored["payloadSha256"]
+    assert RR.reconcile(sd, 1, PHASE, journal)["reappend"] == []
+
+
+def test_reconcile_v1_without_cas_token_differing_payload_reappends(tmp_path):
+    # axis: the v1 recovery contract without casToken still reappends when the payload differs
+    sd = _session(tmp_path)
+    env = _env()
+    _land(sd, env)
+    assert _ingest(sd)["ok"] is True
+    journal = [RR.record_identity(PHASE, SEAT, 0, 1)]
+    journal[0]["payloadSha256"] = "0" * 64
+    rec = RR.reconcile(sd, 1, PHASE, journal)
+    assert len(rec["reappend"]) == 1
+
+
 def test_head_diff_store_path_valid_requires_exact_session_store_path(tmp_path):
     sd = _session(tmp_path)
     expected = RR.head_diff_store_path(sd, 1, PHASE, SEAT, 1)
@@ -1184,7 +1261,8 @@ def _validate(sd, seat=SEAT, attempt=1, current=1, rnd=1, phase=PHASE, **kw):
     ("session-mismatch", lambda sd: _land(sd, _env(session="a" * 32))),
     ("phase-mismatch", lambda sd: _land(sd, _env(phase="dispatch-audits"))),
     ("round-mismatch", lambda sd: _land(sd, _env(round=2))),
-    ("schema-unknown", lambda sd: _land(sd, _env(schema="seat-result/2"))),
+    ("schema-version-mismatch", lambda sd: _land(sd, _env(schema="seat-result/2"))),
+    ("schema-unknown", lambda sd: _land(sd, _env(schema="seat-result/3"))),
     ("missing-reason", lambda sd: _land(sd, _missing_env(reason="vibes"))),
     ("manifest-anchor-mismatch",
      lambda sd: _land(sd, _env(manifestSha256="m" * 64, orderSha256="o" * 64))),
@@ -1493,6 +1571,588 @@ def test_full_envelope_records_seat_declared_hash_source(tmp_path):
     assert out["ok"] is True
     stored, _ = RR.read_json(out["storePath"])
     assert stored.get("payloadHashSource") == "seat-declared"
+
+
+# --- WO-A: seat-result/2 envelope seam and state-version fence --------------------------------
+
+def _well_formed_observation(**over):
+    obs = {
+        "tokens": None,
+        "toolCalls": None,
+        "stdoutBytes": 0,
+        "wallSeconds": 0.0,
+        "source": "none",
+        "read": "unknown",
+        "telemetry": "none",
+    }
+    obs.update(over)
+    return obs
+
+
+def _execution_evidence(**over):
+    evidence = {
+        "source": "runner",
+        "runnerNonce": "nonce-1",
+        "recordDigest": "digest-1",
+        "resultKind": "findings",
+        "resultDigest": RR.payload_sha256(["f1"]),
+        "observation": _well_formed_observation(),
+    }
+    evidence.update(over)
+    return evidence
+
+
+def _v2_env(payload=None, execution_evidence=None, **over):
+    payload = {"findings": ["f1"]} if payload is None else payload
+    evidence = execution_evidence if execution_evidence is not None else _execution_evidence()
+    env = _env(payload, schema=RR.SEAT_RESULT_SCHEMA_V2, **over)
+    env["executionEvidence"] = evidence
+    env["provenance"] = over.get("provenance", "dispatch-observed")
+    env["envelopeSha256"] = RR.envelope_sha256(payload, evidence)
+    return env
+
+
+def test_seat_result_schema_for_state_version_maps_known_versions():
+    assert RR.seat_result_schema_for_state_version(2) == RR.SEAT_RESULT_SCHEMA
+    assert RR.seat_result_schema_for_state_version(3) == RR.SEAT_RESULT_SCHEMA
+    assert RR.seat_result_schema_for_state_version(4) == RR.SEAT_RESULT_SCHEMA
+    assert RR.seat_result_schema_for_state_version(5) == RR.SEAT_RESULT_SCHEMA_V2
+    assert RR.seat_result_schema_for_state_version(99) is None
+    assert RR.seat_result_schema_for_state_version(None) is None
+
+
+def test_envelope_cas_token_uses_payload_sha_for_v1_and_envelope_sha_for_v2():
+    v1 = _env()
+    assert RR.envelope_cas_token(v1) == v1["payloadSha256"]
+    v2 = _v2_env()
+    assert RR.envelope_cas_token(v2) == v2["envelopeSha256"]
+
+
+def test_v2_opt_in_none_accepts_v1(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    plan, refusal = _validate(sd)
+    assert refusal is None and plan is not None
+
+
+def test_v2_opt_in_none_refuses_v2_schema_version_mismatch(tmp_path):
+    # axis: schema-version-mismatch fence — wo_a_1271
+    sd = _session(tmp_path)
+    _land(sd, _v2_env())
+    plan, refusal = _validate(sd)
+    assert plan is None and refusal["reason"] == "schema-version-mismatch"
+
+
+def test_v2_opt_in_v1_accepts_v1(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA)
+    assert refusal is None and plan is not None
+
+
+def test_v2_opt_in_v1_refuses_v2_schema_version_mismatch(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _v2_env())
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA)
+    assert plan is None and refusal["reason"] == "schema-version-mismatch"
+
+
+def test_v2_opt_in_v2_refuses_v1_schema_version_mismatch(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "schema-version-mismatch"
+
+
+def test_v2_opt_in_v2_accepts_well_formed_v2(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _v2_env())
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert refusal is None and plan is not None
+
+
+def test_v2_opt_in_v2_refuses_execution_evidence_missing(tmp_path):
+    # axis: envelope-torn — wo_a_1271 / wo_l1_e
+    # Key absent but envelopeSha256 still bound to the removed evidence object.
+    sd = _session(tmp_path)
+    env = _v2_env()
+    del env["executionEvidence"]
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "envelope-torn"
+
+
+def _session_tree_snapshot(session_dir):
+    snap = {}
+    for root, _dirs, files in os.walk(session_dir):
+        for name in files:
+            path = os.path.join(root, name)
+            with open(path, "rb") as fh:
+                snap[path] = fh.read()
+    return snap
+
+
+@pytest.mark.parametrize("provenance", RR.SEAT_PROVENANCE)
+def test_v2_execution_evidence_key_absent_hash_over_none_certifies(tmp_path, provenance):
+    # axis: executionEvidence key membership — wo_l1_e case 1
+    sd = _session(tmp_path)
+    env = _v2_env(provenance=provenance)
+    del env["executionEvidence"]
+    env["envelopeSha256"] = RR.envelope_sha256(env["payload"], None)
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert refusal is None and plan is not None
+
+
+@pytest.mark.parametrize("provenance", RR.SEAT_PROVENANCE)
+def test_v2_execution_evidence_key_absent_stale_hash_refuses_envelope_torn(tmp_path, provenance):
+    # axis: envelope-torn — wo_l1_e case 2
+    sd = _session(tmp_path)
+    env = _v2_env(provenance=provenance)
+    del env["executionEvidence"]
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "envelope-torn"
+
+
+@pytest.mark.parametrize("provenance,expected", [
+    (RR.PROVENANCE_DISPATCH_OBSERVED, "execution-evidence-malformed"),
+    (RR.PROVENANCE_HAND_LANDED, "execution-evidence-malformed"),
+    (RR.PROVENANCE_ORCHESTRATOR_FULFILLED, "execution-evidence-unexpected"),
+])
+def test_v2_execution_evidence_key_present_null_refuses(tmp_path, provenance, expected):
+    # axis: executionEvidence key membership — wo_l1_e case 3
+    sd = _session(tmp_path)
+    env = _v2_env(provenance=provenance)
+    env["executionEvidence"] = None
+    env["envelopeSha256"] = RR.envelope_sha256(env["payload"], None)
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == expected
+
+
+@pytest.mark.parametrize("provenance,expected", [
+    (RR.PROVENANCE_DISPATCH_OBSERVED, None),
+    (RR.PROVENANCE_HAND_LANDED, None),
+    (RR.PROVENANCE_ORCHESTRATOR_FULFILLED, "execution-evidence-unexpected"),
+])
+def test_v2_execution_evidence_key_present_well_formed(tmp_path, provenance, expected):
+    # axis: executionEvidence key membership — wo_l1_e case 4
+    sd = _session(tmp_path)
+    env = _v2_env(provenance=provenance)
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    if expected is None:
+        assert refusal is None and plan is not None
+    else:
+        assert plan is None and refusal["reason"] == expected
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+@pytest.mark.parametrize("bad_value", [[], "string", 42])
+def test_v2_execution_evidence_key_present_not_dict_refuses_malformed(tmp_path, provenance, bad_value):
+    # axis: execution-evidence-malformed — wo_l1_e case 5
+    sd = _session(tmp_path)
+    env = _v2_env(provenance=provenance)
+    env["executionEvidence"] = bad_value
+    env["envelopeSha256"] = RR.envelope_sha256(env["payload"], bad_value)
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+@pytest.mark.parametrize("missing_field", RR.EXECUTION_EVIDENCE_FIELDS)
+def test_v2_execution_evidence_key_present_missing_required_field(tmp_path, provenance, missing_field):
+    # axis: execution-evidence-malformed — wo_l1_e case 6
+    sd = _session(tmp_path)
+    evidence = _execution_evidence()
+    del evidence[missing_field]
+    env = _v2_env(provenance=provenance, execution_evidence=evidence)
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+# frozenset iteration order is undefined; pytest-xdist requires identical collection order on every worker
+@pytest.mark.parametrize("pointer_key", sorted(RR._EXECUTION_EVIDENCE_POINTER_KEYS))
+def test_v2_execution_evidence_pointer_key_refuses_not_inline(tmp_path, provenance, pointer_key):
+    # axis: execution-evidence-not-inline — wo_l1_e case 7
+    sd = _session(tmp_path)
+    env = _v2_env(provenance=provenance,
+                  execution_evidence=_execution_evidence(
+                      observation=_well_formed_observation(**{pointer_key: "/tmp/evidence"})))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-not-inline"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_pointer_key_nested_two_levels_refuses_not_inline(tmp_path, provenance):
+    # axis: execution-evidence-not-inline — wo_l1_e case 7 (nested)
+    sd = _session(tmp_path)
+    env = _v2_env(provenance=provenance,
+                  execution_evidence=_execution_evidence(
+                      observation=_well_formed_observation(outer={"path": "/tmp/evidence"})))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-not-inline"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_pointer_key_inside_list_refuses_not_inline(tmp_path, provenance):
+    # axis: execution-evidence-not-inline — wo_l1_e case 7 (list)
+    sd = _session(tmp_path)
+    env = _v2_env(provenance=provenance,
+                  execution_evidence=_execution_evidence(
+                      observation=_well_formed_observation(items=[{"file": "/tmp/evidence"}])))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-not-inline"
+
+
+@pytest.mark.parametrize("provenance", [None, "invented"])
+def test_v2_provenance_unknown_refuses(tmp_path, provenance):
+    # axis: provenance-unknown — wo_l1_e case 8
+    sd = _session(tmp_path)
+    env = _v2_env()
+    if provenance is None:
+        del env["provenance"]
+    else:
+        env["provenance"] = provenance
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "provenance-unknown"
+
+
+def test_v2_envelope_override_none_reads_landing_file(tmp_path):
+    # axis: envelope_override back-compat — wo_l1_e case 9
+    sd = _session(tmp_path)
+    env = _v2_env()
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2,
+                              envelope_override=None)
+    assert refusal is None and plan is not None
+
+
+def test_v2_envelope_override_dict_validates_override_not_disk(tmp_path):
+    # axis: envelope_override — wo_l1_e case 10
+    sd = _session(tmp_path)
+    disk_env = _v2_env()
+    disk_env["payload"] = {"findings": ["disk"]}
+    disk_env["payloadSha256"] = RR.payload_sha256(disk_env["payload"])
+    disk_env["envelopeSha256"] = RR.envelope_sha256(disk_env["payload"],
+                                                    disk_env["executionEvidence"])
+    _land(sd, disk_env)
+    override = _v2_env()
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2,
+                              envelope_override=override)
+    assert refusal is None and plan is not None
+    assert plan["envelope"]["payload"] == override["payload"]
+    assert plan["envelope"]["executionEvidence"] == override["executionEvidence"]
+
+
+def test_v2_envelope_override_dict_without_landing_file_certifies(tmp_path):
+    # axis: envelope_override — wo_l1_e case 11
+    sd = _session(tmp_path)
+    override = _v2_env()
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2,
+                              envelope_override=override)
+    assert refusal is None and plan is not None
+
+
+def test_v2_envelope_override_attempt_mismatch_refuses(tmp_path):
+    # axis: envelope_override — wo_l1_e case 12
+    sd = _session(tmp_path)
+    override = _v2_env(attempt=2)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2,
+                              attempt=1, envelope_override=override)
+    assert plan is None and refusal["reason"] == "attempt-mismatch"
+
+
+@pytest.mark.parametrize("bad_override", ["string", [], 7])
+def test_v2_envelope_override_not_dict_refuses_bad_argument(tmp_path, bad_override):
+    # axis: envelope_override — wo_l1_e case 13
+    sd = _session(tmp_path)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2,
+                              envelope_override=bad_override)
+    assert plan is None and refusal["reason"] == "bad-argument"
+
+
+def test_v2_envelope_override_writes_nothing_certifying(tmp_path):
+    # axis: envelope_override write fence — wo_l1_e case 14
+    sd = _session(tmp_path)
+    env = _v2_env()
+    _land(sd, env)
+    before = _session_tree_snapshot(sd)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2,
+                              envelope_override=env)
+    after = _session_tree_snapshot(sd)
+    assert before == after
+    assert refusal is None and plan is not None
+
+
+def test_v2_envelope_override_writes_nothing_refusing(tmp_path):
+    # axis: envelope_override write fence — wo_l1_e case 14
+    sd = _session(tmp_path)
+    env = _v2_env()
+    env["executionEvidence"] = None
+    before = _session_tree_snapshot(sd)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2,
+                              envelope_override=env)
+    after = _session_tree_snapshot(sd)
+    assert before == after
+    assert plan is None and refusal is not None
+
+
+def test_v2_opt_in_v2_refuses_execution_evidence_malformed(tmp_path):
+    sd = _session(tmp_path)
+    env = _v2_env(execution_evidence={"source": "runner"})
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+def test_v2_opt_in_v2_refuses_execution_evidence_not_inline(tmp_path):
+    # axis: execution-evidence-not-inline — wo_a_1271
+    sd = _session(tmp_path)
+    env = _v2_env(execution_evidence=_execution_evidence(
+        observation=_well_formed_observation(path="/tmp/evidence")))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-not-inline"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_observation_missing_telemetry_refuses_malformed(tmp_path, provenance):
+    # axis: execution-evidence-malformed — wo_r2_1271 telemetry requirement
+    sd = _session(tmp_path)
+    obs = _well_formed_observation()
+    del obs["telemetry"]
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(observation=obs))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_observation_bad_telemetry_value_refuses_malformed(tmp_path, provenance):
+    # axis: execution-evidence-malformed — wo_r3_1271 telemetry literal check
+    sd = _session(tmp_path)
+    obs = _well_formed_observation(telemetry="maybe")
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(observation=obs))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+@pytest.mark.parametrize("bad_tokens", ["not-int", -1])
+def test_v2_execution_evidence_observation_bad_tokens_value_refuses_malformed(
+        tmp_path, provenance, bad_tokens):
+    sd = _session(tmp_path)
+    obs = _well_formed_observation(tokens=bad_tokens)
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(observation=obs))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+@pytest.mark.parametrize("bad_tool_calls", ["not-int", -1])
+def test_v2_execution_evidence_observation_bad_tool_calls_value_refuses_malformed(
+        tmp_path, provenance, bad_tool_calls):
+    sd = _session(tmp_path)
+    obs = _well_formed_observation(toolCalls=bad_tool_calls)
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(observation=obs))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+@pytest.mark.parametrize("bad_stdout_bytes", ["not-int", -1])
+def test_v2_execution_evidence_observation_bad_stdout_bytes_value_refuses_malformed(
+        tmp_path, provenance, bad_stdout_bytes):
+    sd = _session(tmp_path)
+    obs = _well_formed_observation(stdoutBytes=bad_stdout_bytes)
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(observation=obs))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+@pytest.mark.parametrize("bad_wall_seconds", ["not-int", -1])
+def test_v2_execution_evidence_observation_bad_wall_seconds_value_refuses_malformed(
+        tmp_path, provenance, bad_wall_seconds):
+    sd = _session(tmp_path)
+    obs = _well_formed_observation(wallSeconds=bad_wall_seconds)
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(observation=obs))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_observation_bad_source_value_refuses_malformed(tmp_path, provenance):
+    sd = _session(tmp_path)
+    obs = _well_formed_observation(source=42)
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(observation=obs))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_observation_bad_read_value_refuses_malformed(tmp_path, provenance):
+    sd = _session(tmp_path)
+    obs = _well_formed_observation(read="maybe")
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(observation=obs))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+@pytest.mark.parametrize("bad_obs", [{"tokens": True}, {"stdoutBytes": False}])
+def test_v2_execution_evidence_observation_bool_is_not_an_integer_refuses_malformed(
+        tmp_path, provenance, bad_obs):
+    sd = _session(tmp_path)
+    obs = _well_formed_observation(**bad_obs)
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(observation=obs))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_result_kind_missing_refuses_malformed(tmp_path, provenance):
+    sd = _session(tmp_path)
+    evidence = _execution_evidence()
+    del evidence["resultKind"]
+    env = _v2_env(provenance=provenance, execution_evidence=evidence)
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_result_kind_wrong_type_refuses_malformed(tmp_path, provenance):
+    sd = _session(tmp_path)
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(resultKind=123))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_observation_missing_required_key_refuses_malformed(tmp_path, provenance):
+    # axis: execution-evidence-malformed — wo_r3_1271 observation key-set check
+    sd = _session(tmp_path)
+    obs = _well_formed_observation()
+    del obs["read"]
+    env = _v2_env(provenance=provenance, execution_evidence=_execution_evidence(observation=obs))
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_observation_extra_key_refuses_unknown_field(tmp_path, provenance):
+    # axis: execution-evidence-unknown-field — wo_r2_1271 observation enumeration
+    sd = _session(tmp_path)
+    env = _v2_env(
+        provenance=provenance,
+        execution_evidence=_execution_evidence(
+            observation=_well_formed_observation(investigated=["a.py"])),
+    )
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-unknown-field"
+    assert refusal["field"] == "investigated"
+    assert refusal["location"] == "observation"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_extra_sibling_key_refuses_unknown_field(tmp_path, provenance):
+    # axis: execution-evidence-unknown-field — wo_r2_1271 evidence key set
+    sd = _session(tmp_path)
+    evidence = _execution_evidence()
+    evidence["investigated"] = ["a.py"]
+    env = _v2_env(provenance=provenance, execution_evidence=evidence)
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-unknown-field"
+    assert refusal["field"] == "investigated"
+    assert refusal["location"] == "executionEvidence"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_well_formed_observation_lands(tmp_path, provenance):
+    sd = _session(tmp_path)
+    env = _v2_env(provenance=provenance)
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert refusal is None and plan is not None
+
+
+def test_v2_opt_in_v2_refuses_provenance_unknown(tmp_path):
+    # axis: provenance-unknown — wo_a_1271
+    sd = _session(tmp_path)
+    _land(sd, _v2_env(provenance="invented"))
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "provenance-unknown"
+
+
+def test_v2_opt_in_v2_refuses_envelope_torn(tmp_path):
+    # axis: envelope-torn — wo_a_1271
+    sd = _session(tmp_path)
+    env = _v2_env()
+    env["envelopeSha256"] = "0" * 64
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "envelope-torn"
+
+
+def test_v2_opt_in_v2_refuses_landing_torn_payload_sha(tmp_path):
+    sd = _session(tmp_path)
+    env = _v2_env()
+    env["payloadSha256"] = "0" * 64
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "landing-torn"
+
+
+def test_v2_envelope_survives_ingest_store_reread(tmp_path):
+    sd = _session(tmp_path)
+    env = _v2_env()
+    _land(sd, env)
+    out = _ingest(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert out["ok"] is True
+    stored, err = RR.read_json(out["storePath"])
+    assert err is None
+    assert stored["executionEvidence"] == env["executionEvidence"]
+    assert stored["provenance"] == env["provenance"]
+    assert stored["envelopeSha256"] == env["envelopeSha256"]
+
+
+def test_v2_session_refuses_second_envelope_after_v1_schema_version_mismatch(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    first = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert first[1]["reason"] == "schema-version-mismatch"
+    _land(sd, _v2_env())
+    second = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert second[0] is not None
+
+
+def test_validate_landing_bad_argument_for_unknown_seat_result_schema(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    plan, refusal = _validate(sd, seat_result_schema="seat-result/9")
+    assert plan is None and refusal["reason"] == "bad-argument"
 
 
 # --- finding 7: phase-name drift guard --------------------------------------------------------

@@ -57,14 +57,40 @@ def _anchor_hashes(session_dir, rnd, phase, attempt, seat, occurrence=0):
     return anchor["manifestSha256"], (anchor.get("orders") or {}).get(skey, RR.NOT_EMITTED)
 
 
+def _execution_evidence(**over):
+    evidence = {
+        "source": "runner",
+        "runnerNonce": "nonce-1",
+        "recordDigest": "digest-1",
+        "resultKind": "findings",
+        "resultDigest": RR.payload_sha256([]),
+        "observation": {
+            "tokens": None,
+            "toolCalls": None,
+            "stdoutBytes": 0,
+            "wallSeconds": 0.0,
+            "source": "none",
+            "read": "unknown",
+            "telemetry": "none",
+        },
+    }
+    evidence.update(over)
+    return evidence
+
+
 def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, **over):
-    pend = pend or RD.load_state(session_dir)[1]["pending"]
+    ok, state = RD.load_state(session_dir)
+    assert ok and state is not None
+    pend = pend or state["pending"]
     payload = {"findings": [], "confidence": "high", "seat": seat,
                "verificationReceipt": {"ran": True}} if payload is None else payload
     manifest_sha, order_sha = _anchor_hashes(session_dir, pend["round"], pend["phase"],
                                              pend["attempt"], seat, occurrence=occurrence)
+    schema = RR.seat_result_schema_for_state_version(state.get("schemaVersion"))
+    if schema is None:
+        schema = RR.SEAT_RESULT_SCHEMA
     env = {
-        "schema": RR.SEAT_RESULT_SCHEMA,
+        "schema": schema,
         "session": _session_id(session_dir),
         "round": pend["round"],
         "phase": pend["phase"],
@@ -79,9 +105,16 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, *
         "payloadSha256": RR.payload_sha256(payload),
         "payload": payload,
     }
+    if schema == RR.SEAT_RESULT_SCHEMA_V2:
+        evidence = _execution_evidence()
+        env["executionEvidence"] = evidence
+        env["provenance"] = RR.PROVENANCE_HAND_LANDED
+        env["envelopeSha256"] = RR.envelope_sha256(payload, evidence)
     if occurrence:
         env["occurrence"] = occurrence
     env.update(over)
+    if schema == RR.SEAT_RESULT_SCHEMA_V2 and "executionEvidence" in over:
+        env["envelopeSha256"] = RR.envelope_sha256(payload, env["executionEvidence"])
     return env
 
 
@@ -714,6 +747,64 @@ def test_cmd_advance_recover_uses_injected_git_seam_for_legacy_sidecar(
     assert os.path.exists(sidecar)
     root = RC.commits_root(session_dir)
     assert not os.path.exists(root) or os.listdir(root) == []
+
+
+def _panel_session(tmp_path):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir, exist_ok=True)
+    out = RD.cmd_next(session_dir, _cfg())
+    assert out["ok"], out
+    return session_dir
+
+
+def _persist_undecodable_schema_version(session_dir, monkeypatch):
+    """Persist schemaVersion at max(SUPPORTED)+1 — loadable but not seat-result-decodable."""
+    unsupported = max(RD.SUPPORTED_STATE_VERSIONS) + 1
+    monkeypatch.setattr(
+        RD, "SUPPORTED_STATE_VERSIONS",
+        tuple(sorted(RD.SUPPORTED_STATE_VERSIONS + (unsupported,))))
+    monkeypatch.setattr(RD, "STATE_SCHEMA_VERSION", unsupported)
+    seat_map = dict(RD.round_records.SEAT_RESULT_SCHEMA_BY_STATE_VERSION)
+    seat_map.pop(unsupported, None)
+    monkeypatch.setattr(RD.round_records, "SEAT_RESULT_SCHEMA_BY_STATE_VERSION", seat_map)
+    ok, state = RD.load_state(session_dir)
+    assert ok and state is not None
+    state["schemaVersion"] = unsupported
+    RD.save_state(session_dir, state)
+    return unsupported
+
+
+def test_cmd_record_result_refuses_state_version_unsupported(tmp_path, monkeypatch):
+    # axis: state-version-unsupported — record-result
+    session_dir = _panel_session(tmp_path)
+    seat = RD.DIMENSIONS[0]
+    _land(session_dir, seat)
+    _persist_undecodable_schema_version(session_dir, monkeypatch)
+    out = RD.cmd_record_result(session_dir, seat)
+    assert out["ok"] is False
+    assert out["reason"] == "state-version-unsupported"
+
+
+def test_cmd_record_result_sweep_refuses_state_version_unsupported(tmp_path, monkeypatch):
+    # axis: state-version-unsupported — sweep (_sweep_record)
+    session_dir = _panel_session(tmp_path)
+    _persist_undecodable_schema_version(session_dir, monkeypatch)
+    out = RD.cmd_record_result(session_dir, sweep=True)
+    assert out["ok"] is False
+    assert out["reason"] == "state-version-unsupported"
+
+
+def test_cmd_record_missing_refuses_state_version_unsupported(tmp_path, monkeypatch):
+    # axis: state-version-unsupported — record-missing
+    session_dir = _panel_session(tmp_path)
+    ok, state = RD.load_state(session_dir)
+    assert ok and state is not None
+    pend = state["pending"]
+    seat = RD.DIMENSIONS[0]
+    _persist_undecodable_schema_version(session_dir, monkeypatch)
+    out = RD.cmd_record_missing(session_dir, seat, pend["attempt"], "timeout")
+    assert out["ok"] is False
+    assert out["reason"] == "state-version-unsupported"
 
 
 def test_sidecar_temp_refuses_a_planted_symlink_and_leaves_victim_intact(tmp_path):

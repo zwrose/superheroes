@@ -144,7 +144,7 @@ Flag ONLY when the app becomes unusable for the actual user. These are usability
   flow-level chain is theirs, so the two agents never report the same flow
   twice.
 - A permissive default, dishonest fail-closed reason, or LLM-courier
-  payload-fidelity issue in gating/certification/verification/safety machinery
+  payload-fidelity issue in gating/certification/verification/control-plane machinery
   is `premortem-reviewer`'s (`fail-direction` / `transport-contract`), even on a
   single line — your single-line defects are the ones with no such systemic
   dimension.

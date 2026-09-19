@@ -48,6 +48,7 @@ import model_registry  # noqa: E402  role read_write classification (#1269 WO-FI
 import resolved_inputs_vocab  # noqa: E402  resolvedInputs <field>Source marker home (#1296)
 import review_findings_schema  # noqa: E402  findings example renderer (#1145 WO-C)
 import sanitized_view  # noqa: E402
+import session_contract  # noqa: E402  WRITE_RESULT_KIND — shared with writer via leaf module
 import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
 from guardian_tools import path_is_confidently_under  # noqa: E402
 
@@ -81,6 +82,7 @@ RUN_LOCK_NAME = "run.lock"
 WORKTREE_LEASE_PREFIX = "superheroes-worktree-lease-"
 PROMPT_NAME = "prompt.txt"
 PROGRESS_NAME = "progress.jsonl"
+_LAST_MESSAGE_BASENAME = "attempt-%d.last-message"
 RUN_KIND_REVIEW = "review"
 # Consumers import engine_adapter.REVIEW_RESULT_KINDS — never restate the tuple (CONVENTIONS §11).
 REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
@@ -853,6 +855,7 @@ def _journal_state(records):
         "abandoned": None,
         "abandonRequested": False,
         "launching": {},
+        "spawned": {},
         "stoodDown": [],
     }
     for rec in records:
@@ -872,6 +875,8 @@ def _journal_state(records):
             att = rec.get("attempt")
             if att is not None:
                 state["launching"][att] = rec
+                if "spawnArgv" in rec:
+                    state["spawned"][att] = list(rec["spawnArgv"])
         elif kind == "engine-started":
             att = rec.get("attempt")
             if att is not None:
@@ -2015,6 +2020,7 @@ def _scan_review_engaged_candidates(run_dir_real, state):
     axis: which outcome is minted — all attempts, not only the graded last attempt.
     """
     opened = state.get("opened") or {}
+    engine = opened.get("engine")
     fed_prompt = opened.get("fedPrompt", "")
     echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
     candidates = []
@@ -2026,6 +2032,10 @@ def _scan_review_engaged_candidates(run_dir_real, state):
         stdout = _read_stdout_for_artifact_scan(stdout_path)
         if stdout is None:
             continue
+        if engine == "codex":
+            stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, att)
+            if not stdout:
+                continue
         shape = engine_adapter.review_artifact_shape(stdout, fed_prompt)
         if not shape.get("engaged"):
             continue
@@ -2377,7 +2387,24 @@ def _with_run_fields(result, *, run_dir, argv, snapshot=None):
     out = dict(result)
     out.pop("ledger", None)
     out["runDir"] = run_dir
-    out["argv"] = list(argv or [])
+    resolved_argv = list(argv or [])
+    try:
+        run_dir_real = os.path.realpath(run_dir) if run_dir else ""
+        if run_dir_real and os.path.isdir(run_dir_real):
+            records, _corrupt = _journal_read(run_dir_real)
+            folded = _journal_state(records)
+            spawned = folded.get("spawned") or {}
+            attempts = folded.get("attempts") or {}
+            # axis: reported argv comes only from an attempt that actually reached the engine.
+            started = [
+                att for att in spawned
+                if attempts.get(att, {}).get("enginePgid") is not None
+            ]
+            if started:
+                resolved_argv = list(spawned[max(started)])
+    except Exception:
+        pass
+    out["argv"] = resolved_argv
     if "terminal" not in out:
         out["terminal"] = out.get("reason") != dispatch_outcome.REASON_RUNNING
     return _attach_resolved_inputs_echo(out, run_dir=run_dir, snapshot=snapshot)
@@ -2646,7 +2673,16 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     if coherence_err:
         _journal_spawn_guard_refusal(run_dir_real, attempt, coherence_err)
         return
-    argv = spawn_argv
+    argv, recorded = _derive_and_record_spawn_argv(
+        run_dir_real, attempt, spawn_argv, opened.get("engine"))
+    if not recorded:
+        # axis: spawnArgv append failed — engine not invoked, attempt ends journal-append-failed.
+        _journal_append(run_dir_real, {
+            "kind": "attempt-ended", "attempt": attempt,
+            "exit": 127, "timedOut": False, "signal": None,
+            "refusal": "journal-append-failed", "at": time.time(),
+        })
+        return
     dispatch_path = _dispatch_path_from_opened(opened)
     try:
         prompt_bytes = os.path.getsize(prompt_path)
@@ -2792,7 +2828,11 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     spawn_argv, coherence_err = _spawn_argv_coherence(opened, opened.get("argv"))
     if coherence_err:
         return False, coherence_err
-    argv = spawn_argv
+    argv, recorded = _derive_and_record_spawn_argv(
+        run_dir_real, attempt, spawn_argv, opened.get("engine"))
+    if not recorded:
+        # axis: spawnArgv append failed — run_engine not invoked, attempt ends journal-append-failed.
+        return False, "journal-append-failed"
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, attempt)
     prompt_path = opened["promptPath"]
@@ -2908,12 +2948,74 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
     return True, ""
 
 
-def _engagement_with_read(engagement, *, result_kind=None, items=None, investigated=None):
-    """Attach engagement.read from observed attempt evidence. Never raises."""
-    read_input = {"investigated": investigated, "engagement": engagement}
+def _attempt_last_message_path(run_dir_real, attempt):
+    return os.path.join(run_dir_real, _LAST_MESSAGE_BASENAME % attempt)
+
+
+def _argv_for_attempt(argv, run_dir_real, attempt, engine):
+    """Per-attempt argv: codex last-message path tracks the attempt number. Never raises."""
+    argv = list(argv)
+    if engine != "codex":
+        return argv
+    path = _attempt_last_message_path(run_dir_real, attempt)
+    if "--output-last-message" in argv:
+        idx = argv.index("--output-last-message")
+        if idx + 1 < len(argv):
+            argv[idx + 1] = path
+        return argv
+    # Spawn-time only — downstream of the G2 argv coherence gate.
+    flags = engine_adapter.codex_json_argv_flags(path)
+    if argv and argv[-1] == "-":
+        return argv[:-1] + flags + ["-"]
+    return argv + flags
+
+
+def _derive_and_record_spawn_argv(run_dir_real, attempt, argv, engine):
+    """Derive per-attempt argv and journal the exact spawn argv. Returns (argv, ok)."""
+    # axis: journaled spawnArgv is the argv handed to the engine; append is fail-closed.
+    spawn_argv = _argv_for_attempt(argv, run_dir_real, attempt, engine)
+    ok = _journal_append(run_dir_real, {
+        "kind": "engine-launching", "attempt": attempt,
+        "spawnArgv": list(spawn_argv),
+        "childPid": os.getpid(), "at": time.time(),
+    })
+    return spawn_argv, ok
+
+
+def _review_stdout_for_parse(engine, stdout, run_dir_real, attempt):
+    """Stdout text passed to review parse/normalize. Codex reads payload off the event stream."""
+    if engine != "codex":
+        return stdout
+    payload = engine_adapter.codex_review_payload_text(
+        stdout, _attempt_last_message_path(run_dir_real, attempt))
+    if payload is not None:
+        return payload
+    if isinstance(stdout, str):
+        if engine_adapter.is_codex_event_stream(stdout):
+            return ""
+        return stdout
+    return ""
+
+
+def _engagement_telemetry(tool_calls):
+    """Derive engagement.telemetry from runner-observed toolCalls only. Never raises."""
+    try:
+        if isinstance(tool_calls, bool):
+            return "none"
+        if isinstance(tool_calls, (int, float)):
+            return "tool-calls"
+    except Exception:
+        pass
+    return "none"
+
+
+def _engagement_with_read(engagement, *, result_kind=None, items=None):
+    """Attach engagement.read and telemetry from observed attempt evidence. Never raises."""
+    read_input = {"engagement": engagement}
     if items is not None and result_kind in REVIEW_RESULT_KINDS:
         read_input[result_kind] = items
     out = dict(engagement)
+    out["telemetry"] = _engagement_telemetry(engagement.get("toolCalls"))
     out["read"] = engine_adapter.engagement_read(read_input)
     return out
 
@@ -2967,6 +3069,111 @@ def _parse_review_has_payload(res):
 def _review_parse_kind_invalid(res):
     """True when parse claims ok but resultKind is missing or outside the two-name enum."""
     return res.get("ok") and res.get("resultKind") not in REVIEW_RESULT_KINDS
+
+
+def _generated_artifacts_from_view_meta(view_meta):
+    """Collect generated artifact paths from view metadata. Never raises."""
+    generated = ()
+    if isinstance(view_meta, dict):
+        diff_path = view_meta.get("diffPath")
+        if isinstance(diff_path, str) and diff_path:
+            generated = (diff_path,)
+        pr_body_path = view_meta.get("prBodyPath")
+        if isinstance(pr_body_path, str) and pr_body_path:
+            generated = generated + (pr_body_path,)
+        config_diff_path = view_meta.get("configDiffPath")
+        if isinstance(config_diff_path, str) and config_diff_path:
+            generated = generated + (config_diff_path,)
+    return generated
+
+
+def _review_attempt_engagement(
+    engine, stdout, stderr_tail, elapsed, stdout_bytes,
+    *,
+    engagement=None,
+    res=None,
+    cwd="",
+    view_meta=None,
+    role_kind=None,
+    fed_prompt="",
+    echo_nonce=None,
+    last_message_path=None,
+):
+    """Shared engine signals and engagement.read grading decision. Never raises.
+
+    Stream-only: pass only stream args; returns the five-key engagement dict.
+    Grade path: pass ``engagement`` and ``res``; returns
+    ``(stamped_or_none, accepted, spot_rejected, has_payload, payload, kind)``.
+    Observation path: pass stream args plus ``role_kind``, ``fed_prompt``, ``echo_nonce``,
+    ``cwd``, and ``view_meta``; returns completed engagement including ``read``.
+    """
+    if engagement is None:
+        if engine == "codex":
+            # telemetry tracks presence of the tool-call channel, not the count; read is the gate.
+            tokens = engine_adapter.codex_event_tokens(stdout)
+            tool_calls = engine_adapter.codex_tool_calls(stdout)
+            source = "codex-events" if tool_calls is not None else "none"
+        elif engine == "cursor":
+            tokens = None
+            tool_calls = engine_adapter.cursor_tool_calls(stdout)
+            source = "cursor-stream" if tool_calls is not None else "none"
+        else:
+            tokens = None
+            tool_calls = None
+            source = "none"
+        engagement = {
+            "tokens": tokens,
+            "toolCalls": tool_calls,
+            "stdoutBytes": stdout_bytes,
+            "wallSeconds": elapsed,
+            "source": source,
+            "telemetry": _engagement_telemetry(tool_calls),
+        }
+
+    if res is not None:
+        kind = res["resultKind"]
+        has_payload, payload = _review_result_payload(res, kind)
+        _, accepted, spot_rejected = engine_adapter.spot_check_investigated(
+            res.get("investigated"), cwd,
+            generated_artifacts=_generated_artifacts_from_view_meta(view_meta))
+        # axis: engagement read grades registered payload and runner toolCalls only
+        stamped = None
+        if has_payload:
+            stamped = _engagement_with_read(
+                engagement, result_kind=kind, items=payload)
+        return stamped, accepted, spot_rejected, has_payload, payload, kind
+
+    if role_kind is not None:
+        try:
+            parse_stdout = stdout
+            if engine == "codex" and last_message_path is not None:
+                payload = engine_adapter.codex_review_payload_text(stdout, last_message_path)
+                parse_stdout = payload if payload is not None else ""
+            norm_strip = engine_adapter.normalize_review_stdout(parse_stdout, fed_prompt)
+            if not norm_strip.get("echoOnly"):
+                envelope_error = norm_strip["rawEnvelopeError"]
+                parse_res = engine_adapter.parse_result(
+                    engine, role_kind, parse_stdout, raw_envelope_error=envelope_error,
+                    echo_nonce=echo_nonce)
+                if not _parse_review_has_payload(parse_res):
+                    stripped_text = norm_strip["text"]
+                    if stripped_text and stripped_text.strip():
+                        parse_res = engine_adapter.parse_result(
+                            engine, role_kind, stripped_text,
+                            raw_envelope_error=envelope_error, echo_nonce=echo_nonce)
+                if parse_res.get("ok") and not _review_parse_kind_invalid(parse_res):
+                    stamped, _accepted, _spot_rejected, _has_payload, _payload, _kind = (
+                        _review_attempt_engagement(
+                            engine, stdout, stderr_tail, elapsed, stdout_bytes,
+                            engagement=engagement, res=parse_res, cwd=cwd,
+                            view_meta=view_meta))
+                    if stamped is not None:
+                        return stamped
+        except Exception:
+            pass
+        return _engagement_with_read(engagement)
+
+    return engagement
 
 
 def _build_running_graded(run_dir_real, state):
@@ -3046,27 +3253,11 @@ def _grade_review_attempt(run_dir_real, state, attempt):
 
     elapsed = ended.get("wallSeconds", 0)
     stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
-    if engine == "codex":
-        tokens = engine_adapter.codex_tokens_used(stderr_tail)
-        tool_calls = None
-        source = "codex-stderr" if tokens is not None else "none"
-    elif engine == "cursor":
-        tokens = None
-        tool_calls = engine_adapter.cursor_tool_calls(stdout)
-        source = "cursor-stream" if tool_calls is not None else "none"
-    else:
-        tokens = None
-        tool_calls = None
-        source = "none"
-    engagement = {
-        "tokens": tokens,
-        "toolCalls": tool_calls,
-        "stdoutBytes": stdout_bytes,
-        "wallSeconds": elapsed,
-        "source": source,
-    }
+    engagement = _review_attempt_engagement(
+        engine, stdout, stderr_tail, elapsed, stdout_bytes)
 
-    norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+    parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt)
+    norm_strip = engine_adapter.normalize_review_stdout(parse_stdout, fed_prompt)
     prompt_echo_only = norm_strip["echoOnly"]
     diagnose_stdout = norm_strip["text"]
     envelope_error = norm_strip["rawEnvelopeError"]
@@ -3086,7 +3277,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         }
 
     res = engine_adapter.parse_result(
-        engine, role_kind, stdout, raw_envelope_error=envelope_error,
+        engine, role_kind, parse_stdout, raw_envelope_error=envelope_error,
         echo_nonce=echo_nonce)
     if not _parse_review_has_payload(res):
         stripped_text = norm_strip["text"]
@@ -3120,29 +3311,17 @@ def _grade_review_attempt(run_dir_real, state, attempt):
             result["payloadShape"] = shape
         return result
 
-    kind = res["resultKind"]
-    has_payload, payload = _review_result_payload(res, kind)
-
     view_meta = opened.get("viewMeta")
-    generated = ()
-    if isinstance(view_meta, dict):
-        diff_path = view_meta.get("diffPath")
-        if isinstance(diff_path, str) and diff_path:
-            generated = (diff_path,)
-        pr_body_path = view_meta.get("prBodyPath")
-        if isinstance(pr_body_path, str) and pr_body_path:
-            generated = generated + (pr_body_path,)
-        config_diff_path = view_meta.get("configDiffPath")
-        if isinstance(config_diff_path, str) and config_diff_path:
-            generated = generated + (config_diff_path,)
-    _, accepted, spot_rejected = engine_adapter.spot_check_investigated(
-        res.get("investigated"), cwd, generated_artifacts=generated)
+    stamped, accepted, spot_rejected, has_payload, payload, kind = (
+        _review_attempt_engagement(
+            engine, stdout, stderr_tail, elapsed, stdout_bytes,
+            engagement=engagement, res=res, cwd=cwd, view_meta=view_meta))
     rejected_records, rejected_reasons = _merge_investigated_rejections(res, spot_rejected)
     findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
     findings_rejected_reasons = list(res.get("findingsRejected") or [])
 
     if not _parse_review_has_payload(res) and not accepted:
-        engagement = _engagement_with_read(engagement, result_kind=kind, items=[], investigated=None)
+        engagement = _engagement_with_read(engagement, result_kind=kind, items=[])
         return {
             "forfeit": True,
             "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
@@ -3178,8 +3357,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         }
 
     if has_payload:
-        engagement = _engagement_with_read(engagement, result_kind=kind, items=payload)
-        result = {"ok": True, "resultKind": kind, kind: payload, "engagement": engagement}
+        result = {"ok": True, "resultKind": kind, kind: payload, "engagement": stamped}
         if accepted:
             result["investigated"] = accepted
         return _attach_review_rejection_fields(
@@ -3191,9 +3369,12 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         )
 
     if accepted:
-        engagement = _engagement_with_read(
-            engagement, result_kind=kind, items=[], investigated=accepted)
-        result = {"ok": True, "resultKind": kind, kind: [], "investigated": accepted, "engagement": engagement}
+        engagement_stamped = stamped if stamped is not None else _engagement_with_read(
+            engagement, result_kind=kind, items=[])
+        result = {
+            "ok": True, "resultKind": kind, kind: [], "investigated": accepted,
+            "engagement": engagement_stamped,
+        }
         return _attach_review_rejection_fields(
             result,
             rejected_records=rejected_records,
@@ -3221,7 +3402,8 @@ def _grade_write_attempt(run_dir_real, state, attempt):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
     fed_prompt = opened.get("fedPrompt", "")
-    res = engine_adapter.grade_write_report(engine, role_kind, stdout, fed_prompt)
+    parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt)
+    res = engine_adapter.grade_write_report(engine, role_kind, parse_stdout, fed_prompt)
     if res.get("ok") is True:
         return {
             "ok": True,
@@ -3831,7 +4013,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                      prompt_path, view_path, view_meta, fed_prompt, order_id,
                      progress_path, repo_root=None, mode="review",
                      expected_result_kind=None, pr_body_source_path=None,
-                     echo_nonce=None, resolved_inputs=None):
+                     echo_nonce=None, base_prompt=None, resolved_inputs=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -3839,10 +4021,13 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         with open(os.path.join(run_dir_real, "journal-root.txt"), "w", encoding="utf-8") as fh:
             fh.write(journal_root + "\n")
         dest_prompt = os.path.join(run_dir_real, PROMPT_NAME)
-        with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
-            base = src.read()
+        # One read per run: hash the bytes the caller already read, or read once here.
+        if base_prompt is None:
+            with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
+                base_prompt = src.read()
+        base_prompt_sha256 = hashlib.sha256(base_prompt.encode("utf-8")).hexdigest()
         with open(dest_prompt, "w", encoding="utf-8") as dst:
-            dst.write(fed_prompt if fed_prompt else base)
+            dst.write(fed_prompt if fed_prompt else base_prompt)
         if progress_path:
             try:
                 open(progress_path, "a").close()
@@ -3868,6 +4053,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "viewMeta": view_meta,
         "baseSha": view_meta.get("headSha"),
         "fedPrompt": fed_prompt,
+        "basePromptSha256": base_prompt_sha256,
         "repoRoot": repo_root_real,
         "repoId": repo_id,
         "supervisorPid": os.getpid(),
@@ -4216,19 +4402,16 @@ def _dispatch_review_impl(seat, *, prompt_path,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real or "", argv=[],
                 ), view)
-                if run_dir_real is None:
-                    run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
-                return _terminate_run(
-                    run_dir_real, {"opened": {
-                        "viewPath": view_path,
-                        "repoRoot": repo_detail,
-                        "engine": engine,
-                        "runKind": RUN_KIND_REVIEW,
-                    }},
-                    record_kind="run-folded", result=err,
-                )
+                try:
+                    sanitized_view.destroy_sanitized_view(view_path)
+                except Exception:
+                    pass
+                return _finish_preflight_terminal(
+                    repo_detail, err, run_dir=run_dir_real or "", engine=engine)
 
             argv = built["argv"]
+            if run_dir_real is None:
+                run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
             notice = sanitized_view.sanitized_view_notice(view, mode=resolved_mode["mode"])
             fed_prompt = ANTIHIJACK_PREAMBLE + notice + base_prompt
             echo_nonce = secrets.token_hex(16)
@@ -4301,7 +4484,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 repo_root=repo_detail, mode=resolved_mode["mode"],
                 expected_result_kind=expected_result_kind,
                 pr_body_source_path=os.path.realpath(pr_body_path) if pr_body_set else None,
-                echo_nonce=echo_nonce,
+                echo_nonce=echo_nonce, base_prompt=base_prompt,
                 resolved_inputs=resolved_inputs,
             )
             if not ok_open:
@@ -4395,6 +4578,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         dest_prompt = os.path.join(run_dir_real, PROMPT_NAME)
         with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
             base = src.read()
+        base_prompt_sha256 = hashlib.sha256(base.encode("utf-8")).hexdigest()
         if base and not base.endswith("\n"):
             content = base + "\n" + engine_adapter.WRITE_REPORT_CONTRACT
         else:
@@ -4421,6 +4605,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "retryTimeout": retry_timeout,
         "promptPath": os.path.join(run_dir_real, PROMPT_NAME),
         "fedPrompt": content,
+        "basePromptSha256": base_prompt_sha256,
         "progressPath": progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
         "viewPath": None,
         "baseSha": base_sha,
@@ -4881,6 +5066,209 @@ def _poll_projection(state):
         return dict(base, terminal=False, state="abandon-requested")
     alive, _who = _run_live_evidence(state)
     return dict(base, terminal=False, state="running" if alive else "idle")
+
+
+def _attempt_ended_successfully(ended):
+    """True when the journal's attempt-ended record is a clean completion. Never raises."""
+    if not isinstance(ended, dict):
+        return False
+    if "exit" not in ended:
+        return False
+    exit_val = ended["exit"]
+    if not isinstance(exit_val, int) or isinstance(exit_val, bool) or exit_val != 0:
+        return False
+    if "timedOut" not in ended or ended["timedOut"] is not False:
+        return False
+    if "refusal" not in ended or ended["refusal"] is not None:
+        return False
+    return True
+
+
+def _parse_review_attempt(run_dir_real, state, attempt):
+    """Parse a completed review attempt's stdout, independent of grading. Never raises."""
+    try:
+        opened = state["opened"]
+        engine = opened["engine"]
+        role_kind = opened.get("roleKind", RUN_KIND_REVIEW)
+        fed_prompt = opened.get("fedPrompt", "")
+        echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
+        stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+        if not stdout and not os.path.exists(stdout_path):
+            return None
+        parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt)
+        norm_strip = engine_adapter.normalize_review_stdout(parse_stdout, fed_prompt)
+        if norm_strip["echoOnly"]:
+            return None
+        envelope_error = norm_strip["rawEnvelopeError"]
+        res = engine_adapter.parse_result(
+            engine, role_kind, parse_stdout, raw_envelope_error=envelope_error,
+            echo_nonce=echo_nonce)
+        if not _parse_review_has_payload(res):
+            stripped_text = norm_strip["text"]
+            if stripped_text and stripped_text.strip():
+                res = engine_adapter.parse_result(
+                    engine, role_kind, stripped_text, raw_envelope_error=envelope_error,
+                    echo_nonce=echo_nonce)
+        return res
+    except Exception:
+        return None
+
+
+def _parse_write_attempt(run_dir_real, state, attempt):
+    """Parse a completed write attempt's stdout, independent of grading. Never raises."""
+    try:
+        opened = state["opened"]
+        engine = opened["engine"]
+        role_kind = opened.get("roleKind", "build")
+        stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+        if not stdout and not os.path.exists(stdout_path):
+            return None
+        fed_prompt = opened.get("fedPrompt", "")
+        parse_stdout = _review_stdout_for_parse(engine, stdout, run_dir_real, attempt)
+        return engine_adapter.grade_write_report(engine, role_kind, parse_stdout, fed_prompt)
+    except Exception:
+        return None
+
+
+def _result_kind_and_content_from_parse(res):
+    """The result-kind content whose digest binds a stamped envelope to its run. Never raises."""
+    if not isinstance(res, dict) or not res.get("ok"):
+        return None, None
+    kind = res.get("resultKind")
+    if kind not in REVIEW_RESULT_KINDS:
+        return None, None
+    has_payload, payload = _review_result_payload(res, kind)
+    if has_payload:
+        return kind, payload
+    if kind in res:
+        return kind, res[kind]
+    return kind, []
+
+
+def _result_kind_and_content_from_write_parse(res):
+    """The write-report evidence whose digest binds a stamped envelope to its run. Never raises."""
+    if not isinstance(res, dict) or not res.get("ok"):
+        return None, None
+    evidence = res.get("evidence")
+    if not isinstance(evidence, dict) or not evidence:
+        return None, None
+    return session_contract.WRITE_RESULT_KIND, evidence
+
+
+def _result_digest_and_kind_from_parse(res):
+    """SHA-256 over the parsed result-kind content. Never raises."""
+    kind, content = _result_kind_and_content_from_parse(res)
+    if kind is None:
+        return None, None
+    import round_records
+    return round_records.payload_sha256(content), kind
+
+
+def _result_digest_and_kind_from_write_parse(res):
+    """SHA-256 over the parsed write-report evidence. Never raises."""
+    kind, content = _result_kind_and_content_from_write_parse(res)
+    if kind is None:
+        return None, None
+    import round_records
+    return round_records.payload_sha256(content), kind
+
+
+def _observation_from_attempt(run_dir_real, state, attempt):
+    """Engagement summary for one completed attempt. Never raises."""
+    opened = state.get("opened") or {}
+    engine = opened.get("engine")
+    slot = (state.get("attempts") or {}).get(attempt) or {}
+    ended = slot.get("ended") or {}
+    stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+    stderr_path = os.path.join(run_dir_real, "attempt-%d.stderr" % attempt)
+    try:
+        with open(stderr_path, encoding="utf-8", errors="ignore") as fh:
+            stderr_tail = fh.read()
+    except OSError:
+        stderr_tail = ended.get("stderrTail", "")
+    stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+    elapsed = ended.get("wallSeconds", 0)
+    stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
+    return _review_attempt_engagement(
+        engine, stdout, stderr_tail, elapsed, stdout_bytes,
+        role_kind=opened.get("roleKind", RUN_KIND_REVIEW),
+        fed_prompt=opened.get("fedPrompt", ""),
+        echo_nonce=review_findings_schema.effective_nonce(opened.get("echoNonce")),
+        cwd=opened.get("cwd", ""),
+        view_meta=opened.get("viewMeta"),
+        last_message_path=_attempt_last_message_path(run_dir_real, attempt),
+    )
+
+
+def run_execution_record(run_dir):
+    """The runner's own record of a completed dispatch, for a consumer that must prove the act
+    happened. Returns (record, error). Never raises, never writes, never spawns."""
+    try:
+        ok, detail = _validate_run_dir(run_dir)
+        if not ok:
+            return None, detail
+        run_dir_real = detail
+        records, interior_corrupt = _journal_read(run_dir_real)
+        if interior_corrupt:
+            return None, "journal-corrupt"
+        state = _journal_state(records)
+        opened = state.get("opened")
+        if not isinstance(opened, dict):
+            return None, "run-not-opened"
+        attempts = state.get("attempts") or {}
+        completed = sorted(att for att in attempts if (attempts[att].get("ended") is not None))
+        if not completed:
+            return None, "no-completed-attempt"
+        attempt = completed[-1]
+        ended = (attempts.get(attempt) or {}).get("ended")
+        if not _attempt_ended_successfully(ended):
+            return None, "attempt-not-completed"
+        engine = opened.get("engine")
+        if not isinstance(engine, str) or not engine:
+            return None, "engine-missing"
+        echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
+        if not echo_nonce:
+            return None, "runner-nonce-missing"
+        run_kind = opened.get("runKind")
+        if run_kind == RUN_KIND_WRITE:
+            res = _parse_write_attempt(run_dir_real, state, attempt)
+            result_digest, result_kind = _result_digest_and_kind_from_write_parse(res)
+        else:
+            res = _parse_review_attempt(run_dir_real, state, attempt)
+            result_digest, result_kind = _result_digest_and_kind_from_parse(res)
+        journal_path = _journal_path(run_dir_real)
+        try:
+            with open(journal_path, "rb") as fh:
+                journal_bytes = fh.read()
+        except OSError:
+            return None, "journal-unreadable"
+        record_digest = hashlib.sha256(journal_bytes).hexdigest()
+        prompt_path = opened.get("promptPath") or os.path.join(run_dir_real, PROMPT_NAME)
+        try:
+            with open(prompt_path, "rb") as fh:
+                prompt_bytes = fh.read()
+        except OSError:
+            return None, "prompt-unreadable"
+        prompt_sha256 = hashlib.sha256(prompt_bytes).hexdigest()
+        observation = _observation_from_attempt(run_dir_real, state, attempt)
+        if not isinstance(observation, dict):
+            return None, "observation-unavailable"
+        record = {
+            "source": engine,
+            "runnerNonce": echo_nonce,
+            "recordDigest": record_digest,
+            "observation": observation,
+            "promptSha256": prompt_sha256,
+            "orderPromptSha256": opened.get("basePromptSha256"),
+        }
+        if isinstance(result_digest, str) and result_digest and isinstance(result_kind, str) and result_kind:
+            record["resultDigest"] = result_digest
+            record["resultKind"] = result_kind
+        return record, None
+    except Exception:
+        return None, "internal-error"
 
 
 def _dispatch_poll_impl(run_dir):
