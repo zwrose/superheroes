@@ -72,23 +72,16 @@ _DRIVER_PH = frozenset({"baseRef"})
 
 
 def _load_result_vocab():
-    try:
-        import engine_adapter
-        import payload_contracts
-        contract, reason = payload_contracts.payload_contract(payload_contracts.P_FIXER)
-        if reason:
-            raise RuntimeError(reason)
-        key = contract["required"][0]
-        return (
-            engine_adapter.WRITE_REPORT_SENTINEL,
-            '{"' + key + '"',
-            "canonical",
-        )
-    except Exception:
-        return "<<<SUPERHEROES-WRITE-REPORT>>>", '{"fixes"', "fallback"
+    import engine_adapter
+    import payload_contracts
+    contract, reason = payload_contracts.payload_contract(payload_contracts.P_FIXER)
+    if reason:
+        raise RuntimeError(reason)
+    key = contract["required"][0]
+    return engine_adapter.WRITE_REPORT_SENTINEL, '{"' + key + '"'
 
 
-_WRITE_SENTINEL, _FIXER_LITERAL, _VOCAB_SOURCE = _load_result_vocab()
+_WRITE_SENTINEL, _FIXER_LITERAL = _load_result_vocab()
 _STDOUT_PROTOCOL = (_WRITE_SENTINEL, _FIXER_LITERAL)
 
 
@@ -190,18 +183,32 @@ def _gather_exempt(text, expect):
 
 
 def _region(text, expect, roots, skip, out, seen, exempt, line=None, o=None, c=None):
+    pos = o if o is not None else 0
+    end = c if c is not None else (len(line) if line is not None else len(text))
+    search_line = line if line is not None else text
     for raw in text.split():
         tok = _SUFFIX.sub("", raw.strip().strip("\"'`,()"))
         if not _cand(tok) or tok in seen:
             continue
-        if posixpath.normpath(tok) in exempt:
+        norm = posixpath.normpath(tok)
+        if norm in exempt:
+            continue
+        idx = search_line.find(raw, pos, end)
+        if idx < 0:
+            idx = search_line.find(tok, pos, end)
+        tok_end = idx + len(raw) if idx >= 0 else pos
+        if idx >= 0 and _exempt(search_line, idx, tok_end, tok, expect):
+            exempt.add(norm)
+            pos = tok_end
             continue
         seen.add(tok)
         if skip:
+            pos = tok_end if idx >= 0 else pos + len(raw)
             continue
         ok, why = _resolve(tok, roots)
         if not ok:
             out.append(_f(TOKEN_PATH_UNRESOLVED, tok + (":" + why if why else "")))
+        pos = tok_end if idx >= 0 else pos + len(raw)
 
 
 def _paths(text, expect, roots, skip):
@@ -219,7 +226,7 @@ def _paths(text, expect, roots, skip):
             _region(ln, expect, roots, skip, out, seen, exempt)
     prose = _BTICK.sub(" ", inline)
     for ln in prose.splitlines():
-        _region(ln, expect, roots, skip, out, seen, exempt)
+        _region(ln, expect, roots, skip, out, seen, exempt, line=ln)
     return out, len(seen)
 
 
@@ -290,7 +297,7 @@ def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer
         findings.append(_f(TOKEN_BUDGET_MISSING, ""))
     return {"ok": not findings, "kind": kind, "findings": findings,
             "checked": {"paths": path_n, "placeholders": pc},
-            "vocabSource": _VOCAB_SOURCE}
+            "vocabSource": "canonical"}
 
 
 def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implementer"):

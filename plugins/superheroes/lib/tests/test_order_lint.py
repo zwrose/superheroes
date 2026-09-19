@@ -446,6 +446,32 @@ def test_http_prefixed_repo_path_is_checked(tmp_path):
     assert OL.TOKEN_PATH_UNRESOLVED not in _tokens(r)
 
 
+def test_stdout_protocol_matches_engine_adapter_and_payload_contracts():
+    import engine_adapter
+    import payload_contracts
+    contract, reason = payload_contracts.payload_contract(payload_contracts.P_FIXER)
+    assert reason is None
+    expected = (
+        engine_adapter.WRITE_REPORT_SENTINEL,
+        '{"' + contract["required"][0] + '"',
+    )
+    assert OL._STDOUT_PROTOCOL == expected
+
+
+def test_prose_expect_item_exempts_declared_path(tmp_path):
+    repo = _mk_repo(tmp_path)
+    text = "Budget: 1 command. Edit missing/new.py\n"
+    r = OL.check_text(text, str(repo), expect_items=["missing/new.py"], kind="implementer")
+    assert OL.TOKEN_PATH_UNRESOLVED not in _tokens(r)
+
+
+def test_prose_new_file_marker_exempts_path(tmp_path):
+    repo = _mk_repo(tmp_path)
+    text = "Budget: 1 command. Create missing/new.py (new file)\n"
+    r = OL.check_text(text, str(repo), kind="implementer")
+    assert OL.TOKEN_PATH_UNRESOLVED not in _tokens(r)
+
+
 def test_cli_unknown_kind_reports_kind_token(tmp_path):
     repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
     order = tmp_path / "order.md"
