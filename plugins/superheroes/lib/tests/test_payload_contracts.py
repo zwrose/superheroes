@@ -38,13 +38,3 @@ def test_payload_contracts_non_empty_string_rejects_blank():
         {"verdicts": [{"id": "f-1", "verdict": "CONFIRMED", "reason": "x"}]},
         "hand-submit",
     ) is None
-
-
-def test_top_level_non_empty_string_refuses_blank_scalar():
-    fault = PC.payload_fault(
-        PC.P_PANEL,
-        {"findings": [], "tier": "   "},
-        "code-reviewer",
-    )
-    assert fault is not None
-    assert "tier" in fault

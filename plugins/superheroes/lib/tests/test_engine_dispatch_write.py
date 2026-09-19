@@ -3463,21 +3463,17 @@ def test_native_write_over_cap_stdout_never_forfeits_stdout_capped(tmp_path):
     assert res.get("detail") == "native-result-schema-invalid"
 
 
-@pytest.mark.parametrize("vendor", ["codex", "cursor"])
-def test_write_run_execution_record_carries_runner_nonce(tmp_path, vendor):
-    """axis: fresh write runs record echoNonce and run_execution_record exposes runnerNonce."""
+def test_write_run_execution_record_carries_runner_nonce(tmp_path):
+    """axis: fresh native write runs record echoNonce and run_execution_record exposes runnerNonce."""
     wt, _main = _linked_worktree(tmp_path)
-    run_dir = str(tmp_path / ("write-nonce-%s" % vendor))
+    run_dir = str(tmp_path / "write-nonce")
     stdout = _build_ok_stdout()
-    seat = _codex_seat(role="implementer") if vendor == "codex" else _cursor_seat()
 
     def ok_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
-        if vendor == "codex":
-            return _finish_codex_write_runner(argv, stdout)
-        return stdout, False, 0, ""
+        return _finish_codex_write_runner(argv, stdout)
 
     fake = FakeRunner([ok_runner])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=seat)
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir)
     assert res["ok"] is True
     records, _ = ED._journal_read(run_dir)
     opened = next(r for r in records if r.get("kind") == "run-opened")

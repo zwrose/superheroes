@@ -198,7 +198,5 @@ see no cursor result-shape change. Wave preflight now runs `lib/conformance_prob
 dispatchable engine; its result is recorded as the launcher's `engine-auth` check — the liveness
 check the dispatch selftest is not.
 
-A runner-journal line that is valid JSON but not an object now counts as interior corruption under
-the class `journal-line-not-object`. The launcher's `preflight-failed:<id>` refusal now carries the
-walked `checks`, including the failing entry, so the launch ledger keeps the probe's evidence on
-refusal.
+The launcher's `preflight-failed:<id>` refusal now carries the walked `checks`, including the
+failing entry, so the launch ledger keeps the probe's evidence on refusal.
