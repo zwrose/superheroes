@@ -6745,6 +6745,91 @@ def test_canary_failed_one_vendor_only_downgrades_that_vendor_seats():
     assert state["fullPanelRan"] is False
 
 
+def _canary_dims_from_by_vendor(by_vendor, status):
+    out = []
+    for info in (by_vendor or {}).values():
+        if not isinstance(info, dict) or info.get("status") != status:
+            continue
+        seats = info.get("seats") if isinstance(info.get("seats"), list) else []
+        out.extend(d for d in seats if isinstance(d, str))
+    return set(out)
+
+
+def _canary_dims_from_by_dim(by_dim, status):
+    if not isinstance(by_dim, dict):
+        return set()
+    return {dim for dim, st in by_dim.items() if isinstance(dim, str) and st == status}
+
+
+def test_canary_dims_for_status_reads_by_dim_when_present():
+    live = {
+        "byDim": {"code-reviewer": "dead", "security-reviewer": "unproven"},
+        "byVendor": {"codex": {"status": "proven", "seats": ["code-reviewer"]}},
+    }
+    assert RD._canary_dims_for_status(live, live["byVendor"], "dead") == ["code-reviewer"]
+    assert RD._canary_dims_for_status(live, live["byVendor"], "unproven") == [
+        "security-reviewer",
+    ]
+
+
+def test_canary_dims_for_status_unions_vendor_when_by_dim_omits_dimension():
+    live = {
+        "byDim": {"code-reviewer": "dead"},
+        "byVendor": {
+            "codex": {"status": "dead", "seats": ["code-reviewer", "security-reviewer"]},
+        },
+    }
+    assert RD._canary_dims_for_status(live, live["byVendor"], "dead") == [
+        "code-reviewer",
+        "security-reviewer",
+    ]
+
+
+def test_canary_by_dim_agrees_with_by_vendor_for_dimension_keyed_statuses():
+    dims = list(RD.DIMENSIONS)
+    seat_map = _seat_map_vendors({d: "claude" for d in dims})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    seat_map["seats"]["security-reviewer"] = {"vendor": "cursor"}
+    seats = {d: {"findings": []} for d in dims}
+    status = {d: "run" for d in dims}
+    scenarios = [
+        ("unproven-no-probe", {}, None),
+        ("dead", {}, {
+            "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": False,
+            "evidence": {}, "detectedPlant": False, "detail": "dead",
+        }),
+        ("outcome-failed", {}, {
+            "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": True,
+            "evidence": {"tokens": 1}, "detectedPlant": False, "detail": "vacuous",
+        }),
+        ("proven", {}, {
+            "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
+            "evidence": {"tokens": 1}, "detectedPlant": True, "detail": "live",
+        }),
+        ("all-claude", _seat_map_vendors({d: "claude" for d in dims}), None),
+        ("findings-n/a", seat_map, None),
+        ("dual-vendor-mixed", seat_map, [
+            {
+                "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": False,
+                "evidence": {}, "detectedPlant": False, "detail": "dead",
+            },
+            {
+                "engine": "cursor", "model": "c", "outcome": "vacuous", "engaged": True,
+                "evidence": {"tokens": 1}, "detectedPlant": False, "detail": "vacuous",
+            },
+        ]),
+    ]
+    findings_seats = dict(seats)
+    findings_seats["code-reviewer"] = {"findings": [{"title": "x"}]}
+    for label, sm, canary in scenarios:
+        s = findings_seats if label == "findings-n/a" else seats
+        out = RD.canary_liveness(dims, status, s, sm, {}, canary)
+        for st in ("unproven", "dead"):
+            from_vendor = _canary_dims_from_by_vendor(out["byVendor"], st)
+            from_dim = _canary_dims_from_by_dim(out["byDim"], st)
+            assert from_dim == from_vendor, (label, st, from_dim, from_vendor)
+
+
 def test_canary_liveness_duplicate_codex_probes_dead_both_orders():
     dims = list(RD.DIMENSIONS)
     seat_map = _seat_map_vendors({d: "claude" for d in dims})

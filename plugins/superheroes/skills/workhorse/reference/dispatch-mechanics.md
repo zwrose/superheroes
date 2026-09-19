@@ -20,7 +20,9 @@ Read this at dispatch time, before you invoke a long dispatch. **Channel and wai
 A long-running external dispatch the builder invokes directly from a headless session is **awaited
 in-turn** through the **authorized entrypoint** (`dispatch-review` / `dispatch-write` with
 `--max-wait`, re-invoked on the same `--run-dir` until its structured result is terminal) — never an
-external `setsid`/`nohup` wrapper or an exit-code sentinel. Harness-tracked background-and-poll is
+external `setsid`/`nohup` wrapper or an exit-code sentinel. A dispatch-shell entry point exits **1**
+when it refuses (returns without doing the work it was asked to do), **0** otherwise; exit **0** still
+never means success — the JSON `ok`/`terminal` fields stay authoritative. Harness-tracked background-and-poll is
 **not** the normal path for those dispatches — tracked background work dies when the turn ends. The
 **native-shape contract** (files not pipes, `--max-wait` slices with non-terminal `running`,
 originating-verb continuation, structured terminal result as the only completion signal,
@@ -36,7 +38,8 @@ workhorse charter §7 — not restated here. Mechanics by dispatch kind:
   ending**. Give the dispatch that room by invoking through **`dispatch-review`/`dispatch-write
   --max-wait`** (≤ 540 s) and **re-invoking the originating verb on the same `--run-dir` until
   terminal** — never by trying to raise a foreground timeout, by wrapping in `setsid`/`nohup`, or by
-  harness-tracked background-and-poll (tracked background dies when the turn ends). Redirect its
+  harness-tracked background-and-poll (tracked background dies when the turn ends). On
+  **`dispatch-write`**, an abbreviated `--base-sha` refuses with nothing opened. Redirect its
   output to a **file, never a pipe or `| tail`** — pipes die with the reader and make a stall look
   like progress. Watch that
   **output/transcript file growing as your primary stall signal**: a growing file is live; use the

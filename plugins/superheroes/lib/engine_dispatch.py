@@ -142,7 +142,7 @@ class _ParamUnsetType:
     __slots__ = ()
 
     def __repr__(self) -> str:
-        return "none"
+        return "<_PARAM_UNSET>"
 
 
 _PARAM_UNSET = _ParamUnsetType()
@@ -594,6 +594,38 @@ def _put_resolved(snapshot, name, value, source):
     snapshot[name + "Source"] = source
 
 
+def _undeclared_source_marker_entry_refusal(exc):
+    """Map ``UndeclaredSourceMarker`` to a structured entry refusal (#1270 WO-3)."""
+    message = str(exc)
+    if not message:
+        message = "resolvedInputs source marker is not declared"
+    return {
+        "ok": False,
+        "entryReason": "internal-error",
+        "detail": message,
+    }
+
+
+def _entry_refusal_for_undeclared_source_marker(
+    exc,
+    *,
+    run_dir=None,
+    mode=None,
+    repo_root=None,
+    engine=None,
+    run_kind=RUN_KIND_REVIEW,
+):
+    """Single construction for marker-guard refusals on both dispatch verbs (#1270 WO-3)."""
+    return _entry_refusal_terminal(
+        _undeclared_source_marker_entry_refusal(exc),
+        run_dir=run_dir,
+        mode=mode,
+        repo_root=repo_root,
+        engine=engine,
+        run_kind=run_kind,
+    )
+
+
 def _synthesize_legacy_resolved_inputs(opened):
     """Best-effort snapshot from a pre-upgrade run-opened record (#1269 WO-A2 I4)."""
     snapshot = {}
@@ -692,10 +724,10 @@ def _build_resolved_inputs(
         snapshot, "effort", seat.get("effort"),
         seat.get("effortSource", resolved_inputs_vocab.CALLER),
     )
-    engine_model, _engine_model_source = engine_adapter.resolve_engine_model(
+    engine_model, engine_model_source = engine_adapter.resolve_engine_model(
         seat, role_kind, engine_model_opts,
     )
-    _put_resolved(snapshot, "engineModel", engine_model, model_source)
+    _put_resolved(snapshot, "engineModel", engine_model, engine_model_source)
     _put_resolved(
         snapshot, "role", seat.get("role"),
         seat.get("roleSource", resolved_inputs_vocab.SEAT),
@@ -4144,6 +4176,12 @@ def dispatch_review(*args, seat=None, prompt_path=None,
         stamped = dict(result)
         stamped["mode"] = resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW)
         return stamped
+    except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
+        return _entry_refusal_for_undeclared_source_marker(
+            exc,
+            run_dir=run_dir,
+            mode=resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW),
+        )
     except Exception as exc:
         return _entry_refusal_terminal(
             {"ok": False, "entryReason": "internal-error",
@@ -4502,6 +4540,15 @@ def _dispatch_review_impl(seat, *, prompt_path,
             if max_wait is not None:
                 return result
             time.sleep(SUPERVISOR_POLL_INTERVAL)
+    except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
+        return _entry_refusal_for_undeclared_source_marker(
+            exc,
+            run_dir=run_dir or run_dir_real or "",
+            mode=resolved_mode["mode"],
+            repo_root=repo_detail,
+            engine=engine,
+            run_kind=RUN_KIND_REVIEW,
+        )
     except Exception as exc:
         err = _with_run_fields(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
@@ -4647,6 +4694,12 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
             run_dir_supplied=run_dir_supplied, max_wait=max_wait,
             max_wait_source=max_wait_source, expected_items=expected_items,
             expected_items_file=expected_items_file,
+        )
+    except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
+        return _entry_refusal_for_undeclared_source_marker(
+            exc,
+            run_dir=run_dir,
+            run_kind=RUN_KIND_WRITE,
         )
     except Exception as exc:
         return _entry_refusal_terminal(
@@ -5218,8 +5271,10 @@ def run_execution_record(run_dir):
         return None, "internal-error"
 
 
-def dispatch_poll(run_dir):
-    """Observational poll — never spawns."""
+def _dispatch_poll_impl(run_dir):
+    """Observational poll — never spawns. Returns (result, classification)."""
+    _performed = dispatch_outcome.CLASSIFICATION_RESULT
+    _refusal = dispatch_outcome.CLASSIFICATION_REFUSAL
     try:
         ok, detail = _validate_run_dir(run_dir)
         if not ok:
@@ -5227,7 +5282,7 @@ def dispatch_poll(run_dir):
                 {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": detail,
                  "attempts": 0, "forfeited": False},
                 run_dir=run_dir or "", argv=[],
-            )
+            ), _refusal
         records, interior_corrupt = _journal_read(detail)
         state = _journal_state(records)
         opened = state.get("opened") or {}
@@ -5239,11 +5294,11 @@ def dispatch_poll(run_dir):
                  "detail": "journal-corrupt", "attempts": 0, "forfeited": False,
                  "poll": projection},
                 run_dir=detail, argv=argv,
-            )
+            ), _refusal
         if state.get("folded") is not None:
             folded = dict(state["folded"])
             folded["poll"] = projection
-            return _with_run_fields(folded, run_dir=detail, argv=argv)
+            return _with_run_fields(folded, run_dir=detail, argv=argv), _performed
         highest = max(state["attempts"]) if state.get("attempts") else 0
         poll_state = projection.get("state", "running")
         if poll_state == "run-abandoned":
@@ -5252,14 +5307,14 @@ def dispatch_poll(run_dir):
                  "detail": "run-abandoned", "attempts": highest, "forfeited": False,
                  "poll": projection},
                 run_dir=detail, argv=argv,
-            )
+            ), _performed
         if poll_state == "run-not-opened":
             return _with_run_fields(
                 {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                  "detail": "run-not-opened", "attempts": 0, "forfeited": False,
                  "poll": projection},
                 run_dir=detail, argv=argv,
-            )
+            ), _refusal
         poll_terminal = projection.get("terminal", False)
         poll_reason = (
             dispatch_outcome.REASON_RUNNING
@@ -5274,14 +5329,19 @@ def dispatch_poll(run_dir):
         return _with_run_fields(
             _non_terminal_running_result(poll_result, detail, state),
             run_dir=detail, argv=argv,
-        )
+        ), _performed
     except Exception as exc:
         return _with_run_fields(
             {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
              "detail": "internal-%s" % type(exc).__name__,
              "attempts": 0, "forfeited": False},
             run_dir=run_dir or "", argv=[],
-        )
+        ), _refusal
+
+
+def dispatch_poll(run_dir):
+    """Observational poll — never spawns."""
+    return _dispatch_poll_impl(run_dir)[0]
 
 
 def _launching_uncertain(state):
@@ -5307,8 +5367,11 @@ def _signal_live_attempts(state):
                 _terminate_pid(slot["childPid"])
 
 
-def dispatch_abandon(run_dir):
-    """Ordered abandon transition — terminates live children, then journals run-abandoned."""
+def _dispatch_abandon_impl(run_dir):
+    """Ordered abandon transition — terminates live children, then journals run-abandoned.
+    Returns (result, classification)."""
+    _performed = dispatch_outcome.CLASSIFICATION_RESULT
+    _refusal = dispatch_outcome.CLASSIFICATION_REFUSAL
     try:
         ok, detail = _validate_run_dir(run_dir)
         if not ok:
@@ -5316,7 +5379,7 @@ def dispatch_abandon(run_dir):
                 {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": detail,
                  "attempts": 0, "forfeited": False},
                 run_dir=run_dir or "", argv=[],
-            )
+            ), _refusal
         run_dir_real = detail
 
         records, interior_corrupt = _journal_read(run_dir_real)
@@ -5326,7 +5389,7 @@ def dispatch_abandon(run_dir):
                 {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                  "detail": "journal-corrupt", "attempts": 0, "forfeited": False},
                 run_dir=run_dir_real, argv=(state.get("opened") or {}).get("argv") or [],
-            )
+            ), _refusal
         state = _journal_state(records)
         opened = state.get("opened") or {}
         argv = opened.get("argv") or []
@@ -5335,10 +5398,10 @@ def dispatch_abandon(run_dir):
             return _with_run_fields(
                 _stored_abandon_result(run_dir_real, state),
                 run_dir=run_dir_real, argv=argv,
-            )
+            ), _performed
 
         if state.get("folded") is not None:
-            return _with_run_fields(state["folded"], run_dir=run_dir_real, argv=argv)
+            return _with_run_fields(state["folded"], run_dir=run_dir_real, argv=argv), _performed
 
         _journal_append(run_dir_real, {"kind": "abandon-requested", "at": time.time()})
         _signal_live_attempts(state)
@@ -5354,7 +5417,7 @@ def dispatch_abandon(run_dir):
                      "detail": "abandon-incomplete", "abandonDetail": "engine-death-unconfirmed",
                      "attempts": len(state.get("attempts") or {}), "forfeited": False},
                     run_dir=run_dir_real, argv=argv,
-                )
+                ), _refusal
             alive, _who = _run_live_evidence(state)
             if not alive:
                 break
@@ -5364,7 +5427,7 @@ def dispatch_abandon(run_dir):
                      "detail": "abandon-incomplete", "abandonDetail": "engine-death-unconfirmed",
                      "attempts": len(state.get("attempts") or {}), "forfeited": False},
                     run_dir=run_dir_real, argv=argv,
-                )
+                ), _refusal
             if not resignalled:
                 resignalled = True
                 _signal_live_attempts(state)
@@ -5382,7 +5445,7 @@ def dispatch_abandon(run_dir):
                     run_dir_real, state,
                 ),
                 run_dir=run_dir_real, argv=argv,
-            )
+            ), _performed
 
         try:
             records, _corrupt = _journal_read(run_dir_real)
@@ -5392,10 +5455,10 @@ def dispatch_abandon(run_dir):
                 return _with_run_fields(
                     _stored_abandon_result(run_dir_real, state),
                     run_dir=run_dir_real, argv=argv,
-                )
+                ), _performed
             return _terminate_run(
                 run_dir_real, state, record_kind="run-abandoned", result={},
-            )
+            ), _performed
         finally:
             try:
                 file_lock.release(lock_path)
@@ -5407,7 +5470,12 @@ def dispatch_abandon(run_dir):
              "detail": "internal-%s" % type(exc).__name__,
              "attempts": 0, "forfeited": False},
             run_dir=run_dir or "", argv=[],
-        )
+        ), _refusal
+
+
+def dispatch_abandon(run_dir):
+    """Ordered abandon transition — terminates live children, then journals run-abandoned."""
+    return _dispatch_abandon_impl(run_dir)[0]
 
 
 def build_parser():
@@ -5484,39 +5552,43 @@ def main(argv):
             run_dir=run_dir,
         )
         sys.stdout.write(json.dumps(refusal) + "\n")
-        return 1
-    args = build_parser().parse_args(argv)
-    if args.cmd == "dispatch-review":
-        res = dispatch_review(seat=args.seat,
-                              prompt_path=args.prompt_path,
-                              repo_root=args.repo_root,
-                              timeout=args.timeout, retry_timeout=args.retry_timeout,
-                              progress_path=args.progress_file, run_dir=args.run_dir,
-                              max_wait=args.max_wait, order_id=args.order_id,
-                              diff_base=args.diff_base, mode=args.mode,
-                              expected_result_kind=args.expected_result_kind,
-                              pr_body_path=args.pr_body_path, session_dir=args.session_dir)
-    elif args.cmd == "dispatch-write":
-        res = dispatch_write(seat=args.seat,
-                             prompt_path=args.prompt_path,
-                             cwd=args.cwd, order_id=args.order_id, base_sha=args.base_sha,
-                             run_dir=args.run_dir, timeout=args.timeout,
-                             retry_timeout=args.retry_timeout, max_wait=args.max_wait,
-                             progress_path=args.progress_file,
-                             expected_items=args.expect_item,
-                             expected_items_file=args.expect_items_file)
-    elif args.cmd == "dispatch-poll":
-        res = dispatch_poll(args.run_dir)
-    elif args.cmd == "dispatch-abandon":
-        res = dispatch_abandon(args.run_dir)
-    elif args.cmd == "run-child":
-        raise SystemExit(_run_child_main(os.path.realpath(args.run_dir)))
+        classification = dispatch_outcome.CLASSIFICATION_REFUSAL
     else:
-        res = {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-               "detail": "unknown-command", "attempts": 0, "forfeited": False,
-               "runDir": "", "argv": []}
-    sys.stdout.write(json.dumps(res) + "\n")
-    return 0
+        args = build_parser().parse_args(argv)
+        if args.cmd == "dispatch-review":
+            res = dispatch_review(seat=args.seat,
+                                  prompt_path=args.prompt_path,
+                                  repo_root=args.repo_root,
+                                  timeout=args.timeout, retry_timeout=args.retry_timeout,
+                                  progress_path=args.progress_file, run_dir=args.run_dir,
+                                  max_wait=args.max_wait, order_id=args.order_id,
+                                  diff_base=args.diff_base, mode=args.mode,
+                                  expected_result_kind=args.expected_result_kind,
+                                  pr_body_path=args.pr_body_path, session_dir=args.session_dir)
+            classification = dispatch_outcome.classify_dispatch_result(res)
+        elif args.cmd == "dispatch-write":
+            res = dispatch_write(seat=args.seat,
+                                 prompt_path=args.prompt_path,
+                                 cwd=args.cwd, order_id=args.order_id, base_sha=args.base_sha,
+                                 run_dir=args.run_dir, timeout=args.timeout,
+                                 retry_timeout=args.retry_timeout, max_wait=args.max_wait,
+                                 progress_path=args.progress_file,
+                                 expected_items=args.expect_item,
+                                 expected_items_file=args.expect_items_file)
+            classification = dispatch_outcome.classify_dispatch_result(res)
+        elif args.cmd == "dispatch-poll":
+            res, classification = _dispatch_poll_impl(args.run_dir)
+        elif args.cmd == "dispatch-abandon":
+            res, classification = _dispatch_abandon_impl(args.run_dir)
+        elif args.cmd == "run-child":
+            raise SystemExit(_run_child_main(os.path.realpath(args.run_dir)))
+        else:
+            res = {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                   "detail": "unknown-command", "attempts": 0, "forfeited": False,
+                   "runDir": "", "argv": []}
+            classification = dispatch_outcome.CLASSIFICATION_REFUSAL
+        sys.stdout.write(json.dumps(res) + "\n")
+    return dispatch_outcome.exit_code(classification)
 
 
 if __name__ == "__main__":

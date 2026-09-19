@@ -950,7 +950,7 @@ def test_dispatch_write_cli_effort_key_absent_refuses(tmp_path, capsys):
         "--max-wait", "0",
     ]
     code = ED.main(argv)
-    assert code == 0
+    assert code == 1
     res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert res["ok"] is False
     assert res["terminal"] is True
@@ -1246,7 +1246,7 @@ def test_write_cli_out_of_range_max_wait_prints_named_refusal(tmp_path, capsys):
         "--run-dir", run_dir,
         "--max-wait", str(ED.MAX_SYNC_WAIT + 1),
     ]
-    assert ED.main(argv) == 0
+    assert ED.main(argv) == 1
     res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert res["ok"] is False
     assert res["terminal"] is True
@@ -2628,7 +2628,7 @@ def test_entry_allowlist_refuses_off_allowlist_write_cli(tmp_path):
         ],
         capture_output=True, text=True, check=False,
     )
-    assert proc.returncode == 0
+    assert proc.returncode == 1
     payload = json.loads(proc.stdout)
     _assert_allowlist_refusal(payload)
     assert _OFF_ALLOWLIST_CODEX in payload["detail"]
@@ -2653,6 +2653,39 @@ def test_write_g1_refusal_leaves_no_lease_or_opened_run(tmp_path):
     assert not os.path.exists(lease_path)
 
 
+def test_dispatch_write_cli_terminal_forfeit_exits_0(tmp_path, monkeypatch, capsys):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-forfeit-cli")
+
+    class DirtyTimeoutRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            with open(os.path.join(cwd, "dirty.txt"), "w", encoding="utf-8") as fh:
+                fh.write("x")
+            return "", True, 0, ""
+
+    fake = DirtyTimeoutRunner()
+    real_supervise = ED._supervise
+
+    def _supervise_with_fake(run_dir_real, *, run_kind, deadline, run_engine=None):
+        return real_supervise(
+            run_dir_real, run_kind=run_kind, deadline=deadline, run_engine=fake,
+        )
+
+    monkeypatch.setattr(ED, "_supervise", _supervise_with_fake)
+    rc = ED.main([
+        "dispatch-write",
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--prompt-path", _prompt(tmp_path),
+        "--cwd", wt,
+        "--run-dir", run_dir,
+        "--max-wait", "120",
+    ])
+    assert rc == 0
+    res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert res["terminal"] is True
+    assert res["forfeited"] is True
+
+
 # --- #1269 WO-8: provenance truthfulness on write path ------------------------
 
 
@@ -2674,3 +2707,72 @@ def test_wo8_edge1_cursor_implementer_null_model_snapshot_sources(tmp_path):
     assert snapshot["modelSource"] == "seat-default"
     assert snapshot["engineModel"] == "composer-2.5"
     assert snapshot["engineModelSource"] == "seat-default"
+
+
+# --- #1270 WO-3: engineModelSource provenance and marker-guard detail ----------------
+
+
+def _undeclared_marker_guard_detail(field, marker, source_markers):
+    vocabulary = ", ".join(sorted(source_markers))
+    return (
+        "resolvedInputs field %r source marker %r is not declared; accepted: %s"
+        % (field, marker, vocabulary)
+    )
+
+
+def test_engine_model_source_caller_supplied_vs_registry_resolved_differ(tmp_path):
+    wt, main = _linked_worktree(tmp_path)
+    wt2 = str(tmp_path / "wt2")
+    _git(main, "worktree", "add", "-q", wt2)
+    fake = FakeRunner([])
+    caller_run = str(tmp_path / "caller-model")
+    _dispatch_write(
+        tmp_path,
+        fake,
+        cwd=wt,
+        run_dir=caller_run,
+        seat=_seat("codex", "gpt-5.6-sol", "high"),
+        max_wait=0,
+    )
+    caller_snapshot = _write_opened_resolved_inputs(caller_run)
+    assert caller_snapshot["engineModelSource"] == "caller"
+
+    defaulted_run = str(tmp_path / "defaulted-model")
+    _dispatch_write(
+        tmp_path,
+        fake,
+        cwd=wt2,
+        run_dir=defaulted_run,
+        seat=_seat_json("cursor", None, None),
+        max_wait=0,
+    )
+    defaulted_snapshot = _write_opened_resolved_inputs(defaulted_run)
+    assert defaulted_snapshot["engineModelSource"] == "seat-default"
+    assert caller_snapshot["engineModelSource"] != defaulted_snapshot["engineModelSource"]
+
+
+def test_dispatch_write_undeclared_marker_detail_surfaces_guard_message(tmp_path, monkeypatch):
+    shrunk = frozenset(m for m in ED.resolved_inputs_vocab.SOURCE_MARKERS if m != ED.resolved_inputs_vocab.CALLER)
+    monkeypatch.setattr(ED.resolved_inputs_vocab, "SOURCE_MARKERS", shrunk)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-marker-guard")
+    result = ED.dispatch_write(
+        seat=_codex_seat(),
+        cwd=wt,
+        run_dir=run_dir,
+        prompt_path=_prompt(tmp_path),
+        run_engine=FakeRunner([]),
+        max_wait=0,
+    )
+    expected_detail = _undeclared_marker_guard_detail(
+        "engine", ED.resolved_inputs_vocab.CALLER, shrunk,
+    )
+    assert result.get("ok") is False
+    assert result.get("terminal") is True
+    assert result.get("reason") == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert result.get("entryReason") == "internal-error"
+    assert result.get("detail") == expected_detail
+    assert "engine" in result.get("detail")
+    assert ED.resolved_inputs_vocab.CALLER in result.get("detail")
+    assert "accepted:" in result.get("detail")
+    assert result.get("runOpened") is False

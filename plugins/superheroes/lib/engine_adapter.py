@@ -240,11 +240,11 @@ def _registered_engine_models_detail(vendor):
     )
 
 
-_BUILD_ARGV_VENDORS = ("codex", "cursor")
+BUILD_ARGV_VENDORS = ("codex", "cursor")
 
 
 def _unknown_engine_detail(vendor):
-    valid = _format_valid(_BUILD_ARGV_VENDORS)
+    valid = _format_valid(BUILD_ARGV_VENDORS)
     if isinstance(vendor, str) and vendor.strip():
         return f"unknown vendor {vendor!r}; valid vendors: {valid}"
     return f"unknown engine vendor; valid vendors: {valid}"
@@ -377,15 +377,23 @@ def _resolve_engine_model_pin(vendor, model_id, claude_tier):
 def resolve_engine_model(seat, _run_kind, opts):
     """Return (engine_model, source) for the resolved engine-model pin (#1269 WO-A2).
 
-    Derives from ``_resolve_engine_model_pin`` — the same ladder ``build_argv_result`` uses."""
+    Derives from ``_resolve_engine_model_pin`` — the same ladder ``build_argv_result`` uses —
+    then maps pin provenance to ``resolvedInputs`` source markers (#1270 WO-3)."""
     opts = opts or {}
     vendor = seat.get("vendor")
     model_id = seat.get("model")
     claude_tier = opts.get("model")
-    engine_model, source, _reason, _detail = _resolve_engine_model_pin(
+    engine_model, pin_source, _reason, _detail = _resolve_engine_model_pin(
         vendor, model_id, claude_tier,
     )
-    return engine_model, source
+    if pin_source == resolved_inputs_vocab.DECLARED_NONE:
+        return engine_model, resolved_inputs_vocab.DECLARED_NONE
+    if pin_source == resolved_inputs_vocab.DEFAULT:
+        return engine_model, resolved_inputs_vocab.DEFAULT
+    if pin_source == resolved_inputs_vocab.RESOLVED:
+        return engine_model, resolved_inputs_vocab.RESOLVED
+    # Identity resolution — engine model unchanged from the seat pin; pass upstream marker.
+    return engine_model, seat.get("modelSource", resolved_inputs_vocab.CALLER)
 
 
 def build_argv_result(seat, role_kind, opts):
@@ -2300,46 +2308,46 @@ def _cmd_build_argv(args):
         except OSError:
             got = None
         if got != want:
-            sys.stdout.write(json.dumps(
-                {"ok": False, "reason": "staged-input-mismatch", "path": path}) + "\n")
-            return 1
+            payload = {"ok": False, "reason": "staged-input-mismatch", "path": path}
+            sys.stdout.write(json.dumps(payload) + "\n")
+            return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
 
     if args.prompt_path is not None:
         ok, why = prompt_path_ok(args.prompt_path)
         if not ok:
-            sys.stdout.write(json.dumps(
-                {"ok": False, "reason": "empty-prompt", "detail": why,
-                 "path": args.prompt_path}) + "\n")
-            return 1
+            payload = {"ok": False, "reason": "empty-prompt", "detail": why,
+                       "path": args.prompt_path}
+            sys.stdout.write(json.dumps(payload) + "\n")
+            return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
 
     resolved = seat_bundle.resolve_entry(args.seat, verb="build-argv")
     if not resolved.get("ok"):
         token = resolved.get("entryReason", "seat-refused")
         detail = resolved.get("detail", token)
-        sys.stdout.write(json.dumps(
-            {"ok": False, "reason": "engine-config", "detail": token,
-             "argv": [], "seat_detail": detail}) + "\n")
-        return 1
+        payload = {"ok": False, "reason": "engine-config", "detail": token,
+                   "argv": [], "seat_detail": detail}
+        sys.stdout.write(json.dumps(payload) + "\n")
+        return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
     role = resolved["role"]
     derived_run_kind = seat_bundle.run_kind_for_role(role)
     if args.run_kind != derived_run_kind:
         mismatch = seat_bundle.build_argv_run_kind_mismatch_refusal(
             role, supplied=args.run_kind, accepted=derived_run_kind,
         )
-        sys.stdout.write(json.dumps(
-            {"ok": False, "reason": "engine-config", "detail": mismatch["entryReason"],
-             "argv": [], "seat_detail": mismatch["detail"]}) + "\n")
-        return 1
+        payload = {"ok": False, "reason": "engine-config", "detail": mismatch["entryReason"],
+                   "argv": [], "seat_detail": mismatch["detail"]}
+        sys.stdout.write(json.dumps(payload) + "\n")
+        return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
     opts = {"cwd": args.cwd}
     res = build_argv_result(resolved, derived_run_kind, opts)
     if res["reason"] is not None:
         detail = res.get("detail") or res["reason"]
-        sys.stdout.write(json.dumps(
-            {"ok": False, "reason": "engine-config", "detail": res["reason"],
-             "argv": [], "seat_detail": detail}) + "\n")
-        return 1
+        payload = {"ok": False, "reason": "engine-config", "detail": res["reason"],
+                   "argv": [], "seat_detail": detail}
+        sys.stdout.write(json.dumps(payload) + "\n")
+        return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
     sys.stdout.write(json.dumps(res["argv"]) + "\n")
-    return 0
+    return dispatch_outcome.exit_code(dispatch_outcome.CLASSIFICATION_RESULT)
 
 
 def build_parser():
@@ -2398,7 +2406,7 @@ def main(argv):
                 "detail": refusal["detail"],
             }
             sys.stdout.write(json.dumps(payload) + "\n")
-            return 1
+            return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
     ap = build_parser()
     args = ap.parse_args(argv)
     if args.cmd == "build-argv":

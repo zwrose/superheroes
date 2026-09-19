@@ -1599,15 +1599,17 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** Not a census row. `_put_resolved` in `plugins/superheroes/lib/engine_dispatch.py`:
   the membership check that refuses any undeclared `<field>Source` marker before writing into a
   `resolvedInputs` snapshot, backed by the closed `SOURCE_MARKERS` vocabulary in
-  `plugins/superheroes/lib/resolved_inputs_vocab.py` and the live-dispatch behavioural tests in
-  `plugins/superheroes/lib/tests/test_resolved_inputs_vocab.py`
-  (`test_put_resolved_refuses_undeclared_marker`, `test_put_resolved_accepts_every_source_marker`,
-  `test_live_dispatch_undeclared_marker_surfaces_as_unrunnable`,
+  `plugins/superheroes/lib/resolved_inputs_vocab.py` and behavioural tests in
+  `plugins/superheroes/lib/tests/test_resolved_inputs_vocab.py`: direct `_put_resolved` chokepoint
+  tests (`test_put_resolved_refuses_undeclared_marker`,
+  `test_put_resolved_accepts_every_source_marker`) and live-dispatch behavioural tests
+  (`test_live_dispatch_undeclared_marker_surfaces_as_unrunnable`,
   `test_live_dispatch_snapshot_source_markers_are_declared`). Its cost is that every new source
   marker must be added to the vocabulary before a producer can write it.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
-  receipt carrying `reason: unrunnable` with `detail: internal-UndeclaredSourceMarker` that caught
-  an undeclared `<field>Source` marker that would otherwise have reached a `resolvedInputs`
+  receipt carrying `reason: unrunnable` with a `detail` naming the undeclared field, marker, and
+  accepted marker set (from `_put_resolved`'s `UndeclaredSourceMarker` guard) that caught an
+  undeclared `<field>Source` marker that would otherwise have reached a `resolvedInputs`
   snapshot. On firing, a proposal to the owner at a gardening pass. A zero citation count means no
   producer wrote an undeclared marker, not that the chokepoint can go.
 - **Last demonstrated benefit.** An undeclared marker planted at a real producer terminated the

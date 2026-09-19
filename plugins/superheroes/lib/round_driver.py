@@ -1881,6 +1881,32 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
     return {"byDim": by_dim, "byVendor": by_vendor}
 
 
+def _canary_by_dim(live):
+    """Per-dimension canary plan from ``canary_liveness``; empty when unreadable."""
+    if not isinstance(live, dict):
+        return {}
+    raw = live.get("byDim")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _canary_dims_for_status(live, by_vendor, status):
+    """Dimensions with ``status`` in the canary plan; vendor fallback when byDim is unreadable."""
+    by_dim = _canary_by_dim(live)
+    vendor_dims = []
+    for info in (by_vendor or {}).values():
+        if not isinstance(info, dict) or info.get("status") != status:
+            continue
+        seats = info.get("seats") if isinstance(info.get("seats"), list) else []
+        vendor_dims.extend(d for d in seats if isinstance(d, str))
+    if by_dim:
+        from_dim = {
+            dim for dim, st in by_dim.items()
+            if isinstance(dim, str) and st == status
+        }
+        return sorted(from_dim | set(vendor_dims))
+    return sorted(set(vendor_dims))
+
+
 def _normalize_canary_probes(canary_raw):
     if isinstance(canary_raw, dict):
         return [canary_raw]
@@ -2021,23 +2047,20 @@ def _fold_panel(state, config, artifact):
     live = canary_liveness(
         _panel_dimensions(config), seat_status, seats, _sm_for_canary,
         ran_manifest_canary, artifact.get("canaryResult"))
-    unverified_dims = []
+    by_vendor = live.get("byVendor") if isinstance(live, dict) else {}
+    if not isinstance(by_vendor, dict):
+        by_vendor = {}
+    unverified_dims = _canary_dims_for_status(live, by_vendor, "unproven")
+    dead_dims = _canary_dims_for_status(live, by_vendor, "dead")
     failed_vendors = {}
     outcome_failed_vendors = {}
     plant_undetected_vendors = {}
     verified_by_vendor = {}
-    for vendor, info in (live.get("byVendor") or {}).items():
+    for vendor, info in by_vendor.items():
         if not isinstance(info, dict):
             continue
         st = info.get("status")
-        vdims = info.get("seats") if isinstance(info.get("seats"), list) else []
-        if st == "unproven":
-            unverified_dims.extend(vdims)
-        elif st == "dead":
-            for dim in vdims:
-                if dim not in missing_dims:
-                    missing_dims.append(dim)
-                seat_status[dim] = "missing"
+        if st == "dead":
             failed_vendors[vendor] = info
         elif st == "outcome-failed":
             outcome_failed_vendors[vendor] = info
@@ -2047,6 +2070,10 @@ def _fold_panel(state, config, artifact):
         elif st == "proven":
             ev = info.get("evidence")
             verified_by_vendor[vendor] = ev if isinstance(ev, dict) else {}
+    for dim in dead_dims:
+        if dim not in missing_dims:
+            missing_dims.append(dim)
+        seat_status[dim] = "missing"
     if unverified_dims:
         canary_panel_gap = True
         _record_round(state, "canaryUnverified", sorted(set(unverified_dims)))

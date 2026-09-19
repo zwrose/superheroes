@@ -47,6 +47,14 @@ def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
 _MARKER_GUARD_DETAIL = "internal-%s" % riv.UndeclaredSourceMarker.__name__
 
 
+def _undeclared_marker_guard_detail(field, marker, source_markers):
+    vocabulary = ", ".join(sorted(source_markers))
+    return (
+        "resolvedInputs field %r source marker %r is not declared; accepted: %s"
+        % (field, marker, vocabulary)
+    )
+
+
 def _valid_prompt(tmp_path, content="Review this code.\n"):
     p = tmp_path / "prompt.txt"
     p.write_text(content, encoding="utf-8")
@@ -161,12 +169,16 @@ def test_live_dispatch_undeclared_marker_surfaces_as_unrunnable(tmp_path, monkey
         max_wait=0,
         order_id="order-1",
     )
+    expected_detail = _undeclared_marker_guard_detail("engine", riv.CALLER, shrunk)
     assert result.get("ok") is False
     assert result.get("terminal") is True
     assert result.get("reason") == dispatch_outcome.REASON_UNRUNNABLE
-    assert result.get("detail") == _MARKER_GUARD_DETAIL
+    assert result.get("detail") == expected_detail
+    assert "engine" in result.get("detail")
+    assert riv.CALLER in result.get("detail")
+    assert "accepted:" in result.get("detail")
+    assert result.get("entryReason") == "internal-error"
     assert result.get("runOpened") is False
-    assert result.get("entryReason") is None
     assert result.get("resolvedInputsStatus") is None
 
 
