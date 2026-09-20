@@ -30,8 +30,19 @@ python3 -B "$ROOT_DIR/lib/register_check.py" check \
   --register <path to the register .md> \
   --body-file <path to the consumer body .md> \
   --child <token> \
+  [--register-copy {auto,main,worktree}] \
   [--allow-no-required-entries]
 ```
+
+`--register-copy` selects **which copy** of the register to read (default: `auto`). `main`
+reads the blob at `<main-ref>:<path-relative-to-repo-root>` where `<main-ref>` is `origin/main`
+when it exists, otherwise `main`. `worktree` reads the file on disk. `auto` chooses `main` when
+the register path resolves inside a git work tree, otherwise `worktree`. **When the selected copy
+is `main` and the blob cannot be resolved or read** — no `origin/main`, no `main`, a shallow
+clone, `git` not on PATH, a non-zero exit, a path not tracked on main — the result is
+`undecided` with reason `register-unreadable` and a detail naming the ref and path tried. The
+check **never** falls back to the worktree file unless the caller passes
+`--register-copy worktree` explicitly.
 
 `--allow-no-required-entries` exists for the single legitimate case of a child that consumes
 **no** register entry — it makes the required set legitimately empty. **None of the three
@@ -76,7 +87,10 @@ Every **`check`** invocation emits exactly one JSON object on stdout — includi
 and every `undecided` path — with every key present; see **Result fields** in
 [Vocabulary (drift-tested)](#vocabulary-drift-tested) for the authoritative field list.
 `--help` prints usage and exits 0 without JSON. `ok` is true only on `pass`. `reason` is null
-except on `undecided`. `firstDifference` is the first `text-drift` finding, else null.
+except on `undecided`. `registerCopy` is `"main"` or `"worktree"` — the copy that was selected.
+`registerRef` is the ref actually read (`"origin/main"` or `"main"`), or `null` for the worktree
+copy. Both appear on every result, including every `undecided` path, so a caller never has to
+infer which copy a refusal is about. `firstDifference` is the first `text-drift` finding, else null.
 
 **Results:**
 
@@ -199,6 +213,8 @@ checked against it by `lib/tests/test_ssot_drift.py` per CONVENTIONS §11.2.
 - `detail`
 - `child`
 - `register`
+- `registerCopy`
+- `registerRef`
 - `body`
 - `registerEntries`
 - `requiredEntries`
