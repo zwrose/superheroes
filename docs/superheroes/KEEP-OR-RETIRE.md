@@ -1774,6 +1774,27 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   it re-reads them; a model that never leaves a placeholder or a dangling path unfilled would retire
   it. Arrives with issue #1339.
 
+#### S20 — Background mode review-only gate
+
+- **Component.** Not a census row. The review-only restriction on claude background dispatch mode —
+  `_claude_mode_background_write_refusal` / `MODE_REFUSAL_CLAUDE_MODE_BACKGROUND_WRITE` in
+  `engine_dispatch.py`, which refuses any `dispatch-write` opened with `--claude-mode background`
+  before spawn (`attempts: 0`, detail `claude-mode-background-write`). Review runs may use
+  `--claude-mode background` on `dispatch-review`; the transcript delivery path in
+  `_run_claude_background_attempt` is the paired mechanism.
+- **Condition.** Capability-based: the review-only restriction retires when the worktree lease can
+  represent a detached session — until then it stays. A lease that can bind to a background session
+  independently of the launching process's liveness removes the reason write dispatches must refuse.
+- **Last demonstrated benefit.** A write dispatch in background mode would let a detached claude
+  session keep editing after the worktree lease's liveness anchor exits; the gate refuses before
+  spawn rather than reclaiming mid-edit (issue #1273 layer 2b background flow;
+  `plugins/superheroes/lib/tests/test_engine_dispatch_write.py`
+  `test_claude_mode_background_write_refused`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the gate is temporary shape, not the background channel itself.
+  Tag: `background-channel`.
+
 
 ## The workaround-marker inventory
 
