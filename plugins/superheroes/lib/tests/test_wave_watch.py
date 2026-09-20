@@ -348,7 +348,8 @@ def test_lane_terminal_makes_zero_gh_run_calls(tmp_path, monkeypatch):
         gh_run=counting_gh_run,
     )
     assert result["event"] == "lane-terminal"
-    assert gh_calls[0] == 0
+    # axis: one open-PR-list read per tick even when a higher-precedence lane event fires
+    assert gh_calls[0] == 1
 
 
 def test_lane_blocked_makes_zero_gh_run_calls(tmp_path, monkeypatch):
@@ -365,7 +366,7 @@ def test_lane_blocked_makes_zero_gh_run_calls(tmp_path, monkeypatch):
         gh_run=counting_gh_run,
     )
     assert result["event"] == "lane-blocked"
-    assert gh_calls[0] == 0
+    assert gh_calls[0] == 1
 
 
 def test_builder_exited_makes_zero_gh_run_calls(tmp_path, monkeypatch):
@@ -383,7 +384,7 @@ def test_builder_exited_makes_zero_gh_run_calls(tmp_path, monkeypatch):
         gh_run=counting_gh_run,
     )
     assert result["event"] == "builder-exited"
-    assert gh_calls[0] == 0
+    assert gh_calls[0] == 1
 
 
 def test_event_e4_pr_set_changed(tmp_path, monkeypatch):
@@ -843,18 +844,18 @@ def test_stale_heartbeat_not_started_no_lane_stale(tmp_path, monkeypatch):
     )
     hb_result = hb.read_heartbeat(repo, "lane-a")
     assert hb_result["class"] == "stale"
-    original_derive = ww._derive_live_lanes
+    original_derive = ww._derive_batch_lanes
 
     def derive_with_unstarted_pid(*args, **kwargs):
-        live, readable = original_derive(*args, **kwargs)
+        batch_lanes, live, readable = original_derive(*args, **kwargs)
         assert "lane-a" in live, "derive injection silently skipped"
         live = dict(live)
         live["lane-a"] = dict(live["lane-a"])
         live["lane-a"]["pid"] = os.getpid()
         assert not live["lane-a"].get("started")
-        return live, readable
+        return batch_lanes, live, readable
 
-    monkeypatch.setattr(ww, "_derive_live_lanes", derive_with_unstarted_pid)
+    monkeypatch.setattr(ww, "_derive_batch_lanes", derive_with_unstarted_pid)
     result = ww.run(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
@@ -1115,11 +1116,12 @@ def test_precedence_terminal_beats_builder_exited(tmp_path, monkeypatch):
 def test_event_precedence_matches_docstring():
     doc = ww.__doc__
     assert "lane-terminal (E1) > lane-blocked (E2) > builder-exited (E3) >" in doc
-    assert "pr-set-changed (E4) > lane-stale (E5) > timer (E6)" in doc
+    assert "stack-state-changed (E4) > pr-set-changed (E5) > lane-stale (E6) > timer (E7)" in doc
     assert ww.EVENT_PRECEDENCE == (
         ww.EVENT_LANE_TERMINAL,
         ww.EVENT_LANE_BLOCKED,
         ww.EVENT_BUILDER_EXITED,
+        ww.EVENT_STACK_STATE_CHANGED,
         ww.EVENT_PR_SET_CHANGED,
         ww.EVENT_LANE_STALE,
         ww.EVENT_TIMER,
@@ -1471,7 +1473,7 @@ def test_gh_child_receives_supplied_env(tmp_path, monkeypatch):
     assert seen[0]["WW_TEST_MARKER"] == "reaches-gh-child"
 
 
-# Literal list, deliberately NOT read from ww._GIT_SCRUB_VARS: a name removed from
+# Literal list, deliberately NOT read from ww._GH_SCRUB_VARS: a name removed from
 # the module tuple must turn exactly its own test red, never silently shrink coverage.
 _EXPECTED_SCRUBBED = [
     "GIT_DIR",
@@ -1635,7 +1637,7 @@ def test_first_tick_slow_scans_skip_gh_poll_without_overrun(tmp_path, monkeypatc
     clock = [0.0]
     gh_calls = []
     derive_calls = [0]
-    original_derive = ww._derive_live_lanes
+    original_derive = ww._derive_batch_lanes
 
     def slow_derive(*args, **kwargs):
         derive_calls[0] += 1
@@ -1643,7 +1645,7 @@ def test_first_tick_slow_scans_skip_gh_poll_without_overrun(tmp_path, monkeypatc
             clock[0] += scan_cost
         return original_derive(*args, **kwargs)
 
-    monkeypatch.setattr(ww, "_derive_live_lanes", slow_derive)
+    monkeypatch.setattr(ww, "_derive_batch_lanes", slow_derive)
 
     def mono():
         return clock[0]
@@ -1670,13 +1672,13 @@ def test_gh_poll_budget_computed_after_scans(tmp_path, monkeypatch):
     clock = [0.0]
     scan_cost = 1.5
     timeouts = []
-    original_derive = ww._derive_live_lanes
+    original_derive = ww._derive_batch_lanes
 
     def slow_derive(*args, **kwargs):
         clock[0] += scan_cost
         return original_derive(*args, **kwargs)
 
-    monkeypatch.setattr(ww, "_derive_live_lanes", slow_derive)
+    monkeypatch.setattr(ww, "_derive_batch_lanes", slow_derive)
 
     def mono():
         return clock[0]
@@ -2107,7 +2109,7 @@ def test_loop_threads_pr_sampled_so_timer_not_never_sampled(tmp_path, monkeypatc
     arm = [0]
     real_run = ww.run
     clock = [0.0]
-    original_derive = ww._derive_live_lanes
+    original_derive = ww._derive_batch_lanes
     gh_calls = [0]
     # Sub-floor scan cost: remaining after derive is 0.95s, below _MIN_PR_POLL_SECONDS.
     sub_floor_scan_cost = 0.05
@@ -2128,7 +2130,7 @@ def test_loop_threads_pr_sampled_so_timer_not_never_sampled(tmp_path, monkeypatc
         if arm[0] == 1:
             call_kwargs["max_seconds"] = 1
             call_kwargs["interval_seconds"] = 60
-            monkeypatch.setattr(ww, "_derive_live_lanes", original_derive)
+            monkeypatch.setattr(ww, "_derive_batch_lanes", original_derive)
         else:
             call_kwargs["max_seconds"] = 1
             call_kwargs["interval_seconds"] = 60
@@ -2137,7 +2139,7 @@ def test_loop_threads_pr_sampled_so_timer_not_never_sampled(tmp_path, monkeypatc
                 clock[0] += sub_floor_scan_cost
                 return original_derive(*args, **kw)
 
-            monkeypatch.setattr(ww, "_derive_live_lanes", slow_derive)
+            monkeypatch.setattr(ww, "_derive_batch_lanes", slow_derive)
         return real_run(repo_root, batch_id, **call_kwargs)
 
     gh_calls[0] = 0
@@ -3502,7 +3504,7 @@ def test_resolve_pr_stack_groups_changing_snapshot_covers_every_changed_pr():
             return _stack_membership(1, [30, 40])
         raise AssertionError("unexpected pr %r" % pr)
 
-    stacks, ungrouped = ww._resolve_pr_stack_groups(
+    stacks, ungrouped, _position_maps = ww._resolve_pr_stack_groups(
         "/fake/repo",
         deadline=time.monotonic() + 30,
         monotonic=time.monotonic,
@@ -3528,7 +3530,7 @@ def test_resolve_pr_stack_groups_shrinking_snapshot_covers_every_changed_pr():
             return _stack_membership(1, [40])
         raise AssertionError("unexpected pr %r" % pr)
 
-    stacks, ungrouped = ww._resolve_pr_stack_groups(
+    stacks, ungrouped, _position_maps = ww._resolve_pr_stack_groups(
         "/fake/repo",
         deadline=time.monotonic() + 30,
         monotonic=time.monotonic,
@@ -3554,7 +3556,7 @@ def test_resolve_pr_stack_groups_refusal_then_membership_no_duplicate():
             return _stack_membership(100, [30, 40])
         raise AssertionError("unexpected pr %r" % pr)
 
-    stacks, ungrouped = ww._resolve_pr_stack_groups(
+    stacks, ungrouped, _position_maps = ww._resolve_pr_stack_groups(
         "/fake/repo",
         deadline=time.monotonic() + 30,
         monotonic=time.monotonic,
@@ -3939,7 +3941,7 @@ def test_resolve_repo_slug_sub_min_budget_makes_no_gh_call():
         gh_calls.append(argv)
         return _gh_repo_view_proc()
 
-    slug = ww._resolve_repo_slug(
+    slug, refusal = ww._resolve_repo_slug(
         "/fake/repo",
         deadline=1000.5,
         monotonic=lambda: mono[0],
