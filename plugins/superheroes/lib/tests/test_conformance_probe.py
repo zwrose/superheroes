@@ -188,12 +188,41 @@ class FakeRunner:
         return stdout, timed_out, rc, stderr_tail
 
 
+def _ok_legs():
+    return {
+        "resultProduction": {"ok": True, "detail": None, "evidence": {}},
+        "completionDetection": {"ok": True, "detail": None, "evidence": {}},
+        "progressTelemetry": {"ok": True, "detail": None, "evidence": {}},
+    }
+
+
+def _failed_probe_result(engine, leg_name, detail=None, repo=None, **kwargs):
+    legs = _ok_legs()
+    legs[leg_name] = {"ok": False, "detail": detail or leg_name, "evidence": {}}
+    out = _probe_result(
+        engine, ok=False, repoRoot=repo, legs=legs,
+        failed=[leg_name], **kwargs,
+    )
+    out["preflightCheck"]["state"] = "fail"
+    return out
+
+
 def _probe_result(engine, **overrides):
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     seat_cell = MR.matrix_config("reviewer-deep", engine)
+    modes = CP._modes_for_engine(engine)
+    mode_legs = overrides.pop("modeLegs", None)
+    probed_modes = overrides.pop("probedModes", None)
+    legs_override = overrides.pop("legs", None)
+    if mode_legs is None:
+        source_legs = legs_override if legs_override is not None else _ok_legs()
+        mode_legs = {mode: dict(source_legs) for mode in modes}
+    if probed_modes is None:
+        probed_modes = list(modes)
+    legs = CP._derive_flat_legs(mode_legs)
     base = {
         "schema": CP.SCHEMA,
-        "ok": True,
+        "ok": all(legs[n]["ok"] for n in CP._LEG_NAMES),
         "engine": engine,
         "channel": ERC.channel_for(engine),
         "seat": {"vendor": engine, "model": seat_cell[0], "effort": seat_cell[1], "role": "reviewer-deep"},
@@ -203,17 +232,21 @@ def _probe_result(engine, **overrides):
         "completedAt": now,
         "wallSeconds": 1.0,
         "runDir": "/tmp/run",
-        "legs": {
-            "resultProduction": {"ok": True, "detail": None, "evidence": {}},
-            "completionDetection": {"ok": True, "detail": None, "evidence": {}},
-            "progressTelemetry": {"ok": True, "detail": None, "evidence": {}},
-        },
-        "failed": [],
+        "probedModes": probed_modes,
+        "modeLegs": mode_legs,
+        "legs": legs,
+        "failed": [n for n in CP._LEG_NAMES if not legs[n]["ok"]],
         "dependentRoles": [],
         "dependentLanes": "no calibrated role routes to %s" % engine,
         "preflightCheck": {"state": "pass", "reason": "ok", "evidence": "evidence"},
     }
     base.update(overrides)
+    if legs_override is not None and "legs" not in overrides:
+        base["legs"] = legs_override
+    if "ok" in overrides:
+        base["ok"] = overrides["ok"]
+    if "failed" in overrides:
+        base["failed"] = overrides["failed"]
     return base
 
 
@@ -254,7 +287,7 @@ def test_engine_set_is_derived_from_adapter_and_channel_map():
     assert CP.DISPATCHABLE_ENGINES == ("codex", "cursor", "claude")
     payload, code, stderr = CP.probe("openai", repo_root="/tmp", run_dir="/tmp/run")
     assert code == 1
-    assert payload["legs"]["resultProduction"]["detail"] == "engine-not-dispatchable"
+    assert payload["legs"]["resultProduction"]["detail"] == "default: engine-not-dispatchable"
     assert stderr is not None
 
 
@@ -338,13 +371,17 @@ def test_run_grades_three_legs_ok_on_valid_claude_native_result(tmp_path, monkey
         "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
-    assert code == 0
-    assert payload["ok"] is True
     assert payload["channel"] == ERC.CHANNEL_NATIVE
-    assert payload["legs"]["resultProduction"]["ok"] is True
-    assert payload["legs"]["completionDetection"]["ok"] is True
-    assert payload["legs"]["progressTelemetry"]["ok"] is True
-    assert stderr is None
+    assert payload["probedModes"] == ["print", "background"]
+    assert set(payload["modeLegs"]) == {"print", "background"}
+    for leg_name in CP._LEG_NAMES:
+        assert payload["modeLegs"]["print"][leg_name]["ok"] is True
+        assert payload["modeLegs"]["background"][leg_name]["ok"] is False
+    assert payload["ok"] is False
+    assert payload["legs"]["resultProduction"]["ok"] is False
+    assert "background: auth-or-config-refusal" in payload["legs"]["resultProduction"]["detail"]
+    assert code == 1
+    assert stderr is not None
 
 
 def test_result_production_fails_on_claude_native_schema_invalid(tmp_path, monkeypatch):
@@ -369,9 +406,11 @@ def test_result_production_fails_on_claude_native_schema_invalid(tmp_path, monke
         build_view=_fake_build_view(tmp_path),
     )
     assert payload["legs"]["resultProduction"]["ok"] is False
-    assert payload["legs"]["resultProduction"]["detail"] == "native-result-schema-invalid"
-    assert payload["legs"]["completionDetection"]["ok"] is True
-    assert payload["legs"]["progressTelemetry"]["ok"] is True
+    assert payload["legs"]["resultProduction"]["detail"] == (
+        "print: native-result-schema-invalid; background: auth-or-config-refusal"
+    )
+    assert payload["legs"]["completionDetection"]["ok"] is False
+    assert payload["legs"]["progressTelemetry"]["ok"] is False
 
 
 def test_claude_telemetry_absent_when_only_the_structured_output_call(tmp_path, monkeypatch):
@@ -400,9 +439,12 @@ def test_claude_telemetry_absent_when_only_the_structured_output_call(tmp_path, 
         "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
-    assert payload["legs"]["resultProduction"]["ok"] is True
+    assert payload["modeLegs"]["print"]["resultProduction"]["ok"] is True
+    assert payload["modeLegs"]["print"]["progressTelemetry"]["ok"] is False
+    assert payload["modeLegs"]["print"]["progressTelemetry"]["detail"] == "telemetry-absent"
     assert payload["legs"]["progressTelemetry"]["ok"] is False
-    assert payload["legs"]["progressTelemetry"]["detail"] == "telemetry-absent"
+    assert "print: telemetry-absent" in payload["legs"]["progressTelemetry"]["detail"]
+    assert "background: auth-or-config-refusal" in payload["legs"]["progressTelemetry"]["detail"]
 
 
 def test_claude_completion_fails_on_nonzero_exit(tmp_path, monkeypatch):
@@ -414,14 +456,14 @@ def test_claude_completion_fails_on_nonzero_exit(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
-    fake = FakeRunner([("", False, 1, "")])
+    fake = FakeRunner([("", False, 1, ""), ("", False, 1, "")])
     payload, code, _stderr = CP.probe(
         "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
     leg = payload["legs"]["completionDetection"]
     assert leg["ok"] is False
-    assert leg["detail"] == "auth-or-config-refusal"
+    assert leg["detail"] == "print: auth-or-config-refusal; background: auth-or-config-refusal"
 
 
 def test_run_grades_three_legs_ok_on_valid_cursor_native_result(tmp_path):
@@ -464,7 +506,7 @@ def test_result_production_fails_on_schema_invalid_native_result(tmp_path):
         build_view=_fake_build_view(tmp_path),
     )
     assert payload["legs"]["resultProduction"]["ok"] is False
-    assert payload["legs"]["resultProduction"]["detail"] == "native-result-schema-invalid"
+    assert payload["legs"]["resultProduction"]["detail"] == "default: native-result-schema-invalid"
     assert payload["legs"]["completionDetection"]["ok"] is True
     assert payload["legs"]["progressTelemetry"]["ok"] is True
 
@@ -502,7 +544,7 @@ def test_result_production_ok_but_telemetry_fails_when_only_the_result_write(tmp
     )
     assert payload["legs"]["resultProduction"]["ok"] is True
     assert payload["legs"]["progressTelemetry"]["ok"] is False
-    assert payload["legs"]["progressTelemetry"]["detail"] == "telemetry-absent"
+    assert payload["legs"]["progressTelemetry"]["detail"] == "default: telemetry-absent"
 
 
 def test_result_production_fails_on_cursor_native_schema_invalid(tmp_path):
@@ -526,7 +568,7 @@ def test_result_production_fails_on_cursor_native_schema_invalid(tmp_path):
         build_view=_fake_build_view(tmp_path),
     )
     assert payload["legs"]["resultProduction"]["ok"] is False
-    assert payload["legs"]["resultProduction"]["detail"] == "native-result-schema-invalid"
+    assert payload["legs"]["resultProduction"]["detail"] == "default: native-result-schema-invalid"
     assert payload["legs"]["completionDetection"]["ok"] is True
     assert payload["legs"]["progressTelemetry"]["ok"] is True
 
@@ -541,7 +583,7 @@ def test_completion_fails_on_timeout(tmp_path):
         build_view=_fake_build_view(tmp_path),
     )
     assert payload["legs"]["completionDetection"]["ok"] is False
-    assert payload["legs"]["completionDetection"]["detail"] == "no-response-within-wait"
+    assert payload["legs"]["completionDetection"]["detail"] == "default: no-response-within-wait"
 
 
 def test_completion_fails_on_refusal_names_auth_or_config(tmp_path):
@@ -557,7 +599,7 @@ def test_completion_fails_on_refusal_names_auth_or_config(tmp_path):
     )
     leg = payload["legs"]["completionDetection"]
     assert leg["ok"] is False
-    assert leg["detail"] == "auth-or-config-refusal"
+    assert leg["detail"] == "default: auth-or-config-refusal"
     assert "spawn-failed" in (leg["evidence"].get("refusal") or "")
 
 
@@ -572,7 +614,7 @@ def test_telemetry_fails_on_zero_tool_call_count(tmp_path):
         build_view=_fake_build_view(tmp_path),
     )
     assert payload["legs"]["progressTelemetry"]["ok"] is False
-    assert payload["legs"]["progressTelemetry"]["detail"] == "telemetry-absent"
+    assert payload["legs"]["progressTelemetry"]["detail"] == "default: telemetry-absent"
 
 
 def test_grade_legs_accepts_production_last_activity_stamp():
@@ -708,7 +750,7 @@ def test_telemetry_fails_when_stream_has_no_tool_calls(tmp_path):
         build_view=_fake_build_view(tmp_path),
     )
     assert payload["legs"]["progressTelemetry"]["ok"] is False
-    assert payload["legs"]["progressTelemetry"]["detail"] == "telemetry-absent"
+    assert payload["legs"]["progressTelemetry"]["detail"] == "default: telemetry-absent"
 
 
 def test_cli_failure_is_loud(tmp_path, capsys):
@@ -751,10 +793,7 @@ def test_dependent_roles_from_calibration():
 def test_preflight_entry_hold_when_failed_without_owner_word(tmp_path):
   # axis: hold-without-owner-word
     repo = _repo(tmp_path)
-    codex_fail = _probe_result("codex", ok=False, repoRoot=repo, failed=["resultProduction"])
-    codex_fail["legs"]["resultProduction"]["ok"] = False
-    codex_fail["failed"] = ["resultProduction"]
-    codex_fail["preflightCheck"]["state"] = "fail"
+    codex_fail = _failed_probe_result("codex", "resultProduction", repo=repo)
     paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_fail)
     payload, code = CP.preflight_entry(
         repo, paths, calibration_rows=_calibration_rows(),
@@ -802,9 +841,7 @@ def test_preflight_entry_launch_without_names_substitutes_from_probed_cells(tmp_
 
     monkeypatch.setattr(CP.seat_map, "build", _capture_build)
     cal = _calibration_rows()
-    codex_fail = _probe_result("codex", ok=False, repoRoot=repo, failed=["resultProduction"])
-    codex_fail["legs"]["resultProduction"]["ok"] = False
-    codex_fail["failed"] = ["resultProduction"]
+    codex_fail = _failed_probe_result("codex", "resultProduction", repo=repo)
     paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_fail)
     payload, code = CP.preflight_entry(
         repo,
@@ -835,9 +872,7 @@ def test_preflight_entry_launch_without_claude_excludes_from_live_vendors(tmp_pa
 
     monkeypatch.setattr(CP.seat_map, "build", _capture_build)
     cal = _calibration_rows()
-    claude_fail = _probe_result("claude", ok=False, repoRoot=repo, failed=["resultProduction"])
-    claude_fail["legs"]["resultProduction"]["ok"] = False
-    claude_fail["failed"] = ["resultProduction"]
+    claude_fail = _failed_probe_result("claude", "resultProduction", repo=repo)
     paths = _ok_dispatchable_probe_paths(tmp_path, repo, claude=claude_fail)
     payload, code = CP.preflight_entry(
         repo,
@@ -872,9 +907,7 @@ def test_preflight_entry_launch_without_claude_parks_when_no_other_live(tmp_path
 
     monkeypatch.setattr(CP.seat_map, "build", _park_build)
     cal = _calibration_rows()
-    claude_fail = _probe_result("claude", ok=False, repoRoot=repo, failed=["resultProduction"])
-    claude_fail["legs"]["resultProduction"]["ok"] = False
-    claude_fail["failed"] = ["resultProduction"]
+    claude_fail = _failed_probe_result("claude", "resultProduction", repo=repo)
     paths = _ok_dispatchable_probe_paths(tmp_path, repo, claude=claude_fail)
     payload, code = CP.preflight_entry(
         repo,
@@ -910,9 +943,7 @@ def test_preflight_entry_parks_on_same_family(tmp_path, monkeypatch):
 
     monkeypatch.setattr(CP.seat_map, "build", _park_build)
     cal = _calibration_rows(implementation="codex", reviewer="codex", pilot="cursor")
-    cursor_fail = _probe_result("cursor", ok=False, repoRoot=repo, failed=["resultProduction"])
-    cursor_fail["legs"]["resultProduction"]["ok"] = False
-    cursor_fail["failed"] = ["resultProduction"]
+    cursor_fail = _failed_probe_result("cursor", "resultProduction", repo=repo)
     paths = _ok_dispatchable_probe_paths(tmp_path, repo, cursor=cursor_fail)
     payload, code = CP.preflight_entry(
         repo,
@@ -942,7 +973,7 @@ def test_probe_refuses_reused_run_dir_with_folded_result(tmp_path):
         build_view=_fake_build_view(tmp_path),
     )
     assert code2 == 1
-    assert payload2["legs"]["resultProduction"]["detail"] == "run-dir-reused"
+    assert payload2["legs"]["resultProduction"]["detail"] == "default: run-dir-reused"
 
 
 def test_probe_run_dir_setup_failure_never_raises(tmp_path, monkeypatch):
@@ -954,7 +985,7 @@ def test_probe_run_dir_setup_failure_never_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(CP.tempfile, "mkdtemp", _boom)
     payload, code, stderr = CP.probe("codex", repo_root=repo)
     assert code == 1
-    assert payload["legs"]["resultProduction"]["detail"] == "run-dir-setup-failed:OSError"
+    assert payload["legs"]["resultProduction"]["detail"] == "default: run-dir-setup-failed:OSError"
     assert stderr is not None
 
 
@@ -994,9 +1025,8 @@ def test_preflight_entry_refuses_wave_mismatch(tmp_path):
 
 def test_preflight_entry_refuses_ok_disagreeing_with_legs(tmp_path):
     repo = _repo(tmp_path)
-    codex = _probe_result("codex", repoRoot=repo, ok=True)
-    codex["legs"]["resultProduction"]["ok"] = False
-    codex["failed"] = ["resultProduction"]
+    codex = _failed_probe_result("codex", "resultProduction", repo=repo)
+    codex["ok"] = True
     cursor = _probe_result("cursor", repoRoot=repo)
     cpath = tmp_path / "codex.json"
     cpath.write_text(json.dumps(codex), encoding="utf-8")
@@ -1248,9 +1278,7 @@ def test_preflight_entry_refuses_calibration_unreadable(tmp_path):
 
 def test_preflight_entry_refuses_author_family_unresolved(tmp_path):
     repo = _repo(tmp_path)
-    codex_fail = _probe_result("codex", ok=False, repoRoot=repo, failed=["resultProduction"])
-    codex_fail["legs"]["resultProduction"]["ok"] = False
-    codex_fail["failed"] = ["resultProduction"]
+    codex_fail = _failed_probe_result("codex", "resultProduction", repo=repo)
     paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_fail)
     cal = [{"role": "implementer", "engine": "codex"}]
     payload, code = CP.preflight_entry(
@@ -1269,9 +1297,7 @@ def test_preflight_entry_refuses_seat_map_failed(tmp_path, monkeypatch):
         raise RuntimeError("seat-map-broken")
 
     monkeypatch.setattr(CP.seat_map, "build", _boom)
-    codex_fail = _probe_result("codex", ok=False, repoRoot=repo, failed=["resultProduction"])
-    codex_fail["legs"]["resultProduction"]["ok"] = False
-    codex_fail["failed"] = ["resultProduction"]
+    codex_fail = _failed_probe_result("codex", "resultProduction", repo=repo)
     paths = _ok_dispatchable_probe_paths(tmp_path, repo, codex=codex_fail)
     payload, code = CP.preflight_entry(
         repo, paths,
@@ -1299,3 +1325,126 @@ def test_preflight_entry_refuses_blank_owner_word_and_unfailed_engine(tmp_path):
     )
     assert code2 == 1
     assert payload2["reason"] == "launch-without-not-failed:cursor"
+
+
+def test_codex_probe_record_has_default_mode_legs(tmp_path):
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout = _codex_event_stream(action_items=2)
+    fake = FakeRunner([(stdout, False, 0, "")])
+    payload, code, _stderr = CP.probe(
+        "codex", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert code == 0
+    assert payload["probedModes"] == ["default"]
+    assert set(payload["modeLegs"]) == {"default"}
+    assert payload["modeLegs"]["default"]["resultProduction"]["ok"] is True
+
+
+def test_derive_flat_legs_mode_failure_propagates_to_flat_view():
+    mode_legs = {
+        "print": _ok_legs(),
+        "background": _ok_legs(),
+    }
+    mode_legs["background"]["progressTelemetry"] = {
+        "ok": False, "detail": "telemetry-absent", "evidence": {},
+    }
+    flat = CP._derive_flat_legs(mode_legs)
+    assert flat["resultProduction"]["ok"] is True
+    assert flat["progressTelemetry"]["ok"] is False
+    assert flat["progressTelemetry"]["detail"] == "background: telemetry-absent"
+
+
+def test_validate_probe_record_refuses_empty_mode_legs():
+    raw = _probe_result("codex")
+    raw["modeLegs"] = {}
+    err = CP._validate_probe_record(raw, "/tmp/codex.json")
+    assert err == "probe-result-malformed:/tmp/codex.json"
+
+
+def test_validate_probe_record_refuses_probed_modes_mode_legs_key_mismatch():
+    raw = _probe_result("claude")
+    raw["probedModes"] = ["print"]
+    err = CP._validate_probe_record(raw, "/tmp/claude.json")
+    assert err == "probe-result-malformed:/tmp/claude.json"
+
+
+def test_payload_writer_probed_modes_matches_mode_legs_keys():
+    seat = _claude_seat()
+    mode_legs = {"print": _ok_legs(), "background": _ok_legs()}
+    payload = CP._payload(
+        "claude", ERC.channel_for("claude"), seat, "/repo",
+        "2026-09-20T00:00:00Z", "2026-09-20T00:00:01Z", 1.0, "/tmp/run",
+        mode_legs, ["print", "background"], [], "lanes",
+    )
+    assert CP._validate_probe_record(payload, "/tmp/claude.json") is None
+
+
+def test_validate_probe_record_refuses_mode_legs_incomplete_leg_map():
+    raw = _probe_result("claude")
+    raw["modeLegs"]["print"].pop("progressTelemetry")
+    err = CP._validate_probe_record(raw, "/tmp/claude.json")
+    assert err == "probe-result-malformed:/tmp/claude.json"
+
+
+def test_payload_writer_mode_legs_carry_all_leg_names():
+    seat = _claude_seat()
+    mode_legs = {"print": _ok_legs(), "background": _ok_legs()}
+    payload = CP._payload(
+        "claude", ERC.channel_for("claude"), seat, "/repo",
+        "2026-09-20T00:00:00Z", "2026-09-20T00:00:01Z", 1.0, "/tmp/run",
+        mode_legs, ["print", "background"], [], "lanes",
+    )
+    for mode in ("print", "background"):
+        assert set(payload["modeLegs"][mode].keys()) == set(CP._LEG_NAMES)
+    assert CP._validate_probe_record(payload, "/tmp/claude.json") is None
+
+
+def test_validate_probe_record_refuses_non_claude_wrong_mode_keys():
+    raw = _probe_result("codex")
+    raw["probedModes"] = ["print"]
+    raw["modeLegs"] = {"print": _ok_legs()}
+    err = CP._validate_probe_record(raw, "/tmp/codex.json")
+    assert err == "probe-result-malformed:/tmp/codex.json"
+
+
+def test_preflight_entry_refuses_schema_v1_record(tmp_path):
+    repo = _repo(tmp_path)
+    codex = _probe_result("codex", repoRoot=repo)
+    codex["schema"] = "conformance-probe/1"
+    cursor = _probe_result("cursor", repoRoot=repo)
+    cpath = tmp_path / "codex.json"
+    cpath.write_text(json.dumps(codex), encoding="utf-8")
+    kpath = tmp_path / "cursor.json"
+    kpath.write_text(json.dumps(cursor), encoding="utf-8")
+    payload, code = CP.preflight_entry(
+        repo, [str(cpath), str(kpath)], calibration_rows=_calibration_rows(),
+    )
+    assert code == 1
+    assert payload["reason"].startswith("probe-result-malformed:")
+
+
+def test_claude_probe_second_mode_runs_when_first_refuses(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    def refuse_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return "", False, 127, "spawn-failed"
+
+    fake = FakeRunner([refuse_runner, refuse_runner], sync_native=False)
+    payload, code, _stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert len(fake.calls) >= 1
+    assert payload["probedModes"] == ["print", "background"]
+    assert payload["modeLegs"]["print"]["completionDetection"]["ok"] is False
+    assert payload["modeLegs"]["background"]["resultProduction"]["ok"] is False
+    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == "auth-or-config-refusal"
