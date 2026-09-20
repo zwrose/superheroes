@@ -102,12 +102,26 @@ class DispositionLedgerReadFault:
     detail: str
 
 
-def read_disposition_ledger(state):
+def read_disposition_ledger(state, required=False):
     """Pure read of ``dispositionLedger`` — never mutates ``state``.
 
     Returns shallow-copied rows and ``None``, or ``([], fault)`` when the stored ledger is
-    malformed. An absent key is not malformed."""
-    if not isinstance(state, dict) or DISPOSITION_LEDGER_KEY not in state:
+    malformed. An absent key is not malformed unless ``required`` is True (recognized-owner reads)."""
+    if not isinstance(state, dict):
+        if required:
+            return [], DispositionLedgerReadFault(
+                token=DISPOSITION_LEDGER_MALFORMED_TOKEN,
+                detail="dispositionLedger key absent when dispositionLedgerOwner is %r"
+                % (DISPOSITION_LEDGER_OWNER_VALUE,),
+            )
+        return [], None
+    if DISPOSITION_LEDGER_KEY not in state:
+        if required:
+            return [], DispositionLedgerReadFault(
+                token=DISPOSITION_LEDGER_MALFORMED_TOKEN,
+                detail="dispositionLedger key absent when dispositionLedgerOwner is %r"
+                % (DISPOSITION_LEDGER_OWNER_VALUE,),
+            )
         return [], None
     ledger = state[DISPOSITION_LEDGER_KEY]
     if not isinstance(ledger, list):

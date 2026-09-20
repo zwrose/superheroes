@@ -359,6 +359,94 @@ def test_fix_not_at_head_records_residual_without_rebind(tmp_path):
 
 # --- item 5: fault path -------------------------------------------------------------
 
+def test_verify_not_pass_records_residual_without_rebind(tmp_path):
+    _, certified_head = _init_git_repo(tmp_path)
+    state = _ledger_only_fixed_state(
+        certified_head,
+        rounds={"1": {"verifyResult": "fail"}},
+    )
+    cfg = dict(state.get("config") or {})
+    cfg["repoRoot"] = str(tmp_path / "repo")
+    cfg["headSha"] = certified_head
+    state["config"] = cfg
+    session_dir = write_session(
+        tmp_path,
+        name="verify-not-pass",
+        state=state,
+        journal_lines=[_dispatch_journal(certified_head)],
+        meta={"headSha": certified_head, "repoRoot": str(tmp_path / "repo")},
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
+    )
+    _write_head_content_blobs(session_dir, head=certified_head)
+    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+        loaded = json.load(fh)
+    before_head = _ledger_receipt(loaded).get("headSha")
+    RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
+    residuals = loaded.get("_fixedDispositionFinalizationResiduals") or {}
+    assert residuals.get(FINDING_KEY) == RD.FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
+    assert _ledger_receipt(loaded).get("headSha") == before_head == OLD_HEAD
+
+
+def test_unchanged_head_with_failed_binding_records_residual(tmp_path):
+    session_dir, certified_head = _certifiable_session(tmp_path)
+    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+        loaded = json.load(fh)
+    loaded["dispositionLedger"][0]["dispositionReceipt"] = _ledger_fixed_receipt(
+        headSha=certified_head,
+        fixContentDigest="0" * 64,
+    )
+    RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
+    residuals = loaded.get("_fixedDispositionFinalizationResiduals") or {}
+    assert residuals.get(FINDING_KEY) == "fix-content-reverted"
+    receipt = _ledger_receipt(loaded)
+    assert receipt.get("verifyResult") is None
+
+
+def test_fixed_row_without_receipt_records_missing_residual(tmp_path):
+    session_dir, certified_head = _certifiable_session(tmp_path)
+    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+        loaded = json.load(fh)
+    loaded["dispositionLedger"][0].pop("dispositionReceipt", None)
+    RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
+    residuals = loaded.get("_fixedDispositionFinalizationResiduals") or {}
+    assert residuals.get(FINDING_KEY) == "fix-content-missing"
+
+
+def test_run_loop_leg_does_not_synthesize_a_pass_receipt(tmp_path):
+    session_dir, certified_head = _certifiable_session(tmp_path)
+    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+        source_state = json.load(fh)
+    source_state.pop("dispositionLedgerOwner", None)
+    source_state.pop("dispositionLedger", None)
+    source_state["findings"] = [{
+        SC.FINDING_KEY_FIELD: FINDING_KEY,
+        "id": "F-live-fixed",
+        "file": FIX_PATH,
+        "line": 1,
+        "title": "guard issue",
+        "severity": "Important",
+        "disposition": "fixed",
+        "dispositionRound": 1,
+    }]
+    materialized = RD._materialize_run_loop_session(
+        source_state, 1, source_session_dir=session_dir
+    )
+    try:
+        with open(os.path.join(materialized, RD.STATE_FILE), encoding="utf-8") as fh:
+            loop_state = json.load(fh)
+        live_row = loop_state["findings"][0]
+        receipt = live_row.get("dispositionReceipt")
+        assert not (
+            isinstance(receipt, dict) and receipt.get("verifyResult") == "pass"
+        ), "run-loop materialization must not synthesize a pass receipt"
+        loop_receipt, loop_refusal = RC.certify(materialized)
+        assert loop_receipt is None, loop_receipt
+        assert loop_refusal is not None
+        assert loop_refusal["class"] == "disposition-without-receipt"
+    finally:
+        shutil.rmtree(materialized, ignore_errors=True)
+
+
 def test_malformed_ledger_fault_leaves_state_unchanged(tmp_path):
     _, certified_head = _init_git_repo(tmp_path)
     state = _ledger_only_fixed_state(certified_head, dispositionLedger=None)

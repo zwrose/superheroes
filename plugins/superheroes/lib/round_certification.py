@@ -369,7 +369,7 @@ def _certification_findings_by_key(state):
     if classification == session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED:
         # axis: ledger-owned reads take disposition family from the ledger only — _records is not a source
         ledger_by_key = {}
-        ledger_rows, ledger_fault = session_contract.read_disposition_ledger(state)
+        ledger_rows, ledger_fault = session_contract.read_disposition_ledger(state, required=True)
         if ledger_fault is not None:
             return {}, _refusal(
                 "disposition-without-receipt",

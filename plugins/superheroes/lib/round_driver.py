@@ -1602,7 +1602,11 @@ def _fixed_ledger_rows(state):
 
     A pure read: a malformed ledger yields no rows and is never repaired here, so no read path
     can launder it past the fold chokepoint's ``bc-03`` refusal."""
-    ledger_rows, fault = session_contract.read_disposition_ledger(state)
+    required = (
+        session_contract.disposition_ledger_owner_classification(state)
+        == session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED
+    )
+    ledger_rows, fault = session_contract.read_disposition_ledger(state, required=required)
     if fault is not None:
         return [], {}, fault
     seen = _ledger_index_by_key(ledger_rows)
@@ -5512,24 +5516,6 @@ def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
             entry, probe_receipt, certified_head, read_outcome, by_key=by_key
         )
         if binding_failure:
-            if head_unchanged and original_receipt.get("verifyResult") is None:
-                verify_result = _verify_result_for_disposition(
-                    state, state.get("round"), certified_head
-                )
-                if verify_result != "pass":
-                    residuals[key] = FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
-                    continue
-                stamp_receipt = dict(original_receipt)
-                stamp_receipt["verifyResult"] = verify_result
-                _record_disposition(
-                    state,
-                    key,
-                    "fixed",
-                    entry.get("dispositionRound"),
-                    **_fixed_disposition_family_with_receipt(entry, stamp_receipt),
-                )
-                changed = True
-                continue
             token = binding_failure[0] if isinstance(binding_failure, tuple) else binding_failure
             residuals[key] = token
             continue
