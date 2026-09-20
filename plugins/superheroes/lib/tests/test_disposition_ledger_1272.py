@@ -439,7 +439,8 @@ def test_L6_without_owner_marker_three_source_merge_unchanged():
     legacy = {"file": "old.py", "line": 1, "title": "legacy", "severity": "Minor",
               SC.FINDING_KEY_FIELD: "legacy-key"}
     state = {"schemaVersion": 5, "findings": [], "_records": [{"findings": [legacy]}]}
-    certified = RC._certification_findings(state)
+    certified, refusal = RC._certification_findings(state)
+    assert refusal is None
     keys = {SC.finding_identity_key(f) for f in certified}
     assert "legacy-key" in keys
 
@@ -449,7 +450,8 @@ def test_L6_with_owner_marker_empty_ledger_excludes_records_findings():
               SC.FINDING_KEY_FIELD: "legacy-key"}
     state = {"schemaVersion": 5, "dispositionLedgerOwner": "ledger", "dispositionLedger": [],
              "findings": [], "_records": [{"findings": [legacy]}]}
-    certified = RC._certification_findings(state)
+    certified, refusal = RC._certification_findings(state)
+    assert refusal is None
     assert certified == []
 
 
@@ -468,7 +470,9 @@ def test_L6_first_stage_backfills_records_into_ledger_undisposed(tmp_path):
     new_key = SC.finding_identity_key(compiled[0])
     RD._record_disposition(state, new_key, "refuted", 2, refutedReason="no")
     state["findings"] = []
-    certified_keys = set(RC._certification_findings_by_key(state))
+    certified_keys, refusal = RC._certification_findings_by_key(state)
+    assert refusal is None
+    certified_keys = set(certified_keys)
     assert "o::old@L1" in certified_keys
     ctx = _ctx(state, tmp_path)
     refusal = RC.check_disposition_without_receipt(ctx)

@@ -26,6 +26,7 @@ __all__ = (
     "DISPOSITION_LEDGER_KEY",
     "DISPOSITION_LEDGER_OWNER_FIELD",
     "DISPOSITION_LEDGER_OWNER_VALUE",
+    "disposition_ledger_owner_classification",
     "MERGED_INTO_FIELD",
     "RAISED_ROUND_FIELD",
     "DISPOSITION_FAMILY_FIELDS",
@@ -68,6 +69,18 @@ DISPOSITION_LEDGER_KEY = "dispositionLedger"
 DISPOSITION_LEDGER_OWNER_FIELD = "dispositionLedgerOwner"
 DISPOSITION_LEDGER_OWNER_VALUE = "ledger"
 MERGED_INTO_FIELD = "mergedInto"
+
+
+def disposition_ledger_owner_classification(state):
+    """Single derivation of the disposition-ledger owner marker — absent, recognized, or unrecognized."""
+    if not isinstance(state, dict):
+        return "absent"
+    value = state.get(DISPOSITION_LEDGER_OWNER_FIELD)
+    if value is None:
+        return "absent"
+    if value == DISPOSITION_LEDGER_OWNER_VALUE:
+        return "recognized"
+    return "unrecognized"
 RAISED_ROUND_FIELD = "raisedRound"
 DISPOSITION_FAMILY_FIELDS = (
     "disposition", "dispositionRound", "dispositionReceipt", "refutedReason",

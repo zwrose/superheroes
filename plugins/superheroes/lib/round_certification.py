@@ -176,7 +176,9 @@ def certify(session_dir):
     terminal_state, terminal_cause, refusal = _resolve_terminal(verdict, ctx["state"])
     if refusal is not None:
         return None, refusal
-    receipt = _build_receipt(ctx, terminal_state, terminal_cause)
+    receipt, build_refusal = _build_receipt(ctx, terminal_state, terminal_cause)
+    if build_refusal is not None:
+        return None, build_refusal
     refusal = _validate_receipt_findings(receipt)
     if refusal is not None:
         return None, refusal
@@ -349,10 +351,17 @@ def _out_of_scope_follow_up(finding):
 
 def _certification_findings_by_key(state):
     """Keyed findings for disposition checks — ledger owner uses ledger + live only."""
+    classification = session_contract.disposition_ledger_owner_classification(state)
+    if classification == "unrecognized":
+        value = state.get(session_contract.DISPOSITION_LEDGER_OWNER_FIELD)
+        return {}, _refusal(
+            "disposition-without-receipt",
+            STATE_FILE,
+            "unrecognized dispositionLedgerOwner value %r" % (value,),
+            binding_failure="disposition-ledger-owner-unrecognized",
+        )
     by_key = {}
-    if state.get(session_contract.DISPOSITION_LEDGER_OWNER_FIELD) == (
-        session_contract.DISPOSITION_LEDGER_OWNER_VALUE
-    ):
+    if classification == "recognized":
         ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
         if isinstance(ledger, list):
             for finding in ledger:
@@ -365,7 +374,7 @@ def _certification_findings_by_key(state):
                 key = _finding_identity_key(finding)
                 if key:
                     by_key[key] = finding
-        return by_key
+        return by_key, None
     ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
     if isinstance(ledger, list):
         for finding in ledger:
@@ -387,12 +396,15 @@ def _certification_findings_by_key(state):
             key = _finding_identity_key(finding)
             if key:
                 by_key[key] = finding
-    return by_key
+    return by_key, None
 
 
 def _certification_findings(state):
     """Live open-work plus durable ledger and review-record history for disposition checks."""
-    return list(_certification_findings_by_key(state).values())
+    by_key, refusal = _certification_findings_by_key(state)
+    if refusal is not None:
+        return [], refusal
+    return list(by_key.values()), None
 
 
 def _resolve_merged_into_entry(finding, by_key):
@@ -1542,7 +1554,9 @@ def check_disposition_without_receipt(ctx):
         )
     certified_head = _certified_head_sha(ctx)
     disclosures = []
-    by_key = _certification_findings_by_key(state)
+    by_key, marker_refusal = _certification_findings_by_key(state)
+    if marker_refusal is not None:
+        return marker_refusal
     for finding in by_key.values():
         if not isinstance(finding, dict):
             continue
@@ -1975,7 +1989,9 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
         }
         for s in seats_info
     ]
-    by_key = _certification_findings_by_key(state)
+    by_key, marker_refusal = _certification_findings_by_key(state)
+    if marker_refusal is not None:
+        return None, marker_refusal
     findings = [
         _project_finding(_effective_certification_finding(f, by_key))
         for f in by_key.values()
@@ -2052,7 +2068,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
     policy_applied = state.get("_policyApplied")
     if isinstance(policy_applied, list) and policy_applied:
         receipt["policyApplied"] = list(policy_applied)
-    return receipt
+    return receipt, None
 
 
 def map_verdict_to_terminal_state(verdict):

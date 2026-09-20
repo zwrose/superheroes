@@ -396,6 +396,9 @@ _GATE_POLICY_SKIP_REASON = "pre-authorized by gate policy (calibration)"
 # Named refusal when a submit artifact lists the same judgment id with conflicting dispositions.
 JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
 
+# Named refusal when loop-state carries an unrecognized dispositionLedgerOwner marker value.
+DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE = "disposition-ledger-owner-unrecognized"
+
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
 POLICY_APPLIED_SOURCE_OWNER_SUPPLIED = "owner-supplied"
 POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED = "owner-unattributed"
@@ -1382,6 +1385,15 @@ def _strip_disposition_family(entry):
     return copy
 
 
+def _apply_disposition_family(target, family):
+    """Set every named disposition-family field on target and pop any member family omits."""
+    for field in session_contract.DISPOSITION_FAMILY_FIELDS:
+        if field in family:
+            target[field] = family[field]
+        else:
+            target.pop(field, None)
+
+
 def _backfill_ledger_from_records(state, ledger, seen):
     """On first ledger-owner activation, seed missing keys from review-record history."""
     preexisting = set(seen)
@@ -1421,9 +1433,10 @@ def _stage_findings(state, compiled):
         return
     ledger = _ensure_disposition_ledger(state)
     seen = _ledger_index_by_key(ledger)
-    first_ledger_owner = state.get(session_contract.DISPOSITION_LEDGER_OWNER_FIELD) != (
-        session_contract.DISPOSITION_LEDGER_OWNER_VALUE
-    )
+    owner_class = session_contract.disposition_ledger_owner_classification(state)
+    if owner_class == "unrecognized":
+        return
+    first_ledger_owner = owner_class == "absent"
     if first_ledger_owner:
         _backfill_ledger_from_records(state, ledger, seen)
     round_no = state["round"]
@@ -1476,21 +1489,17 @@ def _record_disposition(state, key, disposition, round_no, **fields):
         entry[session_contract.RAISED_ROUND_FIELD] = state.get("round", round_no)
     else:
         entry = {session_contract.FINDING_KEY_FIELD: key}
-    entry["disposition"] = disposition
-    entry["dispositionRound"] = round_no
+    family = {"disposition": disposition, "dispositionRound": round_no}
     for fname, val in fields.items():
         if val is not None:
-            entry[fname] = val
+            family[fname] = val
+    _apply_disposition_family(entry, family)
     if key in seen:
         ledger[seen[key]] = entry
     else:
         ledger.append(entry)
     if live is not None:
-        live["disposition"] = disposition
-        live["dispositionRound"] = round_no
-        for fname, val in fields.items():
-            if val is not None:
-                live[fname] = val
+        _apply_disposition_family(live, family)
 
 
 def _record_merged_into(state, key, into_key):
@@ -1504,11 +1513,14 @@ def _record_merged_into(state, key, into_key):
         entry[session_contract.RAISED_ROUND_FIELD] = state.get("round", state["round"])
     else:
         entry = {session_contract.FINDING_KEY_FIELD: key}
-    entry[session_contract.MERGED_INTO_FIELD] = into_key
+    family = {session_contract.MERGED_INTO_FIELD: into_key}
+    _apply_disposition_family(entry, family)
     if key in seen:
         ledger[seen[key]] = entry
     else:
         ledger.append(entry)
+    if live is not None:
+        _apply_disposition_family(live, family)
 
 
 def _fix_receipt_content_fields(session_dir, head_sha, file_path):
@@ -6196,6 +6208,12 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                       "round": pending.get("round"), "attempt": attempt,
                                       "outcome": "hash-mismatch"})
         return {"ok": False, "reason": "state-hash mismatch — the state moved under a stale submit"}
+
+    if session_contract.disposition_ledger_owner_classification(state) == "unrecognized":
+        _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                      "round": pending.get("round"), "attempt": attempt,
+                                      "outcome": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE})
+        return {"ok": False, "reason": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE}
 
     # #845: the panel seat-key invariant, at the chokepoint. A `seats` map keyed by findings-file
     # stems instead of `payload.dimensions` submits `ok` today and fails phases later with empty
