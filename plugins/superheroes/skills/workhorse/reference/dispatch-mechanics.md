@@ -251,12 +251,13 @@ size cap that decodes as JSON (`native-result-missing`, `native-result-oversized
 `native-result-malformed`); it must validate against the declared schema
 (`native-result-schema-invalid`); on a write, its `report` must be non-blank
 (`native-result-report-blank`); and an entry already at the result path when an attempt would spawn
-refuses that attempt (`native-result-path-occupied`); a timed-out attempt additionally requires a
-usable completion stamp on the same monotonic clock as its deadline (`result-completion-unrecorded`
-when the stamp is missing or its epoch disagrees with the deadline's,
-`result-completion-after-deadline` when completion is strictly after the cap — exactly at the cap
-admits, `result-completion-payload-mismatch` when the admitted payload is not the one the stamp
-was taken over). Cursor adds attempt-prompt refusals:
+refuses that attempt (`native-result-path-occupied`); every native attempt requires a usable
+completion stamp (`result-completion-unrecorded` when missing or unusable, and when a deadline is
+present its epoch must match the stamp's); a timed-out attempt additionally records that deadline on
+the same clock (`timeout-deadline-unrecorded` when absent), then `result-completion-after-deadline`
+when completion is strictly after the cap — exactly at the cap admits,
+`result-completion-payload-mismatch` when the admitted payload is not the one the stamp was taken
+over). Cursor adds attempt-prompt refusals:
 `attempt-prompt-occupied` (any pre-existing entry at the attempt-prompt path — file, symlink,
 dangling symlink, directory — the engine learns the run dir from the result path, so a first attempt
 could plant the second's), `attempt-prompt-unwritable`, and `prompt-tampered` (the staged source
