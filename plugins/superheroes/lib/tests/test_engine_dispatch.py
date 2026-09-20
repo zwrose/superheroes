@@ -14291,9 +14291,12 @@ def test_claude_mode_background_review_open_records_caller_provenance(tmp_path, 
         build_view=_stable_build_view(tmp_path),
         run_dir=run_dir,
         claude_mode="background",
-        max_wait=0,
     )
-    assert res["ok"] is False or res.get("terminal") is True
+    assert res["ok"] is False
+    assert res.get("terminal") is True
+    assert res["detail"] == "claude-mode-not-dispatchable:background"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
     opened = _review_opened_record(run_dir)
     assert opened["claudeMode"] == "background"
     assert opened["resolvedInputs"]["claudeMode"] == "background"
@@ -14392,17 +14395,20 @@ def test_continuation_omitted_claude_mode_inherits_journal(tmp_path, monkeypatch
     _plant_claude_review_journal_with_claude_mode(
         tmp_path, run_dir, repo_root, seat, config_dir=cfg, claude_mode="background",
     )
+    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
     res = ED.dispatch_review(
         seat=seat,
         prompt_path=_valid_prompt(tmp_path),
         repo_root=repo_root,
-        run_engine=_ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()]),
+        run_engine=fake,
         build_view=_stable_build_view(tmp_path),
         run_dir=run_dir,
         order_id="claude-mode-test",
-        max_wait=0,
     )
     assert res.get("detail") != ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH
+    assert res["detail"] == "claude-mode-not-dispatchable:background"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
 
 
 def test_legacy_journal_without_claude_mode_dispatches_print_argv(tmp_path, monkeypatch):
@@ -14437,7 +14443,7 @@ def test_claude_background_argv_carries_json_schema_from_journal(tmp_path, monke
     repo_root = _repo(tmp_path)
     run_dir = str(tmp_path / "bg-schema")
     fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
-    ED.dispatch_review(
+    res = ED.dispatch_review(
         seat=_reviewer_claude_seat(),
         prompt_path=_valid_prompt(tmp_path),
         repo_root=repo_root,
@@ -14445,8 +14451,10 @@ def test_claude_background_argv_carries_json_schema_from_journal(tmp_path, monke
         build_view=_stable_build_view(tmp_path),
         run_dir=run_dir,
         claude_mode="background",
-        max_wait=0,
     )
+    assert res["detail"] == "claude-mode-not-dispatchable:background"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
     opened = _review_opened_record(run_dir)
     schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
     with open(schema_path, encoding="utf-8") as fh:

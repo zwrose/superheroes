@@ -3336,6 +3336,11 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
 
 
 def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
+    opened = state.get("opened")
+    if isinstance(opened, dict):
+        claude_mode = opened.get("claudeMode")
+        if claude_mode == engine_result_channel.MODE_BACKGROUND:
+            return False, "claude-mode-not-dispatchable:background"
     if state.get("abandonRequested"):
         return False, "abandon-requested"
     alive, who = _run_live_evidence(state)
@@ -6363,7 +6368,8 @@ def build_parser():
     cc.add_argument(d, "--mode", contract="choices:review,brief-check", default=None,
                     choices=sanitized_view.REVIEW_MODES)
     cc.add_argument(d, "--claude-mode", contract="choices:print,background", default=None,
-                    choices=engine_result_channel.CLAUDE_MODES)
+                    choices=engine_result_channel.CLAUDE_MODES,
+                    help="background is declared but not dispatchable in this release")
     cc.add_argument(d, "--expected-result-kind", contract=_REVIEW_RESULT_KINDS_CHOICES_CONTRACT,
                     default=None, choices=REVIEW_RESULT_KINDS,
                     help="mechanical pin: refuse attempts whose parsed resultKind differs")
@@ -6386,7 +6392,8 @@ def build_parser():
     cc.add_argument(w, "--expect-item", contract="free-text", action="append", default=None)
     cc.add_argument(w, "--expect-items-file", contract="free-text", default=None)
     cc.add_argument(w, "--claude-mode", contract="choices:print,background", default=None,
-                    choices=engine_result_channel.CLAUDE_MODES)
+                    choices=engine_result_channel.CLAUDE_MODES,
+                    help="background is declared but not dispatchable in this release")
 
     p = sub.add_parser("dispatch-poll")
     cc.add_argument(p, "--run-dir", contract="existing-directory", required=True)
