@@ -284,3 +284,51 @@ EXIT:1
 1 passed in 0.41s
 EXIT:0
 ```
+
+---
+
+## BP-2f-r2-f — the census no longer falls open on a variable's name
+
+**Produced by the orchestrator at verification** — WO-R1b's dispatch landed its code change but
+not this record; the probe below was run by the orchestrator against the committed head
+`5f530af7`, with the mutation applied as a targeted edit and reverted by the inverse edit.
+
+**Guarded element.** `test_disposition_family_home_1272._flag_disposition_family_presence_reads` —
+the subscript-assignment class, after its name-keyed exemption (`_ASSIGNMENT_EXEMPT_BASES`,
+`census_mode`) was deleted in WO-R1b.
+
+**Axis.** A disposition-family member write cannot hide behind the spelling of its local. Before
+WO-R1b this same neutralization was **green**, because the base was named `row`; it is red now for
+no other reason.
+
+**Detector.** `test_disposition_family_single_home_census`.
+
+**Neutralization** (`round_certification.py`, in `_project_finding`):
+
+```python
+        row["dispositionReceipt"] = proof
+```
+
+(replaced `row = dict(row, dispositionReceipt=proof)`)
+
+**Raw red** (1 failed):
+
+```
+E       AssertionError: disposition-family member presence outside session_contract:
+E         round_certification.py:1933: row["dispositionReceipt"] = proof
+E       assert not ['round_certification.py:1933: row["dispositionReceipt"] = proof']
+
+plugins/superheroes/lib/tests/test_disposition_family_home_1272.py:212: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_disposition_family_home_1272.py::test_disposition_family_single_home_census
+1 failed, 1 passed in 0.85s
+```
+
+**Restore.** Restored `row = dict(row, dispositionReceipt=proof)`.
+
+**Raw green** (all detectors at the final head, tree clean):
+
+```
+....................................                                     [100%]
+36 passed in 2.88s
+```
