@@ -1185,6 +1185,40 @@ def test_repo_identity_memo_caches_repo_root(tmp_path, monkeypatch):
     assert after_second == after_first
 
 
+def test_repo_root_with_env_bypasses_cwd_keyed_memo(tmp_path, monkeypatch):
+    cwd = str(tmp_path / "work")
+    os.makedirs(cwd)
+    memo_root = str(tmp_path / "memo-root")
+    env_root = str(tmp_path / "env-root")
+    os.makedirs(memo_root)
+    os.makedirs(env_root)
+    calls = []
+
+    def fake_run_git(cwd_arg, *args, env=None):
+        if args == ("rev-parse", "--show-toplevel"):
+            calls.append(env)
+            if env is not None and env.get("GIT_DIR") == "routed":
+                return sc.GitResult(env_root, sc.GIT_OK, None)
+            return sc.GitResult(memo_root, sc.GIT_OK, None)
+        return sc.run_git_result(cwd_arg, *args, env=env)
+
+    monkeypatch.setattr(sc, "run_git_result", fake_run_git)
+    routed_env = dict(os.environ)
+    routed_env["GIT_DIR"] = "routed"
+    with sc.repo_identity_memo():
+        first = sc.repo_root(cwd)
+        assert first == os.path.realpath(memo_root)
+        assert len(calls) == 1
+        memo = sc._active_repo_identity_memo()
+        assert memo["root"][cwd] == first
+        second = sc.repo_root(cwd, env=routed_env)
+        assert second == os.path.realpath(env_root)
+        assert len(calls) == 2
+        assert calls[1] is not None
+        assert calls[1].get("GIT_DIR") == "routed"
+        assert memo["root"][cwd] == first
+
+
 def test_repo_identity_memo_caches_derive_identifiers(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "r", remote="git@github.com:org/repo.git")
     counter = _git_subprocess_counter(monkeypatch)
