@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import hashlib
 import json
@@ -2427,6 +2428,16 @@ def test_parse_result_review_rejected_findings_path_scrubs_secret():
 _HOLLOW_MEMBER_MALFORMED = {"ok": False, "reason": "unreadable"}
 
 
+def _hollow_family_shape(parsed, member_shape_wanted, member_shape_got):
+    return {
+        "parsed": parsed,
+        "topLevelKeys": [],
+        "keysTruncated": False,
+        "memberShapeWanted": member_shape_wanted,
+        "memberShapeGot": member_shape_got,
+    }
+
+
 @pytest.mark.parametrize("stdout", [
     json.dumps({"findings": [{}]}),
     json.dumps({"findings": [{}, {}]}),
@@ -2680,9 +2691,11 @@ def test_review_payload_shape_echo_nonce_second_path_agrees_with_parse():
     nonce = "shape-nonce"
     stdout = json.dumps(RFS.example_findings_object(nonce)["findings"])
     shape = EA.review_payload_shape(stdout, echo_nonce=nonce)
-    assert shape == {
-        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
-    }
+    assert shape == _hollow_family_shape(
+        EA.SHAPE_FINDINGS_HOLLOW_MEMBER,
+        "engaged-finding-member",
+        "list:count=1,hollow=1,substantive=0",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2741,9 +2754,11 @@ def test_review_payload_shape_investigated_placeholder_echo_agrees_with_parse():
     placeholder = RFS._placeholder_string("investigated-path", nonce)
     stdout = json.dumps({"findings": [], "investigated": [placeholder]})
     shape = EA.review_payload_shape(stdout, echo_nonce=nonce)
-    assert shape == {
-        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
-    }
+    assert shape == _hollow_family_shape(
+        EA.SHAPE_FINDINGS_HOLLOW_MEMBER,
+        "non-placeholder-investigated-path",
+        "list:count=1,placeholder-echo=1",
+    )
     assert EA.parse_result("codex", "review", stdout, echo_nonce=nonce) == _HOLLOW_MEMBER_MALFORMED
 
 
@@ -2796,9 +2811,12 @@ def _findings_member_hollow_via_parse(stdout):
 
 def _findings_member_hollow_via_shape(stdout):
     shape = EA.review_payload_shape(stdout)
-    return shape == {
-        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
-    }
+    if shape is None:
+        return False
+    return shape["parsed"] in (
+        EA.SHAPE_FINDINGS_HOLLOW_MEMBER,
+        EA.SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER,
+    )
 
 
 @pytest.mark.parametrize("member,expect_hollow", [
@@ -2886,16 +2904,119 @@ def test_finding_substance_keys_canonical_subset_of_schema():
 ])
 def test_review_payload_shape_hollow_object_branch(stdout):
     res = EA.review_payload_shape(stdout)
-    assert res == {
-        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
-    }
+    assert res == _hollow_family_shape(
+        EA.SHAPE_FINDINGS_HOLLOW_MEMBER,
+        "engaged-finding-member",
+        "list:count=1,hollow=1,substantive=0",
+    )
 
 
 def test_review_payload_shape_hollow_bare_array():
     res = EA.review_payload_shape(json.dumps([{}]))
-    assert res == {
-        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
-    }
+    assert res == _hollow_family_shape(
+        EA.SHAPE_FINDINGS_HOLLOW_MEMBER,
+        "engaged-finding-member",
+        "list:count=1,hollow=1,substantive=0",
+    )
+
+
+def test_review_payload_shape_findings_partial_hollow_member():
+    # axis: populated findings list with substantive and hollow members is not plain hollow
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/c14_l3a_hollow_member_grade.md (BP1)
+    good = {"severity": "Minor", "title": "t", "body": "b"}
+    stdout = json.dumps({"findings": [good, {}]})
+    res = EA.review_payload_shape(stdout)
+    assert res == _hollow_family_shape(
+        EA.SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER,
+        "engaged-finding-member",
+        "list:count=2,hollow=1,substantive=1",
+    )
+    assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_review_payload_shape_verdicts_partial_hollow_member():
+    # axis: populated verdicts list with valid and invalid members is not plain hollow
+    good = {"id": "v1", "verdict": "CONFIRMED", "reason": "seen"}
+    stdout = json.dumps({"verdicts": [good, {"id": "", "verdict": "CONFIRMED"}]})
+    res = EA.review_payload_shape(stdout)
+    assert res == _hollow_family_shape(
+        EA.SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER,
+        "valid-verdict-member",
+        "list:count=2,invalid=1,valid=1",
+    )
+    assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_hollow_family_diagnostic_carries_member_shape_fields():
+    # axis: hollow-family diagnostics always carry bounded wanted/got member-shape fields
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/c14_l3a_hollow_member_grade.md (BP2)
+    res = EA.review_payload_shape(json.dumps({"findings": [{}]}))
+    assert res["memberShapeWanted"] == "engaged-finding-member"
+    assert res["memberShapeGot"] == "list:count=1,hollow=1,substantive=0"
+
+
+_HOLLOW_FAMILY_SHAPE_CONSTANTS = (
+    "SHAPE_FINDINGS_HOLLOW_MEMBER",
+    "SHAPE_VERDICTS_HOLLOW_MEMBER",
+    "SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER",
+    "SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER",
+)
+
+
+def _hollow_family_shape_constant_line_ranges(source):
+    """Return (home_start, home_end, constructor_start, constructor_end) line ranges."""
+    tree = ast.parse(source)
+    home_start = home_end = None
+    constructor_start = constructor_end = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (isinstance(target, ast.Name)
+                        and target.id == "SHAPE_FINDINGS_HOLLOW_MEMBER"):
+                    home_start = node.lineno
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (isinstance(target, ast.Name)
+                        and target.id == "REVIEW_PAYLOAD_SHAPES"):
+                    home_end = node.end_lineno
+        if isinstance(node, ast.FunctionDef) and node.name == "_hollow_family_diagnostic":
+            constructor_start = node.lineno
+            constructor_end = node.end_lineno
+    return home_start, home_end, constructor_start, constructor_end
+
+
+def _hollow_family_shape_constant_refs(source):
+    """Collect line numbers of hollow-family SHAPE_* constant references."""
+    tree = ast.parse(source)
+    refs = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in _HOLLOW_FAMILY_SHAPE_CONSTANTS:
+            refs.append((node.id, node.lineno))
+        elif isinstance(node, ast.Attribute) and node.attr in _HOLLOW_FAMILY_SHAPE_CONSTANTS:
+            refs.append((node.attr, node.lineno))
+    return refs
+
+
+def test_hollow_member_shape_tokens_minted_only_via_constructor():
+    # axis: hollow-family SHAPE_* tokens are minted only at the constructor home
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/c14_l3a_hollow_member_grade.md (BP3)
+    adapter_path = os.path.join(_HERE, "..", "engine_adapter.py")
+    with open(adapter_path, encoding="utf-8") as fh:
+        source = fh.read()
+    home_start, home_end, constructor_start, constructor_end = (
+        _hollow_family_shape_constant_line_ranges(source))
+    assert home_start is not None
+    assert home_end is not None
+    assert constructor_start is not None
+    assert constructor_end is not None
+    allowed = set(range(home_start, home_end + 1)) | set(
+        range(constructor_start, constructor_end + 1))
+    stray = [
+        "%s:%d" % (name, line)
+        for name, line in _hollow_family_shape_constant_refs(source)
+        if line not in allowed
+    ]
+    assert stray == []
 
 
 def test_salvage_from_artifact_hollow_findings_requires_manual_read():
@@ -3981,9 +4102,11 @@ def test_review_payload_shape_verdicts_not_a_list():
 
 def test_review_payload_shape_verdicts_hollow_member():
     res = EA.review_payload_shape(json.dumps({"verdicts": [{"id": "", "verdict": "CONFIRMED"}]}))
-    assert res == {
-        "parsed": EA.SHAPE_VERDICTS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
-    }
+    assert res == _hollow_family_shape(
+        EA.SHAPE_VERDICTS_HOLLOW_MEMBER,
+        "valid-verdict-member",
+        "list:count=1,invalid=1,valid=0",
+    )
 
 
 def test_review_payload_shape_placeholder_literal_refusal():
@@ -3998,6 +4121,7 @@ def test_review_payload_shapes_includes_verdict_tokens():
     for token in (EA.SHAPE_OBJECT_BOTH_PAYLOAD_KEYS,
                   EA.SHAPE_OBJECT_VERDICTS_NOT_A_LIST,
                   EA.SHAPE_VERDICTS_HOLLOW_MEMBER,
+                  EA.SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER,
                   EA.SHAPE_PLACEHOLDER_LITERAL_REFUSAL):
         assert token in EA.REVIEW_PAYLOAD_SHAPES
 
