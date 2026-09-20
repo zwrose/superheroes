@@ -43,7 +43,7 @@ pushed and get pull requests created with the correct base chaining. **Existing 
 reused**; **existing members are never removed**. Passing a **stack number first** appends the
 remaining arguments to the top of that stack. Linking a new layer onto an **existing** stack names
 **every member, bottom to top**, and then the new layer. The two-argument form, the layer below and
-the new layer, is refused: that is the field fact C13 paid for. An argument that belongs to a **different** stack is
+the new layer, is refused. An argument that belongs to a **different** stack is
 **rejected**. `--base` sets the bottom's base branch. The command is **idempotent in the sense that
 matters** — re-linking existing members skips them. Linking **pushes branch arguments** (creating
 or updating those remote branches and opening pull requests for branches that have none), and it
@@ -155,7 +155,7 @@ to break the requirement is a layer whose branch no longer descends from the tip
 
 **The stack is the unit of merge.** A stack merges when its **feature** is complete: every layer
 the issue's plan names, vetted. A vetted prefix is never a click. The ruling this records is the
-owner's standing rule, "keep stacks stacks" (walk 7, 2026-09-20). New scope that a tripwire or a
+owner's standing rule, "keep stacks stacks". New scope that a tripwire or a
 vet discovers **on that feature** joins the stack as a layer rather than becoming a follow-on. A
 finding outside the feature's owner-ratified scope stays a **follow-up** under the existing scope
 rule, which this leaves alone. The click list names whole stacks with their remaining layers, and
@@ -180,28 +180,32 @@ to the layer's head:
   This adds one merge commit per layer, rewrites none of the layer's own commits, and puts the
   lower tip in the layer's history, which is the ancestry condition § How a stack merges states.
   Do not use `gh pr update-branch`. The REST endpoint behind it was **observed** to refuse a
-  stacked pull request with a **403** (PR #1354, 2026-09-20). That is a field observation on a
-  public-preview feature, not a documented GitHub rule. This is how a superheroes lane brings a
-  layer current.
+  stacked pull request with a **403**. That is a field observation on a public-preview feature, not
+  a documented GitHub rule. This is how a superheroes lane brings a layer current.
 - **Cascading rebase** — GitHub's server-side **Rebase stack** action from a pull request in the
   stack. `gh stack checkout <n>`, then `gh stack rebase`, then `gh stack push` is GitHub's own
   named CLI equivalent, and it belongs to a **local tracked stack an operator owns end to end**,
   because it creates local tracking for the whole stack and force-pushes non-atomically. Either
-  form rewrites every commit of every affected layer, so every layer above the change needs fresh
-  remote-head checks and its review and CI receipts re-taken in full. A lane uses it only when a
-  merge cannot resolve the conflict, and discloses it.
+  form rewrites every commit of every affected layer and moves every affected layer's head; each
+  moved layer then owes what the content pin decides — recompute the digest, and an equal digest
+  re-pins with CI and re-reviews nothing while an unequal digest takes the branch the pin already
+  defines. A lane uses it only when a merge cannot resolve the conflict, and discloses it.
 
 A bring-current is a **mechanical operation**, by merge or by rebase, and the receipt that covers
 it is pinned to **content**: the head sha and the digest of the pull request's diff.
 `skills/showrunner/reference/vet-receipt.md` spine field 1 is the home of that rule and of the
-command that takes the digest. What a lane needs here is the consequence. Recompute the digest
-after the bring-current. **Equal digest**: re-pin the sha in place with a dated line, let CI run on
-the new head, and re-review nothing. **Unequal, or `digest-unavailable`**: `git range-diff` names
-the changed commits, a changed hunk in tests, fixtures or prose takes CI and a disclosure line and
-**no reviewer**, and a changed hunk in **product code** takes the merge train's existing union-fix
-floor. A layer is not rebased while its review loop is open. The field case behind this form is the
-C13 pass of 2026-09-20: seven layers, six re-pinned receipts, recorded on #1272. The tax it removes
-is the per-layer re-review C11 (#1306 through #1335) and C13 (#1322 through #1330) paid.
+command that takes the digest. **The content pin governs every bring-current**, by merge or by
+rebase; any older sentence that reads as an unconditional full re-review is superseded by it. What
+a lane needs here is the consequence. Recompute the digest after the bring-current. **Equal digest**:
+re-pin the sha in place with a dated line, let CI run on the new head, and re-review nothing.
+**Unequal, or `digest-unavailable`**: `git range-diff` names the changed commits. A changed hunk takes
+the **mechanical non-semantic** path — CI and a disclosure line, **no reviewer** — only when the
+change is mechanically non-semantic: whitespace, pure formatting, a comment, or a line re-wrap that
+leaves the rule unchanged. A changed hunk takes the merge train's existing union-fix floor whenever
+it changes **behavior-bearing content**: product code; a test's assertions or fixtures' expected
+values; or any prose that states a rule a session or a gate follows. When it is **not clear** which
+side a hunk falls on, it takes the reviewer floor. A layer is not rebased while its review loop is
+open. The tax it removes is per-layer re-review on bring-currents whose content did not change.
 
 For a **local tracked** stack, `gh stack sync` and `gh stack rebase` are the native verbs and they
 do move local branches. That is why they belong to that route and not to a lane whose layer is under

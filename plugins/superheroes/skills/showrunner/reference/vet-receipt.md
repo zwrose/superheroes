@@ -41,26 +41,32 @@ shape is wrong and the thinking wins.
    the one this receipt records.
 
    **The content pin.** The receipt records the head sha **and the digest of the pull request's
-   diff**. Take the digest from a materialized artifact: write `gh pr diff <n> --patch` to a file,
-   check `gh`'s exit status, assert the file is non-empty, then run `shasum -a 256` over that file.
-   It is not a pipeline, for a reason a careful reader would not guess: a shell pipeline discards
-   `gh`'s exit status, so an auth, network or limit failure hashes **empty input** and two failed
-   reads compare **equal**. That is the fail-open this recipe closes. A read that fails, comes back
-   empty, or is truncated by GitHub's diff limits (20,000 lines, 1 MB, 300 files) is
-   **`digest-unavailable`**, and `digest-unavailable` is treated **exactly as unequal**, never as
-   equal.
+   diff**. Take the digest from a materialized artifact between the **pinned base commit** and the
+   current head — prefer a **locally generated patch** (`git diff <base>..<head> --patch` or
+   equivalent over the two git objects), which cannot be truncated by a server-side display limit and
+   includes merge-commit resolutions in the final tree. Where `gh pr diff <n> --patch` is used instead,
+   materialize it to a file, check `gh`'s exit status, assert the file is non-empty, and **establish
+   completeness**: the response must not be at or over GitHub's stated diff limits (20,000 lines, 1 MB,
+   300 files) and must carry no truncation marker. Then run `shasum -a 256` over that file. It is not
+   a pipeline, for a reason a careful reader would not guess: a shell pipeline discards `gh`'s exit
+   status, so an auth, network or limit failure hashes **empty input** and two failed reads compare
+   **equal**. That is the fail-open this recipe closes. When completeness **cannot** be established —
+   a read that fails, comes back empty, or is truncated — the result is **`digest-unavailable`**, and
+   `digest-unavailable` is treated **exactly as unequal**, never as equal.
 
    **The re-pin form.** After a bring-current the lane recomputes the digest. **Equal:** the sha is
    **re-pinned in place with a dated line**, CI runs on the new head, and **nothing is re-reviewed**.
-   **Unequal, or `digest-unavailable`:** `git range-diff` names the changed commits; a changed hunk
-   in **tests, fixtures or prose** takes CI and a disclosure line and **no reviewer**; a changed hunk
-   in **product code** takes the merge train's **existing union-fix floor** — one cross-vendor read
-   plus a control probe, the rule that exists today for merges, **not a loop**, in
-   `skills/showrunner/reference/merge-train.md`. **A layer is not rebased while its review loop is
-   open.** The equal branch is scoped to **the layer's own diff**: a moved base still takes CI on the
-   new head, which this field already requires. A stack of seven layers came through a bring-current
-   pass on 2026-09-20 with six receipts re-pinned this way and nothing re-reviewed (#1272, comment
-   5750129725).
+   **Unequal, or `digest-unavailable`:** `git range-diff` names the changed commits. A changed hunk
+   takes the **mechanical non-semantic** path — CI and a disclosure line, **no reviewer** — only when
+   the change is mechanically non-semantic: whitespace, pure formatting, a comment, or a line re-wrap
+   that leaves the rule unchanged. A changed hunk takes the merge train's **existing union-fix floor**
+   — one cross-vendor read plus a control probe, the rule that exists today for merges, **not a loop**,
+   in `skills/showrunner/reference/merge-train.md` — whenever it changes **behavior-bearing content**:
+   product code; a test's assertions or fixtures' expected values; or any prose that states a rule a
+   session or a gate follows. When it is **not clear** which side a hunk falls on, it takes the
+   reviewer floor. **A layer is not rebased while its review loop is open.** The equal branch is
+   scoped to **the layer's own diff**: a moved base still takes CI on the new head, which this field
+   already requires.
 
    **The verdict form — how the slot is read.** The `## Advisor vet` owner-half slot's verdict is
    read from **one line**: the **first non-empty line after `<!-- superheroes:advisor-vet -->`**.
@@ -82,12 +88,10 @@ shape is wrong and the thinking wins.
    **Retrofit — a listed edit, not a judgment per pull request.** Every **open** pull request whose
    body carries the advisor-vet marker is brought to this form by **the advisor**, editing the slot's
    first line **in place**, before the reader that consumes the form is live. Identify the population
-   **mechanically**: `gh pr list --state open` ∩ advisor-vet marker present. The **2026-09-20
-   snapshot** is stack 1329's #1322 #1327 #1330 #1343 #1344 #1349 #1354, stack 1353's #1350 #1352
-   #1355 #1357 #1361, and stack 1359's #1351 #1358 — **a snapshot, not the population's
-   definition**: a pull request opened after that date is in the population **by the rule**. A slot
-   whose currency **cannot be proved** — no verdict line, a dropped write, a sha that is not the
-   current head — **reads NOT-READY**.
+   **mechanically**: `gh pr list --state open` ∩ advisor-vet marker present. A pull request opened
+   after the reader goes live is in the population **by the rule**. A slot whose currency **cannot be
+   proved** — no verdict line, a dropped write, a sha that is not the current head — **reads
+   NOT-READY**.
 2. **What I probed.** **Distinct from the builder's own receipts** — re-running a green suite the
    builder already ran is not a probe. Say **what bit**: the mutation that made a named test fail, the
    guard you live-fired, the refusal you provoked. Confirm every **probe residue was reverted**. A
