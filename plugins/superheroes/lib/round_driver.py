@@ -400,10 +400,6 @@ JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
 # Named refusal when loop-state carries an unrecognized dispositionLedgerOwner marker value.
 DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE = "disposition-ledger-owner-unrecognized"
 
-FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE = (
-    "fixed-disposition-finalization-verify-not-pass"
-)
-
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
 POLICY_APPLIED_SOURCE_OWNER_SUPPLIED = "owner-supplied"
 POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED = "owner-unattributed"
@@ -1596,115 +1592,14 @@ def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):
     return receipt
 
 
-def _resolve_merged_into_entry(finding, by_key):
-    """Follow mergedInto through by_key; None when the chain does not resolve."""
-    if not isinstance(finding, dict):
-        return finding
-    if not finding.get(session_contract.MERGED_INTO_FIELD):
-        return finding
-    limit = max(len(by_key), 1)
-    entry = finding
-    visited = set()
-    for _ in range(limit):
-        into = entry.get(session_contract.MERGED_INTO_FIELD)
-        if not isinstance(into, str) or not into:
-            return None
-        if into in visited:
-            return None
-        visited.add(into)
-        target = by_key.get(into)
-        if target is None:
-            return None
-        if not target.get(session_contract.MERGED_INTO_FIELD):
-            return target
-        entry = target
-    return None
-
-
-def _fix_content_proof_path(finding, by_key=None):
-    """File path whose head-content proof binds a fixed disposition."""
-    path = finding.get("file")
-    if by_key is not None and finding.get(session_contract.MERGED_INTO_FIELD):
-        resolved = _resolve_merged_into_entry(finding, by_key)
-        if isinstance(resolved, dict):
-            rep_path = resolved.get("file")
-            if isinstance(rep_path, str) and rep_path:
-                path = rep_path
-    return path
-
-
-def _read_head_content_blobs_for_validation(session_dir):
-    """Return (blobs, err) with the same missing/unreadable classes as certification."""
-    path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
-    if not os.path.isfile(path):
-        return None, None
-    try:
-        with open(path, encoding="utf-8") as fh:
-            blobs = json.load(fh)
-    except (OSError, ValueError):
-        return None, "fix-content-unreadable"
-    if not isinstance(blobs, dict):
-        return None, "fix-content-unreadable"
-    return blobs, None
-
-
-def _fix_still_present_at_head(session_dir, finding, receipt, certified_head, by_key=None):
-    """Driver-side fix-content re-validation — binding_failure classes match certification.
-
-    KNOWN, DISCLOSED RESIDUAL (#1272 layer 2f): this classifier is hand-maintained beside
-    ``round_certification._fix_still_present_at_head`` because the writer must not import the
-    driver (#1271 C12). Parity is guarded by ``test_fix_content_classifier_drift_detector``.
-    """
-    path = _fix_content_proof_path(finding, by_key)
-    if not isinstance(path, str) or not path:
-        return "fix-content-missing"
-    head = receipt.get("headSha") or certified_head
-    if not isinstance(head, str) or not head:
-        return "fix-content-missing"
-    blobs, err = _read_head_content_blobs_for_validation(session_dir)
-    if err is not None:
-        return "fix-content-unreadable"
-    if blobs is None:
-        return "fix-content-missing"
-    if blobs.get("schema") != HEAD_CONTENT_BLOBS_SCHEMA:
-        return "fix-content-schema-unsupported"
-    reads = blobs.get("reads")
-    if not isinstance(reads, list):
-        reads = []
-    matching = [
-        row
-        for row in reads
-        if isinstance(row, dict)
-        and row.get("headSha") == head
-        and row.get("path") == path
-    ]
-    if not matching:
-        return "fix-content-missing"
-    row = matching[-1]
-    if row.get("readError") is not None or not row.get("contentDigest"):
-        return "fix-content-unreadable"
-    content_digest = row["contentDigest"]
-    files = blobs.get("files")
-    file_b64 = files.get(path) if isinstance(files, dict) else None
-    if file_b64 is None:
-        return "fix-content-unreadable"
-    try:
-        raw = base64.b64decode(file_b64, validate=True)
-    except (binascii.Error, ValueError):
-        return "fix-content-unreadable"
-    if hashlib.sha256(raw).hexdigest() != content_digest:
-        return "fix-content-reverted"
-    fix_content_digest = receipt.get("fixContentDigest")
-    if not isinstance(fix_content_digest, str) or not fix_content_digest:
-        return "fix-content-reverted"
-    if content_digest != fix_content_digest:
-        return "fix-content-reverted"
-    return None
-
-
 def _fixed_ledger_rows(state):
-    """Fixed disposition-ledger rows as ordered (key, entry) pairs plus the by_key map."""
-    ledger = _ensure_disposition_ledger(state)
+    """Fixed disposition-ledger rows as ordered (key, entry) pairs plus the by_key map.
+
+    A pure read: a ledger that is not a list yields no rows and is never repaired here, so no
+    read path can launder a malformed ledger past the fold chokepoint's ``bc-03`` refusal."""
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
+    if not isinstance(ledger, list):
+        return [], {}
     seen = _ledger_index_by_key(ledger)
     by_key = {
         key: ledger[idx]
@@ -1720,79 +1615,21 @@ def _fixed_ledger_rows(state):
     return rows, by_key
 
 
-def _finalize_fixed_disposition_receipts(state, session_dir, config):
-    """Re-bind fixed receipts to the certified head when provable; record residuals otherwise."""
-    _ = config
-    rows, by_key = _fixed_ledger_rows(state)
-    pending = []
+def _backfill_fixed_disposition_verify_receipts(state, round_no, verify_result):
+    """Stamp verify on fixed receipts when audits folded before verify in the same round."""
+    if verify_result is None:
+        return
+    rows, _by_key = _fixed_ledger_rows(state)
     for key, entry in rows:
+        if entry.get("dispositionRound") != round_no:
+            continue
         receipt = entry.get("dispositionReceipt")
-        if not isinstance(receipt, dict):
-            pending.append((key, None, None))
+        if not isinstance(receipt, dict) or receipt.get("verifyResult") is not None:
             continue
-        pending.append((key, entry, dict(receipt)))
-    if not pending:
-        return None
-    certified_head = _session_certified_head(session_dir, state)
-    residuals = {}
-    for key, entry, original_receipt in pending:
-        if entry is None:
-            residuals[key] = "fix-content-missing"
-            continue
-        if not isinstance(certified_head, str) or not certified_head:
-            residuals[key] = "fix-content-missing"
-            continue
-        existing_head = original_receipt.get("headSha")
-        head_unchanged = (
-            isinstance(existing_head, str) and existing_head and existing_head == certified_head
-        )
-        probe_receipt = dict(original_receipt)
-        if not head_unchanged:
-            probe_receipt["headSha"] = certified_head
-        binding_failure = _fix_still_present_at_head(
-            session_dir, entry, probe_receipt, certified_head, by_key=by_key
-        )
-        if binding_failure:
-            if head_unchanged and original_receipt.get("verifyResult") is None:
-                verify_result = _verify_result_for_disposition(
-                    state, state.get("round"), certified_head
-                )
-                if verify_result != "pass":
-                    residuals[key] = FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
-                    continue
-                stamp_receipt = dict(original_receipt)
-                stamp_receipt["verifyResult"] = verify_result
-                _record_disposition(
-                    state,
-                    key,
-                    "fixed",
-                    entry.get("dispositionRound"),
-                    dispositionReceipt=stamp_receipt,
-                )
-                continue
-            residuals[key] = binding_failure
-            continue
-        updated_receipt = dict(original_receipt)
-        if not head_unchanged:
-            updated_receipt["headSha"] = certified_head
-        verify_result = _verify_result_for_disposition(
-            state, state.get("round"), certified_head
-        )
-        if verify_result != "pass":
-            residuals[key] = FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
-            continue
+        updated_receipt = dict(receipt)
         updated_receipt["verifyResult"] = verify_result
         _record_disposition(
-            state,
-            key,
-            "fixed",
-            entry.get("dispositionRound"),
-            dispositionReceipt=updated_receipt,
-        )
-    if residuals:
-        state["_fixedDispositionFinalizationResiduals"] = residuals
-    return None
-
+            state, key, "fixed", round_no, dispositionReceipt=updated_receipt)
 
 def _archive_departures(state, departing):
     """Write every departing keyed finding into dispositionLedger (replace-by-key)."""
@@ -4007,6 +3844,8 @@ def _fold_verify(state, config, artifact):
     names the class — never advances into a delta round that could later certify."""
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
+    if result == "pass":
+        _backfill_fixed_disposition_verify_receipts(state, state["round"], result)
     if result == "fail":
         state["terminal"] = "halted"
         state["certification"] = {"shape": None, "reason": "verify gate failed"}
@@ -5540,12 +5379,12 @@ def _resolve_repo_root(session_dir, state):
 
 def _fixed_ledger_content_paths(state, artifact=None):
     """Proof paths for fixed ledger rows plus any fix-batch paths at the certified head."""
-    rows, by_key = _fixed_ledger_rows(state)
+    rows, _by_key = _fixed_ledger_rows(state)
     paths = []
     seen = set()
     for key, entry in rows:
         _ = key
-        path = _fix_content_proof_path(entry, by_key)
+        path = entry.get("file")
         if isinstance(path, str) and path and path not in seen:
             seen.add(path)
             paths.append(path)
@@ -5617,14 +5456,15 @@ def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None
 
 
 def _finalize_certification_inputs(session_dir, state, head_sha=None, artifact=None):
-    """One terminal step: persist head-content blobs, re-bind fixed receipts, save state."""
+    """The one terminal step both certification legs reach — persists head-content blobs.
+
+    It is deliberately empty of receipt finalization: #1272 layer 2g plugs the certified-head
+    re-bind in here, and this chokepoint exists so that both legs get it at once."""
     if not session_dir:
         return
     head = head_sha or _session_certified_head(session_dir, state)
     if isinstance(head, str) and head:
         _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
-    _finalize_fixed_disposition_receipts(state, session_dir, state.get("config") or {})
-    save_state(session_dir, state)
 
 
 def _fix_batch_paths(state, artifact=None):

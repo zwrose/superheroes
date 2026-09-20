@@ -553,7 +553,7 @@ def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
     state["rounds"]["2"]["fixFoldHead"] = head2
     entry = _ledger_by_key(state)[key]
     receipt_after = entry.get("dispositionReceipt") or {}
-    assert receipt_after.get("verifyResult") is None
+    assert receipt_after.get("verifyResult") == "pass"
     assert receipt_after.get("headSha") == head2
 
     state["dispositionLedgerOwner"] = "ledger"
