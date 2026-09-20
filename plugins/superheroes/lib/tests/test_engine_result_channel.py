@@ -1022,3 +1022,40 @@ def test_completion_stamp_bad_digest_returns_none(digest):
 @pytest.mark.parametrize("mono_deadline", [True, False, "x", None, {}])
 def test_deadline_stamp_bad_mono_deadline_returns_none(mono_deadline):
     assert ERC.deadline_stamp(mono_deadline) is None
+
+
+# --- canonical_payload_digest (#1273 WO-B) ---
+
+
+def test_canonical_payload_digest_stable_across_key_order():
+    first = ERC.canonical_payload_digest({"a": 1, "b": 2})
+    second = ERC.canonical_payload_digest({"b": 2, "a": 1})
+    assert first is not None
+    assert first == second
+
+
+@pytest.mark.parametrize("bad_obj", [
+    [],
+    "x",
+    {"nested": {1, 2}},
+    {"value": float("nan")},
+])
+def test_canonical_payload_digest_returns_none_for_edge_one_inputs(bad_obj):
+    assert ERC.canonical_payload_digest(bad_obj) is None
+
+
+@pytest.mark.parametrize("bad_digest", [
+    "+" + "a" * 63,
+    "a_" + "a" * 62,
+    "A" * 64,
+    "a" * 63,
+    "a" * 65,
+    1,
+])
+def test_is_valid_sha256_hex_rejects_non_canonical_shapes(bad_digest):
+    assert ERC._is_valid_sha256_hex(bad_digest) is False
+
+
+def test_is_valid_sha256_hex_accepts_hashlib_output():
+    digest = ERC.payload_digest(b"x")
+    assert ERC._is_valid_sha256_hex(digest) is True

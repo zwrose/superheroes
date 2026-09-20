@@ -1403,6 +1403,7 @@ def _run_engine_files_background(
     bg_resumable = False
     timed_out = False
     timeout_at = None
+    completion_stamp = None
     wall_cap = _attempt_bg_wall_cap(opened, attempt)
     wall_seconds = round(_NOW() - start, 1) + prior_wall_seconds
 
@@ -1428,6 +1429,11 @@ def _run_engine_files_background(
             if engine_adapter.claude_transcript_turn_ended(rows_after_cursor):
                 payload = engine_adapter.claude_transcript_result(rows)
                 tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
+                if payload is not None and completion_stamp is None:
+                    completion_stamp = engine_result_channel.completion_stamp(
+                        time.monotonic(),
+                        engine_result_channel.canonical_payload_digest(payload),
+                    )
                 result_path = _native_result_path(run_dir_real, attempt)
                 if result_path is None:
                     transcript_result = "error"
@@ -1460,6 +1466,11 @@ def _run_engine_files_background(
                 if engine_adapter.claude_transcript_turn_ended(rows_after_cursor):
                     payload = engine_adapter.claude_transcript_result(rows)
                     tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
+                    if payload is not None and completion_stamp is None:
+                        completion_stamp = engine_result_channel.completion_stamp(
+                            time.monotonic(),
+                            engine_result_channel.canonical_payload_digest(payload),
+                        )
                     result_path = _native_result_path(run_dir_real, attempt)
                     if result_path is None:
                         transcript_result = "error"
@@ -1531,6 +1542,10 @@ def _run_engine_files_background(
         ended_record["bgStop"] = bg_stop
     if timed_out:
         ended_record["timeoutAt"] = timeout_at
+        _apply_completion_stamp(
+            ended_record, engine_result_channel.deadline_stamp(deadline),
+        )
+    _apply_completion_stamp(ended_record, completion_stamp)
     _journal_bg_ended(ended_record)
 
 
@@ -3696,6 +3711,127 @@ def _sample_stream_sizes(stdout_path, stderr_path):
     return stdout_sz, stderr_sz
 
 
+def _apply_completion_stamp(ended_record, stamp):
+    """Merge a completion stamp onto an attempt-ended record when present. Never raises."""
+    if isinstance(stamp, dict):
+        ended_record.update(stamp)
+
+
+def _observe_stdout_completion(obs_state, stdout_path):
+    """Stamp stdout delivery completion on first valid observation. Never raises.
+
+    Observation error is bounded by _ATTEMPT_POLL_INTERVAL (0.2s): a result completing
+    inside the final poll period before the cap may be stamped just after the deadline.
+    Size unchanged since the prior call is a cheap guard against re-parsing, not a
+    completion test."""
+    if obs_state.get("stamp") is not None:
+        return
+    try:
+        size = os.path.getsize(stdout_path)
+    except OSError:
+        return
+    if size == 0:
+        return
+    prev = obs_state.get("prev_size", 0)
+    if size == prev:
+        return
+    obs_state["prev_size"] = size
+    try:
+        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+    except Exception:
+        return
+    env = engine_adapter.claude_result_envelope(stdout)
+    if (not isinstance(env, dict)
+            or env.get("is_error") is True
+            or "structured_output" not in env):
+        return
+    digest = engine_result_channel.canonical_payload_digest(env["structured_output"])
+    stamp = engine_result_channel.completion_stamp(time.monotonic(), digest)
+    if stamp is not None:
+        obs_state["stamp"] = stamp
+
+
+def _observe_native_file_completion(obs_state, run_dir_real, attempt):
+    """Stamp argv/prompt delivery completion on first stable file plateau. Never raises."""
+    if obs_state.get("stamp") is not None:
+        return
+    result_path = _native_result_path(run_dir_real, attempt)
+    if result_path is None:
+        return
+    try:
+        # Producer-side size guard only — not on WO-C's admission-path census.
+        size = os.path.getsize(result_path)
+    except OSError:
+        return
+    if size == 0:
+        return
+    prev = obs_state.get("prev_size", 0)
+    if prev == 0:
+        obs_state["prev_size"] = size
+        return
+    if size != prev:
+        obs_state["prev_size"] = size
+        return
+    try:
+        with open(result_path, encoding="utf-8") as fh:
+            obj = json.load(fh)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return
+    if not isinstance(obj, dict):
+        return
+    digest = engine_result_channel.canonical_payload_digest(obj)
+    stamp = engine_result_channel.completion_stamp(time.monotonic(), digest)
+    if stamp is not None:
+        obs_state["stamp"] = stamp
+
+
+def _observe_attempt_completions(
+        delivery, stdout_obs, native_obs, run_dir_real, attempt, stdout_path,
+):
+    """Poll-loop observation hook for stdout and native-file deliveries. Never raises."""
+    if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        _observe_stdout_completion(stdout_obs, stdout_path)
+    elif delivery in (
+        engine_result_channel.RESULT_DELIVERY_ARGV,
+        engine_result_channel.RESULT_DELIVERY_PROMPT,
+    ):
+        _observe_native_file_completion(native_obs, run_dir_real, attempt)
+
+
+def _completion_payload_for_delivery(
+        delivery, run_dir_real, attempt, opened, stdout, stdout_path,
+):
+    """Derive the payload object a delivery stamps, or None. Never raises."""
+    if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        env = engine_adapter.claude_result_envelope(stdout)
+        if (not isinstance(env, dict)
+                or env.get("is_error") is True
+                or "structured_output" not in env):
+            return None
+        return env["structured_output"]
+    if delivery == engine_result_channel.RESULT_DELIVERY_TRANSCRIPT:
+        rows = _read_transcript_rows(stdout_path)
+        if rows is None:
+            return None
+        return engine_adapter.claude_transcript_result(rows)
+    if delivery in (
+        engine_result_channel.RESULT_DELIVERY_ARGV,
+        engine_result_channel.RESULT_DELIVERY_PROMPT,
+    ):
+        result_path = _native_result_path(run_dir_real, attempt)
+        if result_path is None:
+            return None
+        try:
+            with open(result_path, encoding="utf-8") as fh:
+                obj = json.load(fh)
+        except (OSError, json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(obj, dict):
+            return None
+        return obj
+    return None
+
+
 def _fold_stream_activity(stdout_path, stderr_path, prev_stdout, prev_stderr,
                           last_activity_at, activity_stream):
     """Final post-reap sample (BC-7): fold mtime/size growth into activity telemetry."""
@@ -3890,7 +4026,13 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     activity_stream = None
     prev_stdout = 0
     prev_stderr = 0
+    stdout_completion_obs = {"stamp": None, "prev_size": 0}
+    native_completion_obs = {"stamp": None, "prev_size": 0}
     while True:
+        _observe_attempt_completions(
+            delivery, stdout_completion_obs, native_completion_obs,
+            run_dir_real, attempt, stdout_path,
+        )
         rc = proc.poll()
         now = time.monotonic()
         if now - last_beat >= HEARTBEAT_INTERVAL:
@@ -3910,6 +4052,10 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
                 pass
         if rc is not None:
             natural_rc = rc
+            _observe_attempt_completions(
+                delivery, stdout_completion_obs, native_completion_obs,
+                run_dir_real, attempt, stdout_path,
+            )
             break
         if now - start >= timeout:
             timed_out = True
@@ -3917,6 +4063,10 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             # result written during the SIGTERM/SIGKILL grace window can be told apart from
             # one written before the cap (see timeoutAt on the ended record).
             timeout_at = timeout_deadline_wall
+            _observe_attempt_completions(
+                delivery, stdout_completion_obs, native_completion_obs,
+                run_dir_real, attempt, stdout_path,
+            )
             break
         time.sleep(_ATTEMPT_POLL_INTERVAL)
     _terminate_process_group(pgid)
@@ -3952,6 +4102,12 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     }
     if timed_out:
         ended_record["timeoutAt"] = timeout_at
+        deadline = engine_result_channel.deadline_stamp(start + timeout)
+        _apply_completion_stamp(ended_record, deadline)
+    completion_stamp = stdout_completion_obs.get("stamp")
+    if completion_stamp is None:
+        completion_stamp = native_completion_obs.get("stamp")
+    _apply_completion_stamp(ended_record, completion_stamp)
     if prompt_bytes is not None:
         ended_record["promptBytes"] = prompt_bytes
     if stdout_observed is not None:
@@ -4077,6 +4233,23 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     except OSError:
         pass
 
+    completion_stamp = None
+    try:
+        inj_delivery = engine_result_channel.result_delivery(
+            opened.get("engine"), opened.get("claudeMode"),
+        )
+    except (engine_result_channel.UnknownEngineError, ValueError):
+        inj_delivery = None
+    if inj_delivery is not None:
+        inj_payload = _completion_payload_for_delivery(
+            inj_delivery, run_dir_real, attempt, opened, stdout, stdout_path,
+        )
+        if inj_payload is not None:
+            completion_stamp = engine_result_channel.completion_stamp(
+                time.monotonic(),
+                engine_result_channel.canonical_payload_digest(inj_payload),
+            )
+
     stdout_result = _materialize_stdout_result(
         run_dir_real, attempt, opened, stdout_path,
     )
@@ -4122,6 +4295,8 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
             ended["stdoutResult"] = stdout_result
     if timed_out:
         ended["timeoutAt"] = timeout_deadline_wall
+        _apply_completion_stamp(ended, engine_result_channel.deadline_stamp(t0 + timeout))
+    _apply_completion_stamp(ended, completion_stamp)
     _journal_append(run_dir_real, ended)
     return True, ""
 
@@ -5277,7 +5452,11 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         _stop_live_background_sessions(
                             state, opened, run_dir_real=run_dir_real,
                         )
-                        _journal_append(run_dir_real, {
+                        # axis: supervisor budget exhaustion — deadline only, no completion
+                        # stamp: this record is written in the supervisor process, so its epoch
+                        # differs from any run-child's and WO-A's epoch-equality check must forfeit
+                        # any completion claimed across that boundary.
+                        budget_ended = {
                             "kind": "attempt-ended", "attempt": latest,
                             "exit": None, "timedOut": True, "signal": None,
                             "refusal": None, "at": time.time(),
@@ -5286,7 +5465,12 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             "capSeconds": _attempt_bg_wall_cap(opened, latest),
                             "launchId": suspended.get("launchId"),
                             "bgSessionId": suspended.get("bgSessionId"),
-                        })
+                        }
+                        _apply_completion_stamp(
+                            budget_ended,
+                            engine_result_channel.deadline_stamp(time.monotonic()),
+                        )
+                        _journal_append(run_dir_real, budget_ended)
                         time.sleep(SUPERVISOR_POLL_INTERVAL)
                         continue
                     ok_spawn, detail = _spawn_attempt(

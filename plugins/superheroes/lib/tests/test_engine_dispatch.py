@@ -15984,3 +15984,264 @@ def test_claude_print_mode_unchanged_by_background_flow(tmp_path, monkeypatch):
     assert "launchId" not in ended
     assert "transcriptResult" not in ended
 
+
+# --- result completion producers (#1273 WO-B) ---
+
+_COMPLETION_KEYS = (
+    ERC.FIELD_RESULT_COMPLETE_AT,
+    ERC.FIELD_RESULT_COMPLETE_EPOCH,
+    ERC.FIELD_RESULT_COMPLETE_SHA256,
+)
+
+
+def _assert_completion_keys(ended, payload):
+    for key in _COMPLETION_KEYS:
+        assert key in ended
+    assert ended[ERC.FIELD_RESULT_COMPLETE_SHA256] == ERC.canonical_payload_digest(payload)
+
+
+def _install_fake_claude(monkeypatch, tmp_path, script_body):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_claude = fake_bin / "claude"
+    fake_claude.write_text("#!/usr/bin/env python3\n" + script_body, encoding="utf-8")
+    fake_claude.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+
+
+def _journal_claude_stdout_run_for_engine_files(tmp_path, run_dir, prompt_path, monkeypatch):
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _reviewer_claude_seat()
+    argv = _claude_argv_for_run(seat, "review", run_dir)
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "claude", list(argv), ED.RUN_KIND_REVIEW,
+    )
+    assert native_err is None, native_err
+    record = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "claude",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "completion-producer",
+        "argv": argv, "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "configDir": cfg,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    if native_schema_path is not None:
+        record["nativeSchemaPath"] = native_schema_path
+    ED._journal_append(run_dir, record)
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    return argv
+
+
+def test_completion_producer_argv_delivery_records_stamp(tmp_path, monkeypatch):
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    script = (
+        "import sys\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        % native_write
+    )
+    run_dir = str(tmp_path / "argv-completion")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, payload)
+
+
+def test_completion_producer_prompt_delivery_records_stamp(tmp_path, monkeypatch):
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    script = (
+        "import sys\n"
+        "_stdin = sys.stdin.read()\n"
+        "_prefix = %r\n"
+        "_path = None\n"
+        "for _line in _stdin.splitlines():\n"
+        "    if _line.startswith(_prefix):\n"
+        "        _path = _line[len(_prefix):].strip()\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        % (ERC.RESULT_FILE_LINE_PREFIX, native_write)
+    )
+    run_dir = str(tmp_path / "prompt-completion")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _cursor_seat(role=_WRITE_ROLE)
+    argv = _journal_cursor_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_cursor(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, payload)
+
+
+def test_completion_producer_stdout_delivery_fast_exit_records_stamp(tmp_path, monkeypatch):
+    """axis: fast-exit observation — stamp must exist when the child exits between heartbeats."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream = _claude_event_stream(result=structured)
+    # Emit after one poll period so the first iteration sees empty stdout; the stamp must
+    # come from a later poll-iteration observation, not the rc branch alone (BP-B1).
+    script = (
+        "import sys, time\n"
+        "time.sleep(0.25)\n"
+        "sys.stdout.write(%r)\n"
+        % stream
+    )
+    run_dir = str(tmp_path / "stdout-fast-exit")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 60)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, structured)
+
+
+def test_completion_producer_transcript_delivery_records_stamp(tmp_path, monkeypatch):
+    cfg, launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "transcript-completion")
+    opened = _plant_claude_background_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured, tool_calls=1))
+    _run_bg_engine_files(tmp_path, run_dir, opened)
+    ended = _bg_attempt_ended(run_dir)
+    _assert_completion_keys(ended, structured)
+
+
+def test_completion_producer_rewrite_keeps_first_digest(tmp_path, monkeypatch):
+    """axis: edge 8 — first observation wins; a later rewrite must not replace the digest."""
+    first = _native_write_result_json(report="first")
+    second = _native_write_result_json(report="second rewritten")
+    script = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        "    time.sleep(0.6)\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+        % (first, second)
+    )
+    run_dir, state, ended = _run_codex_native_write_timeout_script(
+        tmp_path, monkeypatch, script, timeout=2,
+    )
+    first_payload = json.loads(first)
+    _assert_completion_keys(ended, first_payload)
+    assert ended[ERC.FIELD_RESULT_COMPLETE_SHA256] != ERC.canonical_payload_digest(
+        json.loads(second),
+    )
+
+
+def test_completion_producer_timed_out_foreground_carries_deadline_stamp(tmp_path, monkeypatch):
+    native_write = _native_write_result_json()
+    script = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+        % native_write
+    )
+    run_dir, _state, ended = _run_codex_native_write_timeout_script(
+        tmp_path, monkeypatch, script,
+    )
+    assert ended["timedOut"] is True
+    assert ERC.FIELD_DEADLINE_MONO in ended
+    assert ERC.FIELD_DEADLINE_EPOCH in ended
+    if ERC.FIELD_RESULT_COMPLETE_EPOCH in ended:
+        assert ended[ERC.FIELD_DEADLINE_EPOCH] == ended[ERC.FIELD_RESULT_COMPLETE_EPOCH]
+
+
+def test_supervise_bg_budget_exhaustion_carries_deadline_not_completion(tmp_path, monkeypatch):
+    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "bg-budget-deadline-stamp")
+    opened = _plant_claude_background_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    cap = opened["timeout"]
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1,
+        "childPid": None, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "background-launched", "attempt": 1,
+        "launchId": launch_id, "bgSessionId": session_id, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-suspended", "attempt": 1,
+        "launchId": launch_id, "bgSessionId": session_id,
+        "wallSeconds": cap, "transcriptRowCursor": 0,
+        "at": time.time(),
+    })
+    monkeypatch.setattr(ED, "_spawn_attempt", lambda *a, **k: (False, "blocked"))
+    ED._supervise(
+        run_dir, run_kind=ED.RUN_KIND_REVIEW, deadline=time.monotonic() + 5,
+    )
+    ended = _bg_attempt_ended(run_dir)
+    assert ERC.FIELD_DEADLINE_MONO in ended
+    assert ERC.FIELD_DEADLINE_EPOCH in ended
+    for key in _COMPLETION_KEYS:
+        assert key not in ended
+

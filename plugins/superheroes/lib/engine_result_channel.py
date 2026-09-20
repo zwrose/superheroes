@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import uuid
 
@@ -101,11 +102,11 @@ def _is_valid_sha256_hex(value):
     """True when value is a 64-character lowercase hex string. Never raises."""
     if not isinstance(value, str) or len(value) != 64:
         return False
-    try:
-        int(value, 16)
-    except ValueError:
-        return False
-    return value == value.lower()
+    hex_chars = "0123456789abcdef"
+    for ch in value:
+        if ch not in hex_chars:
+            return False
+    return True
 
 
 def mono_epoch():
@@ -114,6 +115,23 @@ def mono_epoch():
     if _mono_epoch_cache is None:
         _mono_epoch_cache = "%d-%s" % (os.getpid(), uuid.uuid4().hex)
     return _mono_epoch_cache
+
+
+def canonical_payload_digest(obj):
+    """Canonical JSON digest for native result objects; None when not a serializable dict. Never raises."""
+    if not isinstance(obj, dict):
+        return None
+    try:
+        raw = json.dumps(
+            obj,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        return None
+    return payload_digest(raw)
 
 
 def payload_digest(data):
