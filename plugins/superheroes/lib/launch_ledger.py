@@ -1190,9 +1190,9 @@ def fold(records):
                 # lane that overlapped nothing and on every pre-#1054 record — the two are
                 # deliberately indistinguishable, because neither ran over an overlap.
                 "surfaceOverlap": rec.get("surfaceOverlap"),
-                # Premise stack and dependency fields are absent on pre-stack records and on
-                # records whose premise omits or malforms them — the documented signal is
-                # None, not a missing key.
+                # Premise stack fields are absent on pre-stack records and on records whose
+                # premise omits or malforms them — the documented signal is None, not a
+                # missing key.
                 "stack": _fold_premise_positive_int(rec.get("premise"), "stack"),
                 "layerPosition": _fold_premise_positive_int(
                     rec.get("premise"), "layerPosition",
@@ -1200,7 +1200,6 @@ def fold(records):
                 "layersPlanned": _fold_premise_positive_int(
                     rec.get("premise"), "layersPlanned",
                 ),
-                "dependency": _fold_premise_positive_int(rec.get("premise"), "dependency"),
             }
             continue
 
