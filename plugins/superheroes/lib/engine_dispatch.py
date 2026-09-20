@@ -6336,6 +6336,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                     engine=opened.get("engine"),
                     run_kind=RUN_KIND_WRITE,
                 )
+            # axis: unreachable while declared claude modes are exactly print and background — background-write refusal above precedes every path that could reach this; a third declared mode makes it live and the census in test_engine_dispatch_write.py fails when that happens.
             if (
                 claude_mode is not None
                 and engine_result_channel.normalize_claude_mode(claude_mode)

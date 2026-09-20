@@ -14502,6 +14502,45 @@ def test_stdout_delivery_gate_unresolved_delivery_forfeits(tmp_path, monkeypatch
     assert gate["detail"] == "result-delivery-unresolved"
 
 
+def test_stdout_delivery_gate_transcript_branch(tmp_path, monkeypatch):
+    # axis: transcript delivery branch discriminates missing, occupied, and materialized transcriptResult
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+
+    def _gate_for_transcript_result(*, transcript_result=None):
+        run_dir = str(tmp_path / ("transcript-gate-%s" % (transcript_result or "missing")))
+        opened = _plant_claude_background_journal(
+            tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+        )
+        assert ERC.result_delivery(opened["engine"], opened["claudeMode"]) == (
+            ERC.RESULT_DELIVERY_TRANSCRIPT
+        )
+        ED._journal_append(run_dir, {
+            "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+        })
+        ended = {"kind": "attempt-ended", "attempt": 1, "exit": 0, "at": time.time()}
+        if transcript_result is not None:
+            ended["transcriptResult"] = transcript_result
+        ED._journal_append(run_dir, ended)
+        return ED._stdout_delivery_gate(run_dir, 1, opened)
+
+    gate_missing = _gate_for_transcript_result()
+    assert gate_missing == {
+        "forfeit": True,
+        "reason": ED.dispatch_outcome.REASON_FORFEITED,
+        "detail": "native-result-missing",
+    }
+
+    gate_occupied = _gate_for_transcript_result(transcript_result="occupied")
+    assert gate_occupied == {
+        "forfeit": True,
+        "reason": ED.dispatch_outcome.REASON_FORFEITED,
+        "detail": "native-result-path-occupied",
+    }
+
+    assert _gate_for_transcript_result(transcript_result="materialized") is None
+
+
 def test_native_materializer_delivery_census():
     assert ED._NATIVE_MATERIALIZER_DELIVERIES <= ERC.RESULT_DELIVERY_MEMBERS
     assert ED._NATIVE_MATERIALIZER_DELIVERIES == frozenset({

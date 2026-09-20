@@ -3784,7 +3784,9 @@ def test_legacy_write_journal_without_claude_mode_continues_with_explicit_print(
     assert ED._spawn_argv_coherence(opened, opened["argv"])[1] is None
 
 
-def test_run_dir_claude_mode_mismatch_refused_write(tmp_path, monkeypatch):
+def test_background_journal_refuses_claude_mode_background_write_before_run_dir_mismatch(
+    tmp_path, monkeypatch,
+):
     _ensure_claude_config_dir(tmp_path, monkeypatch)
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "mode-mismatch")
@@ -3803,8 +3805,17 @@ def test_run_dir_claude_mode_mismatch_refused_write(tmp_path, monkeypatch):
         claude_mode="print",
     )
     assert res["detail"] == ED.MODE_REFUSAL_CLAUDE_MODE_BACKGROUND_WRITE
+    assert res["detail"] != ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH
     assert res["attempts"] == 0
     assert len(fake.calls) == 0
     records, _ = ED._journal_read(run_dir)
     assert len([r for r in records if r.get("kind") == "run-opened"]) == 1
     assert records[0]["argv"] == planted["argv"]
+
+
+def test_claude_mode_literal_census_pins_write_path_mismatch_gate_reachability():
+    # axis: declared claude mode literals pin when write-path run-dir-claude-mode-mismatch becomes reachable
+    assert ERC.CLAUDE_MODES == ("print", "background"), (
+        "a new claude mode makes the write-path run-dir-claude-mode-mismatch gate reachable; "
+        "the gate now needs a real test"
+    )
