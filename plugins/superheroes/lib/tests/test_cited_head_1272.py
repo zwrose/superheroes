@@ -13,6 +13,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import engine_dispatch  # noqa: E402
+import round_adapters  # noqa: E402
 import round_driver as RD  # noqa: E402
 import round_records as RR  # noqa: E402
 import session_contract  # noqa: E402
@@ -449,3 +450,88 @@ def test_reappend_preserves_runner_view_cited_head_source(tmp_path, adapters):
     reappended = [e for e in RD.read_journal(d) if e.get("reappended") is True]
     assert len(reappended) == 1
     assert reappended[0]["citedHeadSource"] == RR.CITED_HEAD_SOURCE_RUNNER_VIEW
+
+
+def _setup_fixer_sweep_fresh_head_diff(tmp_path):
+    findings = [_TDI._blocking_finding("missing bounds guard", 2)]
+    session_dir, gitdir, head_path = _TDI._bootstrap(tmp_path, name="cited-head-sweep-bind")
+    _TDI._drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_FIXER)
+    state = _state(session_dir)
+    pend = state["pending"]
+    roster, _ = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
+    seat = roster[0]
+    slots = _TDI._slots_of(roster)
+    _TDI._write_dispatch_manifest(session_dir, pend, slots, _TDI._auditor_vendor_for(state))
+    bind_head_path = str(tmp_path / "fixer-sweep-bind-head.diff")
+    with open(bind_head_path, "w", encoding="utf-8") as fh:
+        fh.write("diff --git a/f.py b/f.py\n+sweep-bind\n")
+    payload = _TDI._payload_for(session_dir, state, pend, seat, findings, bind_head_path)
+    _TDI._land(session_dir, state, pend, seat, payload, occurrence=0)
+    return session_dir, pend, seat
+
+
+def test_sweep_store_head_diff_declares_order_anchor_cited_head_source(tmp_path):
+    session_dir, pend, seat = _setup_fixer_sweep_fresh_head_diff(tmp_path)
+    out = RD.cmd_record_result(session_dir, sweep=True)
+    assert out["ok"], out
+    spath = RR.store_path(session_dir, pend["round"], pend["phase"],
+                          RR.storage_key(seat), pend["attempt"])
+    stored, err = RR.read_json(spath)
+    assert err is None
+    assert stored["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
+    rows = [r for r in RD.read_journal(session_dir)
+            if r.get("outcome") == "recorded" and r.get("cmd") == "record-result"
+            and r.get("seat") == seat]
+    assert rows
+    assert rows[-1]["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
+
+
+def test_sweep_record_journal_declares_order_anchor_cited_head_source(tmp_path):
+    session_dir, gitdir, head_path = _TDI._bootstrap(tmp_path, name="cited-head-sweep-record")
+    state = _state(session_dir)
+    pend = state["pending"]
+    assert pend["phase"] == RD.P_PANEL
+    roster, _ = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
+    slots = _TDI._slots_of(roster)
+    _TDI._write_dispatch_manifest(session_dir, pend, slots, _TDI._auditor_vendor_for(state))
+    seat, occurrence = slots[0]
+    _TDI._land(session_dir, state, pend, seat,
+               _TDI._payload_for(session_dir, state, pend, seat, [], head_path),
+               occurrence=occurrence)
+    out = RD.cmd_record_result(session_dir, sweep=True)
+    assert out["ok"], out
+    rows = [r for r in RD.read_journal(session_dir)
+            if r.get("outcome") == "recorded" and r.get("cmd") == "record-result"
+            and r.get("seat") == seat]
+    assert rows
+    assert rows[-1]["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
+
+
+def _at_run_verify(tmp_path, session_dir):
+    _record_all_panel_seats(session_dir)
+    assert _advance(session_dir, tmp_path)["ok"] is True
+    state = _state(session_dir)
+    state["step"] = RD.P_VERIFY
+    state["_advanceUsed"] = True
+    state["pending"] = {"action": RD.P_VERIFY, "round": state["round"], "phase": RD.P_VERIFY,
+                        "attempt": 0, "payload": {"command": "none"}}
+    RD.save_state(session_dir, state)
+
+
+def test_orchestrator_fulfilled_declares_order_anchor_cited_head_source(tmp_path, adapters):
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    pend = _pending(d)
+    skey = RR.storage_key("verify")
+    path = RR.bare_payload_path(d, pend["round"], pend["phase"], skey, pend["attempt"])
+    RR.atomic_write_json(path, {"result": "pass"})
+    out = _advance(d, tmp_path)
+    assert out["ok"], out
+    store_path = RR.store_path(d, pend["round"], RD.P_VERIFY, skey, pend["attempt"])
+    stored, err = RR.read_json(store_path)
+    assert err is None
+    assert stored["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
+    rows = [r for r in RD.read_journal(d)
+            if r.get("outcome") == "recorded" and r.get("seat") == "verify"]
+    assert rows
+    assert rows[-1]["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
