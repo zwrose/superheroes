@@ -1349,6 +1349,7 @@ def _strip_disposition_family(entry):
 
 def _backfill_ledger_from_records(state, ledger, seen):
     """On first ledger-owner activation, seed missing keys from review-record history."""
+    preexisting = set(seen)
     for rec in state.get("_records") or []:
         if not isinstance(rec, dict):
             continue
@@ -1357,6 +1358,8 @@ def _backfill_ledger_from_records(state, ledger, seen):
                 continue
             key = _finding_identity_key(finding)
             if not key:
+                continue
+            if key in preexisting:
                 continue
             entry = _strip_disposition_family(dict(finding))
             if key in seen:

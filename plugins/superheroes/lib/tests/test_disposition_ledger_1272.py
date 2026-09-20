@@ -587,6 +587,62 @@ def test_C13_prior_verify_without_fix_fold_head_not_carried():
     assert receipt2.get("verifyResult") is None
 
 
+def test_C13_merged_important_out_of_scope_disclosure_reads_representative_reason(tmp_path):
+    rep = {"file": "m.py", "line": 1, "title": "root a", "severity": "Minor",
+           "verdict": "CONFIRMED"}
+    member = {"file": "m.py", "line": 2, "title": "root b", "severity": "Important",
+              "verdict": "CONFIRMED"}
+    compiled, _ = RD.mechanical_compile([rep, member], None)
+    state = RD.new_state(_cfg())
+    RD._stage_findings(state, compiled)
+    staged = V.stage_ids(compiled)
+    key0 = SC.finding_identity_key(staged[0])
+    key1 = SC.finding_identity_key(staged[1])
+    rep_reason = "deferred to next release"
+    follow_up = {"item": "defer auth redesign", "revisitTrigger": "when #1300 lands",
+                 "classClosure": "tracked separately"}
+    RD._record_disposition(state, key0, "out-of-scope", 1,
+                           outOfScopeReason=rep_reason, followUp=follow_up)
+    ledger = _ledger_by_key(state)
+    member_entry = dict(ledger[key1])
+    member_entry[SC.MERGED_INTO_FIELD] = key0
+    state["dispositionLedgerOwner"] = "ledger"
+    state["findings"] = []
+    state["dispositionLedger"] = [ledger[key0], member_entry]
+    ctx = _ctx(state, tmp_path)
+    assert RC.check_disposition_without_receipt(ctx) is None
+    disclosures = ctx["important_disclosures"]
+    assert len(disclosures) == 1
+    assert disclosures[0]["reason"] == rep_reason
+
+
+def test_C13_backfill_preserves_preexisting_ledger_disposition():
+    key = "o::old@L1"
+    refuted_reason = "persisted refutation"
+    preexisting_entry = {
+        "file": "o", "line": 1, "title": "old", "severity": "Important",
+        SC.FINDING_KEY_FIELD: key,
+        "disposition": "refuted",
+        "dispositionRound": 1,
+        "refutedReason": refuted_reason,
+    }
+    record_finding = {
+        "file": "o", "line": 1, "title": "old", "severity": "Important",
+        SC.FINDING_KEY_FIELD: key, "disposition": "fixed",
+        "dispositionRound": 1, "dispositionReceipt": {"headSha": "z" * 40},
+    }
+    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor"}
+    compiled, _ = RD.mechanical_compile([new_raw], None)
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    state["dispositionLedger"] = [preexisting_entry]
+    state["_records"] = [{"findings": [record_finding]}]
+    RD._stage_findings(state, compiled)
+    ledger = _ledger_by_key(state)
+    assert ledger[key]["disposition"] == "refuted"
+    assert ledger[key]["refutedReason"] == refuted_reason
+
+
 # --- L7 bite-proof: departure chokepoint ---------------------------------------------
 
 def test_L7_archive_departure_without_prior_staging():

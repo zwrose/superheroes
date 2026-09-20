@@ -1650,7 +1650,7 @@ def check_disposition_without_receipt(ctx):
                         "id": finding.get("id"),
                         "title": finding.get("title"),
                         "severity": severity,
-                        "reason": finding.get("outOfScopeReason"),
+                        "reason": graded.get("outOfScopeReason"),
                     }
                 )
     ctx["important_disclosures"] = disclosures
