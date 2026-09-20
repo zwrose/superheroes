@@ -2,7 +2,7 @@
 
 Per-guard bite proof for `plugins/superheroes/lib/stack_check.py`: each `# axis:` clause is neutralized in source, the proving test must go red alone, then the clause is restored and the suite goes green again.
 
-**Register:** 37 guards — grew from 33 after a census of refusing clauses found three that carried no `# axis:` line (parsed JSON payload not an object; non-empty `errors` array; `pageInfo.hasNextPage` missing or not a boolean) and one whose axis line described a sibling clause (`errors` present but not a list); grew from 36 when the two-pass enumeration-drift refusal was added without a record entry.
+**Register:** 38 guards — grew from 37 when WO #1340 layer 2b Fold 2 split the combined order-mismatch clause (`len(collected) != stack_size or positions != expected_positions`) into separate count and positions guards, each with its own `# axis:` line and detail string. Prior growth: from 33 after a census of refusing clauses found three that carried no `# axis:` line and one whose axis line described a sibling clause; from 36 when the two-pass enumeration-drift refusal was added without a record entry.
 
 **Provenance:** cursor / composer-2.5.
 
@@ -16,43 +16,44 @@ Per-guard bite proof for `plugins/superheroes/lib/stack_check.py`: each `# axis:
 
 | ID | Guarded element (file:line) | Axis | Proving test | Verdict |
 |---|---|---|---|---|
-| E1 | stack_check.py:187 | pr is not an int (bool is not an int here) | `test_e1_pr_not_int` | proven |
-| E2 | stack_check.py:191 | pr < 1 | `test_e2_pr_less_than_one` | proven |
-| E3 | stack_check.py:195 | repo is not a string | `test_e3_repo_not_string` | proven |
-| E4 | stack_check.py:199 | repo does not match owner/name pattern | `test_e4_repo_bad_pattern` | proven |
-| E5 | stack_check.py:203 | expect_stack supplied and not an int | `test_e5_expect_stack_not_int` | proven |
-| E6 | stack_check.py:208 | expect_stack supplied and < 1 | `test_e6_expect_stack_less_than_one` | proven |
-| E7 | stack_check.py:213 | page_size is not an int | `test_e7_page_size_not_int` | proven |
-| E8 | stack_check.py:219 | page_size < MIN_PAGE_SIZE | `test_e8_page_size_below_min` | proven |
-| E9 | stack_check.py:225 | page_size > MAX_PAGE_SIZE | `test_e9_page_size_above_max` | proven |
-| E10 | stack_check.py:233 | gh is not on PATH | `test_e11_gh_not_on_path` | proven |
-| E11 | stack_check.py:249 | run raises FileNotFoundError/OSError | `test_e12_run_raises_file_not_found` | proven |
-| E12 | stack_check.py:252 | run raises subprocess.TimeoutExpired | `test_e13_run_raises_timeout_expired` | proven |
-| E13 | stack_check.py:257 | gh exits non-zero | `test_e14_gh_exits_nonzero_with_valid_stdout` | proven |
-| E14 | stack_check.py:265 | stdout is not JSON | `test_e15_stdout_not_json` | proven |
-| E15 | stack_check.py:269 | parsed JSON payload is not an object | `test_e15_payload_not_object` | proven |
-| E16 | stack_check.py:277 | errors is present but not a list | `test_e16_errors_not_list` | proven |
-| E17 | stack_check.py:281 | response carries a non-empty errors array | `test_e16_graphql_errors_nonempty` | proven |
-| E18 | stack_check.py:287 | data/repository is null or not an object | `test_e17_data_or_repository_missing` | proven |
-| E19 | stack_check.py:293 | pullRequest is null or not an object | `test_e18_pull_request_missing` | proven |
-| E20 | stack_check.py:302 | a required top-level pull-request field is missing or of the wrong type | `test_e19_required_pull_request_field_wrong_type` | proven |
-| E21 | stack_check.py:314 | stackEntry is null | `test_e28_stack_entry_null` | proven |
-| E22 | stack_check.py:320 | stackEntry is present but not an object, or position is missing/not an int | `test_e20_stack_entry_bad` | proven |
-| E23 | stack_check.py:330 | stack is missing/not an object, or number/size/baseRefName wrong type | `test_e21_stack_field_wrong_type` | proven |
-| E24 | stack_check.py:343 | entries/pageInfo/nodes is missing or of the wrong type | `test_e22_entries_page_info_empty_object` | proven |
-| E25 | stack_check.py:353 | a later page reports a different page-one snapshot value | `test_e31_later_page_snapshot_mismatch` | proven |
-| E26 | stack_check.py:362 | a node, its position, or one of its pull-request fields is missing or wrong type | `test_e23_node_field_wrong_type` | proven |
-| E27 | stack_check.py:364 | the collected count would exceed size mid-read | `test_e27_collected_count_would_exceed_size` | proven |
-| E28 | stack_check.py:372 | pageInfo hasNextPage is missing or not a boolean | `test_e26_has_next_page_not_boolean` | proven |
-| E29 | stack_check.py:384 | a page adds zero nodes while hasNextPage is true | `test_e24_zero_nodes_with_has_next_page` | proven |
-| E30 | stack_check.py:389 | a next page requires a usable string cursor | `test_e26_has_next_page_without_end_cursor` | proven |
-| E31 | stack_check.py:395 | endCursor repeats a cursor already used | `test_e25_repeated_end_cursor` | proven |
-| E32 | stack_check.py:403 | expect_stack was supplied and does not equal stack.number | `test_e29_expect_stack_does_not_equal_stack_number` | proven |
-| E33 | stack_check.py:410 | the collected entries are exactly the positions 1..size | `test_e30_collected_positions_not_exact` | proven |
-| E34 | stack_check.py:416 | the queried pull request is not present exactly once at its reported position | `test_e30_queried_pr_not_at_reported_position` | proven |
-| E35 | stack_check.py:422 | that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields | `test_e33_queried_entry_head_ref_oid_disagrees`, `test_e33_queried_entry_base_ref_name_disagrees` | proven |
-| E36 | stack_check.py:438 | membership changes between two complete enumeration passes | `test_e37_mixed_time_member_head_change_refuses` | proven |
-| E37 | stack_check.py:478 | the parse boundary (malformed CLI call returns bad-argument instead of argparse exit) | `test_e10_parse_boundary` | proven |
+| E1 | stack_check.py:176 | pr is not an int (bool is not an int here) | `test_e1_pr_not_int` | proven |
+| E2 | stack_check.py:180 | pr < 1 | `test_e2_pr_less_than_one` | proven |
+| E3 | stack_check.py:184 | repo is not a string | `test_e3_repo_not_string` | proven |
+| E4 | stack_check.py:188 | repo does not match owner/name pattern | `test_e4_repo_bad_pattern` | proven |
+| E5 | stack_check.py:192 | expect_stack supplied and not an int | `test_e5_expect_stack_not_int` | proven |
+| E6 | stack_check.py:197 | expect_stack supplied and < 1 | `test_e6_expect_stack_less_than_one` | proven |
+| E7 | stack_check.py:202 | page_size is not an int | `test_e7_page_size_not_int` | proven |
+| E8 | stack_check.py:208 | page_size < MIN_PAGE_SIZE | `test_e8_page_size_below_min` | proven |
+| E9 | stack_check.py:214 | page_size > MAX_PAGE_SIZE | `test_e9_page_size_above_max` | proven |
+| E10 | stack_check.py:220 | gh is not on PATH | `test_e11_gh_not_on_path` | proven |
+| E11 | stack_check.py:233 | run raises FileNotFoundError/OSError | `test_e12_run_raises_file_not_found` | proven |
+| E12 | stack_check.py:236 | run raises subprocess.TimeoutExpired | `test_e13_run_raises_timeout_expired` | proven |
+| E13 | stack_check.py:239 | gh exits non-zero | `test_e14_gh_exits_nonzero_with_valid_stdout` | proven |
+| E14 | stack_check.py:247 | stdout is not JSON | `test_e15_stdout_not_json` | proven |
+| E15 | stack_check.py:251 | parsed JSON payload is not an object | `test_e15_payload_not_object` | proven |
+| E16 | stack_check.py:259 | errors is present but not a list | `test_e16_errors_not_list` | proven |
+| E17 | stack_check.py:263 | response carries a non-empty errors array | `test_e16_graphql_errors_nonempty` | proven |
+| E18 | stack_check.py:274 | data/repository is null or not an object | `test_e17_data_or_repository_missing` | proven |
+| E19 | stack_check.py:280 | pullRequest is null or not an object | `test_e18_pull_request_missing` | proven |
+| E20 | stack_check.py:289 | a required top-level pull-request field is missing or of the wrong type | `test_e19_required_pull_request_field_wrong_type` | proven |
+| E21 | stack_check.py:301 | stackEntry is null | `test_e28_stack_entry_null` | proven |
+| E22 | stack_check.py:307 | stackEntry is present but not an object, or position is missing/not an int | `test_e20_stack_entry_bad` | proven |
+| E23 | stack_check.py:317 | stack is missing/not an object, or number/size/baseRefName wrong type | `test_e21_stack_field_wrong_type` | proven |
+| E24 | stack_check.py:330 | entries/pageInfo/nodes is missing or of the wrong type | `test_e22_entries_page_info_empty_object` | proven |
+| E25 | stack_check.py:342 | a later page reports a different page-one snapshot value | `test_e31_later_page_snapshot_mismatch` | proven |
+| E26 | stack_check.py:351 | a node, its position, or one of its pull-request fields is missing or wrong type | `test_e23_node_field_wrong_type` | proven |
+| E27 | stack_check.py:353 | the collected count would exceed size mid-read | `test_e27_collected_count_would_exceed_size` | proven |
+| E28 | stack_check.py:361 | pageInfo hasNextPage is missing or not a boolean | `test_e26_has_next_page_not_boolean` | proven |
+| E29 | stack_check.py:499 | a page adds zero nodes while hasNextPage is true | `test_e24_zero_nodes_with_has_next_page` | proven |
+| E30 | stack_check.py:504 | a next page requires a usable string cursor | `test_e26_has_next_page_without_end_cursor` | proven |
+| E31 | stack_check.py:510 | endCursor repeats a cursor already used | `test_e25_repeated_end_cursor` | proven |
+| E32 | stack_check.py:389 | expect_stack was supplied and does not equal stack.number | `test_e29_expect_stack_does_not_equal_stack_number` | proven |
+| E33 | stack_check.py:396 | collected member count does not equal stack size | `test_e33_collected_count_not_equal_stack_size` | proven |
+| E34 | stack_check.py:401 | collected positions are not exactly 1..size | `test_e34_collected_positions_not_one_to_size`, `test_e30_collected_positions_not_exact` | proven |
+| E35 | stack_check.py:407 | the queried pull request is not present exactly once at its reported position | `test_e30_queried_pr_not_at_reported_position` | proven |
+| E36 | stack_check.py:413 | that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields | `test_e33_queried_entry_head_ref_oid_disagrees`, `test_e33_queried_entry_base_ref_name_disagrees` | proven |
+| E37 | stack_check.py:428 | membership changes between two complete enumeration passes | `test_e37_mixed_time_member_head_change_refuses` | proven |
+| E38 | stack_check.py:554 | the parse boundary (malformed CLI call returns bad-argument instead of argparse exit) | `test_e10_parse_boundary` | proven |
 
 ---
 
@@ -1194,6 +1195,39 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_cli_bad_argument_
 **raw green** after restore:
 ```
 52 passed in 0.24s
+```
+
+---
+
+## E34 — collected positions are not exactly 1..size
+
+**neutralization** (`plugins/superheroes/lib/stack_check.py`):
+```python
+    # axis: collected positions are not exactly 1..size
+    if positions != expected_positions:
+        return _refusal(REASON_ORDER_MISMATCH, "collected positions are not exactly 1..size",
+            repo=repo, pr=pr, pages=pages)
+```
+→
+```python
+    # axis: collected positions are not exactly 1..size
+    if False:  # bite-proof
+        return _refusal(REASON_ORDER_MISMATCH, "collected positions are not exactly 1..size",
+            repo=repo, pr=pr, pages=pages)
+```
+
+**command:** the command (see top).
+
+**raw red** (traceback body elided):
+```
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e34_collected_positions_not_one_to_size
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e30_collected_positions_not_exact
+2 failed, 51 passed in 0.14s
+```
+
+**raw green** after restore:
+```
+53 passed in 0.12s
 ```
 
 ---
