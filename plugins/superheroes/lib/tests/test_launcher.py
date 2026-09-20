@@ -5996,3 +5996,343 @@ def test_launch_refusal_record_keeps_failed_check(tmp_path, monkeypatch):
     assert auth, preflight_checks
     assert auth[0]["state"] == "fail"
     assert "codex" in auth[0].get("evidence", "")
+
+
+# --- stack premise fields (I1) and layer gate (I2) ---------------------------
+
+
+def _stack_premise(repo, **overrides):
+    base = _valid_premise(repo, stack=1, layerPosition=1)
+    base.update(overrides)
+    return base
+
+
+def _membership_ok(position, head_sha, pr_number=1352):
+    return {
+        "ok": True,
+        "queried": {
+            "number": pr_number,
+            "position": position,
+            "headRefOid": head_sha,
+            "headRefName": "branch",
+            "baseRefName": "main",
+        },
+    }
+
+
+def _pr_lookup_ok(pr=1352, repo="owner/repo"):
+    return {"ok": True, "pr": pr, "repo": repo}
+
+
+@pytest.mark.parametrize("premise_overrides", [
+    {"stack": 1},
+    {"layerPosition": 2},
+])
+def test_premise_stack_fields_incomplete(tmp_path, premise_overrides):
+  # axis: premise-stack-fields-incomplete
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    premise.update(premise_overrides)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-stack-fields-incomplete"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("stack", "1"),
+    ("stack", True),
+    ("stack", 0),
+    ("layerPosition", "2"),
+    ("layerPosition", True),
+    ("layerPosition", 0),
+])
+def test_premise_stack_field_invalid(tmp_path, field, value):
+  # axis: premise-stack-field-invalid
+    repo = _init_repo(tmp_path / "repo")
+    premise = _stack_premise(repo)
+    premise[field] = value
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-stack-field-invalid"
+
+
+def test_premise_stack_fields_valid_survive_stamp(tmp_path):
+  # axis: valid stack fields copied into stamped premise
+    repo = _init_repo(tmp_path / "repo")
+    premise = _stack_premise(repo, stack=3, layerPosition=2)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is True
+    assert result["premise"]["stack"] == 3
+    assert result["premise"]["layerPosition"] == 2
+
+
+def test_premise_stack_fields_absent_unchanged(tmp_path):
+  # axis: absent stack fields leave stamped premise unchanged
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is True
+    assert "stack" not in result["premise"]
+    assert "layerPosition" not in result["premise"]
+
+
+def test_stack_gate_bottom_layer_skips_reader(tmp_path, monkeypatch):
+  # axis: bottom layer skips gate without reading GitHub
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    calls = []
+
+    def tracking_reader(**kwargs):
+        calls.append(kwargs)
+        return _membership_ok(0, head)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=1),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        membership_reader=tracking_reader,
+        pr_lookup=lambda *a, **k: (_ for _ in ()).throw(AssertionError("pr_lookup called")),
+    )
+    assert result["ok"] is True
+    assert calls == []
+    assert result["stackGate"] == {"applied": False, "reason": "bottom-layer"}
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_stack_gate_zero_entry_candidates_refuses(tmp_path, monkeypatch):
+  # axis: zero entry PR candidates refuses base-not-layer-head
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def empty_pr_list_gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps({"nameWithOwner": "owner/repo"}), "",
+            )
+        if argv[:3] == ["gh", "pr", "list"]:
+            return subprocess.CompletedProcess(argv, 0, "[]", "")
+        raise AssertionError("unexpected gh call: %s" % argv)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda r, sha, env=None, gh_run=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=empty_pr_list_gh_run,
+        ),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "base-not-layer-head"
+    refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
+    assert any(r.get("stage") == "stack" for r in refused)
+
+
+def test_stack_gate_two_entry_candidates_refuses(tmp_path, monkeypatch):
+  # axis: ambiguous entry PR lookup refuses stack-read-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: {"ok": False, "reason": "stack-read-unavailable"},
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "stack-read-unavailable"
+
+
+def test_stack_gate_repo_view_failure_refuses(tmp_path, monkeypatch):
+  # axis: gh repo view failure refuses stack-read-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def failing_gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(argv, 1, "", "error")
+        raise AssertionError("unexpected gh call: %s" % argv)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda r, sha, env=None, gh_run=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=failing_gh_run,
+        ),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "stack-read-unavailable"
+
+
+def test_stack_gate_pr_list_unparseable_refuses(tmp_path, monkeypatch):
+  # axis: gh pr list unparseable refuses stack-read-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def bad_pr_list_gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps({"nameWithOwner": "owner/repo"}), "",
+            )
+        if argv[:3] == ["gh", "pr", "list"]:
+            return subprocess.CompletedProcess(argv, 0, "not-json", "")
+        raise AssertionError("unexpected gh call: %s" % argv)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda r, sha, env=None, gh_run=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=bad_pr_list_gh_run,
+        ),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "stack-read-unavailable"
+
+
+def test_stack_gate_not_linked_refuses(tmp_path, monkeypatch):
+  # axis: membership not-linked refuses base-not-layer-head
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(**kwargs):
+        return {"ok": False, "reason": "not-linked"}
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "base-not-layer-head"
+
+
+def test_stack_gate_stack_unreadable_refuses_with_detail(tmp_path, monkeypatch):
+  # axis: membership stack-unreadable refuses stack-read-unavailable with detail
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def reader(**kwargs):
+        return {"ok": False, "reason": "stack-unreadable"}
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "stack-read-unavailable"
+    assert result["detail"] == "stack-unreadable"
+
+
+def test_stack_gate_position_mismatch_refuses(tmp_path, monkeypatch):
+  # axis: position mismatch refuses base-not-layer-head
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(**kwargs):
+        return _membership_ok(2, head)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "base-not-layer-head"
+
+
+def test_stack_gate_head_mismatch_refuses(tmp_path, monkeypatch):
+  # axis: head mismatch refuses base-not-layer-head
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    stale = "0" * 40
+
+    def reader(**kwargs):
+        return _membership_ok(1, stale)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "base-not-layer-head"
+
+
+def test_stack_gate_full_agreement_proceeds(tmp_path, monkeypatch):
+  # axis: full stack gate agreement proceeds with stackGate applied
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(**kwargs):
+        return _membership_ok(1, head)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(pr=1352, repo="owner/repo"),
+        membership_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["stackGate"] == {
+        "applied": True,
+        "stack": 1,
+        "layerPosition": 2,
+        "entryPr": 1352,
+        "layerBelowHead": head,
+    }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass

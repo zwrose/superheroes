@@ -33,6 +33,7 @@ import launch_ledger as ll  # noqa: E402
 import model_registry  # noqa: E402
 import pilot_calibration  # noqa: E402
 import pilot_slot  # noqa: E402
+import stack_check  # noqa: E402
 
 SLOT_REF_ENV = "SUPERHEROES_SLOT_REF"
 WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
@@ -1058,6 +1059,25 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
     if mismatch:
         return _fail(mismatch)
 
+    has_stack = "stack" in premise
+    has_layer = "layerPosition" in premise
+    # axis: stack and layerPosition must both be present or both absent
+    if has_stack != has_layer:
+        return _fail("premise-stack-fields-incomplete")
+    if has_stack:
+        stack_val = premise["stack"]
+        layer_val = premise["layerPosition"]
+        # axis: stack and layerPosition must be positive ints (bool is not an int here)
+        if (
+            not isinstance(stack_val, int)
+            or isinstance(stack_val, bool)
+            or stack_val < 1
+            or not isinstance(layer_val, int)
+            or isinstance(layer_val, bool)
+            or layer_val < 1
+        ):
+            return _fail("premise-stack-field-invalid")
+
     stamped = dict(premise)
     stamped["baseCommit"] = resolved
     stamped["standingExclusions"] = dict(STANDING_EXCLUSIONS)
@@ -1331,6 +1351,132 @@ def _observe_settle(proc, settle_seconds, deadline=None):
     return rc
 
 
+def _lookup_stack_entry_pr(repo_root, resolved_base_commit, env=None, gh_run=None):
+    """Resolve the open PR whose head is the resolved base commit. Never raises."""
+    if gh_run is None:
+        gh_run = subprocess.run
+    scrubbed = _scrub_env(env)
+    try:
+        repo_proc = gh_run(
+            ["gh", "repo", "view", "--json", "nameWithOwner"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            env=scrubbed,
+            timeout=120,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    if repo_proc.returncode != 0:
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    try:
+        repo_data = json.loads(repo_proc.stdout or "")
+        repo_name = repo_data.get("nameWithOwner")
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    if not isinstance(repo_name, str) or not repo_name:
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    try:
+        pr_proc = gh_run(
+            [
+                "gh", "pr", "list",
+                "--state", "open",
+                "--json", "number,headRefOid,state",
+                "--limit", "1000",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            env=scrubbed,
+            timeout=120,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    if pr_proc.returncode != 0:
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    try:
+        pr_list = json.loads(pr_proc.stdout or "")
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    if not isinstance(pr_list, list):
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    candidates = []
+    for pr in pr_list:
+        if not isinstance(pr, dict):
+            continue
+        number = pr.get("number")
+        if pr.get("state") != "OPEN":
+            continue
+        if pr.get("headRefOid") != resolved_base_commit:
+            continue
+        if not isinstance(number, int) or isinstance(number, bool):
+            continue
+        candidates.append(number)
+    # axis: zero open PRs carry this head — base is not a layer head
+    if not candidates:
+        return {"ok": False, "reason": "base-not-layer-head"}
+    # axis: ambiguous or unreadable entry PR lookup
+    if len(candidates) > 1:
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    return {"ok": True, "pr": candidates[0], "repo": repo_name}
+
+
+def _apply_stack_gate(
+    stamped_premise,
+    resolved_base_commit,
+    repo_root,
+    env,
+    pr_lookup,
+    membership_reader,
+):
+    """Run the layer gate when the premise names a stack. Never raises."""
+    stack_num = stamped_premise["stack"]
+    layer_pos = stamped_premise["layerPosition"]
+    if layer_pos == 1:
+        return {
+            "ok": True,
+            "stackGate": {"applied": False, "reason": "bottom-layer"},
+        }
+    lookup = pr_lookup(repo_root, resolved_base_commit, env=env)
+    if not lookup["ok"]:
+        out = {"ok": False, "reason": lookup["reason"]}
+        if "detail" in lookup:
+            out["detail"] = lookup["detail"]
+        return out
+    entry_pr = lookup["pr"]
+    repo_name = lookup["repo"]
+    membership = membership_reader(
+        pr=entry_pr, repo=repo_name, expect_stack=stack_num,
+    )
+    if not membership["ok"]:
+        reason = membership.get("reason")
+        # axis: entry PR is not linked to a stack
+        if reason == "not-linked":
+            return {"ok": False, "reason": "base-not-layer-head"}
+        return {
+            "ok": False,
+            "reason": "stack-read-unavailable",
+            "detail": reason,
+        }
+    queried = membership["queried"]
+    # axis: queried position must equal layerPosition - 1
+    if queried["position"] != layer_pos - 1:
+        return {"ok": False, "reason": "base-not-layer-head"}
+    # axis: queried headRefOid must equal resolved base commit
+    if queried["headRefOid"] != resolved_base_commit:
+        return {"ok": False, "reason": "base-not-layer-head"}
+    return {
+        "ok": True,
+        "stackGate": {
+            "applied": True,
+            "stack": stack_num,
+            "layerPosition": layer_pos,
+            "entryPr": entry_pr,
+            "layerBelowHead": resolved_base_commit,
+        },
+    }
+
+
 def launch_build(
     repo_root,
     issue,
@@ -1351,8 +1497,14 @@ def launch_build(
     boundary=None,
     effort=None,
     allow_foreign_instance=False,
+    membership_reader=None,
+    pr_lookup=None,
 ):
     """Full launch flow: preflight, premise, compose, reserve, spawn, settle/retry."""
+    if membership_reader is None:
+        membership_reader = stack_check.read_membership
+    if pr_lookup is None:
+        pr_lookup = _lookup_stack_entry_pr
     settle_seconds = _SETTLE_SECONDS if settle_seconds is None else settle_seconds
     max_attempts = _MAX_ATTEMPTS if max_attempts is None else max_attempts
     backoff_seconds = _BACKOFF_SECONDS if backoff_seconds is None else backoff_seconds
@@ -1457,8 +1609,47 @@ def launch_build(
                 )
         return _accounted_fail(reserve_result, reason, launch_id)
 
+    stamped_premise = premise_result["premise"]
+    resolved_base = premise_result["resolvedBaseCommit"]
+    stack_gate = None
+    if "stack" in stamped_premise:
+        gate_result = _apply_stack_gate(
+            stamped_premise,
+            resolved_base,
+            repo_root,
+            env,
+            pr_lookup,
+            membership_reader,
+        )
+        if not gate_result["ok"]:
+            stage = "stack"
+            reason = gate_result["reason"]
+            extra = {}
+            if "detail" in gate_result:
+                extra["detail"] = gate_result["detail"]
+            reserve_result = _try_reserve_for_refusal(
+                repo_root, launch_id, issue, stamped_premise,
+                preflight_result, None, env,
+                slot=slot, generation=generation, boundary=boundary,
+                seat_instance=seat["instance"],
+                foreign_instance_allowed=foreign_override,
+            )
+            if reserve_result.get("reserved"):
+                term = _terminalize(
+                    repo_root, launch_id, False, reason, stage=stage, env=env,
+                )
+                if not term["ok"]:
+                    return _accounted_fail(
+                        reserve_result,
+                        _terminalization_reason(term, reason),
+                        launch_id,
+                        **extra,
+                    )
+            return _accounted_fail(reserve_result, reason, launch_id, **extra)
+        stack_gate = gate_result["stackGate"]
+
     compose_result = compose_launch(
-        repo_root, issue, premise_result["premise"], model=model, doctrine_loader=doctrine_loader,
+        repo_root, issue, stamped_premise, model=model, doctrine_loader=doctrine_loader,
         effort=effort,
     )
     if not compose_result["ok"]:
@@ -1483,7 +1674,7 @@ def launch_build(
                 )
         return _accounted_fail(reserve_result, reason, launch_id)
 
-    stamped = premise_result["premise"]
+    stamped = stamped_premise
     doctrine = compose_result["doctrine"]
     argv = compose_result["argv"]
 
@@ -1774,7 +1965,7 @@ def launch_build(
             reason = _terminalization_reason(term, "retry-deadline-exceeded")
             return _post_reserve_fail(reason)
         if rc is None:
-            return {
+            success = {
                 "ok": True,
                 "reason": None,
                 "launchId": launch_id,
@@ -1789,6 +1980,9 @@ def launch_build(
                 "worktree": worktree_path,
                 "warnings": warnings,
             }
+            if stack_gate is not None:
+                success["stackGate"] = stack_gate
+            return success
 
         evidence = "exit-zero" if rc == 0 else "nonzero-exit:%s" % rc
         term = _terminalize(
