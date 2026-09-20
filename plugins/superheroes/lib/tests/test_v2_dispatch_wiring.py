@@ -305,7 +305,6 @@ def test_engine_dispatch_calls_dispatch_guard_validate():
         source = fh.read()
     assert "import dispatch_guard" in source
     assert "dispatch_guard.validate" in source
-    assert "_dispatch_allowlist_validate" in source
     assert "_spawn_allowlist_verdict" in source
     assert "_run_engine_files" in source
     g2_idx = source.index("def _run_engine_files")

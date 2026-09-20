@@ -44,6 +44,10 @@ REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 # literals; engine_dispatch and drift tests import this name, never restate the tuple.
 REVIEW_RESULT_KINDS = ("findings", "verdicts", "grouping", "ruling")
 
+# Write tail signals graded by _grade_build_report_obj (CONVENTIONS §11).
+WRITE_SIGNAL_ENUM = ("ok", "plan_wrong", "needs_context")
+WRITE_SIGNAL_OK, WRITE_SIGNAL_PLAN_WRONG, WRITE_SIGNAL_NEEDS_CONTEXT = WRITE_SIGNAL_ENUM
+
 # Rubric severity tiers — re-export from review_findings_schema (single home; #1145).
 REVIEW_SEVERITY_TIERS = review_findings_schema.SEVERITY_TIERS
 
@@ -110,11 +114,25 @@ _CURSOR_MODEL = model_registry.dispatch_token("cursor", "composer-2.5")
 # worth extra in the common case. 512 KB comfortably exceeds any real findings payload.
 MAX_STDOUT_TAIL_BYTES = 512 * 1024
 
+# Single home for the engine-output byte cap. engine_dispatch.MAX_STDOUT_CAPTURE and
+# engine_result_channel.NATIVE_RESULT_MAX_BYTES both read this — never restate the literal.
+ENGINE_OUTPUT_MAX_BYTES = 8 * 1024 * 1024
+
 # #668: runner stdout capture keeps only the tail (MAX_STDOUT_CAPTURE in engine_dispatch); a large
 # echoed prompt can arrive truncated while the trailing shape-contract example survives.
 ECHO_TAIL_CHARS = 2000
 
 WRITE_REPORT_SENTINEL = "<<<SUPERHEROES-WRITE-REPORT>>>"
+
+WRITE_REPORT_FIELD_SEMANTICS = (
+    "Field semantics:\n"
+    "  ok — true means you ran the order to completion as specified; it is not an acceptance "
+    "verdict — you never judge whether the work is good enough and you never mark your own work done.\n"
+    "  ok: false — you stopped or refused; set signal to \"plan_wrong\" when the order's premise "
+    "is wrong, otherwise \"needs_context\" (only those two values).\n"
+    "  evidence.testFailed / evidence.testPassed — booleans for whether you observed a test "
+    "failing / passing during this attempt; false when not observed.\n"
+)
 
 WRITE_REPORT_CONTRACT = (
     "Write-report contract (your graded tail is separate from prose receipts):\n"
@@ -123,14 +141,8 @@ WRITE_REPORT_CONTRACT = (
     "As the very last thing in your output: a line containing only:\n"
     + WRITE_REPORT_SENTINEL + "\n"
     "then a single JSON object on the following line, then nothing at all.\n"
-    "Field semantics:\n"
-    "  ok — true means you ran the order to completion as specified; it is not an acceptance "
-    "verdict — you never judge whether the work is good enough and you never mark your own work done.\n"
-    "  ok: false — you stopped or refused; set signal to \"plan_wrong\" when the order's premise "
-    "is wrong, otherwise \"needs_context\" (only those two values).\n"
-    "  evidence.testFailed / evidence.testPassed — booleans for whether you observed a test "
-    "failing / passing during this attempt; false when not observed.\n"
-    "Example final two lines (placeholders — compose real JSON literals yourself):\n"
+    + WRITE_REPORT_FIELD_SEMANTICS
+    + "Example final two lines (placeholders — compose real JSON literals yourself):\n"
     + WRITE_REPORT_SENTINEL + "\n"
     '{"ok": <true or false>, "signal": "<ok | plan_wrong | needs_context>", '
     '"evidence": {"testFailed": <true or false>, "testPassed": <true or false>}}'
@@ -232,6 +244,8 @@ def _registered_engine_models_detail(vendor):
         models = model_registry.codex_models()
     elif vendor == "cursor":
         models = model_registry.cursor_models()
+    elif vendor == "claude":
+        models = model_registry.claude_models()
     else:
         return None
     return (
@@ -240,11 +254,11 @@ def _registered_engine_models_detail(vendor):
     )
 
 
-_BUILD_ARGV_VENDORS = ("codex", "cursor")
+BUILD_ARGV_VENDORS = ("codex", "cursor", "claude")
 
 
 def _unknown_engine_detail(vendor):
-    valid = _format_valid(_BUILD_ARGV_VENDORS)
+    valid = _format_valid(BUILD_ARGV_VENDORS)
     if isinstance(vendor, str) and vendor.strip():
         return f"unknown vendor {vendor!r}; valid vendors: {valid}"
     return f"unknown engine vendor; valid vendors: {valid}"
@@ -366,6 +380,26 @@ def _resolve_engine_model_pin(vendor, model_id, claude_tier):
                 )
             return parsed[0], resolved_inputs_vocab.RESOLVED, None, None
         return "composer-2.5", resolved_inputs_vocab.DEFAULT, None, None
+    if vendor == "claude":
+        engine_model = model_id
+        if isinstance(engine_model, str) and engine_model:
+            if model_registry.is_registered("claude", engine_model):
+                return engine_model, resolved_inputs_vocab.CALLER, None, None
+            parsed = model_registry.parse_dispatch_token("claude", engine_model)
+            if parsed is None:
+                return (
+                    None,
+                    resolved_inputs_vocab.DECLARED_NONE,
+                    "unregistered-engine-model",
+                    _registered_engine_models_detail("claude"),
+                )
+            return parsed[0], resolved_inputs_vocab.RESOLVED, None, None
+        return (
+            None,
+            resolved_inputs_vocab.DECLARED_NONE,
+            "unregistered-engine-model",
+            _registered_engine_models_detail("claude"),
+        )
     return (
         None,
         resolved_inputs_vocab.DECLARED_NONE,
@@ -377,15 +411,23 @@ def _resolve_engine_model_pin(vendor, model_id, claude_tier):
 def resolve_engine_model(seat, _run_kind, opts):
     """Return (engine_model, source) for the resolved engine-model pin (#1269 WO-A2).
 
-    Derives from ``_resolve_engine_model_pin`` — the same ladder ``build_argv_result`` uses."""
+    Derives from ``_resolve_engine_model_pin`` — the same ladder ``build_argv_result`` uses —
+    then maps pin provenance to ``resolvedInputs`` source markers (#1270 WO-3)."""
     opts = opts or {}
     vendor = seat.get("vendor")
     model_id = seat.get("model")
     claude_tier = opts.get("model")
-    engine_model, source, _reason, _detail = _resolve_engine_model_pin(
+    engine_model, pin_source, _reason, _detail = _resolve_engine_model_pin(
         vendor, model_id, claude_tier,
     )
-    return engine_model, source
+    if pin_source == resolved_inputs_vocab.DECLARED_NONE:
+        return engine_model, resolved_inputs_vocab.DECLARED_NONE
+    if pin_source == resolved_inputs_vocab.DEFAULT:
+        return engine_model, resolved_inputs_vocab.DEFAULT
+    if pin_source == resolved_inputs_vocab.RESOLVED:
+        return engine_model, resolved_inputs_vocab.RESOLVED
+    # Identity resolution — engine model unchanged from the seat pin; pass upstream marker.
+    return engine_model, seat.get("modelSource", resolved_inputs_vocab.CALLER)
 
 
 def build_argv_result(seat, role_kind, opts):
@@ -465,12 +507,39 @@ def build_argv_result(seat, role_kind, opts):
             model = tok
         else:
             model = _CURSOR_MODEL
-        argv = ["cursor-agent", "--model", model, "-p", "--trust"]
+        argv = [
+            "cursor-agent", "--model", model, "-p", "--trust", "-f",
+            "--sandbox", "enabled", "--output-format", "stream-json",
+        ]
+        return _ok(argv)
+    if vendor == "claude":
+        engine_model, _source, refusal_reason, refusal_detail = _resolve_engine_model_pin(
+            vendor, model_id, claude_tier,
+        )
+        if refusal_reason is not None:
+            return _refuse(refusal_reason, detail=refusal_detail)
+        if engine_model == "fable-5":
+            return _refuse("fable-unrunnable", detail=_fable_unrunnable_detail("fable"))
+        ok, _reason = model_registry.validate_config("claude", engine_model, effort)
+        if not ok:
+            return _refuse(
+                "invalid-model-effort",
+                detail=_invalid_model_effort_detail("claude", engine_model, effort),
+            )
+        tok = model_registry.dispatch_token("claude", engine_model)
+        if not tok:
+            return _refuse(
+                "untokenizable",
+                detail=_untokenizable_detail("claude", engine_model, effort),
+            )
+        argv = [
+            "claude", "-p", "--model", tok, "--effort", effort,
+            "--output-format", "stream-json", "--verbose",
+        ]
         if is_read:
-            argv += ["--mode", "plan"]
+            argv += ["--restricted"]
         else:
-            argv += ["-f"]
-        argv += ["--output-format", "stream-json"]
+            argv += ["--permission-mode", "acceptEdits", "--restricted"]
         return _ok(argv)
     return _refuse("unknown-engine", detail=_unknown_engine_detail(vendor))
 
@@ -598,9 +667,10 @@ def _grade_build_report_obj(obj):
     evidence = {"testFailed": bool(ev.get("testFailed")),
                 "testPassed": bool(ev.get("testPassed"))}
     if obj.get("ok") is not True:
-        sig = "plan_wrong" if obj.get("signal") == "plan_wrong" else "needs_context"
+        sig = (WRITE_SIGNAL_PLAN_WRONG if obj.get("signal") == WRITE_SIGNAL_PLAN_WRONG
+               else WRITE_SIGNAL_NEEDS_CONTEXT)
         return {"ok": False, "signal": sig, "reason": sig, "evidence": evidence}
-    return {"ok": True, "signal": "ok", "evidence": evidence}
+    return {"ok": True, "signal": WRITE_SIGNAL_OK, "evidence": evidence}
 
 
 def grade_write_report(engine, role_kind, stdout, fed_prompt):
@@ -682,6 +752,81 @@ def _iter_codex_event_lines(stdout):
             yield obj
 
 
+_CLAUDE_EVENT_TYPES = frozenset({"assistant", "user", "system", "result"})
+
+
+def _is_claude_event_object(obj):
+    return isinstance(obj, dict) and obj.get("type") in _CLAUDE_EVENT_TYPES
+
+
+def _iter_claude_event_lines(stdout):
+    """Yield parsed JSON objects from claude stream-json stdout. Never raises."""
+    if not isinstance(stdout, str) or not stdout:
+        return
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            yield obj
+
+
+def claude_tool_calls(stdout):
+    """Count distinct tool_use ids in claude stream-json stdout; int or None. Never raises.
+
+    Blocks whose name is StructuredOutput are excluded — that call is the result, not telemetry."""
+    try:
+        if not isinstance(stdout, str) or not stdout:
+            return None
+        parsed_any = False
+        tool_ids = set()
+        for obj in _iter_claude_event_lines(stdout):
+            if not _is_claude_event_object(obj):
+                continue
+            parsed_any = True
+            if obj.get("type") != "assistant":
+                continue
+            message = obj.get("message")
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                name = block.get("name")
+                if name == "StructuredOutput":
+                    continue
+                block_id = block.get("id")
+                if isinstance(block_id, str) and block_id:
+                    tool_ids.add(block_id)
+        if not parsed_any:
+            return None
+        return len(tool_ids)
+    except Exception:
+        return None
+
+
+def claude_result_envelope(stdout):
+    """Return the last result event dict from claude stream-json stdout, or None. Never raises."""
+    try:
+        if not isinstance(stdout, str) or not stdout:
+            return None
+        last = None
+        for obj in _iter_claude_event_lines(stdout):
+            if not isinstance(obj, dict) or obj.get("type") != "result":
+                continue
+            last = obj
+        return last
+    except Exception:
+        return None
+
+
 def is_codex_event_stream(stdout):
     """True when stdout is recognizable codex JSONL telemetry. Never raises."""
     try:
@@ -693,13 +838,6 @@ def is_codex_event_stream(stdout):
         return False
     except Exception:
         return False
-
-
-def codex_json_argv_flags(last_message_path):
-    """Codex review argv flags for JSONL telemetry and last-message extraction."""
-    if isinstance(last_message_path, str) and last_message_path:
-        return ["--json", "--output-last-message", last_message_path]
-    return []
 
 
 def codex_tool_calls(stdout):
@@ -758,41 +896,85 @@ def codex_event_tokens(stdout):
         return None
 
 
-def codex_review_payload_text(stdout, last_message_path=None):
-    """Review payload text for marker parsing: last-message file, else last agent_message. Never raises."""
+def _cursor_tool_call_write_path(tool_call_obj):
+    """Return a file path from a cursor tool_call envelope, or None. Never raises."""
     try:
-        if isinstance(last_message_path, str) and last_message_path:
-            try:
-                with open(last_message_path, encoding="utf-8", errors="ignore") as fh:
-                    text = fh.read()
-                if isinstance(text, str) and text.strip():
-                    return text
-            except OSError:
-                pass
-        if not isinstance(stdout, str) or not stdout:
+        if not isinstance(tool_call_obj, dict):
             return None
-        last_text = None
-        for obj in _iter_codex_event_lines(stdout):
-            if not _is_codex_event_object(obj) or obj.get("type") != "item.completed":
+        for key, val in tool_call_obj.items():
+            if not isinstance(key, str) or not key.endswith("ToolCall"):
                 continue
-            item = obj.get("item")
-            if not isinstance(item, dict) or item.get("type") != "agent_message":
+            if not isinstance(val, dict):
                 continue
-            text = item.get("text")
-            if isinstance(text, str) and text:
-                last_text = text
-        return last_text
+            args = val.get("args")
+            if not isinstance(args, dict):
+                continue
+            for path_key in ("path", "file_path", "target_file"):
+                candidate = args.get(path_key)
+                if isinstance(candidate, str) and candidate:
+                    return candidate
     except Exception:
-        return None
+        pass
+    return None
 
 
-def cursor_tool_calls(stdout):
-    """Count distinct tool_call call_ids in a cursor stream-json stdout; int or None. Never raises."""
+def _cursor_shell_call_delivers_excluded_path(
+        tool_call_obj, excluded_path_strings, excluded_realpaths):
+    """True when a shell-style tool call's command mentions an excluded path. Never raises."""
+    try:
+        if not isinstance(tool_call_obj, dict):
+            return False
+        for key, val in tool_call_obj.items():
+            if not isinstance(key, str) or not key.endswith("ToolCall"):
+                continue
+            if not isinstance(val, dict):
+                continue
+            args = val.get("args")
+            if not isinstance(args, dict):
+                continue
+            if any(
+                isinstance(args.get(path_key), str) and args.get(path_key)
+                for path_key in ("path", "file_path", "target_file")
+            ):
+                continue
+            command = args.get("command")
+            if not isinstance(command, str) or not command:
+                continue
+            for fragment in excluded_path_strings:
+                if fragment in command:
+                    return True
+            for fragment in excluded_realpaths:
+                if fragment in command:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def cursor_tool_calls(stdout, exclude_paths=()):
+    """Count distinct tool_call call_ids in a cursor stream-json stdout; int or None. Never raises.
+
+    A file-writing tool_call whose target path realpath-equals an exclude_paths member is not
+    counted (both started and completed share call_id). A shell-style tool call whose command
+    text contains an exclude_paths member (path string or realpath substring) is also excluded."""
     try:
         if not isinstance(stdout, str) or not stdout:
             return None
+        excluded_path_strings = set()
+        excluded_realpaths = set()
+        if exclude_paths:
+            for path in exclude_paths:
+                if not isinstance(path, str):
+                    continue
+                excluded_path_strings.add(path)
+                try:
+                    excluded_realpaths.add(os.path.realpath(path))
+                except OSError:
+                    continue
+        excluded_call_ids = set()
         call_ids = set()
         object_count = 0
+        events = []
         for line in stdout.splitlines():
             line = line.strip()
             if not line:
@@ -805,13 +987,30 @@ def cursor_tool_calls(stdout):
                 continue
             object_count += 1
             cid = obj.get("call_id")
-            if isinstance(cid, str) and cid:
-                call_ids.add(cid)
+            if not (isinstance(cid, str) and cid):
+                continue
+            events.append((cid, obj.get("tool_call")))
         if object_count == 0:
             return 0
+        if excluded_path_strings or excluded_realpaths:
+            for cid, tool_call in events:
+                write_path = _cursor_tool_call_write_path(tool_call)
+                if write_path is not None:
+                    try:
+                        if os.path.realpath(write_path) in excluded_realpaths:
+                            excluded_call_ids.add(cid)
+                    except OSError:
+                        pass
+                    continue
+                if _cursor_shell_call_delivers_excluded_path(
+                        tool_call, excluded_path_strings, excluded_realpaths):
+                    excluded_call_ids.add(cid)
+        for cid, _tool_call in events:
+            if cid not in excluded_call_ids:
+                call_ids.add(cid)
         if call_ids:
             return len(call_ids)
-        return object_count
+        return 0
     except Exception:
         return None
 
@@ -2300,46 +2499,46 @@ def _cmd_build_argv(args):
         except OSError:
             got = None
         if got != want:
-            sys.stdout.write(json.dumps(
-                {"ok": False, "reason": "staged-input-mismatch", "path": path}) + "\n")
-            return 1
+            payload = {"ok": False, "reason": "staged-input-mismatch", "path": path}
+            sys.stdout.write(json.dumps(payload) + "\n")
+            return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
 
     if args.prompt_path is not None:
         ok, why = prompt_path_ok(args.prompt_path)
         if not ok:
-            sys.stdout.write(json.dumps(
-                {"ok": False, "reason": "empty-prompt", "detail": why,
-                 "path": args.prompt_path}) + "\n")
-            return 1
+            payload = {"ok": False, "reason": "empty-prompt", "detail": why,
+                       "path": args.prompt_path}
+            sys.stdout.write(json.dumps(payload) + "\n")
+            return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
 
     resolved = seat_bundle.resolve_entry(args.seat, verb="build-argv")
     if not resolved.get("ok"):
         token = resolved.get("entryReason", "seat-refused")
         detail = resolved.get("detail", token)
-        sys.stdout.write(json.dumps(
-            {"ok": False, "reason": "engine-config", "detail": token,
-             "argv": [], "seat_detail": detail}) + "\n")
-        return 1
+        payload = {"ok": False, "reason": "engine-config", "detail": token,
+                   "argv": [], "seat_detail": detail}
+        sys.stdout.write(json.dumps(payload) + "\n")
+        return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
     role = resolved["role"]
     derived_run_kind = seat_bundle.run_kind_for_role(role)
     if args.run_kind != derived_run_kind:
         mismatch = seat_bundle.build_argv_run_kind_mismatch_refusal(
             role, supplied=args.run_kind, accepted=derived_run_kind,
         )
-        sys.stdout.write(json.dumps(
-            {"ok": False, "reason": "engine-config", "detail": mismatch["entryReason"],
-             "argv": [], "seat_detail": mismatch["detail"]}) + "\n")
-        return 1
+        payload = {"ok": False, "reason": "engine-config", "detail": mismatch["entryReason"],
+                   "argv": [], "seat_detail": mismatch["detail"]}
+        sys.stdout.write(json.dumps(payload) + "\n")
+        return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
     opts = {"cwd": args.cwd}
     res = build_argv_result(resolved, derived_run_kind, opts)
     if res["reason"] is not None:
         detail = res.get("detail") or res["reason"]
-        sys.stdout.write(json.dumps(
-            {"ok": False, "reason": "engine-config", "detail": res["reason"],
-             "argv": [], "seat_detail": detail}) + "\n")
-        return 1
+        payload = {"ok": False, "reason": "engine-config", "detail": res["reason"],
+                   "argv": [], "seat_detail": detail}
+        sys.stdout.write(json.dumps(payload) + "\n")
+        return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
     sys.stdout.write(json.dumps(res["argv"]) + "\n")
-    return 0
+    return dispatch_outcome.exit_code(dispatch_outcome.CLASSIFICATION_RESULT)
 
 
 def build_parser():
@@ -2398,7 +2597,7 @@ def main(argv):
                 "detail": refusal["detail"],
             }
             sys.stdout.write(json.dumps(payload) + "\n")
-            return 1
+            return dispatch_outcome.exit_code(dispatch_outcome.classify_payload(payload))
     ap = build_parser()
     args = ap.parse_args(argv)
     if args.cmd == "build-argv":

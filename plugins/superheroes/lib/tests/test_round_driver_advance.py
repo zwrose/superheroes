@@ -1480,6 +1480,7 @@ def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path,
     assert err is None and stored_missing["schema"] == RR.SEAT_MISSING_SCHEMA
 
     verdict_payload = {"verdicts": [{"id": "v0", "verdict": "CONFIRMED",
+                                     "reason": "confirmed by sweep-silence fixture",
                                      "evidence": "reproduced the cited line"}]}
     _land(d, verifier_seat, payload=verdict_payload)
 

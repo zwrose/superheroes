@@ -71,6 +71,10 @@ def test_default_claude_tiers_migration_pin():
     assert MR.default_claude_tiers() == _EXPECTED_DEFAULT_CLAUDE_TIERS
 
 
+def test_claude_models_matches_source_keys():
+    assert MR.claude_models() == tuple(MR._MODELS["claude"])
+
+
 def test_known_claude_models_matches_source():
     assert MR.known_claude_models() == tuple(
         m["dispatch"] for m in MR._MODELS["claude"].values())

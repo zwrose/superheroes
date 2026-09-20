@@ -1376,10 +1376,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 #### S1 — Dispatch stdout cap
 
-- **Component.** Not a census row. The engine write dispatch stdout capture cap in
-  `engine_dispatch.py` (`MAX_STDOUT_CAPTURE`, 8 MiB): when engine stdout exceeds the budget, the
-  terminal forfeit carries `stdout-capped-by-attempt` and declared-item grading never runs on work
-  that already landed.
+- **Component.** Not a census row. The engine dispatch stdout capture cap in
+  `engine_dispatch.py` (`MAX_STDOUT_CAPTURE`, 8 MiB): the capture stays capped for both engines
+  (telemetry); the `stdout-capped-by-attempt` forfeit is retired for cursor 2026-09-19 (layer 3c)
+  as it was for codex — it never runs for any dispatchable engine.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite the
   stdout capture cap or `stdout-capped-by-attempt` as the loss mechanism — a zero count means long
   dispatches are staying inside the budget, not that the cap is gone. On firing, a proposal to the
@@ -1390,14 +1390,20 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — external engines paste long receipts; the cap bounds what the runner
-  can grade (Cursor-family implementers observed on weekly-eats dispatches).
+  can grade (Cursor-family implementers observed on weekly-eats dispatches). Retired for codex
+  2026-09-19 — codex's result is a typed file on its native channel; the cap forfeit never runs for
+  a native-channel run. Retired for cursor 2026-09-19 (layer 3c) — same reason. The forfeit's code
+  is reader-less and the condition now watches only the cap as a telemetry bound.
 
 #### S2 — Dispatch salvage paths
 
-- **Component.** Not a census row. The salvage recoveries when a dispatch ends in a forfeit but left
-  a readable artifact: review `forfeit-with-engaged-artifact` salvage, write-report salvage
-  (structured tail and prose tier), and `report-missing-items-delivered` work-on-disk doctrine
-  (`engine_dispatch.py`, `engine_adapter.py`, `dispatch-mechanics.md`).
+- **Component.** Not a census row. The salvage recoveries for **no dispatchable engine** — retired
+  for cursor 2026-09-19 (layer 3c); the helpers (`engine_dispatch.py` scan/salvage/upgrade/delivered-items
+  functions and `engine_adapter.py`'s marker parser and salvage family) have zero non-test readers
+  and are kept only until the gardening pass that deletes them: review `forfeit-with-engaged-artifact`
+  salvage, write-report salvage (structured tail and prose tier), and
+  `report-missing-items-delivered` work-on-disk doctrine (`engine_dispatch.py`, `engine_adapter.py`,
+  `dispatch-mechanics.md`).
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite a
   salvage block or manual artifact read recovering work from a terminal forfeit. On firing, a
   proposal to the owner at a gardening pass.
@@ -1405,9 +1411,13 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   transport grading forfeited after files landed (field record in `dispatch-mechanics.md`: three
   builds in one wave, four of six dispatches with correct files on disk).
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retire-at-next-gardening-pass — delete the helpers and their doctrine surfaces; the
+  owner decides at the pass.
 - **Notes.** harness-limit — salvage exists because engine stdout and host turn limits destroy
-  gradeable reports while work survives on disk (Cursor `NonRetriableError` class).
+  gradeable reports while work survives on disk (Cursor `NonRetriableError` class). Retired for codex
+  2026-09-19 — codex's result is a typed file on its native channel; the salvage tiers and the
+  engaged-artifact upgrade never run for a native-channel run. Retired for cursor 2026-09-19 (layer
+  3c) — same reason.
 
 #### S3 — Dirty-tree probe
 
@@ -1614,15 +1624,17 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** Not a census row. `_put_resolved` in `plugins/superheroes/lib/engine_dispatch.py`:
   the membership check that refuses any undeclared `<field>Source` marker before writing into a
   `resolvedInputs` snapshot, backed by the closed `SOURCE_MARKERS` vocabulary in
-  `plugins/superheroes/lib/resolved_inputs_vocab.py` and the live-dispatch behavioural tests in
-  `plugins/superheroes/lib/tests/test_resolved_inputs_vocab.py`
-  (`test_put_resolved_refuses_undeclared_marker`, `test_put_resolved_accepts_every_source_marker`,
-  `test_live_dispatch_undeclared_marker_surfaces_as_unrunnable`,
+  `plugins/superheroes/lib/resolved_inputs_vocab.py` and behavioural tests in
+  `plugins/superheroes/lib/tests/test_resolved_inputs_vocab.py`: direct `_put_resolved` chokepoint
+  tests (`test_put_resolved_refuses_undeclared_marker`,
+  `test_put_resolved_accepts_every_source_marker`) and live-dispatch behavioural tests
+  (`test_live_dispatch_undeclared_marker_surfaces_as_unrunnable`,
   `test_live_dispatch_snapshot_source_markers_are_declared`). Its cost is that every new source
   marker must be added to the vocabulary before a producer can write it.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
-  receipt carrying `reason: unrunnable` with `detail: internal-UndeclaredSourceMarker` that caught
-  an undeclared `<field>Source` marker that would otherwise have reached a `resolvedInputs`
+  receipt carrying `reason: unrunnable` with a `detail` naming the undeclared field, marker, and
+  accepted marker set (from `_put_resolved`'s `UndeclaredSourceMarker` guard) that caught an
+  undeclared `<field>Source` marker that would otherwise have reached a `resolvedInputs`
   snapshot. On firing, a proposal to the owner at a gardening pass. A zero citation count means no
   producer wrote an undeclared marker, not that the chokepoint can go.
 - **Last demonstrated benefit.** An undeclared marker planted at a real producer terminated the
@@ -1713,6 +1725,70 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   Arrives with issue #1311. S16's duplicate-loop check retires with the wave watcher if reset child
   C15 (#1274) deletes it.
 
+#### S17 — Native result-channel admission (codex, cursor)
+
+- **Component.** Not a census row; the one admission authority for a native-channel run's result —
+  the declared schema per run kind (`engine_result_channel.declared_schema`), written to the run dir
+  at open and re-compared at grade; the fd-based result loader; schema validation; the semantic
+  refusals (`native-result-report-blank`, the hollow-member checks the adapter owns); the spawn-side
+  `native-result-path-occupied` and `marker-channel-retired` refusals; for cursor, the per-attempt
+  prompt file delivery and `attempt-prompt-occupied` / `attempt-prompt-unwritable` refusals
+  (`engine_dispatch.py`, `engine_result_channel.py`, `engine_adapter.py`). Scope is by construction:
+  the engine set is the closed `_CHANNEL_BY_ENGINE` map.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute or incident receipts that cite a
+  `native-result-*` or `native-schema-unreadable` refusal as the reason a live codex dispatch was
+  lost, **or** a second schema or adapter fix on the native channel within one release — either
+  fires a proposal at the next gardening pass (drop the channel, or accept the cost); a zero count
+  means codex is returning typed results that validate.
+- **Last demonstrated benefit.** Live codex review and write dispatches through the build checkout's
+  runner returned typed, schema-valid results; a blank write `report` returned by the live engine was
+  refused rather than graded. Live cursor review and write dispatches through the build checkout's
+  runner returned typed, schema-valid results (layer 3c, 2026-09-19).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — the engine's own structured-output flag replaces our marker parser; the
+  adapter's non-blank checks remain because the strict-mode schema dialect cannot express a minimum
+  length. Tag: `native-channel`.
+
+#### S18 — Conformance probe
+
+- **Component.** Not a census row. `lib/conformance_probe.py`: one `run --engine <e>` command per
+  dispatchable engine per wave (the adapter's dispatchable vendor set intersected with the channel
+  map, by construction); three graded legs (`resultProduction`, `completionDetection`,
+  `progressTelemetry`); the `engine-auth` check entry via `preflight-entry` composing one result per
+  routed engine.
+- **Condition.** Citation-based, 45 days: a probe that passed in the same wave a live seat then
+  failed on a channel or auth cause the probe covers, twice, proposes redesign; a probe never run in
+  45 days of waves proposes retirement — the record is the launch ledger's `engine-auth` evidence. On
+  firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Wave preflight catches dead engines and channel drift before any
+  builder launches — the dispatch selftest validates configuration only, not liveness.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — detection replaces version pinning. Tag: `wave-preflight`.
+
+#### S19 — Order lint (deterministic half + semantic seat)
+
+- **Component.** Not a census row. `lib/order_lint.py check` (the deterministic half) and the
+  `mechanical`-role Haiku seat under `rubric/orders/order-lint-semantic.md` (the semantic half),
+  run by the workhorse before every implementer and review-fix dispatch and by the round driver at
+  every fixer-order emission. Cost: one sub-second CLI run plus one sub-minute Haiku dispatch per
+  order.
+- **Condition.** Catch-based, non-default window: **ten consecutive full lanes with zero
+  order-quality reworks** (a rework is one the build record's dispatch-provenance table attributes to
+  order quality), read from the vet receipts of those lanes — a window in lanes, not days, because
+  the signal only exists when lanes run. On firing, a proposal to the owner at a gardening pass to
+  retire both halves or keep only the deterministic one.
+- **Last demonstrated benefit.** The three C11 layer 3 reworks reconstructed as fixtures
+  (`plugins/superheroes/lib/tests/fixtures/order_lint/`; PR #1332's dispatch-provenance table) —
+  two caught by the deterministic half, the third named for the semantic half. Reconstructed, not a
+  live catch.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — the lint compensates for an orchestrator that writes orders faster than
+  it re-reads them; a model that never leaves a placeholder or a dangling path unfilled would retire
+  it. Arrives with issue #1339.
+
 
 ## The workaround-marker inventory
 
@@ -1757,6 +1833,10 @@ file, returns exactly that set.
 - `plugins/superheroes/lib/launcher.py` — launcher refuses spawn when cwd is the primary checkout
   (own-worktree). **delete-when:** the background-session trial receipt marks launcher worktree
   enforcement not needed.
+- `plugins/superheroes/lib/launcher.py` — the launcher's hand-built claude -p argv (spawn path)
+  duplicates the engine adapter's claude branch until the migration layer folds it in.
+  **delete-when:** the launcher's builder launch goes through engine_adapter.build_argv_result for
+  vendor claude (a grep for the hand-built argv returns nothing).
 - `plugins/superheroes/lib/pilot_conformance_runtime.py` — env-var transport of connection detail
   across multi-account ownership probes. **delete-when:** the background-session trial receipt marks
   multi-account provisioning transport not needed.

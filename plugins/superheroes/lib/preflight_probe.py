@@ -72,7 +72,7 @@ def cross_vendor_no_op_argv(engine):
         # in engine_adapter), not a hard-coded id — `cursor-small` was observed unavailable in a
         # live run, which would fail the probe for a project that never dispatches it.
         return ("cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust",
-                "--mode", "plan")
+                "-f", "--sandbox", "enabled")
     return (engine, "--version")
 
 

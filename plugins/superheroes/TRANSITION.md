@@ -9,6 +9,61 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Dispatch-shell exit codes
+
+A dispatch-shell command-line entry point exits **1** when it refuses (returns without doing the
+work it was asked to do), **0** otherwise; argparse's own argument errors remain exit **2**. Exit
+**0** still never means success — the JSON `ok`/`terminal` fields stay authoritative.
+
+**Consumer-visible change:** `dispatch-review` / `dispatch-write` refusals now exit **1** where they
+previously exited **0**. A successful `dispatch-poll` / `dispatch-abandon` still exits **0** even
+when its JSON carries `reason: unrunnable` (for example after abandon). `dispatch_guard check` and
+`engine_adapter build-argv` exit-code behavior is unchanged from the C10 correction documented
+below.
+
+### Command-line Claude result channel
+
+Command-line **claude** is now dispatchable through the shell — `dispatch-review` / `dispatch-write`
+with `{"vendor":"claude", …}` no longer refuse `undispatchable-vendor`. A consumer that treated
+claude as undispatchable must route it through the sanctioned verbs like codex and cursor.
+
+The argv is `claude -p --model <tok> --effort <effort> --output-format stream-json --verbose`,
+plus `--restricted` for the review role or `--permission-mode acceptEdits --restricted` for
+the write role, with `--json-schema
+<declared schema JSON>` appended at run-open; the prompt arrives on stdin. A claude write dispatch
+is edit-only inside the run cwd because no OS sandbox is available through this CLI, so an order
+needing to run commands does not route to claude today. `<tok>` is the registry's claude dispatch
+token (`haiku`, `sonnet`, `opus`); `fable` refuses `fable-unrunnable`.
+
+The typed result is the `structured_output` member of the **last** `{"type":"result"}` event on
+stdout — the final response `--json-schema` governs. The runner **materializes** it to
+`<run-dir>/native-result-<n>.json` at attempt end; `attempt-ended.stdoutResult` records
+`materialized`, `absent`, `error`, or `occupied`. Only a `materialized` attempt is loaded;
+`occupied` forfeits `native-result-path-occupied`; `absent` (no `result` event, `is_error: true`,
+or no `structured_output`) and `error` forfeit `native-result-missing`. Admission then runs the
+engine-neutral native path unchanged (declared schema, scrub, the `native-result-*` forfeits).
+`--output-format json` prints the identical envelope object once at exit; `stream-json --verbose`
+prints `assistant` events carrying `tool_use` blocks and then that same envelope as the last line.
+
+Telemetry uses `engagement.source: "claude-stream"`, `telemetry: "tool-calls"`; tool calls are counted
+by distinct `tool_use` block id across `assistant` events, **excluding** the `StructuredOutput` call
+(it is the result, not activity).
+
+At run-open the shell resolves the target `CLAUDE_CONFIG_DIR` through `lib/config_dir.resolve(env,
+cwd)` and records it as `run-opened.configDir`; a value that is not an existing directory refuses at
+open with `config-dir-unusable:<why>` (`attempts: 0`). At spawn the same value is injected into the
+child env together with `CLAUDE_CODE_EFFORT_LEVEL=<seat effort>`, and `engine-started.env` records
+both pins.
+
+Refusal tokens a consumer can meet on claude: `config-dir-unusable:<why>`, plus the shared native
+family `native-result-missing`, `native-result-oversized`, `native-result-malformed`,
+`native-result-schema-invalid`, `native-result-report-blank`, `native-result-path-occupied`,
+`native-schema-unreadable`, `marker-channel-retired`; the adapter refusals `unregistered-engine-model`,
+`fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
+
+Not in this release: background mode (`claude --bg`), the launcher's hand-built argv retiring into
+the adapter, the watcher and the steer channel, Astra.
+
 ### Dispatch CLI arguments
 
 On `engine_dispatch dispatch-review`, `engine_dispatch dispatch-write`, `dispatch_guard check`,
@@ -140,13 +195,77 @@ if "class" in result:
     ...
 ```
 
-### Codex dispatch channel
+### Codex result channel
 
-Codex review and write dispatches now run with **`--json`** and **`--output-last-message`**. Engagement
-is read from codex's own JSONL event stream (`engagement.source` is `codex-events` when tool-call
-telemetry parses). The review findings payload is read from the **last-message file**
-(`codex_review_payload_text`); the event stream's last `agent_message` item is the fallback when the
-file is absent.
+Codex review and write dispatches now return their result as a **typed JSON file** on
+`--output-schema` and `-o`. The spawn argv is the opened argv plus `--json` (inserted once, before
+`-o`) and `-o <run-dir>/native-result-<N>.json --output-schema <run-dir>/native-schema.json`, where
+`N` is the attempt number. Stdout is telemetry only — the runner never scans it for a result.
 
-Consumers that parsed review output from codex stdout must read the last-message file (or the
-structured event stream) instead of treating raw stdout as the findings payload.
+The `run-opened` journal record carries `channel` (`"native"` or `"marker"`) and, on native,
+`nativeSchemaPath` (`<run-dir>/native-schema.json`, the declared schema written at open). A resumed
+run that predates the field reads as marker.
+
+On a successful codex write, the terminal result carries `report` (the scrubbed report text). On
+forfeit, it carries `detail` from the native admission vocabulary: `native-schema-unreadable`,
+`native-result-missing`, `native-result-oversized`, `native-result-malformed`,
+`native-result-schema-invalid`, `native-result-report-blank`, `native-result-path-occupied`, or
+`marker-channel-retired`. The dirty-tree forfeit keeps `detail: worktree-dirtied-by-attempt` and
+carries `attemptDetail`.
+
+A codex consumer will no longer see: a `salvage` block, `forfeit-with-engaged-artifact` (the
+terminal stays `forfeited` with its `native-result-*` detail), `stdout-capped-by-attempt`,
+`report-missing-items-delivered` reclassification, or `itemCheck` on a forfeit. `--output-last-message`
+and the `attempt-N.last-message` file are gone. A codex run whose opened record is marker (a persisted
+pre-upgrade run) never spawns again — its attempt ends with `marker-channel-retired` and the run
+forfeits.
+
+Every write run now records `echoNonce` at open, so `run_execution_record` returns `runnerNonce` for
+a write run (a resumed pre-upgrade write run without it still answers `runner-nonce-missing`).
+
+The verifier verdict contract requires `reason` as a non-blank string on every ingest path
+(`payload_contracts` P_VERIFIERS); hand-submitted verifier artifacts are checked against the same
+contract. A whitespace-only `id`, `verdict`, or `reason` faults.
+
+Consumers that read codex findings from the last-message file or the event stream read the folded
+`dispatch-review` result instead; consumers that relied on a write salvage block on codex reconstruct
+from the worktree diff.
+
+### Cursor result channel and the conformance probe
+
+Cursor's results now come home on the typed-file channel — reviews and writes — with the same
+declared schema per run kind as codex. A consumer that read cursor's stream-json stdout for a
+result, a `WRITE_REPORT_SENTINEL` tail, or a `salvage` block reads the folded `dispatch-review` /
+`dispatch-write` result instead.
+
+The argv is `cursor-agent --model <tok> -p --trust -f --sandbox enabled --output-format
+stream-json` for both roles; `--mode plan` is gone. Each attempt stages a per-attempt prompt file
+`<run-dir>/prompt-attempt-<n>.md` (the order prompt plus the typed-file contract); `engine-started`
+carries `attemptPromptPath` and `attemptPromptSha256`, and the execution record's `promptSha256`
+binds the attempt prompt for cursor (`orderPromptSha256` is the caller's order in both).
+
+Refusal tokens a consumer can now meet on cursor: `native-result-missing`,
+`native-result-oversized`, `native-result-malformed`, `native-result-schema-invalid`,
+`native-result-report-blank`, `native-result-path-occupied`, `attempt-prompt-occupied`,
+`attempt-prompt-unwritable`, `native-schema-unreadable`, `prompt-unreadable`,
+`prompt-tampered`,
+`marker-channel-retired`. Tokens that
+never mint again for any engine: `stdout-capped-by-attempt`, `report-missing-items-delivered`,
+`forfeit-with-engaged-artifact`, and the `salvage` block. No engine remains on the marker channel;
+the marker parser, the write-report sentinel contract, the salvage tiers, the delivered-items
+classifier, and the stdout-cap forfeit are retired from the supervised path and stay in the tree
+only until the gardening pass that deletes them (KEEP-OR-RETIRE S1/S2).
+
+- **Codex** — unchanged since layer 2c: native channel, result path on argv (`-o
+  <run-dir>/native-result-<n>.json` with `--output-schema <run-dir>/native-schema.json`), JSONL
+  telemetry on `--json`.
+- **Cursor** — native channel since layer 3c: result path in the per-attempt prompt file, stream-json
+  telemetry (`engagement.source: "cursor-stream"`).
+
+Wave preflight runs `lib/conformance_probe.py` once per dispatchable engine; its result is recorded
+as the launcher's `engine-auth` check — the liveness check the dispatch selftest is not.
+
+A runner-journal line that is valid JSON but not an object now counts as interior corruption under
+the class `journal-line-not-object`. The launcher's `preflight-failed:<id>` refusal now carries the
+walked `checks`, including the failing entry, so the launch ledger keeps the probe's evidence on
+refusal.
