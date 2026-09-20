@@ -69,3 +69,42 @@ specimen is **any non-exempt `{name}` token** in the owner's command (or a path 
 not resolve from the project's `repoRoot`), not `{baseRef}`. The proof above therefore uses a
 project-shaped command that carries validator paths, `--base {baseRef}`, **and** an ordinary
 `{item}` token; the `{item}` is what bites.
+
+## BP-VB-2 — the elision is anchored to the budget's quoted tail
+
+Added in review round 1 (codex `gpt-5.6-sol` xhigh at the chain top, Important finding), proved
+on the committed head `8e23330b`.
+
+**Axis:** the elision removes the owner's command **only** as the budget's quoted tail — never an
+earlier substring match inside the driver's own target-file list.
+
+**Neutralization:** at `_order_lint_text`, replace the anchored pair
+(`budget.endswith(verify)` / `budget[:-len(verify)] + QUOTED_DATA_LINT_ELISION`) with the
+first-occurrence form (`verify in budget` / `budget.replace(verify, QUOTED_DATA_LINT_ELISION, 1)`).
+
+**Red** — `plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_verify_command_elision_is_anchored_to_the_budget_tail`:
+
+```
+E       assert 'prefix/foo/bar.py' in "PROLOGUE\nScoped verify budget for this batch — target files: prefix/(quoted data elided from the order lint). Run th... yours to run inside this attempt — the orchestrator runs it once after the round's fixes land: foo/bar.py\nEPILOGUE\n"
+FAILED plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_verify_command_elision_is_anchored_to_the_budget_tail
+1 failed in 2.23s
+```
+
+The red shows the defect itself: the driver's target path `prefix/foo/bar.py` was rewritten to
+`prefix/(quoted data elided…)` while the owner's command stayed in the text.
+
+**Restore:** restore the anchored pair.
+
+**Restore receipt:**
+
+```
+$ git status --porcelain -- plugins/superheroes/lib/round_driver.py
+(empty)
+```
+
+**Green:**
+
+```
+.                                                                        [100%]
+1 passed in 2.28s
+```
