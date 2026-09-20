@@ -49,6 +49,22 @@ MODE_PRINT = "print"
 MODE_BACKGROUND = "background"
 CLAUDE_MODES = (MODE_PRINT, MODE_BACKGROUND)
 
+# Non-print claude dispatch modes and the engines that support each. Single home for the
+# capability question; engine_result_channel maps supported pairs to delivery mechanics.
+_NON_PRINT_CLAUDE_MODE_ENGINES = {
+    MODE_BACKGROUND: frozenset({"claude"}),
+}
+
+
+def claude_mode_supported(vendor, mode):
+    """True when vendor accepts this claude dispatch mode (print is universal)."""
+    if mode is None or mode == MODE_PRINT:
+        return True
+    allowed = _NON_PRINT_CLAUDE_MODE_ENGINES.get(mode)
+    if allowed is None:
+        return False
+    return vendor in allowed
+
 # Write tail signals graded by _grade_build_report_obj (CONVENTIONS §11).
 WRITE_SIGNAL_ENUM = ("ok", "plan_wrong", "needs_context")
 WRITE_SIGNAL_OK, WRITE_SIGNAL_PLAN_WRONG, WRITE_SIGNAL_NEEDS_CONTEXT = WRITE_SIGNAL_ENUM
@@ -467,7 +483,7 @@ def build_argv_result(seat, role_kind, opts):
                 detail="unknown claude mode %r; accepted modes: %s"
                 % (claude_mode, modes_label),
             )
-        if vendor != "claude":
+        if not claude_mode_supported(vendor, claude_mode):
             return _refuse(
                 "claude-mode-unsupported",
                 detail="claude mode %r is not supported for engine %s"

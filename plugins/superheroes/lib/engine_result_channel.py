@@ -215,6 +215,10 @@ def result_delivery(engine, mode=None):
         if delivery is None:
             raise ValueError("native engine %r has no result delivery entry" % (engine,))
         return delivery
+    if not engine_adapter.claude_mode_supported(engine, mode):
+        raise ValueError(
+            "engine %r has no delivery for mode %r" % (engine, mode)
+        )
     mode_delivery = _RESULT_DELIVERY_BY_ENGINE_MODE.get((engine, mode))
     if mode_delivery is not None:
         return mode_delivery

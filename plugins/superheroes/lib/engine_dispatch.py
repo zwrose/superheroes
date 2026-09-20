@@ -92,6 +92,9 @@ REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
 _REVIEW_RESULT_KINDS_CHOICES_CONTRACT = (
     "choices:" + ",".join(str(kind) for kind in REVIEW_RESULT_KINDS)
 )
+_CLAUDE_MODES_CHOICES_CONTRACT = (
+    "choices:" + ",".join(str(mode) for mode in engine_result_channel.CLAUDE_MODES)
+)
 RESULT_KIND_MISMATCH_DETAIL = "result-kind-mismatch"
 RUN_KIND_WRITE = "write"
 _DISPATCH_SCRIPT = os.path.abspath(__file__)
@@ -4911,8 +4914,8 @@ def dispatch_review(*args, seat=None, prompt_path=None,
                 mode=mode or sanitized_view.MODE_REVIEW,
             )
         if (
-            claude_mode == engine_result_channel.MODE_BACKGROUND
-            and entry.get("vendor") != "claude"
+            claude_mode is not None
+            and not engine_adapter.claude_mode_supported(entry.get("vendor"), claude_mode)
         ):
             return _claude_mode_entry_refusal(
                 "claude-mode-unsupported",
@@ -5532,8 +5535,8 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                 run_dir=run_dir,
             )
         if (
-            claude_mode == engine_result_channel.MODE_BACKGROUND
-            and resolved.get("vendor") != "claude"
+            claude_mode is not None
+            and not engine_adapter.claude_mode_supported(resolved.get("vendor"), claude_mode)
         ):
             return _claude_mode_entry_refusal(
                 "claude-mode-unsupported",
@@ -6424,7 +6427,7 @@ def build_parser():
                          "expression, branch name or tag is refused")
     cc.add_argument(d, "--mode", contract="choices:review,brief-check", default=None,
                     choices=sanitized_view.REVIEW_MODES)
-    cc.add_argument(d, "--claude-mode", contract="choices:print,background", default=None,
+    cc.add_argument(d, "--claude-mode", contract=_CLAUDE_MODES_CHOICES_CONTRACT, default=None,
                     choices=engine_result_channel.CLAUDE_MODES,
                     help="background is declared but is not dispatchable")
     cc.add_argument(d, "--expected-result-kind", contract=_REVIEW_RESULT_KINDS_CHOICES_CONTRACT,
@@ -6448,7 +6451,7 @@ def build_parser():
     cc.add_argument(w, "--progress-file", contract="free-text", default=None)
     cc.add_argument(w, "--expect-item", contract="free-text", action="append", default=None)
     cc.add_argument(w, "--expect-items-file", contract="free-text", default=None)
-    cc.add_argument(w, "--claude-mode", contract="choices:print,background", default=None,
+    cc.add_argument(w, "--claude-mode", contract=_CLAUDE_MODES_CHOICES_CONTRACT, default=None,
                     choices=engine_result_channel.CLAUDE_MODES,
                     help="background is declared but is not dispatchable")
 
