@@ -251,21 +251,40 @@ size cap that decodes as JSON (`native-result-missing`, `native-result-oversized
 `native-result-malformed`); it must validate against the declared schema
 (`native-result-schema-invalid`); on a write, its `report` must be non-blank
 (`native-result-report-blank`); and an entry already at the result path when an attempt would spawn
-refuses that attempt (`native-result-path-occupied`). Cursor adds attempt-prompt refusals:
+refuses that attempt (`native-result-path-occupied`); a timed-out attempt additionally requires a
+usable completion stamp on the same monotonic clock as its deadline (`result-completion-unrecorded`
+when the stamp is missing or its epoch disagrees with the deadline's,
+`result-completion-after-deadline` when completion is strictly after the cap — exactly at the cap
+admits, `result-completion-payload-mismatch` when the admitted payload is not the one the stamp
+was taken over). Cursor adds attempt-prompt refusals:
 `attempt-prompt-occupied` (any pre-existing entry at the attempt-prompt path — file, symlink,
 dangling symlink, directory — the engine learns the run dir from the result path, so a first attempt
 could plant the second's), `attempt-prompt-unwritable`, and `prompt-tampered` (the staged source
 prompt's bytes no longer match the digest bound at run-open). For **codex and cursor**, every
 refusal is a forfeit or an attempt refusal — the runner never scans stdout for a result and never
 repairs a malformed file. **Claude print mode** is the exception on the first half: the runner
-reads stdout for the final `{"type":"result"}` envelope and materializes the typed file from it
-(above); it still never repairs a malformed file. **Claude background mode** never reads stdout
+reads stdout for the final `{"type":"result"}` envelope, records the completion instant at that
+observation (before the process is terminated), and materializes the typed file from it as a later,
+separate act (above); it still never repairs a malformed file. **Claude background mode** never reads stdout
 for a result — the transcript path above. Claude adds `config-dir-unusable:<why>` at run-open and
 the adapter refusals `unregistered-engine-model`,
 `fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
 
-Completion is the process exit plus the typed file — for codex and cursor the file the engine writes
-directly, for claude the materialized structured output; a missing or invalid file forfeits.
+Completion is engine-owned and recorded as a monotonic instant, not inferred from process exit or
+file mtime: each attempt-ended record carries `resultCompleteAt`, `resultCompleteEpoch`, and
+`resultCompleteSha256` (a digest of the payload complete at that instant). **Codex and cursor**
+stamp the first moment the result file parses as complete JSON; **claude print** stamps when the
+poll loop observes the terminal `{"type":"result"}` event on stdout — on natural exit, timeout,
+and poll-loop breaks, all before termination — and later materialization to the result path is not
+the completion time; **claude background** stamps the supervisor's record of the result's arrival
+in the transcript rows; the in-process seam stamps its own capture. On a timed-out attempt the same
+record also carries `deadlineMono` and `deadlineEpoch` (the wall cap on that clock; `timeoutAt`
+remains for display only). Admission compares only those stamped fields in one loader every native
+path passes through: it recomputes the payload digest and requires it to match the recorded one, so
+a result rewritten after its stamp cannot be admitted on the earlier stamp. For claude print the
+completion instant is the runner's observation, bounded by the attempt poll interval (0.2 s) — a
+result completing inside that final window before the cap may be stamped just after it and forfeit;
+that is the safe direction.
 Progress and engagement telemetry come from codex's JSONL event stream on `--json`
 (`engagement.source: "codex-events"`); cursor's stream-json event stream (`engagement.source:
 "cursor-stream"`, `tool_call` events counted by distinct call id); claude's stream-json event stream
