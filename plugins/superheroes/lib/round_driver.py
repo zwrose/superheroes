@@ -136,9 +136,17 @@ def _order_lint_text(order_text, context):
     text = order_text
     budget = ph.get("VERIFY_BUDGET")
     verify = context.get("verify_command")
+    # The budget QUOTES the owner's command as its TAIL (`_fixer_verify_budget` appends it last),
+    # so the elision is anchored to that tail. A first-occurrence replace would search from the
+    # front and could rewrite a driver-authored target path the owner's command is a substring of
+    # (target `prefix/foo/bar.py`, command `foo/bar.py`) — hiding a path the lint must grade and
+    # leaving the owner's command in the text. Anchoring makes that impossible: nothing but the
+    # quoted tail is ever removed, and a budget that does not end in the command is left whole
+    # (the lint then grades it — fail-closed, never fail-open).
     if (isinstance(budget, str) and budget.strip()
-            and isinstance(verify, str) and verify.strip() and verify in budget):
-        text = text.replace(budget, budget.replace(verify, QUOTED_DATA_LINT_ELISION, 1), 1)
+            and isinstance(verify, str) and verify.strip() and budget.endswith(verify)):
+        elided = budget[:-len(verify)] + QUOTED_DATA_LINT_ELISION
+        text = text.replace(budget, elided, 1)
     for quoted in (ph.get("GATE_GUIDANCE"), context.get("ratified_residuals")):
         if isinstance(quoted, str) and quoted.strip():
             text = text.replace(quoted, QUOTED_DATA_LINT_ELISION, 1)

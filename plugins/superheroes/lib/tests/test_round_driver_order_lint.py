@@ -318,8 +318,8 @@ def test_fixer_emission_elides_only_the_owner_verify_command_from_the_budget(tmp
     state.setdefault("config", {})["repoRoot"] = repo
     state["config"]["verifyCommand"] = verify
     target = "plugins/superheroes/lib/round_driver.py"
-    # Every path the order names resolves, so the ONE thing the lint could still refuse on is
-    # the `{baseRef}` token inside the owner's command — the production failure exactly.
+    # Every path the order names resolves, so the ONE thing left for the lint to refuse on is
+    # the non-exempt `{item}` token inside the owner's command — the production failure exactly.
     for path in (target, ".github/scripts/validate_skills.py",
                  ".github/scripts/verify_touched_tests.py"):
         os.makedirs(os.path.join(repo, os.path.dirname(path)), exist_ok=True)
@@ -339,6 +339,33 @@ def test_fixer_emission_elides_only_the_owner_verify_command_from_the_budget(tmp
     assert verify not in lint_text
     assert RD.QUOTED_DATA_LINT_ELISION in lint_text
     assert target in lint_text
+
+
+def test_verify_command_elision_is_anchored_to_the_budget_tail(tmp_path, monkeypatch):
+    # axis: the elision removes the QUOTED TAIL only — never an earlier substring match inside
+    # the driver's own target-file list (review round 1, Important)
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    repo = str(tmp_path / "proj")
+    os.makedirs(repo)
+    # The owner's command is a SUBSTRING of the target path the driver names.
+    target = "prefix/foo/bar.py"
+    verify = "foo/bar.py"
+    os.makedirs(os.path.join(repo, os.path.dirname(target)), exist_ok=True)
+    open(os.path.join(repo, target), "w", encoding="utf-8").close()
+    state.setdefault("config", {})["repoRoot"] = repo
+    state["config"]["verifyCommand"] = verify
+    state["fixBatch"] = [{"file": target, "title": "t", "line": 1}]
+    budget = RD._fixer_verify_budget(state["fixBatch"], state["config"])
+    assert budget.endswith(verify)
+    lint_text = RD._order_lint_text(
+        "PROLOGUE\n" + budget + "\nEPILOGUE\n",
+        {"placeholders": {"VERIFY_BUDGET": budget}, "verify_command": verify})
+    # The driver's target path survives whole — it is NOT rewritten by the elision.
+    assert target in lint_text
+    # And the quoted tail is gone.
+    assert lint_text.rstrip().endswith("EPILOGUE")
+    assert RD.QUOTED_DATA_LINT_ELISION in lint_text
+    assert lint_text.count(verify) == 1  # only the one inside `target`
 
 
 def test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root(tmp_path, monkeypatch):
