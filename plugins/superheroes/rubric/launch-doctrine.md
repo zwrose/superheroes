@@ -82,10 +82,12 @@ checkout. The recorded `configDir` is what lets a watcher running under a *diffe
 resolve that lane's session transcript under the lane's own root rather than its own (#1036). A path that already exists, or that
 git still registers, refuses the launch rather than being reused. **When the premise names a stack,**
 `stack` and `layerPosition` must both be present as positive integers or both absent
-(`premise-stack-fields-incomplete`, `premise-stack-field-invalid`); for `layerPosition >= 2`, launch
-refuses unless the resolved base commit is the current head of the stack member at position
-`layerPosition - 1` (`base-not-layer-head`, `stack-read-unavailable`, `order-mismatch`,
-`layer-position-occupied`). **`launch` also refuses a
+(`premise-stack-fields-incomplete`, `premise-stack-field-invalid`); optional `layersPlanned` requires
+both and must be a positive integer at least `layerPosition`
+(`premise-stack-layers-planned-incomplete`, `premise-stack-layers-planned-invalid`,
+`premise-stack-layers-planned-under-position`); for `layerPosition >= 2`, launch refuses unless the
+resolved base commit is the current head of the stack member at position `layerPosition - 1`
+(`base-not-layer-head`, `stack-read-unavailable`, `order-mismatch`, `layer-position-occupied`). **`launch` also refuses a
 `CLAUDE_CONFIG_DIR` pin that is not the calling seat's own instance** (`launch-foreign-instance-pin`
 or `launch-seat-instance-undetermined`) unless the caller passes `--allow-foreign-instance`; **that gate applies only on a Claude Code seat** — it keys on
 `CLAUDE_PID`, so a host with none (Codex, a scripted or cron caller) skips the gate entirely rather
