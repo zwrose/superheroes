@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 GH_TIMEOUT = 120
 DEFAULT_PAGE_SIZE = 50
@@ -171,7 +172,7 @@ def _parse_member(node):
     )
 
 
-def _validate_membership_arguments(pr, repo, expect_stack, page_size):
+def _validate_membership_arguments(pr, repo, expect_stack, page_size, deadline):
     """Return None when arguments are good, or the refusal dict to return."""
     # axis: pr is not an int (bool is not an int here)
     if not _is_int(pr):
@@ -217,6 +218,18 @@ def _validate_membership_arguments(pr, repo, expect_stack, page_size):
             "page_size must be an integer between %d and %d" % (MIN_PAGE_SIZE, MAX_PAGE_SIZE),
             repo=repo, pr=pr)
 
+    # axis: deadline supplied and not a real number
+    if deadline is not None and (
+        not isinstance(deadline, (int, float)) or isinstance(deadline, bool)
+    ):
+        return _refusal(REASON_BAD_ARGUMENT,
+            "deadline must be a positive number of seconds", repo=repo, pr=pr)
+
+    # axis: deadline supplied and not greater than zero
+    if deadline is not None and not (deadline > 0):
+        return _refusal(REASON_BAD_ARGUMENT,
+            "deadline must be a positive number of seconds", repo=repo, pr=pr)
+
     # axis: gh is not on PATH
     if not shutil.which("gh"):
         return _refusal(REASON_STACK_UNREADABLE, "gh not on PATH", repo=repo, pr=pr)
@@ -224,11 +237,24 @@ def _validate_membership_arguments(pr, repo, expect_stack, page_size):
     return None
 
 
-def _transport_graphql(owner, name, pr, page_size, after, timeout, run, repo, pages):
+def _transport_graphql(
+    owner, name, pr, page_size, after, timeout, run, repo, pages, deadline=None, deadline_at=None,
+):
     """Run one gh api graphql page. Return parsed payload dict or refusal dict."""
+    # axis: read budget exhausted before a gh page
+    if deadline_at is not None and time.monotonic() >= deadline_at:
+        return _refusal(REASON_STACK_UNREADABLE,
+            "read budget of %g seconds exhausted after %d pages" % (deadline, pages),
+            repo=repo, pr=pr, pages=pages)
+
+    effective_timeout = timeout
+    if deadline_at is not None:
+        remaining = deadline_at - time.monotonic()
+        effective_timeout = min(timeout, remaining)
+
     argv = _graphql_argv(owner, name, pr, page_size, after)
     try:
-        proc = run(argv, capture_output=True, text=True, timeout=timeout)
+        proc = run(argv, capture_output=True, text=True, timeout=effective_timeout)
     except (FileNotFoundError, OSError) as exc:
         # axis: run raises FileNotFoundError/OSError
         return _refusal(REASON_STACK_UNREADABLE, str(exc), repo=repo, pr=pr, pages=pages)
@@ -453,17 +479,19 @@ def read_membership(
     expect_stack=None,
     page_size=DEFAULT_PAGE_SIZE,
     timeout=GH_TIMEOUT,
+    deadline=None,
     run=None,
 ):
     """Return the membership read dict. Never raises."""
     if run is None:
         run = subprocess.run
 
-    arg_refusal = _validate_membership_arguments(pr, repo, expect_stack, page_size)
+    arg_refusal = _validate_membership_arguments(pr, repo, expect_stack, page_size, deadline)
     if arg_refusal is not None:
         return arg_refusal
 
     owner, name = repo.split("/", 1)
+    deadline_at = None if deadline is None else time.monotonic() + deadline
 
     prior_members = None
     for verification_pass in (0, 1):
@@ -476,7 +504,8 @@ def read_membership(
 
         while True:
             transport_result = _transport_graphql(
-                owner, name, pr, page_size, after, timeout, run, repo, pages)
+                owner, name, pr, page_size, after, timeout, run, repo, pages,
+                deadline=deadline, deadline_at=deadline_at)
             if not isinstance(transport_result, dict) or "data" not in transport_result:
                 return transport_result
 
