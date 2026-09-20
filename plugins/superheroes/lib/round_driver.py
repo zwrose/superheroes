@@ -6815,7 +6815,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         # (order-result-shape-ambiguous) refuses the emission here and never reaches a dispatch.
         # Quoted-data blocks (owner-gate guidance, verify command, ratified residuals) are elided
         # from the lint text so paths, braces, or result-shape words in owner prose never refuse
-        # only the first occurrence of each block is elided when it appears more than once.
+        # the emission; only the first occurrence of each block is elided when it appears more
+        # than once.
         # Plugin-relative citations resolve via the plugin root as well as the repo root.
         # Deterministic half only — a driver-rendered order has no author for the semantic seat
         # to send a finding back to.
