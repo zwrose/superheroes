@@ -56,7 +56,9 @@ shape is wrong and the thinking wins.
 
    **The re-pin form.** After a bring-current the lane recomputes the digest. **Equal:** the sha is
    **re-pinned in place with a dated line**, CI runs on the new head, and **nothing is re-reviewed**.
-   **Unequal, or `digest-unavailable`:** `git range-diff` names the changed commits. A changed hunk
+   **Unequal, or `digest-unavailable`:** `git range-diff --remerge-diff` names the changed commits
+   (including conflict resolutions in a bring-current merge; plain `range-diff` ignores merge
+   commits). A changed hunk
    takes the **mechanical non-semantic** path — CI and a disclosure line, **no reviewer** — only when
    the change is mechanically non-semantic: whitespace, pure formatting, a comment, or a line re-wrap
    that leaves the rule unchanged. A changed hunk takes the merge train's **existing union-fix floor**

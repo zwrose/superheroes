@@ -213,7 +213,9 @@ review.
 
 When a **lower layer changes under it**, bring the lower layer current first, then the layer above
 from it, bottom-up. The builder discloses the conflict round. Every layer whose head sha changes
-needs fresh remote-head checks and qualifying review and CI receipts on the new head.
+needs fresh remote-head checks and CI on the new head; review follows the content pin above — an
+equal digest re-reviews nothing, and an unequal or `digest-unavailable` digest takes the branch
+that pin already defines.
 
 ## Anti-patterns
 
