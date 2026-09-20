@@ -252,6 +252,18 @@ When an event fires, co-occurring lower-precedence lane signals from the same in
 under `alsoObserved` (launch ids only) — read it, or you will act on one lane and miss its
 siblings. A `timer` result has no `alsoObserved`.
 
+When **`pr-set-changed`** fires, the payload carries the open PR set plus what moved:
+
+- `prs` — sorted open PR numbers after the change
+- `prsAdded` / `prsRemoved` — sorted numbers that joined or left the open set
+- `stacks` — one entry per distinct stack any changed PR belongs to, sorted by stack
+  number: `{"stack": <int>, "prs": [<every member in position order>]}`. A member read
+  returns the whole stack, so the advisor sees one unit move, not unrelated PRs.
+- `ungrouped` — sorted changed PRs that belong to no stack (or whose membership read
+  refused). When stack membership is unavailable, `stack-signal-unavailable` rides on the
+  result and grouping is partial — the original `prs` / `prsAdded` / `prsRemoved` keys
+  are unchanged.
+
 When **`pr-set-changed`** sends you to read a lane's CI, select the run by **workflow name and head
 sha** — never `gh run list --limit 1`. The newest run on a branch is whatever workflow happened to
 fire last, which is not necessarily the one whose green you are claiming: a watcher taking
@@ -305,6 +317,9 @@ it can fire before the watch loop ever runs; neither `ledger-unreadable` on the 
 - `heartbeat-unreadable`
 - `pid-probe-uncertain`
 - `pr-signal-unavailable`
+- `stack-signal-unavailable` — stack membership for one or more changed PRs could not be
+  read before the watcher's deadline; grouping is partial and `ungrouped` carries what
+  could not be resolved
 - `lane-never-stamped`
 - `pr-signal-never-sampled`
 - `log-unwritable`

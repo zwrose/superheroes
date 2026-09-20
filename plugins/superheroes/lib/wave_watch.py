@@ -20,8 +20,8 @@ Contract:
   lane-stale, timer.
 - Degradations (non-fatal): ledger-torn-tail, ledger-unreadable,
   heartbeat-unreadable, pid-probe-uncertain, pr-signal-unavailable,
-  lane-never-stamped, pr-signal-never-sampled, log-unwritable,
-  transcript-ambiguous, transcript-unresolved.
+  stack-signal-unavailable, lane-never-stamped, pr-signal-never-sampled,
+  log-unwritable, transcript-ambiguous, transcript-unresolved.
 - gh child env-scrubbing: ambient git/GH routing variables in _GIT_SCRUB_VARS
   are stripped via _scrub_env before the gh subprocess runs.
 - Deadline-bound polling: no gh poll starts when remaining time is below
@@ -111,6 +111,7 @@ if _LIB_DIR not in sys.path:
 
 import launch_ledger as ll  # noqa: E402
 import heartbeat as hb  # noqa: E402
+import stack_check as sc  # noqa: E402
 
 _GH_PR_LIST_ARGV = [
     "gh", "pr", "list", "--state", "open", "--json", "number", "--limit", "1000",
@@ -217,6 +218,7 @@ DEGRADATION_PR_SIGNAL_NEVER_SAMPLED = "pr-signal-never-sampled"
 DEGRADATION_LOG_UNWRITABLE = "log-unwritable"
 DEGRADATION_TRANSCRIPT_AMBIGUOUS = "transcript-ambiguous"
 DEGRADATION_TRANSCRIPT_UNRESOLVED = "transcript-unresolved"
+DEGRADATION_STACK_SIGNAL_UNAVAILABLE = "stack-signal-unavailable"
 
 DEGRADATIONS = frozenset({
     DEGRADATION_LEDGER_TORN_TAIL,
@@ -229,6 +231,7 @@ DEGRADATIONS = frozenset({
     DEGRADATION_LOG_UNWRITABLE,
     DEGRADATION_TRANSCRIPT_AMBIGUOUS,
     DEGRADATION_TRANSCRIPT_UNRESOLVED,
+    DEGRADATION_STACK_SIGNAL_UNAVAILABLE,
 })
 
 EVENT_PRECEDENCE = (
@@ -694,9 +697,98 @@ def _parse_pr_numbers(stdout):
     return numbers
 
 
+def _resolve_repo_slug(repo_root, deadline, monotonic, gh_run, env):
+    """Return owner/name for stack membership reads, or None. Never raises."""
+    remaining = deadline - monotonic()
+    if remaining < _MIN_PR_POLL_SECONDS:
+        return None
+    timeout = min(30.0, remaining)
+    try:
+        proc = gh_run(
+            ["gh", "repo", "view", "--json", "nameWithOwner"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=repo_root,
+            env=_scrub_env(env),
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        parsed = json.loads(proc.stdout)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    name = parsed.get("nameWithOwner")
+    if not isinstance(name, str) or not name:
+        return None
+    return name
+
+
+def _resolve_pr_stack_groups(
+    repo_root, deadline, monotonic, gh_run, membership_reader, env, degraded,
+    changed_prs,
+):
+    """Group changed PRs into stacks and ungrouped. Never raises."""
+    stacks = []
+    ungrouped = []
+    covered_prs = set()
+    stack_numbers_seen = set()
+
+    repo_slug = _resolve_repo_slug(
+        repo_root, deadline, monotonic, gh_run, env,
+    )
+    if repo_slug is None:
+        if changed_prs:
+            degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
+        return stacks, sorted(changed_prs)
+
+    for pr_num in sorted(changed_prs):
+        # bite-axis: COVERED — a changed PR whose stack was already read costs
+        # zero extra membership_reader calls.
+        if pr_num in covered_prs:
+            continue
+        remaining = deadline - monotonic()
+        # bite-axis: DEADLINE — remaining below _MIN_PR_POLL_SECONDS stops the
+        # walk and marks stack-signal-unavailable; no further membership reads
+        # start.
+        if remaining < _MIN_PR_POLL_SECONDS:
+            degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
+            for rest in sorted(changed_prs):
+                if rest not in covered_prs and rest not in ungrouped:
+                    ungrouped.append(rest)
+            break
+        read_result = membership_reader(
+            pr=pr_num, repo=repo_slug, timeout=remaining,
+        )
+        if read_result.get("ok"):
+            stack_number = read_result["stack"]["number"]
+            members = sorted(
+                read_result["members"], key=lambda item: item["position"],
+            )
+            member_prs = [member["number"] for member in members]
+            covered_prs.update(member_prs)
+            if stack_number not in stack_numbers_seen:
+                stacks.append({"stack": stack_number, "prs": member_prs})
+                stack_numbers_seen.add(stack_number)
+        elif read_result.get("reason") == sc.REASON_NOT_LINKED:
+            ungrouped.append(pr_num)
+        else:
+            degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
+            ungrouped.append(pr_num)
+
+    stacks.sort(key=lambda entry: entry["stack"])
+    ungrouped.sort()
+    return stacks, ungrouped
+
+
 def _evaluate_pr_set_changed(
     repo_root, deadline, monotonic, gh_run, pr_state, degraded, env,
     pr_sampled=None,
+    membership_reader=None,
 ):
     remaining = deadline - monotonic()
     if remaining <= 0:
@@ -738,10 +830,19 @@ def _evaluate_pr_set_changed(
         return None
     added = sorted(pr_set - pr_baseline)
     removed = sorted(pr_baseline - pr_set)
+    changed_prs = added + removed
+    if membership_reader is None:
+        membership_reader = sc.read_membership
+    stacks, ungrouped = _resolve_pr_stack_groups(
+        repo_root, deadline, monotonic, gh_run, membership_reader, env,
+        degraded, changed_prs,
+    )
     return {
         "prs": sorted(pr_set),
         "prsAdded": added,
         "prsRemoved": removed,
+        "stacks": stacks,
+        "ungrouped": ungrouped,
     }
 
 
@@ -826,6 +927,7 @@ def _payload_pr_set_changed(ctx):
         ctx["degraded"],
         ctx["env"],
         ctx["pr_sampled"],
+        ctx["membership_reader"],
     )
     if pr_change is None:
         return None
@@ -930,6 +1032,7 @@ def run(
     interval_seconds=60,
     env=None,
     gh_run=None,
+    membership_reader=None,
     monotonic=None,
     sleep=None,
     ignore_launch_ids=(),
@@ -945,6 +1048,8 @@ def run(
             env = os.environ
         if gh_run is None:
             gh_run = subprocess.run
+        if membership_reader is None:
+            membership_reader = sc.read_membership
         if monotonic is None:
             monotonic = time.monotonic
         if sleep is None:
@@ -1034,6 +1139,7 @@ def run(
                 "pr_state": pr_state,
                 "pr_sampled": pr_sampled,
                 "env": env,
+                "membership_reader": membership_reader,
             }
 
             for event in EVENT_PRECEDENCE:
@@ -1094,6 +1200,7 @@ def loop(
     log_path=None,
     env=None,
     gh_run=None,
+    membership_reader=None,
     monotonic=None,
     sleep=None,
     ignore_launch_ids=(),
@@ -1110,6 +1217,8 @@ def loop(
             env = os.environ
         if gh_run is None:
             gh_run = subprocess.run
+        if membership_reader is None:
+            membership_reader = sc.read_membership
         if monotonic is None:
             monotonic = time.monotonic
         if sleep is None:
@@ -1188,6 +1297,7 @@ def loop(
                 gh_run=gh_run,
                 monotonic=monotonic,
                 sleep=sleep,
+                membership_reader=membership_reader,
                 ignore_launch_ids=ignore_launch_ids,
                 ignore_events=ignore_events,
                 ledger_observed=ledger_observed,
