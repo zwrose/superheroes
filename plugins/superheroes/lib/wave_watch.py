@@ -1020,19 +1020,6 @@ def _compute_stack_state_snapshot(
             stacks_out.append(entry)
             continue
 
-        missing = []
-        for position in range(1, layers_planned + 1):
-            if position not in position_map or position not in ready_positions:
-                missing.append(position)
-        if missing:
-            entry["state"] = "stack-incomplete"
-            entry["missingPositions"] = missing
-            stacks_out.append(entry)
-            continue
-
-        entry["state"] = "stack-complete"
-        stacks_out.append(entry)
-
         occupied = _occupied_layer_positions(batch_lanes, stack_number)
         for position in sorted(ready_positions):
             next_position = position + 1
@@ -1045,6 +1032,19 @@ def _compute_stack_state_snapshot(
                     "stack": stack_number,
                     "position": position,
                 })
+
+        missing = []
+        for position in range(1, layers_planned + 1):
+            if position not in position_map or position not in ready_positions:
+                missing.append(position)
+        if missing:
+            entry["state"] = "stack-incomplete"
+            entry["missingPositions"] = missing
+            stacks_out.append(entry)
+            continue
+
+        entry["state"] = "stack-complete"
+        stacks_out.append(entry)
 
     return {"stacks": stacks_out, "flags": flags}
 

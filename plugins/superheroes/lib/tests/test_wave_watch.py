@@ -4791,6 +4791,177 @@ def test_idle_seat_launchable_child_flag_present_and_absent(tmp_path, monkeypatc
     )
 
 
+def test_idle_seat_launchable_child_incomplete_unlaunched_position(
+    tmp_path, monkeypatch,
+):
+    # axis: incomplete stack with unlaunched next layer still reports idle-seat flag
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[
+            {
+                "launch_id": "lane-pos1",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 3,
+            },
+            {
+                "launch_id": "lane-pos2",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 3,
+            },
+        ],
+    )
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    snapshot, _ = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51],
+        monkeypatch,
+        _membership_for_stack([50, 51]),
+        _position_ready_reader(
+            {1: 50, 2: 51},
+            {50: {"state": _pr_vet_state()}, 51: {"state": _pr_vet_state()}},
+        ),
+    )
+    entry = snapshot["stacks"][0]
+    assert entry["state"] == "stack-incomplete"
+    assert entry["missingPositions"] == [3]
+    assert {
+        "flag": "idle-seat-launchable-child",
+        "stack": _STACK_NUM,
+        "position": 2,
+    } in snapshot["flags"]
+
+
+def test_idle_seat_launchable_child_incomplete_not_ready_next_position(
+    tmp_path, monkeypatch,
+):
+    # axis: incomplete stack with not-READY next member still reports idle-seat flag
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[
+            {
+                "launch_id": "lane-pos1",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 3,
+            },
+            {
+                "launch_id": "lane-pos2",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 3,
+            },
+        ],
+    )
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    snapshot, _ = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51, 52],
+        monkeypatch,
+        _membership_for_stack([50, 51, 52]),
+        _position_ready_reader(
+            {1: 50, 2: 51, 3: 52},
+            {
+                50: {"state": _pr_vet_state()},
+                51: {"state": _pr_vet_state()},
+                52: {"state": _pr_vet_state(_vet_not_ready_body())},
+            },
+        ),
+    )
+    entry = snapshot["stacks"][0]
+    assert entry["state"] == "stack-incomplete"
+    assert entry["missingPositions"] == [3]
+    assert {
+        "flag": "idle-seat-launchable-child",
+        "stack": _STACK_NUM,
+        "position": 2,
+    } in snapshot["flags"]
+
+
+def test_idle_seat_no_flags_layers_planned_unknown(tmp_path, monkeypatch):
+    # axis: layers-planned-unknown reports no idle-seat flags
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[{
+            "launch_id": "lane-a",
+            "stack": _STACK_NUM,
+            "layer_position": 1,
+        }],
+    )
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    snapshot, _ = _snapshot_stack_state(
+        repo, batch_lanes, [50],
+        monkeypatch,
+        _membership_for_stack([50]),
+        _position_ready_reader({1: 50}, {50: {"state": _pr_vet_state()}}),
+    )
+    assert snapshot["stacks"][0]["reason"] == "layers-planned-unknown"
+    assert snapshot["flags"] == []
+
+
+def test_idle_seat_no_flags_layers_planned_disagreed(tmp_path, monkeypatch):
+    # axis: layers-planned-disagreed reports no idle-seat flags
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[
+            {
+                "launch_id": "lane-a",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 2,
+            },
+            {
+                "launch_id": "lane-b",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 3,
+            },
+        ],
+    )
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    snapshot, _ = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51],
+        monkeypatch,
+        _membership_for_stack([50, 51]),
+        _position_ready_reader(
+            {1: 50, 2: 51},
+            {50: {"state": _pr_vet_state()}, 51: {"state": _pr_vet_state()}},
+        ),
+    )
+    assert snapshot["stacks"][0]["reason"] == "layers-planned-disagreed"
+    assert snapshot["flags"] == []
+
+
+def test_idle_seat_no_flags_membership_unresolved(tmp_path, monkeypatch):
+    # axis: membership-unresolved reports no idle-seat flags
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[{
+            "launch_id": "lane-a",
+            "stack": _STACK_NUM,
+            "layer_position": 1,
+            "layers_planned": 2,
+        }],
+    )
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+
+    def refusing_membership(**kwargs):
+        return {"ok": False, "reason": sc.REASON_STACK_UNREADABLE}
+
+    snapshot, _ = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51],
+        monkeypatch,
+        refusing_membership,
+        _position_ready_reader({1: 50}, {50: {"state": _pr_vet_state()}}),
+    )
+    assert snapshot["stacks"][0]["reason"] == "membership-unresolved"
+    assert snapshot["flags"] == []
+
+
 def _stack_membership_members(stack_number, member_rows):
     return {
         "ok": True,
