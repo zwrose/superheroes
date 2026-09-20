@@ -149,7 +149,7 @@ def _responder(round1_findings=None):
             return {"seats": seats}
         if phase == RD.P_VERIFIERS:
             return {"verdicts": [
-                {"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+                {"id": i, "verdict": "CONFIRMED", "reason": "ran", "evidence": "ran"}
                 for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}

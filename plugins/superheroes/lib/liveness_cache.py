@@ -64,10 +64,13 @@ def _stored_ttl_valid(stored):
 
 
 def effective_ttl(receipt):
-    """Effective TTL for expiry: min(stored, configured) when stored is a positive number."""
+    """Effective TTL for expiry: min(stored, configured) when stored is a positive number.
+
+    Non-dict receipts and invalid stored TTL both return 0 (immediately stale, fail-closed).
+    """
     configured = ttl_seconds()
     if not isinstance(receipt, dict):
-        return configured
+        return 0
     stored = receipt.get("ttl")
     if not _stored_ttl_valid(stored):
         return 0

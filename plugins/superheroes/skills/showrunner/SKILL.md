@@ -924,11 +924,14 @@ above).
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/wave-watch.md` — read it at
    arming time.
    **Wave-preflight live canary (strengthens `engine-auth`, not an eighth check).** A wave preflight
-   includes **one cheap live probe per engine** (~3s). The dispatch selftest validates
-   **configuration, not engine liveness** — `lib/dispatch_selftest.py` is explicitly a config-time
-   round-trip that never touches disk — so **780 green config checks were able to coexist undetected
-   with a 3-of-4 live-review failure rate**. This strengthens what the existing `engine-auth` check
-   must mean in a wave; it does **not** add an eighth check to the seven-check list.
+   runs `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/conformance_probe.py" run --engine
+   <e>` per dispatchable engine; three legs (`resultProduction`, `completionDetection`,
+   `progressTelemetry`); `preflight-entry` records the walked `engine-auth` check. The dispatch
+   selftest validates **configuration, not engine liveness** — `lib/dispatch_selftest.py` is
+   explicitly a config-time round-trip that never touches disk — so **780 green config checks were
+   able to coexist undetected with a 3-of-4 live-review failure rate**. This strengthens what the
+   existing `engine-auth` check must mean in a wave; it does **not** add an eighth check to the
+   seven-check list.
 10. **Provision slots for an authenticated wave.** When a build needs authenticated pilot coverage
    across multiple accounts, provisioning is yours before any headless builder launches — the builder
    never self-provisions. **The sequence is load-bearing:** backend identity is only observable on

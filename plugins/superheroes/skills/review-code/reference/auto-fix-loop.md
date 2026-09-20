@@ -691,6 +691,8 @@ round's one full run (§ Round economy in `round-driver.md`).
 The authoritative template body lives at `rubric/orders/dispatch-fixer.md` under the plugin
 root. The fenced block below is illustrative only.
 
+**The rendered fixer order is linted at emission.** `round_driver._emit_orders_manifest` runs `order_lint.check_text(…, kind="fixer")` over every rendered `dispatch-fixer` order and refuses the whole emission as `order-render-refused:<skey>:order-lint:<token>` on any finding — an unfilled placeholder, a cited slashed path that does not resolve under the repo root, or two result contracts named at once (`{"fixes"` beside a native typed shape); the fixer kind carries no command budget, so `order-budget-missing` never applies here. This is the deterministic half only; the semantic half (a Haiku seat, `rubric/orders/order-lint-semantic.md`) is the workhorse's step over orders it authors, and a driver-rendered order has no author to send a finding back to. Cite the module as `lib/order_lint.py` (plugin-relative, as this file's other citations are).
+
 ```
 You are the fixer for one round of an auto-fix code-review loop.
 

@@ -79,6 +79,19 @@ def test_effective_ttl_invalid_stored_is_zero_not_configured(monkeypatch, stored
     assert lc.effective_ttl(receipt) == 0
 
 
+@pytest.mark.parametrize("receipt", [None, "not-a-receipt", [], 42])
+def test_effective_ttl_non_dict_is_zero(receipt):
+    assert lc.effective_ttl(receipt) == 0
+
+
+def test_effective_ttl_dict_subclass_still_works(monkeypatch):
+    class Receipt(dict):
+        pass
+
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    assert lc.effective_ttl(Receipt({"ttl": 600})) == 600
+
+
 def test_effective_ttl_configured_wins_over_larger_stored(monkeypatch):
     monkeypatch.delenv(lc._ENV_TTL, raising=False)
     assert lc.effective_ttl({"ttl": 100_000}) == 3600

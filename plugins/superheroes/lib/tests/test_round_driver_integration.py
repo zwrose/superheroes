@@ -15,8 +15,10 @@ Everything here drives the session the way the orchestrator does: land a seat en
 LANDING area, `record-result` it into the durable store, then `advance` — lock, reconcile, sweep,
 completeness, assemble, fold, emit. No `cmd_submit` is ever called by hand.
 """
+import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -325,6 +327,28 @@ def _drive_one_phase(session_dir, gitdir, panel_findings, head_diff_path):
     return phase, out
 
 
+_DIFF_PATH_RE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
+
+
+def _fixture_repo(tmp_path, name):
+    """The session's repo root, holding every path the fixture's diffs name.
+
+    INVARIANT: every repo-relative path the fixture's diffs cite exists under this root.
+    The driver lints the rendered fixer order against the session's `repoRoot` (#1339), and a
+    fixer order cites the files its batch names; a root that does not hold them refuses the
+    emission `order-lint:order-path-unresolved`. Deriving the set from the diffs rather than
+    listing it keeps a path added to a diff from silently escaping the root.
+    """
+    repo_root = tmp_path / (name + "-repo")
+    for rel in sorted(set(_DIFF_PATH_RE.findall(REVIEWED_DIFF + HEAD_DIFF))):
+        target = repo_root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            target.write_text("alpha\nbeta\ngamma\ndelta\n", encoding="utf-8")
+    repo_root.mkdir(parents=True, exist_ok=True)
+    return str(repo_root)
+
+
 def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
     session_dir = str(tmp_path / name)
     os.makedirs(session_dir, exist_ok=True)
@@ -345,6 +369,7 @@ def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
         with open(meta_path, "w", encoding="utf-8") as fh:
             json.dump(meta, fh, sort_keys=True)
             fh.write("\n")
+    cfg_over.setdefault("repoRoot", _fixture_repo(tmp_path, name))
     out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
     assert out["ok"], out
     return session_dir, gitdir, head_diff_path
@@ -738,6 +763,59 @@ def _codex_event_stream(payload_text, *, action_items=1):
     return "\n".join(lines)
 
 
+_TD = None
+
+
+def _dispatch_test_helpers():
+    global _TD
+    if _TD is None:
+        spec = importlib.util.spec_from_file_location(
+            "test_engine_dispatch",
+            os.path.join(_HERE, "test_engine_dispatch.py"),
+        )
+        _TD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_TD)
+    return _TD
+
+
+def _ensure_investigated_repo_path(repo_root, rel="reviewed.py"):
+    path = os.path.join(repo_root, rel)
+    if not os.path.isfile(path):
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("# fixture investigated path\n")
+    return rel
+
+
+def _write_native_review_result(run_dir, repo_root, *, findings=None, panel_findings=None):
+    td = _dispatch_test_helpers()
+    if panel_findings is not None:
+        findings = td._legacy_overlay_findings(panel_findings)
+        for member, raw in zip(findings, panel_findings):
+            for key, val in raw.items():
+                if key == "detail" and "body" in member:
+                    member["body"] = val
+                elif key in member:
+                    member[key] = val
+            if member.get("title") and member.get("id") == "example":
+                member["id"] = member["title"]
+    elif findings is None:
+        findings = []
+    if panel_findings:
+        rel = panel_findings[0].get("file") or "reviewed.py"
+    else:
+        rel = "reviewed.py"
+    rel = _ensure_investigated_repo_path(repo_root, rel)
+    branch = td._native_review_branch("findings", findings=findings, investigated=[rel])
+    native_path = engine_dispatch._native_result_path(run_dir, 1)
+    assert native_path, "native result path missing for attempt 1"
+    with open(native_path, "w", encoding="utf-8") as fh:
+        json.dump({"result": branch}, fh, separators=(",", ":"))
+        fh.write("\n")
+
+
 def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-panel-e2e",
                        telemetry_shape="dispatch-observed", view_head_sha="abc123fake"):
     """Build a runner run directory for dispatch-observed evidence tests.
@@ -749,8 +827,9 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
     ``telemetry_shape`` selects the stdout/engine pairing:
     - ``dispatch-observed`` (default): codex engine with a JSONL event stream carrying at
       least one completed action item and the panel findings as the last ``agent_message``.
-    - ``no-telemetry``: claude engine with plain JSON stdout from which no runner tool-call
-      count can be derived.
+    - ``no-telemetry``: codex engine with plain JSON stdout carrying no event stream, so no
+      runner tool-call count can be derived; the typed result file is still written so grading
+      admits the findings.
     """
     run_dir = str(tmp_path / "dispatch-evidence-run")
     journal_root = str(tmp_path / "dispatch-journal-root")
@@ -773,11 +852,10 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
     )
     findings_text = json.dumps({"findings": panel_findings})
     if telemetry_shape == "no-telemetry":
-        engine = "claude"
         stdout = findings_text
     else:
-        engine = "codex"
         stdout = _codex_event_stream(findings_text, action_items=1)
+    engine = "codex"
     ok, detail = engine_dispatch._open_review_run(
         run_dir, engine=engine, argv=[sys.executable, "-c", "pass"], cwd=repo_root,
         timeout=30, retry_timeout=30, prompt_path=order_path, view_path=view_path,
@@ -786,6 +864,9 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
         echo_nonce=echo_nonce, base_prompt=base_prompt,
     )
     assert ok, detail
+    if engine == "codex":
+        _write_native_review_result(
+            run_dir, repo_root, panel_findings=panel_findings)
     engine_dispatch._journal_append(run_dir, {
         "kind": "attempt-ended", "attempt": 1,
         "exit": 0, "timedOut": False, "refusal": None,
@@ -817,7 +898,6 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
     for seat, occurrence in slots:
         payload = _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
         if phase == round_driver.P_PANEL and seat == FINDING_SEAT and state["round"] == 1:
-            _dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence)
             order_path = round_records.order_prompt_path(
                 session_dir, pend["round"], pend["phase"],
                 round_records.storage_key(seat, occurrence), pend["attempt"])
@@ -825,6 +905,12 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
             run_dir = _execution_run_dir(
                 tmp_path, order_path, panel_findings, telemetry_shape=telemetry_shape,
                 view_head_sha=view_head)
+            records, _ = engine_dispatch._journal_read(run_dir)
+            journal_state = engine_dispatch._journal_state(records)
+            grade = engine_dispatch._grade_review_attempt(run_dir, journal_state, 1)
+            payload = dict(payload)
+            payload["findings"] = grade.get("findings") or []
+            _dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence)
             out = round_driver.cmd_record_result(
                 session_dir, seat, occurrence=occurrence, evidence_run_dir=run_dir)
         else:
@@ -1123,6 +1209,23 @@ def _write_execution_run_dir(tmp_path, order_path, echo_nonce="nonce-fixer-e2e")
     })
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
         fh.write(stdout)
+    records, _ = engine_dispatch._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    if opened.get("channel") == "native":
+        native_obj = {
+            "ok": True,
+            "signal": "ok",
+            "report": "Receipt prose.",
+            "evidence": {"testFailed": False, "testPassed": True},
+        }
+        native_path = engine_dispatch._native_result_path(run_dir, 1)
+        with open(native_path, "w", encoding="utf-8") as fh:
+            json.dump(native_obj, fh)
+            fh.write("\n")
+        assert os.path.isfile(native_path) and not os.path.islink(native_path)
+        schema = engine_dispatch.engine_result_channel.declared_schema("codex", "write")
+        ok, reason = engine_dispatch.engine_result_channel.validate(schema, native_obj)
+        assert ok is True, reason
     with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
         fh.write("")
     engine_dispatch._journal_append(run_dir, {
@@ -1181,6 +1284,12 @@ def test_assemble_dispatch_evidence_write_run_binding_incomplete_refuses(tmp_pat
     run_dir = _write_execution_run_dir(tmp_path, order_path)
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
         fh.write("not a write report\n")
+    records, _ = engine_dispatch._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    if opened.get("channel") == "native":
+        native_path = engine_dispatch._native_result_path(run_dir, 1)
+        with open(native_path, "w", encoding="utf-8") as fh:
+            fh.write("not a write report\n")
     record, err = engine_dispatch.run_execution_record(run_dir)
     assert err is None, err
     assert "resultDigest" not in record

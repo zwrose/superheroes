@@ -425,6 +425,26 @@ def test_advance_derives_collection_manifest_from_runner_record(tmp_path):
     assert artifact["provenance"]["dispatchManifestIgnored"] is True
 
 
+def _write_native_ruling_result(run_dir, repo_root, seat):
+    """Write the audit seat's typed result on the native channel (C11 retired codex's marker
+    channel, so a run directory only binds a ruling when the typed file is there to read)."""
+    td = _TDI._dispatch_test_helpers()
+    rel = _TDI._ensure_investigated_repo_path(repo_root, "reviewed.py")
+    branch = td._native_review_branch(
+        "ruling",
+        id=seat,
+        ruling="discharged",
+        reason="re-read the hunk; the defect is gone",
+        auditorVendor="codex",
+        investigated=[rel],
+    )
+    native_path = engine_dispatch._native_result_path(run_dir, 1)
+    assert native_path, "native result path missing for attempt 1"
+    with open(native_path, "w", encoding="utf-8") as fh:
+        json.dump(td._wrap_native_review_result(branch), fh, separators=(",", ":"))
+        fh.write("\n")
+
+
 def _audit_execution_run_dir(tmp_path, order_path, seat, echo_nonce="nonce-audit-e2e",
                              view_head_sha="abc123fake"):
     """Build a codex run directory whose parsed ruling binds to an audit seat envelope."""
@@ -461,6 +481,7 @@ def _audit_execution_run_dir(tmp_path, order_path, seat, echo_nonce="nonce-audit
         echo_nonce=echo_nonce, base_prompt=base_prompt,
     )
     assert ok, detail
+    _write_native_ruling_result(run_dir, repo_root, seat)
     engine_dispatch._journal_append(run_dir, {
         "kind": "attempt-ended", "attempt": 1,
         "exit": 0, "timedOut": False, "refusal": None,
@@ -501,7 +522,10 @@ def test_dispatch_observed_non_object_payload_refuses_evidence_binding(tmp_path)
     order_path = str(tmp_path / "panel-order.txt")
     with open(order_path, "w", encoding="utf-8") as fh:
         fh.write("Review the panel findings.\n")
-    panel_findings = [{"dimension": "d", "taxonomy": "t", "title": "x"}]
+    # The native channel validates the typed result against the declared schema, so the
+    # fixture's dimension has to be a real enum member (C11 retired the marker channel that
+    # let a placeholder through).
+    panel_findings = [{"dimension": "Architecture", "taxonomy": "t", "title": "x"}]
     run_dir = _TDI._execution_run_dir(tmp_path, order_path, panel_findings)
     record, err = engine_dispatch.run_execution_record(run_dir)
     assert err is None, err
