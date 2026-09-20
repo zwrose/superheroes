@@ -376,10 +376,17 @@ def test_run_grades_three_legs_ok_on_valid_claude_native_result(tmp_path, monkey
     assert set(payload["modeLegs"]) == {"print", "background"}
     for leg_name in CP._LEG_NAMES:
         assert payload["modeLegs"]["print"][leg_name]["ok"] is True
-        assert payload["modeLegs"]["background"][leg_name]["ok"] is False
+    assert payload["modeLegs"]["background"]["resultProduction"]["ok"] is False
+    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == "native-result-missing"
+    assert payload["modeLegs"]["background"]["completionDetection"]["ok"] is True
+    assert payload["modeLegs"]["background"]["progressTelemetry"]["ok"] is False
+    assert payload["modeLegs"]["background"]["progressTelemetry"]["detail"] == "telemetry-absent"
     assert payload["ok"] is False
     assert payload["legs"]["resultProduction"]["ok"] is False
-    assert "background: auth-or-config-refusal" in payload["legs"]["resultProduction"]["detail"]
+    assert payload["legs"]["resultProduction"]["detail"] == "background: native-result-missing"
+    assert payload["legs"]["completionDetection"]["ok"] is True
+    assert payload["legs"]["progressTelemetry"]["ok"] is False
+    assert payload["legs"]["progressTelemetry"]["detail"] == "background: telemetry-absent"
     assert code == 1
     assert stderr is not None
 
@@ -405,12 +412,17 @@ def test_result_production_fails_on_claude_native_schema_invalid(tmp_path, monke
         "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
+    assert payload["modeLegs"]["print"]["resultProduction"]["ok"] is False
+    assert payload["modeLegs"]["print"]["resultProduction"]["detail"] == "native-result-schema-invalid"
+    assert payload["modeLegs"]["background"]["resultProduction"]["ok"] is False
+    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == "native-result-missing"
     assert payload["legs"]["resultProduction"]["ok"] is False
     assert payload["legs"]["resultProduction"]["detail"] == (
-        "print: native-result-schema-invalid; background: auth-or-config-refusal"
+        "print: native-result-schema-invalid; background: native-result-missing"
     )
-    assert payload["legs"]["completionDetection"]["ok"] is False
+    assert payload["legs"]["completionDetection"]["ok"] is True
     assert payload["legs"]["progressTelemetry"]["ok"] is False
+    assert payload["legs"]["progressTelemetry"]["detail"] == "background: telemetry-absent"
 
 
 def test_claude_telemetry_absent_when_only_the_structured_output_call(tmp_path, monkeypatch):
@@ -443,8 +455,10 @@ def test_claude_telemetry_absent_when_only_the_structured_output_call(tmp_path, 
     assert payload["modeLegs"]["print"]["progressTelemetry"]["ok"] is False
     assert payload["modeLegs"]["print"]["progressTelemetry"]["detail"] == "telemetry-absent"
     assert payload["legs"]["progressTelemetry"]["ok"] is False
+    assert payload["modeLegs"]["background"]["progressTelemetry"]["ok"] is False
+    assert payload["modeLegs"]["background"]["progressTelemetry"]["detail"] == "telemetry-absent"
     assert "print: telemetry-absent" in payload["legs"]["progressTelemetry"]["detail"]
-    assert "background: auth-or-config-refusal" in payload["legs"]["progressTelemetry"]["detail"]
+    assert "background: telemetry-absent" in payload["legs"]["progressTelemetry"]["detail"]
 
 
 def test_claude_completion_fails_on_nonzero_exit(tmp_path, monkeypatch):
@@ -1438,13 +1452,23 @@ def test_claude_probe_second_mode_runs_when_first_refuses(tmp_path, monkeypatch)
     def refuse_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
         return "", False, 127, "spawn-failed"
 
-    fake = FakeRunner([refuse_runner, refuse_runner], sync_native=False)
+    structured = {"result": _native_verdicts_branch()}
+    stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
+
+    def ok_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return stdout, False, 0, ""
+
+    fake = FakeRunner(
+        [refuse_runner, refuse_runner, ok_runner, ok_runner], sync_native=False,
+    )
     payload, code, _stderr = CP.probe(
         "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
-    assert len(fake.calls) >= 1
+    assert len(fake.calls) >= 2
     assert payload["probedModes"] == ["print", "background"]
     assert payload["modeLegs"]["print"]["completionDetection"]["ok"] is False
+    assert payload["modeLegs"]["print"]["completionDetection"]["detail"] == "auth-or-config-refusal"
+    assert payload["modeLegs"]["background"]["completionDetection"]["ok"] is True
     assert payload["modeLegs"]["background"]["resultProduction"]["ok"] is False
-    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == "auth-or-config-refusal"
+    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == "native-result-missing"
