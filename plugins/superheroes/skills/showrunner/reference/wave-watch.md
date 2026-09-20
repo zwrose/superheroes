@@ -248,8 +248,7 @@ The watcher prints **one JSON line on stdout**; **exit 0 on an event, exit 1 on 
 
 **Precedence**, highest first:
 
-`lane-terminal` > `lane-blocked` > `builder-exited` > `stack-state-changed` >
-`pr-set-changed` > `lane-stale` > `timer`
+`lane-terminal` > `lane-blocked` > `builder-exited` > `stack-state-changed` > `pr-set-changed` > `lane-stale` > `timer`
 
 When an event fires, co-occurring lower-precedence lane signals from the same interval ride along
 under `alsoObserved` (launch ids only) — read it, or you will act on one lane and miss its
