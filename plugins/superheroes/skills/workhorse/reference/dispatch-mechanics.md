@@ -218,7 +218,25 @@ The runner materializes the `structured_output` from the last `{"type":"result"}
 on stdout to `<run-dir>/native-result-<n>.json` at attempt end. `attempt-ended.stdoutResult`
 records `materialized`, `absent`, `error`, or `occupied` — only `materialized` is loaded;
 `occupied` forfeits `native-result-path-occupied`; `absent` and `error` forfeit
-`native-result-missing`. At run-open the shell resolves `CLAUDE_CONFIG_DIR` through
+`native-result-missing`. **Print mode** is the default: omit `--claude-mode` or pass
+`--claude-mode print`. **Background mode** is selected with `--claude-mode background` on
+`dispatch-review` only — a write dispatch in background mode refuses before anything spawns
+(`claude-mode-background-write`, `attempts: 0`), because a detached session outlives the
+process whose liveness the worktree lease is keyed on, so the lease could be reclaimed while
+the session may still be editing. A run's mode is fixed when the run opens; a continuation
+that supplies a disagreeing `--claude-mode` refuses `run-dir-claude-mode-mismatch` with
+`attempts: 0`. In background mode the launch child acknowledges and exits; the runner resolves
+the session through the per-account agent listing, polls the session transcript until the turn
+ends, and materializes the last structured-output payload to the same
+`<run-dir>/native-result-<n>.json` path print mode uses, where the same admission gate loads
+it — a launch acknowledgement alone is not a result. A background session does not end when
+its turn does; it stays live until stopped, so every terminal path stops it and confirms the
+stop (`bgStop` records `stopped`, `already-ended`, or `stop-unconfirmed` — an unconfirmed stop
+is recorded, not assumed). When a slice expires before the turn ends, the attempt is suspended
+with the launch and session ids and a transcript cursor; a continuation re-attaches to that
+session rather than launching a second one. Background telemetry comes from the session
+transcript's tool calls (`attempt-ended.transcriptToolCalls`), not from stdout — the background
+argv carries no event stream. At run-open the shell resolves `CLAUDE_CONFIG_DIR` through
 `lib/config_dir.resolve(env, cwd)`, records it as `run-opened.configDir`, and refuses at open with
 `config-dir-unusable:<why>` when it is not an existing directory; at spawn the same value is injected
 with `CLAUDE_CODE_EFFORT_LEVEL=<seat effort>` (`engine-started.env` records both pins). Telemetry
@@ -236,9 +254,13 @@ refuses that attempt (`native-result-path-occupied`). Cursor adds attempt-prompt
 `attempt-prompt-occupied` (any pre-existing entry at the attempt-prompt path — file, symlink,
 dangling symlink, directory — the engine learns the run dir from the result path, so a first attempt
 could plant the second's), `attempt-prompt-unwritable`, and `prompt-tampered` (the staged source
-prompt's bytes no longer match the digest bound at run-open). Every refusal is a forfeit or an attempt
-refusal — the runner never scans stdout for a result and never repairs a malformed file. Claude adds
-`config-dir-unusable:<why>` at run-open and the adapter refusals `unregistered-engine-model`,
+prompt's bytes no longer match the digest bound at run-open). For **codex and cursor**, every
+refusal is a forfeit or an attempt refusal — the runner never scans stdout for a result and never
+repairs a malformed file. **Claude print mode** is the exception on the first half: the runner
+reads stdout for the final `{"type":"result"}` envelope and materializes the typed file from it
+(above); it still never repairs a malformed file. **Claude background mode** never reads stdout
+for a result — the transcript path above. Claude adds `config-dir-unusable:<why>` at run-open and
+the adapter refusals `unregistered-engine-model`,
 `fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
 
 Completion is the process exit plus the typed file — for codex and cursor the file the engine writes

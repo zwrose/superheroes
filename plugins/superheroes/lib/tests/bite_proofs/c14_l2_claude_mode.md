@@ -9,7 +9,7 @@ Re-run on head `11b2dba7` (branch `build/1273-c14-layer2a-mode-contract`). Three
 | BP-1 | `_claude_mode_unknown_detail` | garbage `claude_mode` refuses before open with `claude-mode-unknown:<value>` | `test_claude_mode_unknown_refused_before_open` |
 | BP-2 | `_claude_mode_unsupported_detail` | `background` on non-claude seat refuses with `claude-mode-unsupported:<vendor>` | `test_claude_mode_unsupported_codex_background_refused` |
 | BP-3 | review continuation claude-mode mismatch gate (`normalize_claude_mode`) | disagreeing `--claude-mode` refuses `run-dir-claude-mode-mismatch` with `attempts: 0` | `test_run_dir_claude_mode_mismatch_refused` |
-| BP-4 | `_spawn_attempt` background guard (`engine_result_channel.MODE_BACKGROUND`) | opened `claudeMode: background` refuses spawn with `claude-mode-not-dispatchable:background`, no injected runner | `test_claude_mode_background_review_open_records_caller_provenance` |
+| BP-4 | `_spawn_attempt` background guard (`engine_result_channel.MODE_BACKGROUND`) | opened `claudeMode: background` refuses spawn with `claude-mode-not-dispatchable:background`, no injected runner *(guard removed — see note below)* | `test_claude_mode_background_review_open_records_caller_provenance` |
 | BP-5 | `result_delivery` undeclared-mode raise | unknown `(engine, mode)` pair raises instead of falling back | `test_result_delivery_undeclared_mode_refuses` |
 | BP-6 | `build_argv_result` `unknown-claude-mode` refusal | non-string / unknown `claudeMode` refuses with token `unknown-claude-mode` | `test_build_argv_unknown_claude_mode_refuses` |
 | BP-7 | `build_argv_result` `claude-mode-unsupported` refusal | `background` on non-claude vendor refuses with token `claude-mode-unsupported` | `test_build_argv_claude_mode_unsupported_on_codex` |
@@ -225,8 +225,13 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_run_dir_claud
 
 ## BP-4 — `_spawn_attempt` background guard
 
+> **Guard removed.** The `claude-mode-not-dispatchable:background` spawn gate was a declared
+> temporary; it has since been removed along with the mode's unreachability. Background mode is
+> now dispatchable for review runs through the transcript delivery path (`--claude-mode background`
+> on `dispatch-review`); write dispatches still refuse via `claude-mode-background-write`.
+
 - **axis:** opened `claudeMode: background` refuses spawn with `claude-mode-not-dispatchable:background`, injected runner never called
-- **stale target:** yes — guard now compares against `engine_result_channel.MODE_BACKGROUND` (re-export of `engine_adapter.MODE_BACKGROUND`) instead of inline `"background"`
+- **stale target:** yes — guard now compares against `engine_result_channel.MODE_BACKGROUND` (re-export of `engine_adapter.MODE_BACKGROUND`) instead of inline `"background"`; the guard itself was subsequently deleted — this record is the receipt for the layer that shipped it
 
 **neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_spawn_attempt`):
 
@@ -244,7 +249,7 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_run_dir_claud
 /usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_claude_mode_background_review_open_records_caller_provenance -q
 ```
 
-**raw red** (exit 1):
+**raw red** (exit 1) *(historical — expected detail `claude-mode-not-dispatchable:background`; that guard was later removed)*:
 
 ```
 F                                                                        [100%]
@@ -271,7 +276,7 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x103d72220>
         )
         assert res["ok"] is False
         assert res.get("terminal") is True
->       assert res["detail"] == "claude-mode-not-dispatchable:background"
+>       assert res["detail"] == "claude-mode-not-dispatchable:background"  # guard since removed
 E       AssertionError: assert 'internal-AssertionError' == 'claude-mode-...le:background'
 E         
 E         - claude-mode-not-dispatchable:background
@@ -639,7 +644,7 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105b80550>
 E       AssertionError: assert 'claude-mode-...le:background' == 'run-dir-claude-mode-mismatch'
 E         
 E         - run-dir-claude-mode-mismatch
-E         + claude-mode-not-dispatchable:background
+E         + claude-mode-not-dispatchable:background  # guard since removed; write path now refuses claude-mode-background-write
 
 plugins/superheroes/lib/tests/test_engine_dispatch_write.py:3796: AssertionError
 =========================== short test summary info ============================
