@@ -999,15 +999,9 @@ def _read_session_transcript_rows(config_dir, session_id):
 
 
 def _scrub_native_payload(obj):
-    """Scrub string leaves in a native structured-output payload. Never raises."""
+    """Scrub every string key and value in a native structured-output payload. Never raises."""
     try:
-        if isinstance(obj, str):
-            return engine_adapter._scrub(obj)
-        if isinstance(obj, dict):
-            return {k: _scrub_native_payload(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_scrub_native_payload(v) for v in obj]
-        return obj
+        return engine_adapter._scrub_mapping(obj)
     except Exception:
         return obj
 
@@ -4846,14 +4840,40 @@ def _grade_write_attempt(run_dir_real, state, attempt):
 
     if ended.get("guardRefusal"):
         return _grade_spawn_guard_refusal(ended)
-    if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
+    if ended.get("refusal"):
         result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
-        if ended.get("refusal"):
-            result["detail"] = ended["refusal"]
+        result["detail"] = ended["refusal"]
         return result
 
+    admitted = None
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
-        return _admit_native_write_result(run_dir_real, attempt, opened)
+        admitted = _admit_native_write_result(run_dir_real, attempt, opened)
+        if not admitted.get("forfeit"):
+            return admitted
+
+    if ended.get("exit") not in (0, None) and not ended.get("timedOut"):
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
+
+    if admitted is not None and admitted.get("forfeit"):
+        result = dict(admitted)
+        if ended.get("timedOut"):
+            admission_detail = admitted.get("detail")
+            if admission_detail == "native-result-missing":
+                result["detail"] = "timeout-no-native-result"
+            else:
+                result["detail"] = "timeout-native-result-unadmitted"
+                result["admissionDetail"] = admission_detail
+        return result
+
+    if ended.get("timedOut"):
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "timeout-no-native-result",
+        }
+
+    if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
+        return admitted
 
     return _marker_arm_retired_grade()
 

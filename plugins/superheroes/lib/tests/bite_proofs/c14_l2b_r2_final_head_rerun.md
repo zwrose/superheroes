@@ -151,6 +151,7 @@ its recorded form.** It is replaced on this branch by a committed detector
 - **detector:** `test_claude_background_stop_records_stopped_already_ended_and_stop_failed` (the
   test's name still says `stop_failed`; its body asserts `stop-unconfirmed` — a naming minor
   disclosed in the PR, not a behaviour defect)
+- **rename note (WO-A):** detector renamed to `test_background_stop_records_stopped_already_ended_and_stop_unconfirmed` in #1273 follow-up; captured output above is unchanged.
 - **neutralization:** the final `return "stop-unconfirmed"` of `_background_stop` → `return "stopped"`
 - **raw red:**
   ```

@@ -340,6 +340,7 @@ AssertionError
 
 - **axis:** stop failure surfaces stop-failed not stopped
 - **detector:** `plugins/superheroes/lib/tests/test_engine_dispatch.py::test_claude_background_stop_records_stopped_already_ended_and_stop_failed`
+- **rename note (WO-A):** detector renamed to `test_background_stop_records_stopped_already_ended_and_stop_unconfirmed` in #1273 follow-up; captured output below is unchanged.
 
 **raw red (exit 1):**
 
