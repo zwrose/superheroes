@@ -404,6 +404,11 @@ def test_unprovable_rebind_leaves_receipt_untouched_and_does_not_park(tmp_path):
     state["round"] = 1
     state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": head}}
     key, entry = _audit_discharge_fixed(state, head)
+    stale_head = "d" * 40
+    stale_receipt = {"headSha": stale_head}
+    RD._record_disposition(
+        state, key, "fixed", entry["dispositionRound"], dispositionReceipt=stale_receipt,
+    )
     receipt_before = dict(_ledger_by_key(state)[key]["dispositionReceipt"])
     state["terminal"] = "converged"
     state["step"] = RD.P_TERMINAL
@@ -420,8 +425,8 @@ def test_unprovable_rebind_leaves_receipt_untouched_and_does_not_park(tmp_path):
     state["decisions"] = [{"round": 1, "kind": "converged", "detail": "certified"}]
     session_dir = _certifiable_shell(tmp_path, state, head)
     blobs_path = os.path.join(session_dir, RD.HEAD_CONTENT_BLOBS_FILE)
-    if os.path.isfile(blobs_path):
-        os.remove(blobs_path)
+    with open(blobs_path, "w", encoding="utf-8") as fh:
+        fh.write("{not json")
     ok, live = RD.load_state(session_dir)
     assert ok and live is not None
     fault = RD._terminal_receipt_gate(session_dir, live)
@@ -436,7 +441,7 @@ def test_unprovable_rebind_leaves_receipt_untouched_and_does_not_park(tmp_path):
     assert err is None
     refusal = RC.check_disposition_without_receipt(ctx)
     assert refusal is not None
-    assert refusal.get("bindingFailure") == "fix-content-unreadable"
+    assert refusal.get("bindingFailure") == "verify-not-on-head"
 
 
 # --- verify-not-pass leaves receipt untouched ----------------------------------------
@@ -596,6 +601,55 @@ def test_backfill_helper_absent_same_round_audits_before_verify_still_stamps(tmp
     receipt = _ledger_by_key(reloaded)[key]["dispositionReceipt"]
     assert receipt.get("verifyResult") == "pass"
     assert receipt.get("headSha") == head
+
+
+# --- head unchanged stamps verify from covering gate ---------------------------------
+
+def test_head_unchanged_stamps_verify_result_when_blobs_unreadable(tmp_path):
+    """Head already bound to certified head — stamp verifyResult without re-bind."""
+    head = "f" * 40
+    state = RD.new_state(_cfg())
+    state["config"]["baseGuard"] = RC.BASE_GUARD_CHECKED
+    state["round"] = 2
+    state["rounds"] = {
+        "1": {"verifyResult": "pass", "fixFoldHead": head},
+        "2": {"verifyResult": "pass", "fixFoldHead": head, "roundKind": "delta"},
+    }
+    key, entry = _audit_discharge_fixed(state, head)
+    bare_receipt = {"headSha": head}
+    RD._record_disposition(
+        state, key, "fixed", entry["dispositionRound"], dispositionReceipt=bare_receipt,
+    )
+    receipt_before = dict(_ledger_by_key(state)[key]["dispositionReceipt"])
+    assert receipt_before.get("headSha") == head
+    assert receipt_before.get("verifyResult") is None
+    state["terminal"] = "converged"
+    state["step"] = RD.P_TERMINAL
+    state["certification"] = {
+        "shape": "audited-chain",
+        "fullPanel": False,
+        "independence": "independent",
+        "base": "fetched",
+        "shapeDrivers": [],
+    }
+    state["dispositionLedgerOwner"] = "ledger"
+    state["findings"] = [_ledger_by_key(state)[key]]
+    state["config"]["headSha"] = head
+    state["decisions"] = [{"round": 2, "kind": "converged", "detail": "certified"}]
+    session_dir = _certifiable_shell(tmp_path, state, head)
+    blobs_path = os.path.join(session_dir, RD.HEAD_CONTENT_BLOBS_FILE)
+    if os.path.isfile(blobs_path):
+        os.remove(blobs_path)
+    ok, live = RD.load_state(session_dir)
+    assert ok and live is not None
+    fault = RD._terminal_receipt_gate(session_dir, live)
+    assert fault is None, fault
+    ok, reloaded = RD.load_state(session_dir)
+    assert ok
+    receipt_after = _ledger_by_key(reloaded)[key]["dispositionReceipt"]
+    assert receipt_after.get("headSha") == head
+    assert receipt_after.get("verifyResult") == "pass"
+    assert reloaded.get("_fixedDispositionFinalizationResiduals") is None
 
 
 # --- persistence order ---------------------------------------------------------------

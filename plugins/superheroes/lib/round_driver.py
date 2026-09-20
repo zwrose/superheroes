@@ -1740,8 +1740,13 @@ def _finalize_fixed_disposition_receipts(state, session_dir, config):
         if not isinstance(certified_head, str) or not certified_head:
             residuals[key] = "fix-content-missing"
             continue
+        existing_head = original_receipt.get("headSha")
+        head_unchanged = (
+            isinstance(existing_head, str) and existing_head and existing_head == certified_head
+        )
         updated_receipt = dict(original_receipt)
-        updated_receipt["headSha"] = certified_head
+        if not head_unchanged:
+            updated_receipt["headSha"] = certified_head
         file_path = _fix_content_proof_path(entry, by_key)
         if session_dir and isinstance(file_path, str) and file_path:
             updated_receipt.update(
@@ -1751,6 +1756,23 @@ def _finalize_fixed_disposition_receipts(state, session_dir, config):
             session_dir, entry, updated_receipt, certified_head, by_key=by_key
         )
         if binding_failure:
+            if head_unchanged and original_receipt.get("verifyResult") is None:
+                verify_result = _verify_result_for_disposition(
+                    state, state.get("round"), certified_head
+                )
+                if verify_result != "pass":
+                    residuals[key] = FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
+                    continue
+                stamp_receipt = dict(original_receipt)
+                stamp_receipt["verifyResult"] = verify_result
+                _record_disposition(
+                    state,
+                    key,
+                    "fixed",
+                    entry.get("dispositionRound"),
+                    dispositionReceipt=stamp_receipt,
+                )
+                continue
             residuals[key] = binding_failure
             continue
         verify_result = _verify_result_for_disposition(

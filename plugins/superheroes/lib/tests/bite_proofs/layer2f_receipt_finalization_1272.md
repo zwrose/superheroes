@@ -102,3 +102,34 @@ AssertionError: assert 'fix-content-reverted' == 'fix-content-schema-unsupported
 **Detector.** `test_persistence_order_rebound_on_disk` (ledger + live row headSha after terminal gate).
 
 **Unreachable through this entry point.** Swapping `_write_receipt` before `save_state`, skipping `save_state` in `_finalize_receipt`, or moving `_write_receipt` ahead of `save_state` all leave `test_persistence_order_rebound_on_disk` green: `_terminal_receipt_gate` always calls `save_state` after `_finalize_receipt` returns, so the detector reads loop-state only after that closing save. The ordering inside `_finalize_receipt` is not observable through this test path.
+
+## BP-2f-s — head unchanged stamps verify from covering gate
+
+**Guarded element.** `round_driver._finalize_fixed_disposition_receipts` — `stamp_receipt["verifyResult"] = verify_result` (head-unchanged stamp branch).
+**Axis.** When the receipt's headSha already equals the certified head, stamp verifyResult from the gate that covers that head without re-bind.
+**Detector.** `test_head_unchanged_stamps_verify_result_when_blobs_unreadable`.
+
+**Neutralization.**
+
+```python
+            pass  # bite BP-2f-s neutralized head-unchanged verifyResult stamp
+```
+
+(replaced `stamp_receipt["verifyResult"] = verify_result` in the head-unchanged stamp branch)
+
+**Raw red** (exit 1):
+
+```
+FAILED ...test_head_unchanged_stamps_verify_result_when_blobs_unreadable
+AssertionError: assert None == 'pass'
+1 failed
+```
+
+**Restore.** Restored `stamp_receipt["verifyResult"] = verify_result`.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed
+```
