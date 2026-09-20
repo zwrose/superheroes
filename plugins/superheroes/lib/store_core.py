@@ -147,8 +147,10 @@ def repo_identity_memo():
         stack.pop()
 
 
-def repo_root(cwd):
+def repo_root(cwd, *, env=None):
     """Fail-closed repository root for ``cwd`` (issue #742)."""
+    if env is not None:
+        return _repo_root_uncached(cwd, env=env)
     memo = _active_repo_identity_memo()
     if memo is not None:
         if cwd in memo["root"]:
@@ -166,8 +168,11 @@ def repo_root(cwd):
     return resolved
 
 
-def _repo_root_uncached(cwd):
-    res = run_git_result(cwd, "rev-parse", "--show-toplevel")
+def _repo_root_uncached(cwd, env=None):
+    if env is None:
+        res = run_git_result(cwd, "rev-parse", "--show-toplevel")
+    else:
+        res = run_git_result(cwd, "rev-parse", "--show-toplevel", env=env)
     if res.status == GIT_UNAVAILABLE:
         raise RepoRootUnavailable(
             "git could not be run at %s: %s" % (cwd, res.detail),

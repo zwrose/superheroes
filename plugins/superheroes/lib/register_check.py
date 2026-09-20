@@ -109,10 +109,7 @@ def _git_probe_cwd(register_path):
 def _repo_root_for_path(register_path, git_env=None):
     cwd = _git_probe_cwd(register_path)
     try:
-        if git_env is None:
-            root = store_core.repo_root(cwd)
-        else:
-            root = _repo_root_with_env(cwd, git_env)
+        root = store_core.repo_root(cwd, env=git_env)
     except store_core.RepoRootUnavailable as exc:
         if exc.git_status == store_core.GIT_UNAVAILABLE:
             return None, f"git unavailable while resolving repo root: {exc}"
@@ -127,43 +124,6 @@ def _repo_root_for_path(register_path, git_env=None):
     ):
         return None, None
     return root, None
-
-
-def _repo_root_with_env(cwd, git_env):
-    res = store_core.run_git_result(cwd, "rev-parse", "--show-toplevel", env=git_env)
-    if res.status == store_core.GIT_UNAVAILABLE:
-        raise store_core.RepoRootUnavailable(
-            "git could not be run at %s: %s" % (cwd, res.detail),
-            git_status=store_core.GIT_UNAVAILABLE,
-        )
-    if res.status == store_core.GIT_OK:
-        if not res.out:
-            raise store_core.RepoRootUnavailable(
-                "git rev-parse --show-toplevel at %s returned empty output" % cwd,
-                git_status=store_core.GIT_DECLINED,
-            )
-        resolved = os.path.realpath(res.out)
-        if not os.path.isdir(resolved):
-            raise store_core.RepoRootUnavailable(
-                "git rev-parse --show-toplevel at %s named a non-directory path: %s"
-                % (cwd, res.out),
-                git_status=store_core.GIT_DECLINED,
-            )
-        return resolved
-    if store_core.not_a_repository(res):
-        raise store_core.RepoRootUnavailable(
-            "not a git repository at %s" % cwd,
-            git_status=store_core.GIT_DECLINED,
-        )
-    if not os.path.isdir(cwd):
-        raise store_core.RepoRootUnavailable(
-            "not a git repository at %s" % cwd,
-            git_status=store_core.GIT_DECLINED,
-        )
-    raise store_core.RepoRootUnavailable(
-        "git declined rev-parse --show-toplevel at %s: %s" % (cwd, res.detail),
-        git_status=store_core.GIT_DECLINED,
-    )
 
 
 def _rel_path_in_repo(repo_root, register_path):
