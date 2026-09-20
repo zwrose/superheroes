@@ -896,15 +896,17 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e27_collected_cou
 
 **command:** the command (see top).
 
+**fixture note:** `test_e26_has_next_page_not_boolean` uses `hasNextPage: 0` (falsy, not a boolean) on a single page that carries all five members so neutralizing this clause ends the loop with a complete membership instead of paginating into a sibling guard.
+
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e26_has_next_page_not_boolean
-1 failed, 51 passed in 0.23s
+1 failed, 51 passed in 0.31s
 ```
 
 **raw green** after restore:
 ```
-52 passed in 0.22s
+52 passed in 0.74s
 ```
 
 ---
@@ -958,15 +960,17 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e24_zero_nodes_wi
 
 **command:** the command (see top).
 
+**fixture note:** `test_e26_has_next_page_without_end_cursor` uses `endCursor: 42` (not a string) with a follow-up page keyed on that numeric cursor so neutralizing this clause completes the stack instead of repeating page one into a sibling guard.
+
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e26_has_next_page_without_end_cursor
-1 failed, 51 passed in 0.26s
+1 failed, 51 passed in 0.29s
 ```
 
 **raw green** after restore:
 ```
-52 passed in 0.24s
+52 passed in 0.12s
 ```
 
 ---
@@ -988,15 +992,17 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e26_has_next_page
 
 **command:** the command (see top).
 
+**fixture note:** `test_e25_repeated_end_cursor` repeats `cursor-dup` on page two while `hasNextPage` is still true after delivering the remaining members, with a third request answering `hasNextPage: false` and zero nodes so neutralizing this clause ends on a complete membership instead of refusing on an earlier page.
+
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e25_repeated_end_cursor
-1 failed, 51 passed in 0.19s
+1 failed, 51 passed in 0.18s
 ```
 
 **raw green** after restore:
 ```
-52 passed in 0.15s
+52 passed in 0.22s
 ```
 
 ---
@@ -1196,7 +1202,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_cli_bad_argument_
 
 **`git status --porcelain` (mutated files):**
 ```
-
+ M plugins/superheroes/lib/tests/test_stack_check.py
 ```
 
 **`shasum -a 256` before first neutralization / after last restore:**
@@ -1204,5 +1210,5 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_cli_bad_argument_
 d00ae0e0c2ffc7c91f02988562ec6107eaa0f311d070d699919a9956db5a0076  plugins/superheroes/lib/stack_check.py
 d00ae0e0c2ffc7c91f02988562ec6107eaa0f311d070d699919a9956db5a0076  plugins/superheroes/lib/stack_check.py
 c3d9ab00e30c25866272b3e53c6856428778a359fc2d348aae87c0988048f06f  plugins/superheroes/lib/tests/test_stack_check.py
-c3d9ab00e30c25866272b3e53c6856428778a359fc2d348aae87c0988048f06f  plugins/superheroes/lib/tests/test_stack_check.py
+71a1ec3bd8c8a741fb0d513a55e3afc3fddac4d1ea44ad103049fe0939ffc75b  plugins/superheroes/lib/tests/test_stack_check.py
 ```

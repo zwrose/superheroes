@@ -451,15 +451,21 @@ def test_e25_repeated_end_cursor():
         stack_size=5,
     )
     page2 = _pull_request(
-        nodes=[_member(3, number=PR), _member(4)],
+        nodes=[_member(3, number=PR), _member(4), _member(5)],
         has_next_page=True,
         end_cursor="cursor-dup",
+        stack_size=5,
+    )
+    page3 = _pull_request(
+        nodes=[],
+        has_next_page=False,
+        end_cursor=None,
         stack_size=5,
     )
     run, _calls = _make_run(
         {
             _argv_page(PR, 2): _graphql_ok(page1),
-            _argv_page(PR, 2, "cursor-dup"): _graphql_ok(page2),
+            _argv_page(PR, 2, "cursor-dup"): [_graphql_ok(page2), _graphql_ok(page3)],
         }
     )
     result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
@@ -467,23 +473,43 @@ def test_e25_repeated_end_cursor():
 
 
 def test_e26_has_next_page_without_end_cursor():
-    page = _pull_request(nodes=[_member(1), _member(2)], has_next_page=True, end_cursor=None, stack_size=5)
-    run, _calls = _make_run({_argv_page(PR, 2): _graphql_ok(page)})
+    page1 = _pull_request(
+        nodes=[_member(1), _member(2)],
+        has_next_page=True,
+        end_cursor=None,
+        stack_size=5,
+    )
+    page1["stackEntry"]["stack"]["entries"]["pageInfo"]["endCursor"] = 42
+    page2 = _pull_request(
+        nodes=[_member(3, number=PR), _member(4)],
+        has_next_page=True,
+        end_cursor="cursor-2",
+        stack_size=5,
+    )
+    page3 = _pull_request(
+        nodes=[_member(5)],
+        has_next_page=False,
+        end_cursor=None,
+        stack_size=5,
+    )
+    run, _calls = _make_run(
+        {
+            _argv_page(PR, 2): _graphql_ok(page1),
+            _argv_page(PR, 2, 42): _graphql_ok(page2),
+            _argv_page(PR, 2, "cursor-2"): _graphql_ok(page3),
+        }
+    )
     result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
     _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
 
 
 def test_e26_has_next_page_not_boolean():
     page = _pull_request(
-        pr_number=PR,
-        position=1,
-        nodes=[_member(1, number=PR)],
+        nodes=[_member(1), _member(2), _member(3, number=PR), _member(4), _member(5)],
         has_next_page=False,
-        stack_size=1,
+        stack_size=5,
     )
-    page["number"] = PR
-    page["stackEntry"]["position"] = 1
-    page["stackEntry"]["stack"]["entries"]["pageInfo"]["hasNextPage"] = "false"
+    page["stackEntry"]["stack"]["entries"]["pageInfo"]["hasNextPage"] = 0
     run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
     result = sc.read_membership(pr=PR, repo=REPO, run=run)
     _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
