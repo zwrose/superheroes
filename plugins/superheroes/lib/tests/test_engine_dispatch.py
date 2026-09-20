@@ -6142,6 +6142,10 @@ def test_review_mode_argparse_choices_match_review_modes():
     ("success-brief-check", {"mode": "brief-check"}, "success", "brief-check", None, True, True),
     ("running-non-terminal", {"max_wait": 1}, "running", "review", None, False, False),
     ("outer-exception", {}, "outer_exc", "review", "internal-RuntimeError", False, True),
+    ("claude-mode-unknown", {"claude_mode": "bogus"},
+     None, "review", "claude-mode-unknown:'bogus'", False, True),
+    ("claude-mode-unsupported", {"seat": _codex_seat(), "claude_mode": "background"},
+     None, "review", "claude-mode-unsupported:codex", False, True),
 ])
 def test_dispatch_review_every_outcome_carries_mode(
     tmp_path, monkeypatch, label, kwargs, setup, expected_mode, expected_detail,
@@ -10163,6 +10167,24 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
         ),
         "dispatch-review-library-mode-invalid",
         "mode-invalid",
+    )
+    _assert_dispatch_result_entry_refusal(
+        ED.dispatch_review(
+            seat=_reviewer_claude_seat(), prompt_path=prompt, repo_root=repo_root,
+            run_engine=_never_call, build_view=_never_build_view,
+            claude_mode="bogus",
+        ),
+        "dispatch-review-library-claude-mode-unknown",
+        "claude-mode-unknown",
+    )
+    _assert_dispatch_result_entry_refusal(
+        ED.dispatch_review(
+            seat=_codex_seat(), prompt_path=prompt, repo_root=repo_root,
+            run_engine=_never_call, build_view=_never_build_view,
+            claude_mode="background",
+        ),
+        "dispatch-review-library-claude-mode-unsupported",
+        "claude-mode-unsupported",
     )
     _assert_dispatch_result_entry_refusal(
         ED.dispatch_review(
@@ -14411,6 +14433,29 @@ def test_continuation_omitted_claude_mode_inherits_journal(tmp_path, monkeypatch
     assert len(fake.calls) == 0
 
 
+def test_legacy_journal_without_claude_mode_continues_with_explicit_print(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "legacy-explicit-print")
+    repo_root = _repo(tmp_path)
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _reviewer_claude_seat()
+    _plant_claude_review_journal(
+        tmp_path, run_dir, repo_root, seat, config_dir=cfg,
+    )
+    res = ED.dispatch_review(
+        seat=seat,
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()]),
+        build_view=_stable_build_view(tmp_path),
+        run_dir=run_dir,
+        order_id="claude-native",
+        claude_mode="print",
+        max_wait=0,
+    )
+    assert res.get("detail") != ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH
+
+
 def test_legacy_journal_without_claude_mode_dispatches_print_argv(tmp_path, monkeypatch):
     _ensure_claude_config_dir(tmp_path, monkeypatch)
     run_dir = str(tmp_path / "legacy")
@@ -14436,6 +14481,14 @@ def test_legacy_journal_without_claude_mode_dispatches_print_argv(tmp_path, monk
     opened = next(r for r in records if r.get("kind") == "run-opened")
     assert opened["argv"] == planted["argv"]
     assert ED._spawn_argv_coherence(opened, opened["argv"])[1] is None
+
+
+def test_native_materializer_delivery_census():
+    assert ED._NATIVE_MATERIALIZER_DELIVERIES <= ERC.RESULT_DELIVERY_MEMBERS
+    assert ED._NATIVE_MATERIALIZER_DELIVERIES == frozenset({
+        ERC.RESULT_DELIVERY_STDOUT,
+        ERC.RESULT_DELIVERY_TRANSCRIPT,
+    })
 
 
 def test_claude_background_argv_carries_json_schema_from_journal(tmp_path, monkeypatch):

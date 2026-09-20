@@ -3711,6 +3711,31 @@ def test_claude_mode_unsupported_codex_background_refused_write(tmp_path):
     assert len(fake.calls) == 0
 
 
+def test_legacy_write_journal_without_claude_mode_continues_with_explicit_print(
+    tmp_path, monkeypatch,
+):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "legacy-explicit-print")
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _implementer_claude_seat()
+    planted = _plant_claude_write_journal_with_claude_mode(
+        tmp_path, run_dir, wt, seat, config_dir=cfg,
+    )
+    assert "claudeMode" not in planted
+    fake = FakeRunner([])
+    res = _dispatch_write(
+        tmp_path,
+        fake,
+        cwd=wt,
+        run_dir=run_dir,
+        seat=seat,
+        order_id="claude-mode-test",
+        claude_mode="print",
+    )
+    assert res.get("detail") != ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH
+
+
 def test_run_dir_claude_mode_mismatch_refused_write(tmp_path, monkeypatch):
     _ensure_claude_config_dir(tmp_path, monkeypatch)
     wt, _main = _linked_worktree(tmp_path)

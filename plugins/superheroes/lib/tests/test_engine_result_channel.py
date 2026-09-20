@@ -439,6 +439,34 @@ def test_result_delivery_print_default_identity(vendor, expected):
     assert ERC.result_delivery(vendor, ERC.MODE_PRINT) == expected
 
 
+def test_claude_modes_reexported_from_adapter():
+    assert ERC.MODE_PRINT == EA.MODE_PRINT
+    assert ERC.MODE_BACKGROUND == EA.MODE_BACKGROUND
+    assert ERC.CLAUDE_MODES == EA.CLAUDE_MODES
+
+
+def test_result_delivery_members_closed():
+    assert ERC.RESULT_DELIVERY_MEMBERS == frozenset({
+        ERC.RESULT_DELIVERY_ARGV,
+        ERC.RESULT_DELIVERY_PROMPT,
+        ERC.RESULT_DELIVERY_STDOUT,
+        ERC.RESULT_DELIVERY_TRANSCRIPT,
+    })
+
+
+def test_result_delivery_contract_builders_cover_all_members():
+    review_schema = ERC.declared_schema("claude", ERC.RUN_KIND_REVIEW)
+    write_schema = ERC.declared_schema("claude", ERC.RUN_KIND_WRITE)
+    for delivery in ERC.RESULT_DELIVERY_MEMBERS:
+        assert ERC.review_result_contract_from_schema(review_schema, delivery=delivery)
+        assert ERC.write_result_contract_from_schema(write_schema, delivery=delivery)
+
+
+def test_normalize_claude_mode_treats_omitted_as_print():
+    assert ERC.normalize_claude_mode(None) == ERC.MODE_PRINT
+    assert ERC.normalize_claude_mode(ERC.MODE_PRINT) == ERC.MODE_PRINT
+
+
 def test_result_delivery_claude_background_transcript():
     assert ERC.result_delivery("claude", ERC.MODE_BACKGROUND) == ERC.RESULT_DELIVERY_TRANSCRIPT
 

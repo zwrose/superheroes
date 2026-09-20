@@ -55,6 +55,8 @@ The entry-refusal reasons are the closed set the dispatch shell's `entryReason` 
 - `allowlist-malformed`
 - `allowlist-raised`
 - `allowlist-refused`
+- `claude-mode-unknown`
+- `claude-mode-unsupported`
 - `effort-invalid`
 - `effort-key-absent`
 - `effort-token-conflict`

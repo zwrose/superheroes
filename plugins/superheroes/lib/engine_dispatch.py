@@ -186,18 +186,17 @@ def _claude_mode_unsupported_detail(vendor):
 
 
 def _claude_mode_entry_refusal(
-    detail, *, run_dir=None, mode=None, repo_root=None, engine=None,
+    entry_reason, detail, *, run_dir=None, mode=None, repo_root=None, engine=None,
     run_kind=RUN_KIND_REVIEW,
 ):
-    refusal = {
-        "ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": detail,
-        "attempts": 0, "forfeited": False, "terminal": True,
-    }
-    if repo_root is not None:
-        return _finish_preflight_terminal(
-            repo_root, refusal, run_dir=run_dir or "", engine=engine, run_kind=run_kind,
-        )
-    return _with_run_fields(refusal, run_dir=run_dir or "", argv=[])
+    return _entry_refusal_terminal(
+        {"ok": False, "entryReason": entry_reason, "detail": detail, "mode": mode},
+        run_dir=run_dir,
+        mode=mode,
+        repo_root=repo_root,
+        engine=engine,
+        run_kind=run_kind,
+    )
 
 
 def _expected_result_kind_invalid_refusal(rejected_kind, effective_mode):
@@ -469,12 +468,9 @@ def _native_schema_path(run_dir_real):
 
 def _native_channel_suffix(opened):
     """Return native-channel argv suffix for this run's result delivery mode."""
-    try:
-        delivery = engine_result_channel.result_delivery(
-            opened.get("engine"), opened.get("claudeMode"),
-        )
-    except Exception:
-        return ()
+    delivery = engine_result_channel.result_delivery(
+        opened.get("engine"), opened.get("claudeMode"),
+    )
     if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
         return ()
     schema_path = opened.get("nativeSchemaPath")
@@ -818,31 +814,14 @@ def _claude_child_env(opened, base=None):
     return env, pins
 
 
-def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path):
-    """Materialize claude stdout delivery's structured_output to the native result path. (#1273)"""
-    try:
-        delivery = engine_result_channel.result_delivery(
-            opened.get("engine"), opened.get("claudeMode"),
-        )
-    except Exception:
-        return None
-    if delivery != engine_result_channel.RESULT_DELIVERY_STDOUT:
-        return None
-    stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
-    result_path = _native_result_path(run_dir_real, attempt)
-    if result_path is None:
-        return "error"
-    env = engine_adapter.claude_result_envelope(stdout)
-    if (not isinstance(env, dict)
-            or env.get("is_error") is True
-            or "structured_output" not in env):
-        # axis: a path planted during the run occupies the materializer even without a result event.
-        try:
-            os.lstat(result_path)
-        except FileNotFoundError:
-            return "absent"
-        return "occupied"
-    payload = json.dumps(env["structured_output"], separators=(",", ":")) + "\n"
+_NATIVE_MATERIALIZER_DELIVERIES = frozenset({
+    engine_result_channel.RESULT_DELIVERY_STDOUT,
+    engine_result_channel.RESULT_DELIVERY_TRANSCRIPT,
+})
+
+
+def _write_native_result_payload(result_path, payload_obj):
+    payload = json.dumps(payload_obj, separators=(",", ":")) + "\n"
     try:
         fd = os.open(
             result_path,
@@ -861,15 +840,77 @@ def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path):
     return "materialized"
 
 
+def _native_result_materialization_status(result_path, payload_obj):
+    if payload_obj is None:
+        try:
+            os.lstat(result_path)
+        except FileNotFoundError:
+            return "absent"
+        return "occupied"
+    return _write_native_result_payload(result_path, payload_obj)
+
+
+def _read_transcript_rows(stdout_path):
+    rows = []
+    try:
+        with open(stdout_path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return None
+    return rows
+
+
+def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path):
+    """Materialize stdout/transcript delivery to the native result path. (#1273)"""
+    delivery = engine_result_channel.result_delivery(
+        opened.get("engine"), opened.get("claudeMode"),
+    )
+    if delivery not in _NATIVE_MATERIALIZER_DELIVERIES:
+        return None
+    result_path = _native_result_path(run_dir_real, attempt)
+    if result_path is None:
+        return "error"
+    if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+        env = engine_adapter.claude_result_envelope(stdout)
+        if (not isinstance(env, dict)
+                or env.get("is_error") is True
+                or "structured_output" not in env):
+            return _native_result_materialization_status(result_path, None)
+        return _native_result_materialization_status(
+            result_path, env["structured_output"],
+        )
+    rows = _read_transcript_rows(stdout_path)
+    if rows is None:
+        return "error"
+    payload_obj = engine_adapter.claude_transcript_result(rows)
+    return _native_result_materialization_status(result_path, payload_obj)
+
+
+def _result_delivery_gate_refusal():
+    return {
+        "forfeit": True,
+        "reason": dispatch_outcome.REASON_FORFEITED,
+        "detail": "result-delivery-unresolved",
+    }
+
+
 def _stdout_delivery_gate(run_dir_real, attempt, opened):
-    """Refuse admission when stdout delivery did not materialize a native result. (#1273)"""
+    """Refuse admission when stdout/transcript delivery did not materialize a native result. (#1273)"""
     try:
         delivery = engine_result_channel.result_delivery(
             opened.get("engine"), opened.get("claudeMode"),
         )
-    except Exception:
-        return None
-    if delivery != engine_result_channel.RESULT_DELIVERY_STDOUT:
+    except (engine_result_channel.UnknownEngineError, ValueError):
+        return _result_delivery_gate_refusal()
+    if delivery not in _NATIVE_MATERIALIZER_DELIVERIES:
         return None
     records, _corrupt = _journal_read(run_dir_real)
     state = _journal_state(records)
@@ -4838,6 +4879,7 @@ def dispatch_review(*args, seat=None, prompt_path=None,
                 )
         if claude_mode is not None and not engine_result_channel.claude_mode_ok(claude_mode):
             return _claude_mode_entry_refusal(
+                "claude-mode-unknown",
                 _claude_mode_unknown_detail(claude_mode),
                 run_dir=run_dir,
                 mode=mode or sanitized_view.MODE_REVIEW,
@@ -4873,6 +4915,7 @@ def dispatch_review(*args, seat=None, prompt_path=None,
             and entry.get("vendor") != "claude"
         ):
             return _claude_mode_entry_refusal(
+                "claude-mode-unsupported",
                 _claude_mode_unsupported_detail(entry.get("vendor")),
                 run_dir=run_dir,
                 mode=mode or sanitized_view.MODE_REVIEW,
@@ -5060,7 +5103,11 @@ def _dispatch_review_impl(seat, *, prompt_path,
                     )
                 journal_claude_mode = opened.get("claudeMode")
                 resolved_claude_mode["claudeMode"] = journal_claude_mode
-                if claude_mode is not None and claude_mode != journal_claude_mode:
+                if (
+                    claude_mode is not None
+                    and engine_result_channel.normalize_claude_mode(claude_mode)
+                    != engine_result_channel.normalize_claude_mode(journal_claude_mode)
+                ):
                     return _finish_preflight_terminal(
                         repo_detail,
                         {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
@@ -5461,6 +5508,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
             )
         if claude_mode is not None and not engine_result_channel.claude_mode_ok(claude_mode):
             return _claude_mode_entry_refusal(
+                "claude-mode-unknown",
                 _claude_mode_unknown_detail(claude_mode),
                 run_dir=run_dir,
                 run_kind=RUN_KIND_WRITE,
@@ -5488,6 +5536,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
             and resolved.get("vendor") != "claude"
         ):
             return _claude_mode_entry_refusal(
+                "claude-mode-unsupported",
                 _claude_mode_unsupported_detail(resolved.get("vendor")),
                 run_dir=run_dir,
                 engine=resolved.get("vendor"),
@@ -5648,7 +5697,11 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 )
             journal_claude_mode = opened.get("claudeMode")
             resolved_claude_mode["claudeMode"] = journal_claude_mode
-            if claude_mode is not None and claude_mode != journal_claude_mode:
+            if (
+                claude_mode is not None
+                and engine_result_channel.normalize_claude_mode(claude_mode)
+                != engine_result_channel.normalize_claude_mode(journal_claude_mode)
+            ):
                 return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH,

@@ -44,6 +44,11 @@ REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 # literals; engine_dispatch and drift tests import this name, never restate the tuple.
 REVIEW_RESULT_KINDS = ("findings", "verdicts", "grouping", "ruling")
 
+# Claude dispatch modes — single home; engine_result_channel re-exports (CONVENTIONS §11).
+MODE_PRINT = "print"
+MODE_BACKGROUND = "background"
+CLAUDE_MODES = (MODE_PRINT, MODE_BACKGROUND)
+
 # Write tail signals graded by _grade_build_report_obj (CONVENTIONS §11).
 WRITE_SIGNAL_ENUM = ("ok", "plan_wrong", "needs_context")
 WRITE_SIGNAL_OK, WRITE_SIGNAL_PLAN_WRONG, WRITE_SIGNAL_NEEDS_CONTEXT = WRITE_SIGNAL_ENUM
@@ -448,19 +453,19 @@ def build_argv_result(seat, role_kind, opts):
     is_read = role_kind == "review"
     claude_tier = opts.get("model")
     claude_mode = opts.get("claudeMode")
-    if claude_mode is not None and claude_mode != "print":
+    if claude_mode is not None and claude_mode != MODE_PRINT:
+        modes_label = ", ".join(CLAUDE_MODES)
         if not isinstance(claude_mode, str):
             return _refuse(
                 "unknown-claude-mode",
-                detail="unknown claude mode %r; accepted modes: print, background"
-                % (claude_mode,),
+                detail="unknown claude mode %r; accepted modes: %s"
+                % (claude_mode, modes_label),
             )
-        import engine_result_channel as erc  # noqa: PLC0415 — lazy: engine_result_channel imports this module
-        if claude_mode not in erc.CLAUDE_MODES:
+        if claude_mode not in CLAUDE_MODES:
             return _refuse(
                 "unknown-claude-mode",
-                detail="unknown claude mode %r; accepted modes: print, background"
-                % (claude_mode,),
+                detail="unknown claude mode %r; accepted modes: %s"
+                % (claude_mode, modes_label),
             )
         if vendor != "claude":
             return _refuse(
@@ -555,7 +560,7 @@ def build_argv_result(seat, role_kind, opts):
                 "untokenizable",
                 detail=_untokenizable_detail("claude", engine_model, effort),
             )
-        if claude_mode == "background":
+        if claude_mode == MODE_BACKGROUND:
             argv = ["claude", "--bg", "--model", tok, "--effort", effort]
         else:
             argv = [
