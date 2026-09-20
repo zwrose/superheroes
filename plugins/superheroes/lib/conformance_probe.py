@@ -23,7 +23,7 @@ import readout  # noqa: E402
 import seat_map  # noqa: E402
 import store_core  # noqa: E402
 
-SCHEMA = "conformance-probe/1"
+SCHEMA = "conformance-probe/2"
 PREFLIGHT_ENTRY_SCHEMA = "conformance-preflight-entry/1"
 PROBE_ROLE = "reviewer-deep"
 SLICE_MAX_WAIT = 300
@@ -92,6 +92,39 @@ def _all_legs_failed(detail, evidence=None):
     return {name: _leg(False, detail, ev) for name in _LEG_NAMES}
 def _failed_leg_names(legs):
     return [name for name in _LEG_NAMES if not legs.get(name, {}).get("ok")]
+
+def _modes_for_engine(engine):
+    if engine == "claude":
+        return ("print", "background")
+    return ("default",)
+
+def _mode_run_dir(parent_run_dir, mode):
+    if mode == "default":
+        return parent_run_dir
+    return os.path.join(parent_run_dir, mode)
+
+def _derive_flat_legs(mode_legs):
+    flat = {}
+    for leg_name in _LEG_NAMES:
+        failing = []
+        for mode, legs in mode_legs.items():
+            leg = legs.get(leg_name) or {}
+            if not leg.get("ok"):
+                failing.append((mode, leg))
+        if not failing:
+            flat[leg_name] = _leg(True, None, {})
+            continue
+        mode, leg = failing[0]
+        detail = leg.get("detail")
+        if len(failing) == 1:
+            mode_detail = "%s: %s" % (mode, detail) if detail else mode
+        else:
+            mode_detail = "; ".join(
+                "%s: %s" % (m, (lg.get("detail") or "failed")) for m, lg in failing)
+        evidence = dict(leg.get("evidence") or {})
+        evidence["failingModes"] = [m for m, _lg in failing]
+        flat[leg_name] = _leg(False, mode_detail, evidence)
+    return flat
 
 def _resolve_repo_root(repo_root):
     if repo_root is None:
@@ -213,13 +246,15 @@ def _grade_legs(terminal, state, bound_exceeded):
     return {"resultProduction": rp, "completionDetection": cd, "progressTelemetry": pt}
 
 def _payload(engine, channel, seat, repo_root, started_at, completed_at, wall, run_dir,
-             legs, dependent_roles, dependent_lanes, wave=None):
+             mode_legs, probed_modes, dependent_roles, dependent_lanes, wave=None):
+    legs = _derive_flat_legs(mode_legs)
     all_ok = all(legs[n]["ok"] for n in _LEG_NAMES)
     out = {
         "schema": SCHEMA, "ok": all_ok, "engine": engine, "channel": channel, "seat": seat,
         "probedCell": [seat["vendor"], seat["model"], seat.get("effort")],
         "repoRoot": repo_root, "startedAt": started_at, "completedAt": completed_at,
-        "wallSeconds": wall, "runDir": run_dir, "legs": legs,
+        "wallSeconds": wall, "runDir": run_dir, "probedModes": list(probed_modes),
+        "modeLegs": mode_legs, "legs": legs,
         "failed": _failed_leg_names(legs), "dependentRoles": dependent_roles,
         "dependentLanes": dependent_lanes,
         "preflightCheck": _preflight_check_entry(engine, channel, seat, wall, legs, run_dir, all_ok),
@@ -232,12 +267,79 @@ def _refuse(engine, detail, repo_root, seat=None, channel=None):
     seat = seat or {"vendor": engine, "model": None, "effort": None, "role": PROBE_ROLE}
     if channel is None and engine in DISPATCHABLE_ENGINES:
         channel = engine_result_channel.channel_for(engine)
-    legs = _all_legs_failed(detail)
+    modes = _modes_for_engine(engine if engine in DISPATCHABLE_ENGINES else "codex")
+    failed_legs = _all_legs_failed(detail)
+    mode_legs = {mode: dict(failed_legs) for mode in modes}
+    legs = _derive_flat_legs(mode_legs)
     dep_roles, dep_lanes = _dependent_from_calibration(
         preflight_probe.dispatch_calibration(cwd=repo_root or os.getcwd()), engine)
     now = _utc_now_iso()
-    payload = _scrub_obj(_payload(engine, channel, seat, repo_root, now, now, 0.0, "", legs, dep_roles, dep_lanes))
+    payload = _scrub_obj(_payload(
+        engine, channel, seat, repo_root, now, now, 0.0, "", mode_legs, modes, dep_roles, dep_lanes))
     return payload, 1, _stderr_failure_line(engine, legs, dep_lanes)
+
+def _stamp_mode_run_dir(legs, mode_run_dir):
+    stamped = {}
+    for name in _LEG_NAMES:
+        leg = dict(legs[name])
+        evidence = dict(leg.get("evidence") or {})
+        evidence["runDir"] = mode_run_dir
+        leg["evidence"] = evidence
+        stamped[name] = leg
+    return stamped
+
+def _probe_one_mode(engine, mode, seat, repo_real, parent_run_dir, prompt_path, timeout,
+                    run_engine, build_view, order_suffix):
+    mode_run_dir = _mode_run_dir(parent_run_dir, mode)
+    try:
+        os.makedirs(mode_run_dir, exist_ok=True)
+    except OSError as exc:
+        return _stamp_mode_run_dir(_all_legs_failed("run-dir-setup-failed:%s" % type(exc).__name__),
+                                   mode_run_dir)
+    mode_run_dir_real = os.path.realpath(mode_run_dir)
+    try:
+        records, _ = engine_dispatch._journal_read(mode_run_dir_real)
+        if engine_dispatch._journal_state(records).get("folded") is not None:
+            return _stamp_mode_run_dir(_all_legs_failed("run-dir-reused"), mode_run_dir_real)
+    except OSError:
+        pass
+    claude_mode = mode if engine == "claude" else None
+    order_id = "conformance-probe:%s:%s:%s" % (engine, mode, order_suffix)
+    deadline = time.monotonic() + timeout + BOUND_PAD_SECONDS
+    terminal, bound_exceeded = {"ok": False, "terminal": False, "attempts": 0}, False
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            dispatch_kw = {
+                "seat": seat, "prompt_path": prompt_path, "repo_root": repo_real,
+                "run_dir": mode_run_dir, "max_wait": min(SLICE_MAX_WAIT, int(remaining)),
+                "order_id": order_id,
+                "expected_result_kind": "verdicts", "timeout": timeout, "run_engine": run_engine,
+            }
+            if claude_mode is not None:
+                dispatch_kw["claude_mode"] = claude_mode
+            if build_view is not None:
+                dispatch_kw["build_view"] = build_view
+            terminal = engine_dispatch.dispatch_review(**dispatch_kw)
+        except Exception as exc:
+            terminal = {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                        "detail": "internal-%s" % type(exc).__name__,
+                        "attempts": 0, "forfeited": False, "runDir": mode_run_dir_real}
+            break
+        if terminal.get("terminal"):
+            break
+    if not terminal.get("terminal"):
+        bound_exceeded = True
+        try:
+            engine_dispatch.dispatch_abandon(mode_run_dir)
+        except Exception:
+            pass
+        terminal = dict(terminal, terminal=True, ok=False)
+    records, _ = engine_dispatch._journal_read(mode_run_dir_real)
+    legs = _grade_legs(terminal, engine_dispatch._journal_state(records), bound_exceeded)
+    return _stamp_mode_run_dir(legs, mode_run_dir_real)
 
 def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, build_view=None,
           wave=None):
@@ -261,64 +363,33 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
             run_dir = os.path.join(parent, "run")
         except OSError as exc:
             return _refuse(engine, "run-dir-setup-failed:%s" % type(exc).__name__, repo_real, seat=seat)
-    run_dir_real = os.path.realpath(run_dir)
-    try:
-        records, _ = engine_dispatch._journal_read(run_dir_real)
-        if engine_dispatch._journal_state(records).get("folded") is not None:
-            return _refuse(engine, "run-dir-reused", repo_real, seat=seat)
-    except OSError:
-        pass
+    parent_run_dir = os.path.realpath(run_dir)
     if run_dir_given:
         prompt_path = os.path.join(
-            os.path.dirname(run_dir_real),
-            os.path.basename(run_dir_real) + ".probe-prompt.md",
+            os.path.dirname(parent_run_dir),
+            os.path.basename(parent_run_dir) + ".probe-prompt.md",
         )
     else:
-        prompt_path = os.path.join(os.path.dirname(run_dir_real), "probe-prompt.md")
+        prompt_path = os.path.join(os.path.dirname(parent_run_dir), "probe-prompt.md")
     try:
         _write_probe_prompt(prompt_path, repo_real)
     except OSError:
         return _refuse(engine, "prompt-write-failed", repo_real, seat=seat)
     channel = engine_result_channel.channel_for(engine)
-    order_id = "conformance-probe:%s:%s" % (engine, uuid.uuid4().hex)
-    deadline = time.monotonic() + timeout + BOUND_PAD_SECONDS
-    terminal, bound_exceeded = {"ok": False, "terminal": False, "attempts": 0}, False
-    while time.monotonic() < deadline:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        try:
-            dispatch_kw = {
-                "seat": seat, "prompt_path": prompt_path, "repo_root": repo_real,
-                "run_dir": run_dir, "max_wait": min(SLICE_MAX_WAIT, int(remaining)),
-                "order_id": order_id,
-                "expected_result_kind": "verdicts", "timeout": timeout, "run_engine": run_engine,
-            }
-            if build_view is not None:
-                dispatch_kw["build_view"] = build_view
-            terminal = engine_dispatch.dispatch_review(**dispatch_kw)
-        except Exception as exc:
-            terminal = {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                        "detail": "internal-%s" % type(exc).__name__,
-                        "attempts": 0, "forfeited": False, "runDir": run_dir_real}
-            break
-        if terminal.get("terminal"):
-            break
-    if not terminal.get("terminal"):
-        bound_exceeded = True
-        try:
-            engine_dispatch.dispatch_abandon(run_dir)
-        except Exception:
-            pass
-        terminal = dict(terminal, terminal=True, ok=False)
-    records, _ = engine_dispatch._journal_read(run_dir_real)
-    legs = _grade_legs(terminal, engine_dispatch._journal_state(records), bound_exceeded)
+    order_suffix = uuid.uuid4().hex
+    modes = _modes_for_engine(engine)
+    mode_legs = {}
+    for mode in modes:
+        mode_legs[mode] = _probe_one_mode(
+            engine, mode, seat, repo_real, parent_run_dir, prompt_path, timeout,
+            run_engine, build_view, order_suffix)
     wall = time.monotonic() - t0
     dep_roles, dep_lanes = _dependent_from_calibration(
         preflight_probe.dispatch_calibration(cwd=repo_real), engine)
     payload = _scrub_obj(_payload(
         engine, channel, seat, repo_real, started_at, _utc_now_iso(), round(wall, 1),
-        run_dir_real, legs, dep_roles, dep_lanes, wave=wave))
+        parent_run_dir, mode_legs, modes, dep_roles, dep_lanes, wave=wave))
+    legs = payload["legs"]
     all_ok = payload["ok"]
     return payload, (0 if all_ok else 1), (_stderr_failure_line(engine, legs, dep_lanes) if not all_ok else None)
 
@@ -371,12 +442,35 @@ def _validate_probe_record(raw, path_hint=""):
         return "probe-result-malformed:%s" % path_hint
     if not isinstance(raw.get("runDir"), str):
         return "probe-result-malformed:%s" % path_hint
+    mode_legs = raw.get("modeLegs")
+    if not isinstance(mode_legs, dict) or not mode_legs:
+        return "probe-result-malformed:%s" % path_hint
+    probed_modes = raw.get("probedModes")
+    if not isinstance(probed_modes, list):
+        return "probe-result-malformed:%s" % path_hint
+    if set(probed_modes) != set(mode_legs.keys()):
+        return "probe-result-malformed:%s" % path_hint
+    expected_modes = _modes_for_engine(eng)
+    if tuple(probed_modes) != expected_modes:
+        return "probe-result-malformed:%s" % path_hint
+    for _mode, mode_entry in mode_legs.items():
+        if not isinstance(mode_entry, dict):
+            return "probe-result-malformed:%s" % path_hint
+        if set(mode_entry.keys()) != set(_LEG_NAMES):
+            return "probe-result-malformed:%s" % path_hint
+        for name in _LEG_NAMES:
+            leg = mode_entry.get(name)
+            if not isinstance(leg, dict) or not isinstance(leg.get("ok"), bool):
+                return "probe-result-malformed:%s" % path_hint
     legs = raw.get("legs")
     if not isinstance(legs, dict):
         return "probe-result-malformed:%s" % path_hint
+    derived_legs = _derive_flat_legs(mode_legs)
     for name in _LEG_NAMES:
         leg = legs.get(name)
         if not isinstance(leg, dict) or not isinstance(leg.get("ok"), bool):
+            return "probe-result-malformed:%s" % path_hint
+        if leg.get("ok") != derived_legs[name]["ok"]:
             return "probe-result-malformed:%s" % path_hint
     computed_ok = all(legs[n]["ok"] for n in _LEG_NAMES)
     computed_failed = _failed_leg_names(legs)

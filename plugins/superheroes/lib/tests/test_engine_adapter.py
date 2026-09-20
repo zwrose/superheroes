@@ -809,16 +809,55 @@ def test_claude_launch_id_measured_acknowledgement():
     assert EA.claude_launch_id("prefix backgrounded · a1b2c3d4\n") is None
 
 
+def test_claude_launch_id_skips_leading_non_matching_lines():
+    stdout = (
+        "Starting background session...\n"
+        "Tip: use /tasks to list sessions\n"
+        "backgrounded · a1b2c3d4\n"
+        "More help text follows\n"
+    )
+    assert EA.claude_launch_id(stdout) == "a1b2c3d4"
+
+
+def test_claude_launch_id_none_and_non_string():
+    assert EA.claude_launch_id(None) is None
+    assert EA.claude_launch_id(7) is None
+
+
 def test_jsonl_dict_line_readers_skip_garbage():
     stream = "not json\n" + json.dumps(["not", "a", "dict"]) + "\n" + json.dumps({
         "type": "assistant",
         "message": {"content": []},
     }) + "\n"
-    claude_objs = list(EA._iter_claude_event_lines(stream))
-    codex_objs = list(EA._iter_codex_event_lines(stream))
-    assert len(claude_objs) == 1
-    assert len(codex_objs) == 1
-    assert claude_objs[0]["type"] == "assistant"
+    objs = list(EA._iter_jsonl_dict_lines(stream))
+    assert len(objs) == 1
+    assert objs[0]["type"] == "assistant"
+
+
+def test_read_transcript_rows_capped_tail_preserves_result(tmp_path):
+    result_row = {"type": "assistant", "message": {"content": [{"type": "tool_use"}]}}
+    filler = "x" * (EA.ENGINE_OUTPUT_MAX_BYTES - 64)
+    path = tmp_path / "transcript.jsonl"
+    path.write_bytes(
+        (filler + "\n").encode("utf-8")
+        + (json.dumps(result_row) + "\n").encode("utf-8")
+    )
+    rows = EA._read_transcript_rows(str(path))
+    assert rows is not None
+    assert rows[-1] == result_row
+
+
+def test_read_transcript_rows_invalid_utf8_degrades_not_raises(tmp_path):
+    valid = {"type": "user", "toolEndsTurn": True}
+    path = tmp_path / "bad-utf8.jsonl"
+    path.write_bytes(b"\xff\xfe" + json.dumps(valid).encode("utf-8") + b"\n")
+    rows = EA._read_transcript_rows(str(path))
+    assert rows is not None
+    assert valid in rows
+
+
+def test_read_transcript_rows_missing_file_returns_none(tmp_path):
+    assert EA._read_transcript_rows(str(tmp_path / "absent.jsonl")) is None
 
 
 def test_registered_engine_models_detail_claude_lists_every_id():
