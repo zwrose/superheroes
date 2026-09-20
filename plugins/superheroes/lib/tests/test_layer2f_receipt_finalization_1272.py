@@ -242,6 +242,10 @@ _DRIFT_FIXTURES = [
 ]
 
 
+_MERGED_PROOF_PATH = "rep.py"
+_MERGED_MEMBER_PATH = "m.py"
+
+
 def _drift_finding_and_receipt(head, binding):
     finding = {
         "id": "F-drift",
@@ -256,6 +260,59 @@ def _drift_finding_and_receipt(head, binding):
     elif binding != "fix-content-missing":
         receipt["fixContentDigest"] = _FIX_DIGEST
     return finding, receipt
+
+
+def _adapt_drift_blobs_for_path(payload, proof_path):
+    if payload is None or isinstance(payload, str):
+        return payload
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    files = out.get("files")
+    if isinstance(files, dict) and "f.py" in files:
+        out["files"] = {proof_path: files["f.py"]}
+    reads = out.get("reads")
+    if isinstance(reads, list):
+        out["reads"] = [
+            dict(row, path=proof_path) if isinstance(row, dict) and row.get("path") == "f.py" else row
+            for row in reads
+        ]
+    fix_commits = out.get("fixCommits")
+    if isinstance(fix_commits, list):
+        out["fixCommits"] = [
+            dict(row, path=proof_path) if isinstance(row, dict) and row.get("path") == "f.py" else row
+            for row in fix_commits
+        ]
+    return out
+
+
+def _merged_drift_finding_and_receipt(head, binding):
+    rep_key = "rep-key"
+    member_key = "member-key"
+    rep = {
+        "id": "F-rep",
+        "file": _MERGED_PROOF_PATH,
+        "line": 1,
+        "severity": "Important",
+        "disposition": "fixed",
+        SC.FINDING_KEY_FIELD: rep_key,
+    }
+    member = {
+        "id": "F-member",
+        "file": _MERGED_MEMBER_PATH,
+        "line": 5,
+        "severity": "Important",
+        "disposition": "fixed",
+        SC.MERGED_INTO_FIELD: rep_key,
+        SC.FINDING_KEY_FIELD: member_key,
+    }
+    receipt = {"headSha": head, "verifyResult": "pass"}
+    if binding == "fix-content-reverted":
+        receipt["fixContentDigest"] = "0" * 64
+    elif binding != "fix-content-missing":
+        receipt["fixContentDigest"] = _FIX_DIGEST
+    by_key = {rep_key: rep, member_key: member}
+    return member, receipt, by_key
 
 
 # --- end-to-end re-bind through disk -------------------------------------------------
@@ -285,7 +342,6 @@ def test_fixed_receipt_rebound_certifies_from_disk(tmp_path):
     head2 = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
     ).stdout.strip()
-    head2_blobs, head2_digest = _blobs_for_bytes(head2, "f.py", _FIX_BYTES)
 
     state = RD.new_state(_cfg())
     state["config"]["baseGuard"] = RC.BASE_GUARD_CHECKED
@@ -322,7 +378,7 @@ def test_fixed_receipt_rebound_certifies_from_disk(tmp_path):
     rebound = _ledger_by_key(reloaded)[key]["dispositionReceipt"]
     assert rebound["headSha"] == head2
     assert rebound["verifyResult"] == "pass"
-    assert rebound.get("fixContentDigest") == head2_digest
+    assert rebound.get("fixContentDigest") == _FIX_DIGEST
 
     with open(os.path.join(session_dir, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         round_receipt = json.load(fh)
@@ -537,12 +593,20 @@ def test_driver_fix_content_binding_classes(tmp_path, binding):
 # --- drift detector ------------------------------------------------------------------
 
 @pytest.mark.parametrize("binding,_writer", _DRIFT_FIXTURES)
-def test_fix_content_classifier_drift_detector(tmp_path, binding, _writer):
+@pytest.mark.parametrize("merged_chain", [False, True], ids=["direct", "mergedInto"])
+def test_fix_content_classifier_drift_detector(tmp_path, binding, _writer, merged_chain):
     head = "d" * 40
-    finding, receipt = _drift_finding_and_receipt(head, binding)
-    session_dir = str(tmp_path / ("drift-" + binding))
+    by_key = None
+    if merged_chain:
+        finding, receipt, by_key = _merged_drift_finding_and_receipt(head, binding)
+        proof_path = _MERGED_PROOF_PATH
+    else:
+        finding, receipt = _drift_finding_and_receipt(head, binding)
+        proof_path = "f.py"
+    session_dir = str(tmp_path / ("drift-" + binding + ("-merged" if merged_chain else "")))
     os.makedirs(session_dir, exist_ok=True)
     payload = _writer(session_dir, head)
+    payload = _adapt_drift_blobs_for_path(payload, proof_path)
     if payload is not None:
         if isinstance(payload, str):
             with open(os.path.join(session_dir, RD.HEAD_CONTENT_BLOBS_FILE), "w", encoding="utf-8") as fh:
@@ -558,8 +622,23 @@ def test_fix_content_classifier_drift_detector(tmp_path, binding, _writer):
         json.dump({"sessionId": "s", "headSha": head, "baseGuard": RC.BASE_GUARD_CHECKED}, fh)
     ctx, err = RC._load_context(session_dir)
     assert err is None
-    assert _driver_binding_failure(session_dir, finding, receipt, head) == binding
-    assert _cert_binding_failure(ctx, finding, receipt) == binding
+    assert _driver_binding_failure(session_dir, finding, receipt, head, by_key=by_key) == binding
+    assert _cert_binding_failure(ctx, finding, receipt, by_key=by_key) == binding
+
+
+def test_fix_content_classifier_two_homed_disclosed_residual():
+    """KNOWN, DISCLOSED RESIDUAL — fix-content binding classifier lives in both modules.
+
+    round_certification must not import round_driver (#1271 C12), and this layer's ratified
+    scope does not include extracting a third shared module. Parity — including the mergedInto
+    proof-path arm — is guarded by test_fix_content_classifier_drift_detector.
+    """
+    assert callable(RD._fix_still_present_at_head)
+    assert callable(RC._fix_still_present_at_head)
+    assert callable(RD._fix_content_proof_path)
+    assert callable(RC._fix_content_proof_path)
+    assert callable(RD._resolve_merged_into_entry)
+    assert callable(RC._resolve_merged_into_entry)
 
 
 # --- partial backfill retired --------------------------------------------------------

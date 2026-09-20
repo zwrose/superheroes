@@ -1649,7 +1649,12 @@ def _read_head_content_blobs_for_validation(session_dir):
 
 
 def _fix_still_present_at_head(session_dir, finding, receipt, certified_head, by_key=None):
-    """Driver-side fix-content re-validation — binding_failure classes match certification."""
+    """Driver-side fix-content re-validation — binding_failure classes match certification.
+
+    KNOWN, DISCLOSED RESIDUAL (#1272 layer 2f): this classifier is hand-maintained beside
+    ``round_certification._fix_still_present_at_head`` because the writer must not import the
+    driver (#1271 C12). Parity is guarded by ``test_fix_content_classifier_drift_detector``.
+    """
     path = _fix_content_proof_path(finding, by_key)
     if not isinstance(path, str) or not path:
         return "fix-content-missing"
@@ -1741,7 +1746,6 @@ def _finalize_fixed_disposition_receipts(state, session_dir, config):
         head_unchanged = (
             isinstance(existing_head, str) and existing_head and existing_head == certified_head
         )
-        file_path = _fix_content_proof_path(entry, by_key)
         probe_receipt = dict(original_receipt)
         if not head_unchanged:
             probe_receipt["headSha"] = certified_head
@@ -1771,10 +1775,6 @@ def _finalize_fixed_disposition_receipts(state, session_dir, config):
         updated_receipt = dict(original_receipt)
         if not head_unchanged:
             updated_receipt["headSha"] = certified_head
-        if session_dir and isinstance(file_path, str) and file_path:
-            updated_receipt.update(
-                _fix_receipt_content_fields(session_dir, certified_head, file_path)
-            )
         verify_result = _verify_result_for_disposition(
             state, state.get("round"), certified_head
         )
