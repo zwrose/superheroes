@@ -14162,6 +14162,11 @@ def _reviewer_claude_seat():
     return {"vendor": "claude", "model": cell[0], "effort": cell[1], "role": "reviewer"}
 
 
+def _implementer_claude_seat():
+    cell = MR.matrix_config("implementer", "claude")
+    return {"vendor": "claude", "model": cell[0], "effort": cell[1], "role": _WRITE_ROLE}
+
+
 def _reviewer_deep_claude_seat():
     cell = MR.matrix_config("reviewer-deep", "claude")
     return {"vendor": "claude", "model": cell[0], "effort": cell[1], "role": "reviewer-deep"}
@@ -16073,6 +16078,95 @@ def _journal_claude_stdout_run_for_engine_files(tmp_path, run_dir, prompt_path, 
     return argv
 
 
+def _journal_claude_stdout_write_run_for_engine_files(tmp_path, run_dir, prompt_path, monkeypatch):
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _implementer_claude_seat()
+    argv = _claude_argv_for_run(seat, "build", run_dir)
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "claude", list(argv), ED.RUN_KIND_WRITE,
+    )
+    assert native_err is None, native_err
+    record = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "claude",
+        "roleKind": "build", "orderId": "completion-producer-write",
+        "argv": argv, "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "configDir": cfg,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    if native_schema_path is not None:
+        record["nativeSchemaPath"] = native_schema_path
+    ED._journal_append(run_dir, record)
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    return argv
+
+
+def _large_claude_result_stream(result_payload, *, min_result_line_bytes=20000):
+    """Build a claude stdout stream whose final result JSON line meets min size."""
+    pad_target = result_payload
+    pad_key = "report"
+    if isinstance(result_payload, dict) and "result" in result_payload:
+        branch = result_payload["result"]
+        if isinstance(branch, dict):
+            if branch.get("resultKind") == "verdicts" and branch.get("verdicts"):
+                pad_target = branch["verdicts"][0]
+                pad_key = "reason"
+            elif branch.get("resultKind") == "findings" and branch.get("findings"):
+                pad_target = branch["findings"][0]
+                pad_key = "body"
+            elif "reason" in branch:
+                pad_target = branch
+                pad_key = "reason"
+            else:
+                pad_target = branch
+                pad_key = "report"
+    elif isinstance(pad_target, dict) and "report" in pad_target:
+        pad_key = "report"
+    extra = ""
+    while True:
+        trial_payload = json.loads(json.dumps(result_payload))
+        if isinstance(trial_payload, dict) and "result" in trial_payload:
+            branch = dict(trial_payload["result"])
+            branch[pad_key] = (branch.get(pad_key) or "") + extra
+            trial_payload["result"] = branch
+        elif isinstance(trial_payload, dict):
+            trial_payload[pad_key] = (trial_payload.get(pad_key) or "") + extra
+        line = json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "structured_output": trial_payload,
+            "session_id": "sess-1",
+        }, separators=(",", ":"))
+        line_bytes = len(line.encode("utf-8"))
+        if line_bytes >= min_result_line_bytes:
+            return _claude_event_stream(result=trial_payload), trial_payload, line_bytes
+        extra += "x" * 500
+
+
+def _stdout_last_line_byte_length(stdout_path):
+    with open(stdout_path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        end = fh.tell()
+        line_end = end
+        while line_end > 0:
+            fh.seek(line_end - 1)
+            if fh.read(1) in b"\r\n \t":
+                line_end -= 1
+            else:
+                break
+        pos = line_end
+        while pos > 0:
+            fh.seek(pos - 1)
+            if fh.read(1) == b"\n":
+                return line_end - pos
+            pos -= 1
+        return line_end
+
+
 def test_completion_producer_argv_delivery_records_stamp(tmp_path, monkeypatch):
     native_write = _native_write_result_json()
     payload = json.loads(native_write)
@@ -16169,6 +16263,177 @@ def test_completion_producer_stdout_delivery_fast_exit_records_stamp(tmp_path, m
     )
     _install_fake_claude(monkeypatch, tmp_path, script)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 60)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, structured)
+
+
+def test_completion_producer_stdout_large_result_lingering_child_admits(tmp_path, monkeypatch):
+    """axis: large stdout result line — stamp before exit even when child lingers."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream, structured, result_line_bytes = _large_claude_result_stream(structured)
+    assert result_line_bytes >= 20000
+    script = (
+        "import sys, time\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(0.6)\n"
+        % stream
+    )
+    run_dir = str(tmp_path / "stdout-large-linger")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert _stdout_last_line_byte_length(stdout_path) >= 20000
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert ended["timedOut"] is False
+    assert ended["stdoutResult"] == "materialized"
+    _assert_completion_keys(ended, structured)
+    state = ED._journal_state(records)
+    _, detail = ED._load_native_result_json(run_dir, 1, state["opened"])
+    assert detail != ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED
+    assert detail is None
+
+
+def test_completion_producer_stdout_large_result_immediate_exit_admits(tmp_path, monkeypatch):
+    """axis: large stdout result line — stamp on immediate exit."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream, structured, result_line_bytes = _large_claude_result_stream(structured)
+    assert result_line_bytes >= 20000
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir = str(tmp_path / "stdout-large-fast")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert _stdout_last_line_byte_length(stdout_path) >= 20000
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert ended["timedOut"] is False
+    assert ended["stdoutResult"] == "materialized"
+    _assert_completion_keys(ended, structured)
+    state = ED._journal_state(records)
+    _, detail = ED._load_native_result_json(run_dir, 1, state["opened"])
+    assert detail != ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED
+    assert detail is None
+
+
+def test_completion_producer_stdout_large_result_before_cap_admits_after_timeout(
+        tmp_path, monkeypatch,
+):
+    """axis: large stdout write result stamped before cap admits after timeout."""
+    payload = json.loads(_native_write_result_json())
+    stream, payload, result_line_bytes = _large_claude_result_stream(payload)
+    assert result_line_bytes >= 20000
+    script = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.flush()\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+        % stream
+    )
+    run_dir = str(tmp_path / "stdout-large-timeout")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_write_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    real_observe = ED._observe_stdout_completion
+    stamp_seen = {"flag": False}
+    attempt_timeout = 5
+
+    def _observe_with_stamp_flag(obs_state, stdout_path, *, terminal=False):
+        real_observe(obs_state, stdout_path, terminal=terminal)
+        if obs_state.get("stamp") is not None:
+            stamp_seen["flag"] = True
+
+    class _TimeProxy:
+        def __init__(self, real):
+            self._real = real
+
+        def monotonic(self):
+            base = self._real.monotonic()
+            if stamp_seen["flag"]:
+                return base + float(attempt_timeout) + 10.0
+            return base
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    monkeypatch.setattr(ED, "_observe_stdout_completion", _observe_with_stamp_flag)
+    monkeypatch.setattr(ED, "time", _TimeProxy(time))
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, attempt_timeout,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert _stdout_last_line_byte_length(stdout_path) >= 20000
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert ended["timedOut"] is True
+    _assert_completion_keys(ended, payload)
+    state = ED._journal_state(records)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("admittedAfterTimeout") is True
+
+
+def test_completion_producer_stdout_trailing_non_result_line_stamps_at_terminal(
+        tmp_path, monkeypatch,
+):
+    """axis: terminal observation stamps when trailing line hides the result from pre-check."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream = _claude_event_stream(result=structured)
+    script = (
+        "import sys\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.write('warning: done\\n')\n"
+        % stream
+    )
+    run_dir = str(tmp_path / "stdout-trailing-line")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
     ED._run_engine_files(
         run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30,

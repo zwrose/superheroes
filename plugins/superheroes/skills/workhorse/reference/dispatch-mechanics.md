@@ -253,8 +253,10 @@ size cap that decodes as JSON (`native-result-missing`, `native-result-oversized
 (`native-result-report-blank`); and an entry already at the result path when an attempt would spawn
 refuses that attempt (`native-result-path-occupied`); every native attempt requires a usable
 completion stamp (`result-completion-unrecorded` when missing or unusable, and when a deadline is
-present its epoch must match the stamp's); a timed-out attempt additionally records that deadline on
-the same clock (`timeout-deadline-unrecorded` when absent), then `result-completion-after-deadline`
+present its epoch must match the stamp's); every attempt-ended record also carries the wall-cap
+deadline on the same clock (`deadlineMono`/`deadlineEpoch` stamped from `start + timeout` at attempt
+end), and a timed-out attempt refuses when those deadline fields are missing or unusable
+(`timeout-deadline-unrecorded`), then `result-completion-after-deadline`
 when completion is strictly after the cap — exactly at the cap admits,
 `result-completion-payload-mismatch` when the admitted payload is not the one the stamp was taken
 over). Cursor adds attempt-prompt refusals:
@@ -278,9 +280,10 @@ stamp the first moment the result file parses as complete JSON; **claude print**
 poll loop observes the terminal `{"type":"result"}` event on stdout — on natural exit, timeout,
 and poll-loop breaks, all before termination — and later materialization to the result path is not
 the completion time; **claude background** stamps the supervisor's record of the result's arrival
-in the transcript rows; the in-process seam stamps its own capture. On a timed-out attempt the same
-record also carries `deadlineMono` and `deadlineEpoch` (the wall cap on that clock; `timeoutAt`
-remains for display only). Admission compares only those stamped fields in one loader every native
+in the transcript rows; the in-process seam stamps its own capture. Every attempt-ended record also
+carries `deadlineMono` and `deadlineEpoch` (the wall cap on that clock, stamped unconditionally at
+attempt end; `timeoutAt` remains for display only on timed-out attempts). Admission compares only
+those stamped fields in one loader every native
 path passes through: it recomputes the payload digest and requires it to match the recorded one, so
 a result rewritten after its stamp cannot be admitted on the earlier stamp. For claude print the
 completion instant is the runner's observation, bounded by the attempt poll interval (0.2 s) — a

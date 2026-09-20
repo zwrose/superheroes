@@ -997,6 +997,16 @@ def test_completion_window_bad_payload_sha256_forfeits_mismatch(bad_payload):
     )
 
 
+def test_completion_window_valid_different_digest_forfeits_payload_mismatch():
+    ended = _completion_record(10.0, digest=_DIGEST_X)
+    digest_b = ERC.payload_digest(b"y")
+    assert digest_b is not None
+    assert digest_b != _DIGEST_X
+    assert ERC.completion_window(ended, digest_b) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_PAYLOAD_MISMATCH,
+    )
+
+
 def test_completion_window_nested_complete_at_forfeits_unrecorded():
     ended = {
         ERC.FIELD_RESULT_COMPLETE_AT: {"a": 1},

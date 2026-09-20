@@ -3719,22 +3719,50 @@ def _apply_completion_stamp(ended_record, stamp):
         ended_record.update(stamp)
 
 
-def _stdout_tail_has_result_event(stdout_path):
-    """Return True when the last stdout line is a complete result event. Never raises."""
+_STDOUT_LINE_SCAN_CHUNK = 65536
+
+
+def _stdout_last_line_is_result_event(stdout_path):
+    """Return True when the last non-blank stdout line is a complete result event. Never raises."""
+    _ws = b"\r\n \t"
     try:
         with open(stdout_path, "rb") as fh:
             fh.seek(0, os.SEEK_END)
-            end = fh.tell()
-            if end == 0:
+            file_size = fh.tell()
+            if file_size == 0:
                 return False
-            chunk = min(end, 8192)
-            fh.seek(end - chunk)
-            tail = fh.read().decode("utf-8", errors="ignore")
-        lines = [ln for ln in tail.splitlines() if ln.strip()]
-        if not lines:
-            return False
-        last = json.loads(lines[-1])
-        return isinstance(last, dict) and last.get("type") == "result"
+            line_end = file_size
+            while line_end > 0:
+                fh.seek(line_end - 1)
+                if fh.read(1) in _ws:
+                    line_end -= 1
+                else:
+                    break
+            if line_end == 0:
+                return False
+            bound = max(0, file_size - MAX_STDOUT_CAPTURE)
+            line_start = None
+            pos = line_end
+            while pos > bound:
+                scan_from = max(bound, pos - _STDOUT_LINE_SCAN_CHUNK)
+                fh.seek(scan_from)
+                chunk = fh.read(pos - scan_from)
+                idx = chunk.rfind(b"\n")
+                if idx >= 0:
+                    line_start = scan_from + idx + 1
+                    break
+                pos = scan_from
+            if line_start is None:
+                if bound == 0:
+                    line_start = 0
+                else:
+                    return False
+            fh.seek(line_start)
+            line_bytes = fh.read(line_end - line_start)
+            if not line_bytes.strip():
+                return False
+            last = json.loads(line_bytes.decode("utf-8", errors="ignore"))
+            return isinstance(last, dict) and last.get("type") == "result"
     except Exception:
         return False
 
@@ -3742,10 +3770,10 @@ def _stdout_tail_has_result_event(stdout_path):
 def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
     """Stamp stdout delivery completion on first valid observation. Never raises.
 
-    Observation error is bounded by _ATTEMPT_POLL_INTERVAL (0.2s): a result completing
-    inside the final poll period before the cap may be stamped just after the deadline.
-    Size unchanged since the prior call is a cheap guard against re-parsing, not a
-    completion test."""
+    Non-terminal polls skip unchanged stdout and require the last line to be a complete
+    result event before parsing. Terminal observation is unconditional except for an
+    existing stamp or missing/empty stdout: it always parses capped stdout so a result
+    event is stamped even when size is unchanged since the prior poll."""
     if obs_state.get("stamp") is not None:
         return
     try:
@@ -3755,11 +3783,14 @@ def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
     if size == 0:
         return
     prev = obs_state.get("prev_size", 0)
-    if size == prev:
-        return
-    obs_state["prev_size"] = size
-    if not terminal and not _stdout_tail_has_result_event(stdout_path):
-        return
+    if not terminal:
+        if size == prev:
+            return
+        obs_state["prev_size"] = size
+        if not _stdout_last_line_is_result_event(stdout_path):
+            return
+    else:
+        obs_state["prev_size"] = size
     try:
         stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
     except Exception:
