@@ -21,6 +21,7 @@ not listed in the table below is the same as the **full** lane.
 | Review before handback | full panel, fix loop | one independent cross-vendor reviewer | one independent cross-vendor reviewer, in-session |
 | Test-pilot | where there is an app | where there is an app | no — *if you think you need it, it isn't micro* |
 | Preflight | yes | yes | no |
+| Order lint before dispatch | every implementer and review-fix order: the deterministic half always, the semantic half where the host vendor has a mechanical cell (else dispatched with semantic-lint-unavailable:<vendor> disclosed); the driver lints each fixer order | — (no orders) | — |
 | Definition-of-done table | yes | yes | no — nothing to disposition against |
 | Authorized by | the route | the route | the owner, per change |
 | Size (non-test lines — see below) | — | ~100–400 | ~100 or fewer |
@@ -100,7 +101,8 @@ micro review** — the control that makes single-seat review trustworthy. The pr
 come back **engaged**. A probe that returns **not engaged** — for any reason — means **that
 review did not happen:** **re-dispatch once**, and if it is still not engaged, **resolve
 upward to the full lane or park.** A not-engaged probe is **never** a pass, and exiting
-zero is not evidence of engagement. The **investigation-record floor** (an empty external
+zero is not evidence of engagement. For a single-seat review the probe's seat key is
+`code-reviewer`. The **investigation-record floor** (an empty external
 review seat must prove it actually investigated, or forfeit as vacuous) already applies
 automatically to **every external review seat**, single-seat lanes included; it is a
 standing safeguard, not something these lanes add. What single-reviewer lanes **add** is
@@ -425,7 +427,10 @@ named in its issue. A guard with no named failure is speculation dressed as auto
 
 This section holds the standing rules about what machinery this band builds, where each rule
 lives, and what a review may ask a build to add. Read it before you propose new standing
-machinery or answer a finding that does.
+machinery or answer a finding that does. Order lint's homes: the deterministic half
+`lib/order_lint.py`, the semantic half's prompt `rubric/orders/order-lint-semantic.md`, the
+dispatch step in the workhorse charter §7, the fixer emission in
+`skills/review-code/reference/auto-fix-loop.md`.
 
 ### Guards do not get guards
 

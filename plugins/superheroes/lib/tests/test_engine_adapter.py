@@ -168,29 +168,35 @@ def test_build_argv_codex_invalid_engine_model_pin_refuses_unregistered():
     assert "gpt-5.6-sol" in res["detail"]
 
 
-def test_build_argv_cursor_review_plan_mode():
-    argv = EA.build_argv(_seat("cursor", "composer-2.5", None), "review", {"cwd": "/wt"})
-    assert argv[0] == "cursor-agent"
-    assert "--mode" in argv and argv[argv.index("--mode") + 1] == "plan"
-    # cursor-agent 2026.06.26: --model (not -m); -p (headless) + --trust (clear the trust gate) required.
-    assert "--model" in argv and argv[argv.index("--model") + 1] == "composer-2.5"
-    assert "-p" in argv and "--trust" in argv
-    assert "-m" not in argv                  # the old short flag is rejected by this cursor-agent
+@pytest.mark.parametrize("role_kind", ["review", "build"])
+def test_cursor_argv_shape_both_roles(role_kind):
+    argv = EA.build_argv(_seat("cursor", "composer-2.5", None), role_kind, {"cwd": "/wt"})
+    assert argv == [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--trust", "-f",
+        "--sandbox", "enabled", "--output-format", "stream-json",
+    ]
 
 
-def test_build_argv_cursor_build_force_write():
-    argv = EA.build_argv(_seat("cursor", "composer-2.5", None), "build", {"cwd": "/wt"})
-    assert argv[0] == "cursor-agent"
-    assert "-f" in argv                      # workspace-write / force
-    assert "-p" in argv and "--trust" in argv
-    assert argv[argv.index("--model") + 1] == "composer-2.5"
+def test_codex_argv_unchanged_by_delivery_table():
+    review_argv = EA.build_argv(_seat("codex", "gpt-5.6-sol", "high"), "review", {"cwd": "/wt"})
+    assert review_argv == [
+        "codex", "exec", "--sandbox", "read-only", "-m", "gpt-5.6-sol",
+        "-c", "model_reasoning_effort=high", "-C", "/wt", "-",
+    ]
+    build_argv = EA.build_argv(_seat("codex", "gpt-5.6-sol", "high"), "build", {"cwd": "/wt"})
+    assert build_argv == [
+        "codex", "exec", "--sandbox", "workspace-write", "-m", "gpt-5.6-sol",
+        "-c", "model_reasoning_effort=high", "-C", "/wt", "-",
+    ]
 
 
 def test_build_argv_cli(capsys):
     rc = EA.main(["build-argv", "--seat", _seat_json("codex", "gpt-5.6-terra", "high", "implementer"),
                   "--run-kind", "build", "--cwd", "/wt"])
     out = json.loads(capsys.readouterr().out)
-    assert rc == 0 and out[0] == "codex" and "workspace-write" in out
+    assert rc == 0
+    assert isinstance(out, list)
+    assert out[0] == "codex" and "workspace-write" in out
     assert out[out.index("-m") + 1] == "gpt-5.6-terra"
 
 
@@ -582,12 +588,13 @@ def test_build_argv_result_untokenizable(monkeypatch):
     assert got["reason"] == "untokenizable"
 
 
-def test_unknown_engine_refusal_lists_only_build_argv_vendors():
+def test_unknown_engine_refusal_lists_all_build_argv_vendors():
+    """Claude is now dispatchable — unknown-engine detail must include it (#1273 WO-A)."""
     res = EA.build_argv_result(_seat("openai", None, "high"), "review", {})
     assert res["reason"] == "unknown-engine"
     assert "codex" in res["detail"]
     assert "cursor" in res["detail"]
-    assert "claude" not in res["detail"]
+    assert "claude" in res["detail"]
 
 
 def test_build_argv_result_fail_closed_edges():
@@ -621,11 +628,126 @@ def test_build_argv_result_fail_closed_edges():
     # 15 codex sol + max passes
     r = EA.build_argv_result(_seat("codex", "gpt-5.6-sol", "max"), "review", {})
     assert r["reason"] is None and "model_reasoning_effort=max" in r["argv"]
-    # 16 read vs write roles unchanged
+    # 16 review and build share the same cursor argv shape
     rev = EA.build_argv_result(_seat("cursor", "composer-2.5", None), "review", {})
     bld = EA.build_argv_result(_seat("cursor", "composer-2.5", None), "build", {})
-    assert "--mode" in rev["argv"] and rev["argv"][rev["argv"].index("--mode") + 1] == "plan"
-    assert "-f" in bld["argv"] and "--mode" not in bld["argv"]
+    assert rev["argv"] == bld["argv"]
+    assert "-f" in rev["argv"] and "--sandbox" in rev["argv"]
+    assert "--mode" not in rev["argv"]
+
+
+def test_build_argv_claude_review_exact_shape():
+    argv = EA.build_argv(_seat("claude", "sonnet-5", "high"), "review", {})
+    assert argv == [
+        "claude", "-p", "--model", "sonnet", "--effort", "high",
+        "--output-format", "stream-json", "--verbose", "--restricted",
+    ]
+
+
+def test_build_argv_claude_write_exact_shape():
+    argv = EA.build_argv(_seat("claude", "sonnet-5", "high"), "build", {})
+    assert argv == [
+        "claude", "-p", "--model", "sonnet", "--effort", "high",
+        "--output-format", "stream-json", "--verbose",
+        "--permission-mode", "acceptEdits", "--restricted",
+    ]
+
+
+def test_build_argv_claude_write_omits_allowed_tools():
+    argv = EA.build_argv(_seat("claude", "sonnet-5", "high"), "build", {})
+    assert "--allowedTools" not in argv
+
+
+def test_registered_engine_models_detail_claude_lists_every_id():
+    detail = EA._registered_engine_models_detail("claude")
+    for model_id in EA.model_registry.claude_models():
+        assert model_id in detail
+
+
+def test_build_argv_claude_fail_closed_edges():
+    # 1 seat vendor claude with model None/"" → unregistered-engine-model
+    for model in (None, ""):
+        res = EA.build_argv_result(_seat("claude", model, "high"), "review", {})
+        assert res["reason"] == "unregistered-engine-model"
+        assert "haiku-4.5" in res["detail"]
+    # 2 fable-5 or token fable → fable-unrunnable
+    res = EA.build_argv_result(_seat("claude", "fable-5", "high"), "review", {})
+    assert res["reason"] == "fable-unrunnable"
+    res = EA.build_argv_result(_seat("claude", "fable", "high"), "review", {})
+    assert res["reason"] == "fable-unrunnable"
+    # 3 codex id under claude vendor → unregistered-engine-model
+    res = EA.build_argv_result(_seat("claude", "gpt-5.6-sol", "high"), "review", {})
+    assert res["reason"] == "unregistered-engine-model"
+    # 4 effort None or off-enum → invalid-model-effort with claude enum
+    res = EA.build_argv_result(_seat("claude", "sonnet-5", None), "review", {})
+    assert res["reason"] == "invalid-model-effort"
+    assert "low" in res["detail"] and "xhigh" in res["detail"]
+    res = EA.build_argv_result(_seat("claude", "sonnet-5", "max"), "review", {})
+    assert res["reason"] == "invalid-model-effort"
+    # 5 unknown claude tier in opts → unknown-claude-tier (unchanged)
+    res = EA.build_argv_result(_seat("claude", "sonnet-5", "high"), "review", {"model": "bogus"})
+    assert res["reason"] == "unknown-claude-tier"
+
+
+def _claude_event_stream(tool_names=(), result=None, extra_lines=()):
+    """Build a claude stream-json stdout fixture from measured event shapes."""
+    lines = []
+    for index, name in enumerate(tool_names):
+        lines.append(json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-%d" % index,
+                    "name": name,
+                    "input": {},
+                }],
+            },
+        }))
+    if result is not None:
+        lines.append(json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "structured_output": result,
+            "session_id": "sess-1",
+        }))
+    for line in extra_lines:
+        lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
+def test_claude_tool_calls_fail_closed_edges():
+    # 6 empty stdout → None
+    assert EA.claude_tool_calls("") is None
+    assert EA.claude_tool_calls(None) is None
+    # only StructuredOutput → 0
+    stream = _claude_event_stream(tool_names=["StructuredOutput"])
+    assert EA.claude_tool_calls(stream) == 0
+    # 2 Read + 1 StructuredOutput → 2
+    stream = _claude_event_stream(tool_names=["Read", "Read", "StructuredOutput"])
+    assert EA.claude_tool_calls(stream) == 2
+    # duplicate id counted once
+    dup = json.dumps({
+        "type": "assistant",
+        "message": {"content": [
+            {"type": "tool_use", "id": "same-id", "name": "Read", "input": {}},
+            {"type": "tool_use", "id": "same-id", "name": "Read", "input": {}},
+        ]},
+    })
+    stream = dup + "\n" + json.dumps({"type": "system", "content": "init"}) + "\n"
+    assert EA.claude_tool_calls(stream) == 1
+
+
+def test_claude_result_envelope_fail_closed_edges():
+    first = json.dumps({"type": "result", "subtype": "success", "structured_output": {"a": 1}})
+    second = json.dumps({"type": "result", "subtype": "success", "structured_output": {"b": 2}})
+    stream = first + "\n" + second + "\n"
+    env = EA.claude_result_envelope(stream)
+    assert env["structured_output"] == {"b": 2}
+    assert EA.claude_result_envelope("") is None
+    partial = first + "\n{\"type\":\"result\",\"subtype\":\n"
+    assert EA.claude_result_envelope(partial) == json.loads(first)
 
 
 def test_build_argv_matches_build_argv_result_argv():
@@ -635,6 +757,8 @@ def test_build_argv_matches_build_argv_result_argv():
         (_seat("cursor", "composer-2.5", "high"), "build", {}),
         (_seat("cursor", "cursor-grok-4.6", "xhigh"), "review", {}),
         (_seat("cursor", "composer-2.5", None), "review", {"model": "opus"}),
+        (_seat("claude", "sonnet-5", "high"), "review", {}),
+        (_seat("claude", "sonnet-5", "high"), "build", {}),
         (_seat("bogus", None, "high"), "review", {}),
     ]
     for seat, role, opts in samples:
@@ -662,8 +786,8 @@ def test_build_argv_cli_empty_effort_normalizes_to_none_for_composer_pin(capsys)
 def test_build_argv_must_not_regress_measured_invariants():
     argv = EA.build_argv(_seat("cursor", "cursor-grok-4.6", "xhigh"), "review", {})
     assert argv == [
-        "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust",
-        "--mode", "plan", "--output-format", "stream-json",
+        "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust", "-f",
+        "--sandbox", "enabled", "--output-format", "stream-json",
     ]
     argv = EA.build_argv(_seat("codex", "gpt-5.6-sol", "xhigh"), "review", {})
     assert argv == [
@@ -673,7 +797,7 @@ def test_build_argv_must_not_regress_measured_invariants():
     argv = EA.build_argv(_seat("cursor", "composer-2.5", None), "build", {})
     assert argv == [
         "cursor-agent", "--model", "composer-2.5", "-p", "--trust", "-f",
-        "--output-format", "stream-json",
+        "--sandbox", "enabled", "--output-format", "stream-json",
     ]
 
 
@@ -782,6 +906,7 @@ def test_build_argv_cli_missing_role_key_refused(capsys):
 
 
 def test_resolve_engine_model_pin_matches_build_argv_result_ladder():
+    riv = EA.resolved_inputs_vocab
     samples = [
         ("codex", "gpt-5.6-sol", "high", {}, "review"),
         ("codex", "gpt-5.6-sol", "high", {"model": "opus"}, "review"),
@@ -797,7 +922,11 @@ def test_resolve_engine_model_pin_matches_build_argv_result_ladder():
         pin, pin_source, refusal, _detail = EA._resolve_engine_model_pin(
             vendor, model, opts.get("model"),
         )
-        assert (resolved_model, source) == (pin, pin_source)
+        assert resolved_model == pin
+        if pin_source == riv.CALLER:
+            assert source == seat.get("modelSource", riv.CALLER)
+        else:
+            assert source == pin_source
         argv_res = EA.build_argv_result(seat, run_kind, opts)
         if refusal is None and argv_res["reason"] is None:
             if vendor == "codex":
@@ -805,6 +934,43 @@ def test_resolve_engine_model_pin_matches_build_argv_result_ladder():
             elif vendor == "cursor" and resolved_model:
                 model_tok = argv_res["argv"][argv_res["argv"].index("--model") + 1]
                 assert model_tok.startswith(resolved_model.split("-")[0]) or resolved_model in model_tok
+
+
+def test_resolve_engine_model_identity_passes_seat_model_source():
+    riv = EA.resolved_inputs_vocab
+    seat = {
+        "vendor": "codex",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "modelSource": riv.SEAT_DEFAULT,
+    }
+    engine_model, source = EA.resolve_engine_model(seat, "review", {})
+    assert engine_model == "gpt-5.6-sol"
+    assert source == riv.SEAT_DEFAULT
+
+
+def test_resolve_engine_model_transformed_pin_is_resolved():
+    riv = EA.resolved_inputs_vocab
+    seat = {"vendor": "cursor", "model": "cursor-grok-4.6-xhigh", "effort": None}
+    engine_model, source = EA.resolve_engine_model(seat, "build", {})
+    assert engine_model == "cursor-grok-4.6"
+    assert source == riv.RESOLVED
+
+
+def test_resolve_engine_model_defaulted_null_cursor_model_is_default():
+    riv = EA.resolved_inputs_vocab
+    seat = {"vendor": "cursor", "model": None, "effort": None}
+    engine_model, source = EA.resolve_engine_model(seat, "build", {})
+    assert engine_model == "composer-2.5"
+    assert source == riv.DEFAULT
+
+
+def test_resolve_engine_model_unknown_vendor_is_declared_none():
+    riv = EA.resolved_inputs_vocab
+    seat = {"vendor": "bogus", "model": None, "effort": "high"}
+    engine_model, source = EA.resolve_engine_model(seat, "review", {})
+    assert engine_model is None
+    assert source == riv.DECLARED_NONE
 
 
 def test_engine_reviewer_stdout_contract_is_stated_in_dispatch_reference():
@@ -1771,6 +1937,82 @@ def test_cursor_tool_calls_skips_garbage_no_raise():
 def test_cursor_tool_calls_empty_returns_none():
     assert EA.cursor_tool_calls("") is None
     assert EA.cursor_tool_calls(None) is None
+
+
+def _cursor_edit_tool_call_lines(path, call_id="tool_edit1"):
+    return [
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"editToolCall": {"args": {"path": path}}},
+        }),
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "completed",
+            "tool_call": {"editToolCall": {"args": {"path": path}}},
+        }),
+    ]
+
+
+def _cursor_shell_tool_call_lines(command, call_id="tool_shell1"):
+    return [
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"shellToolCall": {"args": {"command": command}}},
+        }),
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "completed",
+            "tool_call": {"shellToolCall": {"args": {"command": command}}},
+        }),
+    ]
+
+
+def _cursor_read_tool_call_lines(path, call_id="tool_read1"):
+    return [
+        json.dumps({
+            "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"readToolCall": {"args": {"path": path}}},
+        }),
+    ]
+
+
+def test_cursor_tool_calls_excludes_result_path(tmp_path):
+    result_path = str(tmp_path / "native-result-1.json")
+    write_only = "\n".join(_cursor_edit_tool_call_lines(result_path))
+    assert EA.cursor_tool_calls(write_only, exclude_paths=(result_path,)) == 0
+
+    other_path = str(tmp_path / "other.py")
+    write_plus_read = "\n".join(
+        _cursor_edit_tool_call_lines(result_path, "w1")
+        + _cursor_read_tool_call_lines(other_path, "r1"))
+    assert EA.cursor_tool_calls(write_plus_read, exclude_paths=(result_path,)) == 1
+
+    shell_named = "\n".join(
+        _cursor_shell_tool_call_lines("cat %s" % other_path, "s1"))
+    assert EA.cursor_tool_calls(shell_named, exclude_paths=(result_path,)) == 1
+
+    shell_write = "\n".join(
+        _cursor_shell_tool_call_lines("printf x > %s" % result_path, "s2"))
+    assert EA.cursor_tool_calls(shell_write, exclude_paths=(result_path,)) == 0
+
+    shell_investigate = "\n".join(
+        _cursor_shell_tool_call_lines("ls -la", "s3"))
+    assert EA.cursor_tool_calls(shell_investigate, exclude_paths=(result_path,)) == 1
+
+    shell_list_and_deliver = "\n".join(
+        _cursor_shell_tool_call_lines(
+            "ls -la %s && printf x > %s" % (result_path, result_path), "s4"))
+    assert EA.cursor_tool_calls(shell_list_and_deliver, exclude_paths=(result_path,)) == 0
+
+
+def test_cursor_tool_calls_excludes_late_discovered_result_path(tmp_path):
+    result_path = str(tmp_path / "native-result-1.json")
+    lines = [
+        json.dumps({"type": "tool_call", "call_id": "w1", "subtype": "started"}),
+        json.dumps({
+            "type": "tool_call", "call_id": "w1", "subtype": "completed",
+            "tool_call": {"editToolCall": {"args": {"path": result_path}}},
+        }),
+    ]
+    assert EA.cursor_tool_calls("\n".join(lines), exclude_paths=(result_path,)) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -4021,3 +4263,18 @@ def test_parse_result_review_ruling_valid_id_still_parses():
     assert res["ok"] is True
     assert res["resultKind"] == "ruling"
     assert res["ruling"]["id"] == "f1"
+
+
+@pytest.mark.parametrize(
+    "obj,expected_signal",
+    [
+        ({"ok": True}, EA.WRITE_SIGNAL_OK),
+        ({"ok": False, "signal": EA.WRITE_SIGNAL_PLAN_WRONG}, EA.WRITE_SIGNAL_PLAN_WRONG),
+        ({"ok": False, "signal": "unrecognised"}, EA.WRITE_SIGNAL_NEEDS_CONTEXT),
+    ],
+)
+def test_grade_build_report_obj_signals_read_write_signal_enum(obj, expected_signal):
+    """Every signal _grade_build_report_obj emits is a member of WRITE_SIGNAL_ENUM."""
+    graded = EA._grade_build_report_obj(obj)
+    assert graded["signal"] in EA.WRITE_SIGNAL_ENUM
+    assert graded["signal"] == expected_signal
