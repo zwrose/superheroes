@@ -128,9 +128,14 @@ saw. Nothing in the tooling closes that gap; this rule does.
 
    GitHub's cascading rebase (the server-side **Rebase stack** action for a lane; `gh stack rebase`
    + `gh stack push` only for a local tracked stack an operator owns end to end) is the disclosed
-   alternative when a merge cannot resolve the conflict; it rewrites every commit of every affected layer, so those layers'
-   review and CI receipts are re-taken in full. Never a hand-rebase or force-push of a layer under
-   review, which the doctrine names as an anti-pattern (`rubric/native-stacks.md` § *Anti-patterns*).
+   alternative when a merge cannot resolve the conflict; it rewrites every commit of every affected
+   layer, so every affected layer's head moves. What each moved head then owes is decided by the
+   content pin: recompute the digest, and an **equal digest** re-pins the sha with a dated line and
+   lets CI run on the new head with nothing re-reviewed, while an **unequal digest or
+   `digest-unavailable`** takes the branch the pin defines
+   (`skills/showrunner/reference/vet-receipt.md` spine field 1). Never a hand-rebase or force-push of
+   a layer under review, which the doctrine names as an anti-pattern (`rubric/native-stacks.md`
+   § *Anti-patterns*).
 
 6. **After the merge, report what merged** — each pull request number with the head sha that landed
    — and then this file's existing rules apply unchanged: the train is green when **`main`'s own

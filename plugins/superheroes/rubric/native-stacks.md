@@ -40,10 +40,11 @@ gh stack link <bottom> <top> [<more>...]
 Arguments run **bottom to top**. Each argument is a branch name, pull request number, or pull
 request URL. The command does not rely on `gh-stack` local tracking state. Branch arguments are
 pushed and get pull requests created with the correct base chaining. **Existing pull requests are
-reused**; **existing members are never removed**. Passing a **stack number first** appends the
-remaining arguments to the top of that stack. Linking a new layer onto an **existing** stack names
-**every member, bottom to top**, and then the new layer. The two-argument form, the layer below and
-the new layer, is refused. An argument that belongs to a **different** stack is
+reused**; **existing members are never removed**. Passing a **stack number first** is the documented
+shortcut for growing an existing stack: the remaining arguments are appended to the top of that
+stack. Naming **every member, bottom to top**, and then the new layer is a **safe lane habit** and
+not a requirement the tool imposes — it is unambiguous and it re-states the order the lane expects.
+An argument that belongs to a **different** stack is
 **rejected**. `--base` sets the bottom's base branch. The command is **idempotent in the sense that
 matters** — re-linking existing members skips them. Linking **pushes branch arguments** (creating
 or updating those remote branches and opening pull requests for branches that have none), and it
@@ -166,8 +167,10 @@ Merging up to a middle pull request merges everything below it and leaves the pu
 target the stack base directly** ([merging stacked pull
 requests](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-stacked-pull-requests)),
 which rewrites its commits and changes its head sha; we have not smoke-tested it. Every remaining
-layer therefore needs a fresh remote-head check and its review and CI receipts re-taken on the head
-it then has before it is considered mergeable.
+layer therefore needs a fresh remote-head check, and what its moved head owes is decided by the
+content pin: an **equal digest** re-pins with a dated line and lets CI run on the new head with
+nothing re-reviewed, while an **unequal digest or `digest-unavailable`** takes the branch the pin
+defines (`skills/showrunner/reference/vet-receipt.md` spine field 1).
 
 ## How a stack stays current
 
