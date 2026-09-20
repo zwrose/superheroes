@@ -7923,6 +7923,8 @@ def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurr
         return diff_path, None
     diff_path, diff_bytes, final, payload_sha = _envelope_with_head_diff(
         session_dir, envelope, content, rnd, phase, seat_key, attempt, occurrence)
+    final = round_records.envelope_bind_cited_head_source(
+        final, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
     try:
         c = round_commit.begin(session_dir, "head-diff-bind")
         c.add_replace_file(diff_path, diff_bytes)
@@ -8143,7 +8145,12 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
     evidence = {key: record[key] for key in round_records.EXECUTION_EVIDENCE_FIELDS}
     out = dict(envelope)
     if cited_head_source == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW:
-        out["headSha"] = view_head
+        env_head = envelope.get("headSha")
+        if env_head is None:
+            out["headSha"] = view_head
+        elif env_head != view_head:
+            return None, "head-anchor-mismatch", {"envelopeHeadSha": env_head,
+                                                   "viewHeadSha": view_head}, None
     out["executionEvidence"] = evidence
     out["envelopeSha256"] = round_records.envelope_sha256(out.get("payload"), evidence)
     return out, None, {}, cited_head_source
@@ -8304,13 +8311,14 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         return _refuse_cmd(session_dir, "record-result", landing_refusal.get("reason"), phase=phase,
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                            detail=landing_refusal.get("message") or landing_refusal.get("storePath"))
-    envelope = plan["envelope"]
+    envelope = round_records.envelope_bind_cited_head_source(plan["envelope"], cited_head_source)
     payload_sha = plan["payloadSha256"]
     head_store_path = None
     head_diff_bytes = None
     if head_content is not None:
         head_store_path, head_diff_bytes, envelope, payload_sha = _envelope_with_head_diff(
             session_dir, envelope, head_content, rnd, phase, seat, cur_attempt, occurrence)
+        envelope = round_records.envelope_bind_cited_head_source(envelope, cited_head_source)
     row_cited_head = cited_head
     if cited_head_source == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW:
         row_cited_head = assembled["headSha"]
@@ -8326,8 +8334,9 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         # Stamp the landing file only when read from the full-envelope slot — bare-payload slots
         # stay single-file; the stamped envelope is written to the store copy alone.
         if landing_replace_path is not None and assembled is not None:
+            stamped = round_records.envelope_bind_cited_head_source(assembled, cited_head_source)
             c.add_replace_file(landing_replace_path,
-                                round_records.canonical(assembled).encode("utf-8"))
+                                round_records.canonical(stamped).encode("utf-8"))
         c.add_replace_file(plan["storePath"], round_records.canonical(envelope).encode("utf-8"))
         if head_store_path is not None:
             c.add_replace_file(head_store_path, head_diff_bytes)
@@ -8479,7 +8488,8 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                                    seat=seat, storePath=spath)
             cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
             revision_fields = round_records.recorded_row_fields(
-                stored_envelope, cited_head, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
+                stored_envelope, cited_head,
+                round_records.stored_cited_head_source(stored_envelope))
             _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                            seat=seat, occurrence=occurrence, **revision_fields,
                            **_journal_addressing_fields(expect_round, expect_phase),
@@ -8590,6 +8600,7 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
         "reason": reason,
         "evidence": evidence,
         "occurrence": occurrence,
+        "citedHeadSource": round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR,
     }
     try:
         lpath = round_records.landing_path(
@@ -9105,6 +9116,7 @@ def _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt, se
     if schema == round_records.SEAT_RESULT_SCHEMA_V2:
         envelope["provenance"] = round_records.PROVENANCE_ORCHESTRATOR_FULFILLED
         envelope["envelopeSha256"] = round_records.envelope_sha256(payload, None)
+    envelope["citedHeadSource"] = round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
     return envelope
 
 
@@ -9334,7 +9346,8 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
                                seat=seat_key, storePath=spath)
         cited_head = _anchor_cited_head(state, session_dir, rnd, phase, entry_attempt)
         revision_fields = round_records.recorded_row_fields(
-            stored_envelope, cited_head, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
+            stored_envelope, cited_head,
+            round_records.stored_cited_head_source(stored_envelope))
         _journal_event(session_dir, "advance", "recorded", phase=phase, round=rnd,
                        attempt=entry_attempt, seat=slot[0] if slot else None,
                        occurrence=slot[1] if slot else None,

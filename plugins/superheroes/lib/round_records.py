@@ -68,7 +68,8 @@ SEAT_RESULT_FIELDS = ("schema", "session", "round", "phase", "seat", "attempt", 
 SEAT_RESULT_V2_FIELDS = SEAT_RESULT_FIELDS + ("executionEvidence", "provenance",
                                               "envelopeSha256", "headSha")
 REVISION_IDENTITY_FIELDS = ("payloadSha256", "casToken", "executionEvidence", "provenance",
-                            "envelopeSha256", "executionEvidencePresent", "citedHead")
+                            "envelopeSha256", "executionEvidencePresent", "citedHead",
+                            "citedHeadSource")
 PROVENANCE_DISPATCH_OBSERVED = "dispatch-observed"
 CITED_HEAD_SOURCE_RUNNER_VIEW = "runner-view"
 CITED_HEAD_SOURCE_ORDER_ANCHOR = "order-anchor"
@@ -174,6 +175,25 @@ class IncompleteRevisionIdentity(ValueError):
     def __init__(self, missing):
         self.missing = tuple(missing)
         super().__init__("incomplete revision identity: missing %s" % (self.missing,))
+
+
+def stored_cited_head_source(stored_envelope):
+    """The durable cited-head derivation bound on a stored envelope, or order-anchor for legacy rows."""
+    if not isinstance(stored_envelope, dict):
+        return CITED_HEAD_SOURCE_ORDER_ANCHOR
+    source = stored_envelope.get("citedHeadSource")
+    if source in CITED_HEAD_SOURCES:
+        return source
+    return CITED_HEAD_SOURCE_ORDER_ANCHOR
+
+
+def envelope_bind_cited_head_source(envelope, cited_head_source):
+    """Stamp `citedHeadSource` onto an envelope about to be written to the store."""
+    if cited_head_source not in CITED_HEAD_SOURCES:
+        raise IncompleteRevisionIdentity(("citedHeadSource",))
+    out = dict(envelope)
+    out["citedHeadSource"] = cited_head_source
+    return out
 
 
 def recorded_row_fields(stored_envelope, cited_head, cited_head_source):

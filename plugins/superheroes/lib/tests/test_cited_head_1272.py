@@ -19,7 +19,12 @@ import session_contract  # noqa: E402
 
 from test_recorded_row_chokepoint_1272 import (  # noqa: E402
     HEAD_SHA,
+    FakeAdapters,
+    _advance,
+    _land,
     _pending,
+    _record_all_panel_seats,
+    _result_envelope,
     _session,
     _state,
 )
@@ -39,6 +44,13 @@ _TSP_SPEC.loader.exec_module(_TSP)
 ANCHOR_HEAD = HEAD_SHA
 PANEL_FINDING = [{"dimension": "d", "taxonomy": "t", "title": "x"}]
 PANEL_PAYLOAD = {"findings": PANEL_FINDING}
+
+
+@pytest.fixture
+def adapters(monkeypatch):
+    fake = FakeAdapters()
+    monkeypatch.setitem(sys.modules, "round_adapters", fake)
+    return fake
 
 
 def _observation():
@@ -175,6 +187,18 @@ def test_assemble_refuses_review_when_anchor_cited_head_missing(tmp_path, anchor
     assert source is None
     assert refusal == "view-head-underivable"
     assert extra == {"runKind": engine_dispatch.RUN_KIND_REVIEW, "anchorCitedHead": anchor_head}
+
+
+def test_assemble_refuses_when_landed_envelope_head_sha_disagrees_with_view(tmp_path):
+    record = _runner_record()
+    envelope = _panel_envelope()
+    envelope["headSha"] = "f" * 40
+    assembled, refusal, extra, source = _assemble_with_record(
+        tmp_path, envelope, record)
+    assert assembled is None
+    assert source is None
+    assert refusal == "head-anchor-mismatch"
+    assert extra == {"envelopeHeadSha": "f" * 40, "viewHeadSha": ANCHOR_HEAD}
 
 
 def test_assemble_refuses_review_when_view_head_differs_from_anchor(tmp_path):
@@ -347,3 +371,81 @@ def test_record_result_review_run_carries_runner_view_cited_head(tmp_path):
            if r.get("outcome") == "recorded" and r.get("seat") == seat][-1]
     assert row["citedHead"] == runner_view_head
     assert row["citedHeadSource"] == RR.CITED_HEAD_SOURCE_RUNNER_VIEW
+    assert stored["citedHeadSource"] == RR.CITED_HEAD_SOURCE_RUNNER_VIEW
+
+
+def test_record_missing_declares_order_anchor_cited_head_source(tmp_path, adapters):
+    d = _session(tmp_path)
+    pend = _pending(d)
+    seat = "security-reviewer"
+    out = RD.cmd_record_missing(d, seat, pend["attempt"], "forfeit")
+    assert out["ok"], out
+    row = [r for r in RD.read_journal(d)
+           if r.get("outcome") == "recorded" and r.get("cmd") == "record-missing"
+           and r.get("seat") == seat][-1]
+    assert row["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
+
+
+def test_advance_reappend_row_declares_order_anchor_cited_head_source(tmp_path, adapters):
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    pend = _pending(d)
+    ghost_seat = "ghost-reviewer"
+    ghost_skey = RR.storage_key(ghost_seat)
+    env = _result_envelope(d, ghost_seat,
+                           payload={"findings": [], "confidence": "high", "seat": ghost_seat},
+                           headSha=None)
+    spath = RR.store_path(d, pend["round"], pend["phase"], ghost_skey, pend["attempt"])
+    os.makedirs(os.path.dirname(spath), exist_ok=True)
+    RR.atomic_write_json(spath, env)
+    out = _advance(d, tmp_path)
+    assert out["ok"], out
+    reappended = [e for e in RD.read_journal(d)
+                  if e.get("outcome") == "recorded" and e.get("cmd") == "advance"
+                  and e.get("reappended") is True]
+    assert len(reappended) == 1
+    assert reappended[0]["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
+
+
+def _fixer_session(tmp_path, adapters, name="cited-head-fixer"):
+    d = _session(tmp_path, name=name)
+    state = _state(d)
+    state["step"] = RD.P_FIXER
+    state["pending"] = {"action": RD.P_FIXER, "round": 1, "phase": RD.P_FIXER, "attempt": 0,
+                        "payload": {}}
+    RD.save_state(d, state)
+    return d
+
+
+def test_fixer_head_diff_row_declares_order_anchor_cited_head_source(tmp_path, adapters):
+    d = _fixer_session(tmp_path, adapters)
+    head_path = str(tmp_path / "head.diff")
+    with open(head_path, "w", encoding="utf-8") as fh:
+        fh.write("diff --git a/f.py b/f.py\n+fixed\n")
+    _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path}, headSha=None)
+    out = RD.cmd_record_result(d, "dispatch-fixer")
+    assert out["ok"], out
+    rows = [r for r in RD.read_journal(d)
+            if r.get("outcome") == "recorded" and r.get("phase") == RD.P_FIXER
+            and r.get("seat") == "dispatch-fixer"]
+    assert rows
+    assert rows[-1]["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
+
+
+def test_reappend_preserves_runner_view_cited_head_source(tmp_path, adapters):
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    pend = _pending(d)
+    ghost_seat = "ghost-reviewer"
+    ghost_skey = RR.storage_key(ghost_seat)
+    env = _result_envelope(d, ghost_seat,
+                           payload={"findings": [], "confidence": "high", "seat": ghost_seat})
+    env = RR.envelope_bind_cited_head_source(env, RR.CITED_HEAD_SOURCE_RUNNER_VIEW)
+    spath = RR.store_path(d, pend["round"], pend["phase"], ghost_skey, pend["attempt"])
+    os.makedirs(os.path.dirname(spath), exist_ok=True)
+    RR.atomic_write_json(spath, env)
+    out = _advance(d, tmp_path)
+    assert out["ok"], out
+    reappended = [e for e in RD.read_journal(d) if e.get("reappended") is True]
+    assert len(reappended) == 1
+    assert reappended[0]["citedHeadSource"] == RR.CITED_HEAD_SOURCE_RUNNER_VIEW

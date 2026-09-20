@@ -269,6 +269,7 @@ def _complete_recorded_row(pend, **over):
         "envelopeSha256": "y" * 64,
         "executionEvidencePresent": True,
         "citedHead": HEAD_SHA,
+        "citedHeadSource": RR.CITED_HEAD_SOURCE_ORDER_ANCHOR,
     }
     row.update(over)
     return row
