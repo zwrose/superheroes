@@ -1867,6 +1867,98 @@ def test_eligible_owner_acceptance_converges_end_to_end(tmp_path):
     assert "accepted the disclosed" in note, note
 
 
+def _dual_stall_target_state(confirmed, plausible):
+    """Two stalled audit targets for mixed accept-risk disposition tests."""
+    state = RD.new_state(_cfg_cert())
+    state["findings"] = []
+    compiled, _ = RD.mechanical_compile([dict(confirmed), dict(plausible)], None)
+    for row, src in zip(compiled, (confirmed, plausible)):
+        row["verdict"] = src["verdict"]
+        row["evidence"] = src.get("evidence")
+    RD._stage_findings(state, compiled)
+    state["fixBatch"] = compiled
+    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+    targets = state["_auditTargets"]
+    state["_auditOutcome"] = {"notDischarged": [t["id"] for t in targets]}
+    state["selfRecovered"] = True
+    RD._handle_stall(state, state["config"], {
+        "reason": "audit-stall", "detail": "x",
+        "stalledIdentities": [t["identity"] for t in targets]})
+    return state, targets
+
+
+def _ledger_by_key(state):
+    SC = _load("session_contract")
+    return {SC.finding_identity_key(e): e
+            for e in (state.get("dispositionLedger") or []) if isinstance(e, dict)}
+
+
+def _stall_cert_refusal(state, tmp_path):
+    RC = _load("round_certification")
+    RR = _load("round_records")
+    session_dir = str(tmp_path / "sess")
+    os.makedirs(session_dir, exist_ok=True)
+    state.setdefault("config", {})["baseGuard"] = RC.BASE_GUARD_CHECKED
+    head = "a" * 40
+    state["config"]["headSha"] = head
+    RD.save_state(session_dir, state)
+    with open(os.path.join(session_dir, RD.JOURNAL_FILE), "w", encoding="utf-8") as fh:
+        fh.write("")
+    with open(os.path.join(session_dir, RR.META_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"sessionId": "s", "headSha": head, "baseGuard": RC.BASE_GUARD_CHECKED}, fh)
+    ctx, err = RC._load_context(session_dir)
+    assert err is None
+    return RC.check_disposition_without_receipt(ctx)
+
+
+def test_accept_risk_dispositions_only_qualifying_targets_in_mixed_batch(tmp_path):
+    """accept-the-disclosed-risk must not clear PLAUSIBLE siblings — only per-target qualifiers."""
+    confirmed = {"title": "confirmed-bug", "severity": "Important", "file": "a.py", "line": 1,
+                 "verdict": "CONFIRMED", "evidence": "tests pass"}
+    plausible = {"title": "plausible-bug", "severity": "Important", "file": "b.py", "line": 2,
+                  "verdict": "PLAUSIBLE", "evidence": "maybe"}
+    state, targets = _dual_stall_target_state(confirmed, plausible)
+    assert state["_acceptRiskEligible"] is True
+    follow_up = {"item": "defer plausible sibling", "revisitTrigger": "next milestone",
+                 "classClosure": "tracked separately"}
+    RD._fold_stall(state, state["config"], {
+        "choice": RD.ACCEPT_RISK_CHOICE,
+        "followUp": follow_up,
+    })
+    ledger = _ledger_by_key(state)
+    confirmed_key = RD._finding_key_of(targets[0])
+    plausible_key = RD._finding_key_of(targets[1])
+    assert ledger[confirmed_key]["disposition"] == "out-of-scope"
+    assert ledger[confirmed_key]["followUp"] == follow_up
+    assert ledger[plausible_key].get("disposition") is None
+    refusal = _stall_cert_refusal(state, tmp_path)
+    assert refusal is not None
+    assert refusal["detail"] == "finding has no disposition recorded"
+
+
+def test_accept_risk_never_dispositions_critical_targets(tmp_path):
+    """Critical stalled targets stay open — out-of-scope on Critical is forbidden at certification."""
+    critical = {"title": "crit", "severity": "Critical", "file": "c.py", "line": 1,
+                "verdict": "CONFIRMED", "evidence": "proven"}
+    important = {"title": "imp", "severity": "Important", "file": "d.py", "line": 2,
+                 "verdict": "CONFIRMED", "evidence": "proven"}
+    state, targets = _dual_stall_target_state(critical, important)
+    follow_up = {"item": "accept important only", "revisitTrigger": "next milestone",
+                 "classClosure": "none"}
+    RD._fold_stall(state, state["config"], {
+        "choice": RD.ACCEPT_RISK_CHOICE,
+        "followUp": follow_up,
+    })
+    ledger = _ledger_by_key(state)
+    critical_key = RD._finding_key_of(targets[0])
+    important_key = RD._finding_key_of(targets[1])
+    assert ledger[critical_key].get("disposition") is None
+    assert ledger[important_key]["disposition"] == "out-of-scope"
+    refusal = _stall_cert_refusal(state, tmp_path)
+    assert refusal is not None
+    assert refusal["detail"] == "finding has no disposition recorded"
+
+
 # =============================================================================
 # confirmation economics: cap-parks-on-Critical, budget 2, re-arm
 # =============================================================================

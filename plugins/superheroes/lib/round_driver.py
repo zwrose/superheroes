@@ -4515,11 +4515,18 @@ def _handle_stall(state, config, breaker):
     state["step"] = P_STALL
 
 
+def _stall_target_accept_risk_eligible(target):
+    """A stalled audit target qualifies for accept-the-disclosed-risk when CONFIRMED with evidence."""
+    return (isinstance(target, dict)
+            and target.get("verdict") == "CONFIRMED"
+            and target.get("evidence"))
+
+
 def _accept_risk_eligible(state, breaker):
     """accept-the-disclosed-risk is offerable ONLY when a stalled audit target is CONFIRMED with a
     receipt (an owner may knowingly accept a proven, disclosed risk — never an unproven one)."""
     for t in _stalled_open_targets(state, breaker):
-        if isinstance(t, dict) and t.get("verdict") == "CONFIRMED" and t.get("evidence"):
+        if _stall_target_accept_risk_eligible(t):
             return True
     return False
 
@@ -4528,7 +4535,7 @@ def _stall_targets_accept_risk_eligible(state):
     """Fold-time accept-risk eligibility from the persisted stall-target snapshot — never a cached
     boolean a prior version may have written under a broader rule."""
     for t in state.get("_stallTargets") or []:
-        if isinstance(t, dict) and t.get("verdict") == "CONFIRMED" and t.get("evidence"):
+        if _stall_target_accept_risk_eligible(t):
             return True
     return False
 
@@ -4546,6 +4553,10 @@ def _fold_stall(state, config, artifact):
         follow_up = artifact.get("followUp") if isinstance(artifact.get("followUp"), dict) else None
         for target in state.get("_stallTargets") or []:
             if not isinstance(target, dict):
+                continue
+            if not _stall_target_accept_risk_eligible(target):
+                continue
+            if circuit_breaker.is_critical(target.get("severity")):
                 continue
             key = _finding_key_of(target)
             if not key:
