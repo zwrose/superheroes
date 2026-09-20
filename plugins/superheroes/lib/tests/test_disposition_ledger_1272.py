@@ -145,6 +145,38 @@ def test_L2_author_justified_plausible_drop_refuted():
     assert entry["refutedReason"].startswith("author-justified: ")
 
 
+def test_L2_restaged_finding_strips_prior_round_disposition():
+    finding = {"file": "r.py", "line": 1, "title": "bug", "severity": "Important"}
+    compiled, _ = RD.mechanical_compile([finding], None)
+    state = RD.new_state(_cfg())
+    key = SC.finding_identity_key(compiled[0])
+    state["round"] = 2
+    RD._stage_findings(state, compiled)
+    RD._record_disposition(state, key, "fixed", 2,
+                           dispositionReceipt={"headSha": "b" * 40})
+    state["round"] = 3
+    RD._stage_findings(state, compiled)
+    entry = _ledger_by_key(state)[key]
+    assert entry["raisedRound"] == 3
+    assert "disposition" not in entry
+    assert "dispositionReceipt" not in entry
+
+
+def test_L2_same_round_restage_keeps_disposition():
+    finding = {"file": "s.py", "line": 1, "title": "bug", "severity": "Important"}
+    compiled, _ = RD.mechanical_compile([finding], None)
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    key = SC.finding_identity_key(compiled[0])
+    RD._stage_findings(state, compiled)
+    RD._record_disposition(state, key, "fixed", 2,
+                           dispositionReceipt={"headSha": "b" * 40})
+    RD._stage_findings(state, compiled)
+    entry = _ledger_by_key(state)[key]
+    assert entry["disposition"] == "fixed"
+    assert entry["dispositionReceipt"]["headSha"] == "b" * 40
+
+
 def test_L2_stage_findings_strips_seat_supplied_disposition_family():
     finding = {"file": "a.py", "line": 1, "title": "bug", "severity": "Important",
                "disposition": "fixed", "dispositionReceipt": {"headSha": "z" * 40}}
@@ -196,10 +228,7 @@ def test_L2_merged_away_member_resolves_through_representative(tmp_path):
     refusal = RC.check_disposition_without_receipt(ctx)
     assert refusal is not None
     assert refusal["class"] == "disposition-without-receipt"
-    assert refusal["detail"] in (
-        "finding has no disposition recorded",
-        "merged-into chain does not resolve",
-    )
+    assert refusal["detail"] == "merged-into chain does not resolve", refusal
 
 
 # --- L3 ------------------------------------------------------------------------------
@@ -289,6 +318,20 @@ def test_L5_stall_accept_risk_records_out_of_scope_on_targets():
     entry = _ledger_by_key(state)[key]
     assert entry["disposition"] == "out-of-scope"
     assert entry["outOfScopeReason"] == "owner accepted the disclosed risk (stall gate)"
+
+
+def test_L5_stall_accept_risk_carries_follow_up():
+    state, ident, tgt = _stall_target_state()
+    key = RD._finding_key_of(tgt)
+    follow_up = {"item": "defer auth redesign", "revisitTrigger": "when #1300 lands",
+                 "classClosure": "tracked separately"}
+    RD._fold_stall(state, state["config"], {
+        "choice": RD.ACCEPT_RISK_CHOICE,
+        "followUp": follow_up,
+    })
+    entry = _ledger_by_key(state)[key]
+    assert entry["disposition"] == "out-of-scope"
+    assert entry["followUp"] == follow_up
 
 
 def _stall_target_state(verdict="CONFIRMED", evidence="ran", identity=None):

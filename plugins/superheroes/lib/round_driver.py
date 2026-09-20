@@ -1368,7 +1368,9 @@ def _stage_findings(state, compiled):
         existing = ledger[seen[key]] if key in seen else None
         entry = dict(finding)
         entry[session_contract.RAISED_ROUND_FIELD] = round_no
-        if isinstance(existing, dict) and existing.get("disposition") is not None:
+        if (isinstance(existing, dict)
+                and existing.get("disposition") is not None
+                and existing.get("dispositionRound") == round_no):
             for field in session_contract.DISPOSITION_FAMILY_FIELDS:
                 if field in existing:
                     entry[field] = existing[field]
@@ -1554,9 +1556,13 @@ def _archive_departures(state, departing):
         replacement = dict(finding)
         if key in seen and isinstance(ledger[seen[key]], dict):
             prior = ledger[seen[key]]
-            for field in session_contract.DISPOSITION_FAMILY_FIELDS:
-                if field in prior and field not in replacement:
-                    replacement[field] = prior[field]
+            raised_round = replacement.get(session_contract.RAISED_ROUND_FIELD)
+            if raised_round is None:
+                raised_round = prior.get(session_contract.RAISED_ROUND_FIELD)
+            if prior.get("dispositionRound") == raised_round:
+                for field in session_contract.DISPOSITION_FAMILY_FIELDS:
+                    if field in prior and field not in replacement:
+                        replacement[field] = prior[field]
             raised = session_contract.RAISED_ROUND_FIELD
             if raised in prior and raised not in replacement:
                 replacement[raised] = prior[raised]

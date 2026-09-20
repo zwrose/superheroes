@@ -488,6 +488,29 @@ def test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_h
     assert receipt["terminalState"] == "certified"
 
 
+def test_real_loop_hand_landed_unknown_read_refuses_execution_evidence_not_engaged(tmp_path):
+    """Hand-landed seats with read unknown must not satisfy the read-engagement bar."""
+    seat_map = {
+        "seats": {
+            dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
+            for dim in RD.DIMENSIONS
+        }
+    }
+    session_dir, gitdir, head_path, head_sha = _bootstrap_head_before_next(
+        tmp_path,
+        name="cited-head-not-engaged",
+        seatMap=seat_map,
+        vendors=["codex"],
+        baseGuard=RCE.BASE_GUARD_CHECKED,
+    )
+    TRI._drive_to_terminal_with_panel_dispatch_evidence(
+        session_dir, tmp_path, gitdir, [], head_path, evidence_read="unknown")
+    receipt, refusal = RCE.certify(session_dir)
+    assert receipt is None, receipt
+    assert refusal is not None
+    assert refusal["bindingFailure"] == "execution-evidence-not-engaged"
+
+
 def test_journal_revision_helpers_removed_from_lib():
     """T5 — grep DoD: no `_journal_revision_fields` / `_journal_stored_revision` in lib/*.py."""
     paths = glob.glob(os.path.join(_LIB, "*.py"))

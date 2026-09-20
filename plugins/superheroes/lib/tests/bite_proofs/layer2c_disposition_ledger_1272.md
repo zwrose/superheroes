@@ -176,3 +176,36 @@ E       KeyError: 'fixFoldHead'
 .                                                                        [100%]
 1 passed in 0.15s
 ```
+
+## BP-2c-g — dispositionRound guard on disposition-family carry
+
+**Guarded element.** `round_driver._stage_findings` and `_archive_departures`, the
+`_DISPOSITION_FAMILY_FIELDS` carry guarded by `existing.get("dispositionRound") == round_no`
+(staging) and `prior.get("dispositionRound") == raised_round` (archive).
+**Axis.** A finding re-raised in a later round must not inherit an earlier round's disposition
+family; only a same-round re-stage may carry it forward.
+**Detector.** `test_L2_restaged_finding_strips_prior_round_disposition` and
+`test_L2_same_round_restage_keeps_disposition`.
+
+**Neutralization.** Drop the `dispositionRound` equality guard in `_stage_findings` (restore the
+pre-guard `existing.get("disposition") is not None` test only).
+
+**Raw red** (exit 1):
+
+```
+FAILED plugins/superheroes/lib/tests/test_disposition_ledger_1272.py::test_L2_restaged_finding_strips_prior_round_disposition
+...
+>       assert "disposition" not in entry
+E       AssertionError: assert 'disposition' not in {'disposition': 'fixed', ...}
+1 failed in 0.16s
+```
+
+**Restore.** Reinstate the `dispositionRound == round_no` guard in `_stage_findings` and the
+matching guard in `_archive_departures`.
+
+**Raw green** (exit 0):
+
+```
+..                                                                       [100%]
+2 passed in 0.17s
+```

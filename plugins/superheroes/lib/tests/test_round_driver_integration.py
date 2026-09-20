@@ -156,14 +156,14 @@ def _execution_evidence(**over):
     return evidence
 
 
-def _execution_evidence_for_payload(payload, source="runner"):
+def _execution_evidence_for_payload(payload, source="runner", read="engaged"):
     observation = {
         "tokens": None,
         "toolCalls": 1,
         "stdoutBytes": 0,
         "wallSeconds": 0.0,
         "source": "codex-events",
-        "read": "engaged",
+        "read": read,
         "telemetry": "tool-calls",
     }
     for kind in engine_adapter.REVIEW_RESULT_KINDS + ("fixes", "result"):
@@ -180,7 +180,7 @@ def _execution_evidence_for_payload(payload, source="runner"):
     return _execution_evidence(observation=observation, source=source)
 
 
-def _land(session_dir, state, pend, seat, payload, occurrence=0):
+def _land(session_dir, state, pend, seat, payload, occurrence=0, evidence_read="engaged"):
     """Write ONE seat's envelope into the LANDING area (what the host does)."""
     manifest_sha, order_sha = _anchor_hashes(session_dir, state, pend, seat)
     schema = round_records.seat_result_schema_for_state_version(state.get("schemaVersion"))
@@ -204,7 +204,8 @@ def _land(session_dir, state, pend, seat, payload, occurrence=0):
     }
     if schema == round_records.SEAT_RESULT_SCHEMA_V2:
         evidence_source = _auditor_vendor_for(state)(seat)
-        evidence = _execution_evidence_for_payload(payload, source=evidence_source)
+        evidence = _execution_evidence_for_payload(
+            payload, source=evidence_source, read=evidence_read)
         envelope["executionEvidence"] = evidence
         envelope["provenance"] = round_records.PROVENANCE_HAND_LANDED
         envelope["envelopeSha256"] = round_records.envelope_sha256(payload, evidence)
@@ -800,7 +801,8 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
 
 def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
                                                   panel_findings, head_diff_path,
-                                                  telemetry_shape="dispatch-observed"):
+                                                  telemetry_shape="dispatch-observed",
+                                                  evidence_read="engaged"):
     _assert_adapters_are_real()
     state = _state(session_dir)
     pend = state["pending"]
@@ -821,7 +823,8 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
             out = round_driver.cmd_record_result(
                 session_dir, seat, occurrence=occurrence, evidence_run_dir=run_dir)
         else:
-            _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
+            _land(session_dir, state, pend, seat, payload, occurrence=occurrence,
+                  evidence_read=evidence_read)
             out = _record(session_dir, seat, occurrence=occurrence)
         assert out["ok"], (phase, seat, occurrence, out)
     if phase == round_driver.P_PANEL and telemetry_shape != "no-telemetry":
@@ -839,7 +842,8 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
 def _drive_to_terminal_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
                                                       panel_findings, head_diff_path,
                                                       max_steps=24,
-                                                      telemetry_shape="dispatch-observed"):
+                                                      telemetry_shape="dispatch-observed",
+                                                      evidence_read="engaged"):
     folded = []
     for _ in range(max_steps):
         if _state(session_dir).get("terminal"):
@@ -847,7 +851,7 @@ def _drive_to_terminal_with_panel_dispatch_evidence(session_dir, tmp_path, gitdi
         before = _state(session_dir)["pending"]["phase"]
         phase, out = _drive_one_phase_with_panel_dispatch_evidence(
             session_dir, tmp_path, gitdir, panel_findings, head_diff_path,
-            telemetry_shape=telemetry_shape)
+            telemetry_shape=telemetry_shape, evidence_read=evidence_read)
         assert out["ok"], (phase, out)
         assert out["folded"]["phase"] == phase, out
         assert _state(session_dir)["step"] != before, (phase, _state(session_dir)["step"])
