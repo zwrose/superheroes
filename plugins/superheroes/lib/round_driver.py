@@ -8077,7 +8077,8 @@ def _runner_shaped_result(phase, result_kind, envelope_payload):
     return {"ok": True, "resultKind": result_kind, result_kind: envelope_payload}
 
 
-def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_cited_head):
+def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_cited_head,
+                                phase):
     """Bind runner telemetry to the driver's order hash.
 
     Returns (envelope, refusal_reason, extra, cited_head_source)."""
@@ -8098,6 +8099,13 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
     if (not isinstance(result_digest, str) or not result_digest
             or not isinstance(result_kind, str) or not result_kind):
         return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}, None
+    run_kind = record.get("runKind")
+    if run_kind == engine_dispatch.RUN_KIND_WRITE:
+        if phase != P_FIXER:
+            return None, "evidence-run-kind-mismatch", {"runKind": run_kind, "phase": phase}, None
+    elif run_kind == engine_dispatch.RUN_KIND_REVIEW:
+        if phase == P_FIXER:
+            return None, "evidence-run-kind-mismatch", {"runKind": run_kind, "phase": phase}, None
     envelope_payload = envelope.get("payload")
     if result_kind == session_contract.WRITE_RESULT_KIND:
         pass
@@ -8124,7 +8132,6 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "payloadSha256": payload_digest,
                                                        "resultKind": result_kind}, None
-    run_kind = record.get("runKind")
     cited_head_source = None
     view_head = None
     if run_kind == engine_dispatch.RUN_KIND_WRITE:
@@ -8279,7 +8286,7 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         if (seat_schema == round_records.SEAT_RESULT_SCHEMA_V2 and isinstance(envelope, dict)
                 and envelope.get("provenance") == round_records.PROVENANCE_DISPATCH_OBSERVED):
             assembled, ev_reason, ev_extra, assembly_source = _assemble_dispatch_evidence(
-                session_dir, envelope, evidence_run_dir, cited_head)
+                session_dir, envelope, evidence_run_dir, cited_head, phase)
             if assembly_source is not None:
                 cited_head_source = assembly_source
             if ev_reason is not None:

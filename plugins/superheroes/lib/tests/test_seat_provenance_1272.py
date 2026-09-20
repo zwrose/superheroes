@@ -511,7 +511,7 @@ def test_dispatch_observed_non_object_payload_refuses_evidence_binding(tmp_path)
     for bad_payload in ([], "x", None):
         envelope = dict(base_envelope, payload=bad_payload)
         assembled, refusal, extra, _source = RD._assemble_dispatch_evidence(
-            session_dir, envelope, run_dir, "abc123fake")
+            session_dir, envelope, run_dir, "abc123fake", RD.P_PANEL)
         assert assembled is None
         assert refusal == "evidence-result-mismatch"
         assert extra == {"resultDigest": record["resultDigest"], "resultKind": record["resultKind"]}

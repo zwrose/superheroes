@@ -79,7 +79,7 @@ def test_journal_line_not_an_object_refuses_evidence_binding(tmp_path, monkeypat
     session_dir = str(tmp_path / "session")
     os.makedirs(session_dir, exist_ok=True)
     assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
-        session_dir, envelope, run_dir, "abc123fake")
+        session_dir, envelope, run_dir, "abc123fake", round_driver.P_PANEL)
     assert assembled is None
     assert refusal == "evidence-run-dir-unreadable"
     assert extra == {"detail": "internal-error"}
@@ -130,7 +130,7 @@ def test_assemble_dispatch_evidence_refuses_cross_kind_subject_disagreement(tmp_
     engine_dispatch.run_execution_record = _patched
     try:
         assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
-            session_dir, envelope, "fake-run-dir", "a" * 64)
+            session_dir, envelope, "fake-run-dir", "a" * 64, round_driver.P_PANEL)
     finally:
         engine_dispatch.run_execution_record = real_record
     assert assembled is None
@@ -151,7 +151,7 @@ def test_assemble_dispatch_evidence_refuses_cross_kind_subject_disagreement(tmp_
     engine_dispatch.run_execution_record = _findings_patched
     try:
         assembled, refusal, extra, cited_head_source = round_driver._assemble_dispatch_evidence(
-            session_dir, envelope, "fake-run-dir", "a" * 64)
+            session_dir, envelope, "fake-run-dir", "a" * 64, round_driver.P_PANEL)
     finally:
         engine_dispatch.run_execution_record = real_record
     assert assembled is not None

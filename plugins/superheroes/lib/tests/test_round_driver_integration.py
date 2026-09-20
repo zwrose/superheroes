@@ -1151,7 +1151,7 @@ def test_assemble_dispatch_evidence_write_run_fixer_envelope(tmp_path):
     assert err is None, err
     envelope = _fixer_envelope_for_write_run(record)
     assembled, refusal, extra, cited_head_source = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir, "abc")
+        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
     assert refusal is None, extra
     assert assembled is not None
     assert cited_head_source == round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
@@ -1169,7 +1169,7 @@ def test_assemble_dispatch_evidence_write_run_order_mismatch_refuses(tmp_path):
     assert err is None, err
     envelope = _fixer_envelope_for_write_run(record, order_sha="0" * 64)
     assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir, "abc")
+        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
     assert assembled is None
     assert refusal == "evidence-order-mismatch"
 
@@ -1186,7 +1186,7 @@ def test_assemble_dispatch_evidence_write_run_binding_incomplete_refuses(tmp_pat
     assert "resultDigest" not in record
     envelope = _fixer_envelope_for_write_run(record)
     assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir, "abc")
+        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
     assert assembled is None
     assert refusal == "evidence-run-dir-unreadable"
     assert extra.get("detail") == "result-binding-incomplete"
@@ -1212,7 +1212,7 @@ def test_assemble_dispatch_evidence_kind_not_in_payload_refuses(tmp_path):
     try:
         envelope = _fixer_envelope_for_write_run(record)
         assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
-            str(tmp_path / "session"), envelope, run_dir, "abc")
+            str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
     finally:
         engine_dispatch.run_execution_record = real_record
     assert assembled is None
@@ -1232,7 +1232,7 @@ def test_assemble_dispatch_evidence_review_kind_absent_from_payload_refuses(tmp_
         "payload": {"fixes": []},
     }
     assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir, "abc123fake")
+        str(tmp_path / "session"), envelope, run_dir, "abc123fake", round_driver.P_PANEL)
     assert assembled is None
     assert refusal == "evidence-result-mismatch"
     assert extra.get("resultKind") == "findings"
