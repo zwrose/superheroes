@@ -1121,6 +1121,75 @@ def test_main_selected_git_unavailable_undecided(tmp_path, monkeypatch):
     assert result["registerCopy"] == rc.REGISTER_COPY_MAIN
 
 
+def test_main_copy_symlinked_ancestor_matches_real_path(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    _init_git_repo(real)
+    register = real / "register.md"
+    register.write_text(_tiny_register_text("Main copy."), encoding="utf-8")
+    _git_commit_all(real, "main copy")
+    body = real / "body.md"
+    body.write_text("> **R1 — Main copy.**\n", encoding="utf-8")
+    result_real = _check(
+        register, body, "C1", register_copy=rc.REGISTER_COPY_MAIN,
+    )
+    result_link = _check(
+        link / "register.md",
+        link / "body.md",
+        "C1",
+        register_copy=rc.REGISTER_COPY_MAIN,
+    )
+    assert result_real["result"] == rc.RESULT_PASS
+    assert result_link["result"] == result_real["result"]
+    assert result_link["registerRef"] == result_real["registerRef"]
+    assert result_link["registerCopy"] == rc.REGISTER_COPY_MAIN
+
+
+def test_main_copy_grades_branch_not_tag_when_both_named_main(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    register = repo / "register.md"
+    register.write_text(_tiny_register_text("Tag copy."), encoding="utf-8")
+    _git_commit_all(repo, "tag snapshot")
+    subprocess.run(
+        ["git", "-C", str(repo), "tag", "main"],
+        check=True,
+        capture_output=True,
+    )
+    register.write_text(_tiny_register_text("Branch copy."), encoding="utf-8")
+    _git_commit_all(repo, "branch snapshot")
+    body = repo / "body.md"
+    body.write_text("> **R1 — Branch copy.**\n", encoding="utf-8")
+    result = _check(register, body, "C1", register_copy=rc.REGISTER_COPY_MAIN)
+    assert result["result"] == rc.RESULT_PASS
+    assert result["registerRef"] == "main"
+    assert result["registerCopy"] == rc.REGISTER_COPY_MAIN
+
+
+def test_main_copy_unaffected_by_ambient_git_routing(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    register = repo / "register.md"
+    register.write_text(_tiny_register_text("Main copy."), encoding="utf-8")
+    _git_commit_all(repo, "main copy")
+    body = repo / "body.md"
+    body.write_text("> **R1 — Main copy.**\n", encoding="utf-8")
+    result_clean = _check(
+        register, body, "C1", register_copy=rc.REGISTER_COPY_MAIN,
+    )
+    monkeypatch.setenv("GIT_DIR", "/bogus/nonexistent/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/bogus/nonexistent")
+    result_dirty = _check(
+        register, body, "C1", register_copy=rc.REGISTER_COPY_MAIN,
+    )
+    assert result_clean["result"] == rc.RESULT_PASS
+    assert result_dirty == result_clean
+
+
 def test_register_copy_fields_on_every_result_path(tmp_path):
     register = _tiny_register(tmp_path)
     pass_body = tmp_path / "pass.md"

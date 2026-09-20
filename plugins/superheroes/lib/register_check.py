@@ -7,12 +7,14 @@ byte-exactly (modulo line terminators), and every entry whose Consumers line nam
 the child is quoted. Call-site-agnostic — the caller names the register path.
 """
 import argparse
+import contextlib
 import json
 import os
 import re
 import subprocess
 import sys
 
+import launch_ledger
 import md_fence
 import store_core
 
@@ -63,6 +65,10 @@ REGISTER_COPY_MODES = frozenset({
 })
 
 MAIN_REFS = ("origin/main", "main")
+_MAIN_BRANCH_FQ_REFS = {
+    "origin/main": "refs/remotes/origin/main",
+    "main": "refs/heads/main",
+}
 
 RESULT_FIELDS = (
     "schema", "result", "ok", "reason", "detail", "child", "register",
@@ -121,7 +127,8 @@ def _repo_root_for_path(register_path):
 
 
 def _rel_path_in_repo(repo_root, register_path):
-    abs_path = os.path.abspath(register_path)
+    # bite-axis: register path must be resolved the same way as repo_root before containment.
+    abs_path = os.path.realpath(register_path)
     rel = os.path.relpath(abs_path, repo_root)
     if rel.startswith(".."):
         return None
@@ -129,10 +136,24 @@ def _rel_path_in_repo(repo_root, register_path):
 
 
 def _git_env():
-    env = dict(os.environ)
+    # bite-axis: ambient git routing must not re-route the main-copy read child.
+    env = launch_ledger._scrub_env(os.environ)
     env["LC_ALL"] = "C"
     env["LANGUAGE"] = "C"
     return env
+
+
+@contextlib.contextmanager
+def _isolated_git_routing_env():
+    # bite-axis: main-copy read chokepoint must not inherit ambient git routing.
+    saved = {}
+    for key in launch_ledger._GIT_SCRUB_VARS:
+        if key in os.environ:
+            saved[key] = os.environ.pop(key)
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
 
 
 def _git_show_blob(repo_root, ref, rel_path):
@@ -170,44 +191,47 @@ def _resolve_register_copy_selection(register_path, register_copy):
 
 
 def _resolve_main_ref(repo_root):
-    for ref in MAIN_REFS:
-        res = store_core.run_git_result(repo_root, "rev-parse", "--verify", ref)
+    for short_ref in MAIN_REFS:
+        fq_ref = _MAIN_BRANCH_FQ_REFS[short_ref]
+        # bite-axis: only branch refs may satisfy the main copy — never a tag named main.
+        res = store_core.run_git_result(repo_root, "rev-parse", "--verify", fq_ref)
         if res.status == store_core.GIT_UNAVAILABLE:
-            return None, res.detail
+            return None, None, res.detail
         if res.status == store_core.GIT_OK:
-            return ref, None
-    return None, None
+            return short_ref, fq_ref, None
+    return None, None, None
 
 
 def _read_register_lines_from_main(register_path):
-    repo_root, root_err = _repo_root_for_path(register_path)
-    if root_err is not None:
-        return None, None, root_err
-    if repo_root is None:
-        return None, None, (
-            f"register path {register_path!r} is not inside a git work tree"
-        )
-    rel_path = _rel_path_in_repo(repo_root, register_path)
-    if rel_path is None:
-        return None, None, (
-            f"register path {register_path!r} is outside repo root {repo_root!r}"
-        )
-    main_ref, git_err = _resolve_main_ref(repo_root)
-    if git_err is not None:
-        return None, None, (
-            f"git unavailable while resolving main ref for {rel_path!r}: {git_err}"
-        )
-    if main_ref is None:
-        return None, None, (
-            f"could not read register from main: no ref among "
-            f"{', '.join(MAIN_REFS)} exists for {rel_path!r}"
-        )
-    text, show_err = _git_show_blob(repo_root, main_ref, rel_path)
-    if text is None:
-        return None, main_ref, (
-            f"could not read register from {main_ref!r} at {rel_path!r}: {show_err}"
-        )
-    return _lines_from_text(text), main_ref, None
+    with _isolated_git_routing_env():
+        repo_root, root_err = _repo_root_for_path(register_path)
+        if root_err is not None:
+            return None, None, root_err
+        if repo_root is None:
+            return None, None, (
+                f"register path {register_path!r} is not inside a git work tree"
+            )
+        rel_path = _rel_path_in_repo(repo_root, register_path)
+        if rel_path is None:
+            return None, None, (
+                f"register path {register_path!r} is outside repo root {repo_root!r}"
+            )
+        main_ref, fq_ref, git_err = _resolve_main_ref(repo_root)
+        if git_err is not None:
+            return None, None, (
+                f"git unavailable while resolving main ref for {rel_path!r}: {git_err}"
+            )
+        if main_ref is None:
+            return None, None, (
+                f"could not read register from main: no ref among "
+                f"{', '.join(MAIN_REFS)} exists for {rel_path!r}"
+            )
+        text, show_err = _git_show_blob(repo_root, fq_ref, rel_path)
+        if text is None:
+            return None, main_ref, (
+                f"could not read register from {main_ref!r} at {rel_path!r}: {show_err}"
+            )
+        return _lines_from_text(text), main_ref, None
 
 
 def _is_italic_metadata_line(line):
