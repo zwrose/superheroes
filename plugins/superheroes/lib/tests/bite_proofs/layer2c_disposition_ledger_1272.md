@@ -209,3 +209,243 @@ matching guard in `_archive_departures`.
 ..                                                                       [100%]
 2 passed in 0.17s
 ```
+
+---
+
+# Round-5 additions and the orchestrator's re-run at the final head
+
+**Provenance (this section only):** every proof below was run by the **orchestrator**, not by an
+implementer dispatch, in a dedicated detached probe worktree
+(`issue-1272-r5-probe`) cut at the final head **`8128ca43`** — never in a tree a live seat was
+reading. Each neutralization is a targeted revertible edit through the host's edit action; each
+restore is its exact inverse (never `git checkout` / `git restore`). The probe worktree was
+confirmed **byte-clean** (`git status --porcelain` empty) after the last restore, and the closing
+run over the whole detector file plus the byte-pin detector was green: `31 passed in 0.30s`, exit 0.
+
+Command prefix for every run in this section:
+
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-probe
+```
+
+## BP-2c-h — the backfill merges a pre-existing key rather than skipping it
+
+**Guarded element.** `round_driver._backfill_ledger_from_records` — the absence of a
+`if key in preexisting: continue` short-circuit, so a pre-existing key's **non-disposition** fields
+take the newest `_records` value.
+**Axis.** A finding recorded `Critical` in `_records` must reach the ledger as `Critical`, so the
+`"Critical finding may not take out-of-scope disposition"` gate can fire. A stale `Minor` frozen by a
+skip turns a refusal into a certification — a fail-direction inversion.
+**Detector.** `test_C13_backfill_merges_record_severity_preserves_disposition_family`.
+
+**Neutralization.** Reinstate the skip — replace
+
+```python
+            entry = _strip_disposition_family(dict(finding))
+            if key in preexisting:
+                entry.update(family_snapshots.get(key, {}))
+```
+
+with
+
+```python
+            if key in preexisting:
+                continue
+            entry = _strip_disposition_family(dict(finding))
+```
+
+**Raw red** (exit 1):
+
+```
+.F                                                                       [100%]
+____ test_C13_backfill_merges_record_severity_preserves_disposition_family _____
+        state["_records"] = [{"findings": [record_finding]}]
+        RD._stage_findings(state, compiled)
+        ledger = _ledger_by_key(state)
+        entry = ledger[key]
+>       assert entry["severity"] == "Critical"
+E       AssertionError: assert 'Minor' == 'Critical'
+E         - Critical
+E         + Minor
+FAILED plugins/superheroes/lib/tests/test_disposition_ledger_1272.py::test_C13_backfill_merges_record_severity_preserves_disposition_family
+1 failed, 1 passed in 0.35s
+```
+
+**Restore.** Exact inverse of the edit above.
+
+**Raw green** (exit 0): `1 failed, 2 passed in 0.36s` — this element's detector is among the **2
+passed**; the single failure in that run is BP-2c-i's own red, which was neutralized at the time.
+Confirmed again unconditionally in the closing whole-file run: `31 passed in 0.30s`, exit 0.
+
+## BP-2c-h2 — the merge preserves the pre-existing disposition family rather than overwriting it
+
+**Guarded element.** `round_driver._backfill_ledger_from_records` — the
+`entry.update(family_snapshots.get(key, {}))` re-application of the snapshotted disposition family.
+**Axis.** The *other* direction of the same merge rule: a legacy ledger entry's durable disposition
+must survive first ledger-owner activation. Without it the merge becomes the overwrite that finding
+R3-2 closed.
+**Detector.** `test_C13_backfill_preserves_preexisting_ledger_disposition`.
+
+**Neutralization.** Delete the two-line family re-application (`if key in preexisting:` /
+`entry.update(family_snapshots.get(key, {}))`), leaving the snapshot built and unused.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+__________ test_C13_backfill_preserves_preexisting_ledger_disposition __________
+        state["dispositionLedger"] = [preexisting_entry]
+        state["_records"] = [{"findings": [record_finding]}]
+        RD._stage_findings(state, compiled)
+        ledger = _ledger_by_key(state)
+>       assert ledger[key]["disposition"] == "refuted"
+E       KeyError: 'disposition'
+FAILED plugins/superheroes/lib/tests/test_disposition_ledger_1272.py::test_C13_backfill_preserves_preexisting_ledger_disposition
+1 failed in 0.34s
+```
+
+**Restore.** Reinstate the two deleted lines.
+
+**Raw green** (exit 0): among the **2 passed** of `1 failed, 2 passed in 0.36s`, and again in the
+closing whole-file run.
+
+**Why both halves are proved.** One neutralization per direction. BP-2c-h proves the skip cannot
+return; BP-2c-h2 proves the overwrite cannot return. A single proof would have left the merge rule
+half-guarded, which is exactly how this surface produced a new defect in four consecutive rounds.
+
+## BP-2c-i — an out-of-scope disposition with no recorded reason refuses
+
+**Guarded element.** `round_certification.check_disposition_without_receipt`, the
+`outOfScopeReason` refusal in the `out-of-scope` branch, placed **before** the follow-up checks.
+**Axis.** `"reason": null` must not reach a certified Important disclosure by any door; the field
+validated is the same field the disclosure later writes.
+**Detector.** `test_C13_out_of_scope_reason_required_before_follow_up_checks`.
+
+**Neutralization.** Delete the refusal block:
+
+```python
+            reason = graded.get("outOfScopeReason")
+            if not isinstance(reason, str) or not reason.strip():
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "out-of-scope disposition lacks recorded reason",
+                )
+```
+
+**Raw red** (exit 1):
+
+```
+..F                                                                      [100%]
+________ test_C13_out_of_scope_reason_required_before_follow_up_checks _________
+        state["findings"] = [dict(base)]
+        ctx = _ctx(state, tmp_path)
+        refusal = RC.check_disposition_without_receipt(ctx)
+>       assert refusal is not None
+E       assert None is not None
+FAILED plugins/superheroes/lib/tests/test_disposition_ledger_1272.py::test_C13_out_of_scope_reason_required_before_follow_up_checks
+1 failed, 2 passed in 0.36s
+```
+
+**Restore.** Reinstate the refusal block verbatim, above `follow_up = _out_of_scope_follow_up(graded)`.
+
+**Raw green** (exit 0):
+
+```
+.F                                                                       [100%]
+1 failed, 1 passed in 0.39s
+```
+
+— this element's detector is the **1 passed**; the failure in that run is CENSUS-J's own red,
+neutralized at the time. Confirmed unconditionally in the closing whole-file run.
+
+## Re-run of the inherited proofs at the final head `8128ca43`
+
+Every red half below was **re-established by the orchestrator at this head** — none of these is an
+implementer's or fixer's inherited claim.
+
+| ID | Detector | Red re-run at `8128ca43` | Green on restore |
+|---|---|---|---|
+| **BP-2c-a** | `test_L2_merged_away_member_resolves_through_representative` | **yes**, exit 1 | yes |
+| **BP-2c-b** | `test_L2_stage_findings_strips_seat_supplied_disposition_family` | **yes**, exit 1 | yes |
+| **BP-2c-c** | `test_L7_archive_departure_without_prior_staging` | **yes**, exit 1 | yes |
+| **BP-2c-d** | `test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions` | **yes**, exit 1 | yes |
+| **BP-2c-g** | `test_L2_restaged_finding_strips_prior_round_disposition` | **yes**, exit 1 | yes |
+| BP-2c-e | `test_C13_two_round_moving_head_verify_never_passes_refuses` | proved at `0451579e`; guarded code untouched since | — |
+| BP-2c-f | `test_C13_fix_fold_records_fix_fold_head` | proved at `0451579e`; guarded code untouched since | — |
+
+**Correction to BP-2c-a's recorded neutralization.** The inherited record names
+`if resolved is None:` → `if False:` in `round_certification`. At this head that text occurs **once**,
+in `_effective_certification_finding` — and neutralizing it there leaves the detector **green**
+(`1 passed in 0.25s`, exit 0), because the assertion the detector makes is reached through the
+**earlier** arm in `check_disposition_without_receipt`. A proof run against the recorded
+neutralization would therefore have been **vacuous**. The guarded element the record's prose names —
+"the `mergedInto` resolution arm of `check_disposition_without_receipt`" — is correct; only the quoted
+line is stale. The neutralization that actually bites at this head is:
+
+```python
+        if finding.get(session_contract.MERGED_INTO_FIELD):
+            if _resolve_merged_into_entry(finding, by_key) is None:
+```
+→
+```python
+        if finding.get(session_contract.MERGED_INTO_FIELD):
+            if False:
+```
+
+**Raw red** with that neutralization (exit 1):
+
+```
+        refusal = RC.check_disposition_without_receipt(ctx)
+        assert refusal is not None
+        assert refusal["class"] == "disposition-without-receipt"
+>       assert refusal["detail"] == "merged-into chain does not resolve", refusal
+E       AssertionError: {'artifact': 'root b', 'bindingFailure': None, 'class': 'disposition-without-receipt', 'detail': 'finding has no disposition recorded'}
+E         - merged-into chain does not resolve
+E         + finding has no disposition recorded
+FAILED plugins/superheroes/lib/tests/test_disposition_ledger_1272.py::test_L2_merged_away_member_resolves_through_representative
+1 failed in 0.28s
+```
+
+**Restore.** Exact inverse. **Raw green** (exit 0): `1 passed`, in the paired run
+`1 failed, 1 passed in 0.29s` (the failure being BP-2c-b's red).
+
+This correction is recorded rather than silently applied: a stale neutralization in a bite-proof
+record is the record's own failure mode — it reads as a proof while proving nothing.
+
+### The other reds, quoted
+
+**BP-2c-b** (`_strip_disposition_family` → `return dict(entry)`), exit 1:
+
+```
+>       assert "disposition" not in entry
+E       AssertionError: assert 'disposition' not in {'classification': 'mechanical', 'disposition': 'fixed', 'dispositionReceipt': {'headSha': 'zzzz…'}, 'file': 'a.py', ...}
+1 failed, 1 passed in 0.29s
+```
+
+**BP-2c-c** (`return` inserted after the `_archive_departures` docstring), exit 1:
+
+```
+        RD._set_findings(state, [])
+>       assert key in _ledger_by_key(state)
+E       AssertionError: assert 'a.py::bug@L1' in {}
+1 failed, 1 passed in 0.30s
+```
+
+**BP-2c-d** (`for tid in outcome.get("discharged") or []:` → `for tid in ():`), exit 1:
+
+```
+        entry = ledger[key]
+>       assert entry["disposition"] == "fixed"
+E       KeyError: 'disposition'
+1 failed, 1 passed in 8.66s
+```
+
+**BP-2c-g** (drop the `dispositionRound` equality guard in `_stage_findings`), exit 1:
+
+```
+        assert entry["raisedRound"] == 3
+>       assert "disposition" not in entry
+E       AssertionError: assert 'disposition' not in {'classification': 'mechanical', 'disposition': 'fixed', 'dispositionReceipt': {'headSha': 'bbbb…'}, 'dispositionRound': 2, ...}
+1 failed, 2 passed in 8.67s
+```
