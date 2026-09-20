@@ -400,6 +400,10 @@ JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
 # Named refusal when loop-state carries an unrecognized dispositionLedgerOwner marker value.
 DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE = "disposition-ledger-owner-unrecognized"
 
+FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE = (
+    "fixed-disposition-finalization-verify-not-pass"
+)
+
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
 POLICY_APPLIED_SOURCE_OWNER_SUPPLIED = "owner-supplied"
 POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED = "owner-unattributed"
@@ -5465,16 +5469,97 @@ def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None
         pass
 
 
-def _finalize_certification_inputs(session_dir, state, head_sha=None, artifact=None):
-    """The one terminal step both certification legs reach — persists head-content blobs.
+def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
+    """Re-bind fixed ledger receipts to the certified head when provable; record residuals otherwise.
 
-    It is deliberately empty of receipt finalization: #1272 layer 2g plugs the certified-head
-    re-bind in here, and this chokepoint exists so that both legs get it at once."""
+    Returns True when ``state`` was mutated (re-bind, residual, or verify stamp)."""
+    rows, by_key, fault = _fixed_ledger_rows(state)
+    if fault is not None:
+        return False
+    pending = []
+    for key, entry in rows:
+        receipt = entry.get("dispositionReceipt")
+        if not isinstance(receipt, dict):
+            pending.append((key, None, None))
+            continue
+        pending.append((key, entry, dict(receipt)))
+    if not pending:
+        return False
+    if not isinstance(certified_head, str) or not certified_head:
+        return False
+    read_outcome = _read_head_content_blobs_file(session_dir, normalized=True)
+    residuals = {}
+    changed = False
+    for key, entry, original_receipt in pending:
+        if entry is None:
+            residuals[key] = "fix-content-missing"
+            continue
+        existing_head = original_receipt.get("headSha")
+        head_unchanged = (
+            isinstance(existing_head, str) and existing_head and existing_head == certified_head
+        )
+        probe_receipt = dict(original_receipt)
+        if not head_unchanged:
+            probe_receipt["headSha"] = certified_head
+        binding_failure = session_contract.fix_still_present_at_head(
+            entry, probe_receipt, certified_head, read_outcome, by_key=by_key
+        )
+        if binding_failure:
+            if head_unchanged and original_receipt.get("verifyResult") is None:
+                verify_result = _verify_result_for_disposition(
+                    state, state.get("round"), certified_head
+                )
+                if verify_result != "pass":
+                    residuals[key] = FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
+                    continue
+                stamp_receipt = dict(original_receipt)
+                stamp_receipt["verifyResult"] = verify_result
+                _record_disposition(
+                    state,
+                    key,
+                    "fixed",
+                    entry.get("dispositionRound"),
+                    dispositionReceipt=stamp_receipt,
+                )
+                changed = True
+                continue
+            token = binding_failure[0] if isinstance(binding_failure, tuple) else binding_failure
+            residuals[key] = token
+            continue
+        updated_receipt = dict(original_receipt)
+        if not head_unchanged:
+            updated_receipt["headSha"] = certified_head
+        verify_result = _verify_result_for_disposition(
+            state, state.get("round"), certified_head
+        )
+        if verify_result != "pass":
+            residuals[key] = FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
+            continue
+        updated_receipt["verifyResult"] = verify_result
+        _record_disposition(
+            state,
+            key,
+            "fixed",
+            entry.get("dispositionRound"),
+            dispositionReceipt=updated_receipt,
+        )
+        changed = True
+    if residuals:
+        state["_fixedDispositionFinalizationResiduals"] = residuals
+        changed = True
+    return changed
+
+
+def _finalize_certification_inputs(session_dir, state, head_sha=None, artifact=None):
+    """One terminal step: persist head-content blobs, re-bind fixed receipts, save state."""
     if not session_dir:
         return
     head = head_sha or _session_certified_head(session_dir, state)
-    if isinstance(head, str) and head:
-        _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
+    if not isinstance(head, str) or not head:
+        return
+    _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
+    if _finalize_fixed_disposition_receipts(state, session_dir, head):
+        save_state(session_dir, state)
 
 
 def _fix_batch_paths(state, artifact=None):
@@ -5688,20 +5773,6 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     cfg.pop("baseGuard", None)
     if source_guard == BASE_GUARD_CHECKED:
         cfg["baseGuard"] = BASE_GUARD_CHECKED
-    for finding in state_copy.get("findings") or []:
-        if not isinstance(finding, dict):
-            continue
-        if finding.get("disposition") == "fixed":
-            receipt = finding.get("dispositionReceipt")
-            if not isinstance(receipt, dict):
-                family = session_contract.disposition_family_snapshot(finding)
-                family = dict(
-                    family,
-                    dispositionReceipt={"headSha": head, "verifyResult": "pass"},
-                )
-                session_contract.apply_disposition_family(finding, family)
-            elif not receipt.get("headSha"):
-                receipt["headSha"] = head
     meta = {"sessionId": "run-loop-%s" % head[:16], "headSha": head, "producer": "run-loop"}
     repo_root = cfg.get("repoRoot")
     if isinstance(repo_root, str) and repo_root:

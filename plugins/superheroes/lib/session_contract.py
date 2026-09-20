@@ -310,6 +310,7 @@ def resolve_merged_into_entry(finding, by_key):
             return None
         if into in visited:
             return None
+        visited.add(into)
         target = by_key.get(into)
         if target is None:
             return None
