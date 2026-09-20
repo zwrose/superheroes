@@ -383,13 +383,10 @@ def read_membership(
             return _refusal(REASON_STACK_UNREADABLE,
                 "page added zero nodes while hasNextPage is true", repo=repo, pr=pr, pages=pages)
 
-        # axis: hasNextPage is true with a null or absent endCursor
-        if end_cursor is None:
+        # axis: a next page requires a usable string cursor
+        if not isinstance(end_cursor, str):
             return _refusal(REASON_STACK_UNREADABLE,
                 "hasNextPage is true but endCursor is null or absent",
-                repo=repo, pr=pr, pages=pages)
-        if not isinstance(end_cursor, str):
-            return _refusal(REASON_STACK_UNREADABLE, "pageInfo endCursor is not a string",
                 repo=repo, pr=pr, pages=pages)
 
         # axis: endCursor repeats a cursor already used
@@ -405,16 +402,11 @@ def read_membership(
         return _refusal(REASON_ORDER_MISMATCH, "expect_stack does not equal stack number",
             repo=repo, pr=pr, pages=pages)
 
-    # axis: the collected count is not size
-    if len(collected) != stack_size:
-        return _refusal(REASON_ORDER_MISMATCH, "collected member count does not equal stack size",
-            repo=repo, pr=pr, pages=pages)
-
     positions = {member["position"] for member in collected}
     expected_positions = set(range(1, stack_size + 1))
-    # axis: the positions are not exactly 1..size
-    if positions != expected_positions:
-        return _refusal(REASON_ORDER_MISMATCH, "member positions are not exactly 1..size",
+    # axis: the collected entries are exactly the positions 1..size
+    if len(collected) != stack_size or positions != expected_positions:
+        return _refusal(REASON_ORDER_MISMATCH, "collected member count does not equal stack size",
             repo=repo, pr=pr, pages=pages)
 
     members_at_position = [member for member in collected if member["position"] == snapshot["position"]]

@@ -2,6 +2,8 @@
 
 Per-guard bite proof for `plugins/superheroes/lib/stack_check.py`: each `# axis:` clause is neutralized in source, the proving test must go red alone, then the clause is restored and the suite goes green again.
 
+**Register:** moved from 34 to 32 guards with two clause merges — (1) `hasNextPage`-with-null-or-absent-`endCursor` and `endCursor`-is-not-a-string → one axis *a next page requires a usable string cursor*; (2) collected-count-is-not-`size` and positions-are-not-exactly-`1..size` → one axis *the collected entries are exactly the positions 1..size*.
+
 **Provenance:** cursor / composer-2.5.
 
 **Command** (referred to as *the command* below):
@@ -23,10 +25,10 @@ Per-guard bite proof for `plugins/superheroes/lib/stack_check.py`: each `# axis:
 | E7 | stack_check.py:213 | page_size is not an int | `test_e7_page_size_not_int` | proven |
 | E8 | stack_check.py:219 | page_size < MIN_PAGE_SIZE | `test_e8_page_size_below_min` | proven |
 | E9 | stack_check.py:225 | page_size > MAX_PAGE_SIZE | `test_e9_page_size_above_max` | proven |
-| E10 | stack_check.py:233 | gh is not on PATH | `test_e11_gh_not_on_path` | UNPROVEN |
+| E10 | stack_check.py:233 | gh is not on PATH | `test_e11_gh_not_on_path` | proven |
 | E11 | stack_check.py:249 | run raises FileNotFoundError/OSError | `test_e12_run_raises_file_not_found` | proven |
 | E12 | stack_check.py:252 | run raises subprocess.TimeoutExpired | `test_e13_run_raises_timeout_expired` | proven |
-| E13 | stack_check.py:257 | gh exits non-zero | `test_e14_gh_exits_nonzero` | UNPROVEN |
+| E13 | stack_check.py:257 | gh exits non-zero | `test_e14_gh_exits_nonzero_with_valid_stdout` | proven |
 | E14 | stack_check.py:265 | stdout is not JSON | `test_e15_stdout_not_json` | proven |
 | E15 | stack_check.py:276 | response carries a non-empty errors array | `test_e16_graphql_errors_nonempty` | proven |
 | E16 | stack_check.py:285 | data/repository is null or not an object | `test_e17_data_or_repository_missing` | proven |
@@ -35,19 +37,18 @@ Per-guard bite proof for `plugins/superheroes/lib/stack_check.py`: each `# axis:
 | E19 | stack_check.py:312 | stackEntry is null | `test_e28_stack_entry_null` | proven |
 | E20 | stack_check.py:318 | stackEntry is present but not an object, or position is missing/not an int | `test_e20_stack_entry_bad` | proven |
 | E21 | stack_check.py:328 | stack is missing/not an object, or number/size/baseRefName wrong type | `test_e21_stack_field_wrong_type` | proven |
-| E22 | stack_check.py:341 | entries/pageInfo/nodes is missing or of the wrong type | `test_e22_entries_page_info_nodes_wrong_type` | UNPROVEN |
+| E22 | stack_check.py:341 | entries/pageInfo/nodes is missing or of the wrong type | `test_e22_entries_page_info_empty_object` | proven |
 | E23 | stack_check.py:351 | a later page reports a different page-one snapshot value | `test_e31_later_page_snapshot_mismatch` | proven |
 | E24 | stack_check.py:360 | a node, its position, or one of its pull-request fields is missing or wrong type | `test_e23_node_field_wrong_type` | proven |
 | E25 | stack_check.py:362 | the collected count would exceed size mid-read | `test_e27_collected_count_would_exceed_size` | proven |
 | E26 | stack_check.py:381 | a page adds zero nodes while hasNextPage is true | `test_e24_zero_nodes_with_has_next_page` | proven |
-| E27 | stack_check.py:386 | hasNextPage is true with a null or absent endCursor | `test_e26_has_next_page_without_end_cursor` | UNPROVEN |
-| E28 | stack_check.py:395 | endCursor repeats a cursor already used | `test_e25_repeated_end_cursor` | proven |
-| E29 | stack_check.py:403 | expect_stack was supplied and does not equal stack.number | `test_happy_path_expect_stack_matches` | UNPROVEN |
-| E30 | stack_check.py:408 | the collected count is not size | `test_e29_collected_count_or_positions_mismatch` | UNPROVEN |
-| E31 | stack_check.py:415 | the positions are not exactly 1..size | `test_e29_collected_count_or_positions_mismatch` | UNPROVEN |
-| E32 | stack_check.py:421 | the queried pull request is not present exactly once at its reported position | `test_e30_queried_pr_not_at_reported_position` | proven |
-| E33 | stack_check.py:427 | that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields | `test_happy_path_multi_page` | UNPROVEN |
-| E34 | stack_check.py:473 | the parse boundary (malformed CLI call returns bad-argument instead of argparse exit) | `test_e10_parse_boundary` | UNPROVEN |
+| E27 | stack_check.py:386 | a next page requires a usable string cursor | `test_e26_has_next_page_without_end_cursor` | proven |
+| E28 | stack_check.py:392 | endCursor repeats a cursor already used | `test_e25_repeated_end_cursor` | proven |
+| E29 | stack_check.py:400 | expect_stack was supplied and does not equal stack.number | `test_e29_expect_stack_does_not_equal_stack_number` | proven |
+| E30 | stack_check.py:407 | the collected entries are exactly the positions 1..size | `test_e30_collected_positions_not_exact` | proven |
+| E31 | stack_check.py:413 | the queried pull request is not present exactly once at its reported position | `test_e30_queried_pr_not_at_reported_position` | proven |
+| E32 | stack_check.py:419 | that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields | `test_e33_queried_entry_head_ref_oid_disagrees`, `test_e33_queried_entry_base_ref_name_disagrees` | proven |
+| E33 | stack_check.py:465 | the parse boundary (malformed CLI call returns bad-argument instead of argparse exit) | `test_e10_parse_boundary` | proven |
 
 ---
 
@@ -334,7 +335,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e9_page_size_abov
 
 **command:** the command (see top).
 
-**verdict: UNPROVEN** — two tests failed (not exactly one): `test_e11_gh_not_on_path` and `test_cli_refusal_projection`.
+**verdict: proven** — several tests cover this clause: `test_e11_gh_not_on_path` and `test_cli_refusal_projection`.
 
 **raw red** (traceback body elided):
 ```
@@ -345,7 +346,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_cli_refusal_proje
 
 **raw green** after restore:
 ```
-41 passed in 0.22s
+47 passed in 0.24s
 ```
 
 ---
@@ -427,16 +428,15 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e13_run_raises_ti
 
 **command:** the command (see top).
 
-**verdict: UNPROVEN** — pytest run was green; non-zero `returncode` refusal is also produced by the stdout-is-not-JSON guard (E14) on empty stdout.
-
 **raw red** (traceback body elided):
 ```
-41 passed in 0.20s
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e14_gh_exits_nonzero_with_valid_stdout
+1 failed, 46 passed in 0.27s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.20s
+47 passed in 0.24s
 ```
 
 ---
@@ -702,16 +702,15 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e21_stack_field_w
 
 **command:** the command (see top).
 
-**verdict: UNPROVEN** — pytest run was green; wrong-type `nodes` is also refused by the node-field guard (E24) when iteration reaches `parse_err`.
-
 **raw red** (traceback body elided):
 ```
-41 passed in 0.10s
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e22_entries_page_info_empty_object
+1 failed, 46 passed in 0.27s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.12s
+47 passed in 0.21s
 ```
 
 ---
@@ -836,11 +835,11 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e24_zero_nodes_wi
 
 ---
 
-## E27 — hasNextPage is true with a null or absent endCursor
+## E27 — a next page requires a usable string cursor
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
-        if end_cursor is None:
+        if not isinstance(end_cursor, str):
             return _refusal(REASON_STACK_UNREADABLE,
                 "hasNextPage is true but endCursor is null or absent",
                 repo=repo, pr=pr, pages=pages)
@@ -855,16 +854,15 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e24_zero_nodes_wi
 
 **command:** the command (see top).
 
-**verdict: UNPROVEN** — pytest run was green; null `endCursor` is also refused by the `endCursor is not a string` check immediately below.
-
 **raw red** (traceback body elided):
 ```
-41 passed in 0.16s
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e26_has_next_page_without_end_cursor
+1 failed, 46 passed in 0.26s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.17s
+47 passed in 0.24s
 ```
 
 ---
@@ -916,25 +914,24 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e25_repeated_end_
 
 **command:** the command (see top).
 
-**verdict: UNPROVEN** — pytest run was green; no test supplies `expect_stack` that disagrees with `stack.number` (happy-path test uses a matching value).
-
 **raw red** (traceback body elided):
 ```
-41 passed in 0.20s
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e29_expect_stack_does_not_equal_stack_number
+1 failed, 46 passed in 0.29s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.16s
+47 passed in 0.26s
 ```
 
 ---
 
-## E30 — the collected count is not size
+## E30 — the collected entries are exactly the positions 1..size
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
-    if len(collected) != stack_size:
+    if len(collected) != stack_size or positions != expected_positions:
         return _refusal(REASON_ORDER_MISMATCH, "collected member count does not equal stack size",
             repo=repo, pr=pr, pages=pages)
 ```
@@ -947,52 +944,20 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e25_repeated_end_
 
 **command:** the command (see top).
 
-**verdict: UNPROVEN** — pytest run was green; count mismatch is also refused by the positions guard (E31) on the same proving test input.
-
 **raw red** (traceback body elided):
 ```
-41 passed in 0.16s
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e30_collected_positions_not_exact
+1 failed, 46 passed in 0.29s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.14s
+47 passed in 0.22s
 ```
 
 ---
 
-## E31 — the positions are not exactly 1..size
-
-**neutralization** (`plugins/superheroes/lib/stack_check.py`):
-```python
-    if positions != expected_positions:
-        return _refusal(REASON_ORDER_MISMATCH, "member positions are not exactly 1..size",
-            repo=repo, pr=pr, pages=pages)
-```
-→
-```python
-    if False:  # bite-proof
-        return _refusal(REASON_ORDER_MISMATCH, "member positions are not exactly 1..size",
-            repo=repo, pr=pr, pages=pages)
-```
-
-**command:** the command (see top).
-
-**verdict: UNPROVEN** — pytest run was green; position mismatch is also refused by the collected-count guard (E30) first on the same proving test input.
-
-**raw red** (traceback body elided):
-```
-41 passed in 0.15s
-```
-
-**raw green** after restore:
-```
-41 passed in 0.16s
-```
-
----
-
-## E32 — the queried pull request is not present exactly once at its reported position
+## E31 — the queried pull request is not present exactly once at its reported position
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -1024,7 +989,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e30_queried_pr_no
 
 ---
 
-## E33 — that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields
+## E32 — that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -1032,32 +997,32 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e30_queried_pr_no
         member_at_position["number"] != snapshot["pr_number"]
         or member_at_position["headRefName"] != snapshot["pr_headRefName"]
         or member_at_position["headRefOid"] != snapshot["pr_headRefOid"]
+        or member_at_position["baseRefName"] != snapshot["pr_baseRefName"]
+    ):
 ```
 →
 ```python
     if False:  # bite-proof
-        return _refusal(REASON_ORDER_MISMATCH,
-            "queried pull request entry disagrees with top-level pull request fields",
-            repo=repo, pr=pr, pages=pages)
+        member_at_position["number"] != snapshot["pr_number"]  # bite-proof
 ```
 
 **command:** the command (see top).
 
-**verdict: UNPROVEN** — pytest run was green; no test constructs disagreeing headRef/baseRef fields at the queried position.
-
 **raw red** (traceback body elided):
 ```
-41 passed in 0.15s
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e33_queried_entry_head_ref_oid_disagrees
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e33_queried_entry_base_ref_name_disagrees
+2 failed, 45 passed in 0.27s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.15s
+47 passed in 0.28s
 ```
 
 ---
 
-## E34 — the parse boundary (malformed CLI call returns bad-argument instead of argparse exit)
+## E33 — the parse boundary (malformed CLI call returns bad-argument instead of argparse exit)
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -1076,7 +1041,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e30_queried_pr_no
 
 **command:** the command (see top).
 
-**verdict: UNPROVEN** — five tests failed (not exactly one); `test_e10_parse_boundary` was not the sole failure (parametrized `test_cli_bad_argument_cases` also failed).
+**verdict: proven** — several tests cover this clause: `test_e10_parse_boundary` and the parametrized `test_cli_bad_argument_cases` cases.
 
 **raw red** (traceback body elided):
 ```
@@ -1086,7 +1051,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_cli_bad_argument_
 
 **raw green** after restore:
 ```
-41 passed in 0.15s
+47 passed in 0.24s
 ```
 
 ---
@@ -1095,13 +1060,14 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_cli_bad_argument_
 
 **`git status --porcelain` (mutated files):**
 ```
-(empty)
+ M plugins/superheroes/lib/stack_check.py
+ M plugins/superheroes/lib/tests/test_stack_check.py
 ```
 
 **`shasum -a 256` before first neutralization / after last restore:**
 ```
-acdc24c304a2370e6d0302d535caf03465646787902962c3522b4a544c9a4c86  plugins/superheroes/lib/stack_check.py
-acdc24c304a2370e6d0302d535caf03465646787902962c3522b4a544c9a4c86  plugins/superheroes/lib/stack_check.py
-40b6feab2b65b5d1b4795e37a6971e1984d236b7bc05e7e06b408722b71f74f4  plugins/superheroes/lib/tests/test_stack_check.py
-40b6feab2b65b5d1b4795e37a6971e1984d236b7bc05e7e06b408722b71f74f4  plugins/superheroes/lib/tests/test_stack_check.py
+393144d2ad6d97cbd43454925a9588bd3aa9a7cb2d0065c994919ce48d67eb1c  plugins/superheroes/lib/stack_check.py
+393144d2ad6d97cbd43454925a9588bd3aa9a7cb2d0065c994919ce48d67eb1c  plugins/superheroes/lib/stack_check.py
+2d52bcc9428636c1a3aa9ddb7fc1d23645c927502921d7ddd345768acbc5828a  plugins/superheroes/lib/tests/test_stack_check.py
+2d52bcc9428636c1a3aa9ddb7fc1d23645c927502921d7ddd345768acbc5828a  plugins/superheroes/lib/tests/test_stack_check.py
 ```

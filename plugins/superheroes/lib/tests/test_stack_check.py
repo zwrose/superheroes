@@ -256,6 +256,27 @@ def test_e14_gh_exits_nonzero():
     _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
 
 
+def test_e14_gh_exits_nonzero_with_valid_stdout():
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    run, _calls = _make_run(
+        {
+            _argv_page(PR, sc.DEFAULT_PAGE_SIZE): SimpleNamespace(
+                returncode=1, stdout=json.dumps({"data": {"repository": {"pullRequest": page}}}), stderr=""
+            ),
+        }
+    )
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+
+
 def test_e15_stdout_not_json():
     run, _calls = _make_run(
         {
@@ -332,6 +353,23 @@ def test_e21_stack_field_wrong_type():
 def test_e22_entries_page_info_nodes_wrong_type():
     page = _pull_request(nodes=[_member(1)], stack_size=1)
     page["stackEntry"]["stack"]["entries"]["nodes"] = "nope"
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+
+
+def test_e22_entries_page_info_empty_object():
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    nodes = page["stackEntry"]["stack"]["entries"]["nodes"]
+    page["stackEntry"]["stack"]["entries"] = {"nodes": nodes}
     run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
     result = sc.read_membership(pr=PR, repo=REPO, run=run)
     _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
@@ -420,6 +458,23 @@ def test_e28_stack_entry_null():
 
 def test_e29_collected_count_or_positions_mismatch():
     page = _pull_request(nodes=[_member(1), _member(2)], has_next_page=False, stack_size=5)
+    run, _calls = _make_run({_argv_page(PR, 2): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+
+
+def test_e30_collected_positions_not_exact():
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR), _member(3)],
+        has_next_page=False,
+        stack_size=2,
+        head_ref_name="branch-1",
+        head_ref_oid="oid1",
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
     run, _calls = _make_run({_argv_page(PR, 2): _graphql_ok(page)})
     result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
     _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
@@ -520,6 +575,53 @@ def test_happy_path_expect_stack_matches():
     result = sc.read_membership(pr=PR, repo=REPO, expect_stack=STACK_NUMBER, run=run)
     assert result["ok"] is True
     assert result["reason"] is None
+
+
+def test_e29_expect_stack_does_not_equal_stack_number():
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, expect_stack=STACK_NUMBER + 1, run=run)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+
+
+def test_e33_queried_entry_head_ref_oid_disagrees():
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR, headRefOid="other-oid")],
+        has_next_page=False,
+        stack_size=1,
+        head_ref_oid="oid1",
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+
+
+def test_e33_queried_entry_base_ref_name_disagrees():
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR, baseRefName="develop")],
+        has_next_page=False,
+        stack_size=1,
+        base_ref_name=STACK_BASE,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
 
 
 # --- argv pinning -----------------------------------------------------------------
