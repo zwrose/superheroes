@@ -100,7 +100,7 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
         return []
 
     def default_verifier(clusters, rnd):
-        return [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+        return [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                 for c in (clusters or []) for i in (c.get("ids") or [])]
 
     def default_synthesis(findings, rnd):
@@ -456,7 +456,7 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
             out = []
             for c in payload.get("clusters", []):
                 for i in c.get("ids", []):
-                    v = {"id": i, "verdict": verdict}
+                    v = {"id": i, "verdict": verdict, "reason": "checked"}
                     if verdict == "CONFIRMED":
                         v["evidence"] = "ran"
                     out.append(v)
@@ -634,6 +634,31 @@ def test_submit_verify_skip_accepted_with_a_configured_command(tmp_path, token):
     assert state.get("terminal") == "halted", state.get("terminal")
     assert state["certification"]["shape"] is None
     assert "pytest -q" in state["certification"]["reason"]
+
+
+def test_run_verify_payload_binds_base_ref_token_to_the_pinned_base(tmp_path):
+    """`{baseRef}` in the calibrated verify command is bound to the session's pinned base commit
+    at `run-verify`, so a touched-tests gate on a stacked branch diffs against the PR base rather
+    than main (vet 244, @244-3).
+
+    Bites on: `_verify_command` substituting the token from `config["baseRef"]`."""
+    pin = "a" * 40
+    d, n = _at(tmp_path, RD.P_VERIFY,
+               cfg=_cfg(verifyCommand="gate.py --base {baseRef} && pytest -q", baseRef=pin))
+    assert n["payload"]["command"] == "gate.py --base %s && pytest -q" % pin, n["payload"]
+
+
+def test_run_verify_payload_leaves_base_ref_token_verbatim_without_a_full_hex_pin(tmp_path):
+    """No pin, or a pin that is not a full hex object id, leaves the token in the command so the
+    gate refuses loudly on an unresolvable ref — never a silent substitution of main or of ``.
+
+    Bites on: the full-hex guard in `_verify_command` (a `""`/short/None pin does not substitute)."""
+    for i, pin in enumerate((None, "", "abc1234", "not-a-sha", "x" * 40)):
+        cfg = _cfg(verifyCommand="gate.py --base {baseRef}")
+        if pin is not None:
+            cfg["baseRef"] = pin
+        d, n = _at(str(tmp_path / ("case-%d" % i)), RD.P_VERIFY, cfg=cfg)   # one fresh session per case
+        assert n["payload"]["command"] == "gate.py --base {baseRef}", (pin, n["payload"])
 
 
 def test_submit_verify_guard_does_not_preempt_fences(tmp_path):
@@ -1008,13 +1033,31 @@ def test_submit_audits_collection_manifest_refusal_no_fold(tmp_path):
 
 def test_verifier_results_fault_pure():
     assert RD.verifier_results_fault({"verdicts": []}) is None
-    assert RD.verifier_results_fault({"verdicts": [{"id": "x", "verdict": "CONFIRMED"}]}) is None
+    fault = RD.verifier_results_fault({"verdicts": [{"id": "x", "verdict": "CONFIRMED"}]})
+    assert fault is not None
+    assert "reason" in fault
     assert RD.verifier_results_fault(None) is not None
     assert RD.verifier_results_fault({}) is not None
     assert "missing `verdicts`" in RD.verifier_results_fault({}) or \
         "no `verdicts` key" in RD.verifier_results_fault({})
     fault = RD.verifier_results_fault({"findings": []})
     assert fault is not None and "`findings`" in fault
+    assert RD.verifier_results_fault({"verdicts": {}}) is not None
+
+
+def test_hand_submit_verifier_reasonless_verdict_refused():
+    fault = RD.verifier_results_fault({"verdicts": [{"id": "f-1", "verdict": "CONFIRMED"}]})
+    assert fault is not None
+    assert "reason" in fault
+    assert RD.verifier_results_fault(
+        {"verdicts": [{"id": "f-1", "verdict": "CONFIRMED", "reason": "checked"}]}
+    ) is None
+    assert RD.verifier_results_fault(None) is not None
+    assert RD.verifier_results_fault({}) is not None
+    assert "missing `verdicts`" in RD.verifier_results_fault({}) or \
+        "no `verdicts` key" in RD.verifier_results_fault({})
+    fault_findings = RD.verifier_results_fault({"findings": []})
+    assert fault_findings is not None and "`findings`" in fault_findings
     assert RD.verifier_results_fault({"verdicts": {}}) is not None
 
 
@@ -1128,7 +1171,7 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path):
                     {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
             return {"seats": seats}
         if phase == RD.P_VERIFIERS:
-            return {"verdicts": [{"id": i, "verdict": "PLAUSIBLE"}
+            return {"verdicts": [{"id": i, "verdict": "PLAUSIBLE", "reason": "checked"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
@@ -1176,7 +1219,7 @@ def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
                     {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
             return {"seats": seats}
         if phase == RD.P_VERIFIERS:
-            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
@@ -1253,7 +1296,7 @@ def _multifile_delta_respond(captured, fixer_artifact):
                     {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
             return {"seats": seats}
         if phase == RD.P_VERIFIERS:
-            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
@@ -1313,7 +1356,7 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
                     {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
             return {"seats": seats}
         if phase == RD.P_VERIFIERS:
-            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
@@ -1409,6 +1452,100 @@ def test_run_loop_refusal_only_contract_journal_fault_unrecordable():
     _assert_run_loop_refusal_only(RD.run_loop(_seams(reviewer=boom), _cfg_cert()))
 
 
+def _panel_finding_reviewer():
+    finding = {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}
+
+    def reviewer(dim, tier, rnd, ctx):
+        if rnd == 1 and dim == "code-reviewer":
+            return {"findings": [finding]}
+        return []
+
+    return reviewer
+
+
+def test_run_seam_verifier_reason_less_verdict_returns_fault_directly():
+    """axis: a reason-less verifier verdict is converted into _verifierArtifactFault, not a ruling."""
+    def bad_verifier(clusters, rnd):
+        return [{"id": i, "verdict": "CONFIRMED"}
+                for c in (clusters or []) for i in (c.get("ids") or [])]
+
+    state = RD.new_state(_cfg())
+    result = RD._run_seam(
+        _seams(verifier=bad_verifier),
+        RD.P_VERIFIERS,
+        {"clusters": [{"ids": ["f-1"]}]},
+        state,
+        state["config"],
+    )
+    fault = RD.verifier_results_fault({"verdicts": [{"id": "f-1", "verdict": "CONFIRMED"}]})
+    assert result == {"verdicts": [], "_verifierArtifactFault": fault}
+    assert "reason" in fault
+
+
+def test_two_verifier_faults_in_one_round_are_both_recorded():
+    wave = {"n": 0}
+
+    def wave_verifier(clusters, rnd):
+        wave["n"] += 1
+        ids = [i for c in (clusters or []) for i in (c.get("ids") or [])]
+        if wave["n"] == 1:
+            return [{"id": i, "verdict": "CONFIRMED"} for i in ids]
+        return [{"verdict": "CONFIRMED", "reason": "checked"} for _i in ids]
+
+    finding = {"title": "bug", "severity": "Important", "file": "f0.py", "line": 1}
+    gap_finding = {"title": "gap", "severity": "Important", "file": "f1.py", "line": 1}
+
+    def reviewer(dim, tier, rnd, ctx):
+        if dim == "gap-sweep":
+            return {"findings": [gap_finding]}
+        if rnd == 1 and dim == "code-reviewer":
+            return {"findings": [finding]}
+        return []
+
+    refusal, _loop_receipt = _run_loop_with_loop_receipt(
+        _seams(reviewer=reviewer, verifier=wave_verifier),
+        _cfg_cert(diff=_big_diff(25)),
+    )
+    faults = refusal.get("verifierArtifactFault") or []
+    assert len(faults) == 2
+    assert faults[0]["round"] == 1
+    assert faults[1]["round"] == 1
+    assert "reason" in faults[0]["fault"]
+    assert "id" in faults[1]["fault"]
+    assert faults[0]["fault"] != faults[1]["fault"]
+
+
+def test_run_loop_verifier_reasonless_verdict_keeps_findings_plausible():
+    def bad_verifier(clusters, rnd):
+        return [{"id": i, "verdict": "CONFIRMED"}
+                for c in (clusters or []) for i in (c.get("ids") or [])]
+
+    refusal, loop_receipt = _run_loop_with_loop_receipt(
+        _seams(reviewer=_panel_finding_reviewer(), verifier=bad_verifier),
+        _cfg_cert(),
+    )
+    assert refusal["loopTerminal"] != "cannot-certify"
+    assert refusal.get("verifierArtifactFault")
+    assert any("reason" in entry["fault"] for entry in refusal["verifierArtifactFault"])
+    r1 = [r for r in refusal["loopRounds"] if r["round"] == 1][0]
+    assert r1["verifyPasses"][0]["PLAUSIBLE"] >= 1
+    assert r1["verifyPasses"][0]["CONFIRMED"] == 0
+
+
+def test_run_loop_verifier_valid_reason_control():
+    def good_verifier(clusters, rnd):
+        return [{"id": i, "verdict": "CONFIRMED", "reason": "checked", "evidence": "ran"}
+                for c in (clusters or []) for i in (c.get("ids") or [])]
+
+    refusal, loop_receipt = _run_loop_with_loop_receipt(
+        _seams(reviewer=_panel_finding_reviewer(), verifier=good_verifier),
+        _cfg_cert(),
+    )
+    assert refusal.get("verifierArtifactFault") is None
+    r1 = [r for r in refusal["loopRounds"] if r["round"] == 1][0]
+    assert r1["verifyPasses"][0]["CONFIRMED"] >= 1
+    assert r1["verifyPasses"][0]["PLAUSIBLE"] == 0
+
 
 def test_run_loop_certification_refusal_not_legacy_receipt():
     """Without a checked base guard the loop still terminates; run_loop never mints a legacy receipt."""
@@ -1440,7 +1577,8 @@ def _persistent_not_discharged_seams(io=None):
         return {"fixes": [], "headDiff": _headf(counter["n"]), "changedSubjects": ["Code"]}
 
     def plaus_verifier(clusters, rnd):
-        return [{"id": i, "verdict": "PLAUSIBLE"} for i in range(len(clusters or []))]
+        return [{"id": i, "verdict": "PLAUSIBLE", "reason": "checked"}
+                for c in (clusters or []) for i in (c.get("ids") or [])]
 
     return _seams(
         reviewer=lambda dim, tier, rnd, ctx:
@@ -1720,7 +1858,8 @@ def _stall_then_clean_auditor_seams(io=None, clean_after=2):
         return {"fixes": [], "headDiff": _headf(counter["n"]), "changedSubjects": ["Code"]}
 
     def plaus_verifier(clusters, rnd):
-        return [{"id": i, "verdict": "PLAUSIBLE"} for i in range(len(clusters or []))]
+        return [{"id": i, "verdict": "PLAUSIBLE", "reason": "checked"}
+                for c in (clusters or []) for i in (c.get("ids") or [])]
 
     seams = _seams(
         reviewer=lambda dim, tier, rnd, ctx:
@@ -2627,7 +2766,8 @@ def test_receipt_missing_seat_surfaces_unverified(tmp_path):
         return []
 
     receipt = RD.run_loop(_seams(reviewer=reviewer,
-                                 verifier=lambda cl, rnd: [{"id": i, "verdict": "PLAUSIBLE"}
+                                 verifier=lambda cl, rnd: [{"id": i, "verdict": "PLAUSIBLE",
+                                                            "reason": "checked"}
                                                            for c in (cl or []) for i in c.get("ids", [])]),
                           _cfg_cert())
     r1 = [x for x in receipt["loopRounds"] if x["round"] == 1][0]
@@ -6723,6 +6863,91 @@ def test_canary_failed_one_vendor_only_downgrades_that_vendor_seats():
     assert sorted(r1["canaryFailed"]["seats"]) == ["security-reviewer"]
     assert r1["canaryVerified"] == {"codex": {"tokens": 1}}
     assert state["fullPanelRan"] is False
+
+
+def _canary_dims_from_by_vendor(by_vendor, status):
+    out = []
+    for info in (by_vendor or {}).values():
+        if not isinstance(info, dict) or info.get("status") != status:
+            continue
+        seats = info.get("seats") if isinstance(info.get("seats"), list) else []
+        out.extend(d for d in seats if isinstance(d, str))
+    return set(out)
+
+
+def _canary_dims_from_by_dim(by_dim, status):
+    if not isinstance(by_dim, dict):
+        return set()
+    return {dim for dim, st in by_dim.items() if isinstance(dim, str) and st == status}
+
+
+def test_canary_dims_for_status_reads_by_dim_when_present():
+    live = {
+        "byDim": {"code-reviewer": "dead", "security-reviewer": "unproven"},
+        "byVendor": {"codex": {"status": "proven", "seats": ["code-reviewer"]}},
+    }
+    assert RD._canary_dims_for_status(live, live["byVendor"], "dead") == ["code-reviewer"]
+    assert RD._canary_dims_for_status(live, live["byVendor"], "unproven") == [
+        "security-reviewer",
+    ]
+
+
+def test_canary_dims_for_status_unions_vendor_when_by_dim_omits_dimension():
+    live = {
+        "byDim": {"code-reviewer": "dead"},
+        "byVendor": {
+            "codex": {"status": "dead", "seats": ["code-reviewer", "security-reviewer"]},
+        },
+    }
+    assert RD._canary_dims_for_status(live, live["byVendor"], "dead") == [
+        "code-reviewer",
+        "security-reviewer",
+    ]
+
+
+def test_canary_by_dim_agrees_with_by_vendor_for_dimension_keyed_statuses():
+    dims = list(RD.DIMENSIONS)
+    seat_map = _seat_map_vendors({d: "claude" for d in dims})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    seat_map["seats"]["security-reviewer"] = {"vendor": "cursor"}
+    seats = {d: {"findings": []} for d in dims}
+    status = {d: "run" for d in dims}
+    scenarios = [
+        ("unproven-no-probe", {}, None),
+        ("dead", {}, {
+            "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": False,
+            "evidence": {}, "detectedPlant": False, "detail": "dead",
+        }),
+        ("outcome-failed", {}, {
+            "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": True,
+            "evidence": {"tokens": 1}, "detectedPlant": False, "detail": "vacuous",
+        }),
+        ("proven", {}, {
+            "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
+            "evidence": {"tokens": 1}, "detectedPlant": True, "detail": "live",
+        }),
+        ("all-claude", _seat_map_vendors({d: "claude" for d in dims}), None),
+        ("findings-n/a", seat_map, None),
+        ("dual-vendor-mixed", seat_map, [
+            {
+                "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": False,
+                "evidence": {}, "detectedPlant": False, "detail": "dead",
+            },
+            {
+                "engine": "cursor", "model": "c", "outcome": "vacuous", "engaged": True,
+                "evidence": {"tokens": 1}, "detectedPlant": False, "detail": "vacuous",
+            },
+        ]),
+    ]
+    findings_seats = dict(seats)
+    findings_seats["code-reviewer"] = {"findings": [{"title": "x"}]}
+    for label, sm, canary in scenarios:
+        s = findings_seats if label == "findings-n/a" else seats
+        out = RD.canary_liveness(dims, status, s, sm, {}, canary)
+        for st in ("unproven", "dead"):
+            from_vendor = _canary_dims_from_by_vendor(out["byVendor"], st)
+            from_dim = _canary_dims_from_by_dim(out["byDim"], st)
+            assert from_dim == from_vendor, (label, st, from_dim, from_vendor)
 
 
 def test_canary_liveness_duplicate_codex_probes_dead_both_orders():

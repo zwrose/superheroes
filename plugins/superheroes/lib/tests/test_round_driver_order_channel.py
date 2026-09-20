@@ -123,7 +123,7 @@ def _names_a_landing_path(text):
 def test_engine_seat_order_carries_the_stdout_contract(tmp_path):
     orders = _emit(tmp_path, "mixed", _mixed_seat_map())
     text = orders[ENGINE_SEAT]
-    assert "final stdout" in text, text[-1200:]
+    assert "runner's declared result channel" in text, text[-1200:]
 
 
 def test_engine_seat_order_names_no_landing_path_write(tmp_path):
@@ -177,7 +177,7 @@ def test_absent_seat_map_never_emits_a_write_contract(tmp_path):
     for dim, text in sorted(orders.items()):
         assert _names_a_write(text) == [], (dim, _names_a_write(text))
         assert not _names_a_landing_path(text), dim
-        assert "final stdout" in text, dim
+        assert "runner's declared result channel" in text, dim
 
 
 def test_absent_vendor_is_still_disclosed_not_merely_made_safe(tmp_path):
@@ -216,7 +216,7 @@ def test_every_phase_renders_exactly_one_output_contract(phase):
     for host_seat in (True, False):
         text = _render_phase(phase, host_seat=host_seat)
         writes = bool(_names_a_write(text))
-        emits = "final stdout" in text
+        emits = "runner's declared result channel" in text
         assert writes != emits, (
             "phase=%s host_seat=%s must state exactly one contract (writes=%s emits_stdout=%s)"
             % (phase, host_seat, writes, emits))
@@ -299,7 +299,10 @@ def test_emit_orders_manifest_reuses_the_same_row_for_manifest_and_render(tmp_pa
         order_text = fh.read()
 
     manifest_says_engine = RD._vendor_is_external_engine(engine_entry["vendor"])
-    order_says_stdout = "final stdout" in order_text and not _names_a_landing_path(order_text)
+    order_says_stdout = (
+        "runner's declared result channel" in order_text
+        and not _names_a_landing_path(order_text)
+    )
     assert manifest_says_engine == order_says_stdout, (
         "manifest vendor=%r (engine=%s) but rendered order says stdout=%s:\n%s"
         % (engine_entry["vendor"], manifest_says_engine, order_says_stdout, order_text[-1200:]))

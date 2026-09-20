@@ -701,24 +701,6 @@ def _validate_model_effort(bundle: dict) -> dict:
     return out
 
 
-def validate(bundle: dict, role: str) -> dict:
-    if not bundle.get("ok"):
-        return bundle
-    if not isinstance(role, str) or role not in model_registry.roles():
-        valid = _format_valid(model_registry.roles())
-        return {
-            "ok": False,
-            "reason": "unknown-role",
-            "detail": (
-                f"unknown role {role!r}; valid roles: {valid}; {accepted_role_detail()}"
-            ),
-        }
-    checked = _validate_model_effort(bundle)
-    if not checked.get("ok"):
-        return checked
-    return checked
-
-
 def validate_effort_only(bundle: dict) -> dict:
     """Model-level effort validation without registry role allowlist (build-argv entry)."""
     if not bundle.get("ok"):
@@ -808,11 +790,10 @@ def _parse_entry_dict(obj: dict) -> dict:
             ),
         )
     if not isinstance(role, str) or role not in model_registry.roles():
-        valid = _format_valid(model_registry.roles())
         return _entry_refusal(
             "unknown-role",
             (
-                f"unknown role {role!r}; valid roles: {valid}; "
+                f"unknown role {role!r}; "
                 f"accepted: {_ACCEPTED_SEAT}; {accepted_role_detail()}"
             ),
         )
@@ -1070,7 +1051,31 @@ def _normalize_allowlist_verdict(verdict, *, role: str, vendor: str, model: str,
 def _dispatch_adapter_vendors():
     import engine_adapter  # noqa: WPS433 — lazy: argv-capable vendor roster lives in adapter
 
-    return engine_adapter._BUILD_ARGV_VENDORS
+    return engine_adapter.BUILD_ARGV_VENDORS
+
+
+_ALLOWLIST_RAISED_LEAD = "allowlist guard raised unexpectedly"
+# Match review_memory's 500-char excerpt cap: enough for diagnosis without bloating refusals.
+_ALLOWLIST_RAISED_IDENTITY_MAX = 500
+
+
+def _allowlist_raised_detail(exc: BaseException) -> str:
+    import readout  # noqa: WPS433 — lazy: scrub seam without import cycle at module load
+
+    exc_name = type(exc).__name__
+    try:
+        msg = str(exc)
+    except Exception:
+        identity = "%s: <message unavailable>" % exc_name
+    else:
+        if msg:
+            identity = "%s: %s" % (exc_name, msg)
+        else:
+            identity = exc_name
+    scrubbed, _ok = readout.scrub(identity)
+    if len(scrubbed) > _ALLOWLIST_RAISED_IDENTITY_MAX:
+        scrubbed = scrubbed[:_ALLOWLIST_RAISED_IDENTITY_MAX] + "…"
+    return "%s: %s" % (_ALLOWLIST_RAISED_LEAD, scrubbed)
 
 
 def _undispatchable_vendor_refusal(vendor: str, *, verb: str) -> dict:
@@ -1121,10 +1126,10 @@ def resolve_entry(
             return mode_refusal
     try:
         verdict = dispatch_allowlist.validate(role, vendor, model, effort)
-    except Exception:
+    except Exception as exc:
         return _entry_refusal(
             "allowlist-raised",
-            "allowlist guard raised unexpectedly",
+            _allowlist_raised_detail(exc),
         )
     normalized = _normalize_allowlist_verdict(
         verdict, role=role, vendor=vendor, model=model, effort=effort,

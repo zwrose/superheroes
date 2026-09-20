@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Config-time dispatch vocabulary round-trip self-test (issue #636).
+"""Config-time dispatch vocabulary round-trip self-test.
 
+It proves configuration only — never engine liveness; a green selftest says nothing about whether an engine answers.
 Pure, stdlib-only; never touches disk; never raises from run()."""
 from __future__ import annotations
 
