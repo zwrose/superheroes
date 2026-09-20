@@ -243,6 +243,16 @@ def test_recorded_row_fields_rejects_missing_or_unknown_cited_head_source():
     assert excinfo.value.missing == ("citedHeadSource",)
 
 
+def test_stored_cited_head_source_defaults_when_absent():
+    assert RR.stored_cited_head_source({}) == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
+
+
+def test_stored_cited_head_source_raises_on_invalid_present_value():
+    with pytest.raises(RR.IncompleteRevisionIdentity) as excinfo:
+        RR.stored_cited_head_source({"citedHeadSource": "runner-veiw"})
+    assert excinfo.value.missing == ("citedHeadSource",)
+
+
 def _run_dir_with_opened_view_meta(tmp_path, view_meta, base_sha=None):
     order_path = str(tmp_path / "order.txt")
     with open(order_path, "w", encoding="utf-8") as fh:
@@ -500,11 +510,65 @@ def test_sweep_record_journal_declares_order_anchor_cited_head_source(tmp_path):
                occurrence=occurrence)
     out = RD.cmd_record_result(session_dir, sweep=True)
     assert out["ok"], out
+    spath = RR.store_path(session_dir, pend["round"], pend["phase"],
+                          RR.storage_key(seat, occurrence), pend["attempt"])
+    stored, err = RR.read_json(spath)
+    assert err is None
+    assert stored["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
     rows = [r for r in RD.read_journal(session_dir)
             if r.get("outcome") == "recorded" and r.get("cmd") == "record-result"
             and r.get("seat") == seat]
     assert rows
     assert rows[-1]["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
+
+
+def test_sweep_ignores_false_runner_view_on_landing(tmp_path):
+    session_dir, gitdir, head_path = _TDI._bootstrap(tmp_path, name="cited-head-false-runner-view")
+    state = _state(session_dir)
+    pend = state["pending"]
+    assert pend["phase"] == RD.P_PANEL
+    roster, _ = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
+    slots = _TDI._slots_of(roster)
+    _TDI._write_dispatch_manifest(session_dir, pend, slots, _TDI._auditor_vendor_for(state))
+    seat, occurrence = slots[0]
+    _TDI._land(session_dir, state, pend, seat,
+               _TDI._payload_for(session_dir, state, pend, seat, [], head_path),
+               occurrence=occurrence)
+    lpath = RR.landing_path(session_dir, pend["round"], pend["phase"],
+                            RR.storage_key(seat, occurrence), pend["attempt"])
+    envelope, _ = RR.read_json(lpath)
+    assert envelope is not None
+    envelope["citedHeadSource"] = RR.CITED_HEAD_SOURCE_RUNNER_VIEW
+    RR.atomic_write_json(lpath, envelope)
+    out = RD.cmd_record_result(session_dir, sweep=True)
+    assert out["ok"], out
+    spath = RR.store_path(session_dir, pend["round"], pend["phase"],
+                          RR.storage_key(seat, occurrence), pend["attempt"])
+    stored, err = RR.read_json(spath)
+    assert err is None
+    assert stored["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
+    rows = [r for r in RD.read_journal(session_dir)
+            if r.get("outcome") == "recorded" and r.get("cmd") == "record-result"
+            and r.get("seat") == seat]
+    assert rows
+    assert rows[-1]["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
+
+
+def test_advance_reappend_refuses_invalid_stored_cited_head_source(tmp_path, adapters):
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    pend = _pending(d)
+    ghost_seat = "ghost-reviewer"
+    ghost_skey = RR.storage_key(ghost_seat)
+    env = _result_envelope(d, ghost_seat,
+                           payload={"findings": [], "confidence": "high", "seat": ghost_seat})
+    env["citedHeadSource"] = "runner-veiw"
+    spath = RR.store_path(d, pend["round"], pend["phase"], ghost_skey, pend["attempt"])
+    os.makedirs(os.path.dirname(spath), exist_ok=True)
+    RR.atomic_write_json(spath, env)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False
+    assert out["reason"] == "recorded-row-incomplete"
 
 
 def _at_run_verify(tmp_path, session_dir):

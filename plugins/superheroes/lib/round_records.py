@@ -181,10 +181,12 @@ def stored_cited_head_source(stored_envelope):
     """The durable cited-head derivation bound on a stored envelope, or order-anchor for legacy rows."""
     if not isinstance(stored_envelope, dict):
         return CITED_HEAD_SOURCE_ORDER_ANCHOR
-    source = stored_envelope.get("citedHeadSource")
+    if "citedHeadSource" not in stored_envelope:
+        return CITED_HEAD_SOURCE_ORDER_ANCHOR
+    source = stored_envelope["citedHeadSource"]
     if source in CITED_HEAD_SOURCES:
         return source
-    return CITED_HEAD_SOURCE_ORDER_ANCHOR
+    raise IncompleteRevisionIdentity(("citedHeadSource",))
 
 
 def envelope_bind_cited_head_source(envelope, cited_head_source):
@@ -459,6 +461,8 @@ def _normalize_envelope(envelope, occurrence=0):
     addressed to, which is also the slot the file lives in, so the stored record says WHICH of two
     same-id seats it is rather than leaving the reader to infer it from the filename."""
     out = dict(envelope)
+    # Writer-owned revision identity — never authoritative from a landing envelope.
+    out.pop("citedHeadSource", None)
     out["occurrence"] = occurrence
     for key in ("round", "attempt"):
         value = out.get(key)
@@ -718,7 +722,7 @@ def _probe_store_entry(spath):
 def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                      supersede=False, expect_sha256=None, anchor=None, occurrence=0,
                      seat_result_schema=None, envelope_override=None,
-                     evidence_minted=False):
+                     evidence_minted=False, cited_head_source=None):
     """Every check `ingest_landing` performs, with NO write.
 
     When ``envelope_override`` is a dict, that dict is validated in place of reading the
@@ -881,9 +885,12 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
             return None, _refuse("cas-mismatch", expected=expect_sha256, actual=current_sha,
                                  storePath=spath)
 
+    normalized = _normalize_envelope(envelope, occurrence)
+    if cited_head_source is not None:
+        normalized = envelope_bind_cited_head_source(normalized, cited_head_source)
     plan = {
         "storePath": spath,
-        "envelope": _normalize_envelope(envelope, occurrence),
+        "envelope": normalized,
         "payloadSha256": stored_sha,
         "superseded": bool(exists and supersede),
         "seatKey": seat_key,
@@ -895,7 +902,7 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
 
 def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                    supersede=False, expect_sha256=None, anchor=None, occurrence=0,
-                   seat_result_schema=None, evidence_minted=False):
+                   seat_result_schema=None, evidence_minted=False, cited_head_source=None):
     """Ingest ONE landed seat envelope into the durable store. Never raises on bad input.
 
     Returns `{"ok": True, "storePath", "payloadSha256", "superseded"}` or a refusal
@@ -930,7 +937,8 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
                                      supersede=supersede, expect_sha256=expect_sha256,
                                      anchor=anchor, occurrence=occurrence,
                                      seat_result_schema=seat_result_schema,
-                                     evidence_minted=evidence_minted)
+                                     evidence_minted=evidence_minted,
+                                     cited_head_source=cited_head_source)
     if refusal is not None:
         return refusal
     atomic_write_json(plan["storePath"], plan["envelope"])
@@ -1002,7 +1010,8 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
         out = ingest_landing(session_dir, rnd, phase, seat_key, current_attempt,
                              current_attempt=current_attempt, roster=roster, anchor=anchor,
                              occurrence=occurrence, seat_result_schema=seat_result_schema,
-                             evidence_minted=evidence_minted)
+                             evidence_minted=evidence_minted,
+                             cited_head_source=CITED_HEAD_SOURCE_ORDER_ANCHOR)
         out.setdefault("seatKey", seat_key)
         out.setdefault("storageKey", skey)
         out.setdefault("occurrence", occurrence)

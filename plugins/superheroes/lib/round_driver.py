@@ -8487,9 +8487,15 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                                    fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
                                    seat=seat, storePath=spath)
             cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
+            try:
+                cited_head_source = round_records.stored_cited_head_source(stored_envelope)
+            except round_records.IncompleteRevisionIdentity as exc:
+                return _refuse_cmd(session_dir, cmd, "recorded-row-incomplete",
+                                   fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
+                                   seat=seat, storePath=spath,
+                                   detail=", ".join(exc.missing))
             revision_fields = round_records.recorded_row_fields(
-                stored_envelope, cited_head,
-                round_records.stored_cited_head_source(stored_envelope))
+                stored_envelope, cited_head, cited_head_source)
             _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                            seat=seat, occurrence=occurrence, **revision_fields,
                            **_journal_addressing_fields(expect_round, expect_phase),
@@ -8612,7 +8618,8 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
     round_records.atomic_write_json(lpath, envelope)
     out = round_records.ingest_landing(session_dir, rnd, phase, seat, cur_attempt,
                                        current_attempt=cur_attempt, roster=roster, anchor=anchor,
-                                       occurrence=occurrence, seat_result_schema=seat_schema)
+                                       occurrence=occurrence, seat_result_schema=seat_schema,
+                                       cited_head_source=round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
     if not out.get("ok"):
         return _refuse_cmd(session_dir, "record-missing", out.get("reason"), phase=phase, rnd=rnd,
                            attempt=cur_attempt, seat=_slot_label(seat, occurrence),
@@ -9345,9 +9352,16 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
                                fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
                                seat=seat_key, storePath=spath)
         cited_head = _anchor_cited_head(state, session_dir, rnd, phase, entry_attempt)
+        try:
+            cited_head_source = round_records.stored_cited_head_source(stored_envelope)
+        except round_records.IncompleteRevisionIdentity as exc:
+            seat_key = slot[0] if slot is not None else None
+            return _refuse_cmd(session_dir, "advance", "recorded-row-incomplete",
+                               fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
+                               seat=seat_key, storePath=spath,
+                               detail=", ".join(exc.missing))
         revision_fields = round_records.recorded_row_fields(
-            stored_envelope, cited_head,
-            round_records.stored_cited_head_source(stored_envelope))
+            stored_envelope, cited_head, cited_head_source)
         _journal_event(session_dir, "advance", "recorded", phase=phase, round=rnd,
                        attempt=entry_attempt, seat=slot[0] if slot else None,
                        occurrence=slot[1] if slot else None,
