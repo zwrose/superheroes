@@ -265,3 +265,42 @@ AssertionError: assert None == 'pass'
 .                                                                        [100%]
 1 passed
 ```
+
+## BP-2f-r2-g — terminal without certified head still records residuals
+
+**Guarded element.** `round_driver._finalize_certification_inputs` — early return when certified head is unresolvable.
+**Axis.** The shared terminal step always re-binds fixed receipts and saves state; only head-content read is skipped when no head resolves.
+**Detector.** `test_terminal_without_certified_head_still_records_residuals`.
+
+**Neutralization.**
+
+```python
+    if not isinstance(head, str) or not head:
+        return
+```
+
+(restored WO-R2 early return that skipped re-bind and save when head is missing)
+
+**Raw red** (exit 1):
+
+```
+FAILED ...test_terminal_without_certified_head_still_records_residuals
+AssertionError: assert None == 'fix-content-missing'
+1 failed in 0.46s
+```
+
+**Restore.** Removed early return; blob persist conditioned on `isinstance(head, str) and head`:
+
+```python
+    if isinstance(head, str) and head:
+        _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
+    _finalize_fixed_disposition_receipts(state, session_dir, state.get("config") or {})
+    save_state(session_dir, state)
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.41s
+```

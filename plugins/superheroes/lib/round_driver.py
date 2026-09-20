@@ -3729,7 +3729,7 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
             _record_round(state, "fixFoldHead", head)
             _record_fix_content_on_findings(state, session_dir, artifact, head)
             _merge_head_content_blobs(
-                session_dir, state, head, _fix_batch_paths(state, artifact))
+                session_dir, state, head, _fixed_ledger_content_paths(state, artifact))
     queue = state.get("_fixQueue") or []
     if queue:
         cap = _fix_batch_cap(config)
@@ -5605,9 +5605,12 @@ def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None
     head = head_sha or _session_certified_head(session_dir, state)
     if not isinstance(head, str) or not head:
         return
-    if paths is None:
-        paths = _fixed_ledger_content_paths(state, artifact)
-    _merge_head_content_blobs(session_dir, state, head, paths)
+    try:
+        if paths is None:
+            paths = _fixed_ledger_content_paths(state, artifact)
+        _merge_head_content_blobs(session_dir, state, head, paths)
+    except Exception:
+        pass
 
 
 def _finalize_certification_inputs(session_dir, state, head_sha=None, artifact=None):
@@ -5615,9 +5618,8 @@ def _finalize_certification_inputs(session_dir, state, head_sha=None, artifact=N
     if not session_dir:
         return
     head = head_sha or _session_certified_head(session_dir, state)
-    if not isinstance(head, str) or not head:
-        return
-    _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
+    if isinstance(head, str) and head:
+        _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
     _finalize_fixed_disposition_receipts(state, session_dir, state.get("config") or {})
     save_state(session_dir, state)
 

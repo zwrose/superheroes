@@ -840,6 +840,87 @@ def test_terminal_rebind_covers_a_ledger_only_fixed_row(tmp_path):
     assert blobs.get("files", {}).get(proof_path) is not None
 
 
+def test_terminal_without_certified_head_still_records_residuals(tmp_path):
+    """Terminal with no resolvable certified head still records fix-content-missing on disk."""
+    repo, head = _init_repo(tmp_path)
+    state = RD.new_state(_cfg())
+    state["config"]["baseGuard"] = RC.BASE_GUARD_CHECKED
+    state["config"]["repoRoot"] = str(repo)
+    state["round"] = 1
+    state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": head}}
+    key, entry = _audit_discharge_fixed(state, head)
+    _terminal_converged_state(state, head, key)
+    state["config"].pop("headSha", None)
+    state["config"].pop(RD.FIX_FOLD_HEAD_KEY, None)
+    state["findings"] = [_ledger_by_key(state)[key]]
+    meta = {"baseGuard": RC.BASE_GUARD_CHECKED, "repoRoot": str(repo)}
+    evidence = {
+        "source": "runner",
+        "runnerNonce": "no-head-nonce",
+        "recordDigest": "a" * 64,
+        "resultDigest": _RCF.DEFAULT_FINDINGS_RESULT_SHA,
+        "resultKind": "findings",
+        "observation": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+        },
+    }
+    journal = [{
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "phase": RC.PANEL_PHASE,
+        "round": 1,
+        "attempt": 0,
+        "seat": "code-reviewer",
+        "provenance": RC.PROVENANCE_HAND_LANDED,
+        "payloadSha256": _RCF.DEFAULT_PANEL_PAYLOAD_SHA,
+        "executionEvidence": {
+            field: evidence[field] for field in RC.EXECUTION_EVIDENCE_BINDING_FIELDS
+        },
+        "recordIdentity": {
+            "phase": RC.PANEL_PHASE,
+            "seat": "code-reviewer",
+            "occurrence": 0,
+            "attempt": 0,
+        },
+    }]
+    envelopes = [{
+        "seat": "code-reviewer",
+        "payloadSha256": _RCF.DEFAULT_PANEL_PAYLOAD_SHA,
+        "executionEvidence": evidence,
+        "payload": _RCF.DEFAULT_PANEL_PAYLOAD,
+    }]
+    session_dir = _RCF.write_session(
+        tmp_path,
+        name="no-certified-head",
+        state=state,
+        meta=meta,
+        journal_lines=journal,
+        envelopes=envelopes,
+        faithful_session=True,
+    )
+    meta_path = os.path.join(session_dir, RR.META_FILE)
+    with open(meta_path, encoding="utf-8") as fh:
+        meta_obj = json.load(fh)
+    meta_obj.pop("headSha", None)
+    meta_obj.pop(RD.FIX_FOLD_HEAD_KEY, None)
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump(meta_obj, fh)
+        fh.write("\n")
+    ok, live = RD.load_state(session_dir)
+    assert ok and live is not None
+    assert RD._session_certified_head(session_dir, live) is None
+    fault = RD._terminal_receipt_gate(session_dir, live)
+    assert fault is None, fault
+    ok, reloaded = RD.load_state(session_dir)
+    assert ok
+    residuals = reloaded.get("_fixedDispositionFinalizationResiduals") or {}
+    assert residuals.get(key) == "fix-content-missing"
+
+
 def test_certification_input_finalization_has_one_call_site():
     """Head-content persist and fixed receipt re-bind each have one call site — the shared step."""
     with open(_ROUND_DRIVER_PY, encoding="utf-8") as fh:
