@@ -8921,8 +8921,9 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
         "reason": reason,
         "evidence": evidence,
         "occurrence": occurrence,
-        "citedHeadSource": round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR,
     }
+    envelope = round_records.envelope_bind_cited_head_source(
+        envelope, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
     try:
         lpath = round_records.landing_path(
             session_dir, rnd, phase, round_records.storage_key(seat, occurrence), cur_attempt)
@@ -9438,8 +9439,8 @@ def _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt, se
     if schema == round_records.SEAT_RESULT_SCHEMA_V2:
         envelope["provenance"] = round_records.PROVENANCE_ORCHESTRATOR_FULFILLED
         envelope["envelopeSha256"] = round_records.envelope_sha256(payload, None)
-    envelope["citedHeadSource"] = round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
-    return envelope
+    return round_records.envelope_bind_cited_head_source(
+        envelope, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
 
 
 def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt, config,
