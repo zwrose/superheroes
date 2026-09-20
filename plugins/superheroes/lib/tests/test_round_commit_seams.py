@@ -708,7 +708,8 @@ def test_seam_a_record_ingest_replaces_landing_when_evidence_stamped(tmp_path, a
   assert ev_err is None
   after_obj, after_err = RR.read_json(path)
   assert after_err is None
-  assert set(after_obj) - set(_env) == {"executionEvidence", "payloadHashSource"}
+  # headSha: runner-observed cited head that layer 1c carries onto a review-run envelope
+  assert set(after_obj) - set(_env) == {"executionEvidence", "payloadHashSource", "headSha"}
   assert set(_env) - set(after_obj) == set()
   assert after_obj["executionEvidence"] == {
       key: record[key] for key in RR.EXECUTION_EVIDENCE_FIELDS}
