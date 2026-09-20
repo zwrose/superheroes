@@ -229,7 +229,7 @@ def test_absent_ledger_key_is_not_malformed():
     assert fault is None
 
 
-def test_legacy_branch_tolerates_malformed_ledger():
+def test_unrecognized_owner_refuses():
     state = {
         "schemaVersion": 5,
         "dispositionLedgerOwner": None,
@@ -241,6 +241,30 @@ def test_legacy_branch_tolerates_malformed_ledger():
     by_key, refusal = RC._certification_findings_by_key(state)
     assert refusal is not None
     assert refusal["bindingFailure"] == "disposition-ledger-owner-unrecognized"
+    assert _state_bytes(state) == before
+
+
+def test_legacy_branch_tolerates_malformed_ledger_row():
+    good_key = "good@L1"
+    state = {
+        "schemaVersion": 5,
+        "dispositionLedger": [
+            {
+                SC.FINDING_KEY_FIELD: good_key,
+                "file": "good.py",
+                "line": 1,
+                "title": "ok",
+                "severity": "Minor",
+            },
+            "not-a-dict",
+        ],
+        "findings": [],
+        "_records": [],
+    }
+    before = _state_bytes(state)
+    by_key, refusal = RC._certification_findings_by_key(state)
+    assert refusal is None
+    assert good_key in by_key
     assert _state_bytes(state) == before
 
 

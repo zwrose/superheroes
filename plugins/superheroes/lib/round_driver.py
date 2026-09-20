@@ -5389,12 +5389,12 @@ def _resolve_repo_root(session_dir, state):
 
 def _fixed_ledger_content_paths(state, artifact=None):
     """Proof paths for fixed ledger rows plus any fix-batch paths at the certified head."""
-    rows, _by_key, _fault = _fixed_ledger_rows(state)
+    rows, by_key, _fault = _fixed_ledger_rows(state)
     paths = []
     seen = set()
     for key, entry in rows:
         _ = key
-        path = entry.get("file")
+        path = session_contract.fix_proof_path(entry, by_key)
         if isinstance(path, str) and path and path not in seen:
             seen.add(path)
             paths.append(path)
@@ -5551,15 +5551,21 @@ def _head_content_read_row(repo_root, head_sha, path, read_at=None):
     }, raw
 
 
-def _read_head_content_blobs_file(session_dir):
+def _read_head_content_blobs_file(session_dir, *, normalized=False):
     path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
     if not os.path.isfile(path):
+        if normalized:
+            return session_contract.classify_head_content_read(absent=True)
         return None
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if normalized:
+            return session_contract.classify_head_content_read(error=exc)
         return None
+    if normalized:
+        return session_contract.classify_head_content_read(blobs=data)
     return data if isinstance(data, dict) else None
 
 

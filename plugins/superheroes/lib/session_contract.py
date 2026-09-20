@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Session-contract path and phase constants — leaf module with no round_* imports."""
+import base64
+import binascii
 import hashlib
 import json
 from dataclasses import dataclass
+from typing import Optional
 
 from finding_identity import clamp_title, finding_identity, finding_label, normalize_title
 
@@ -46,6 +49,12 @@ __all__ = (
     "minted_identity_key",
     "finding_content_canonical",
     "content_hash_suffix",
+    "HeadContentRead",
+    "classify_head_content_read",
+    "resolve_merged_into_entry",
+    "fix_proof_path",
+    "fix_still_present_at_head",
+    "legacy_disposition_ledger_rows",
 )
 
 # Fields the loop stamps onto a finding row after a seat reported it — excluded from content hash.
@@ -116,6 +125,21 @@ def read_disposition_ledger(state):
             )
         rows.append(dict(entry))
     return rows, None
+
+
+def legacy_disposition_ledger_rows(state):
+    """Yield ``(key, row)`` from a legacy (non-owner) ledger — skip malformed rows only."""
+    if not isinstance(state, dict):
+        return
+    ledger = state.get(DISPOSITION_LEDGER_KEY)
+    if not isinstance(ledger, list):
+        return
+    for finding in ledger:
+        if not isinstance(finding, dict):
+            continue
+        key = finding_identity_key(finding)
+        if key:
+            yield key, finding
 
 
 def disposition_ledger_owner_classification(state):
@@ -251,3 +275,143 @@ def finding_identity_key(finding):
     if isinstance(key, str) and key:
         return key
     return minted_identity_key(finding)
+
+
+@dataclass(frozen=True)
+class HeadContentRead:
+    """Normalized outcome of a head-content-blobs read — no I/O in this module."""
+    kind: str
+    blobs: Optional[dict] = None
+
+
+def classify_head_content_read(*, absent=False, blobs=None, error=None):
+    """Classify a caller's raw head-content read attempt into ``HeadContentRead``."""
+    if absent:
+        return HeadContentRead(kind="missing")
+    if error is not None:
+        return HeadContentRead(kind="unreadable")
+    if not isinstance(blobs, dict):
+        return HeadContentRead(kind="unreadable")
+    return HeadContentRead(kind="ok", blobs=blobs)
+
+
+def resolve_merged_into_entry(finding, by_key):
+    """Follow mergedInto through by_key; None when the chain does not resolve."""
+    if not isinstance(finding, dict):
+        return finding
+    if not finding.get(MERGED_INTO_FIELD):
+        return finding
+    limit = max(len(by_key), 1)
+    entry = finding
+    visited = set()
+    for _ in range(limit):
+        into = entry.get(MERGED_INTO_FIELD)
+        if not isinstance(into, str) or not into:
+            return None
+        if into in visited:
+            return None
+        target = by_key.get(into)
+        if target is None:
+            return None
+        if not target.get(MERGED_INTO_FIELD):
+            return target
+        entry = target
+    return None
+
+
+def fix_proof_path(finding, by_key=None):
+    """File path whose head-content proof binds a fixed disposition — representative for merged members."""
+    path = finding.get("file")
+    if by_key is not None and finding.get(MERGED_INTO_FIELD):
+        resolved = resolve_merged_into_entry(finding, by_key)
+        if isinstance(resolved, dict):
+            rep_path = resolved.get("file")
+            if isinstance(rep_path, str) and rep_path:
+                path = rep_path
+    return path
+
+
+def fix_still_present_at_head(finding, receipt, head, read_outcome, by_key=None):
+    """Return ``(binding_failure_token, detail)`` when the fix no longer stands, else ``None``.
+
+    ``head`` and ``read_outcome`` are supplied by the caller; this leaf never reaches for a session."""
+    path = fix_proof_path(finding, by_key)
+    if not isinstance(path, str) or not path:
+        return (
+            "fix-content-missing",
+            "fixed disposition lacks file path for head-content verification",
+        )
+    if not isinstance(head, str) or not head:
+        return (
+            "fix-content-missing",
+            "fixed disposition lacks certified head for content verification",
+        )
+    if read_outcome.kind == "unreadable":
+        return (
+            "fix-content-unreadable",
+            "fixed disposition fix-content read failed on certified head",
+        )
+    if read_outcome.kind == "missing":
+        return (
+            "fix-content-missing",
+            "fixed disposition lacks head-content evidence on certified head",
+        )
+    blobs = read_outcome.blobs
+    if blobs.get("schema") != HEAD_CONTENT_BLOBS_SCHEMA:
+        return (
+            "fix-content-schema-unsupported",
+            "fixed disposition head-content schema is not supported",
+        )
+    reads = blobs.get("reads")
+    if not isinstance(reads, list):
+        reads = []
+    matching = [
+        row
+        for row in reads
+        if isinstance(row, dict)
+        and row.get("headSha") == head
+        and row.get("path") == path
+    ]
+    if not matching:
+        return (
+            "fix-content-missing",
+            "fixed disposition fix is not present in content at the certified head",
+        )
+    row = matching[-1]
+    if row.get("readError") is not None or not row.get("contentDigest"):
+        return (
+            "fix-content-unreadable",
+            "fixed disposition fix-content read failed on certified head",
+        )
+    content_digest = row["contentDigest"]
+    files = blobs.get("files")
+    file_b64 = files.get(path) if isinstance(files, dict) else None
+    if file_b64 is None:
+        return (
+            "fix-content-unreadable",
+            "fixed disposition fix-content read failed on certified head",
+        )
+    try:
+        raw = base64.b64decode(file_b64, validate=True)
+    except (binascii.Error, ValueError):
+        return (
+            "fix-content-unreadable",
+            "fixed disposition fix-content read failed on certified head",
+        )
+    if hashlib.sha256(raw).hexdigest() != content_digest:
+        return (
+            "fix-content-reverted",
+            "fixed disposition fix is not present in content at the certified head",
+        )
+    fix_content_digest = receipt.get("fixContentDigest")
+    if not isinstance(fix_content_digest, str) or not fix_content_digest:
+        return (
+            "fix-content-reverted",
+            "fixed disposition fix is not present in content at the certified head",
+        )
+    if content_digest != fix_content_digest:
+        return (
+            "fix-content-reverted",
+            "fixed disposition fix is not present in content at the certified head",
+        )
+    return None
