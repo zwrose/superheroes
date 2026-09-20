@@ -2,7 +2,7 @@
 
 Per-guard bite proof for `plugins/superheroes/lib/stack_check.py`: each `# axis:` clause is neutralized in source, the proving test must go red alone, then the clause is restored and the suite goes green again.
 
-**Register:** moved from 34 to 32 guards with two clause merges — (1) `hasNextPage`-with-null-or-absent-`endCursor` and `endCursor`-is-not-a-string → one axis *a next page requires a usable string cursor*; (2) collected-count-is-not-`size` and positions-are-not-exactly-`1..size` → one axis *the collected entries are exactly the positions 1..size*.
+**Register:** 36 guards — grew from 33 after a census of refusing clauses found three that carried no `# axis:` line (parsed JSON payload not an object; non-empty `errors` array; `pageInfo.hasNextPage` missing or not a boolean) and one whose axis line described a sibling clause (`errors` present but not a list).
 
 **Provenance:** cursor / composer-2.5.
 
@@ -30,25 +30,28 @@ Per-guard bite proof for `plugins/superheroes/lib/stack_check.py`: each `# axis:
 | E12 | stack_check.py:252 | run raises subprocess.TimeoutExpired | `test_e13_run_raises_timeout_expired` | proven |
 | E13 | stack_check.py:257 | gh exits non-zero | `test_e14_gh_exits_nonzero_with_valid_stdout` | proven |
 | E14 | stack_check.py:265 | stdout is not JSON | `test_e15_stdout_not_json` | proven |
-| E15 | stack_check.py:276 | response carries a non-empty errors array | `test_e16_graphql_errors_nonempty` | proven |
-| E16 | stack_check.py:285 | data/repository is null or not an object | `test_e17_data_or_repository_missing` | proven |
-| E17 | stack_check.py:291 | pullRequest is null or not an object | `test_e18_pull_request_missing` | proven |
-| E18 | stack_check.py:300 | a required top-level pull-request field is missing or of the wrong type | `test_e19_required_pull_request_field_wrong_type` | proven |
-| E19 | stack_check.py:312 | stackEntry is null | `test_e28_stack_entry_null` | proven |
-| E20 | stack_check.py:318 | stackEntry is present but not an object, or position is missing/not an int | `test_e20_stack_entry_bad` | proven |
-| E21 | stack_check.py:328 | stack is missing/not an object, or number/size/baseRefName wrong type | `test_e21_stack_field_wrong_type` | proven |
-| E22 | stack_check.py:341 | entries/pageInfo/nodes is missing or of the wrong type | `test_e22_entries_page_info_empty_object` | proven |
-| E23 | stack_check.py:351 | a later page reports a different page-one snapshot value | `test_e31_later_page_snapshot_mismatch` | proven |
-| E24 | stack_check.py:360 | a node, its position, or one of its pull-request fields is missing or wrong type | `test_e23_node_field_wrong_type` | proven |
-| E25 | stack_check.py:362 | the collected count would exceed size mid-read | `test_e27_collected_count_would_exceed_size` | proven |
-| E26 | stack_check.py:381 | a page adds zero nodes while hasNextPage is true | `test_e24_zero_nodes_with_has_next_page` | proven |
-| E27 | stack_check.py:386 | a next page requires a usable string cursor | `test_e26_has_next_page_without_end_cursor` | proven |
-| E28 | stack_check.py:392 | endCursor repeats a cursor already used | `test_e25_repeated_end_cursor` | proven |
-| E29 | stack_check.py:400 | expect_stack was supplied and does not equal stack.number | `test_e29_expect_stack_does_not_equal_stack_number` | proven |
-| E30 | stack_check.py:407 | the collected entries are exactly the positions 1..size | `test_e30_collected_positions_not_exact` | proven |
-| E31 | stack_check.py:413 | the queried pull request is not present exactly once at its reported position | `test_e30_queried_pr_not_at_reported_position` | proven |
-| E32 | stack_check.py:419 | that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields | `test_e33_queried_entry_head_ref_oid_disagrees`, `test_e33_queried_entry_base_ref_name_disagrees` | proven |
-| E33 | stack_check.py:465 | the parse boundary (malformed CLI call returns bad-argument instead of argparse exit) | `test_e10_parse_boundary` | proven |
+| E15 | stack_check.py:269 | parsed JSON payload is not an object | `test_e15_payload_not_object` | proven |
+| E16 | stack_check.py:277 | errors is present but not a list | `test_e16_errors_not_list` | proven |
+| E17 | stack_check.py:281 | response carries a non-empty errors array | `test_e16_graphql_errors_nonempty` | proven |
+| E18 | stack_check.py:287 | data/repository is null or not an object | `test_e17_data_or_repository_missing` | proven |
+| E19 | stack_check.py:293 | pullRequest is null or not an object | `test_e18_pull_request_missing` | proven |
+| E20 | stack_check.py:302 | a required top-level pull-request field is missing or of the wrong type | `test_e19_required_pull_request_field_wrong_type` | proven |
+| E21 | stack_check.py:314 | stackEntry is null | `test_e28_stack_entry_null` | proven |
+| E22 | stack_check.py:320 | stackEntry is present but not an object, or position is missing/not an int | `test_e20_stack_entry_bad` | proven |
+| E23 | stack_check.py:330 | stack is missing/not an object, or number/size/baseRefName wrong type | `test_e21_stack_field_wrong_type` | proven |
+| E24 | stack_check.py:343 | entries/pageInfo/nodes is missing or of the wrong type | `test_e22_entries_page_info_empty_object` | proven |
+| E25 | stack_check.py:353 | a later page reports a different page-one snapshot value | `test_e31_later_page_snapshot_mismatch` | proven |
+| E26 | stack_check.py:362 | a node, its position, or one of its pull-request fields is missing or wrong type | `test_e23_node_field_wrong_type` | proven |
+| E27 | stack_check.py:364 | the collected count would exceed size mid-read | `test_e27_collected_count_would_exceed_size` | proven |
+| E28 | stack_check.py:372 | pageInfo hasNextPage is missing or not a boolean | `test_e26_has_next_page_not_boolean` | proven |
+| E29 | stack_check.py:384 | a page adds zero nodes while hasNextPage is true | `test_e24_zero_nodes_with_has_next_page` | proven |
+| E30 | stack_check.py:389 | a next page requires a usable string cursor | `test_e26_has_next_page_without_end_cursor` | proven |
+| E31 | stack_check.py:395 | endCursor repeats a cursor already used | `test_e25_repeated_end_cursor` | proven |
+| E32 | stack_check.py:403 | expect_stack was supplied and does not equal stack.number | `test_e29_expect_stack_does_not_equal_stack_number` | proven |
+| E33 | stack_check.py:410 | the collected entries are exactly the positions 1..size | `test_e30_collected_positions_not_exact` | proven |
+| E34 | stack_check.py:416 | the queried pull request is not present exactly once at its reported position | `test_e30_queried_pr_not_at_reported_position` | proven |
+| E35 | stack_check.py:422 | that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields | `test_e33_queried_entry_head_ref_oid_disagrees`, `test_e33_queried_entry_base_ref_name_disagrees` | proven |
+| E36 | stack_check.py:468 | the parse boundary (malformed CLI call returns bad-argument instead of argparse exit) | `test_e10_parse_boundary` | proven |
 
 ---
 
@@ -471,7 +474,73 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e15_stdout_not_js
 
 ---
 
-## E15 — response carries a non-empty errors array
+## E15 — parsed JSON payload is not an object
+
+**neutralization** (`plugins/superheroes/lib/stack_check.py`):
+```python
+        # axis: parsed JSON payload is not an object
+        if not isinstance(payload, dict):
+            return _refusal(REASON_STACK_UNREADABLE,
+                "gh api graphql returned JSON that is not an object", repo=repo, pr=pr, pages=pages)
+```
+→
+```python
+        # axis: parsed JSON payload is not an object
+        if False:  # bite-proof
+            return _refusal(REASON_STACK_UNREADABLE,
+                "gh api graphql returned JSON that is not an object", repo=repo, pr=pr, pages=pages)
+```
+
+**command:** the command (see top).
+
+**raw red** (traceback body elided):
+```
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e15_payload_not_object
+1 failed, 49 passed in 0.23s
+```
+
+**raw green** after restore:
+```
+50 passed in 0.23s
+```
+
+---
+
+## E16 — errors is present but not a list
+
+**neutralization** (`plugins/superheroes/lib/stack_check.py`):
+```python
+        # axis: errors is present but not a list
+        if not isinstance(errors, list):
+            return _refusal(REASON_STACK_UNREADABLE, "gh api graphql errors is not a list",
+                repo=repo, pr=pr, pages=pages)
+```
+→
+```python
+        # axis: errors is present but not a list
+        if False:  # bite-proof
+            return _refusal(REASON_STACK_UNREADABLE, "gh api graphql errors is not a list",
+                repo=repo, pr=pr, pages=pages)
+```
+
+**fixture note:** `test_e16_errors_not_list` uses `errors: false` (falsy, not a list) so neutralizing this clause does not fall through to the non-empty-errors sibling.
+
+**command:** the command (see top).
+
+**raw red** (traceback body elided):
+```
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e16_errors_not_list
+1 failed, 49 passed in 0.30s
+```
+
+**raw green** after restore:
+```
+50 passed in 0.22s
+```
+
+---
+
+## E17 — response carries a non-empty errors array
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -486,20 +555,22 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e15_stdout_not_js
 
 **command:** the command (see top).
 
+**fixture note:** `test_e16_graphql_errors_nonempty` uses a complete, valid single-page success payload so neutralizing this clause would otherwise succeed.
+
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e16_graphql_errors_nonempty
-1 failed, 40 passed in 0.25s
+1 failed, 49 passed in 0.23s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.21s
+50 passed in 0.20s
 ```
 
 ---
 
-## E16 — data/repository is null or not an object
+## E18 — data/repository is null or not an object
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -529,7 +600,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e17_data_or_repos
 
 ---
 
-## E17 — pullRequest is null or not an object
+## E19 — pullRequest is null or not an object
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -559,7 +630,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e18_pull_request_
 
 ---
 
-## E18 — a required top-level pull-request field is missing or of the wrong type
+## E20 — a required top-level pull-request field is missing or of the wrong type
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -591,7 +662,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e19_required_pull
 
 ---
 
-## E19 — stackEntry is null
+## E21 — stackEntry is null
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -621,7 +692,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e28_stack_entry_n
 
 ---
 
-## E20 — stackEntry is present but not an object, or position is missing/not an int
+## E22 — stackEntry is present but not an object, or position is missing/not an int
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -653,7 +724,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e20_stack_entry_b
 
 ---
 
-## E21 — stack is missing/not an object, or number/size/baseRefName wrong type
+## E23 — stack is missing/not an object, or number/size/baseRefName wrong type
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -683,7 +754,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e21_stack_field_w
 
 ---
 
-## E22 — entries/pageInfo/nodes is missing or of the wrong type
+## E24 — entries/pageInfo/nodes is missing or of the wrong type
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -715,7 +786,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e22_entries_page_
 
 ---
 
-## E23 — a later page reports a different page-one snapshot value
+## E25 — a later page reports a different page-one snapshot value
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -745,7 +816,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e31_later_page_sn
 
 ---
 
-## E24 — a node, its position, or one of its pull-request fields is missing or wrong type
+## E26 — a node, its position, or one of its pull-request fields is missing or wrong type
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -775,7 +846,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e23_node_field_wr
 
 ---
 
-## E25 — the collected count would exceed size mid-read
+## E27 — the collected count would exceed size mid-read
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -805,7 +876,39 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e27_collected_cou
 
 ---
 
-## E26 — a page adds zero nodes while hasNextPage is true
+## E28 — pageInfo hasNextPage is missing or not a boolean
+
+**neutralization** (`plugins/superheroes/lib/stack_check.py`):
+```python
+        # axis: pageInfo hasNextPage is missing or not a boolean
+        if not isinstance(has_next_page, bool):
+            return _refusal(REASON_STACK_UNREADABLE,
+                "pageInfo hasNextPage is missing or not a boolean", repo=repo, pr=pr, pages=pages)
+```
+→
+```python
+        # axis: pageInfo hasNextPage is missing or not a boolean
+        if False:  # bite-proof
+            return _refusal(REASON_STACK_UNREADABLE,
+                "pageInfo hasNextPage is missing or not a boolean", repo=repo, pr=pr, pages=pages)
+```
+
+**command:** the command (see top).
+
+**raw red** (traceback body elided):
+```
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e26_has_next_page_not_boolean
+1 failed, 49 passed in 0.23s
+```
+
+**raw green** after restore:
+```
+50 passed in 0.22s
+```
+
+---
+
+## E29 — a page adds zero nodes while hasNextPage is true
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -835,7 +938,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e24_zero_nodes_wi
 
 ---
 
-## E27 — a next page requires a usable string cursor
+## E30 — a next page requires a usable string cursor
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -867,7 +970,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e26_has_next_page
 
 ---
 
-## E28 — endCursor repeats a cursor already used
+## E31 — endCursor repeats a cursor already used
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -897,7 +1000,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e25_repeated_end_
 
 ---
 
-## E29 — expect_stack was supplied and does not equal stack.number
+## E32 — expect_stack was supplied and does not equal stack.number
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -927,7 +1030,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e29_expect_stack_
 
 ---
 
-## E30 — the collected entries are exactly the positions 1..size
+## E33 — the collected entries are exactly the positions 1..size
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -957,7 +1060,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e30_collected_pos
 
 ---
 
-## E31 — the queried pull request is not present exactly once at its reported position
+## E34 — the queried pull request is not present exactly once at its reported position
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -989,7 +1092,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e30_queried_pr_no
 
 ---
 
-## E32 — that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields
+## E35 — that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -1022,7 +1125,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e33_queried_entry
 
 ---
 
-## E33 — the parse boundary (malformed CLI call returns bad-argument instead of argparse exit)
+## E36 — the parse boundary (malformed CLI call returns bad-argument instead of argparse exit)
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -1066,8 +1169,8 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_cli_bad_argument_
 
 **`shasum -a 256` before first neutralization / after last restore:**
 ```
-393144d2ad6d97cbd43454925a9588bd3aa9a7cb2d0065c994919ce48d67eb1c  plugins/superheroes/lib/stack_check.py
-393144d2ad6d97cbd43454925a9588bd3aa9a7cb2d0065c994919ce48d67eb1c  plugins/superheroes/lib/stack_check.py
-2d52bcc9428636c1a3aa9ddb7fc1d23645c927502921d7ddd345768acbc5828a  plugins/superheroes/lib/tests/test_stack_check.py
-2d52bcc9428636c1a3aa9ddb7fc1d23645c927502921d7ddd345768acbc5828a  plugins/superheroes/lib/tests/test_stack_check.py
+3ccd2886befe02bb434e97fbfd51ad67445389ded84c59b87415b6882fe5768d  plugins/superheroes/lib/stack_check.py
+3ccd2886befe02bb434e97fbfd51ad67445389ded84c59b87415b6882fe5768d  plugins/superheroes/lib/stack_check.py
+dd2bbc280f5fd4e6c5389e55d3e2900c6b0b95f3063295cf2201b8a864e5913d  plugins/superheroes/lib/tests/test_stack_check.py
+dd2bbc280f5fd4e6c5389e55d3e2900c6b0b95f3063295cf2201b8a864e5913d  plugins/superheroes/lib/tests/test_stack_check.py
 ```

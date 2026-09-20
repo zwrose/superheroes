@@ -266,6 +266,7 @@ def read_membership(
             return _refusal(REASON_STACK_UNREADABLE,
                 "gh api graphql returned output that is not JSON", repo=repo, pr=pr, pages=pages)
 
+        # axis: parsed JSON payload is not an object
         if not isinstance(payload, dict):
             return _refusal(REASON_STACK_UNREADABLE,
                 "gh api graphql returned JSON that is not an object", repo=repo, pr=pr, pages=pages)
@@ -273,10 +274,11 @@ def read_membership(
         errors = payload.get("errors")
         if errors is None:
             errors = []
-        # axis: response carries a non-empty errors array
+        # axis: errors is present but not a list
         if not isinstance(errors, list):
             return _refusal(REASON_STACK_UNREADABLE, "gh api graphql errors is not a list",
                 repo=repo, pr=pr, pages=pages)
+        # axis: response carries a non-empty errors array
         if errors:
             return _refusal(REASON_STACK_UNREADABLE, json.dumps(errors), repo=repo, pr=pr, pages=pages)
 
@@ -367,6 +369,7 @@ def read_membership(
             added += 1
 
         has_next_page = page_info.get("hasNextPage")
+        # axis: pageInfo hasNextPage is missing or not a boolean
         if not isinstance(has_next_page, bool):
             return _refusal(REASON_STACK_UNREADABLE,
                 "pageInfo hasNextPage is missing or not a boolean", repo=repo, pr=pr, pages=pages)

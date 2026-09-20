@@ -289,11 +289,53 @@ def test_e15_stdout_not_json():
     _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
 
 
+def test_e15_payload_not_object():
+    run, _calls = _make_run(
+        {
+            _argv_page(PR, sc.DEFAULT_PAGE_SIZE): SimpleNamespace(
+                returncode=0, stdout=json.dumps(["not", "an", "object"]), stderr=""
+            ),
+        }
+    )
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+
+
 def test_e16_graphql_errors_nonempty():
-    page = _pull_request(nodes=[_member(1)], stack_size=1)
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
     run, _calls = _make_run(
         {
             _argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page, errors=[{"message": "boom"}]),
+        }
+    )
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+
+
+def test_e16_errors_not_list():
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    payload = {"data": {"repository": {"pullRequest": page}}, "errors": False}
+    run, _calls = _make_run(
+        {
+            _argv_page(PR, sc.DEFAULT_PAGE_SIZE): SimpleNamespace(
+                returncode=0, stdout=json.dumps(payload), stderr=""
+            ),
         }
     )
     result = sc.read_membership(pr=PR, repo=REPO, run=run)
@@ -423,6 +465,22 @@ def test_e26_has_next_page_without_end_cursor():
     page = _pull_request(nodes=[_member(1), _member(2)], has_next_page=True, end_cursor=None, stack_size=5)
     run, _calls = _make_run({_argv_page(PR, 2): _graphql_ok(page)})
     result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+
+
+def test_e26_has_next_page_not_boolean():
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    page["stackEntry"]["stack"]["entries"]["pageInfo"]["hasNextPage"] = "false"
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
     _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
 
 
