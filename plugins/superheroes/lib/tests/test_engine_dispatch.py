@@ -1348,10 +1348,10 @@ def test_review_unregistered_model_refusal_leaves_no_dispatch_review_temp_dir(tm
 
 def test_timeout_mid_stream_partial_output_rejected(tmp_path):
     repo_root = _repo(tmp_path)
-    partial = json.dumps({"findings": [{"id": "partial"}]})
+    # Unreadable stdout maps to a malformed native result — still forfeits via admission.
     fake = FakeRunner([
-        (partial, True, 0, ""),
-        (partial, True, 0, ""),
+        ("not json", True, 0, ""),
+        ("not json", True, 0, ""),
     ])
     res = ED.dispatch_review(
         seat=_codex_seat(),
@@ -3658,8 +3658,8 @@ def test_native_write_timeout_at_is_cap_not_poll_time(tmp_path, monkeypatch):
     assert ended["at"] - ended["timeoutAt"] >= 2.0
 
 
-# axis: P2 background timeout records timeoutAt and refuses a native result stamped after it.
-def test_background_timeout_records_timeout_at_and_rejects_late_native_write(tmp_path):
+# axis: write admission after deadline forfeits codex argv native result.
+def test_write_admission_completion_after_deadline_forfeits_codex_argv(tmp_path):
     native_write = _native_write_result_json()
     payload = json.loads(native_write)
     deadline_mono = 10.0
@@ -3677,8 +3677,6 @@ def test_background_timeout_records_timeout_at_and_rejects_late_native_write(tmp
         ),
         payload=payload,
     )
-    assert ended["timedOut"] is True
-    assert isinstance(ended["timeoutAt"], (int, float))
     with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
         fh.write(native_write + "\n")
     grade = ED._grade_write_attempt(run_dir, state, 1)
@@ -4252,7 +4250,8 @@ def test_dispatch_review_timeout_forfeit_has_no_engagement(tmp_path):
         build_view=_fake_build_view(tmp_path),
     )
     assert res["forfeited"] is True
-    assert res.get("engagement") is None
+    assert res.get("engagement") is not None
+    assert res["engagement"]["read"] == "unknown"
 
 
 def test_dispatch_review_nonzero_exit_forfeit_has_no_engagement(tmp_path):
@@ -16034,6 +16033,8 @@ _COMPLETION_KEYS = (
 def _assert_completion_keys(ended, payload):
     for key in _COMPLETION_KEYS:
         assert key in ended
+    if isinstance(payload, dict):
+        payload = ED._scrub_native_payload(payload)
     assert ended[ERC.FIELD_RESULT_COMPLETE_SHA256] == ERC.canonical_payload_digest(payload)
 
 
@@ -16608,4 +16609,130 @@ def test_admission_second_attempt_without_stamp_does_not_inherit_first(tmp_path)
     grade = ED._grade_write_attempt(run_dir, state, 2)
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "result-completion-unrecorded"
+
+
+def test_completion_producer_native_file_fast_exit_records_stamp(tmp_path, monkeypatch):
+    """axis: fast native-file exit — stamp when child writes between observations."""
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    script = (
+        "import sys, time\n"
+        "time.sleep(0.25)\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        % native_write
+    )
+    run_dir = str(tmp_path / "native-fast-exit")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 60)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, payload)
+
+
+def test_completion_producer_natural_exit_after_cap_forfeits(tmp_path, monkeypatch):
+    """axis: natural exit just after wall cap — deadline present, late stamp forfeits."""
+    native_write = _native_write_result_json()
+    script = (
+        "import sys, time\n"
+        "time.sleep(0.45)\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        % native_write
+    )
+    run_dir, state, ended = _run_codex_native_write_timeout_script(
+        tmp_path, monkeypatch, script, timeout=0.5,
+    )
+    assert ended["timedOut"] is False
+    assert ERC.FIELD_DEADLINE_MONO in ended
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "result-completion-after-deadline"
+
+
+def test_completion_producer_transcript_scrubbed_digest_admits(tmp_path, monkeypatch):
+    """axis: transcript producer stamps scrubbed digest matching on-disk materialization."""
+    cfg, _launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "transcript-scrub-stamp")
+    opened = _plant_claude_background_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    structured = _wrap_native_review_result(_native_review_branch("findings"))
+    branch = structured["result"]
+    branch["findings"][0]["body"] = "log shows Bearer " + ("a" * 32)
+    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured, tool_calls=1))
+    _run_bg_engine_files(tmp_path, run_dir, opened)
+    ended = _bg_attempt_ended(run_dir)
+    _assert_completion_keys(ended, structured)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+
+
+def test_admission_scrubbed_digest_binds_admitted_object(tmp_path):
+    """axis: admission returns the scrubbed digest subject, not a distinct raw rewrite."""
+    secret = "Bearer " + ("a" * 32)
+    raw_with_secret = _write_payload_obj()
+    raw_with_secret["report"] = "found " + secret
+    raw_redacted = dict(raw_with_secret)
+    raw_redacted["report"] = "found Bearer [REDACTED]"
+    scrubbed = ED._scrub_native_payload(raw_with_secret)
+    ended = _ended_with_completion_stamp(
+        raw_with_secret, complete_at=5.0, deadline_mono=10.0,
+        exit=0, timedOut=False,
+    )
+    run_dir, state = _write_admission_codex_argv(tmp_path, ended, raw_redacted)
+    obj, detail = ED._load_native_result_json(run_dir, 1, state["opened"])
+    assert detail is None
+    assert obj == scrubbed
+    assert secret not in json.dumps(obj)
+
+
+@pytest.mark.parametrize("delivery", _REVIEW_ADMISSION_DELIVERIES)
+def test_review_admission_timed_out_complete_before_deadline_admits(
+        tmp_path, delivery, monkeypatch,
+):
+    envelope = _review_payload_envelope()
+    ended = _ended_with_completion_stamp(
+        envelope, complete_at=5.0, deadline_mono=10.0,
+        exit=1, timedOut=True, timeoutAt=1000.0,
+    )
+    if delivery == "argv":
+        run_dir, state = _review_admission_codex_argv(tmp_path, ended, envelope)
+    elif delivery == "prompt":
+        run_dir, state = _review_admission_cursor_prompt(tmp_path, ended, envelope)
+    elif delivery == "stdout":
+        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
+    else:
+        run_dir, state = _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
 

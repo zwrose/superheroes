@@ -1430,9 +1430,10 @@ def _run_engine_files_background(
                 payload = engine_adapter.claude_transcript_result(rows)
                 tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
                 if payload is not None and completion_stamp is None:
+                    scrubbed = _scrub_native_payload(payload)
                     completion_stamp = engine_result_channel.completion_stamp(
                         _NOW(),
-                        engine_result_channel.canonical_payload_digest(payload),
+                        engine_result_channel.canonical_payload_digest(scrubbed),
                     )
                 result_path = _native_result_path(run_dir_real, attempt)
                 if result_path is None:
@@ -1467,9 +1468,10 @@ def _run_engine_files_background(
                     payload = engine_adapter.claude_transcript_result(rows)
                     tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
                     if payload is not None and completion_stamp is None:
+                        scrubbed = _scrub_native_payload(payload)
                         completion_stamp = engine_result_channel.completion_stamp(
                             _NOW(),
-                            engine_result_channel.canonical_payload_digest(payload),
+                            engine_result_channel.canonical_payload_digest(scrubbed),
                         )
                     result_path = _native_result_path(run_dir_real, attempt)
                     if result_path is None:
@@ -1540,11 +1542,11 @@ def _run_engine_files_background(
         ended_record["transcriptToolCalls"] = tool_calls
     if bg_stop is not None:
         ended_record["bgStop"] = bg_stop
+    _apply_completion_stamp(
+        ended_record, engine_result_channel.deadline_stamp(deadline),
+    )
     if timed_out:
         ended_record["timeoutAt"] = timeout_at
-        _apply_completion_stamp(
-            ended_record, engine_result_channel.deadline_stamp(deadline),
-        )
     _apply_completion_stamp(ended_record, completion_stamp)
     _journal_bg_ended(ended_record)
 
@@ -3717,7 +3719,27 @@ def _apply_completion_stamp(ended_record, stamp):
         ended_record.update(stamp)
 
 
-def _observe_stdout_completion(obs_state, stdout_path):
+def _stdout_tail_has_result_event(stdout_path):
+    """Return True when the last stdout line is a complete result event. Never raises."""
+    try:
+        with open(stdout_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            end = fh.tell()
+            if end == 0:
+                return False
+            chunk = min(end, 8192)
+            fh.seek(end - chunk)
+            tail = fh.read().decode("utf-8", errors="ignore")
+        lines = [ln for ln in tail.splitlines() if ln.strip()]
+        if not lines:
+            return False
+        last = json.loads(lines[-1])
+        return isinstance(last, dict) and last.get("type") == "result"
+    except Exception:
+        return False
+
+
+def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
     """Stamp stdout delivery completion on first valid observation. Never raises.
 
     Observation error is bounded by _ATTEMPT_POLL_INTERVAL (0.2s): a result completing
@@ -3736,6 +3758,8 @@ def _observe_stdout_completion(obs_state, stdout_path):
     if size == prev:
         return
     obs_state["prev_size"] = size
+    if not terminal and not _stdout_tail_has_result_event(stdout_path):
+        return
     try:
         stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
     except Exception:
@@ -3753,7 +3777,9 @@ def _observe_stdout_completion(obs_state, stdout_path):
         obs_state["stamp"] = stamp
 
 
-def _observe_native_file_completion(obs_state, run_dir_real, attempt):
+def _observe_native_file_completion(
+        obs_state, run_dir_real, attempt, *, terminal=False,
+):
     """Stamp argv/prompt delivery completion on first stable file plateau. Never raises."""
     if obs_state.get("stamp") is not None:
         return
@@ -3768,18 +3794,22 @@ def _observe_native_file_completion(obs_state, run_dir_real, attempt):
     if size == 0:
         return
     prev = obs_state.get("prev_size", 0)
-    if prev == 0:
+    if not terminal:
+        if prev == 0:
+            obs_state["prev_size"] = size
+            return
+        if size != prev:
+            obs_state["prev_size"] = size
+            obs_state.pop("parse_failed_at_size", None)
+            return
+        if obs_state.get("parse_failed_at_size") == size:
+            return
+    elif size != prev:
         obs_state["prev_size"] = size
-        return
-    if size != prev:
-        obs_state["prev_size"] = size
-        return
-    try:
-        with open(result_path, encoding="utf-8") as fh:
-            obj = json.load(fh)
-    except (OSError, json.JSONDecodeError, ValueError):
-        return
-    if not isinstance(obj, dict):
+        obs_state.pop("parse_failed_at_size", None)
+    obj, detail = _read_native_result_file(result_path)
+    if detail or not isinstance(obj, dict):
+        obs_state["parse_failed_at_size"] = size
         return
     digest = engine_result_channel.canonical_payload_digest(_scrub_native_payload(obj))
     stamp = engine_result_channel.completion_stamp(time.monotonic(), digest)
@@ -3789,15 +3819,18 @@ def _observe_native_file_completion(obs_state, run_dir_real, attempt):
 
 def _observe_attempt_completions(
         delivery, stdout_obs, native_obs, run_dir_real, attempt, stdout_path,
+        *, terminal=False,
 ):
     """Poll-loop observation hook for stdout and native-file deliveries. Never raises."""
     if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
-        _observe_stdout_completion(stdout_obs, stdout_path)
+        _observe_stdout_completion(stdout_obs, stdout_path, terminal=terminal)
     elif delivery in (
         engine_result_channel.RESULT_DELIVERY_ARGV,
         engine_result_channel.RESULT_DELIVERY_PROMPT,
     ):
-        _observe_native_file_completion(native_obs, run_dir_real, attempt)
+        _observe_native_file_completion(
+            native_obs, run_dir_real, attempt, terminal=terminal,
+        )
 
 
 def _completion_payload_for_delivery(
@@ -3815,7 +3848,10 @@ def _completion_payload_for_delivery(
         rows = _read_transcript_rows(stdout_path)
         if rows is None:
             return None
-        return engine_adapter.claude_transcript_result(rows)
+        payload = engine_adapter.claude_transcript_result(rows)
+        if payload is None:
+            return None
+        return _scrub_native_payload(payload)
     if delivery in (
         engine_result_channel.RESULT_DELIVERY_ARGV,
         engine_result_channel.RESULT_DELIVERY_PROMPT,
@@ -3823,12 +3859,8 @@ def _completion_payload_for_delivery(
         result_path = _native_result_path(run_dir_real, attempt)
         if result_path is None:
             return None
-        try:
-            with open(result_path, encoding="utf-8") as fh:
-                obj = json.load(fh)
-        except (OSError, json.JSONDecodeError, ValueError):
-            return None
-        if not isinstance(obj, dict):
+        obj, detail = _read_native_result_file(result_path)
+        if detail or not isinstance(obj, dict):
             return None
         return _scrub_native_payload(obj)
     return None
@@ -4056,7 +4088,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             natural_rc = rc
             _observe_attempt_completions(
                 delivery, stdout_completion_obs, native_completion_obs,
-                run_dir_real, attempt, stdout_path,
+                run_dir_real, attempt, stdout_path, terminal=True,
             )
             break
         if now - start >= timeout:
@@ -4067,7 +4099,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             timeout_at = timeout_deadline_wall
             _observe_attempt_completions(
                 delivery, stdout_completion_obs, native_completion_obs,
-                run_dir_real, attempt, stdout_path,
+                run_dir_real, attempt, stdout_path, terminal=True,
             )
             break
         time.sleep(_ATTEMPT_POLL_INTERVAL)
@@ -4102,10 +4134,11 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         "capSeconds": timeout,
         "dispatchPath": dispatch_path,
     }
+    _apply_completion_stamp(
+        ended_record, engine_result_channel.deadline_stamp(start + timeout),
+    )
     if timed_out:
         ended_record["timeoutAt"] = timeout_at
-        deadline = engine_result_channel.deadline_stamp(start + timeout)
-        _apply_completion_stamp(ended_record, deadline)
     completion_stamp = stdout_completion_obs.get("stamp")
     if completion_stamp is None:
         completion_stamp = native_completion_obs.get("stamp")
@@ -4297,7 +4330,7 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
             ended["stdoutResult"] = stdout_result
     if timed_out:
         ended["timeoutAt"] = timeout_deadline_wall
-        _apply_completion_stamp(ended, engine_result_channel.deadline_stamp(t0 + timeout))
+    _apply_completion_stamp(ended, engine_result_channel.deadline_stamp(t0 + timeout))
     _apply_completion_stamp(ended, completion_stamp)
     _journal_append(run_dir_real, ended)
     return True, ""
@@ -4596,11 +4629,8 @@ def _native_review_forfeit(engagement, detail, *, payload_shape=None, **extra):
     return result
 
 
-def _load_native_result_json(run_dir_real, attempt, opened):
-    """Load native result JSON via fd. Returns (obj, None) or (None, detail). Never raises."""
-    path = _native_result_path(run_dir_real, attempt)
-    if path is None:
-        return None, "native-result-missing"
+def _read_native_result_file(path):
+    """Read native result JSON via bounded fd. Returns (obj, None) or (None, detail). Never raises."""
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
     try:
         # axis: the result path is opened without following a symlink and without blocking; a symlink, FIFO or absent entry reads as native-result-missing.
@@ -4636,32 +4666,43 @@ def _load_native_result_json(run_dir_real, attempt, opened):
             obj = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
             return None, "native-result-malformed"
-        records, _corrupt = _journal_read(run_dir_real)
-        state = _journal_state(records)
-        attempt_rec = state.get("attempts", {}).get(attempt)
-        ended = attempt_rec.get("ended") if isinstance(attempt_rec, dict) else None
-        if not isinstance(ended, dict):
-            return None, engine_result_channel.REFUSAL_RESULT_COMPLETION_UNRECORDED
-        if ended.get("timedOut"):
-            deadline_mono = ended.get(engine_result_channel.FIELD_DEADLINE_MONO)
-            deadline_epoch = ended.get(engine_result_channel.FIELD_DEADLINE_EPOCH)
-            if (
-                isinstance(deadline_mono, bool)
-                or not isinstance(deadline_mono, (int, float))
-                or not isinstance(deadline_epoch, str)
-                or not deadline_epoch
-            ):
-                return None, "timeout-deadline-unrecorded"
-        digest_obj = _scrub_native_payload(obj) if isinstance(obj, dict) else obj
-        digest = engine_result_channel.canonical_payload_digest(digest_obj)
-        if digest is None:
-            return None, engine_result_channel.REFUSAL_RESULT_COMPLETION_UNRECORDED
-        verdict, detail = engine_result_channel.completion_window(ended, digest)
-        if verdict == "forfeit":
-            return None, detail
         return obj, None
     finally:
         os.close(fd)
+
+
+def _load_native_result_json(run_dir_real, attempt, opened):
+    """Load native result JSON via fd. Returns (obj, None) or (None, detail). Never raises."""
+    path = _native_result_path(run_dir_real, attempt)
+    if path is None:
+        return None, "native-result-missing"
+    obj, detail = _read_native_result_file(path)
+    if detail:
+        return None, detail
+    records, _corrupt = _journal_read(run_dir_real)
+    state = _journal_state(records)
+    attempt_rec = state.get("attempts", {}).get(attempt)
+    ended = attempt_rec.get("ended") if isinstance(attempt_rec, dict) else None
+    if not isinstance(ended, dict):
+        return None, engine_result_channel.REFUSAL_RESULT_COMPLETION_UNRECORDED
+    if ended.get("timedOut"):
+        deadline_mono = ended.get(engine_result_channel.FIELD_DEADLINE_MONO)
+        deadline_epoch = ended.get(engine_result_channel.FIELD_DEADLINE_EPOCH)
+        if (
+            isinstance(deadline_mono, bool)
+            or not isinstance(deadline_mono, (int, float))
+            or not isinstance(deadline_epoch, str)
+            or not deadline_epoch
+        ):
+            return None, "timeout-deadline-unrecorded"
+    digest_obj = _scrub_native_payload(obj) if isinstance(obj, dict) else obj
+    digest = engine_result_channel.canonical_payload_digest(digest_obj)
+    if digest is None:
+        return None, engine_result_channel.REFUSAL_RESULT_COMPLETION_UNRECORDED
+    verdict, detail = engine_result_channel.completion_window(ended, digest)
+    if verdict == "forfeit":
+        return None, detail
+    return digest_obj, None
 
 
 def _read_native_review_envelope(run_dir_real, attempt, engagement, opened):
@@ -5019,11 +5060,12 @@ def _grade_review_attempt(run_dir_real, state, attempt):
 
     if ended.get("guardRefusal"):
         return _grade_spawn_guard_refusal(ended)
-    if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
+    if ended.get("refusal"):
         result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
-        if ended.get("refusal"):
-            result["detail"] = ended["refusal"]
+        result["detail"] = ended["refusal"]
         return result
+    if ended.get("exit") not in (0, None) and not ended.get("timedOut"):
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
     try:
         with open(stderr_path, encoding="utf-8", errors="ignore") as fh:
