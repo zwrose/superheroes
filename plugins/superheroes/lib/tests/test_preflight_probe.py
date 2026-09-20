@@ -190,14 +190,15 @@ def test_cross_vendor_no_op_argv_cursor():
     probe = pp.cross_vendor_no_op_argv("cursor")
     assert probe == (
         "cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust",
-        "--mode", "plan")
+        "-f", "--sandbox", "enabled")
     seat = seat_bundle.validate_effort_only(
         seat_bundle.parse(json.dumps(
             {"vendor": "cursor", "model": "composer-2.5", "effort": None})),
     )
     assert seat.get("ok"), seat.get("detail", seat.get("reason"))
     builder = engine_adapter.build_argv(seat, "review", {})
-    assert builder[builder.index("--mode") + 1] == "plan"
+    assert "-f" in builder
+    assert builder[builder.index("--sandbox") + 1] == "enabled"
     # Every read-role token the builder emits is carried by the probe, except the
     # stream-json output format the probe deliberately omits (it parses no stdout).
     _assert_probe_argv_matches_builder_minus_stream_json(builder, probe)
@@ -1045,7 +1046,7 @@ def test_model_no_op_argv_cursor_grok_dispatch_token():
     assert argv == expected
     assert argv == (
         "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust",
-        "--mode", "plan", "--output-format", "stream-json")
+        "-f", "--sandbox", "enabled", "--output-format", "stream-json")
 
 
 def test_model_no_op_argv_cursor_bogus_model_returns_none():

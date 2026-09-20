@@ -73,7 +73,10 @@ def test_journal_line_not_an_object_refuses_evidence_binding(tmp_path, monkeypat
     run_dir = _run_dir_with_non_object_journal_line(tmp_path, order_path, monkeypatch)
     record, err = engine_dispatch.run_execution_record(run_dir)
     assert record is None
-    assert err == "internal-error"  # runner-side class; dispatch shell not narrowed here
+    # Runner-side class. Main narrowed the generic `internal-error` to a named
+    # journal-corruption class; the seam still fails closed, and the narrower token
+    # names the cause.
+    assert err == "journal-corrupt:journal-line-not-object"
 
     envelope = {"orderSha256": "0" * 64, "payload": {"findings": []}}
     session_dir = str(tmp_path / "session")
@@ -82,7 +85,7 @@ def test_journal_line_not_an_object_refuses_evidence_binding(tmp_path, monkeypat
         session_dir, envelope, run_dir)
     assert assembled is None
     assert refusal == "evidence-run-dir-unreadable"
-    assert extra == {"detail": "internal-error"}
+    assert extra == {"detail": "journal-corrupt:journal-line-not-object"}
 
 
 def _panel_cross_kind_fixture():

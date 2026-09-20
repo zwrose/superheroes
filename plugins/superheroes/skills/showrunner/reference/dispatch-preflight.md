@@ -15,6 +15,12 @@ The seven enumerated checks the advisor runs before launching a builder session.
       grant, or work outside the grant's enumerated scope.
 <!-- launch-doctrine:preflight-charter:end -->
 
+For check 1 in a wave, run `lib/conformance_probe.py` once per dispatchable engine, then compose
+the walked `engine-auth` entry with `preflight-entry` and write it into the checks file the launcher
+walks. A failed engine with no owner word → hold (`preflight-failed:engine-auth`, nothing launches).
+With `--launch-without <engine> --owner-word "<text>"` → pass whose evidence names substitute families
+from probed cells only, or **PARK** when the seat map reports `same-family` degradation.
+
 Check 3 does **not** ask whether the surfaces are disjoint. Overlap with a live lane is a recorded,
 disclosed warning: `reserve` returns `ok` with `warnings: ["surface-overlap:<launchId>", …]` and
 stamps `surfaceOverlap` on the `reserved` record, `launch` stamps the disclosure on the lane's

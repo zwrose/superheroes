@@ -33,6 +33,10 @@ _EA = importlib.util.spec_from_file_location(
 EA = importlib.util.module_from_spec(_EA)
 _EA.loader.exec_module(EA)
 
+_ERC = importlib.util.spec_from_file_location(
+    "engine_result_channel", os.path.join(_HERE, "..", "engine_result_channel.py"))
+ERC = importlib.util.module_from_spec(_ERC)
+_ERC.loader.exec_module(ERC)
 _RR = importlib.util.spec_from_file_location(
     "round_records", os.path.join(_HERE, "..", "round_records.py"))
 RR = importlib.util.module_from_spec(_RR)
@@ -107,6 +111,57 @@ def _contracted_fed_prompt(base):
     return base + EA.WRITE_REPORT_CONTRACT
 
 
+def _finish_codex_write_runner(argv, stdout, prompt_bytes=None, timed_out=False, rc=0, stderr=""):
+    _write_native_write_result(argv, stdout, prompt_bytes)
+    return stdout, timed_out, rc, stderr
+
+
+def _resolve_native_result_path(argv, prompt_bytes=None):
+    if "-o" in argv:
+        return argv[argv.index("-o") + 1]
+    if prompt_bytes is not None:
+        return ERC.result_file_path_from_prompt(
+            prompt_bytes.decode("utf-8", "ignore"))
+    return None
+
+
+def _write_native_write_result(argv, stdout, prompt_bytes=None):
+    result_path = _resolve_native_result_path(argv, prompt_bytes)
+    if result_path is None:
+        return
+    text = stdout if isinstance(stdout, str) else ""
+    obj = EA.extract_write_report(text)
+    if obj is None:
+        return
+    lines = text.split("\n")
+    last_idx = None
+    for i, line in enumerate(lines):
+        if line.strip() == EA.WRITE_REPORT_SENTINEL:
+            last_idx = i
+    if last_idx is not None:
+        report = "\n".join(lines[:last_idx]).strip()
+    else:
+        report = ""
+    if not report:
+        report = "Receipt prose."
+    evidence = obj.get("evidence") if isinstance(obj.get("evidence"), dict) else {}
+    signal = obj.get("signal")
+    if signal is None:
+        signal = "ok" if obj.get("ok") else "needs_context"
+    native = {
+        "ok": obj.get("ok"),
+        "signal": signal,
+        "report": report,
+        "evidence": {
+            "testFailed": bool(evidence.get("testFailed")),
+            "testPassed": bool(evidence.get("testPassed")),
+        },
+    }
+    with open(result_path, "w", encoding="utf-8") as fh:
+        json.dump(native, fh, separators=(",", ":"))
+        fh.write("\n")
+
+
 class FakeRunner:
     def __init__(self, responses):
         self.responses = list(responses)
@@ -122,7 +177,47 @@ class FakeRunner:
         idx = len(self.calls) - 1
         if idx >= len(self.responses):
             raise AssertionError("fake called too many times")
-        return self.responses[idx]
+        resp = self.responses[idx]
+        if callable(resp):
+            out = resp(argv, prompt_bytes, timeout, progress_cb, cwd)
+            if isinstance(out, tuple) and len(out) == 4:
+                stdout, timed_out, rc, stderr_tail = out
+            else:
+                stdout, timed_out, rc, stderr_tail = out, False, 0, ""
+        elif isinstance(resp, tuple) and len(resp) == 4:
+            stdout, timed_out, rc, stderr_tail = resp
+        else:
+            stdout, timed_out, rc, stderr_tail = resp, False, 0, ""
+        if _resolve_native_result_path(argv, prompt_bytes):
+            _write_native_write_result(argv, stdout, prompt_bytes)
+        return stdout, timed_out, rc, stderr_tail
+
+
+class _PreservingNativeWriteFakeRunner(FakeRunner):
+    """FakeRunner that does not sync stdout into the native result file (runner owns -o)."""
+
+    def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+        self.calls.append({
+            "argv": list(argv),
+            "prompt_bytes": prompt_bytes,
+            "timeout": timeout,
+            "cwd": cwd,
+        })
+        idx = len(self.calls) - 1
+        if idx >= len(self.responses):
+            raise AssertionError("fake called too many times")
+        resp = self.responses[idx]
+        if callable(resp):
+            out = resp(argv, prompt_bytes, timeout, progress_cb, cwd)
+            if isinstance(out, tuple) and len(out) == 4:
+                stdout, timed_out, rc, stderr_tail = out
+            else:
+                stdout, timed_out, rc, stderr_tail = out, False, 0, ""
+        elif isinstance(resp, tuple) and len(resp) == 4:
+            stdout, timed_out, rc, stderr_tail = resp
+        else:
+            stdout, timed_out, rc, stderr_tail = resp, False, 0, ""
+        return stdout, timed_out, rc, stderr_tail
 
 
 _NO_CWD = object()
@@ -727,36 +822,6 @@ def _prose_write_report():
     }
 
 
-def test_write_forfeit_attaches_salvage_without_upgrading_outcome(tmp_path, monkeypatch):
-    wt, _main = _linked_worktree(tmp_path)
-    calls = []
-
-    def recover(engine, role_kind, stdout, fed_prompt):
-        if stdout == "unrecoverable":
-            return None
-        calls.append((engine, role_kind, stdout, fed_prompt))
-        return _write_report()
-
-    _install_write_salvage(monkeypatch, recover)
-    res = _dispatch_write(tmp_path, FakeRunner([
-        ("unrecoverable", True, 0, ""),
-        (_build_ok_stdout(), True, 0, ""),
-    ]), cwd=wt)
-
-    assert res["ok"] is False
-    assert res["terminal"] is True
-    assert res["forfeited"] is True
-    assert res["reason"] == ED.dispatch_outcome.REASON_FORFEITED
-    assert res["salvage"] == {
-        "attempt": 2,
-        "stdoutPath": os.path.join(str(tmp_path / "run"), "attempt-2.stdout"),
-        **_write_report(),
-    }
-    assert "still a forfeit" in res["disclosure"]
-    assert "independently verified" in res["disclosure"]
-    assert calls == [("codex", "build", _build_ok_stdout(), _contracted_fed_prompt("Build this.\n"))]
-
-
 def test_write_run_opened_records_fed_prompt(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     prompt_text = "Implement exactly the assigned work order.\n"
@@ -771,70 +836,9 @@ def test_write_run_opened_records_fed_prompt(tmp_path):
     assert res["ok"] is True
     records, _ = ED._journal_read(str(tmp_path / "run"))
     opened = next(record for record in records if record.get("kind") == "run-opened")
-    assert opened["fedPrompt"] == _contracted_fed_prompt(prompt_text)
-
-
-def test_write_salvage_uses_latest_report_and_records_earlier_attempt(tmp_path, monkeypatch):
-    wt, _main = _linked_worktree(tmp_path)
-
-    def recover(_engine, _role_kind, stdout, _fed_prompt):
-        return _write_report(ok=stdout == "second report") if stdout in {"first report", "second report"} else None
-
-    _install_write_salvage(monkeypatch, recover)
-    res = _dispatch_write(tmp_path, FakeRunner([
-        ("first report", True, 0, ""),
-        ("second report", True, 0, ""),
-    ]), cwd=wt)
-
-    assert res["forfeited"] is True
-    assert res["salvage"]["attempt"] == 2
-    assert res["salvage"]["alsoRecovered"] == [{
-        "attempt": 1,
-        "stdoutPath": os.path.join(str(tmp_path / "run"), "attempt-1.stdout"),
-    }]
-
-
-def test_write_salvage_prefers_structured_report_over_later_prose(tmp_path, monkeypatch):
-    # axis: C4 structure must beat recency; prose remains visible in alsoRecovered.
-    wt, _main = _linked_worktree(tmp_path)
-
-    def recover(_engine, _role_kind, stdout, _fed_prompt):
-        if stdout == "structured report":
-            return _write_report()
-        if stdout == "prose report":
-            return _prose_write_report()
-        return None
-
-    _install_write_salvage(monkeypatch, recover)
-    res = _dispatch_write(tmp_path, FakeRunner([
-        ("structured report", True, 0, ""),
-        ("prose report", True, 0, ""),
-    ]), cwd=wt)
-
-    assert res["salvage"]["attempt"] == 1
-    assert res["salvage"]["structured"] is True
-    assert res["salvage"]["alsoRecovered"] == [{
-        "attempt": 2,
-        "stdoutPath": os.path.join(str(tmp_path / "run"), "attempt-2.stdout"),
-    }]
-
-
-def test_write_dirty_tree_forfeit_attaches_salvage(tmp_path, monkeypatch):
-    wt, _main = _linked_worktree(tmp_path)
-
-    class DirtyTimeoutRunner:
-        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
-            with open(os.path.join(cwd, "dirty.txt"), "w", encoding="utf-8") as fh:
-                fh.write("x")
-            return _build_ok_stdout(), True, 0, ""
-
-    _install_write_salvage(monkeypatch, lambda *_args: _write_report())
-    res = _dispatch_write(tmp_path, DirtyTimeoutRunner(), cwd=wt, max_wait=120)
-
-    assert res["detail"] == "worktree-dirtied-by-attempt"
-    assert res["forfeited"] is True
-    assert res["salvage"]["attempt"] == 1
-    assert "report was not gradeable" in res["disclosure"]
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_WRITE)
+    expected = prompt_text + ERC.write_result_contract_from_schema(schema)
+    assert opened["fedPrompt"] == expected
 
 
 def test_write_salvage_scan_exception_leaves_terminal_forfeit_unchanged(tmp_path, monkeypatch):
@@ -847,7 +851,7 @@ def test_write_salvage_scan_exception_leaves_terminal_forfeit_unchanged(tmp_path
     res = _dispatch_write(tmp_path, FakeRunner([
         (_build_ok_stdout(), True, 0, ""),
         (_build_ok_stdout(), True, 0, ""),
-    ]), cwd=wt)
+    ]), cwd=wt, seat=_cursor_seat())
 
     assert res["forfeited"] is True
     assert "salvage" not in res
@@ -876,15 +880,13 @@ def test_write_argv_shape_codex(tmp_path):
     built = EA.build_argv_result(seat, "build", {"cwd": cwd_real})
     records, _ = ED._journal_read(run_dir)
     opened = next(r for r in records if r.get("kind") == "run-opened")
-    assert opened["argv"] == built["argv"]
-    last_msg_idx = spawn_argv.index("--output-last-message")
-    assert spawn_argv == [
-        "codex", "exec", "--sandbox", "workspace-write", "-m", spawn_argv[5],
-        "-c", "model_reasoning_effort=high", "-C", cwd_real,
-        "--json", "--output-last-message", spawn_argv[last_msg_idx + 1],
-        "-",
-    ]
-    assert spawn_argv[last_msg_idx + 1] == ED._attempt_last_message_path(run_dir, 1)
+    assert opened["channel"] == ERC.CHANNEL_NATIVE
+    assert opened["argv"] == built["argv"] + ["--output-schema", opened["nativeSchemaPath"]]
+    assert "--output-schema" in spawn_argv
+    assert "--json" in spawn_argv
+    assert "--output-last-message" not in spawn_argv
+    o_idx = spawn_argv.index("-o")
+    assert spawn_argv[o_idx + 1] == ED._native_result_path(run_dir, 1)
     assert "read-only" not in spawn_argv
     review_built = EA.build_argv_result(seat, "review", {"cwd": cwd_real})
     assert review_built["argv"] != spawn_argv
@@ -899,7 +901,7 @@ def test_write_argv_shape_cursor(tmp_path):
     argv = fake.calls[0]["argv"]
     assert argv == [
         "cursor-agent", "--model", "composer-2.5", "-p", "--trust", "-f",
-        "--output-format", "stream-json",
+        "--sandbox", "enabled", "--output-format", "stream-json",
     ]
     built = EA.build_argv_result(
         _cursor_seat(), "build",
@@ -909,11 +911,15 @@ def test_write_argv_shape_cursor(tmp_path):
     assert argv[0] == "cursor-agent"
     assert "-f" in argv
     assert "--mode" not in argv
+    assert "-o" not in argv
+    assert "--output-schema" not in argv
     review_built = EA.build_argv_result(
         _cursor_seat(), "review", {"engine_model": "composer-2.5"},
     )
-    assert "-f" not in review_built["argv"]
-    assert "--mode" in review_built["argv"]
+    assert review_built["argv"] == [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--trust", "-f",
+        "--sandbox", "enabled", "--output-format", "stream-json",
+    ]
 
 
 def test_dispatch_write_codex_null_effort_resolves_at_entry():
@@ -950,7 +956,7 @@ def test_dispatch_write_cli_effort_key_absent_refuses(tmp_path, capsys):
         "--max-wait", "0",
     ]
     code = ED.main(argv)
-    assert code == 0
+    assert code == 1
     res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert res["ok"] is False
     assert res["terminal"] is True
@@ -1151,20 +1157,30 @@ def test_engine_started_append_failure_terminates_engine(tmp_path, monkeypatch):
     open(prompt_path, "w").write("go\n")
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     stderr_path = os.path.join(run_dir, "attempt-1.stderr")
-    seat = _codex_seat(role=_WRITE_ROLE)
-    argv = _codex_argv_for_run(seat, "build", run_dir)
+    seat = _cursor_seat()
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", EA.build_argv_result(seat, "build", {"cwd": run_dir})["argv"],
+        ED.RUN_KIND_WRITE,
+    )
+    assert native_err is None
     ED._journal_append(run_dir, {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "cursor",
         "roleKind": "build", "orderId": "x", "argv": argv,
         "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "nativeSchemaPath": native_schema_path,
         "supervisorPid": 1, "at": time.time(),
         "resolvedInputs": _spawn_gate_resolved_inputs(seat),
     })
     ED._journal_append(run_dir, {
         "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
     })
-    _install_fake_codex(monkeypatch, tmp_path, "import time\ntime.sleep(120)\n")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_cursor = fake_bin / "cursor-agent"
+    fake_cursor.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(120)\n", encoding="utf-8")
+    fake_cursor.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
     real_append = ED._journal_append
 
     def fail_engine_started(rd, record):
@@ -1246,7 +1262,7 @@ def test_write_cli_out_of_range_max_wait_prints_named_refusal(tmp_path, capsys):
         "--run-dir", run_dir,
         "--max-wait", str(ED.MAX_SYNC_WAIT + 1),
     ]
-    assert ED.main(argv) == 0
+    assert ED.main(argv) == 1
     res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert res["ok"] is False
     assert res["terminal"] is True
@@ -1387,7 +1403,7 @@ def test_write_open_persists_expected_items_and_baseline(tmp_path):
         def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
             with open(os.path.join(cwd, "track.txt"), "w", encoding="utf-8") as fh:
                 fh.write("y\n")
-            return _build_ok_stdout(), False, 0, ""
+            return _finish_codex_write_runner(argv, _build_ok_stdout())
 
     res = _dispatch_write(
         tmp_path, DeliverExpectedRunner(), cwd=wt,
@@ -1571,7 +1587,7 @@ def test_write_all_delivered_ok_with_item_check(tmp_path):
         def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
             with open(target, "w", encoding="utf-8") as fh:
                 fh.write("done\n")
-            return _build_ok_stdout(), False, 0, ""
+            return _finish_codex_write_runner(argv, _build_ok_stdout())
 
     res = _dispatch_write(
         tmp_path, DeliverRunner(), cwd=wt,
@@ -1630,7 +1646,7 @@ def test_write_rename_contributes_both_paths(tmp_path):
     class RenameRunner:
         def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
             _git(cwd, "mv", "old-name.txt", "new-name.txt")
-            return _build_ok_stdout(), False, 0, ""
+            return _finish_codex_write_runner(argv, _build_ok_stdout())
 
     res = _dispatch_write(
         tmp_path, RenameRunner(), cwd=wt,
@@ -1849,7 +1865,7 @@ def test_write_untracked_dir_file_delivered(tmp_path):
             os.makedirs(target_dir)
             with open(os.path.join(target_dir, "file.txt"), "w", encoding="utf-8") as fh:
                 fh.write("new\n")
-            return _build_ok_stdout(), False, 0, ""
+            return _finish_codex_write_runner(argv, _build_ok_stdout())
 
     res = _dispatch_write(
         tmp_path, DeliverRunner(), cwd=wt,
@@ -1873,7 +1889,7 @@ def test_write_gitignored_declared_path_delivered(tmp_path):
             os.makedirs(docs, exist_ok=True)
             with open(os.path.join(docs, "spec.md"), "w", encoding="utf-8") as fh:
                 fh.write("spec\n")
-            return _build_ok_stdout(), False, 0, ""
+            return _finish_codex_write_runner(argv, _build_ok_stdout())
 
     res = _dispatch_write(
         tmp_path, DeliverRunner(), cwd=wt,
@@ -1912,7 +1928,7 @@ def test_write_committed_then_reverted_not_credited(tmp_path):
             _git(cwd, "add", "reverted.txt")
             _git(cwd, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "add temp")
             os.remove(reverted)
-            return _build_ok_stdout(), False, 0, ""
+            return _finish_codex_write_runner(argv, _build_ok_stdout())
 
     res = _dispatch_write(
         tmp_path, CommitThenRevertRunner(), cwd=wt,
@@ -2035,12 +2051,14 @@ def test_write_open_contracts_prompt_once_to_journal_file_and_engine(tmp_path):
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res = _dispatch_write(tmp_path, fake, cwd=wt, prompt_path=prompt_path)
     assert res["ok"] is True
-    expected = _contracted_fed_prompt(base)
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_WRITE)
+    expected = base + ERC.write_result_contract_from_schema(schema)
     run_dir = str(tmp_path / "run")
     records, _ = ED._journal_read(run_dir)
     opened = next(r for r in records if r.get("kind") == "run-opened")
     assert opened["fedPrompt"] == expected
-    assert expected.endswith(EA.WRITE_REPORT_CONTRACT)
+    assert EA.WRITE_REPORT_FIELD_SEMANTICS.strip() in expected
+    assert EA.WRITE_REPORT_SENTINEL not in expected
     assert base in opened["fedPrompt"]
     with open(os.path.join(run_dir, ED.PROMPT_NAME), encoding="utf-8") as fh:
         assert fh.read() == expected
@@ -2055,7 +2073,7 @@ def test_write_contracted_report_success_end_to_end(tmp_path):
         def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
             with open(target, "w", encoding="utf-8") as fh:
                 fh.write("done\n")
-            return _build_ok_stdout(), False, 0, ""
+            return _finish_codex_write_runner(argv, _build_ok_stdout())
 
     res = _dispatch_write(
         tmp_path, DeliverAndReportRunner(), cwd=wt,
@@ -2364,55 +2382,6 @@ def test_report_missing_classifier_all_five_emit_token(tmp_path):
     assert detail == ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
 
 
-def test_report_missing_dirty_tree_path(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    target = os.path.join(wt, "delivered.txt")
-
-    class DirtyNoReportRunner:
-        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
-            with open(target, "w", encoding="utf-8") as fh:
-                fh.write("done\n")
-            return "prose only\n", False, 0, ""
-
-    res = _dispatch_write(
-        tmp_path, DirtyNoReportRunner(), cwd=wt,
-        expected_items=["delivered.txt"],
-    )
-    assert res["ok"] is False
-    assert res["forfeited"] is True
-    assert res["detail"] == ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    assert res["itemCheck"]["missing"] == []
-    assert "reconstruct the change from the diff" in res["disclosure"]
-    assert "not authorship" in res["disclosure"]
-    assert "inspect and clean it yourself" in res["disclosure"]
-
-
-def test_report_missing_double_forfeit_path(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    target = os.path.join(wt, "delivered.txt")
-
-    class DoubleNoReportRunner:
-        def __init__(self):
-            self.calls = 0
-
-        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
-            self.calls += 1
-            if self.calls == 2:
-                with open(target, "w", encoding="utf-8") as fh:
-                    fh.write("done\n")
-            return "prose only\n", False, 0, ""
-
-    res = _dispatch_write(
-        tmp_path, DoubleNoReportRunner(), cwd=wt,
-        expected_items=["delivered.txt"],
-    )
-    assert res["ok"] is False
-    assert res["forfeited"] is True
-    assert res["detail"] == ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    assert res["attempts"] == 2
-    assert res["itemCheck"]["missing"] == []
-
-
 def test_write_legacy_uncontracted_resume_grades_like_parse_result(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")
@@ -2443,10 +2412,13 @@ def test_write_legacy_uncontracted_resume_grades_like_parse_result(tmp_path):
     for record in records:
         if record.get("kind") == "run-opened":
             record["fedPrompt"] = fed_prompt
+            record.pop("channel", None)
+            record.pop("nativeSchemaPath", None)
     state = ED._journal_state(records)
     grade = ED._grade_write_attempt(run_dir, state, 1)
-    assert grade["ok"] is True
-    assert grade["signal"] == "ok"
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "ok" not in grade
 
 
 def _execution_record_completed_write_attempt(
@@ -2473,6 +2445,14 @@ def _execution_record_completed_write_attempt(
             fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
         fh.write(stdout)
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    if opened.get("channel") == ERC.CHANNEL_NATIVE:
+        native_path = ED._native_result_path(run_dir, 1)
+        _write_native_write_result(
+            ["--output-schema", opened.get("nativeSchemaPath", ""), "-o", native_path],
+            stdout,
+        )
     with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
         fh.write("")
     ED._journal_append(run_dir, {
@@ -2492,14 +2472,45 @@ def test_run_execution_record_write_stamps_evidence_binding(tmp_path):
     stdout = _build_ok_stdout()
     _execution_record_completed_write_attempt(tmp_path, run_dir, stdout=stdout)
     records, _ = ED._journal_read(run_dir)
-    fed_prompt = next(rec["fedPrompt"] for rec in records if rec.get("kind") == "run-opened")
-    parsed = EA.grade_write_report("codex", "build", stdout, fed_prompt)
+    state = ED._journal_state(records)
+    parsed = ED._parse_write_attempt(run_dir, state, 1)
     assert parsed["ok"] is True
     record, error = ED.run_execution_record(run_dir)
     assert error is None
     assert isinstance(record, dict)
     assert record["resultKind"] == "evidence"
-    assert record["resultDigest"] == RR.payload_sha256(parsed["evidence"])
+    digest_content = ED._write_result_digest_content(parsed)
+    assert record["resultDigest"] == RR.payload_sha256(digest_content)
+
+
+def test_native_write_run_execution_record_digest_binds_full_result(tmp_path):
+    """Native write resultDigest covers report text and is stable across reads."""
+    def _stdout_with_report(report_text):
+        body = json.dumps({
+            "ok": True, "signal": "ok",
+            "evidence": {"testFailed": False, "testPassed": True},
+        })
+        return report_text + "\n" + EA.WRITE_REPORT_SENTINEL + "\n" + body
+
+    run_dir_a = str(tmp_path / "native-digest-a")
+    run_dir_b = str(tmp_path / "native-digest-b")
+    os.makedirs(run_dir_a, exist_ok=True)
+    os.makedirs(run_dir_b, exist_ok=True)
+    _execution_record_completed_write_attempt(
+        tmp_path / "setup-a", run_dir_a, stdout=_stdout_with_report("First report prose."))
+    _execution_record_completed_write_attempt(
+        tmp_path / "setup-b", run_dir_b, stdout=_stdout_with_report("Second report prose."))
+    record_a1, error_a1 = ED.run_execution_record(run_dir_a)
+    record_a2, error_a2 = ED.run_execution_record(run_dir_a)
+    record_b, error_b = ED.run_execution_record(run_dir_b)
+    assert error_a1 is None and error_a2 is None and error_b is None
+    assert record_a1["resultDigest"] == record_a2["resultDigest"]
+    assert record_a1["resultDigest"] != record_b["resultDigest"]
+    records, _ = ED._journal_read(run_dir_a)
+    state = ED._journal_state(records)
+    parsed = ED._parse_write_attempt(run_dir_a, state, 1)
+    assert record_a1["resultDigest"] == RR.payload_sha256(ED._write_result_digest_content(parsed))
+    assert "report" in ED._write_result_digest_content(parsed)
 
 
 def test_run_execution_record_write_omits_binding_when_parse_yields_nothing(tmp_path):
@@ -2628,7 +2639,7 @@ def test_entry_allowlist_refuses_off_allowlist_write_cli(tmp_path):
         ],
         capture_output=True, text=True, check=False,
     )
-    assert proc.returncode == 0
+    assert proc.returncode == 1
     payload = json.loads(proc.stdout)
     _assert_allowlist_refusal(payload)
     assert _OFF_ALLOWLIST_CODEX in payload["detail"]
@@ -2653,6 +2664,39 @@ def test_write_g1_refusal_leaves_no_lease_or_opened_run(tmp_path):
     assert not os.path.exists(lease_path)
 
 
+def test_dispatch_write_cli_terminal_forfeit_exits_0(tmp_path, monkeypatch, capsys):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-forfeit-cli")
+
+    class DirtyTimeoutRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            with open(os.path.join(cwd, "dirty.txt"), "w", encoding="utf-8") as fh:
+                fh.write("x")
+            return "", True, 0, ""
+
+    fake = DirtyTimeoutRunner()
+    real_supervise = ED._supervise
+
+    def _supervise_with_fake(run_dir_real, *, run_kind, deadline, run_engine=None):
+        return real_supervise(
+            run_dir_real, run_kind=run_kind, deadline=deadline, run_engine=fake,
+        )
+
+    monkeypatch.setattr(ED, "_supervise", _supervise_with_fake)
+    rc = ED.main([
+        "dispatch-write",
+        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--prompt-path", _prompt(tmp_path),
+        "--cwd", wt,
+        "--run-dir", run_dir,
+        "--max-wait", "120",
+    ])
+    assert rc == 0
+    res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert res["terminal"] is True
+    assert res["forfeited"] is True
+
+
 # --- #1269 WO-8: provenance truthfulness on write path ------------------------
 
 
@@ -2674,3 +2718,920 @@ def test_wo8_edge1_cursor_implementer_null_model_snapshot_sources(tmp_path):
     assert snapshot["modelSource"] == "seat-default"
     assert snapshot["engineModel"] == "composer-2.5"
     assert snapshot["engineModelSource"] == "seat-default"
+
+
+# --- #1270 WO-3: engineModelSource provenance and marker-guard detail ----------------
+
+
+def _undeclared_marker_guard_detail(field, marker, source_markers):
+    vocabulary = ", ".join(sorted(source_markers))
+    return (
+        "resolvedInputs field %r source marker %r is not declared; accepted: %s"
+        % (field, marker, vocabulary)
+    )
+
+
+def test_engine_model_source_caller_supplied_vs_registry_resolved_differ(tmp_path):
+    wt, main = _linked_worktree(tmp_path)
+    wt2 = str(tmp_path / "wt2")
+    _git(main, "worktree", "add", "-q", wt2)
+    fake = FakeRunner([])
+    caller_run = str(tmp_path / "caller-model")
+    _dispatch_write(
+        tmp_path,
+        fake,
+        cwd=wt,
+        run_dir=caller_run,
+        seat=_seat("codex", "gpt-5.6-sol", "high"),
+        max_wait=0,
+    )
+    caller_snapshot = _write_opened_resolved_inputs(caller_run)
+    assert caller_snapshot["engineModelSource"] == "caller"
+
+    defaulted_run = str(tmp_path / "defaulted-model")
+    _dispatch_write(
+        tmp_path,
+        fake,
+        cwd=wt2,
+        run_dir=defaulted_run,
+        seat=_seat_json("cursor", None, None),
+        max_wait=0,
+    )
+    defaulted_snapshot = _write_opened_resolved_inputs(defaulted_run)
+    assert defaulted_snapshot["engineModelSource"] == "seat-default"
+    assert caller_snapshot["engineModelSource"] != defaulted_snapshot["engineModelSource"]
+
+
+def test_dispatch_write_undeclared_marker_detail_surfaces_guard_message(tmp_path, monkeypatch):
+    shrunk = frozenset(m for m in ED.resolved_inputs_vocab.SOURCE_MARKERS if m != ED.resolved_inputs_vocab.CALLER)
+    monkeypatch.setattr(ED.resolved_inputs_vocab, "SOURCE_MARKERS", shrunk)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-marker-guard")
+    result = ED.dispatch_write(
+        seat=_codex_seat(),
+        cwd=wt,
+        run_dir=run_dir,
+        prompt_path=_prompt(tmp_path),
+        run_engine=FakeRunner([]),
+        max_wait=0,
+    )
+    expected_detail = _undeclared_marker_guard_detail(
+        "engine", ED.resolved_inputs_vocab.CALLER, shrunk,
+    )
+    assert result.get("ok") is False
+    assert result.get("terminal") is True
+    assert result.get("reason") == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert result.get("entryReason") == "internal-error"
+    assert result.get("detail") == expected_detail
+    assert "engine" in result.get("detail")
+    assert ED.resolved_inputs_vocab.CALLER in result.get("detail")
+    assert "accepted:" in result.get("detail")
+    assert result.get("runOpened") is False
+
+
+# --- #1270 WO-B1: native result channel at write open ---
+
+
+def _write_opened_record(run_dir):
+    records, _ = ED._journal_read(run_dir)
+    return next(r for r in records if r.get("kind") == "run-opened")
+
+
+def _strip_opened_to_marker_channel(run_dir):
+    records, _ = ED._journal_read(run_dir)
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            if rec.get("kind") == "run-opened":
+                rec.pop("channel", None)
+                rec.pop("nativeSchemaPath", None)
+                argv = list(rec.get("argv") or [])
+                cleaned = []
+                idx = 0
+                while idx < len(argv):
+                    token = argv[idx]
+                    if token in ("--output-schema", "-o") and idx + 1 < len(argv):
+                        idx += 2
+                        continue
+                    if token == "--json":
+                        idx += 1
+                        continue
+                    cleaned.append(token)
+                    idx += 1
+                rec["argv"] = cleaned
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+
+
+def test_codex_marker_channel_write_run_refuses_to_spawn(tmp_path):
+    run_dir = str(tmp_path / "marker-retired-codex-write")
+    wt, _main = _linked_worktree(tmp_path)
+    _dispatch_write(tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=0)
+    _strip_opened_to_marker_channel(run_dir)
+    fake = FakeRunner([])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=120)
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "marker-channel-retired"
+    assert fake.calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended1 = next(
+        r for r in records if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended1.get("refusal") == "marker-channel-retired"
+
+
+# --- #1270 WO-B: marker-arm collapse detectors (write) ---
+
+
+def _marker_opened_write_attempt_state(tmp_path, *, stdout, engine="cursor"):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "marker-write-grade")
+    wt_real = os.path.realpath(wt)
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {
+            "engine": engine,
+            "roleKind": "build",
+            "cwd": wt_real,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    return run_dir, state, wt
+
+
+def test_grade_write_attempt_marker_opened_returns_retired(tmp_path):
+    run_dir, state, wt = _marker_opened_write_attempt_state(
+        tmp_path, stdout=_build_ok_stdout())
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "marker-channel-retired"
+    assert "ok" not in grade
+
+
+def test_parse_write_attempt_marker_opened_returns_none(tmp_path):
+    run_dir, state, _wt = _marker_opened_write_attempt_state(
+        tmp_path, stdout=_build_ok_stdout(), engine="codex")
+    parsed = ED._parse_write_attempt(run_dir, state, 1)
+    assert parsed is None
+
+
+def test_supervise_write_marker_opened_never_mints_stdout_capped(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "marker-write-supervise-cap")
+    _dispatch_write(
+        tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=0,
+        seat=_cursor_seat(),
+    )
+    over = ED.MAX_STDOUT_CAPTURE + 4096
+    truncated = "z" * over + _build_ok_stdout()
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(truncated)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": len(truncated), "at": time.time(),
+    })
+    _strip_opened_to_marker_channel(run_dir)
+    res = _dispatch_write(
+        tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=120,
+        seat=_cursor_seat(),
+    )
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "marker-channel-retired"
+    assert "stdout-capped-by-attempt" not in str(res.get("detail", ""))
+
+
+def test_finalize_write_forfeit_terminal_passthrough(tmp_path):
+    stdout = _build_ok_stdout()
+    run_dir, state, _wt = _marker_opened_write_attempt_state(tmp_path, stdout=stdout)
+    terminal = {
+        "ok": False,
+        "terminal": True,
+        "reason": "forfeited",
+        "detail": "worktree-dirtied-by-attempt",
+        "attempts": 1,
+        "forfeited": True,
+        "disclosure": "inspect the worktree",
+    }
+    out = ED._finalize_write_forfeit_terminal(
+        terminal, "cursor", run_dir, state, 1,
+    )
+    assert out == terminal
+    assert "itemCheck" not in out
+    assert "salvage" not in out
+
+
+# axis: codex write open records CHANNEL_NATIVE and binds argv to the declared write schema path.
+def test_codex_write_open_records_native_channel_and_schema(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir)
+    opened = _write_opened_record(run_dir)
+    assert opened["channel"] == ERC.CHANNEL_NATIVE
+    schema_path = opened["nativeSchemaPath"]
+    assert os.path.isfile(schema_path)
+    with open(schema_path, encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    assert on_disk == ERC.declared_schema("codex", ERC.RUN_KIND_WRITE)
+    built = EA.build_argv_result(_codex_seat(), "build", {"cwd": opened["cwd"]})
+    assert opened["argv"] == built["argv"] + ["--output-schema", opened["nativeSchemaPath"]]
+
+
+def test_cursor_write_open_records_native_channel(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    seat = _cursor_seat()
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=seat)
+    opened = _write_opened_record(run_dir)
+    assert opened["channel"] == ERC.CHANNEL_NATIVE
+    schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
+    assert os.path.isfile(schema_path)
+    with open(schema_path, encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    assert on_disk == ERC.declared_schema("cursor", ERC.RUN_KIND_WRITE)
+    built = EA.build_argv_result(seat, "build", {"cwd": opened["cwd"]})
+    assert opened["argv"] == built["argv"]
+    assert "-o" not in opened["argv"]
+    assert "--output-schema" not in opened["argv"]
+
+
+# axis: declared_schema failure at open refuses before any attempt journal or engine spawn.
+def test_codex_write_open_refuses_when_schema_undeclarable(tmp_path, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise ValueError("schema broke")
+
+    monkeypatch.setattr(ED.engine_result_channel, "declared_schema", boom)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    baseline = ED._worktree_baseline(os.path.realpath(wt))
+    ok, detail = ED._open_write_run(
+        run_dir,
+        engine="codex",
+        argv=_codex_argv_for_run(_codex_seat(), "build", os.path.realpath(wt)),
+        cwd=os.path.realpath(wt),
+        timeout=ED.RETRY_MIN_TIMEOUT,
+        retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=_prompt(tmp_path),
+        order_id="order-1",
+        base_sha="abc",
+        worktree_baseline=baseline,
+        progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert ok is False
+    assert detail == "native-schema-undeclarable"
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") == "run-opened" for r in records)
+
+
+# --- #1270 layer 2b: codex writes on the native channel -----------------------
+
+
+_NATIVE_WRITE_SECRET = "sk-EXAMPLEfakenotarealsecret0"
+
+
+def _valid_native_write_obj(**overrides):
+    obj = {
+        "ok": True,
+        "signal": "ok",
+        "report": "Receipt prose.",
+        "evidence": {"testFailed": False, "testPassed": True},
+    }
+    obj.update(overrides)
+    return obj
+
+
+def _native_write_grade_state(tmp_path, obj, *, write_result=True, schema_mutator=None):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    wt_real = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(wt_real)
+    ED._acquire_worktree_lease(wt_real, run_dir)
+    ok, detail = ED._open_write_run(
+        run_dir,
+        engine="codex",
+        argv=_codex_argv_for_run(_codex_seat(), "build", wt_real),
+        cwd=wt_real,
+        timeout=ED.RETRY_MIN_TIMEOUT,
+        retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=_prompt(tmp_path),
+        order_id="native-write-grade",
+        base_sha="abc",
+        worktree_baseline=baseline,
+        progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert ok, detail
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    if write_result:
+        path = ED._native_result_path(run_dir, 1)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, separators=(",", ":"))
+            fh.write("\n")
+    if schema_mutator is not None:
+        schema_mutator(state["opened"]["nativeSchemaPath"])
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "wallSeconds": 1.0, "stdoutBytes": 0,
+        "at": time.time(),
+    })
+    records, _ = ED._journal_read(run_dir)
+    return run_dir, ED._journal_state(records)
+
+
+def _write_native_obj_at_argv(argv, obj):
+    result_path = argv[argv.index("-o") + 1]
+    with open(result_path, "w", encoding="utf-8") as fh:
+        json.dump(obj, fh, separators=(",", ":"))
+        fh.write("\n")
+
+
+# axis: _admit_native_write_result admits a schema-valid typed file as terminal ok with report.
+def test_native_write_result_production_typed_file(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    obj = _valid_native_write_obj()
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        _write_native_obj_at_argv(argv, obj)
+        return "", False, 0, ""
+
+    res = _dispatch_write(tmp_path, runner, cwd=wt)
+    assert res["ok"] is True
+    assert res["terminal"] is True
+    assert res["signal"] == "ok"
+    assert res["evidence"] == obj["evidence"]
+    assert res["report"] == obj["report"]
+
+
+# axis: native write grades from the typed result file, not stdout presence.
+def test_native_write_completion_detected_with_empty_stdout(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    obj = _valid_native_write_obj()
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        _write_native_obj_at_argv(argv, obj)
+        return "", False, 0, ""
+
+    res = _dispatch_write(tmp_path, runner, cwd=wt)
+    assert res["ok"] is True
+    assert res["attempts"] == 1
+
+
+# axis: progress_cb telemetry is recorded per attempt on the native write path.
+def test_native_write_progress_telemetry_recorded(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    obj = _valid_native_write_obj()
+    progress_path = os.path.join(run_dir, "progress.jsonl")
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        progress_cb(1.0, 0)
+        progress_cb(2.0, 0)
+        _write_native_obj_at_argv(argv, obj)
+        return "", False, 0, ""
+
+    res = _dispatch_write(
+        tmp_path, runner, cwd=wt, run_dir=run_dir, progress_path=progress_path,
+    )
+    assert res["ok"] is True
+    with open(progress_path, encoding="utf-8") as fh:
+        lines = fh.read().strip().splitlines()
+    records = [json.loads(line) for line in lines]
+    attempt_one = [rec for rec in records if rec.get("attempt") == 1]
+    assert len(attempt_one) >= 2
+    elapsed_values = {rec["elapsed_s"] for rec in attempt_one}
+    assert 1.0 in elapsed_values
+    assert 2.0 in elapsed_values
+
+
+# axis: admitted write report threads through the delivered-items success terminal.
+def test_native_write_report_threaded_with_declared_items(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    target = os.path.join(wt, "delivered.txt")
+    obj = _valid_native_write_obj(report="Delivered the item.")
+
+    class DeliverRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            with open(target, "w", encoding="utf-8") as fh:
+                fh.write("done\n")
+            _write_native_obj_at_argv(argv, obj)
+            return "", False, 0, ""
+
+    res = _dispatch_write(
+        tmp_path, DeliverRunner(), cwd=wt, expected_items=["delivered.txt"],
+    )
+    assert res["ok"] is True
+    assert res["itemCheck"]["missing"] == []
+    assert res["report"] == obj["report"]
+
+
+# axis: _supervise threads admitted report through items-undelivered forfeit terminal.
+def test_native_write_report_survives_undelivered_items(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    obj = _valid_native_write_obj(report="Work completed but item missing.")
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        _write_native_obj_at_argv(argv, obj)
+        return "", False, 0, ""
+
+    res = _dispatch_write(
+        tmp_path, runner, cwd=wt, expected_items=["undelivered.txt"],
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == ED.ITEM_DETAIL_UNDELIVERED
+    assert res["report"] == obj["report"]
+
+
+# axis: _supervise threads admitted report through item-evidence-unavailable terminal.
+def test_native_write_report_survives_item_evidence_unavailable(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+    obj = _valid_native_write_obj(report="Evidence probe failed.")
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        _write_native_obj_at_argv(argv, obj)
+        return "", False, 0, ""
+
+    monkeypatch.setattr(ED, "_item_delivery_check", lambda *_a, **_k: {
+        "evidenceUnavailable": True, "evidenceCause": "probe",
+    })
+
+    res = _dispatch_write(tmp_path, runner, cwd=wt, expected_items=["item.txt"])
+    assert res["forfeited"] is True
+    assert res["detail"].startswith(ED.ITEM_DETAIL_EVIDENCE_UNAVAILABLE)
+    assert res["report"] == obj["report"]
+
+
+# axis: native codex write without result file forfeits dirtied, not report-missing-items-delivered.
+def test_native_write_delivered_items_without_result_is_not_report_missing(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    target = os.path.join(wt, "delivered.txt")
+
+    class DeliverNoResultRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            with open(target, "w", encoding="utf-8") as fh:
+                fh.write("done\n")
+            return "", False, 0, ""
+
+    res = _dispatch_write(
+        tmp_path, DeliverNoResultRunner(), cwd=wt,
+        expected_items=["delivered.txt"],
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "worktree-dirtied-by-attempt"
+    assert res["attemptDetail"] == "native-result-missing"
+    assert res["detail"] != ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
+
+
+# axis: terminal_refusal from _admit_native_write_result carries report without forfeit.
+def test_native_write_refusal_carries_report(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    obj = {
+        "ok": False,
+        "signal": "plan_wrong",
+        "report": "Order premise was wrong.",
+        "evidence": {"testFailed": True, "testPassed": False},
+    }
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        _write_native_obj_at_argv(argv, obj)
+        return "", False, 0, ""
+
+    res = _dispatch_write(tmp_path, runner, cwd=wt)
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res["forfeited"] is False
+    assert res["signal"] == "plan_wrong"
+    assert res["report"] == obj["report"]
+
+
+# axis: _admit_native_write_result schema validation forfeits native-result-schema-invalid.
+@pytest.mark.parametrize("obj", [
+    {"ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": True}},
+    {"ok": True, "signal": "ok", "report": "x", "evidence": {"testFailed": False, "testPassed": True}, "extra": 1},
+    {"ok": "yes", "signal": "ok", "report": "x", "evidence": {"testFailed": False, "testPassed": True}},
+    {"ok": True, "signal": "bogus", "report": "x", "evidence": {"testFailed": False, "testPassed": True}},
+    {"ok": True, "signal": "ok", "report": "x", "evidence": {"testFailed": "no", "testPassed": True}},
+])
+def test_native_write_schema_invalid_forfeits(tmp_path, obj):
+    run_dir, state = _native_write_grade_state(tmp_path, obj)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-schema-invalid"
+    assert grade.get("ok") is not True
+
+
+# axis: _admit_native_write_result refuses blank or whitespace-only report text.
+@pytest.mark.parametrize("report", ["", "   \n"])
+def test_native_write_blank_report_forfeits(tmp_path, report):
+    obj = _valid_native_write_obj(report=report)
+    run_dir, state = _native_write_grade_state(tmp_path, obj)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-report-blank"
+
+
+# axis: _verify_native_schema refuses when on-disk schema differs from declared.
+def test_native_write_schema_substitution_refuses(tmp_path):
+    obj = _valid_native_write_obj()
+
+    def mutate(schema_path):
+        with open(schema_path, "w", encoding="utf-8") as fh:
+            json.dump({}, fh)
+
+    run_dir, state = _native_write_grade_state(tmp_path, obj, schema_mutator=mutate)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-schema-unreadable"
+
+
+# axis: admitted write report egress scrubs secrets from terminal and journal.
+def test_native_write_secret_in_report_scrubbed_from_terminal_and_journal(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    obj = _valid_native_write_obj(
+        report="log shows Authorization: Bearer %s" % _NATIVE_WRITE_SECRET,
+    )
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        _write_native_obj_at_argv(argv, obj)
+        return "", False, 0, ""
+
+    planted_report = obj["report"]
+    res = _dispatch_write(tmp_path, runner, cwd=wt, run_dir=run_dir)
+    assert res["ok"] is True
+    assert _NATIVE_WRITE_SECRET not in json.dumps(res)
+    journal_bytes = open(ED._journal_path(run_dir), "rb").read()
+    assert _NATIVE_WRITE_SECRET.encode("utf-8") not in journal_bytes
+    assert "log shows Authorization" in res["report"]
+    assert res["report"] != planted_report
+
+
+# axis: missing native result file forfeits with native-result-missing detail.
+def test_native_write_exhausted_forfeit_carries_native_detail(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return "", False, 0, ""
+
+    res = _dispatch_write(tmp_path, runner, cwd=wt, max_wait=120)
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-missing"
+
+
+# axis: dirty worktree on retry forfeits worktree-dirtied-by-attempt with attemptDetail.
+def test_native_write_dirtied_forfeit_carries_attempt_detail(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    invalid = _valid_native_write_obj()
+    invalid["evidence"] = {"testFailed": "no", "testPassed": True}
+
+    class DirtyInvalidRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            with open(os.path.join(cwd, "dirty.txt"), "w", encoding="utf-8") as fh:
+                fh.write("x")
+            _write_native_obj_at_argv(argv, invalid)
+            return "", False, 0, ""
+
+    res = _dispatch_write(tmp_path, DirtyInvalidRunner(), cwd=wt, max_wait=120)
+    assert res["forfeited"] is True
+    assert res["detail"] == "worktree-dirtied-by-attempt"
+    assert res["attemptDetail"] == "native-result-schema-invalid"
+
+
+# axis: _spawn_native_result_argv refuses occupied result path; engine never receives -o symlink.
+def test_native_write_dangling_symlink_at_result_path_never_handed_to_engine(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    _dispatch_write(tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=0)
+    attempt1_path = ED._native_result_path(run_dir, 1)
+    dangling_target = tmp_path / "never-created-target"
+    os.symlink(str(dangling_target), attempt1_path)
+    obj = _valid_native_write_obj()
+    calls = []
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        calls.append(list(argv))
+        _write_native_obj_at_argv(argv, obj)
+        return "", False, 0, ""
+
+    res = ED._supervise(
+        run_dir,
+        run_kind=ED.RUN_KIND_WRITE,
+        deadline=time.monotonic() + 30,
+        run_engine=runner,
+    )
+    assert res.get("terminal") is True
+    assert res.get("ok") is True
+    assert os.path.islink(attempt1_path)
+    assert os.readlink(attempt1_path) == str(dangling_target)
+    assert not dangling_target.exists()
+    for argv in calls:
+        if "-o" in argv:
+            assert argv[argv.index("-o") + 1] != attempt1_path
+    records, _ = ED._journal_read(run_dir)
+    ended1 = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended1["refusal"] == "native-result-path-occupied"
+    assert calls
+    attempt2_path = ED._native_result_path(run_dir, 2)
+    assert calls[-1][-2:] == ["-o", attempt2_path]
+
+
+# axis: run_execution_record binds completed native write attempt to evidence digest.
+def test_native_write_run_execution_record_binds_result(tmp_path):
+    run_dir = str(tmp_path / "native-exec-record")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout = _build_ok_stdout()
+    _execution_record_completed_write_attempt(tmp_path, run_dir, stdout=stdout)
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert record["resultKind"] == "evidence"
+    assert record["resultDigest"]
+    assert isinstance(record.get("observation"), dict)
+
+
+# axis: cursor native write grades from the typed file, not marker stdout.
+def test_cursor_write_prompt_and_grading_native(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    seat = _cursor_seat()
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=seat)
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert "result file named in the typed-file contract" in opened["fedPrompt"]
+    assert "The final response must be" not in opened["fedPrompt"]
+    spawn_argv = fake.calls[0]["argv"]
+    assert "--output-schema" not in spawn_argv
+    assert "-o" not in spawn_argv
+    assert res["ok"] is True
+    assert res["signal"] == "ok"
+
+
+def _invalid_native_write_runner():
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({
+                "ok": True,
+                "signal": "ok",
+                "evidence": {"testFailed": False, "testPassed": True},
+            }, fh, separators=(",", ":"))
+            fh.write("\n")
+        return _build_ok_stdout(), False, 0, ""
+    return runner
+
+
+def test_native_write_exhausted_forfeit_carries_no_salvage(tmp_path):
+    """axis: native write terminal forfeit never attaches marker-channel salvage."""
+    wt, _main = _linked_worktree(tmp_path)
+    fake = _PreservingNativeWriteFakeRunner([
+        _invalid_native_write_runner(),
+        _invalid_native_write_runner(),
+    ])
+    res = _dispatch_write(tmp_path, fake, cwd=wt)
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-schema-invalid"
+    assert "salvage" not in res
+    assert "itemCheck" not in res
+    assert "salvaged" not in res.get("disclosure", "").lower()
+
+
+def test_native_write_over_cap_stdout_never_forfeits_stdout_capped(tmp_path):
+    """axis: native write ignores stdout-cap forfeit — grades typed file only."""
+    wt, _main = _linked_worktree(tmp_path)
+    over = ED.MAX_STDOUT_CAPTURE + 512
+
+    def over_cap_invalid(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump({
+                "ok": True,
+                "signal": "ok",
+                "evidence": {"testFailed": False, "testPassed": True},
+            }, fh, separators=(",", ":"))
+            fh.write("\n")
+        return "x" * over, False, 0, ""
+
+    fake = FakeRunner([over_cap_invalid, over_cap_invalid])
+    res = _dispatch_write(tmp_path, fake, cwd=wt)
+    assert res["forfeited"] is True
+    assert "stdout-capped-by-attempt" not in str(res.get("detail", ""))
+    assert res.get("detail") == "native-result-schema-invalid"
+
+
+@pytest.mark.parametrize("vendor", ["codex", "cursor"])
+def test_write_run_execution_record_carries_runner_nonce(tmp_path, vendor):
+    """axis: fresh write runs record echoNonce and run_execution_record exposes runnerNonce."""
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / ("write-nonce-%s" % vendor))
+    stdout = _build_ok_stdout()
+    seat = _codex_seat(role="implementer") if vendor == "codex" else _cursor_seat()
+
+    def ok_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        if vendor == "codex":
+            return _finish_codex_write_runner(argv, stdout)
+        return stdout, False, 0, ""
+
+    fake = FakeRunner([ok_runner])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=seat)
+    assert res["ok"] is True
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    echo_nonce = opened.get("echoNonce")
+    assert isinstance(echo_nonce, str) and len(echo_nonce) == 32
+    record, err = ED.run_execution_record(run_dir)
+    assert err is None
+    assert record["runnerNonce"] == echo_nonce
+
+
+# --- claude stdout delivery (#1273) ---
+
+_TEA = importlib.util.spec_from_file_location(
+    "test_engine_adapter", os.path.join(_HERE, "test_engine_adapter.py"))
+_TEA_MOD = importlib.util.module_from_spec(_TEA)
+_TEA.loader.exec_module(_TEA_MOD)
+_claude_event_stream = _TEA_MOD._claude_event_stream
+
+_MR = importlib.util.spec_from_file_location(
+    "model_registry", os.path.join(_HERE, "..", "model_registry.py"))
+MR = importlib.util.module_from_spec(_MR)
+_MR.loader.exec_module(MR)
+
+_OFF_ALLOWLIST_CLAUDE = "haiku-4.5"
+
+
+def _claude_seat(model="sonnet", effort="high"):
+    return _seat("claude", model, effort)
+
+
+def _ensure_claude_config_dir(tmp_path, monkeypatch, *, relative=None):
+    if relative is not None:
+        rel_dir = tmp_path / relative
+        rel_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", relative)
+        monkeypatch.delenv("HOME", raising=False)
+        return str(rel_dir.resolve())
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    cfg = home / ".claude"
+    cfg.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    return str(cfg)
+
+
+class _ClaudeStdoutWriteFakeRunner(FakeRunner):
+    def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+        self.calls.append({
+            "argv": list(argv),
+            "prompt_bytes": prompt_bytes,
+            "timeout": timeout,
+            "cwd": cwd,
+        })
+        idx = len(self.calls) - 1
+        if idx >= len(self.responses):
+            raise AssertionError("fake called too many times")
+        resp = self.responses[idx]
+        if callable(resp):
+            out = resp(argv, prompt_bytes, timeout, progress_cb, cwd)
+        elif isinstance(resp, tuple) and len(resp) == 4:
+            out = resp
+        else:
+            out = resp, False, 0, ""
+        if isinstance(out, tuple) and len(out) == 4:
+            stdout, timed_out, rc, stderr_tail = out
+        else:
+            stdout, timed_out, rc, stderr_tail = out, False, 0, ""
+        return stdout, timed_out, rc, stderr_tail
+
+
+def _claude_argv_for_run(seat, cwd):
+    built = EA.build_argv_result(seat, "build", {"cwd": cwd})
+    assert built["reason"] is None, built
+    return built["argv"]
+
+
+def _valid_claude_write_structured(**overrides):
+    obj = _valid_native_write_obj()
+    obj.update(overrides)
+    return obj
+
+
+def _claude_write_runner(structured=None):
+    if structured is None:
+        structured = _valid_claude_write_structured()
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        stream = _claude_event_stream(result=structured)
+        return stream, False, 0, ""
+    return runner
+
+
+def test_claude_write_open_records_native_channel_and_config_dir(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    seat = _claude_seat()
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=seat)
+    opened = _write_opened_record(run_dir)
+    assert opened["channel"] == ERC.CHANNEL_NATIVE
+    assert os.path.isabs(opened["configDir"])
+    with open(opened["nativeSchemaPath"], encoding="utf-8") as fh:
+        schema_text = fh.read().rstrip("\n")
+    assert opened["argv"][-2:] == ["--json-schema", schema_text]
+    built = EA.build_argv_result(seat, "build", {"cwd": opened["cwd"]})
+    assert opened["argv"][:-2] == built["argv"]
+
+
+def test_claude_write_admits_structured_report_through_injected_seam(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    structured = _valid_claude_write_structured(report="Receipt prose.")
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner(structured)])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, seat=_claude_seat())
+    assert res["ok"] is True
+    assert res["signal"] == "ok"
+    assert res["report"] == "Receipt prose."
+    assert "itemCheck" not in res
+    records, _ = ED._journal_read(res["runDir"])
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended["stdoutResult"] == "materialized"
+
+
+def test_claude_write_blank_report_forfeits_native_result_report_blank(tmp_path, monkeypatch):
+    # edge 14
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    structured = _valid_claude_write_structured(report="   ")
+    runner = _claude_write_runner(structured)
+    fake = _ClaudeStdoutWriteFakeRunner([runner, runner])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, seat=_claude_seat())
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-report-blank"
+
+
+def test_claude_write_planted_valid_result_without_stdout_result_forfeits_occupied(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "occupied-no-result")
+    os.makedirs(run_dir, exist_ok=True)
+    monkeypatch.setenv("WO_B_CLAUDE_RUN_DIR", os.path.realpath(run_dir))
+
+    plant_calls = []
+    valid = _valid_claude_write_structured()
+
+    def plant_no_result(argv, prompt_bytes, timeout, progress_cb, cwd):
+        attempt = len(plant_calls) + 1
+        plant_calls.append(attempt)
+        result_path = ED._native_result_path(os.environ["WO_B_CLAUDE_RUN_DIR"], attempt)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(valid, separators=(",", ":")) + "\n")
+        return "", False, 0, ""
+
+    res = _dispatch_write(
+        tmp_path,
+        _ClaudeStdoutWriteFakeRunner([plant_no_result, plant_no_result]),
+        cwd=wt,
+        run_dir=run_dir,
+        seat=_claude_seat(),
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-path-occupied"
+
+
+def test_claude_off_allowlist_seat_refused_at_spawn_gate_write(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    res = _dispatch_write(
+        tmp_path, _ClaudeStdoutWriteFakeRunner([]),
+        cwd=wt, seat=_claude_seat(model="haiku-4.5", effort="high"),
+    )
+    assert res["ok"] is False
+    assert res["attempts"] == 0
+    assert _OFF_ALLOWLIST_CLAUDE in res["detail"]
