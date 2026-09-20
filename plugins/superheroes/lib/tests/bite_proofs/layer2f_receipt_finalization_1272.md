@@ -95,13 +95,145 @@ AssertionError: assert 'fix-content-reverted' == 'fix-content-schema-unsupported
 1 passed
 ```
 
-## BP-2f-m — persistence order (certification reads post-rebind state)
+## BP-2f-r2-c — shared terminal step (materializer leg)
 
-**Guarded element.** `round_driver._finalize_receipt` — `save_state(session_dir, state)` before `_write_receipt`.
-**Axis.** Loop-state on disk is saved after re-bind and before round-receipt write so certification re-read sees rebound receipts.
-**Detector.** `test_persistence_order_rebound_on_disk` (ledger + live row headSha after terminal gate).
+**Guarded element.** `round_driver._materialize_run_loop_session` — `_finalize_certification_inputs(session_dir, state_copy, head_sha=head)`.
+**Axis.** The materializer leg runs the same certification-input finalization as the CLI terminal gate.
+**Detector.** `test_both_certification_legs_reach_the_shared_terminal_step`.
+
+**Neutralization.**
+
+```python
+        pass  # bite BP-2f-r2-c neutralized materializer _finalize_certification_inputs
+```
+
+(replaced `_finalize_certification_inputs(session_dir, state_copy, head_sha=head)`)
+
+**Raw red** (exit 1):
+
+```
+FAILED ...test_both_certification_legs_reach_the_shared_terminal_step
+AssertionError: assert {'headSha': '...', 'verifyResult': 'pass'} == {'fixContentB...', ...}
+Right contains 3 more items:
+ {'fixContentBytes': 12, 'fixContentDigest': '...', 'fixContentHeadSha': '...'}
+1 failed in 0.41s
+```
+
+**Restore.** Restored `_finalize_certification_inputs(session_dir, state_copy, head_sha=head)`.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.44s
+```
+
+## BP-2f-r2-d — ledger-driven path set
+
+**Guarded element.** `round_driver._persist_head_content_blobs` — `paths = _fixed_ledger_content_paths(state, artifact)`.
+**Axis.** Default head-content paths come from fixed ledger rows, not live `state["findings"]`.
+**Detector.** `test_terminal_rebind_covers_a_ledger_only_fixed_row`.
+
+**Neutralization.**
+
+```python
+        paths = []
+        seen = set()
+        for finding in (state.get("findings") or []) if isinstance(state, dict) else []:
+            ...
+```
+
+(replaced `paths = _fixed_ledger_content_paths(state, artifact)` with live-findings scan)
+
+**Raw red** (exit 1):
+
+```
+FAILED ...test_terminal_rebind_covers_a_ledger_only_fixed_row
+AssertionError: assert 'f.py::fixed bug@L1' not in {'f.py::fixed bug@L1': 'fix-content-missing'}
+1 failed in 0.46s
+```
+
+**Restore.** Restored `paths = _fixed_ledger_content_paths(state, artifact)`.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.55s
+```
+
+## BP-2f-r2-e — one-call-site census
+
+**Guarded element.** `round_driver._finalize_receipt` — extra `_persist_head_content_blobs` call.
+**Axis.** Head-content persist has exactly one production call site inside `_finalize_certification_inputs`.
+**Detector.** `test_certification_input_finalization_has_one_call_site`.
+
+**Neutralization.**
+
+```python
+    _persist_head_content_blobs(session_dir, state, head_sha=certified_head)  # bite BP-2f-r2-e
+```
+
+(added after `_finalize_certification_inputs` in `_finalize_receipt`)
+
+**Raw red** (exit 1):
+
+```
+FAILED ...test_certification_input_finalization_has_one_call_site
+AssertionError: _persist_head_content_blobs call sites: [('_finalize_certification_inputs', 5620), ('_finalize_receipt', 6625)]
+assert 2 == 1
+1 failed in 0.46s
+```
+
+**Restore.** Removed the extra `_persist_head_content_blobs` line from `_finalize_receipt`.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.55s
+```
+
+## BP-2f-m — persistence order (RETRACTED + replacement)
+
+**RETRACTED as vacuous (no bite through this entry point).** Original entry below — `_terminal_receipt_gate` performs another `save_state` after `_finalize_receipt` returns, so neutralizing the save inside `_finalize_receipt` leaves `test_persistence_order_rebound_on_disk` green.
+
+**Guarded element (original).** `round_driver._finalize_receipt` — `save_state(session_dir, state)` before `_write_receipt`.
+**Axis (original).** Loop-state on disk is saved after re-bind and before round-receipt write so certification re-read sees rebound receipts.
+**Detector (original).** `test_persistence_order_rebound_on_disk` (ledger + live row headSha after terminal gate).
 
 **Unreachable through this entry point.** Swapping `_write_receipt` before `save_state`, skipping `save_state` in `_finalize_receipt`, or moving `_write_receipt` ahead of `save_state` all leave `test_persistence_order_rebound_on_disk` green: `_terminal_receipt_gate` always calls `save_state` after `_finalize_receipt` returns, so the detector reads loop-state only after that closing save. The ordering inside `_finalize_receipt` is not observable through this test path.
+
+**Replacement proof (materializer leg).** `_finalize_certification_inputs` — `save_state(session_dir, state)`.
+**Axis.** On-disk loop-state after the shared step carries re-bound receipts and fix-content fields on the materializer leg.
+**Detector.** `test_both_certification_legs_reach_the_shared_terminal_step` (materialized session loaded from disk).
+
+**Neutralization.**
+
+```python
+    pass  # bite BP-2f-m neutralized save_state inside _finalize_certification_inputs
+```
+
+(replaced `save_state(session_dir, state)`)
+
+**Raw red** (exit 1):
+
+```
+FAILED ...test_both_certification_legs_reach_the_shared_terminal_step
+AssertionError: assert {'headSha': '...', 'verifyResult': 'pass'} == {'fixContentB...', ...}
+Right contains 3 more items:
+ {'fixContentBytes': 12, 'fixContentDigest': '...', 'fixContentHeadSha': '...'}
+1 failed in 0.64s
+```
+
+**Restore.** Restored `save_state(session_dir, state)`.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.49s
+```
 
 ## BP-2f-s — head unchanged stamps verify from covering gate
 

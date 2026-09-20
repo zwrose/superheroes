@@ -1,9 +1,11 @@
 """#1272 layer 2f WO-C — fixed disposition receipt finalization at the certified head."""
+import ast
 import base64
 import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -142,7 +144,7 @@ def _session_dir(tmp_path, repo, head):
     return session_dir
 
 
-def _certifiable_shell(tmp_path, state, head, repo=None):
+def _certifiable_shell(tmp_path, state, head, repo=None, name="sess"):
     meta = {"headSha": head, RD.FIX_FOLD_HEAD_KEY: head, "baseGuard": RC.BASE_GUARD_CHECKED}
     if repo is not None:
         meta["repoRoot"] = str(repo)
@@ -187,7 +189,7 @@ def _certifiable_shell(tmp_path, state, head, repo=None):
     }]
     session_dir = _RCF.write_session(
         tmp_path,
-        name="sess",
+        name=name,
         state=state,
         meta=meta,
         journal_lines=journal,
@@ -707,3 +709,151 @@ def test_persistence_order_rebound_on_disk(tmp_path):
     ok, reason = RD.validate_receipt(round_receipt)
     assert ok, reason
     assert round_receipt["verdict"] == "converged"
+
+
+# --- WO-R2: shared terminal step + ledger-driven path set ---------------------------
+
+_ROUND_DRIVER_PY = os.path.join(_LIB, "round_driver.py")
+
+
+def _function_name_for_line(tree, lineno):
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = getattr(node, "end_lineno", node.lineno)
+            if node.lineno <= lineno <= end:
+                return node.name
+    return None
+
+
+def _call_sites_for(tree, target_name):
+    sites = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func
+        name = callee.id if isinstance(callee, ast.Name) else (
+            callee.attr if isinstance(callee, ast.Attribute) else None
+        )
+        if name != target_name:
+            continue
+        func = _function_name_for_line(tree, node.lineno)
+        sites.append((func, node.lineno))
+    return sites
+
+
+def _terminal_converged_state(state, head, key):
+    state["terminal"] = "converged"
+    state["step"] = RD.P_TERMINAL
+    state["certification"] = {
+        "shape": "audited-chain",
+        "fullPanel": False,
+        "independence": "independent",
+        "base": "fetched",
+        "shapeDrivers": [],
+    }
+    state["dispositionLedgerOwner"] = "ledger"
+    state["config"]["headSha"] = head
+    state["decisions"] = [{"round": state["round"], "kind": "converged", "detail": "certified"}]
+
+
+def _ledger_only_fixed_state(tmp_path, head, repo):
+    state = RD.new_state(_cfg())
+    state["config"]["baseGuard"] = RC.BASE_GUARD_CHECKED
+    state["config"]["repoRoot"] = str(repo)
+    state["config"]["headSha"] = head
+    state["round"] = 1
+    state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": head}}
+    key, entry = _audit_discharge_fixed(state, head)
+    state["findings"] = []
+    state.pop("fixBatch", None)
+    state.pop("_fixBatch", None)
+    _terminal_converged_state(state, head, key)
+    return state, key, entry
+
+
+def test_both_certification_legs_reach_the_shared_terminal_step(tmp_path):
+    """CLI terminal gate and materializer both run the shared certification-input step."""
+    repo, head = _init_repo(tmp_path)
+    state, key, _entry = _ledger_only_fixed_state(tmp_path, head, repo)
+    session_cli = _certifiable_shell(
+        tmp_path, json.loads(json.dumps(state)), head, repo=repo, name="cli",
+    )
+    session_src = _certifiable_shell(
+        tmp_path, json.loads(json.dumps(state)), head, repo=repo, name="src",
+    )
+    ok, live = RD.load_state(session_cli)
+    assert ok and live is not None
+    fault = RD._terminal_receipt_gate(session_cli, live)
+    assert fault is None, fault
+    ok, cli_state = RD.load_state(session_cli)
+    assert ok
+    cli_receipt = _ledger_by_key(cli_state)[key]["dispositionReceipt"]
+    cli_blobs = RD._read_head_content_blobs_file(session_cli)
+    assert cli_receipt["headSha"] == head
+    assert cli_receipt["verifyResult"] == "pass"
+
+    materialized = RD._materialize_run_loop_session(
+        json.loads(json.dumps(state)), 0, source_session_dir=session_src,
+    )
+    try:
+        assert materialized is not None
+        ok, mat_state = RD.load_state(materialized)
+        assert ok
+        mat_receipt = _ledger_by_key(mat_state)[key]["dispositionReceipt"]
+        mat_blobs = RD._read_head_content_blobs_file(materialized)
+        assert mat_receipt == cli_receipt
+        assert mat_blobs == cli_blobs
+        assert mat_receipt["headSha"] == head
+        assert mat_receipt["verifyResult"] == "pass"
+    finally:
+        shutil.rmtree(materialized, ignore_errors=True)
+
+
+def test_terminal_rebind_covers_a_ledger_only_fixed_row(tmp_path):
+    """Ledger-only fixed rows re-bind at the certified head — not fix-content-missing."""
+    repo, head = _init_repo(tmp_path)
+    state, key, _entry = _ledger_only_fixed_state(tmp_path, head, repo)
+    session_dir = _certifiable_shell(tmp_path, state, head, repo=repo)
+    ok, live = RD.load_state(session_dir)
+    assert ok and live is not None
+    fault = RD._terminal_receipt_gate(session_dir, live)
+    assert fault is None, fault
+    ok, reloaded = RD.load_state(session_dir)
+    assert ok
+    rebound = _ledger_by_key(reloaded)[key]["dispositionReceipt"]
+    assert rebound["headSha"] == head
+    assert rebound["verifyResult"] == "pass"
+    residuals = reloaded.get("_fixedDispositionFinalizationResiduals") or {}
+    assert key not in residuals
+    assert residuals.get(key) != "fix-content-missing"
+
+    blobs = RD._read_head_content_blobs_file(session_dir)
+    assert blobs is not None
+    proof_path = "f.py"
+    matching = [
+        row for row in (blobs.get("reads") or [])
+        if isinstance(row, dict) and row.get("path") == proof_path
+    ]
+    assert len(matching) == 1
+    assert matching[0].get("readError") is None
+    assert matching[0].get("headSha") == head
+    assert blobs.get("files", {}).get(proof_path) is not None
+
+
+def test_certification_input_finalization_has_one_call_site():
+    """Head-content persist and fixed receipt re-bind each have one call site — the shared step."""
+    with open(_ROUND_DRIVER_PY, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=_ROUND_DRIVER_PY)
+    finalize_fn = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, ast.FunctionDef) and n.name == "_finalize_certification_inputs"),
+        None,
+    )
+    assert finalize_fn is not None, "_finalize_certification_inputs missing"
+    for target in ("_persist_head_content_blobs", "_finalize_fixed_disposition_receipts"):
+        sites = _call_sites_for(tree, target)
+        assert len(sites) == 1, "%s call sites: %s" % (target, sites)
+        func, lineno = sites[0]
+        assert func == "_finalize_certification_inputs", (
+            "%s called from %s:%s, not _finalize_certification_inputs" % (target, func, lineno)
+        )

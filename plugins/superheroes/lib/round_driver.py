@@ -1697,9 +1697,8 @@ def _fix_still_present_at_head(session_dir, finding, receipt, certified_head, by
     return None
 
 
-def _finalize_fixed_disposition_receipts(state, session_dir, config):
-    """Re-bind fixed receipts to the certified head when provable; record residuals otherwise."""
-    _ = config
+def _fixed_ledger_rows(state):
+    """Fixed disposition-ledger rows as ordered (key, entry) pairs plus the by_key map."""
     ledger = _ensure_disposition_ledger(state)
     seen = _ledger_index_by_key(ledger)
     by_key = {
@@ -1707,11 +1706,21 @@ def _finalize_fixed_disposition_receipts(state, session_dir, config):
         for key, idx in seen.items()
         if isinstance(ledger[idx], dict)
     }
-    pending = []
+    rows = []
     for key, idx in list(seen.items()):
         entry = ledger[idx]
         if not isinstance(entry, dict) or entry.get("disposition") != "fixed":
             continue
+        rows.append((key, entry))
+    return rows, by_key
+
+
+def _finalize_fixed_disposition_receipts(state, session_dir, config):
+    """Re-bind fixed receipts to the certified head when provable; record residuals otherwise."""
+    _ = config
+    rows, by_key = _fixed_ledger_rows(state)
+    pending = []
+    for key, entry in rows:
         receipt = entry.get("dispositionReceipt")
         if not isinstance(receipt, dict):
             pending.append((key, None, None))
@@ -3719,7 +3728,8 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         else:
             _record_round(state, "fixFoldHead", head)
             _record_fix_content_on_findings(state, session_dir, artifact, head)
-            _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
+            _merge_head_content_blobs(
+                session_dir, state, head, _fix_batch_paths(state, artifact))
     queue = state.get("_fixQueue") or []
     if queue:
         cap = _fix_batch_cap(config)
@@ -5525,17 +5535,91 @@ def _resolve_repo_root(session_dir, state):
     return os.path.realpath(root) if root else None
 
 
-def _fixed_finding_paths(state):
+def _fixed_ledger_content_paths(state, artifact=None):
+    """Proof paths for fixed ledger rows plus any fix-batch paths at the certified head."""
+    rows, by_key = _fixed_ledger_rows(state)
     paths = []
     seen = set()
-    for finding in (state.get("findings") or []) if isinstance(state, dict) else []:
-        if not isinstance(finding, dict) or finding.get("disposition") != "fixed":
-            continue
-        path = finding.get("file")
+    for key, entry in rows:
+        _ = key
+        path = _fix_content_proof_path(entry, by_key)
         if isinstance(path, str) and path and path not in seen:
             seen.add(path)
             paths.append(path)
+    for path in _fix_batch_paths(state, artifact):
+        if path not in seen:
+            seen.add(path)
+            paths.append(path)
     return paths
+
+
+def _merge_head_content_blobs(session_dir, state, head_sha, paths):
+    """Write or merge head-content reads bound to a named head (#1271 layer 2).
+
+    Every row records a read that actually happened; presence is never written here."""
+    if not session_dir:
+        return
+    try:
+        head = head_sha
+        if not isinstance(head, str) or not head:
+            return
+        if not paths:
+            return
+        repo_root = _resolve_repo_root(session_dir, state)
+        existing = _read_head_content_blobs_file(session_dir) or {}
+        files = dict(existing.get("files") or {})
+        reads = [row for row in (existing.get("reads") or []) if isinstance(row, dict)]
+        indexed = {(row.get("headSha"), row.get("path")): i for i, row in enumerate(reads)}
+        read_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        for path in paths:
+            row, raw = _head_content_read_row(repo_root, head, path, read_at)
+            key = (head, path)
+            if key in indexed:
+                reads[indexed[key]] = row
+            else:
+                indexed[key] = len(reads)
+                reads.append(row)
+            if row.get("readError") is None and raw is not None:
+                files[path] = base64.b64encode(raw).decode("ascii")
+            else:
+                files.pop(path, None)
+        blobs = {
+            "schema": HEAD_CONTENT_BLOBS_SCHEMA,
+            "headSha": head,
+            "files": files,
+            "reads": reads,
+        }
+        out_path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
+        round_commit.atomic_write_bytes(
+            out_path, (json.dumps(blobs, sort_keys=True) + "\n").encode("utf-8"))
+    except Exception:
+        pass
+
+
+def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None, paths=None):
+    """Write or merge head-content reads bound to a named head (#1271 layer 2).
+
+    Every row records a read that actually happened; presence is never written here."""
+    if not session_dir:
+        return
+    head = head_sha or _session_certified_head(session_dir, state)
+    if not isinstance(head, str) or not head:
+        return
+    if paths is None:
+        paths = _fixed_ledger_content_paths(state, artifact)
+    _merge_head_content_blobs(session_dir, state, head, paths)
+
+
+def _finalize_certification_inputs(session_dir, state, head_sha=None, artifact=None):
+    """One terminal step: persist head-content blobs, re-bind fixed receipts, save state."""
+    if not session_dir:
+        return
+    head = head_sha or _session_certified_head(session_dir, state)
+    if not isinstance(head, str) or not head:
+        return
+    _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
+    _finalize_fixed_disposition_receipts(state, session_dir, state.get("config") or {})
+    save_state(session_dir, state)
 
 
 def _fix_batch_paths(state, artifact=None):
@@ -5657,54 +5741,6 @@ def _record_fix_content_on_findings(state, session_dir, artifact, head):
         receipt["fixContentBytes"] = row.get("bytes")
 
 
-def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None, paths=None):
-    """Write or merge head-content reads bound to a named head (#1271 layer 2).
-
-    Every row records a read that actually happened; presence is never written here."""
-    if not session_dir:
-        return
-    try:
-        head = head_sha or _session_certified_head(session_dir, state)
-        if not isinstance(head, str) or not head:
-            return
-        if paths is None:
-            paths = _fixed_finding_paths(state)
-            for path in _fix_batch_paths(state, artifact):
-                if path not in paths:
-                    paths.append(path)
-        if not paths:
-            return
-        repo_root = _resolve_repo_root(session_dir, state)
-        existing = _read_head_content_blobs_file(session_dir) or {}
-        files = dict(existing.get("files") or {})
-        reads = [row for row in (existing.get("reads") or []) if isinstance(row, dict)]
-        indexed = {(row.get("headSha"), row.get("path")): i for i, row in enumerate(reads)}
-        read_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        for path in paths:
-            row, raw = _head_content_read_row(repo_root, head, path, read_at)
-            key = (head, path)
-            if key in indexed:
-                reads[indexed[key]] = row
-            else:
-                indexed[key] = len(reads)
-                reads.append(row)
-            if row.get("readError") is None and raw is not None:
-                files[path] = base64.b64encode(raw).decode("ascii")
-            else:
-                files.pop(path, None)
-        blobs = {
-            "schema": HEAD_CONTENT_BLOBS_SCHEMA,
-            "headSha": head,
-            "files": files,
-            "reads": reads,
-        }
-        out_path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
-        round_commit.atomic_write_bytes(
-            out_path, (json.dumps(blobs, sort_keys=True) + "\n").encode("utf-8"))
-    except Exception:
-        pass
-
-
 def _write_certification_artifacts(session_dir):
     """Write certification-receipt.json or certification-refusal.json beside round-receipt.json.
 
@@ -5806,6 +5842,9 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
             elif not receipt.get("headSha"):
                 receipt["headSha"] = head
     meta = {"sessionId": "run-loop-%s" % head[:16], "headSha": head, "producer": "run-loop"}
+    repo_root = cfg.get("repoRoot")
+    if isinstance(repo_root, str) and repo_root:
+        meta["repoRoot"] = repo_root
     _apply_grounded_mode(meta, session_mode.resolve(meta, cfg))
     round_commit.atomic_write_bytes(
         os.path.join(session_dir, round_records.META_FILE),
@@ -5813,7 +5852,7 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     save_state(session_dir, state_copy)
     if source_session_dir:
         _copy_session_tree(source_session_dir, session_dir)
-        _persist_head_content_blobs(session_dir, state_copy, head_sha=head)
+        _finalize_certification_inputs(session_dir, state_copy, head_sha=head)
         return session_dir
     shutil.rmtree(session_dir, ignore_errors=True)
     return None
@@ -6582,9 +6621,7 @@ def _finalize_receipt(session_dir, state):
     orchestrator must treat it as a park), never certifying on a missing/short receipt (#507 v14).
     Returns None on success."""
     certified_head = _session_certified_head(session_dir, state)
-    _persist_head_content_blobs(session_dir, state, head_sha=certified_head)
-    _finalize_fixed_disposition_receipts(state, session_dir, state.get("config") or {})
-    save_state(session_dir, state)
+    _finalize_certification_inputs(session_dir, state, head_sha=certified_head)
     try:
         _write_receipt(session_dir, state)
     except ReceiptWriteError as exc:
