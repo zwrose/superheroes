@@ -104,11 +104,13 @@ COUNT_RESULT_BLOCKS = ("counts", "amendments", "lanes", "attempts", "laneDetail"
 CHARTER_NAMED_COUNT_BLOCKS = ("lanes", "attempts", "laneDetail")
 
 
-def scrub_env(env=None):
+def scrub_env(env=None, *, keys=GIT_SCRUB_VARS, roots=(LEDGER_ROOT_ENV,)):
+    """Return a copy of env with every key in keys and roots removed."""
     base = dict(env if env is not None else os.environ)
-    for key in GIT_SCRUB_VARS:
+    for key in keys:
         base.pop(key, None)
-    base.pop(LEDGER_ROOT_ENV, None)
+    for root in roots:
+        base.pop(root, None)
     return base
 
 
@@ -1188,8 +1190,9 @@ def fold(records):
                 # lane that overlapped nothing and on every pre-#1054 record — the two are
                 # deliberately indistinguishable, because neither ran over an overlap.
                 "surfaceOverlap": rec.get("surfaceOverlap"),
-                # Premise stack fields are absent on pre-stack records and on records whose
-                # premise omits or malforms them — the documented signal is None, not a missing key.
+                # Premise stack and dependency fields are absent on pre-stack records and on
+                # records whose premise omits or malforms them — the documented signal is
+                # None, not a missing key.
                 "stack": _fold_premise_positive_int(rec.get("premise"), "stack"),
                 "layerPosition": _fold_premise_positive_int(
                     rec.get("premise"), "layerPosition",
@@ -1197,6 +1200,7 @@ def fold(records):
                 "layersPlanned": _fold_premise_positive_int(
                     rec.get("premise"), "layersPlanned",
                 ),
+                "dependency": _fold_premise_positive_int(rec.get("premise"), "dependency"),
             }
             continue
 
