@@ -65,12 +65,15 @@ saw. Nothing in the tooling closes that gap; this rule does.
    the showrunner charter's **The word** in duty 6; a layer linked onto the stack **after** the
    word is **outside** that word.
 
-3. **Immediately before the irreversible command, re-read remote membership** and compare it to the
-   enumeration. Mismatch — a different order, a missing member, an **extra** layer, a member no
-   longer open or now draft, or a head sha that no longer matches the recorded evidence — **refuses**,
-   and the advisor asks the owner again rather than merging a container whose contents changed. This
-   re-read is not optional and is not satisfied by the earlier read at click-list time: the point of
-   it is the window between them.
+3. **Immediately before the irreversible command, re-read remote membership** and compare the owner's
+   enumeration to the remote entries **through the chosen target pull request** — not the whole
+   stack when the word names a prefix. Mismatch — a different order, a missing member, an unexpected
+   layer **within that prefix**, a member no longer open or now draft, or a head sha that no longer
+   matches the recorded evidence — **refuses**, and the advisor asks the owner again rather than
+   merging a container whose contents changed. Layers **above** the chosen target are outside this
+   operation and are not a mismatch. **Full-stack** equality is required only when the merge is
+   invoked by **stack number**. This re-read is not optional and is not satisfied by the earlier read
+   at click-list time: the point of it is the window between them.
 
 4. **One command merges the stack, in order** — `gh stack merge <stack-or-pr> --yes --squash`; every
    member up to and including the chosen pull request. A **direct** merge is atomic (all or nothing);
@@ -93,10 +96,13 @@ saw. Nothing in the tooling closes that gap; this rule does.
    [Selecting the run to watch](#selecting-the-run-to-watch)).
 
 7. **What a vet checks per layer, and what it checks once per stack.** **Per layer:** its own DoD
-   rows, its own review dispositions and receipts, its own CI on its own head, its base being the
-   layer below's branch, and its membership read back. **Once per stack, at the top:** that the
-   ordered entries equal the layers the advisor planned and the owner enumerated, that no member is
-   unexpected, and that the stack's base is `main`.
+   rows, its own review dispositions and receipts, its own CI on its own head, its base — for each
+   non-bottom layer, the layer below's branch; for the bottom layer, the stack's base
+   (`baseRefName`) — and its membership read back. **Once per stack, at the top:** that the ordered
+   entries **through the chosen target pull request** equal the layers the advisor planned and the
+   owner enumerated (full-stack equality only when merging by stack number), that no member within
+   that scope is unexpected, and that the stack's `baseRefName` matches the planned or owner-approved
+   base.
 
 ## Selecting the run to watch
 
