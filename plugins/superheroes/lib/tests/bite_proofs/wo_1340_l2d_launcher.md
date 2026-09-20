@@ -8,7 +8,7 @@ Per-guard bite proof for the three new `layersPlanned` clauses in `validate_prem
 |---|---|---|---|
 | E1 | `validate_premise` layersPlanned pairing | layersPlanned requires stack and layerPosition | `test_premise_layers_planned_without_stack_pair_refuses` |
 | E2 | `validate_premise` layersPlanned floor | layersPlanned must be at least layerPosition | `test_premise_layers_planned_under_position_refuses` |
-| E3 | `validate_premise` layersPlanned bool exclusion | layersPlanned must be a positive int (bool is not an int here) | `test_premise_layers_planned_invalid[True]` |
+| E3 | `validate_premise` layersPlanned `ll.is_positive_premise_int` guard | layersPlanned must be a positive int (bool is not an int here) | `test_premise_layers_planned_invalid[True]` |
 
 ---
 
@@ -118,13 +118,9 @@ FAILED plugins/superheroes/lib/tests/test_launcher.py::test_premise_layers_plann
 
 **neutralization** (`plugins/superheroes/lib/launcher.py`):
 ```python
-            if (
-                not isinstance(layers_planned_val, int)
-                or False and isinstance(layers_planned_val, bool)
-                or layers_planned_val < 1
-            ):
+            if False and not ll.is_positive_premise_int(layers_planned_val):
 ```
-(replaces `or isinstance(layers_planned_val, bool)` with `or False and isinstance(layers_planned_val, bool)`)
+(replaces `if not ll.is_positive_premise_int(layers_planned_val):`)
 
 **command:**
 ```
@@ -157,11 +153,7 @@ FAILED plugins/superheroes/lib/tests/test_launcher.py::test_premise_layers_plann
 
 **restore:**
 ```python
-            if (
-                not isinstance(layers_planned_val, int)
-                or isinstance(layers_planned_val, bool)
-                or layers_planned_val < 1
-            ):
+            if not ll.is_positive_premise_int(layers_planned_val):
 ```
 
 **raw green:**

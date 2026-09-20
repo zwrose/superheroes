@@ -2,7 +2,7 @@
 
 Per-guard bite proof for `resolve_repo_slug` and `read_vet_verdict` classification guards added in layer 2d.
 
-**Register:** 8 guards — reminder-present check, negated-READY refusal, whole-word READY, slot-boundary extraction, repo-slug `_REPO_RE` validation, exhausted-deadline refusal-without-calling, head-pinning on READY, and refusal/not-ready separation.
+**Register:** 9 guards — reminder-present check, negated-READY refusal, whole-word READY, slot-boundary extraction, verdict-region mechanism exclusion, repo-slug `_REPO_RE` validation, exhausted-deadline refusal-without-calling, head-pinning on READY, and refusal/not-ready separation.
 
 **Provenance:** cursor / composer-2.5.
 
@@ -18,11 +18,12 @@ Per-guard bite proof for `resolve_repo_slug` and `read_vet_verdict` classificati
 |---|---|---|---|---|
 | E1 | stack_check.py:671 | reminder prefix present → not-ready | `test_l2d_read_vet_verdict_reminder_present_is_not_ready` | proven |
 | E2 | stack_check.py:678 | negated READY phrasing → not-ready | `test_l2d_read_vet_verdict_not_ready_is_not_ready` | proven |
-| E2b | stack_check.py:682 | whole-word READY requirement | `test_l2d_read_vet_verdict_already_word_is_not_ready` | proven |
-| E3 | stack_check.py:674 | slot-boundary extraction | `test_l2d_read_vet_verdict_later_ready_section_is_not_ready` | proven |
+| E2b | stack_check.py:696 | whole-word READY requirement | `test_l2d_read_vet_verdict_already_word_is_not_ready` | proven |
+| E3 | stack_check.py:688 | slot-boundary extraction | `test_l2d_read_vet_verdict_later_ready_section_is_not_ready` | proven |
+| E3b | stack_check.py:660 | verdict-region mechanism exclusion | `test_l2d_read_vet_verdict_fenced_ready_is_not_ready`, `test_l2d_read_vet_verdict_details_ready_is_not_ready`, `test_l2d_read_vet_verdict_parked_with_quoted_ready_for_pr_is_not_ready` | proven |
 | E4 | stack_check.py:586 | `_REPO_RE` validation of returned slug | `test_l2d_resolve_repo_slug_name_with_owner_bad_pattern` | proven |
 | E5 | stack_check.py:611 | exhausted deadline refuses without calling gh | `test_l2d_resolve_repo_slug_deadline_exhausted` | proven |
-| E6 | stack_check.py:683 | head-pinning on READY verdict | `test_l2d_read_vet_verdict_stale_head_is_not_ready` | proven |
+| E6 | stack_check.py:697 | head-pinning on READY verdict | `test_l2d_read_vet_verdict_stale_head_is_not_ready` | proven |
 | E7 | stack_check.py:760 | unreadable read returns refusal, not not-ready | `test_l2d_read_vet_verdict_unreadable_returns_refusal` | proven |
 
 ---
@@ -111,11 +112,11 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verd
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
-        re.search(r"\bREADY\b", slot_text) is not None
+    return _VET_AFFIRMATIVE_READY_RE.search(_vet_verdict_region(slot_text)) is not None
 ```
 →
 ```python
-        "ready" in slot_text.lower()
+    return "ready" in _vet_verdict_region(slot_text).lower()
 ```
 
 **command:**
@@ -136,7 +137,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verd
 
 **restored lines:**
 ```python
-        re.search(r"\bREADY\b", slot_text) is not None
+    return _VET_AFFIRMATIVE_READY_RE.search(_vet_verdict_region(slot_text)) is not None
 ```
 
 ---
@@ -145,12 +146,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verd
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
-        re.search(r"\bREADY\b", slot_text) is not None
+        _slot_has_affirmative_ready_verdict(slot_text)
         and _slot_names_head(slot_text, head_ref_oid)
 ```
 →
 ```python
-        re.search(r"\bREADY\b", body) is not None
+        _slot_has_affirmative_ready_verdict(body)
         and _slot_names_head(body, head_ref_oid)
 ```
 
@@ -172,8 +173,52 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verd
 
 **restored lines:**
 ```python
-        re.search(r"\bREADY\b", slot_text) is not None
+        _slot_has_affirmative_ready_verdict(slot_text)
         and _slot_names_head(slot_text, head_ref_oid)
+```
+
+---
+
+## E3b — verdict-region mechanism exclusion
+
+Proving tests: `test_l2d_read_vet_verdict_fenced_ready_is_not_ready`, `test_l2d_read_vet_verdict_details_ready_is_not_ready`, `test_l2d_read_vet_verdict_parked_with_quoted_ready_for_pr_is_not_ready`.
+
+**neutralization** (`plugins/superheroes/lib/stack_check.py`):
+```python
+def _vet_verdict_region(slot_text):
+    region = _VET_FENCED_BLOCK_RE.sub("", slot_text)
+    return _VET_DETAILS_BLOCK_RE.sub("", region)
+```
+→
+```python
+def _vet_verdict_region(slot_text):
+    return slot_text
+```
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_fenced_ready_is_not_ready plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_details_ready_is_not_ready plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_parked_with_quoted_ready_for_pr_is_not_ready -q
+```
+
+**raw red** (traceback body elided):
+```
+.FF                                                                      [100%]
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_fenced_ready_is_not_ready
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_details_ready_is_not_ready
+2 failed, 1 passed in 0.15s
+```
+
+**raw green** after restore:
+```
+...                                                                      [100%]
+3 passed in 0.11s
+```
+
+**restored lines:**
+```python
+def _vet_verdict_region(slot_text):
+    region = _VET_FENCED_BLOCK_RE.sub("", slot_text)
+    return _VET_DETAILS_BLOCK_RE.sub("", region)
 ```
 
 ---
@@ -260,12 +305,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_resolve_repo_
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
-        re.search(r"\bREADY\b", slot_text) is not None
+        _slot_has_affirmative_ready_verdict(slot_text)
         and _slot_names_head(slot_text, head_ref_oid)
 ```
 →
 ```python
-        re.search(r"\bREADY\b", slot_text) is not None
+        _slot_has_affirmative_ready_verdict(slot_text)
 ```
 
 **command:**
@@ -286,7 +331,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verd
 
 **restored lines:**
 ```python
-        re.search(r"\bREADY\b", slot_text) is not None
+        _slot_has_affirmative_ready_verdict(slot_text)
         and _slot_names_head(slot_text, head_ref_oid)
 ```
 

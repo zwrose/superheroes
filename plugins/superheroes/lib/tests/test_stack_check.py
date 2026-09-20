@@ -1680,3 +1680,57 @@ def test_l2d_read_vet_verdict_later_ready_section_is_not_ready():
     verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
     assert verdict == sc.VET_NOT_READY
     assert refusal is None
+
+
+def test_l2d_read_vet_verdict_parked_with_quoted_ready_for_pr_is_not_ready():
+    # axis: quoted review-code verdict in <details> must not classify ready
+    body = "\n".join(
+        [
+            "## Advisor vet",
+            sc.ADVISOR_VET_MARKER,
+            "**Vet — PARKED** at `%s`" % HEAD_ABBREV,
+            "<details>",
+            "review-code returned READY FOR PR",
+            "</details>",
+        ]
+    )
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_fenced_ready_is_not_ready():
+    # axis: READY inside a fenced block must not classify ready
+    body = "\n".join(
+        [
+            "## Advisor vet",
+            sc.ADVISOR_VET_MARKER,
+            "**Vet — PARKED** at `%s`" % HEAD_ABBREV,
+            "```",
+            "READY %s" % HEAD_OID,
+            "```",
+        ]
+    )
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_details_ready_is_not_ready():
+    # axis: READY inside <details> must not classify ready
+    body = "\n".join(
+        [
+            "## Advisor vet",
+            sc.ADVISOR_VET_MARKER,
+            "**Vet — PARKED** at `%s`" % HEAD_ABBREV,
+            "<details>",
+            "READY %s" % HEAD_OID,
+            "</details>",
+        ]
+    )
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None

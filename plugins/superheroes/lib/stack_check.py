@@ -35,6 +35,12 @@ _VET_NEGATED_READY_RE = re.compile(
     r"\b(?:not(?:\s+yet)?|no|never)(?:[\s_*~`]+)+ready\b",
     re.IGNORECASE,
 )
+_VET_AFFIRMATIVE_READY_RE = re.compile(r"\bREADY\b(?!\s+FOR\b)")
+_VET_FENCED_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
+_VET_DETAILS_BLOCK_RE = re.compile(
+    r"<details\b[^>]*>.*?</details>",
+    re.DOTALL | re.IGNORECASE,
+)
 
 QUERY = """\
 query($owner:String!,$repo:String!,$pr:Int!,$first:Int!,$after:String){
@@ -651,6 +657,15 @@ def _slot_has_negated_ready_verdict(slot_text):
     return _VET_NEGATED_READY_RE.search(slot_text) is not None
 
 
+def _vet_verdict_region(slot_text):
+    region = _VET_FENCED_BLOCK_RE.sub("", slot_text)
+    return _VET_DETAILS_BLOCK_RE.sub("", region)
+
+
+def _slot_has_affirmative_ready_verdict(slot_text):
+    return _VET_AFFIRMATIVE_READY_RE.search(_vet_verdict_region(slot_text)) is not None
+
+
 def _slot_names_head(slot_text, head_ref_oid):
     if head_ref_oid in slot_text:
         return True
@@ -679,7 +694,7 @@ def _classify_vet_verdict(body, head_ref_oid, state, is_draft):
         return VET_NOT_READY
 
     if (
-        re.search(r"\bREADY\b", slot_text) is not None
+        _slot_has_affirmative_ready_verdict(slot_text)
         and _slot_names_head(slot_text, head_ref_oid)
     ):
         return VET_READY
