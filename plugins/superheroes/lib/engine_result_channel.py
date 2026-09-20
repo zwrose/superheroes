@@ -47,13 +47,21 @@ _CHANNEL_BY_ENGINE = {
     "claude": CHANNEL_NATIVE,
 }
 
+MODE_PRINT = "print"
+MODE_BACKGROUND = "background"
+CLAUDE_MODES = (MODE_PRINT, MODE_BACKGROUND)
+
 RESULT_DELIVERY_ARGV = "argv"      # the shell appends -o <path> --output-schema <schema>
 RESULT_DELIVERY_PROMPT = "prompt"  # the shell names <path> in a per-attempt prompt block
 RESULT_DELIVERY_STDOUT = "stdout"  # the shell passes --json-schema <schema> on argv; the runner materializes the final result event's structured_output to the result path
+RESULT_DELIVERY_TRANSCRIPT = "transcript"  # the shell reads the typed result from background transcript rows
 _RESULT_DELIVERY_BY_ENGINE = {
     "codex": RESULT_DELIVERY_ARGV,
     "cursor": RESULT_DELIVERY_PROMPT,
     "claude": RESULT_DELIVERY_STDOUT,
+}
+_RESULT_DELIVERY_BY_ENGINE_MODE = {
+    ("claude", MODE_BACKGROUND): RESULT_DELIVERY_TRANSCRIPT,
 }
 
 RESULT_FILE_LINE_PREFIX = "Result file (write exactly this path; nothing else is graded): "
@@ -169,20 +177,37 @@ def channel_for(engine):
     return _CHANNEL_BY_ENGINE[engine]
 
 
-def result_delivery(engine):
+def claude_mode_ok(mode):
+    """True when mode is absent or one of the declared claude dispatch modes."""
+    return mode is None or mode in CLAUDE_MODES
+
+
+def result_delivery(engine, mode=None):
     """How a native-channel engine receives its result path; None for a marker-channel engine."""
     if not isinstance(engine, str) or engine not in _CHANNEL_BY_ENGINE:
         raise UnknownEngineError(
             "unknown engine %r; registered engines: %s"
             % (engine, ", ".join(model_registry.vendors()))
         )
+    if mode is not None and mode not in CLAUDE_MODES:
+        raise ValueError(
+            "unknown claude mode %r; declared modes: print, background"
+            % (mode,)
+        )
     channel = _CHANNEL_BY_ENGINE[engine]
     if channel == CHANNEL_MARKER:
         return None
-    delivery = _RESULT_DELIVERY_BY_ENGINE.get(engine)
-    if delivery is None:
-        raise ValueError("native engine %r has no result delivery entry" % (engine,))
-    return delivery
+    if mode is None or mode == MODE_PRINT:
+        delivery = _RESULT_DELIVERY_BY_ENGINE.get(engine)
+        if delivery is None:
+            raise ValueError("native engine %r has no result delivery entry" % (engine,))
+        return delivery
+    mode_delivery = _RESULT_DELIVERY_BY_ENGINE_MODE.get((engine, mode))
+    if mode_delivery is not None:
+        return mode_delivery
+    raise ValueError(
+        "engine %r has no delivery for mode %r" % (engine, mode)
+    )
 
 
 def file_result_contract(schema_text, result_path, run_kind=RUN_KIND_REVIEW):

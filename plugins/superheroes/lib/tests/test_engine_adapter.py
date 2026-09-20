@@ -658,6 +658,169 @@ def test_build_argv_claude_write_omits_allowed_tools():
     assert "--allowedTools" not in argv
 
 
+def test_build_argv_claude_background_review_exact_shape():
+    res = EA.build_argv_result(
+        _seat("claude", "sonnet-5", "high"), "review", {"claudeMode": "background"},
+    )
+    assert res["reason"] is None
+    assert res["argv"] == [
+        "claude", "--bg", "--model", "sonnet", "--effort", "high", "--restricted",
+    ]
+
+
+def test_build_argv_claude_background_write_exact_shape():
+    res = EA.build_argv_result(
+        _seat("claude", "sonnet-5", "high"), "build", {"claudeMode": "background"},
+    )
+    assert res["reason"] is None
+    assert res["argv"] == [
+        "claude", "--bg", "--model", "sonnet", "--effort", "high",
+        "--permission-mode", "acceptEdits", "--restricted",
+    ]
+
+
+def test_build_argv_claude_background_omits_print_flags():
+    res = EA.build_argv_result(
+        _seat("claude", "sonnet-5", "high"), "review", {"claudeMode": "background"},
+    )
+    argv = res["argv"]
+    assert "-p" not in argv
+    assert "--output-format" not in argv
+    assert "--json-schema" not in argv
+    assert argv == [
+        "claude", "--bg", "--model", "sonnet", "--effort", "high", "--restricted",
+    ]
+
+
+def test_build_argv_claude_print_mode_explicit_unchanged():
+    for mode in (None, "print"):
+        opts = {"claudeMode": mode} if mode is not None else {}
+        argv = EA.build_argv(_seat("claude", "sonnet-5", "high"), "review", opts)
+        assert argv == [
+            "claude", "-p", "--model", "sonnet", "--effort", "high",
+            "--output-format", "stream-json", "--verbose", "--restricted",
+        ]
+
+
+def test_build_argv_unknown_claude_mode_refuses():
+    res = EA.build_argv_result(_seat("claude", "sonnet-5", "high"), "review", {"claudeMode": 123})
+    assert res["reason"] == "unknown-claude-mode"
+    assert "accepted modes: print, background" in res["detail"]
+    res = EA.build_argv_result(_seat("claude", "sonnet-5", "high"), "review", {"claudeMode": "printt"})
+    assert res["reason"] == "unknown-claude-mode"
+
+
+def test_build_argv_claude_mode_unsupported_on_codex():
+    res = EA.build_argv_result(
+        _seat("codex", "gpt-5.6-sol", "high"), "review", {"claudeMode": "background"},
+    )
+    assert res["reason"] == "claude-mode-unsupported"
+    assert "not supported for engine codex" in res["detail"]
+
+
+def test_build_argv_codex_cursor_unchanged_with_claude_mode_none():
+    codex = EA.build_argv_result(_seat("codex", "gpt-5.6-sol", "high"), "review", {})
+    cursor = EA.build_argv_result(_seat("cursor", "cursor-grok-4.6", "xhigh"), "review", {})
+    assert codex["reason"] is None
+    assert cursor["reason"] is None
+    assert codex["argv"] == [
+        "codex", "exec", "--sandbox", "read-only", "-m", "gpt-5.6-sol",
+        "-c", "model_reasoning_effort=high", "-",
+    ]
+    assert cursor["argv"] == [
+        "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust", "-f",
+        "--sandbox", "enabled", "--output-format", "stream-json",
+    ]
+
+
+def test_build_argv_claude_fable_refuses_in_background_mode():
+    res = EA.build_argv_result(
+        _seat("claude", "fable-5", "high"), "review", {"claudeMode": "background"},
+    )
+    assert res["reason"] == "fable-unrunnable"
+
+
+def _claude_transcript_fixture_rows():
+    return [
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-read-1",
+                    "name": "Read",
+                    "input": {"path": "foo.py"},
+                }],
+            },
+        },
+        {"type": "user", "toolEndsTurn": True},
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-so-1",
+                    "name": "StructuredOutput",
+                    "input": {"ok": True, "signal": "ok"},
+                }],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-so-2",
+                    "name": "StructuredOutput",
+                    "input": {"ok": False, "signal": "needs_context"},
+                }],
+            },
+        },
+        {"type": "system", "subtype": "turn_duration", "duration_ms": 1200},
+    ]
+
+
+def test_claude_transcript_readers_realistic_fixture():
+    rows = _claude_transcript_fixture_rows()
+    assert EA.claude_transcript_result(rows) == {"ok": False, "signal": "needs_context"}
+    assert EA.claude_transcript_tool_calls(rows) == 1
+    assert EA.claude_transcript_turn_ended(rows) is True
+
+
+def test_claude_transcript_result_no_structured_output():
+    rows = [{"type": "assistant", "message": {"content": []}}]
+    assert EA.claude_transcript_result(rows) is None
+
+
+def test_claude_transcript_turn_ended_signals():
+    assert EA.claude_transcript_turn_ended([{"type": "user", "toolEndsTurn": True}]) is True
+    assert EA.claude_transcript_turn_ended(
+        [{"type": "system", "subtype": "turn_duration"}],
+    ) is True
+    assert EA.claude_transcript_turn_ended([{"type": "user"}]) is False
+
+
+def test_claude_launch_id_measured_acknowledgement():
+    assert EA.claude_launch_id("backgrounded · a1b2c3d4\n") == "a1b2c3d4"
+    assert EA.claude_launch_id("") is None
+    assert EA.claude_launch_id("error: something failed\n") is None
+    assert EA.claude_launch_id("backgrounded · abcdefg\n") is None
+    assert EA.claude_launch_id("backgrounded · ABCD1234\n") is None
+    assert EA.claude_launch_id("prefix backgrounded · a1b2c3d4\n") is None
+
+
+def test_jsonl_dict_line_readers_skip_garbage():
+    stream = "not json\n" + json.dumps(["not", "a", "dict"]) + "\n" + json.dumps({
+        "type": "assistant",
+        "message": {"content": []},
+    }) + "\n"
+    claude_objs = list(EA._iter_claude_event_lines(stream))
+    codex_objs = list(EA._iter_codex_event_lines(stream))
+    assert len(claude_objs) == 1
+    assert len(codex_objs) == 1
+    assert claude_objs[0]["type"] == "assistant"
+
+
 def test_registered_engine_models_detail_claude_lists_every_id():
     detail = EA._registered_engine_models_detail("claude")
     for model_id in EA.model_registry.claude_models():

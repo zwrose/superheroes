@@ -215,6 +215,8 @@ _ARTIFACT_TRACEBACK_FIRST_LINE_RE = re.compile(
 BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     "unknown-engine",
     "unknown-claude-tier",
+    "unknown-claude-mode",
+    "claude-mode-unsupported",
     "fable-unrunnable",
     "unregistered-engine-model",
     "engine-model-effort-conflict",
@@ -445,6 +447,27 @@ def build_argv_result(seat, role_kind, opts):
     cwd = opts.get("cwd")
     is_read = role_kind == "review"
     claude_tier = opts.get("model")
+    claude_mode = opts.get("claudeMode")
+    if claude_mode is not None and claude_mode != "print":
+        if not isinstance(claude_mode, str):
+            return _refuse(
+                "unknown-claude-mode",
+                detail="unknown claude mode %r; accepted modes: print, background"
+                % (claude_mode,),
+            )
+        import engine_result_channel as erc  # noqa: PLC0415 — lazy: engine_result_channel imports this module
+        if claude_mode not in erc.CLAUDE_MODES:
+            return _refuse(
+                "unknown-claude-mode",
+                detail="unknown claude mode %r; accepted modes: print, background"
+                % (claude_mode,),
+            )
+        if vendor != "claude":
+            return _refuse(
+                "claude-mode-unsupported",
+                detail="claude mode %r is not supported for engine %s"
+                % (claude_mode, vendor),
+            )
     if claude_tier is not None:
         if not isinstance(claude_tier, str) or claude_tier not in model_registry.known_claude_models():
             return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(claude_tier))
@@ -532,10 +555,13 @@ def build_argv_result(seat, role_kind, opts):
                 "untokenizable",
                 detail=_untokenizable_detail("claude", engine_model, effort),
             )
-        argv = [
-            "claude", "-p", "--model", tok, "--effort", effort,
-            "--output-format", "stream-json", "--verbose",
-        ]
+        if claude_mode == "background":
+            argv = ["claude", "--bg", "--model", tok, "--effort", effort]
+        else:
+            argv = [
+                "claude", "-p", "--model", tok, "--effort", effort,
+                "--output-format", "stream-json", "--verbose",
+            ]
         if is_read:
             argv += ["--restricted"]
         else:
@@ -736,8 +762,8 @@ def _is_codex_event_object(obj):
     return isinstance(obj, dict) and obj.get("type") in _CODEX_EVENT_TYPES
 
 
-def _iter_codex_event_lines(stdout):
-    """Yield parsed JSON objects from codex JSONL stdout. Never raises."""
+def _iter_jsonl_dict_lines(stdout):
+    """Yield parsed JSON dicts from JSONL stdout; skip unparseable and non-dict lines. Never raises."""
     if not isinstance(stdout, str) or not stdout:
         return
     for line in stdout.splitlines():
@@ -750,6 +776,12 @@ def _iter_codex_event_lines(stdout):
             continue
         if isinstance(obj, dict):
             yield obj
+
+
+def _iter_codex_event_lines(stdout):
+    """Yield parsed JSON objects from codex JSONL stdout. Never raises."""
+    for obj in _iter_jsonl_dict_lines(stdout):
+        yield obj
 
 
 _CLAUDE_EVENT_TYPES = frozenset({"assistant", "user", "system", "result"})
@@ -761,18 +793,8 @@ def _is_claude_event_object(obj):
 
 def _iter_claude_event_lines(stdout):
     """Yield parsed JSON objects from claude stream-json stdout. Never raises."""
-    if not isinstance(stdout, str) or not stdout:
-        return
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(obj, dict):
-            yield obj
+    for obj in _iter_jsonl_dict_lines(stdout):
+        yield obj
 
 
 def claude_tool_calls(stdout):
@@ -823,6 +845,106 @@ def claude_result_envelope(stdout):
                 continue
             last = obj
         return last
+    except Exception:
+        return None
+
+
+def claude_transcript_result(rows):
+    """Return the input dict of the last StructuredOutput tool_use in transcript rows, or None."""
+    try:
+        if not isinstance(rows, list):
+            return None
+        last_input = None
+        for row in rows:
+            if not isinstance(row, dict) or row.get("type") != "assistant":
+                continue
+            message = row.get("message")
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                if block.get("name") != "StructuredOutput":
+                    continue
+                inp = block.get("input")
+                if isinstance(inp, dict):
+                    last_input = inp
+        return last_input
+    except Exception:
+        return None
+
+
+def claude_transcript_tool_calls(rows):
+    """Count distinct non-StructuredOutput tool_use ids in transcript rows; int or None."""
+    try:
+        if not isinstance(rows, list):
+            return None
+        parsed_any = False
+        tool_ids = set()
+        for row in rows:
+            if not _is_claude_event_object(row):
+                continue
+            parsed_any = True
+            if row.get("type") != "assistant":
+                continue
+            message = row.get("message")
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                if block.get("name") == "StructuredOutput":
+                    continue
+                block_id = block.get("id")
+                if isinstance(block_id, str) and block_id:
+                    tool_ids.add(block_id)
+        if not parsed_any:
+            return None
+        return len(tool_ids)
+    except Exception:
+        return None
+
+
+def claude_transcript_turn_ended(rows):
+    """True when transcript rows signal turn end via toolEndsTurn or turn_duration."""
+    try:
+        if not isinstance(rows, list):
+            return False
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if row.get("toolEndsTurn") is True:
+                return True
+            if row.get("type") == "system" and row.get("subtype") == "turn_duration":
+                return True
+        return False
+    except Exception:
+        return False
+
+
+_CLAUDE_LAUNCH_ID_RE = re.compile(r"^backgrounded · ([0-9a-f]{8})$")
+
+
+def claude_launch_id(stdout):
+    """Return the 8-char session id from a background launch acknowledgement line, or None."""
+    try:
+        if not isinstance(stdout, str):
+            return None
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            match = _CLAUDE_LAUNCH_ID_RE.match(line)
+            if match:
+                return match.group(1)
+            return None
+        return None
     except Exception:
         return None
 

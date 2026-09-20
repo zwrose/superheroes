@@ -428,6 +428,47 @@ def test_result_delivery_registered_engines():
     assert ERC.result_delivery("claude") == ERC.RESULT_DELIVERY_STDOUT
 
 
+@pytest.mark.parametrize("vendor,expected", [
+    ("codex", ERC.RESULT_DELIVERY_ARGV),
+    ("cursor", ERC.RESULT_DELIVERY_PROMPT),
+    ("claude", ERC.RESULT_DELIVERY_STDOUT),
+])
+def test_result_delivery_print_default_identity(vendor, expected):
+    assert ERC.result_delivery(vendor) == expected
+    assert ERC.result_delivery(vendor, None) == expected
+    assert ERC.result_delivery(vendor, ERC.MODE_PRINT) == expected
+
+
+def test_result_delivery_claude_background_transcript():
+    assert ERC.result_delivery("claude", ERC.MODE_BACKGROUND) == ERC.RESULT_DELIVERY_TRANSCRIPT
+
+
+@pytest.mark.parametrize("vendor", ["codex", "cursor"])
+def test_result_delivery_background_refuses_non_claude(vendor):
+    with pytest.raises(ValueError, match="has no delivery for mode"):
+        ERC.result_delivery(vendor, ERC.MODE_BACKGROUND)
+
+
+def test_result_delivery_undeclared_mode_refuses():
+    with pytest.raises(ValueError, match="unknown claude mode"):
+        ERC.result_delivery("claude", "bogus")
+
+
+def test_result_delivery_unknown_engine_before_bad_mode():
+    with pytest.raises(ERC.UnknownEngineError):
+        ERC.result_delivery("bogus", "bogus")
+
+
+@pytest.mark.parametrize("mode,expected", [
+    (None, True),
+    (ERC.MODE_PRINT, True),
+    (ERC.MODE_BACKGROUND, True),
+    ("bogus", False),
+])
+def test_claude_mode_ok(mode, expected):
+    assert ERC.claude_mode_ok(mode) is expected
+
+
 def test_result_delivery_unknown_engine_refuses():
     with pytest.raises(ERC.UnknownEngineError):
         ERC.result_delivery("bogus")
