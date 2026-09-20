@@ -145,6 +145,22 @@ def test_L2_author_justified_plausible_drop_refuted():
     assert entry["refutedReason"].startswith("author-justified: ")
 
 
+def test_L2_stage_findings_strips_seat_supplied_disposition_family():
+    finding = {"file": "a.py", "line": 1, "title": "bug", "severity": "Important",
+               "disposition": "fixed", "dispositionReceipt": {"headSha": "z" * 40}}
+    compiled, _ = RD.mechanical_compile([finding], None)
+    state = RD.new_state(_cfg())
+    RD._stage_findings(state, compiled)
+    key = SC.finding_identity_key(compiled[0])
+    entry = _ledger_by_key(state)[key]
+    assert "disposition" not in entry
+    assert "dispositionReceipt" not in entry
+    staged = state.get("_toVerify") or []
+    assert len(staged) == 1
+    assert "disposition" not in staged[0]
+    assert "dispositionReceipt" not in staged[0]
+
+
 def test_L2_merged_away_member_resolves_through_representative(tmp_path):
     f1 = {"file": "m.py", "line": 1, "title": "root a", "severity": "Important",
           "verdict": "CONFIRMED"}
@@ -422,6 +438,17 @@ def test_C13_prior_verify_without_fix_fold_head_not_carried():
 
 
 # --- L7 bite-proof: departure chokepoint ---------------------------------------------
+
+def test_L7_archive_departure_without_prior_staging():
+    finding = {"file": "a.py", "line": 1, "title": "bug", "severity": "Important"}
+    compiled, _ = RD.mechanical_compile([finding], None)
+    state = RD.new_state(_cfg())
+    key = SC.finding_identity_key(compiled[0])
+    state["findings"] = compiled
+    assert key not in _ledger_by_key(state)
+    RD._set_findings(state, [])
+    assert key in _ledger_by_key(state)
+
 
 def test_L7_departure_outside_chokepoint_still_on_ledger(tmp_path):
     finding = {"file": "d.py", "line": 1, "title": "live", "severity": "Important"}

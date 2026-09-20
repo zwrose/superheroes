@@ -1315,17 +1315,11 @@ def _finding_key_of(finding):
     return session_contract.finding_identity_key(finding)
 
 
-_DISPOSITION_FAMILY_FIELDS = (
-    "disposition", "dispositionRound", "dispositionReceipt", "refutedReason",
-    "outOfScopeReason", "followUp", "mergedInto",
-)
-
-
 def _ensure_disposition_ledger(state):
-    ledger = state.get("dispositionLedger")
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
     if not isinstance(ledger, list):
         ledger = []
-        state["dispositionLedger"] = ledger
+        state[session_contract.DISPOSITION_LEDGER_KEY] = ledger
     return ledger
 
 
@@ -1348,48 +1342,55 @@ def _live_finding_by_key(state, key):
 
 def _strip_disposition_family(entry):
     copy = dict(entry)
-    for field in _DISPOSITION_FAMILY_FIELDS:
+    for field in session_contract.DISPOSITION_FAMILY_FIELDS:
         copy.pop(field, None)
     return copy
 
 
 def _stage_findings(state, compiled):
     """The only writer of ``_toVerify`` — seeds one ledger entry per compiled candidate."""
-    state["_toVerify"] = compiled
     if not isinstance(compiled, list):
+        state["_toVerify"] = compiled
         return
     ledger = _ensure_disposition_ledger(state)
     seen = _ledger_index_by_key(ledger)
     round_no = state["round"]
     seeded = False
+    sanitized = []
     for finding in compiled:
         if not isinstance(finding, dict):
+            sanitized.append(finding)
             continue
         key = _finding_identity_key(finding)
         if not key:
+            sanitized.append(finding)
             continue
         existing = ledger[seen[key]] if key in seen else None
         entry = dict(finding)
-        entry["raisedRound"] = round_no
+        entry[session_contract.RAISED_ROUND_FIELD] = round_no
         if isinstance(existing, dict) and existing.get("disposition") is not None:
-            for field in _DISPOSITION_FAMILY_FIELDS:
+            for field in session_contract.DISPOSITION_FAMILY_FIELDS:
                 if field in existing:
                     entry[field] = existing[field]
         else:
             entry = _strip_disposition_family(entry)
-            entry["raisedRound"] = round_no
+            entry[session_contract.RAISED_ROUND_FIELD] = round_no
+        sanitized.append(entry)
         if key in seen:
             ledger[seen[key]] = entry
         else:
             seen[key] = len(ledger)
             ledger.append(entry)
         seeded = True
+    state["_toVerify"] = sanitized
     if seeded:
-        state["dispositionLedgerOwner"] = "ledger"
+        state[session_contract.DISPOSITION_LEDGER_OWNER_FIELD] = (
+            session_contract.DISPOSITION_LEDGER_OWNER_VALUE
+        )
 
 
 def _record_disposition(state, key, disposition, round_no, **fields):
-    if disposition not in ("fixed", "refuted", "out-of-scope"):
+    if disposition not in session_contract.DISPOSITIONS:
         raise ValueError("unknown disposition %r" % (disposition,))
     ledger = _ensure_disposition_ledger(state)
     seen = _ledger_index_by_key(ledger)
@@ -1398,7 +1399,7 @@ def _record_disposition(state, key, disposition, round_no, **fields):
         entry = dict(ledger[seen[key]])
     elif live is not None:
         entry = dict(live)
-        entry["raisedRound"] = state.get("round", round_no)
+        entry[session_contract.RAISED_ROUND_FIELD] = state.get("round", round_no)
     else:
         entry = {session_contract.FINDING_KEY_FIELD: key}
     entry["disposition"] = disposition
@@ -1426,10 +1427,10 @@ def _record_merged_into(state, key, into_key):
         entry = dict(ledger[seen[key]])
     elif live is not None:
         entry = dict(live)
-        entry["raisedRound"] = state.get("round", state["round"])
+        entry[session_contract.RAISED_ROUND_FIELD] = state.get("round", state["round"])
     else:
         entry = {session_contract.FINDING_KEY_FIELD: key}
-    entry["mergedInto"] = into_key
+    entry[session_contract.MERGED_INTO_FIELD] = into_key
     if key in seen:
         ledger[seen[key]] = entry
     else:
@@ -1553,11 +1554,12 @@ def _archive_departures(state, departing):
         replacement = dict(finding)
         if key in seen and isinstance(ledger[seen[key]], dict):
             prior = ledger[seen[key]]
-            for field in _DISPOSITION_FAMILY_FIELDS:
+            for field in session_contract.DISPOSITION_FAMILY_FIELDS:
                 if field in prior and field not in replacement:
                     replacement[field] = prior[field]
-            if "raisedRound" in prior and "raisedRound" not in replacement:
-                replacement["raisedRound"] = prior["raisedRound"]
+            raised = session_contract.RAISED_ROUND_FIELD
+            if raised in prior and raised not in replacement:
+                replacement[raised] = prior[raised]
         if key in seen:
             ledger[seen[key]] = replacement
         else:

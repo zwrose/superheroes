@@ -350,8 +350,10 @@ def _out_of_scope_follow_up(finding):
 def _certification_findings_by_key(state):
     """Keyed findings for disposition checks — ledger owner uses ledger + live only."""
     by_key = {}
-    if state.get("dispositionLedgerOwner") == "ledger":
-        ledger = state.get("dispositionLedger")
+    if state.get(session_contract.DISPOSITION_LEDGER_OWNER_FIELD) == (
+        session_contract.DISPOSITION_LEDGER_OWNER_VALUE
+    ):
+        ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
         if isinstance(ledger, list):
             for finding in ledger:
                 if isinstance(finding, dict):
@@ -364,7 +366,7 @@ def _certification_findings_by_key(state):
                 if key:
                     by_key[key] = finding
         return by_key
-    ledger = state.get("dispositionLedger")
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
     if isinstance(ledger, list):
         for finding in ledger:
             if isinstance(finding, dict):
@@ -397,13 +399,13 @@ def _resolve_merged_into_entry(finding, by_key):
     """Follow mergedInto through by_key; None when the chain does not resolve."""
     if not isinstance(finding, dict):
         return finding
-    if not finding.get("mergedInto"):
+    if not finding.get(session_contract.MERGED_INTO_FIELD):
         return finding
     limit = max(len(by_key), 1)
     entry = finding
     visited = set()
     for _ in range(limit):
-        into = entry.get("mergedInto")
+        into = entry.get(session_contract.MERGED_INTO_FIELD)
         if not isinstance(into, str) or not into:
             return None
         if into in visited:
@@ -412,10 +414,30 @@ def _resolve_merged_into_entry(finding, by_key):
         target = by_key.get(into)
         if target is None:
             return None
-        if not target.get("mergedInto"):
+        if not target.get(session_contract.MERGED_INTO_FIELD):
             return target
         entry = target
     return None
+
+
+def _effective_certification_finding(finding, by_key):
+    """Project a merged-away member through its representative; keep member identity."""
+    if not isinstance(finding, dict):
+        return finding
+    if not finding.get(session_contract.MERGED_INTO_FIELD):
+        return finding
+    resolved = _resolve_merged_into_entry(finding, by_key)
+    if resolved is None:
+        return finding
+    effective = dict(finding)
+    for field in session_contract.DISPOSITION_FAMILY_FIELDS:
+        if field == session_contract.MERGED_INTO_FIELD:
+            continue
+        if field in resolved:
+            effective[field] = resolved[field]
+        else:
+            effective.pop(field, None)
+    return effective
 
 
 def _resolve_repo_head_sha(ctx):
@@ -1514,16 +1536,14 @@ def check_disposition_without_receipt(ctx):
             continue
         fid = finding.get("id") or finding.get("title") or "finding"
         severity = finding.get("severity")
-        graded = finding
-        if finding.get("mergedInto"):
-            resolved = _resolve_merged_into_entry(finding, by_key)
-            if resolved is None:
+        if finding.get(session_contract.MERGED_INTO_FIELD):
+            if _resolve_merged_into_entry(finding, by_key) is None:
                 return _refusal(
                     "disposition-without-receipt",
                     fid,
                     "merged-into chain does not resolve",
                 )
-            graded = resolved
+        graded = _effective_certification_finding(finding, by_key)
         disposition = graded.get("disposition")
         if disposition is None:
             return _refusal(
@@ -1531,7 +1551,7 @@ def check_disposition_without_receipt(ctx):
                 fid,
                 "finding has no disposition recorded",
             )
-        if disposition not in ("fixed", "refuted", "out-of-scope"):
+        if disposition not in session_contract.DISPOSITIONS:
             return _refusal(
                 "disposition-without-receipt",
                 fid,
@@ -1859,7 +1879,7 @@ def _validate_receipt_findings(receipt):
                 "certified receipt finding lacks disposition",
             )
         proof = finding.get("dispositionReceipt")
-        if disposition in ("fixed", "refuted"):
+        if disposition in session_contract.DISPOSITIONS[:2]:
             if not isinstance(proof, dict) and not (
                 disposition == "refuted" and isinstance(proof, str) and proof.strip()
             ):
@@ -1868,7 +1888,7 @@ def _validate_receipt_findings(receipt):
                     fid,
                     "certified receipt finding lacks disposition proof",
                 )
-        elif disposition == "out-of-scope":
+        elif disposition == session_contract.DISPOSITIONS[2]:
             if not isinstance(proof, dict):
                 return _refusal(
                     "unfetched-findings",
@@ -1936,9 +1956,10 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
         }
         for s in seats_info
     ]
+    by_key = _certification_findings_by_key(state)
     findings = [
-        _project_finding(f)
-        for f in _certification_findings(state)
+        _project_finding(_effective_certification_finding(f, by_key))
+        for f in by_key.values()
         if isinstance(f, dict)
     ]
     rounds = _build_receipt_rounds(state, form)

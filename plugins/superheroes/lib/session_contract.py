@@ -22,6 +22,13 @@ __all__ = (
     "REVIEW_LIST_RESULT_KINDS",
     "FINDING_KEY_FIELD",
     "TRANSIENT_FINDING_FIELDS",
+    "DISPOSITIONS",
+    "DISPOSITION_LEDGER_KEY",
+    "DISPOSITION_LEDGER_OWNER_FIELD",
+    "DISPOSITION_LEDGER_OWNER_VALUE",
+    "MERGED_INTO_FIELD",
+    "RAISED_ROUND_FIELD",
+    "DISPOSITION_FAMILY_FIELDS",
     "evidence_digest_subject",
     "canonical",
     "payload_sha256",
@@ -55,6 +62,17 @@ HEAD_CONTENT_BLOBS_SCHEMA = "head-content-blobs/2"
 SEAT_MISSING_SCHEMA = "seat-missing/1"
 FIX_FOLD_HEAD_KEY = "fixFoldHeadSha"
 FINDING_KEY_FIELD = "findingKey"
+
+DISPOSITIONS = ("fixed", "refuted", "out-of-scope")
+DISPOSITION_LEDGER_KEY = "dispositionLedger"
+DISPOSITION_LEDGER_OWNER_FIELD = "dispositionLedgerOwner"
+DISPOSITION_LEDGER_OWNER_VALUE = "ledger"
+MERGED_INTO_FIELD = "mergedInto"
+RAISED_ROUND_FIELD = "raisedRound"
+DISPOSITION_FAMILY_FIELDS = (
+    "disposition", "dispositionRound", "dispositionReceipt", "refutedReason",
+    "outOfScopeReason", "followUp", MERGED_INTO_FIELD,
+)
 
 
 def location_key(finding):

@@ -41,7 +41,7 @@ E           AttributeError: 'NoneType' object has no attribute 'get'
 
 **Guarded element.** `round_driver._strip_disposition_family` / the `else: entry = _strip_disposition_family(entry)` arm in `_stage_findings`.
 **Axis.** A self-declared disposition on a compiled candidate is stripped at seeding; only an existing ledger entry's disposition survives.
-**Detector.** Inline probe (no dedicated unit test): stage a compiled finding carrying `disposition: fixed` and assert the ledger entry has no disposition.
+**Detector.** `test_L2_stage_findings_strips_seat_supplied_disposition_family`.
 
 **Neutralization.** `_strip_disposition_family` body → `return dict(entry)` (skip strip).
 
@@ -53,13 +53,18 @@ AssertionError: {'file': 'a.py', 'line': 1, 'title': 'bug', 'severity': 'Importa
 
 **Restore.** reinstate the `for field in _DISPOSITION_FAMILY_FIELDS: copy.pop(field, None)` loop.
 
-**Raw green** (exit 0): inline probe completes with no assertion (exit 0).
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.14s
+```
 
 ## BP-2c-c — E3 archive every departure through `_set_findings`
 
 **Guarded element.** `round_driver._archive_departures`, invoked from `_set_findings` when a keyed finding leaves the live list.
 **Axis.** Departures through the chokepoint are archived whether or not they carry a disposition.
-**Detector.** Inline probe: `_set_findings(state, compiled)` then `_set_findings(state, [])`; assert departed key is on the ledger.
+**Detector.** `test_L7_archive_departure_without_prior_staging`.
 
 **Neutralization.** Insert `return` immediately after the `_archive_departures` docstring (no-op the archiver).
 
@@ -77,7 +82,6 @@ AssertionError: departed finding not archived to ledger
 .                                                                        [100%]
 1 passed in 0.14s
 ```
-(`test_L7_departure_outside_chokepoint_still_on_ledger` also passes restored.)
 
 ## BP-2c-d — flipped seam test certifying assertion
 
