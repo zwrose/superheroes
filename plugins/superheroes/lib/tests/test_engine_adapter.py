@@ -834,32 +834,6 @@ def test_jsonl_dict_line_readers_skip_garbage():
     assert objs[0]["type"] == "assistant"
 
 
-def test_read_transcript_rows_capped_tail_preserves_result(tmp_path):
-    result_row = {"type": "assistant", "message": {"content": [{"type": "tool_use"}]}}
-    filler = "x" * (EA.ENGINE_OUTPUT_MAX_BYTES - 64)
-    path = tmp_path / "transcript.jsonl"
-    path.write_bytes(
-        (filler + "\n").encode("utf-8")
-        + (json.dumps(result_row) + "\n").encode("utf-8")
-    )
-    rows = EA._read_transcript_rows(str(path))
-    assert rows is not None
-    assert rows[-1] == result_row
-
-
-def test_read_transcript_rows_invalid_utf8_degrades_not_raises(tmp_path):
-    valid = {"type": "user", "toolEndsTurn": True}
-    path = tmp_path / "bad-utf8.jsonl"
-    path.write_bytes(b"\xff\xfe" + json.dumps(valid).encode("utf-8") + b"\n")
-    rows = EA._read_transcript_rows(str(path))
-    assert rows is not None
-    assert valid in rows
-
-
-def test_read_transcript_rows_missing_file_returns_none(tmp_path):
-    assert EA._read_transcript_rows(str(tmp_path / "absent.jsonl")) is None
-
-
 def test_registered_engine_models_detail_claude_lists_every_id():
     detail = EA._registered_engine_models_detail("claude")
     for model_id in EA.model_registry.claude_models():

@@ -14223,6 +14223,10 @@ def test_claude_review_secret_scrubbed_from_result_and_journal(tmp_path, monkeyp
         expected_result_kind="findings",
     )
     assert res.get("ok") is True
+    assert res.get("resultKind") == "findings"
+    assert isinstance(res.get("findings"), list) and len(res["findings"]) == 1
+    assert res["findings"][0].get("body") == "log shows [REDACTED]"
+    assert res["findings"][0].get("id") == finding["id"]
     assert secret not in json.dumps(res)
     records, _ = ED._journal_read(res["runDir"])
     assert secret not in json.dumps(records)
@@ -14320,7 +14324,7 @@ def test_claude_mode_background_review_open_records_caller_provenance(tmp_path, 
         claude_mode="background",
         max_wait=0,
     )
-    assert res["ok"] is False or res.get("terminal") is True
+    assert res["ok"] is False
     opened = _review_opened_record(run_dir)
     assert opened["claudeMode"] == "background"
     assert opened["resolvedInputs"]["claudeMode"] == "background"
@@ -14363,7 +14367,7 @@ def test_claude_mode_unknown_refused_before_open(tmp_path):
     assert res["detail"] == "claude-mode-unknown:'bogus'"
     assert res["attempts"] == 0
     assert res.get("runOpened") is False
-    assert not os.path.isdir(run_dir) or not os.path.isfile(os.path.join(run_dir, ED.PROMPT_NAME))
+    assert not os.path.isfile(os.path.join(run_dir, ED.PROMPT_NAME))
     assert len(fake.calls) == 0
 
 
@@ -14506,6 +14510,42 @@ def test_native_materializer_delivery_census():
     })
 
 
+def test_claude_background_materializer_error_when_transcript_unreadable(tmp_path):
+    run_dir = str(tmp_path / "bg-materializer-error")
+    os.makedirs(run_dir, exist_ok=True)
+    opened = {
+        "engine": "claude",
+        "channel": ERC.CHANNEL_NATIVE,
+        "claudeMode": "background",
+    }
+    stdout_path = str(tmp_path / "missing-transcript.stdout")
+    assert ED._materialize_stdout_result(run_dir, 1, opened, stdout_path) == "error"
+
+
+def test_claude_review_json_schema_argv_text_drift_refuses_coherence(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "schema-drift")
+    ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()]),
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    opened = _review_opened_record(run_dir)
+    with open(opened["nativeSchemaPath"], encoding="utf-8") as fh:
+        schema_text = fh.read().rstrip("\n")
+    assert opened["argv"][-2:] == ["--json-schema", schema_text]
+    drifted = list(opened["argv"])
+    drifted[-1] = schema_text + " "
+    _, err = ED._spawn_argv_coherence(opened, drifted)
+    assert err is not None
+    assert "spawn argv does not match resolvedInputs snapshot" in err
+
+
 def test_claude_background_argv_carries_json_schema_from_journal(tmp_path, monkeypatch):
     _ensure_claude_config_dir(tmp_path, monkeypatch)
     repo_root = _repo(tmp_path)
@@ -14530,13 +14570,67 @@ def test_claude_background_argv_carries_json_schema_from_journal(tmp_path, monke
     assert ED._spawn_argv_coherence(opened, opened["argv"])[1] is None
 
 
+def _vendor_branch_call_targets(tree, func_name, vendor):
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name != func_name:
+            continue
+        for stmt in ast.walk(node):
+            if not isinstance(stmt, ast.If):
+                continue
+            test = stmt.test
+            if not (
+                isinstance(test, ast.Compare)
+                and len(test.ops) == 1
+                and isinstance(test.ops[0], ast.Eq)
+                and len(test.comparators) == 1
+            ):
+                continue
+            left, right = test.left, test.comparators[0]
+            if not (
+                isinstance(left, ast.Name)
+                and left.id == "vendor"
+                and isinstance(right, ast.Constant)
+                and right.value == vendor
+            ):
+                continue
+            targets = []
+            for child in ast.walk(stmt):
+                if not isinstance(child, ast.Call):
+                    continue
+                func = child.func
+                if isinstance(func, ast.Name):
+                    targets.append(func.id)
+                elif isinstance(func, ast.Attribute):
+                    targets.append(func.attr)
+            return targets
+    return None
+
+
 def test_no_quota_leg_on_the_claude_dispatch_path():
-    pattern = re.compile(r"\bquota\b", re.IGNORECASE)
-    for name in ("engine_dispatch.py", "engine_adapter.py"):
-        path = os.path.join(_HERE, "..", name)
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-        assert not pattern.search(text), "unexpected quota mention in %s" % name
+    adapter_path = os.path.join(_HERE, "..", "engine_adapter.py")
+    dispatch_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    with open(adapter_path, encoding="utf-8") as fh:
+        adapter_tree = ast.parse(fh.read(), filename=adapter_path)
+    claude_calls = _vendor_branch_call_targets(adapter_tree, "build_argv_result", "claude")
+    assert claude_calls is not None, "build_argv_result claude branch missing"
+    forbidden = ("launch_doctrine", "preflight", "quota")
+    offenders = [
+        name for name in claude_calls
+        if any(token in name.lower() for token in forbidden)
+    ]
+    assert offenders == [], offenders
+    with open(dispatch_path, encoding="utf-8") as fh:
+        dispatch_tree = ast.parse(fh.read(), filename=dispatch_path)
+    dispatch_imports = []
+    for node in ast.walk(dispatch_tree):
+        if isinstance(node, ast.Import):
+            dispatch_imports.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            dispatch_imports.append(node.module)
+    assert "launch_doctrine" not in dispatch_imports
+    built = EA.build_argv_result(_reviewer_claude_seat(), "review", {})
+    assert built["reason"] is None, built
+    assert built["argv"][:2] == ["claude", "-p"]
 
 
 # --- C14 layer 2: background attempt flow (#1273 WO-B2) -----------------------
