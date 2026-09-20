@@ -196,8 +196,9 @@ slice (12–45 s is the measured range above).
 The sanctioned way to dispatch a long-running **external reviewer** seat is `dispatch-review`. The
 seat's delivery contract is in `rubric/review-base.md` ("Findings output format"); `auto-fix-loop.md`
 documents the runner's result mechanics — read both before authoring seat prompts; this subsection is
-the at-dispatch-time summary only. For the full CLI argument surface, read
-`skills/workhorse/reference/dispatch-entry.md`. `--session-dir` pairs with `--pr-body-path`; either alone refuses `pr-body-args-unpaired`.
+the at-dispatch-time summary only. For the full CLI argument surface — including the
+`--session-dir`/`--pr-body-path` pairing and its refusal token — read
+`skills/workhorse/reference/dispatch-entry.md`.
 
 ### Result channels
 

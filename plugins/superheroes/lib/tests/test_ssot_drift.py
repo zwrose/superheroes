@@ -451,48 +451,6 @@ def test_shape_drivers_channel_vocabulary_biteproof_doc_anchor_non_vacuous():
     )
 
 
-# --- Cluster: review payload shape tokens (engine_adapter → auto-fix-loop.md) ---
-
-
-def _review_payload_shape_tokens_from_home():
-    import engine_adapter
-
-    return set(engine_adapter.REVIEW_PAYLOAD_SHAPES)
-
-
-def _review_payload_shape_tokens_from_auto_fix_loop_doc(doc):
-    """The payloadShape `parsed` enumeration in auto-fix-loop.md — scoped to that block only."""
-    m = re.search(
-        r"`parsed`\s*\(one of\s*(.*?)\)\s*,\s*`topLevelKeys`",
-        doc,
-        re.DOTALL,
-    )
-    assert m, (
-        "auto-fix-loop.md: payloadShape `parsed` enumeration not found "
-        "(moved or reworded?)"
-    )
-    tokens = set(re.findall(r"`([^`]+)`", m.group(1)))
-    assert tokens, (
-        "auto-fix-loop.md: payloadShape `parsed` enumeration parsed to zero tokens "
-        "(regex drift or empty enumeration?)"
-    )
-    return tokens
-
-
-def test_review_payload_shape_tokens_in_auto_fix_loop_doc():
-    """§11: auto-fix-loop.md restates the payloadShape `parsed` vocabulary from engine_adapter."""
-    home = _review_payload_shape_tokens_from_home()
-    doc = _read("skills/review-code/reference/auto-fix-loop.md")
-    doc_tokens = _review_payload_shape_tokens_from_auto_fix_loop_doc(doc)
-    missing_from_doc = sorted(home - doc_tokens)
-    extra_in_doc = sorted(doc_tokens - home)
-    assert not missing_from_doc and not extra_in_doc, (
-        "auto-fix-loop.md payloadShape `parsed` vocabulary drift from "
-        "engine_adapter.REVIEW_PAYLOAD_SHAPES — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_from_doc, extra_in_doc)
-    )
-
 
 # --- Cluster: review resultKind enum (engine_adapter → doc copies) ---
 

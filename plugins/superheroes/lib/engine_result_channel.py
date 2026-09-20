@@ -776,7 +776,7 @@ def _schema_branch_active_payload_keys(branch):
     return active
 
 
-def native_review_payload_shape(detail, envelope=None, branch=None):
+def native_review_payload_shape(detail, envelope=None, branch=None, echo_nonce=None):
     """Derive payloadShape for a native-channel review forfeit from the result file state.
 
     Returns {"parsed", "topLevelKeys", "keysTruncated"} or None when no diagnostic applies.
@@ -800,6 +800,18 @@ def native_review_payload_shape(detail, envelope=None, branch=None):
     if detail in ("native-result-schema-invalid", "native-result-malformed-branch"):
         if isinstance(branch, dict):
             matched = ea._recognised_review_kinds(branch)
+            # The native branch is a discriminated-union object: every result-kind's payload
+            # key is always present, null for every kind but the one `resultKind` names. The
+            # stdout-oriented matchers (`_matches_review_findings`/`_matches_review_verdicts`)
+            # only check key PRESENCE, so on a branch they spuriously "match" every sibling
+            # kind whose key is merely present-but-null. Narrow to kinds whose own payload key
+            # actually carries a value, so a genuinely single-kind branch is diagnosed as one
+            # kind instead of falling into the both-payload-keys ambiguity case.
+            populated_key = {"findings": "findings", "verdicts": "verdicts", "grouping": "grouping"}
+            matched = [
+                k for k in matched
+                if k not in populated_key or branch.get(populated_key[k]) is not None
+            ]
             top_keys, keys_truncated = ea._bound_top_level_keys(branch)
             if len(matched) > 1:
                 return {
@@ -807,6 +819,20 @@ def native_review_payload_shape(detail, envelope=None, branch=None):
                     "topLevelKeys": top_keys,
                     "keysTruncated": keys_truncated,
                 }
+            if len(matched) == 1:
+                # Route through the same hollow-family constructor the marker-stdout path
+                # uses (review_payload_shape), so a schema-valid native branch with a
+                # partial/hollow findings or verdicts list gets the specific
+                # findings-partial-hollow-member / verdicts-partial-hollow-member label
+                # (with memberShapeWanted/memberShapeGot) instead of the generic
+                # object-without-findings fallback.
+                kind = matched[0]
+                if kind == "findings":
+                    diag = ea._review_payload_shape_findings_obj(branch, echo_nonce=echo_nonce)
+                else:
+                    diag = ea._REVIEW_PAYLOAD_SHAPE_DIAGNOSTICS.get(kind, lambda _obj: None)(branch)
+                if diag is not None:
+                    return diag
             return {
                 "parsed": ea.SHAPE_OBJECT_WITHOUT_FINDINGS,
                 "topLevelKeys": top_keys,

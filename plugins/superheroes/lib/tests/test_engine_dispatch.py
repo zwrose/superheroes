@@ -12784,7 +12784,9 @@ def test_grade_native_review_attempt_ignores_stdout_on_semantic_refusal(tmp_path
 
 
 def test_admit_native_review_parser_refusal_forfeit_payload_shape_describes_branch(tmp_path):
-    # axis: parser refusal forfeit carries payloadShape describing parsed branch
+    # axis: parser refusal forfeit carries payloadShape describing parsed branch — a wholly
+    # hollow (single, all-invalid-member) verdicts branch gets the specific
+    # verdicts-hollow-member label (#1273 C14 v5), not a generic fallback.
     branch = _native_review_branch("verdicts")
     branch["verdicts"][0]["reason"] = "   "
     run_dir, state = _native_review_grade_state(
@@ -12795,9 +12797,51 @@ def test_admit_native_review_parser_refusal_forfeit_payload_shape_describes_bran
     assert grade.get("detail") == "native-result-malformed"
     shape = grade.get("payloadShape")
     assert shape is not None
-    assert shape["parsed"] != EA.SHAPE_NO_PARSEABLE_JSON
-    assert shape["topLevelKeys"]
-    assert "resultKind" in shape["topLevelKeys"]
+    assert shape["parsed"] == EA.SHAPE_VERDICTS_HOLLOW_MEMBER
+    assert shape["memberShapeWanted"] == "valid-verdict-member"
+
+
+def test_admit_native_review_parser_refusal_findings_partial_hollow_member_reaches_native(tmp_path):
+    # axis: a schema-valid native findings branch with one engaged and one hollow (whitespace-only
+    # substance) member is diagnosed with the specific partial-hollow label (#1273 C14 v5) —
+    # not the generic object-without-findings/object-both-payload-keys fallback.
+    branch = _native_review_branch("findings")
+    engaged = dict(branch["findings"][0])
+    hollow = dict(branch["findings"][0])
+    for key in RFS.SUBSTANCE_KEYS_CANONICAL:
+        hollow[key] = "   "
+    branch["findings"] = [engaged, hollow]
+    run_dir, state = _native_review_grade_state(tmp_path, branch)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-malformed"
+    shape = grade.get("payloadShape")
+    assert shape is not None
+    assert shape["parsed"] == EA.SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER
+    assert shape["memberShapeWanted"] == "engaged-finding-member"
+    assert "hollow=1" in shape["memberShapeGot"]
+    assert "substantive=1" in shape["memberShapeGot"]
+
+
+def test_admit_native_review_parser_refusal_verdicts_partial_hollow_member_reaches_native(tmp_path):
+    # axis: same as above for the verdicts kind (#1273 C14 v5)
+    branch = _native_review_branch("verdicts")
+    engaged = dict(branch["verdicts"][0])
+    hollow = dict(branch["verdicts"][0])
+    hollow["reason"] = "   "
+    branch["verdicts"] = [engaged, hollow]
+    run_dir, state = _native_review_grade_state(
+        tmp_path, branch, expected_result_kind="verdicts",
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "native-result-malformed"
+    shape = grade.get("payloadShape")
+    assert shape is not None
+    assert shape["parsed"] == EA.SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER
+    assert shape["memberShapeWanted"] == "valid-verdict-member"
+    assert "invalid=1" in shape["memberShapeGot"]
+    assert "valid=1" in shape["memberShapeGot"]
 
 
 # --- #1270 WO-2a2-B: one native result file per attempt ----

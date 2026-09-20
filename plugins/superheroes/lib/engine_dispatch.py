@@ -4510,14 +4510,14 @@ def _normalize_native_review_branch_for_parser(branch):
     return branch
 
 
-def _native_review_parser_refusal_forfeit(engagement, envelope, branch):
+def _native_review_parser_refusal_forfeit(engagement, envelope, branch, echo_nonce=None):
     """Forfeit a schema-valid native branch the adapter parser refused. Never raises."""
     placeholder_shape = _native_branch_placeholder_shape(branch)
     if placeholder_shape is not None:
         return _native_review_forfeit(
             engagement, "native-result-malformed", payload_shape=placeholder_shape)
     shape = engine_result_channel.native_review_payload_shape(
-        "native-result-malformed-branch", envelope=envelope, branch=branch)
+        "native-result-malformed-branch", envelope=envelope, branch=branch, echo_nonce=echo_nonce)
     return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
 
 
@@ -4655,7 +4655,7 @@ def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_
     kind = branch.get("resultKind")
     parser = engine_adapter._REVIEW_CONTRACT_PARSERS.get(kind)
     if parser is None:
-        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch, echo_nonce)
     normalized = _normalize_native_review_branch_for_parser(branch)
     try:
         if kind == "findings":
@@ -4663,9 +4663,9 @@ def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_
         else:
             parsed = parser(normalized, None)
     except Exception:
-        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch, echo_nonce)
     if not parsed.get("ok"):
-        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch, echo_nonce)
     return parsed
 
 
@@ -7248,8 +7248,10 @@ def build_parser():
     cc.add_argument(d, "--expected-result-kind", contract=_REVIEW_RESULT_KINDS_CHOICES_CONTRACT,
                     default=None, choices=REVIEW_RESULT_KINDS,
                     help="mechanical pin: refuse attempts whose parsed resultKind differs")
-    cc.add_argument(d, "--pr-body-path", contract="free-text", default=None)
-    cc.add_argument(d, "--session-dir", contract="existing-directory", default=None)
+    cc.add_argument(d, "--pr-body-path", contract="free-text", default=None,
+                    help="pairs with --session-dir; either alone refuses pr-body-args-unpaired")
+    cc.add_argument(d, "--session-dir", contract="existing-directory", default=None,
+                    help="pairs with --pr-body-path; either alone refuses pr-body-args-unpaired")
 
     w = sub.add_parser("dispatch-write")
     cc.add_argument(w, "--seat", contract="free-text", required=True,

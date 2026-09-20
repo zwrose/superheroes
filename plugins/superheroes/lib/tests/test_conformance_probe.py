@@ -1424,6 +1424,33 @@ def test_validate_probe_record_refuses_non_claude_wrong_mode_keys():
     assert err == "probe-result-malformed:/tmp/codex.json"
 
 
+def test_validate_probe_record_refuses_flat_legs_disagreeing_with_mode_legs():
+    raw = _probe_result("claude")
+    raw["modeLegs"]["background"]["resultProduction"] = {
+        "ok": False, "detail": "native-result-missing", "evidence": {},
+    }
+    # flat legs left claiming ok, ok/failed kept self-consistent so only the
+    # modeLegs-vs-legs cross-check can fire
+    assert raw["legs"]["resultProduction"]["ok"] is True
+    err = CP._validate_probe_record(raw, "/tmp/claude.json")
+    assert err == "probe-result-malformed:/tmp/claude.json"
+
+
+def test_derive_flat_legs_records_failing_modes_in_evidence():
+    mode_legs = {"print": _ok_legs(), "background": _ok_legs()}
+    mode_legs["background"]["resultProduction"] = {
+        "ok": False, "detail": "native-result-missing", "evidence": {},
+    }
+    flat = CP._derive_flat_legs(mode_legs)
+    assert flat["resultProduction"]["evidence"]["failingModes"] == ["background"]
+
+
+def test_stamp_mode_run_dir_records_run_dir_per_leg():
+    stamped = CP._stamp_mode_run_dir(_ok_legs(), "/tmp/run/background")
+    for name in CP._LEG_NAMES:
+        assert stamped[name]["evidence"]["runDir"] == "/tmp/run/background"
+
+
 def test_preflight_entry_refuses_schema_v1_record(tmp_path):
     repo = _repo(tmp_path)
     codex = _probe_result("codex", repoRoot=repo)

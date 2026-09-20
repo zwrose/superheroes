@@ -95,7 +95,7 @@ def _failed_leg_names(legs):
 
 def _modes_for_engine(engine):
     if engine == "claude":
-        return ("print", "background")
+        return engine_adapter.CLAUDE_MODES
     return ("default",)
 
 def _mode_run_dir(parent_run_dir, mode):
@@ -288,21 +288,33 @@ def _stamp_mode_run_dir(legs, mode_run_dir):
         stamped[name] = leg
     return stamped
 
-def _probe_one_mode(engine, mode, seat, repo_real, parent_run_dir, prompt_path, timeout,
-                    run_engine, build_view, order_suffix):
-    mode_run_dir = _mode_run_dir(parent_run_dir, mode)
-    try:
-        os.makedirs(mode_run_dir, exist_ok=True)
-    except OSError as exc:
-        return _stamp_mode_run_dir(_all_legs_failed("run-dir-setup-failed:%s" % type(exc).__name__),
-                                   mode_run_dir)
-    mode_run_dir_real = os.path.realpath(mode_run_dir)
+def _ensure_mode_run_dir(mode_run_dir):
+    """Create `mode_run_dir` and report whether its journal is already folded (reused).
+
+    Returns (mode_run_dir_real, reused, setup_error). `setup_error` is a detail string
+    when the directory itself could not be created; `reused` is only meaningful when
+    `setup_error` is None.
+    """
+    ok, result = engine_dispatch._validate_run_dir(mode_run_dir, create=True)
+    if not ok:
+        return mode_run_dir, False, result
+    mode_run_dir_real = result
     try:
         records, _ = engine_dispatch._journal_read(mode_run_dir_real)
         if engine_dispatch._journal_state(records).get("folded") is not None:
-            return _stamp_mode_run_dir(_all_legs_failed("run-dir-reused"), mode_run_dir_real)
+            return mode_run_dir_real, True, None
     except OSError:
         pass
+    return mode_run_dir_real, False, None
+
+def _probe_one_mode(engine, mode, seat, repo_real, parent_run_dir, prompt_path, timeout,
+                    run_engine, build_view, order_suffix):
+    mode_run_dir = _mode_run_dir(parent_run_dir, mode)
+    mode_run_dir_real, reused, setup_error = _ensure_mode_run_dir(mode_run_dir)
+    if setup_error:
+        return _stamp_mode_run_dir(_all_legs_failed(setup_error), mode_run_dir_real)
+    if reused:
+        return _stamp_mode_run_dir(_all_legs_failed("run-dir-reused"), mode_run_dir_real)
     claude_mode = mode if engine == "claude" else None
     order_id = "conformance-probe:%s:%s:%s" % (engine, mode, order_suffix)
     deadline = time.monotonic() + timeout + BOUND_PAD_SECONDS
@@ -363,6 +375,27 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
             run_dir = os.path.join(parent, "run")
         except OSError as exc:
             return _refuse(engine, "run-dir-setup-failed:%s" % type(exc).__name__, repo_real, seat=seat)
+    if run_dir_given:
+        # Validate the caller-supplied parent BEFORE resolving/partitioning it: resolving
+        # a leaf symlink via realpath first (as the old code did) silently swaps in the
+        # symlink's target and bypasses this refusal entirely.
+        stripped = run_dir
+        while stripped.endswith(os.sep) and len(stripped) > 1:
+            stripped = stripped[:-1]
+        if os.path.islink(stripped):
+            return _refuse(engine, "run-dir-is-symlink", repo_real, seat=seat)
+        expected_names = set(_modes_for_engine(engine))
+        # Only engines with nested per-mode subdirectories (currently claude: print/,
+        # background/) have a meaningful "recognized top-level entries" set — for a
+        # "default"-mode engine the mode dir IS the parent, and its own reuse/nonempty
+        # rules are enforced later, per-mode, by the shared dispatch helper.
+        if expected_names != {"default"} and os.path.exists(stripped):
+            try:
+                entries = set(os.listdir(stripped))
+            except OSError as exc:
+                return _refuse(engine, "run-dir-setup-failed:%s" % type(exc).__name__, repo_real, seat=seat)
+            if entries - expected_names:
+                return _refuse(engine, "run-dir-not-empty-unopened", repo_real, seat=seat)
     parent_run_dir = os.path.realpath(run_dir)
     if run_dir_given:
         prompt_path = os.path.join(
@@ -378,11 +411,29 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
     channel = engine_result_channel.channel_for(engine)
     order_suffix = uuid.uuid4().hex
     modes = _modes_for_engine(engine)
-    mode_legs = {}
+    # Preflight every mode's run directory before dispatching any of them: a folded
+    # journal in one mode (e.g. an interrupted prior probe) must refuse the whole probe
+    # with nothing launched, rather than let an independent later mode still dispatch
+    # (and get charged) against a payload that is already guaranteed to fail overall.
+    mode_dirs, setup_error, any_reused = {}, None, False
     for mode in modes:
-        mode_legs[mode] = _probe_one_mode(
-            engine, mode, seat, repo_real, parent_run_dir, prompt_path, timeout,
-            run_engine, build_view, order_suffix)
+        mode_run_dir_real, reused, err = _ensure_mode_run_dir(_mode_run_dir(parent_run_dir, mode))
+        mode_dirs[mode] = mode_run_dir_real
+        if err and setup_error is None:
+            setup_error = err
+        any_reused = any_reused or reused
+    mode_legs = {}
+    if setup_error:
+        for mode in modes:
+            mode_legs[mode] = _stamp_mode_run_dir(_all_legs_failed(setup_error), mode_dirs[mode])
+    elif any_reused:
+        for mode in modes:
+            mode_legs[mode] = _stamp_mode_run_dir(_all_legs_failed("run-dir-reused"), mode_dirs[mode])
+    else:
+        for mode in modes:
+            mode_legs[mode] = _probe_one_mode(
+                engine, mode, seat, repo_real, parent_run_dir, prompt_path, timeout,
+                run_engine, build_view, order_suffix)
     wall = time.monotonic() - t0
     dep_roles, dep_lanes = _dependent_from_calibration(
         preflight_probe.dispatch_calibration(cwd=repo_real), engine)
@@ -446,7 +497,7 @@ def _validate_probe_record(raw, path_hint=""):
     if not isinstance(mode_legs, dict) or not mode_legs:
         return "probe-result-malformed:%s" % path_hint
     probed_modes = raw.get("probedModes")
-    if not isinstance(probed_modes, list):
+    if not isinstance(probed_modes, list) or not all(isinstance(m, str) for m in probed_modes):
         return "probe-result-malformed:%s" % path_hint
     if set(probed_modes) != set(mode_legs.keys()):
         return "probe-result-malformed:%s" % path_hint
@@ -461,6 +512,9 @@ def _validate_probe_record(raw, path_hint=""):
         for name in _LEG_NAMES:
             leg = mode_entry.get(name)
             if not isinstance(leg, dict) or not isinstance(leg.get("ok"), bool):
+                return "probe-result-malformed:%s" % path_hint
+            evidence = leg.get("evidence")
+            if evidence is not None and not isinstance(evidence, dict):
                 return "probe-result-malformed:%s" % path_hint
     legs = raw.get("legs")
     if not isinstance(legs, dict):
@@ -525,7 +579,10 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
                 raw = json.load(fh)
         except (OSError, json.JSONDecodeError):
             return {"ok": False, "reason": "probe-result-malformed:%s" % path}, 1
-        malformed = _validate_probe_record(raw, path)
+        try:
+            malformed = _validate_probe_record(raw, path)
+        except Exception:
+            return {"ok": False, "reason": "probe-result-malformed:%s" % path}, 1
         if malformed:
             return {"ok": False, "reason": malformed}, 1
         eng = raw.get("engine")
