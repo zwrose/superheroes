@@ -3839,20 +3839,23 @@ def test_pr_set_changed_real_read_membership_whole_read_bounded_by_watcher_budge
     monkeypatch.setattr(
         sc.shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None,
     )
-    times = [1000.0, 1000.0, 1000.0, 2000.0]
-    sc_index = [0]
+    # Stable until membership GraphQL transport runs; then jump past the shared
+    # read budget so verification sees exhaustion without pinning call count.
+    sc_clock = [1000.0]
 
     def sc_monotonic():
-        index = sc_index[0]
-        sc_index[0] += 1
-        return times[index] if index < len(times) else times[-1]
+        return sc_clock[0]
 
     monkeypatch.setattr(sc.time, "monotonic", sc_monotonic)
 
-    run = _stack_check_graphql_run(99)
+    base_run = _stack_check_graphql_run(99)
+
+    def membership_graphql_run(argv, **kwargs):
+        sc_clock[0] = 2000.0
+        return base_run(argv, **kwargs)
 
     def membership_reader(**kwargs):
-        return sc.read_membership(run=run, **kwargs)
+        return sc.read_membership(run=membership_graphql_run, **kwargs)
 
     mono = [1000.0]
     repo = _init_repo(tmp_path / "repo")
