@@ -56,9 +56,12 @@ shape is wrong and the thinking wins.
 
    **The re-pin form.** After a bring-current the lane recomputes the digest. **Equal:** the sha is
    **re-pinned in place with a dated line**, CI runs on the new head, and **nothing is re-reviewed**.
-   **Unequal, or `digest-unavailable`:** `git range-diff --remerge-diff` names the changed commits
-   (including conflict resolutions in a bring-current merge; plain `range-diff` ignores merge
-   commits). A changed hunk
+   **Unequal, or `digest-unavailable`:** `git range-diff --remerge-diff <base-before>..<head-before>
+   <base-after>..<head-after>` names the changed commits (including conflict resolutions in a
+   bring-current merge; plain `range-diff` ignores merge commits), where **base-before** and
+   **base-after** are the tip of the layer below before and after the bring-current — the base a
+   bring-current moves — and **head-before** and **head-after** are the layer's head before and
+   after. A changed hunk
    takes the **mechanical non-semantic** path — CI and a disclosure line, **no reviewer** — only when
    the change is mechanically non-semantic: whitespace, pure formatting, a comment, or a line re-wrap
    that leaves the rule unchanged. A changed hunk takes the merge train's **existing union-fix floor**
@@ -254,7 +257,7 @@ it:
 - `<!-- superheroes:pending-proposals -->` — immediately above spine field 7's **pending** set (its
   body is the items, or the literal `None`).
 - `<!-- superheroes:advisor-vet -->` — the boundary of your write inside the PR's `## Advisor vet`
-  owner-half slot. The slot's **first line** is the verdict line, in spine field 1's form. **The builder stamps it for you** (workhorse charter §11), together with a
+  owner-half slot. The slot's **first line** is the verdict line, in spine field 1's form. **The builder stamps the marker for you** (workhorse charter §11), together with a
   reminder comment beneath it; you write **beneath the marker**, and your write **replaces the
   reminder**. The slot is **append-only and yours**: you edit your own prior text in place, never the
   builder's prose — with exactly one exception, **the reminder**, which is the sole piece of
