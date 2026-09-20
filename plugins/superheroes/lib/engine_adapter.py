@@ -937,25 +937,6 @@ def claude_transcript_turn_ended(rows):
         return False
 
 
-def _read_transcript_rows(stdout_path):
-    """Read JSONL transcript rows from a file, capped at ENGINE_OUTPUT_MAX_BYTES. Never raises."""
-    try:
-        text, _truncated = _read_stdout_tail(stdout_path, ENGINE_OUTPUT_MAX_BYTES)
-    except (OSError, MemoryError):
-        return None
-    rows = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        rows.append(obj)
-    return rows
-
-
 _CLAUDE_LAUNCH_ID_RE = re.compile(r"^backgrounded · ([0-9a-f]{8})$")
 
 
