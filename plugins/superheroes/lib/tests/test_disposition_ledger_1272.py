@@ -370,6 +370,30 @@ def test_L6_with_owner_marker_empty_ledger_excludes_records_findings():
     assert certified == []
 
 
+def test_L6_first_stage_backfills_records_into_ledger_undisposed(tmp_path):
+    old = {"file": "o", "line": 1, "title": "old", "severity": "Important",
+           SC.FINDING_KEY_FIELD: "o::old@L1"}
+    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor"}
+    compiled, _ = RD.mechanical_compile([new_raw], None)
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    state["_records"] = [{"findings": [old]}]
+    RD._stage_findings(state, compiled)
+    ledger = _ledger_by_key(state)
+    assert "o::old@L1" in ledger
+    assert ledger["o::old@L1"].get("disposition") is None
+    new_key = SC.finding_identity_key(compiled[0])
+    RD._record_disposition(state, new_key, "refuted", 2, refutedReason="no")
+    state["findings"] = []
+    certified_keys = set(RC._certification_findings_by_key(state))
+    assert "o::old@L1" in certified_keys
+    ctx = _ctx(state, tmp_path)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is not None
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["detail"] == "finding has no disposition recorded"
+
+
 # --- C13: head-bound verify receipts -------------------------------------------------
 
 def _audit_discharge_fixed(state, head_sha):

@@ -1347,6 +1347,25 @@ def _strip_disposition_family(entry):
     return copy
 
 
+def _backfill_ledger_from_records(state, ledger, seen):
+    """On first ledger-owner activation, seed missing keys from review-record history."""
+    for rec in state.get("_records") or []:
+        if not isinstance(rec, dict):
+            continue
+        for finding in rec.get("findings") or []:
+            if not isinstance(finding, dict):
+                continue
+            key = _finding_identity_key(finding)
+            if not key or key in seen:
+                continue
+            if finding.get("disposition") is not None:
+                entry = dict(finding)
+            else:
+                entry = _strip_disposition_family(dict(finding))
+            seen[key] = len(ledger)
+            ledger.append(entry)
+
+
 def _stage_findings(state, compiled):
     """The only writer of ``_toVerify`` — seeds one ledger entry per compiled candidate."""
     if not isinstance(compiled, list):
@@ -1354,6 +1373,11 @@ def _stage_findings(state, compiled):
         return
     ledger = _ensure_disposition_ledger(state)
     seen = _ledger_index_by_key(ledger)
+    first_ledger_owner = state.get(session_contract.DISPOSITION_LEDGER_OWNER_FIELD) != (
+        session_contract.DISPOSITION_LEDGER_OWNER_VALUE
+    )
+    if first_ledger_owner:
+        _backfill_ledger_from_records(state, ledger, seen)
     round_no = state["round"]
     seeded = False
     sanitized = []
