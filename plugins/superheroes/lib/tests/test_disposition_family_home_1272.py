@@ -73,17 +73,6 @@ def _compare_tests_none_presence(compare):
     return any(isinstance(op, presence_ops) for op in compare.ops)
 
 
-def _is_has_disposition_family_call(node):
-    if not isinstance(node, ast.Call):
-        return False
-    func = node.func
-    if isinstance(func, ast.Attribute) and func.attr == "has_disposition_family":
-        return True
-    if isinstance(func, ast.Name) and func.id == "has_disposition_family":
-        return True
-    return False
-
-
 def _in_presence_context(node, parents, comprehension_ifs):
     if node in comprehension_ifs:
         return True
@@ -105,17 +94,7 @@ def _in_presence_context(node, parents, comprehension_ifs):
     return False
 
 
-_ASSIGNMENT_EXEMPT_BASES = frozenset({"disp_kwargs", "family", "row"})
-
-
-def _subscript_assign_exempt(target):
-    if not isinstance(target, ast.Subscript):
-        return False
-    base = target.value
-    return isinstance(base, ast.Name) and base.id in _ASSIGNMENT_EXEMPT_BASES
-
-
-def _flag_disposition_family_presence_reads(source, filename="<fixture>", *, census_mode=False):
+def _flag_disposition_family_presence_reads(source, filename="<fixture>"):
     tree = ast.parse(source, filename=filename)
     parents = _parent_map(tree)
     comprehension_ifs = _comprehension_if_nodes(tree)
@@ -127,23 +106,16 @@ def _flag_disposition_family_presence_reads(source, filename="<fixture>", *, cen
             member = _get_member_from_get_call(node)
             if member in _DISPOSITION_FAMILY_MEMBERS and _in_presence_context(
                     node, parents, comprehension_ifs):
-                if _is_has_disposition_family_call(node):
-                    continue
-                parent = parents.get(node)
-                if isinstance(parent, ast.Compare) and not _compare_tests_none_presence(parent):
-                    continue
                 line = lines[node.lineno - 1].strip()
                 violations.append("%s:%s: %s" % (filename, node.lineno, line))
 
         if isinstance(node, ast.Compare):
-            for op in node.ops:
-                if not isinstance(op, (ast.In, ast.NotIn)):
-                    continue
             if isinstance(node.left, ast.Constant) and isinstance(node.left.value, str):
                 member = node.left.value
                 if member in _DISPOSITION_FAMILY_MEMBERS:
-                    line = lines[node.lineno - 1].strip()
-                    violations.append("%s:%s: %s" % (filename, node.lineno, line))
+                    if any(isinstance(op, (ast.In, ast.NotIn)) for op in node.ops):
+                        line = lines[node.lineno - 1].strip()
+                        violations.append("%s:%s: %s" % (filename, node.lineno, line))
 
         if isinstance(node, (ast.Assign, ast.AugAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -154,8 +126,6 @@ def _flag_disposition_family_presence_reads(source, filename="<fixture>", *, cen
                 if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
                     member = sl.value
                     if member in _DISPOSITION_FAMILY_MEMBERS:
-                        if census_mode and _subscript_assign_exempt(target):
-                            continue
                         line = lines[node.lineno - 1].strip()
                         violations.append("%s:%s: %s" % (filename, node.lineno, line))
 
@@ -195,6 +165,8 @@ def test_disposition_family_census_matcher_flags_and_ignores():
         'if not row.get("disposition"): pass',
         'if "followUp" in row: pass',
         'row["dispositionReceipt"] = x',
+        'row["disposition"] = d',
+        'if "mergedInto" not in row: pass',
         'x = [f for f in fs if f.get("disposition")]',
     ]
     for idx, snippet in enumerate(flags):
@@ -208,6 +180,8 @@ def test_disposition_family_census_matcher_flags_and_ignores():
         'payload = {"disposition": d}',
         'for field in DISPOSITION_FAMILY_FIELDS: pass',
         'if session_contract.has_disposition_family(row): pass',
+        'x = ("disposition" == y)',
+        'kwargs = dict(base, followUp=f)',
     ]
     for idx, snippet in enumerate(ignores):
         found = _flag_disposition_family_presence_reads(
@@ -230,9 +204,7 @@ def test_disposition_family_single_home_census():
         with open(path, encoding="utf-8") as fh:
             source = fh.read()
         try:
-            flagged = _flag_disposition_family_presence_reads(
-                source, name, census_mode=True,
-            )
+            flagged = _flag_disposition_family_presence_reads(source, name)
         except SyntaxError as exc:
             raise AssertionError("%s failed to parse: %s" % (name, exc)) from exc
         violations.extend(flagged)

@@ -1930,7 +1930,7 @@ def _project_finding(finding, by_key=None):
     }
     proof = _finding_disposition_proof(effective)
     if proof is not None:
-        row["dispositionReceipt"] = proof
+        row = dict(row, dispositionReceipt=proof)
     finding_key = finding.get(session_contract.FINDING_KEY_FIELD)
     if finding_key:
         row[session_contract.FINDING_KEY_FIELD] = finding_key

@@ -3497,7 +3497,7 @@ def _fold_judgment(state, config, artifact):
             follow_up = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
             disp_kwargs = {"outOfScopeReason": reason.strip()}
             if follow_up is not None:
-                disp_kwargs["followUp"] = follow_up
+                disp_kwargs = dict(disp_kwargs, followUp=follow_up)
             _record_disposition(state, fid, "out-of-scope", state["round"], **disp_kwargs)
             continue
         g = dict(f)
@@ -4829,7 +4829,7 @@ def _fold_stall(state, config, artifact):
                 continue
             disp_kwargs = {"outOfScopeReason": "owner accepted the disclosed risk (stall gate)"}
             if follow_up is not None:
-                disp_kwargs["followUp"] = follow_up
+                disp_kwargs = dict(disp_kwargs, followUp=follow_up)
             _record_disposition(state, key, "out-of-scope", state["round"], **disp_kwargs)
         _terminal_converged(state, config, full_panel=False,
                             note="owner accepted the disclosed (CONFIRMED) risk")
@@ -5798,7 +5798,10 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
             receipt = finding.get("dispositionReceipt")
             if not isinstance(receipt, dict):
                 family = session_contract.disposition_family_snapshot(finding)
-                family["dispositionReceipt"] = {"headSha": head, "verifyResult": "pass"}
+                family = dict(
+                    family,
+                    dispositionReceipt={"headSha": head, "verifyResult": "pass"},
+                )
                 session_contract.apply_disposition_family(finding, family)
             elif not receipt.get("headSha"):
                 receipt["headSha"] = head
