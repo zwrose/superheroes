@@ -18,6 +18,7 @@ completeness, assemble, fold, emit. No `cmd_submit` is ever called by hand.
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -325,6 +326,28 @@ def _drive_one_phase(session_dir, gitdir, panel_findings, head_diff_path):
     return phase, out
 
 
+_DIFF_PATH_RE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
+
+
+def _fixture_repo(tmp_path, name):
+    """The session's repo root, holding every path the fixture's diffs name.
+
+    INVARIANT: every repo-relative path the fixture's diffs cite exists under this root.
+    The driver lints the rendered fixer order against the session's `repoRoot` (#1339), and a
+    fixer order cites the files its batch names; a root that does not hold them refuses the
+    emission `order-lint:order-path-unresolved`. Deriving the set from the diffs rather than
+    listing it keeps a path added to a diff from silently escaping the root.
+    """
+    repo_root = tmp_path / (name + "-repo")
+    for rel in sorted(set(_DIFF_PATH_RE.findall(REVIEWED_DIFF + HEAD_DIFF))):
+        target = repo_root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            target.write_text("alpha\nbeta\ngamma\ndelta\n", encoding="utf-8")
+    repo_root.mkdir(parents=True, exist_ok=True)
+    return str(repo_root)
+
+
 def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
     session_dir = str(tmp_path / name)
     os.makedirs(session_dir, exist_ok=True)
@@ -333,6 +356,7 @@ def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
     head_diff_path = str(tmp_path / (name + "-head.diff"))
     with open(head_diff_path, "w", encoding="utf-8") as fh:
         fh.write(HEAD_DIFF)
+    cfg_over.setdefault("repoRoot", _fixture_repo(tmp_path, name))
     out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
     assert out["ok"], out
     if head_sha is not None:

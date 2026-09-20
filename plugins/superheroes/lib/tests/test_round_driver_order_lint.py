@@ -57,7 +57,17 @@ def _fixer_placeholders():
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "CWD": _REPO,
         "REPO_ROOT": shlex.quote(_REPO),
-        "VERIFY_COMMAND": "npm test",
+        # The round economy (C13 layer 2d) replaced the fixer template's bare VERIFY_COMMAND
+        # with the scoped verify budget; this golden copy fills it the way
+        # `test_round_orders._fixer_placeholders` does, so the render leaves neither an
+        # unfilled placeholder nor an unused context key.
+        "VERIFY_BUDGET": (
+            "Scoped verify budget for this batch — target files: auth.py. "
+            "Run the tests that reference those files (select by reading the test files' own text "
+            "for the target path, never by test-file name) plus the project's static validators, "
+            "at most once each. The project's full verify command is NOT yours to run inside this "
+            "attempt — the orchestrator runs it once after the round's fixes land: pytest -q"
+        ),
         "ROUND": "2",
         "GATE_GUIDANCE": "No owner-gate guidance is attached to this batch.",
     }
