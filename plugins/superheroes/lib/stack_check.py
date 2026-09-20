@@ -31,6 +31,10 @@ ADVISOR_VET_REMINDER_PREFIX = "<!-- advisor: BEFORE writing this slot"
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _HEAD_ABBREV_RE = re.compile(r"\b[0-9a-fA-F]{8,}\b")
+_VET_NEGATED_READY_RE = re.compile(
+    r"\b(?:not(?:\s+yet)?|no|never)(?:[\s_*~`]+)+ready\b",
+    re.IGNORECASE,
+)
 
 QUERY = """\
 query($owner:String!,$repo:String!,$pr:Int!,$first:Int!,$after:String){
@@ -643,6 +647,10 @@ def _vet_slot_text(body, marker):
     return after_marker[:heading_pos]
 
 
+def _slot_has_negated_ready_verdict(slot_text):
+    return _VET_NEGATED_READY_RE.search(slot_text) is not None
+
+
 def _slot_names_head(slot_text, head_ref_oid):
     if head_ref_oid in slot_text:
         return True
@@ -666,6 +674,9 @@ def _classify_vet_verdict(body, head_ref_oid, state, is_draft):
     slot_text = _vet_slot_text(body, ADVISOR_VET_MARKER)
     if slot_text is None:
         return VET_ABSENT
+
+    if _slot_has_negated_ready_verdict(slot_text):
+        return VET_NOT_READY
 
     if (
         re.search(r"\bREADY\b", slot_text) is not None

@@ -1073,22 +1073,14 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
         layer_val = premise["layerPosition"]
         # axis: stack and layerPosition must be positive ints (bool is not an int here)
         if (
-            not isinstance(stack_val, int)
-            or isinstance(stack_val, bool)
-            or stack_val < 1
-            or not isinstance(layer_val, int)
-            or isinstance(layer_val, bool)
-            or layer_val < 1
+            not ll.is_positive_premise_int(stack_val)
+            or not ll.is_positive_premise_int(layer_val)
         ):
             return _fail("premise-stack-field-invalid")
         if has_layers_planned:
             layers_planned_val = premise["layersPlanned"]
             # axis: layersPlanned must be a positive int (bool is not an int here)
-            if (
-                not isinstance(layers_planned_val, int)
-                or isinstance(layers_planned_val, bool)
-                or layers_planned_val < 1
-            ):
+            if not ll.is_positive_premise_int(layers_planned_val):
                 return _fail("premise-stack-layers-planned-invalid")
             # axis: layersPlanned must be at least layerPosition
             if layers_planned_val < layer_val:

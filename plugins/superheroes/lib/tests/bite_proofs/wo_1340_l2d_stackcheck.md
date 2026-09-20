@@ -2,7 +2,7 @@
 
 Per-guard bite proof for `resolve_repo_slug` and `read_vet_verdict` classification guards added in layer 2d.
 
-**Register:** 7 guards — reminder-present check, whole-word READY, slot-boundary extraction, repo-slug `_REPO_RE` validation, exhausted-deadline refusal-without-calling, head-pinning on READY, and refusal/not-ready separation.
+**Register:** 8 guards — reminder-present check, negated-READY refusal, whole-word READY, slot-boundary extraction, repo-slug `_REPO_RE` validation, exhausted-deadline refusal-without-calling, head-pinning on READY, and refusal/not-ready separation.
 
 **Provenance:** cursor / composer-2.5.
 
@@ -17,7 +17,8 @@ Per-guard bite proof for `resolve_repo_slug` and `read_vet_verdict` classificati
 | ID | Guarded element (file:line) | Axis | Proving test | Verdict |
 |---|---|---|---|---|
 | E1 | stack_check.py:663 | reminder prefix present → not-ready | `test_l2d_read_vet_verdict_reminder_present_is_not_ready` | proven |
-| E2 | stack_check.py:672 | whole-word READY requirement | `test_l2d_read_vet_verdict_already_word_is_not_ready` | proven |
+| E2 | stack_check.py:678 | negated READY phrasing → not-ready | `test_l2d_read_vet_verdict_not_ready_is_not_ready` | proven |
+| E2b | stack_check.py:681 | whole-word READY requirement | `test_l2d_read_vet_verdict_already_word_is_not_ready` | proven |
 | E3 | stack_check.py:657 | slot-boundary extraction | `test_l2d_read_vet_verdict_later_ready_section_is_not_ready` | proven |
 | E4 | stack_check.py:582 | `_REPO_RE` validation of returned slug | `test_l2d_resolve_repo_slug_name_with_owner_bad_pattern` | proven |
 | E5 | stack_check.py:607 | exhausted deadline refuses without calling gh | `test_l2d_resolve_repo_slug_deadline_exhausted` | proven |
@@ -62,7 +63,43 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verd
 
 ---
 
-## E2 — whole-word READY requirement
+## E2 — negated READY phrasing → not-ready
+
+**neutralization** (`plugins/superheroes/lib/stack_check.py`):
+```python
+    if _slot_has_negated_ready_verdict(slot_text):
+        return VET_NOT_READY
+```
+→
+```python
+    # negated-READY check removed
+```
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_not_ready_is_not_ready -q
+```
+
+**raw red** (traceback body elided):
+```
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_not_ready_is_not_ready
+1 failed in 0.34s
+```
+
+**raw green** after restore:
+```
+1 passed in 0.33s
+```
+
+**restored lines:**
+```python
+    if _slot_has_negated_ready_verdict(slot_text):
+        return VET_NOT_READY
+```
+
+---
+
+## E2b — whole-word READY requirement
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python

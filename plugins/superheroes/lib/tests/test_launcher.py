@@ -6160,6 +6160,7 @@ def test_stack_gate_slug_resolver_receives_scrubbed_env_and_budget(
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
     head = _head_sha(repo)
+    premise = _stack_premise(repo, stack=1, layerPosition=2)
     captured = []
 
     def tracking_resolver(repo_root, *, deadline=None, run=None, env=None):
@@ -6172,6 +6173,8 @@ def test_stack_gate_slug_resolver_receives_scrubbed_env_and_budget(
         return "owner/repo", None
 
     monkeypatch.setattr(L.stack_check, "resolve_repo_slug", tracking_resolver)
+    monkeypatch.setenv("GIT_DIR", "/bogus/nonexistent/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/bogus/nonexistent")
 
     def pr_list_gh_run(argv, **kwargs):
         if argv[:3] == ["gh", "pr", "list"]:
@@ -6184,7 +6187,7 @@ def test_stack_gate_slug_resolver_receives_scrubbed_env_and_budget(
     result = L.launch_build(
         repo,
         656,
-        _stack_premise(repo, stack=1, layerPosition=2),
+        premise,
         _all_checks(),
         log_dir,
         spawn_fn=_make_spawn_fn("sleep"),
@@ -6201,6 +6204,8 @@ def test_stack_gate_slug_resolver_receives_scrubbed_env_and_budget(
     assert call["deadline"] is not None
     assert call["deadline"] > 0
     assert call["env"] is not None
+    for key in ll.GIT_SCRUB_VARS:
+        assert key not in call["env"], key
     assert ll.LEDGER_ROOT_ENV not in call["env"]
     try:
         os.kill(result["pid"], signal.SIGTERM)

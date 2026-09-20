@@ -1,5 +1,6 @@
 """Fake-based units for stack_check.py. No real gh or network — every gh call is faked."""
 import json
+import os
 import subprocess
 from types import SimpleNamespace
 
@@ -1245,6 +1246,18 @@ def test_l2d_advisor_vet_marker_matches_grounding_stage():
     assert sc.ADVISOR_VET_MARKER == grounding_stage.REGION_MARKERS["advisor-vet"]
 
 
+_PLUGIN_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+def test_l2d_reminder_prefix_matches_workhorse_template():
+    # axis: the reminder guard must bite on the text workhorse actually writes
+    tpl = open(
+        os.path.join(_PLUGIN_ROOT, "skills/workhorse/SKILL.md"),
+        encoding="utf-8",
+    ).read()
+    assert sc.ADVISOR_VET_REMINDER_PREFIX in tpl
+
+
 def test_l2d_resolve_repo_slug_run_raises():
     # axis: run raises any exception
     def _run(*args, **kwargs):
@@ -1386,6 +1399,25 @@ def test_l2d_read_vet_verdict_reminder_present_is_not_ready():
     run, _calls = _make_run(
         {_vet_argv(): _vet_payload(body=_ready_vet_body(include_reminder=True))}
     )
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_literal_reminder_is_not_ready():
+    # axis: reminder guard bites on the workhorse template text, not only the constant
+    body = "\n".join(
+        [
+            "## Advisor vet",
+            sc.ADVISOR_VET_MARKER,
+            (
+                "<!-- advisor: BEFORE writing this slot, read the showrunner"
+                " charter's vet-receipt reference -->"
+            ),
+            "Vet READY at `%s`" % HEAD_ABBREV,
+        ]
+    )
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
     verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
     assert verdict == sc.VET_NOT_READY
     assert refusal is None
@@ -1582,6 +1614,52 @@ def test_l2d_read_vet_verdict_already_word_is_not_ready():
             "Vet already reviewed at `%s`" % HEAD_ABBREV,
         ]
     )
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def _negated_ready_vet_body(verdict_line):
+    return "\n".join(
+        [
+            "## Advisor vet",
+            sc.ADVISOR_VET_MARKER,
+            verdict_line % HEAD_ABBREV,
+        ]
+    )
+
+
+def test_l2d_read_vet_verdict_not_ready_is_not_ready():
+    # axis: negated verdict — not ready
+    body = _negated_ready_vet_body("**Vet — NOT READY** · commit `%s`")
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_not_yet_ready_is_not_ready():
+    # axis: negated verdict — not yet ready
+    body = _negated_ready_vet_body("**Vet — not yet ready** · commit `%s`")
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_no_ready_is_not_ready():
+    # axis: negated verdict — no ready
+    body = _negated_ready_vet_body("**Vet — no ready** · commit `%s`")
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_never_ready_is_not_ready():
+    # axis: negated verdict — never ready
+    body = _negated_ready_vet_body("**Vet — never ready** · commit `%s`")
     run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
     verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
     assert verdict == sc.VET_NOT_READY

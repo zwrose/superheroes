@@ -1070,11 +1070,15 @@ def _validate_event_fields(rec):
     return None
 
 
+def is_positive_premise_int(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
 def _fold_premise_positive_int(premise, key):
     if not isinstance(premise, dict):
         return None
     val = premise.get(key)
-    if isinstance(val, int) and not isinstance(val, bool) and val >= 1:
+    if is_positive_premise_int(val):
         return val
     return None
 
