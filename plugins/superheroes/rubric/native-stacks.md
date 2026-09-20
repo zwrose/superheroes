@@ -174,9 +174,9 @@ membership.
 
 **Hand-rewriting a layer's history** — a rebase or force-push a builder improvises on a layer under
 review. It breaks review continuity on that pull request and moves a head other layers are based
-on. This is not the **disclosed cascading rebase** of § How a stack stays current (GitHub's
-server-side action, or `gh stack rebase`/`gh stack push`), and it is not `gh stack sync` or
-`rebase` on a **local tracked** stack the builder owns end to end.
+on. This is not the **disclosed cascading rebase** of § How a stack stays current — on a lane's
+layer that means GitHub's server-side **Rebase stack** action only — and it is not `gh stack sync`
+or `gh stack rebase`/`gh stack push` on a **local tracked** stack the builder owns end to end.
 
 **Reading the stack's copy of a register from inside a layer** — a layer's worktree carries whatever
 the layers below it wrote, which can be a stale or amended copy. The copy that grades a child is
