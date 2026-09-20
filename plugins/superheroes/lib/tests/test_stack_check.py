@@ -1641,7 +1641,7 @@ def test_l2d_read_vet_verdict_not_ready_is_not_ready():
 
 def test_l2d_read_vet_verdict_not_yet_ready_is_not_ready():
     # axis: negated verdict — not yet ready
-    body = _negated_ready_vet_body("**Vet — not yet ready** · commit `%s`")
+    body = _negated_ready_vet_body("**Vet — NOT YET READY** · commit `%s`")
     run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
     verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
     assert verdict == sc.VET_NOT_READY
@@ -1650,7 +1650,7 @@ def test_l2d_read_vet_verdict_not_yet_ready_is_not_ready():
 
 def test_l2d_read_vet_verdict_no_ready_is_not_ready():
     # axis: negated verdict — no ready
-    body = _negated_ready_vet_body("**Vet — no ready** · commit `%s`")
+    body = _negated_ready_vet_body("**Vet — NO READY** · commit `%s`")
     run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
     verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
     assert verdict == sc.VET_NOT_READY
@@ -1659,7 +1659,7 @@ def test_l2d_read_vet_verdict_no_ready_is_not_ready():
 
 def test_l2d_read_vet_verdict_never_ready_is_not_ready():
     # axis: negated verdict — never ready
-    body = _negated_ready_vet_body("**Vet — never ready** · commit `%s`")
+    body = _negated_ready_vet_body("**Vet — NEVER READY** · commit `%s`")
     run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
     verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
     assert verdict == sc.VET_NOT_READY
