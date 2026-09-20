@@ -133,6 +133,7 @@ MODE_REFUSAL_INVALID = "mode-invalid"
 MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE = "mode-brief-check-with-diff-base"
 MODE_REFUSAL_RUN_DIR_MISMATCH = "run-dir-mode-mismatch"
 MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH = "run-dir-claude-mode-mismatch"
+MODE_REFUSAL_CLAUDE_MODE_NOT_DISPATCHABLE = "claude-mode-not-dispatchable"
 PR_BODY_REFUSAL_RUN_DIR_MISMATCH = "run-dir-pr-body-mismatch"
 RESULT_KIND_REFUSAL_INVALID = "expected-result-kind-invalid"
 RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH = "run-dir-result-kind-mismatch"
@@ -3340,7 +3341,10 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
     if isinstance(opened, dict):
         claude_mode = opened.get("claudeMode")
         if claude_mode == engine_result_channel.MODE_BACKGROUND:
-            return False, "claude-mode-not-dispatchable:background"
+            return False, "%s:%s" % (
+                MODE_REFUSAL_CLAUDE_MODE_NOT_DISPATCHABLE,
+                engine_result_channel.MODE_BACKGROUND,
+            )
     if state.get("abandonRequested"):
         return False, "abandon-requested"
     alive, who = _run_live_evidence(state)
@@ -6369,7 +6373,7 @@ def build_parser():
                     choices=sanitized_view.REVIEW_MODES)
     cc.add_argument(d, "--claude-mode", contract="choices:print,background", default=None,
                     choices=engine_result_channel.CLAUDE_MODES,
-                    help="background is declared but not dispatchable in this release")
+                    help="background is declared but is not dispatchable")
     cc.add_argument(d, "--expected-result-kind", contract=_REVIEW_RESULT_KINDS_CHOICES_CONTRACT,
                     default=None, choices=REVIEW_RESULT_KINDS,
                     help="mechanical pin: refuse attempts whose parsed resultKind differs")
@@ -6393,7 +6397,7 @@ def build_parser():
     cc.add_argument(w, "--expect-items-file", contract="free-text", default=None)
     cc.add_argument(w, "--claude-mode", contract="choices:print,background", default=None,
                     choices=engine_result_channel.CLAUDE_MODES,
-                    help="background is declared but not dispatchable in this release")
+                    help="background is declared but is not dispatchable")
 
     p = sub.add_parser("dispatch-poll")
     cc.add_argument(p, "--run-dir", contract="existing-directory", required=True)

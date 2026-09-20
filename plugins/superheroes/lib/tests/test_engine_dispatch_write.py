@@ -2532,6 +2532,7 @@ _WRITE_RESOLVED_INPUT_KEYS = frozenset({
     "preflightTimeoutSource", "mode", "modeSource", "expectedResultKind",
     "expectedResultKindSource", "baseSha", "baseShaSource", "diffBase", "diffBaseSource",
     "progressPath", "progressPathSource", "journalRoot", "journalRootSource",
+    "claudeMode", "claudeModeSource",
 })
 
 
