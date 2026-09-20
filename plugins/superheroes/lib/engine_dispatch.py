@@ -19,6 +19,7 @@ status files are advisory evidence for supervisor decisions only. Never raises t
 (CONVENTIONS §7.5: engine *selection* fails open; a completed external *result* fails closed.)
 """
 import argparse
+import glob
 import hashlib
 import json
 import os
@@ -817,31 +818,145 @@ def _claude_child_env(opened, base=None):
     return env, pins
 
 
-def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path):
-    """Materialize claude stdout delivery's structured_output to the native result path. (#1273)"""
+_SLEEP = time.sleep
+_NOW = time.monotonic
+_CLAUDE_CLI_DEFAULT_TIMEOUT = 30
+_BACKGROUND_POLL_INTERVAL = 2
+
+
+def _claude_cli(args, config_dir, cwd=None, timeout=_CLAUDE_CLI_DEFAULT_TIMEOUT):
+    """Single chokepoint for claude agents/stop reads. Never raises. (#1273)"""
+    env = _scrub_env()
+    if isinstance(config_dir, str) and config_dir:
+        env["CLAUDE_CONFIG_DIR"] = config_dir
+    cmd = ["claude"] + list(args)
     try:
-        delivery = engine_result_channel.result_delivery(
-            opened.get("engine"), opened.get("claudeMode"),
+        out = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd,
+            env=env,
         )
+        return out.returncode, out.stdout or "", out.stderr or ""
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"").decode(
+            "utf-8", errors="ignore")
+        stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode(
+            "utf-8", errors="ignore")
+        return 124, stdout, (stderr or "timeout")[:_STDERR_TAIL]
+    except OSError as exc:
+        return 127, "", str(exc)[:_STDERR_TAIL]
+
+
+def _parse_claude_agents_rows(stdout):
+    """Parse claude agents --json output. Returns list or None. Never raises."""
+    try:
+        if not isinstance(stdout, str) or not stdout.strip():
+            return None
+        rows = json.loads(stdout)
+        if not isinstance(rows, list):
+            return None
+        return rows
     except Exception:
         return None
-    if delivery != engine_result_channel.RESULT_DELIVERY_STDOUT:
+
+
+def _claude_agents_rows(config_dir, cwd):
+    """Return agent listing rows or None on read failure. Never raises."""
+    if not isinstance(cwd, str) or not cwd:
         return None
-    stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+    rc, stdout, _stderr = _claude_cli(
+        ["agents", "--json", "--all", "--cwd", cwd],
+        config_dir,
+        cwd=cwd,
+    )
+    if rc != 0:
+        return None
+    return _parse_claude_agents_rows(stdout)
+
+
+def _claude_agent_row_for_launch(rows, launch_id):
+    """Find the background agent row matching launch_id; skip interactive rows without id."""
+    if not isinstance(rows, list) or not isinstance(launch_id, str) or not launch_id:
+        return None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_id = row.get("id")
+        if not isinstance(row_id, str) or not row_id:
+            continue
+        if row_id == launch_id:
+            return row
+    return None
+
+
+def _glob_transcript_paths(config_dir, session_id):
+    """Glob transcript paths for session_id. Never raises."""
+    paths = []
+    try:
+        if not isinstance(config_dir, str) or not config_dir:
+            return paths
+        if not isinstance(session_id, str) or not session_id:
+            return paths
+        pattern = os.path.join(config_dir, "projects", "*", session_id + ".jsonl")
+        paths = glob.glob(pattern)
+    except Exception:
+        return []
+    return paths
+
+
+def _read_transcript_rows(config_dir, session_id):
+    """Read transcript JSONL rows; skip partial last line; missing file is empty. Never raises."""
+    paths = _glob_transcript_paths(config_dir, session_id)
+    if len(paths) != 1:
+        return [], paths
+    rows = []
+    try:
+        with open(paths[0], "r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(obj, dict):
+                    rows.append(obj)
+    except OSError:
+        return [], paths
+    return rows, paths
+
+
+def _scrub_native_payload(obj):
+    """Scrub string leaves in a native structured-output payload. Never raises."""
+    try:
+        if isinstance(obj, str):
+            return engine_adapter._scrub(obj)
+        if isinstance(obj, dict):
+            return {k: _scrub_native_payload(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_scrub_native_payload(v) for v in obj]
+        return obj
+    except Exception:
+        return obj
+
+
+def _write_native_result_payload(run_dir_real, attempt, payload_obj):
+    """Write scrubbed payload to native result path with O_EXCL. Returns outcome token."""
     result_path = _native_result_path(run_dir_real, attempt)
     if result_path is None:
         return "error"
-    env = engine_adapter.claude_result_envelope(stdout)
-    if (not isinstance(env, dict)
-            or env.get("is_error") is True
-            or "structured_output" not in env):
-        # axis: a path planted during the run occupies the materializer even without a result event.
+    if payload_obj is None:
         try:
             os.lstat(result_path)
         except FileNotFoundError:
             return "absent"
         return "occupied"
-    payload = json.dumps(env["structured_output"], separators=(",", ":")) + "\n"
+    scrubbed = _scrub_native_payload(payload_obj)
+    payload = json.dumps(scrubbed, separators=(",", ":")) + "\n"
     try:
         fd = os.open(
             result_path,
@@ -860,15 +975,314 @@ def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path):
     return "materialized"
 
 
-def _stdout_delivery_gate(run_dir_real, attempt, opened):
-    """Refuse admission when stdout delivery did not materialize a native result. (#1273)"""
+def _background_stop(launch_id, config_dir, cwd):
+    """Stop a background session and confirm it ended. Returns stop outcome token."""
+    if not isinstance(launch_id, str) or not launch_id:
+        return "stop-failed"
+    rows_before = _claude_agents_rows(config_dir, cwd)
+    row_before = _claude_agent_row_for_launch(rows_before, launch_id) if rows_before is not None else None
+    if row_before is None:
+        return "already-ended"
+    if row_before.get("state") in ("stopped", "done"):
+        return "already-ended"
+    rc, _stdout, _stderr = _claude_cli(
+        ["stop", launch_id],
+        config_dir,
+        cwd=cwd,
+    )
+    rows_after = _claude_agents_rows(config_dir, cwd)
+    row_after = _claude_agent_row_for_launch(rows_after, launch_id) if rows_after is not None else None
+    if row_after is None:
+        return "stopped"
+    if row_after.get("state") in ("stopped", "done"):
+        return "stopped"
+    if rc != 0:
+        return "stop-failed"
+    return "stop-failed"
+
+
+def _background_session_ended(row):
+    """True when listing row signals session end without a typed result."""
+    if row is None:
+        return True
+    if not isinstance(row, dict):
+        return False
+    state = row.get("state")
+    return state in ("stopped", "done")
+
+
+def _attempt_bg_resumable(state, attempt):
+    slot = (state.get("attempts") or {}).get(attempt) or {}
+    ended = slot.get("ended") or {}
+    return bool(ended.get("bgResumable") and ended.get("launchId"))
+
+
+def _latest_bg_resumable_attempt(state):
+    attempts = state.get("attempts") or {}
+    for att in sorted(attempts, reverse=True):
+        if _attempt_bg_resumable(state, att):
+            return att
+    return None
+
+
+def _background_stop_for_attempt(opened, attempt_rec):
+    """Stop background session recorded on attempt if still live. Never raises."""
+    ended = (attempt_rec or {}).get("ended") or {}
+    launch_id = ended.get("launchId")
+    if not isinstance(launch_id, str) or not launch_id:
+        return None
+    if ended.get("bgStop") in ("stopped", "already-ended"):
+        return ended.get("bgStop")
+    cfg = opened.get("configDir")
+    cwd = opened.get("cwd")
+    return _background_stop(launch_id, cfg, cwd)
+
+
+def _stop_live_background_sessions(state, opened):
+    """Stop any live background session on terminal fold, abandon, or retry. Never raises."""
+    attempts = state.get("attempts") or {}
+    for att in sorted(attempts):
+        slot = attempts[att]
+        ended = slot.get("ended") or {}
+        launch_id = ended.get("launchId")
+        if not isinstance(launch_id, str) or not launch_id:
+            continue
+        if ended.get("bgStop") in ("stopped", "already-ended"):
+            continue
+        stop_outcome = _background_stop(launch_id, opened.get("configDir"), opened.get("cwd"))
+        if stop_outcome and ended.get("bgStop") != stop_outcome:
+            ended = dict(ended)
+            ended["bgStop"] = stop_outcome
+            slot["ended"] = ended
+
+
+def _resolve_bg_session_id(launch_id, config_dir, cwd, *, retry=True):
+    """Resolve sessionId from agents listing; one retry on miss."""
+    rows = _claude_agents_rows(config_dir, cwd)
+    row = _claude_agent_row_for_launch(rows, launch_id) if rows is not None else None
+    if row is None and retry:
+        rows = _claude_agents_rows(config_dir, cwd)
+        row = _claude_agent_row_for_launch(rows, launch_id) if rows is not None else None
+    if row is None:
+        return None, rows
+    session_id = row.get("sessionId")
+    if not isinstance(session_id, str) or not session_id:
+        return None, rows
+    return session_id, rows
+
+
+def _run_claude_background_launch(argv, prompt_path, cwd, child_env, stdout_path, stderr_path):
+    """Launch claude background child; return (exit_code, ack_stdout). Never raises."""
+    try:
+        with open(prompt_path, "rb") as prompt_fh:
+            stdout_fd = os.open(
+                stdout_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644,
+            )
+            stderr_fd = os.open(
+                stderr_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644,
+            )
+            proc = subprocess.Popen(
+                argv,
+                stdin=prompt_fh,
+                stdout=stdout_fd,
+                stderr=stderr_fd,
+                cwd=cwd,
+                start_new_session=True,
+                env=child_env,
+            )
+    except Exception:
+        return 127, ""
+    try:
+        proc.wait(timeout=_CLAUDE_CLI_DEFAULT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        _terminate_process_group(proc.pid)
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            pass
+        return 124, _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+    except Exception:
+        return 127, _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+    return proc.returncode, _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+
+
+def _run_engine_files_background(
+        run_dir_real, attempt, opened, argv, cwd, prompt_path, stdout_path,
+        stderr_path, timeout, progress_path, native_result_path, *,
+        resume_launch_id=None, resume_session_id=None, prior_wall_seconds=0):
+    """Background transcript delivery: launch, poll, materialize, stop. Never raises."""
+    config_dir = opened.get("configDir")
+    dispatch_path = _dispatch_path_from_opened(opened)
+    write_progress = _progress_writer(progress_path)
+    start = _NOW()
+    deadline = start + max(0.0, timeout - prior_wall_seconds)
+    launch_id = resume_launch_id
+    session_id = resume_session_id
+    transcript_paths = []
+    rows = []
+    tool_calls = None
+
+    def _journal_bg_ended(ended_record):
+        _journal_append(run_dir_real, ended_record)
+
+    if launch_id is None:
+        child_env, env_pins = _claude_child_env(opened)
+        exit_code, ack_stdout = _run_claude_background_launch(
+            argv, prompt_path, cwd, child_env, stdout_path, stderr_path,
+        )
+        launch_id = engine_adapter.claude_launch_id(ack_stdout)
+        if launch_id is None:
+            _journal_bg_ended({
+                "kind": "attempt-ended", "attempt": attempt,
+                "exit": exit_code if exit_code is not None else 127,
+                "timedOut": False, "signal": None,
+                "refusal": "background-launch-unacknowledged",
+                "at": time.time(),
+                "wallSeconds": round(_NOW() - start, 1),
+                "capSeconds": timeout,
+                "dispatchPath": dispatch_path,
+            })
+            return
+        if exit_code not in (0, None):
+            _journal_bg_ended({
+                "kind": "attempt-ended", "attempt": attempt,
+                "exit": exit_code, "timedOut": False, "signal": None,
+                "refusal": "background-launch-failed",
+                "refusalDetail": str(exit_code),
+                "launchId": launch_id,
+                "at": time.time(),
+                "wallSeconds": round(_NOW() - start, 1),
+                "capSeconds": timeout,
+                "dispatchPath": dispatch_path,
+            })
+            return
+        session_id, _agent_rows = _resolve_bg_session_id(launch_id, config_dir, cwd)
+        if session_id is None:
+            _journal_bg_ended({
+                "kind": "attempt-ended", "attempt": attempt,
+                "exit": 0, "timedOut": False, "signal": None,
+                "refusal": "background-session-unlisted",
+                "launchId": launch_id,
+                "at": time.time(),
+                "wallSeconds": round(_NOW() - start, 1),
+                "capSeconds": timeout,
+                "dispatchPath": dispatch_path,
+            })
+            return
+
+    transcript_result = None
+    refusal = None
+    bg_resumable = False
+
+    while _NOW() < deadline:
+        rows, transcript_paths = _read_transcript_rows(config_dir, session_id)
+        if len(transcript_paths) > 1:
+            refusal = "background-transcript-ambiguous"
+            break
+        if engine_adapter.claude_transcript_turn_ended(rows):
+            payload = engine_adapter.claude_transcript_result(rows)
+            tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
+            if payload is not None:
+                transcript_result = _write_native_result_payload(
+                    run_dir_real, attempt, payload,
+                )
+            else:
+                transcript_result = _write_native_result_payload(
+                    run_dir_real, attempt, None,
+                )
+            break
+        agent_rows = _claude_agents_rows(config_dir, cwd)
+        agent_row = _claude_agent_row_for_launch(agent_rows, launch_id)
+        if _background_session_ended(agent_row):
+            if transcript_result is None:
+                refusal = "background-session-ended-without-result"
+            break
+        elapsed = _NOW() - start
+        try:
+            write_progress(attempt, elapsed, 0, 0)
+        except Exception:
+            pass
+        _SLEEP(_BACKGROUND_POLL_INTERVAL)
+
+    if refusal is None and transcript_result is None and _NOW() >= deadline:
+        bg_resumable = True
+
+    bg_stop = None
+    if not bg_resumable:
+        bg_stop = _background_stop(launch_id, config_dir, cwd)
+
+    ended_record = {
+        "kind": "attempt-ended", "attempt": attempt,
+        "exit": 0 if refusal is None and not bg_resumable else (0 if bg_resumable else 1),
+        "timedOut": False,
+        "signal": None,
+        "refusal": refusal,
+        "at": time.time(),
+        "wallSeconds": round(_NOW() - start, 1),
+        "capSeconds": timeout,
+        "dispatchPath": dispatch_path,
+        "launchId": launch_id,
+        "bgSessionId": session_id,
+    }
+    if transcript_result is not None:
+        ended_record["transcriptResult"] = transcript_result
+    if tool_calls is not None:
+        ended_record["transcriptToolCalls"] = tool_calls
+    if transcript_result == "materialized" and rows:
+        payload = engine_adapter.claude_transcript_result(rows)
+        if isinstance(payload, dict):
+            ended_record["transcriptStructuredOutput"] = _scrub_native_payload(payload)
+    if bg_stop is not None:
+        ended_record["bgStop"] = bg_stop
+    if bg_resumable:
+        ended_record["bgResumable"] = True
+    _journal_bg_ended(ended_record)
+
+
+def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path, transcript_rows=None):
+    """Materialize native result for stdout or transcript delivery. (#1273)"""
     try:
         delivery = engine_result_channel.result_delivery(
             opened.get("engine"), opened.get("claudeMode"),
         )
     except Exception:
         return None
-    if delivery != engine_result_channel.RESULT_DELIVERY_STDOUT:
+    if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+        result_path = _native_result_path(run_dir_real, attempt)
+        if result_path is None:
+            return "error"
+        env = engine_adapter.claude_result_envelope(stdout)
+        if (not isinstance(env, dict)
+                or env.get("is_error") is True
+                or "structured_output" not in env):
+            # axis: a path planted during the run occupies the materializer even without a result event.
+            try:
+                os.lstat(result_path)
+            except FileNotFoundError:
+                return "absent"
+            return "occupied"
+        return _write_native_result_payload(run_dir_real, attempt, env["structured_output"])
+    if delivery == engine_result_channel.RESULT_DELIVERY_TRANSCRIPT:
+        if transcript_rows is None:
+            return None
+        payload = engine_adapter.claude_transcript_result(transcript_rows)
+        return _write_native_result_payload(run_dir_real, attempt, payload)
+    return None
+
+
+def _stdout_delivery_gate(run_dir_real, attempt, opened):
+    """Refuse admission when native delivery did not materialize a result. (#1273)"""
+    try:
+        delivery = engine_result_channel.result_delivery(
+            opened.get("engine"), opened.get("claudeMode"),
+        )
+    except Exception:
+        return None
+    if delivery not in (
+        engine_result_channel.RESULT_DELIVERY_STDOUT,
+        engine_result_channel.RESULT_DELIVERY_TRANSCRIPT,
+    ):
         return None
     records, _corrupt = _journal_read(run_dir_real)
     state = _journal_state(records)
@@ -886,10 +1300,13 @@ def _stdout_delivery_gate(run_dir_real, attempt, opened):
             "reason": dispatch_outcome.REASON_FORFEITED,
             "detail": "native-result-missing",
         }
-    stdout_result = ended.get("stdoutResult")
-    if stdout_result == "materialized":
+    if delivery == engine_result_channel.RESULT_DELIVERY_TRANSCRIPT:
+        materialized = ended.get("transcriptResult")
+    else:
+        materialized = ended.get("stdoutResult")
+    if materialized == "materialized":
         return None
-    if stdout_result == "occupied":
+    if materialized == "occupied":
         return {
             "forfeit": True,
             "reason": dispatch_outcome.REASON_FORFEITED,
@@ -2641,6 +3058,7 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
     finalizes (release lease, destroy view). Returns the terminal result, or a named
     non-cleanup refusal when the terminal record could not be made durable. Never raises."""
     opened = state.get("opened") or {}
+    _stop_live_background_sessions(state, opened)
     argv = list(opened.get("argv") or result.get("argv") or [])
 
     if record_kind == "run-folded":
@@ -3061,6 +3479,51 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             "refusal": "journal-append-failed", "at": time.time(),
         })
         return
+    try:
+        delivery = engine_result_channel.result_delivery(
+            opened.get("engine"), opened.get("claudeMode"),
+        )
+    except Exception:
+        delivery = None
+    if delivery == engine_result_channel.RESULT_DELIVERY_TRANSCRIPT:
+        child_env, env_pins = _claude_child_env(opened)
+        engine_started = {
+            "kind": "engine-started", "attempt": attempt,
+            "enginePgid": os.getpid(), "at": time.time(),
+        }
+        if native_result_path is not None:
+            engine_started["nativeResultPath"] = native_result_path
+        if staged_path != opened["promptPath"]:
+            engine_started["attemptPromptPath"] = staged_path
+            if prompt_sha is not None:
+                engine_started["attemptPromptSha256"] = prompt_sha
+        if env_pins:
+            engine_started["env"] = env_pins
+        if not _journal_append(run_dir_real, engine_started):
+            _journal_append(run_dir_real, {
+                "kind": "attempt-ended", "attempt": attempt,
+                "exit": 127, "timedOut": False, "signal": None,
+                "refusal": "journal-append-failed", "at": time.time(),
+            })
+            return
+        state = _journal_state(records)
+        slot = (state.get("attempts") or {}).get(attempt) or {}
+        prior_ended = slot.get("ended") or {}
+        resume_launch_id = None
+        resume_session_id = None
+        prior_wall_seconds = 0
+        if prior_ended.get("bgResumable"):
+            resume_launch_id = prior_ended.get("launchId")
+            resume_session_id = prior_ended.get("bgSessionId")
+            prior_wall_seconds = prior_ended.get("wallSeconds") or 0
+        _run_engine_files_background(
+            run_dir_real, attempt, opened, argv, cwd, prompt_path,
+            stdout_path, stderr_path, timeout, progress_path, native_result_path,
+            resume_launch_id=resume_launch_id,
+            resume_session_id=resume_session_id,
+            prior_wall_seconds=prior_wall_seconds,
+        )
+        return
     dispatch_path = _dispatch_path_from_opened(opened)
     try:
         prompt_bytes = os.path.getsize(prompt_path)
@@ -3335,16 +3798,19 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     return True, ""
 
 
-def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
+def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None, resume=False):
     if state.get("abandonRequested"):
         return False, "abandon-requested"
     alive, who = _run_live_evidence(state)
     if alive:
         return False, "attempt-already-live:%s" % who
-    if attempt > MAX_ATTEMPTS:
+    if attempt > MAX_ATTEMPTS and not resume:
         return False, "attempts-exhausted"
-    if attempt in state.get("attempts", {}) and state["attempts"][attempt].get("childPid") is not None:
-        return False, "attempt-already-started"
+    if not resume:
+        if attempt in state.get("attempts", {}) and state["attempts"][attempt].get("childPid") is not None:
+            return False, "attempt-already-started"
+    elif not _attempt_bg_resumable(state, attempt):
+        return False, "attempt-not-resumable"
 
     if run_engine is not None and run_engine is not _run_engine:
         return _execute_injected_attempt(run_dir_real, state, attempt, run_engine)
@@ -4038,9 +4504,27 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
     elapsed = ended.get("wallSeconds", 0)
     stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
-    engagement = _review_attempt_engagement(
-        engine, stdout, stderr_tail, elapsed, stdout_bytes,
-        native_result_path=slot.get("nativeResultPath"))
+    try:
+        delivery = engine_result_channel.result_delivery(
+            opened.get("engine"), opened.get("claudeMode"),
+        )
+    except Exception:
+        delivery = None
+    if (_opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE
+            and delivery == engine_result_channel.RESULT_DELIVERY_TRANSCRIPT):
+        tool_calls = ended.get("transcriptToolCalls")
+        engagement = {
+            "tokens": None,
+            "toolCalls": tool_calls,
+            "stdoutBytes": stdout_bytes,
+            "wallSeconds": elapsed,
+            "source": "claude-transcript" if tool_calls is not None else "none",
+            "telemetry": _engagement_telemetry(tool_calls),
+        }
+    else:
+        engagement = _review_attempt_engagement(
+            engine, stdout, stderr_tail, elapsed, stdout_bytes,
+            native_result_path=slot.get("nativeResultPath"))
 
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
         return _grade_native_review_attempt(
@@ -4379,6 +4863,20 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
 
                 latest = max(attempts)
                 latest_ended = (attempts[latest].get("ended") or {})
+                if latest_ended.get("bgResumable") and latest_ended.get("launchId"):
+                    ok_spawn, detail = _spawn_attempt(
+                        run_dir_real, state, latest, run_engine=run_engine, resume=True,
+                    )
+                    if not ok_spawn:
+                        if detail.startswith("attempt-already-live"):
+                            time.sleep(SUPERVISOR_POLL_INTERVAL)
+                            continue
+                        return _fold_run(run_dir_real, state, _with_run_fields(
+                            {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                             "detail": detail, "attempts": latest, "forfeited": False},
+                            run_dir=run_dir_real, argv=argv,
+                        ))
+                    continue
                 if latest_ended.get("guardRefusal"):
                     if run_kind == RUN_KIND_WRITE:
                         grade = _grade_write_attempt(run_dir_real, state, latest)
@@ -4515,6 +5013,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                                 ),
                                 run_dir=run_dir_real, argv=argv,
                             ))
+                    _stop_live_background_sessions(state, opened)
                     ok_spawn, detail = _spawn_attempt(
                         run_dir_real, state, latest + 1, run_engine=run_engine,
                     )
@@ -6265,6 +6764,7 @@ def _dispatch_abandon_impl(run_dir):
         if state.get("folded") is not None:
             return _with_run_fields(state["folded"], run_dir=run_dir_real, argv=argv), _performed
 
+        _stop_live_background_sessions(state, opened)
         _journal_append(run_dir_real, {"kind": "abandon-requested", "at": time.time()})
         _signal_live_attempts(state)
 

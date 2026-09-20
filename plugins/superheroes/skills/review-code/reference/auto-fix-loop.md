@@ -190,6 +190,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `mode-invalid` | `--mode` is not a string in `{review,brief-check}` — top-level `mode` stays canonical (`review`); the rejected value is in `rejectedMode` |
 > | `mode-brief-check-with-diff-base` | `--mode brief-check` and `--diff-base` were both explicitly supplied |
 > | `run-dir-mode-mismatch` | continuation with an explicitly disagreeing `--mode` |
+> | `run-dir-claude-mode-mismatch` | continuation with an explicitly disagreeing `--claude-mode`; `attempts: 0` |
 >
 > **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
 > the investigation floor and forfeits vacuously — fail-safe (the seat falls open to the host model), never a
