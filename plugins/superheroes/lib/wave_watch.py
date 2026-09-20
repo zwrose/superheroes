@@ -774,14 +774,25 @@ def _resolve_pr_stack_groups(
             )
             member_prs = [member["number"] for member in members]
             covered_prs.update(member_prs)
+            if ungrouped:
+                ungrouped[:] = [
+                    listed for listed in ungrouped if listed not in covered_prs
+                ]
             if stack_number not in stack_numbers_seen:
                 stacks.append({"stack": stack_number, "prs": member_prs})
                 stack_numbers_seen.add(stack_number)
+            else:
+                for entry in stacks:
+                    if entry["stack"] == stack_number:
+                        entry["prs"] = member_prs
+                        break
         elif read_result.get("reason") == sc.REASON_NOT_LINKED:
-            ungrouped.append(pr_num)
+            if pr_num not in covered_prs:
+                ungrouped.append(pr_num)
         else:
             degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
-            ungrouped.append(pr_num)
+            if pr_num not in covered_prs:
+                ungrouped.append(pr_num)
 
     stacks.sort(key=lambda entry: entry["stack"])
     ungrouped.sort()

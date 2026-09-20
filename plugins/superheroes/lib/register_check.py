@@ -103,12 +103,21 @@ def _git_probe_cwd(register_path):
 
 def _repo_root_for_path(register_path):
     cwd = _git_probe_cwd(register_path)
-    res = store_core.run_git_result(cwd, "rev-parse", "--show-toplevel")
-    if res.status == store_core.GIT_OK:
-        return res.out, None
-    if res.status == store_core.GIT_UNAVAILABLE:
-        return None, f"git unavailable while resolving repo root: {res.detail}"
-    return None, None
+    try:
+        root = store_core.repo_root(cwd)
+    except store_core.RepoRootUnavailable as exc:
+        if exc.git_status == store_core.GIT_UNAVAILABLE:
+            return None, f"git unavailable while resolving repo root: {exc}"
+        return None, str(exc)
+    try:
+        in_repo = store_core.git_dot_entry_ancestor(cwd) is not None
+    except OSError as exc:
+        return None, f"git unavailable while resolving repo root: {exc}"
+    if not in_repo and not (
+        os.environ.get("GIT_DIR") or os.environ.get("GIT_WORK_TREE")
+    ):
+        return None, None
+    return root, None
 
 
 def _rel_path_in_repo(repo_root, register_path):

@@ -3476,6 +3476,75 @@ def test_pr_set_changed_second_member_in_stack_costs_no_extra_reader_call(
     assert result["ungrouped"] == []
 
 
+def _gh_repo_view_proc():
+    return subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=json.dumps({"nameWithOwner": _TEST_REPO_SLUG}),
+        stderr="",
+    )
+
+
+def _changed_pr_partition(stacks, ungrouped):
+    represented = set(ungrouped)
+    for entry in stacks:
+        represented.update(entry["prs"])
+    return represented
+
+
+def test_resolve_pr_stack_groups_changing_snapshot_covers_every_changed_pr():
+    degraded = set()
+
+    def membership_reader(*, pr, repo, **kwargs):
+        if pr == 30:
+            return _stack_membership(1, [30])
+        if pr == 40:
+            return _stack_membership(1, [30, 40])
+        raise AssertionError("unexpected pr %r" % pr)
+
+    stacks, ungrouped = ww._resolve_pr_stack_groups(
+        "/fake/repo",
+        deadline=time.monotonic() + 30,
+        monotonic=time.monotonic,
+        gh_run=lambda *args, **kwargs: _gh_repo_view_proc(),
+        membership_reader=membership_reader,
+        env={},
+        degraded=degraded,
+        changed_prs=[30, 40],
+    )
+
+    assert _changed_pr_partition(stacks, ungrouped) == {30, 40}
+    assert stacks == [{"stack": 1, "prs": [30, 40]}]
+    assert ungrouped == []
+
+
+def test_resolve_pr_stack_groups_refusal_then_membership_no_duplicate():
+    degraded = set()
+
+    def membership_reader(*, pr, repo, **kwargs):
+        if pr == 30:
+            return {"ok": False, "reason": "stack-unreadable"}
+        if pr == 40:
+            return _stack_membership(100, [30, 40])
+        raise AssertionError("unexpected pr %r" % pr)
+
+    stacks, ungrouped = ww._resolve_pr_stack_groups(
+        "/fake/repo",
+        deadline=time.monotonic() + 30,
+        monotonic=time.monotonic,
+        gh_run=lambda *args, **kwargs: _gh_repo_view_proc(),
+        membership_reader=membership_reader,
+        env={},
+        degraded=degraded,
+        changed_prs=[30, 40],
+    )
+
+    assert _changed_pr_partition(stacks, ungrouped) == {30, 40}
+    assert stacks == [{"stack": 100, "prs": [30, 40]}]
+    assert ungrouped == []
+    assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in degraded
+
+
 def test_pr_set_changed_not_linked_lands_in_ungrouped(tmp_path, monkeypatch):
     pr_sets = [{10}, {10, 99}]
 

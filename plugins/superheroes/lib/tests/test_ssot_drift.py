@@ -3588,6 +3588,84 @@ def test_register_check_verification_sentence_pinned_across_copy_holders():
             )
 
 
+# --- Cluster: launcher stack-gate refusal tokens (launcher → doc copies) -----
+
+import ast as _ast  # noqa: E402 — cluster-local; keeps AST helpers scoped here
+
+_LAUNCHER_PY = os.path.join(PLUGIN, "lib", "launcher.py")
+_LAUNCHER_STACK_GATE_REFUSAL_FUNCTIONS = (
+    "validate_premise",
+    "_lookup_stack_entry_pr",
+    "_apply_stack_gate",
+)
+_LAUNCHER_STACK_GATE_REFUSAL_TOKEN_COPY_HOLDERS = (
+    "rubric/launch-doctrine.md",
+    "rubric/native-stacks.md",
+    "skills/showrunner-resume/SKILL.md",
+    "TRANSITION.md",
+)
+
+
+def _launcher_dict_refusal_reason(node):
+    if not isinstance(node, _ast.Dict):
+        return None
+    fields = {}
+    for key, val in zip(node.keys, node.values):
+        if isinstance(key, _ast.Constant):
+            fields[key.value] = val
+    if fields.get("ok") != _ast.Constant(value=False):
+        return None
+    reason = fields.get("reason")
+    if isinstance(reason, _ast.Constant) and isinstance(reason.value, str):
+        return reason.value
+    return None
+
+
+def _launcher_stack_gate_refusal_tokens_from_home():
+    with open(_LAUNCHER_PY, encoding="utf-8") as fh:
+        tree = _ast.parse(fh.read(), filename=_LAUNCHER_PY)
+    funcs = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, _ast.FunctionDef)
+    }
+    tokens = set()
+    for fname in _LAUNCHER_STACK_GATE_REFUSAL_FUNCTIONS:
+        func_node = funcs.get(fname)
+        assert func_node is not None, (
+            "launcher.py: %s not found — rename/refactor?" % fname
+        )
+        for node in _ast.walk(func_node):
+            reason = _launcher_dict_refusal_reason(node)
+            if reason is not None:
+                tokens.add(reason)
+                continue
+            if not isinstance(node, _ast.Call):
+                continue
+            callee = node.func
+            if isinstance(callee, _ast.Name) and callee.id == "_fail":
+                if node.args and isinstance(node.args[0], _ast.Constant):
+                    val = node.args[0].value
+                    if isinstance(val, str) and val.startswith("premise-stack-"):
+                        tokens.add(val)
+    assert tokens, (
+        "launcher.py: stack-gate refusal census parsed to zero tokens"
+    )
+    return tokens
+
+
+def test_launcher_stack_gate_refusal_tokens_in_copy_holders():
+    """§11: every enumerated doc/skill copy restates launcher's stack-gate refusal tokens."""
+    home = _launcher_stack_gate_refusal_tokens_from_home()
+    for rel in _LAUNCHER_STACK_GATE_REFUSAL_TOKEN_COPY_HOLDERS:
+        doc = _read(rel)
+        missing = sorted(token for token in home if token not in doc)
+        assert not missing, (
+            "%s: missing launcher stack-gate refusal token(s) %r"
+            % (rel, missing)
+        )
+
+
 # --- Cluster: R5 weight vocabulary + R7 park surface (pinned register literals) ---
 
 # The epic register is the home of record for these sentences. lib/tests/ ships inside the
