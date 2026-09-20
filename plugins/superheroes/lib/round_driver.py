@@ -69,7 +69,9 @@ import engine_pref  # noqa: E402
 import model_tier_overrides  # noqa: E402
 import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
+import order_lint  # noqa: E402
 import panel_tally  # noqa: E402
+import payload_contracts  # noqa: E402
 import review_base_guard  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
@@ -115,6 +117,17 @@ _SELF_RECOVERY_FIXER_EFFORT = "high"
 
 # Fold-owned guidance record key inside judgmentDispositions entries (dispatch-fixer.md).
 GATE_GUIDANCE_RECORD_KEY = "userGuidance"
+QUOTED_DATA_LINT_ELISION = "(quoted data elided from the order lint)"
+
+
+def _order_lint_text(order_text, context):
+    """The rendered order minus every quoted-data block: the lint grades the driver's text, never the owner's."""
+    ph = context.get("placeholders") if isinstance(context.get("placeholders"), dict) else {}
+    text = order_text
+    for quoted in (ph.get("GATE_GUIDANCE"), ph.get("VERIFY_COMMAND"), context.get("ratified_residuals")):
+        if isinstance(quoted, str) and quoted.strip():
+            text = text.replace(quoted, QUOTED_DATA_LINT_ELISION, 1)
+    return text
 GATE_GUIDANCE_ROW_BYTE_CAP = 2000
 GATE_GUIDANCE_AGGREGATE_BYTE_CAP = 8000
 # Bounds each header field so one oversized value cannot cost its entry a place under the
@@ -1538,6 +1551,25 @@ def _park_cannot_certify(state, detail):
     state["step"] = P_TERMINAL
 
 
+VERIFY_BASE_TOKEN = "{baseRef}"
+_FULL_HEX_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def _verify_command(config):
+    """The command `run-verify` hands the orchestrator, with `{baseRef}` bound to the session's
+    pinned base commit. A touched-tests gate that diffs against main selects a stacked branch's
+    whole stack (PR #1332 vet 244, collector @244-3); the token lets the calibrated command diff
+    against the pinned base instead. Without a full-hex pin the token stays verbatim — the gate's
+    own `base ref does not resolve` refusal is the loud failure, never a silent fall-back to main."""
+    cmd = config.get("verifyCommand", "none")
+    if not isinstance(cmd, str) or VERIFY_BASE_TOKEN not in cmd:
+        return cmd
+    base = config.get("baseRef")
+    if isinstance(base, str) and _FULL_HEX_ID.fullmatch(base):
+        return cmd.replace(VERIFY_BASE_TOKEN, base)
+    return cmd
+
+
 def _shard_payload(diff_text, dimensions):
     """The panel dispatch payload: dims + tiers, and — when shard_plan says big — per-lens shards.
     The cross-cutting lenses always carry the whole diff."""
@@ -1584,7 +1616,7 @@ def _advance(state, config):
     elif step == P_SCOPED:
         payload = {"hunks": state.get("_newSurface") or {}, "tier": DEEP}
     elif step == P_VERIFY:
-        payload = {"command": config.get("verifyCommand", "none")}
+        payload = {"command": _verify_command(config)}
     elif step == P_FIXER:
         payload = {"batch": state.get("_fixBatch") or []}
         if state.get("_escalatedRung"):
@@ -1911,6 +1943,32 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
     return {"byDim": by_dim, "byVendor": by_vendor}
 
 
+def _canary_by_dim(live):
+    """Per-dimension canary plan from ``canary_liveness``; empty when unreadable."""
+    if not isinstance(live, dict):
+        return {}
+    raw = live.get("byDim")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _canary_dims_for_status(live, by_vendor, status):
+    """Dimensions with ``status`` in the canary plan; vendor fallback when byDim is unreadable."""
+    by_dim = _canary_by_dim(live)
+    vendor_dims = []
+    for info in (by_vendor or {}).values():
+        if not isinstance(info, dict) or info.get("status") != status:
+            continue
+        seats = info.get("seats") if isinstance(info.get("seats"), list) else []
+        vendor_dims.extend(d for d in seats if isinstance(d, str))
+    if by_dim:
+        from_dim = {
+            dim for dim, st in by_dim.items()
+            if isinstance(dim, str) and st == status
+        }
+        return sorted(from_dim | set(vendor_dims))
+    return sorted(set(vendor_dims))
+
+
 def _normalize_canary_probes(canary_raw):
     if isinstance(canary_raw, dict):
         return [canary_raw]
@@ -2051,23 +2109,20 @@ def _fold_panel(state, config, artifact):
     live = canary_liveness(
         _panel_dimensions(config), seat_status, seats, _sm_for_canary,
         ran_manifest_canary, artifact.get("canaryResult"))
-    unverified_dims = []
+    by_vendor = live.get("byVendor") if isinstance(live, dict) else {}
+    if not isinstance(by_vendor, dict):
+        by_vendor = {}
+    unverified_dims = _canary_dims_for_status(live, by_vendor, "unproven")
+    dead_dims = _canary_dims_for_status(live, by_vendor, "dead")
     failed_vendors = {}
     outcome_failed_vendors = {}
     plant_undetected_vendors = {}
     verified_by_vendor = {}
-    for vendor, info in (live.get("byVendor") or {}).items():
+    for vendor, info in by_vendor.items():
         if not isinstance(info, dict):
             continue
         st = info.get("status")
-        vdims = info.get("seats") if isinstance(info.get("seats"), list) else []
-        if st == "unproven":
-            unverified_dims.extend(vdims)
-        elif st == "dead":
-            for dim in vdims:
-                if dim not in missing_dims:
-                    missing_dims.append(dim)
-                seat_status[dim] = "missing"
+        if st == "dead":
             failed_vendors[vendor] = info
         elif st == "outcome-failed":
             outcome_failed_vendors[vendor] = info
@@ -2077,6 +2132,10 @@ def _fold_panel(state, config, artifact):
         elif st == "proven":
             ev = info.get("evidence")
             verified_by_vendor[vendor] = ev if isinstance(ev, dict) else {}
+    for dim in dead_dims:
+        if dim not in missing_dims:
+            missing_dims.append(dim)
+        seat_status[dim] = "missing"
     if unverified_dims:
         canary_panel_gap = True
         _record_round(state, "canaryUnverified", sorted(set(unverified_dims)))
@@ -2960,6 +3019,9 @@ def verifier_results_fault(artifact):
         return ("verifiers artifact `verdicts` is %s, not a list; expected {\"verdicts\": [...]}; "
                 "resubmit the same phase/attempt/state-hash with a corrected artifact"
                 % type(verdicts).__name__)
+    fault = payload_contracts.payload_fault(payload_contracts.P_VERIFIERS, artifact, "hand-submit")
+    if fault is not None:
+        return fault
     return None
 
 
@@ -4436,7 +4498,11 @@ def _run_seam(seams, action, payload, state, config):
                 out["canaryResult"] = cr
         return out
     if action == P_VERIFIERS:
-        return {"verdicts": seams["verifier"](payload.get("clusters"), state["round"])}
+        artifact = {"verdicts": seams["verifier"](payload.get("clusters"), state["round"])}
+        fault = verifier_results_fault(artifact)
+        if fault is not None:
+            return {"verdicts": [], "_verifierArtifactFault": fault}
+        return artifact
     if action == P_SYNTHESIS:
         return {"grouping": seams["synthesis"](payload.get("findings"), state["round"])}
     if action == P_GAPSWEEP:
@@ -4858,6 +4924,19 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     return None
 
 
+def _loop_verifier_artifact_faults(state):
+    """Collect per-round verifierArtifactFault disclosures for run_loop observables."""
+    faults = []
+    for key in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
+        rec = state["rounds"][key]
+        fault = rec.get("verifierArtifactFault")
+        if isinstance(fault, list):
+            faults.extend(fault)
+        elif isinstance(fault, dict):
+            faults.append(fault)
+    return faults
+
+
 def _attach_loop_observables_to_refusal(refusal, state):
     """Add loop observables — what the loop reached, not certification claims.
 
@@ -4871,6 +4950,9 @@ def _attach_loop_observables_to_refusal(refusal, state):
         loop_receipt = build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED)
         refusal["loopCertificationShape"] = loop_receipt.get("certificationShape")
         refusal["loopRounds"] = loop_receipt.get("rounds") or []
+        faults = _loop_verifier_artifact_faults(state)
+        if faults:
+            refusal["verifierArtifactFault"] = faults
     return refusal
 
 
@@ -4936,6 +5018,11 @@ def run_loop(seams, config=None):
                 break
             # handle the gap-sweep re-entry (verifiers → synthesis carries the merge back).
             artifact = _run_seam(seams, action, step["payload"], state, state["config"])
+            if action == P_VERIFIERS and isinstance(artifact, dict):
+                fault = artifact.pop("_verifierArtifactFault", None)
+                if fault is not None:
+                    _record_round_append(state, "verifierArtifactFault",
+                                         {"fault": fault, "round": state["round"]})
             _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
             _persist_round_records(state, state["config"])
             # a delta round routes scoped candidates through verifiers; when that path is armed the
@@ -6887,6 +6974,27 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         order_text, render_reason = round_orders.render_order(phase, seat_key, context)
         if render_reason is not None or not isinstance(order_text, str):
             raise ValueError("order-render-refused:%s:%s" % (skey, render_reason or "empty"))
+        # Order lint (#1339): the rendered fixer order is the one driver-authored order an engine
+        # acts on; an unfilled placeholder (order-placeholder-unfilled), a dangling path
+        # (order-path-unresolved), or two result contracts named at once
+        # (order-result-shape-ambiguous) refuses the emission here and never reaches a dispatch.
+        # Quoted-data blocks (owner-gate guidance, verify command, ratified residuals) are elided
+        # from the lint text so paths, braces, or result-shape words in owner prose never refuse
+        # the emission; only the first occurrence of each block is elided when it appears more
+        # than once.
+        # Plugin-relative citations resolve via the plugin root as well as the repo root.
+        # Deterministic half only — a driver-rendered order has no author for the semantic seat
+        # to send a finding back to.
+        if phase == P_FIXER:
+            lint_text = _order_lint_text(order_text, context)
+            lint = order_lint.check_text(
+                lint_text, repo_root, alt_roots=(_plugin_resource_root(),), kind="fixer")
+            if not lint.get("ok"):
+                first = (lint.get("findings") or [{}])[0]
+                token = first.get("token") or "unknown"
+                detail = first.get("detail") or ""
+                raise ValueError("order-render-refused:%s:order-lint:%s" % (
+                    skey, token + (":" + detail if detail else "")))
         order_sha = round_records.sha256_text(order_text)
         order_hashes[skey] = order_sha
         seats[skey] = {

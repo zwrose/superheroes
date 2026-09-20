@@ -81,7 +81,8 @@ every PR from its artifacts — the diff, the issue/spec, the build brief — ag
 asked and what was proposed, diagnoses anomalies from artifacts, and coordinates releases. It
 keeps **merge approval** with the owner — a scoped word in chat after the PRs are talked
 through — and may **execute merges inside that scope** after the lane's review and
-verification evidence, CI green on the recorded head, and a current branch.
+verification evidence, CI green on the recorded head, and a current branch. A wave preflight runs the
+conformance probe once per dispatchable engine before any builder launches.
 
 | Command | Use it to… |
 | --- | --- |

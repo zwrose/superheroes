@@ -363,9 +363,15 @@ def test_clause_manifest_survives_in_rendered_orders():
     }
     test_clause_manifest_covers_every_order_template()
     for template_name, clauses in manifest.items():
-        phase, ph_fn = phase_map[template_name]
-        text, reason = RO.render_order(phase, "seat", _base_context(placeholders=ph_fn()))
-        assert reason is None, "%s: %s" % (template_name, reason)
+        # a non-driver prompt (order-lint-semantic) is dispatched verbatim; its text is its render.
+        if template_name not in phase_map:
+            path = RO.order_template_path(template_name)
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        else:
+            phase, ph_fn = phase_map[template_name]
+            text, reason = RO.render_order(phase, "seat", _base_context(placeholders=ph_fn()))
+            assert reason is None, "%s: %s" % (template_name, reason)
         for clause in clauses:
             assert _clause_in_rendered(clause, text), (
                 "missing clause %r in %s" % (clause, template_name))
@@ -459,8 +465,21 @@ def test_golden_stdout_channel_panel_order():
     )
     text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
     assert reason is None
-    assert "stdout" in text.lower() or "final stdout" in text
+    assert RO._RESULT_CHANNEL_NEUTRAL_DELIVERY in text
+    assert "final stdout" not in text.lower()
     assert "do not write a findings file" in text
+
+
+def test_engine_stdout_channel_panel_order_is_result_channel_neutral():
+    ctx = _base_context(
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
+                                  "code-reviewer.a0.json"),
+        placeholders=_panel_placeholders(channel="stdout"),
+    )
+    text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
+    assert reason is None
+    assert "final stdout" not in text.lower()
+    assert "runner's declared result channel" in text
 
 
 # --- FX-1: focus normalization (fix 8) -----------------------------------------
@@ -763,7 +782,7 @@ def test_engine_panel_landing_block_uses_phase_stdout_contract():
     assert RFS.example_prompt_block() in text
     assert "Format only" in text
     assert '"findings": []' in text
-    assert "Delivery section above" in text
+    assert "runner's declared result channel" in text
     example_json = json.dumps(RFS.example_findings_object(), sort_keys=True)
     assert f"emit `{example_json}`".lower() not in text.lower()
 
@@ -1011,7 +1030,7 @@ def test_engine_order_landing_block_uses_stdout_not_file_write():
     )
     text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
     assert reason is None
-    assert "stdout channel" in text
+    assert "runner's declared result channel" in text
     assert "Landing path:" not in text
     assert "Envelope stub:" not in text
 

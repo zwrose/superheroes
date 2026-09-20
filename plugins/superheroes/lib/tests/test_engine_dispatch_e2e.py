@@ -115,8 +115,32 @@ def _run_dir(tmp_path, name):
     return path
 
 
-def _findings_stdout():
-    return json.dumps({"findings": [{"id": "f1", "message": "issue found"}]})
+_TD = None
+
+
+def _dispatch_test_helpers():
+    global _TD
+    if _TD is None:
+        spec = importlib.util.spec_from_file_location(
+            "test_engine_dispatch",
+            os.path.join(_HERE, "test_engine_dispatch.py"),
+        )
+        _TD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_TD)
+    return _TD
+
+
+def _e2e_native_findings_envelope():
+    """Typed review envelope for codex review e2e fixtures (from test_engine_dispatch helpers)."""
+    td = _dispatch_test_helpers()
+    branch = td._native_review_branch("findings")
+    branch["findings"][0]["id"] = "f1"
+    branch["findings"][0]["body"] = "issue found"
+    return td._wrap_native_review_result(branch)
+
+
+def _e2e_native_findings_result_json():
+    return json.dumps(_e2e_native_findings_envelope(), separators=(",", ":"))
 
 
 def _build_ok_stdout():
@@ -135,8 +159,21 @@ def _honest_refusal_stdout():
     return "Stopped per order.\n" + EA.WRITE_REPORT_SENTINEL + "\n" + body
 
 
+_NATIVE_WRITE_OK_JSON = json.dumps({
+    "ok": True, "signal": "ok", "report": "receipt prose",
+    "evidence": {"testFailed": False, "testPassed": True},
+}, separators=(",", ":"))
+
+_NATIVE_WRITE_REFUSAL_JSON = json.dumps({
+    "ok": False, "signal": "plan_wrong",
+    "report": "cannot proceed: honest refusal",
+    "evidence": {"testFailed": True, "testPassed": False},
+}, separators=(",", ":"))
+
+
 def _install_fake_engine(tmp_path, monkeypatch, name, *, stdout="", sleep_s=0, exit_code=0,
-                          argv_file=None, out_file=None, death_marker=None, stage_out_file=False):
+                          argv_file=None, out_file=None, death_marker=None, stage_out_file=False,
+                          native_review_result=None, native_write_result=None):
     """Install a fake engine; behavior is literal in the script (survives env scrub)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -152,6 +189,9 @@ _out_file = %(out_file)r
 _death_marker = %(death_marker)r
 _stage_out_file = %(stage_out_file)s
 _stdout_payload = %(stdout)r
+_native_review_result = %(native_review_result)r
+_native_write_result = %(native_write_result)r
+_RESULT_FILE_PREFIX = %(result_file_prefix)r
 _sleep_s = %(sleep)s
 _exit_code = %(exit_code)s
 
@@ -181,6 +221,28 @@ if _out_file:
 if _sleep_s:
     time.sleep(_sleep_s)
 
+def _resolve_result_path():
+    if "-o" in sys.argv:
+        return sys.argv[sys.argv.index("-o") + 1]
+    path = None
+    for line in _stdin_data.split("\\n"):
+        if line.startswith(_RESULT_FILE_PREFIX):
+            remainder = line[len(_RESULT_FILE_PREFIX):].strip()
+            path = remainder if remainder else None
+    return path
+
+if _native_review_result is not None:
+    _result_path = _resolve_result_path()
+    if _result_path:
+        with open(_result_path, "w", encoding="utf-8") as fh:
+            fh.write(_native_review_result)
+
+if _native_write_result is not None:
+    _result_path = _resolve_result_path()
+    if _result_path:
+        with open(_result_path, "w", encoding="utf-8") as fh:
+            fh.write(_native_write_result)
+
 if _stdout_payload:
     sys.stdout.write(_stdout_payload)
     sys.stdout.flush()
@@ -192,6 +254,9 @@ sys.exit(_exit_code)
         "death_marker": death_marker,
         "stage_out_file": stage_out_file,
         "stdout": stdout,
+        "native_review_result": native_review_result,
+        "native_write_result": native_write_result,
+        "result_file_prefix": ED.engine_result_channel.RESULT_FILE_LINE_PREFIX,
         "sleep": sleep_s,
         "exit_code": exit_code,
     }
@@ -363,7 +428,7 @@ def test_e2e_review_real_path_terminal_success(tmp_path, monkeypatch):
 
     _install_fake_engine(
         tmp_path, monkeypatch, "codex",
-        stdout=_findings_stdout(), argv_file=argv_file,
+        native_review_result=_e2e_native_findings_result_json(), argv_file=argv_file,
     )
 
     res = _poll_review_terminal(repo, run_dir, prompt_path)
@@ -376,9 +441,14 @@ def test_e2e_review_real_path_terminal_success(tmp_path, monkeypatch):
 
     with open(argv_file, encoding="utf-8") as fh:
         spawned_argv = json.load(fh)
-    # argv[0] is PATH-resolved in the child; tail must match the journaled argv exactly.
+    # argv[0] is PATH-resolved in the child; tail is the journaled spawnArgv.
     assert os.path.basename(spawned_argv[0]) == res["argv"][0]
-    assert spawned_argv[1:] == res["argv"][1:]
+    journalled_tail = res["argv"][1:]
+    expected_path = ED._native_result_path(run_dir, 1)
+    assert spawned_argv[1:] == journalled_tail
+    o_idx = journalled_tail.index("-o")
+    assert journalled_tail.count("-o") == 1
+    assert journalled_tail[o_idx + 1] == expected_path
     records = _journal_records(run_dir)
     assert _no_mismatch_tokens(records)
     for rec in records:
@@ -397,7 +467,7 @@ def test_e2e_write_real_path_terminal_success(tmp_path, monkeypatch):
 
     _install_fake_engine(
         tmp_path, monkeypatch, "cursor-agent",
-        stdout=_build_ok_stdout(), out_file=out_marker,
+        native_write_result=_NATIVE_WRITE_OK_JSON, out_file=out_marker,
     )
 
     head_before = _git(wt, "rev-parse", "HEAD").stdout.strip()
@@ -428,7 +498,7 @@ def test_e2e_supervisor_rotation_survives(tmp_path, monkeypatch):
 
     _install_fake_engine(
         tmp_path, monkeypatch, "cursor-agent",
-        stdout=_build_ok_stdout(), sleep_s=30,
+        native_write_result=_NATIVE_WRITE_OK_JSON, sleep_s=30,
     )
 
     first = ED.dispatch_write(
@@ -500,7 +570,7 @@ def test_e2e_no_second_engine_pgroup_gate(tmp_path, monkeypatch):
 
     _install_fake_engine(
         tmp_path, monkeypatch, "cursor-agent",
-        stdout=_build_ok_stdout(), sleep_s=120,
+        native_write_result=_NATIVE_WRITE_OK_JSON, sleep_s=120,
     )
 
     first = ED.dispatch_write(
@@ -560,7 +630,7 @@ def test_e2e_lease_blocks_second_run_dir(tmp_path, monkeypatch):
 
     _install_fake_engine(
         tmp_path, monkeypatch, "cursor-agent",
-        stdout=_build_ok_stdout(), sleep_s=120,
+        native_write_result=_NATIVE_WRITE_OK_JSON, sleep_s=120,
     )
 
     res_a = ED.dispatch_write(
@@ -594,24 +664,30 @@ def test_e2e_lease_released_on_terminal(tmp_path, monkeypatch, scenario):
     prompt_path = _prompt(tmp_path)
 
     if scenario == "success":
-        _install_fake_engine(tmp_path, monkeypatch, "cursor-agent", stdout=_build_ok_stdout())
+        _install_fake_engine(
+            tmp_path, monkeypatch, "cursor-agent",
+            native_write_result=_NATIVE_WRITE_OK_JSON,
+        )
         res = _poll_write_terminal(wt, run_dir, prompt_path, order_id="lease-" + scenario)
         assert res["ok"] is True
     elif scenario == "honest_refusal":
-        _install_fake_engine(tmp_path, monkeypatch, "cursor-agent", stdout=_honest_refusal_stdout())
+        _install_fake_engine(
+            tmp_path, monkeypatch, "cursor-agent",
+            native_write_result=_NATIVE_WRITE_REFUSAL_JSON,
+        )
         res = _poll_write_terminal(wt, run_dir, prompt_path, order_id="lease-" + scenario)
         assert res["ok"] is False
         assert res["forfeited"] is False
         assert res["reason"] == "plan_wrong"
     elif scenario == "double_forfeit":
-        _install_fake_engine(tmp_path, monkeypatch, "cursor-agent", stdout="not-valid-json")
+        _install_fake_engine(tmp_path, monkeypatch, "cursor-agent")
         res = _poll_write_terminal(wt, run_dir, prompt_path, order_id="lease-" + scenario, timeout=180)
         assert res["ok"] is False
         assert res.get("forfeited") is True
     else:  # abandon
         _install_fake_engine(
             tmp_path, monkeypatch, "cursor-agent",
-            stdout=_build_ok_stdout(), sleep_s=120,
+            native_write_result=_NATIVE_WRITE_OK_JSON, sleep_s=120,
         )
         ED.dispatch_write(
             seat=_cursor_seat(),
@@ -637,7 +713,7 @@ def test_e2e_lease_retained_on_non_terminal_slice(tmp_path, monkeypatch):
 
     _install_fake_engine(
         tmp_path, monkeypatch, "cursor-agent",
-        stdout=_build_ok_stdout(), sleep_s=120,
+        native_write_result=_NATIVE_WRITE_OK_JSON, sleep_s=120,
     )
 
     res = ED.dispatch_write(
@@ -661,7 +737,10 @@ def test_e2e_dispatch_poll_never_spawns(tmp_path, monkeypatch):
     run_dir = _run_dir(tmp_path, "run-poll")
     prompt_path = _prompt(tmp_path, "Review.\n")
 
-    _install_fake_engine(tmp_path, monkeypatch, "codex", stdout=_findings_stdout())
+    _install_fake_engine(
+        tmp_path, monkeypatch, "codex",
+        native_review_result=_e2e_native_findings_result_json(),
+    )
 
     opened = ED.dispatch_review(
         seat=_codex_seat(),
@@ -676,11 +755,15 @@ def test_e2e_dispatch_poll_never_spawns(tmp_path, monkeypatch):
 
     terminal = _poll_review_terminal(repo, run_dir, prompt_path)
     assert terminal["terminal"] is True
+    assert terminal["ok"] is True
 
     run_dir2 = _run_dir(tmp_path, "run-poll-dead")
     wt, _main = _linked_worktree(tmp_path)
     prompt2 = _prompt(tmp_path, "Build.\n")
-    _install_fake_engine(tmp_path, monkeypatch, "cursor-agent", stdout=_build_ok_stdout())
+    _install_fake_engine(
+        tmp_path, monkeypatch, "cursor-agent",
+        native_write_result=_NATIVE_WRITE_OK_JSON,
+    )
     _poll_write_terminal(wt, run_dir2, prompt2, order_id="poll-dead")
 
     before2 = _count_attempt_started(run_dir2)
@@ -719,7 +802,7 @@ def test_e2e_dispatch_abandon_order_and_idempotent(tmp_path, monkeypatch):
 
     _install_fake_engine(
         tmp_path, monkeypatch, "cursor-agent",
-        stdout=_build_ok_stdout(), sleep_s=120, death_marker=death_marker,
+        native_write_result=_NATIVE_WRITE_OK_JSON, sleep_s=120, death_marker=death_marker,
     )
 
     ED.dispatch_write(
@@ -778,7 +861,7 @@ def test_e2e_caller_exit_pgroup_kill_engine_survives_reattaches(tmp_path, monkey
         prompt_path = _prompt(tmp_path, "Review this.\n")
         _install_fake_engine(
             tmp_path, monkeypatch, "codex",
-            stdout=_findings_stdout(), sleep_s=engine_sleep_s,
+            native_review_result=_e2e_native_findings_result_json(), sleep_s=engine_sleep_s,
         )
         cli_args = [
             "--seat", _seat_json("codex", "gpt-5.6-terra", "high", _REVIEW_ROLE),
@@ -792,7 +875,7 @@ def test_e2e_caller_exit_pgroup_kill_engine_survives_reattaches(tmp_path, monkey
         prompt_path = _prompt(tmp_path)
         _install_fake_engine(
             tmp_path, monkeypatch, "cursor-agent",
-            stdout=_build_ok_stdout(), sleep_s=engine_sleep_s,
+            native_write_result=_NATIVE_WRITE_OK_JSON, sleep_s=engine_sleep_s,
         )
         cli_args = [
             "--seat", _seat_json("cursor", "composer-2.5", None, _WRITE_ROLE),

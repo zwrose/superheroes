@@ -257,3 +257,41 @@ def test_dispatch_mechanics_names_every_terminal_reason():
         "dispatch-mechanics.md missing outcome member(s): %s (file: %s)"
         % (", ".join(missing), _DISPATCH_MECHANICS)
     )
+
+
+@pytest.mark.parametrize("result,expected", [
+    (None, dispatch_outcome.CLASSIFICATION_REFUSAL),
+    ([], dispatch_outcome.CLASSIFICATION_REFUSAL),
+    ("unrunnable", dispatch_outcome.CLASSIFICATION_REFUSAL),
+    ({}, dispatch_outcome.CLASSIFICATION_RESULT),
+    ({"terminal": True}, dispatch_outcome.CLASSIFICATION_RESULT),
+    ({"reason": dispatch_outcome.REASON_UNRUNNABLE}, dispatch_outcome.CLASSIFICATION_RESULT),
+    ({"terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE},
+     dispatch_outcome.CLASSIFICATION_REFUSAL),
+    ({"terminal": True, "reason": dispatch_outcome.REASON_FORFEITED},
+     dispatch_outcome.CLASSIFICATION_RESULT),
+    ({"terminal": True, "reason": 123}, dispatch_outcome.CLASSIFICATION_RESULT),
+])
+def test_classify_dispatch_result_edges(result, expected):
+    assert dispatch_outcome.classify_dispatch_result(result) == expected
+
+
+@pytest.mark.parametrize("payload,expected", [
+    (None, dispatch_outcome.CLASSIFICATION_REFUSAL),
+    ([], dispatch_outcome.CLASSIFICATION_REFUSAL),
+    ({}, dispatch_outcome.CLASSIFICATION_REFUSAL),
+    ({"ok": 1}, dispatch_outcome.CLASSIFICATION_REFUSAL),
+    ({"ok": "yes"}, dispatch_outcome.CLASSIFICATION_REFUSAL),
+    ({"ok": True}, dispatch_outcome.CLASSIFICATION_RESULT),
+])
+def test_classify_payload_edges(payload, expected):
+    assert dispatch_outcome.classify_payload(payload) == expected
+
+
+@pytest.mark.parametrize("classification,expected", [
+    (dispatch_outcome.CLASSIFICATION_RESULT, 0),
+    (dispatch_outcome.CLASSIFICATION_REFUSAL, 1),
+    ("unknown", 1),
+])
+def test_exit_code_edges(classification, expected):
+    assert dispatch_outcome.exit_code(classification) == expected

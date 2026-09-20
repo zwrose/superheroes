@@ -36,8 +36,9 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 - `grant-state` (conditional) — Grant state
 <!-- launch-doctrine:preflight:end -->
 
-**Wave live canary (documentation only — not parsed).** A wave preflight includes one cheap live
-probe per engine (~3s): the dispatch selftest validates configuration, not engine liveness, so green
+**Wave live canary (documentation only — not parsed).** A wave preflight runs the conformance probe
+once per dispatchable engine — one command per engine, three legs, result recorded as the
+`engine-auth` check: the dispatch selftest validates configuration, not engine liveness, so green
 config checks can coexist with dead engines. This paragraph is **documentation for advisors reading
 the doctrine for intent** — it is **not** a parsed invariant and is **not** delivered to the builder
 through the composed launch prompt (`compose_launch` sends the child only the parsed `rulingsBlock`;
