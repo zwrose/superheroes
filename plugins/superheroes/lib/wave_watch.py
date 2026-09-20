@@ -761,8 +761,11 @@ def _resolve_pr_stack_groups(
                 if rest not in covered_prs and rest not in ungrouped:
                     ungrouped.append(rest)
             break
+        # bite-axis: READ-BUDGET — the whole membership read is bounded by the
+        # watcher's remaining budget; a read that outlives it refuses rather
+        # than returning partial membership.
         read_result = membership_reader(
-            pr=pr_num, repo=repo_slug, timeout=remaining,
+            pr=pr_num, repo=repo_slug, deadline=remaining,
         )
         if read_result.get("ok"):
             stack_number = read_result["stack"]["number"]

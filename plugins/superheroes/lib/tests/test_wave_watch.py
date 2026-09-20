@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -3432,8 +3433,8 @@ def test_pr_set_changed_two_stacks_groups_all_members_in_position_order(
     pr_sets = [{10, 20, 30, 40}, {10, 20, 30, 40, 50, 60}]
     calls = []
 
-    def membership_reader(*, pr, repo, timeout):
-        calls.append({"pr": pr, "timeout": timeout})
+    def membership_reader(*, pr, repo, **kwargs):
+        calls.append({"pr": pr, "kwargs": kwargs})
         if pr == 50:
             return _stack_membership(100, [50, 51])
         if pr == 60:
@@ -3460,7 +3461,7 @@ def test_pr_set_changed_second_member_in_stack_costs_no_extra_reader_call(
     pr_sets = [{10, 20}, {10, 20, 30, 40}]
     calls = []
 
-    def membership_reader(*, pr, repo, timeout):
+    def membership_reader(*, pr, repo, **kwargs):
         calls.append(pr)
         return _stack_membership(100, [30, 40])
 
@@ -3478,7 +3479,7 @@ def test_pr_set_changed_second_member_in_stack_costs_no_extra_reader_call(
 def test_pr_set_changed_not_linked_lands_in_ungrouped(tmp_path, monkeypatch):
     pr_sets = [{10}, {10, 99}]
 
-    def membership_reader(*, pr, repo, timeout):
+    def membership_reader(*, pr, repo, **kwargs):
         return {"ok": False, "reason": sc.REASON_NOT_LINKED}
 
     result = _run_pr_set_changed(
@@ -3496,7 +3497,7 @@ def test_pr_set_changed_refusing_read_degrades_and_preserves_prs_keys(
 ):
     pr_sets = [{10}, {10, 99}]
 
-    def membership_reader(*, pr, repo, timeout):
+    def membership_reader(*, pr, repo, **kwargs):
         return {"ok": False, "reason": "stack-unreadable"}
 
     result = _run_pr_set_changed(
@@ -3519,7 +3520,7 @@ def test_pr_set_changed_exhausted_deadline_stops_walk_no_reader_after(
     reader_calls = []
     mono = [1000.0]
 
-    def membership_reader(*, pr, repo, timeout):
+    def membership_reader(*, pr, repo, **kwargs):
         reader_calls.append(pr)
         if pr == 30:
             mono[0] += 10.0
@@ -3552,12 +3553,12 @@ def test_pr_set_changed_membership_read_timeout_bounded_by_remaining(
     tmp_path, monkeypatch,
 ):
     pr_sets = [{10}, {10, 99}]
-    seen_timeouts = []
+    seen_deadlines = []
     mono = [500.0]
-    deadline = 505.0
+    watcher_deadline = 505.0
 
-    def membership_reader(*, pr, repo, timeout):
-        seen_timeouts.append(timeout)
+    def membership_reader(*, pr, repo, **kwargs):
+        seen_deadlines.append(kwargs.get("deadline"))
         return {"ok": False, "reason": sc.REASON_NOT_LINKED}
 
     def monotonic():
@@ -3576,7 +3577,7 @@ def test_pr_set_changed_membership_read_timeout_bounded_by_remaining(
     )
 
     assert result["event"] == "pr-set-changed"
-    assert seen_timeouts == [deadline - mono[0]]
+    assert seen_deadlines == [watcher_deadline - mono[0]]
 
 
 def test_pr_set_changed_no_stacks_empty_stacks_all_changed_in_ungrouped(
@@ -3584,7 +3585,7 @@ def test_pr_set_changed_no_stacks_empty_stacks_all_changed_in_ungrouped(
 ):
     pr_sets = [{10}, {10, 88, 99}]
 
-    def membership_reader(*, pr, repo, timeout):
+    def membership_reader(*, pr, repo, **kwargs):
         return {"ok": False, "reason": sc.REASON_NOT_LINKED}
 
     result = _run_pr_set_changed(
@@ -3596,4 +3597,183 @@ def test_pr_set_changed_no_stacks_empty_stacks_all_changed_in_ungrouped(
     assert result["prsRemoved"] == []
     assert result["stacks"] == []
     assert result["ungrouped"] == [88, 99]
+
+
+# --- pr-set-changed membership read budget (#1340 layer 2c) -------------------
+
+
+def _stack_check_graphql_run(pr_number, page_size=None):
+    if page_size is None:
+        page_size = sc.DEFAULT_PAGE_SIZE
+    owner, name = _TEST_REPO_SLUG.split("/", 1)
+    stack_number = 100
+    stack_size = 5
+    position = 3
+
+    def _member(member_position, number=None):
+        member_number = number if number is not None else (100 + member_position)
+        return {
+            "position": member_position,
+            "pullRequest": {
+                "number": member_number,
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefName": "branch-%d" % member_position,
+                "headRefOid": "oid%d" % member_position,
+                "baseRefName": "main",
+            },
+        }
+
+    nodes = [
+        _member(1),
+        _member(2),
+        _member(3, number=pr_number),
+        _member(4),
+        _member(5),
+    ]
+    pull = {
+        "number": pr_number,
+        "baseRefName": "main",
+        "headRefName": "branch-%d" % position,
+        "headRefOid": "oid%d" % position,
+        "stackEntry": {
+            "position": position,
+            "stack": {
+                "number": stack_number,
+                "size": stack_size,
+                "baseRefName": "main",
+                "entries": {
+                    "pageInfo": {
+                        "hasNextPage": False,
+                        "endCursor": None,
+                    },
+                    "nodes": nodes,
+                },
+            },
+        },
+    }
+
+    handlers = {}
+    argv = tuple(sc._graphql_argv(owner, name, pr_number, page_size, None))
+    payload = {"data": {"repository": {"pullRequest": pull}}}
+    handlers[argv] = SimpleNamespace(
+        returncode=0, stdout=json.dumps(payload), stderr="",
+    )
+
+    queues = {key: [value, value] for key, value in handlers.items()}
+
+    def run(argv, **kwargs):
+        key = tuple(argv)
+        if key not in queues or not queues[key]:
+            raise AssertionError("unexpected gh argv: %r" % (argv,))
+        return queues[key].pop(0)
+
+    return run
+
+
+def test_pr_set_changed_whole_membership_read_bounded_by_watcher_remaining_budget(
+    tmp_path, monkeypatch,
+):
+    pr_sets = [{10}, {10, 99}]
+    recorded = []
+    mono = [500.0]
+    watcher_deadline = 505.0
+
+    def membership_reader(**kwargs):
+        recorded.append(dict(kwargs))
+        return {"ok": False, "reason": sc.REASON_NOT_LINKED}
+
+    def monotonic():
+        return mono[0]
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ww.run(
+        repo,
+        "batch-982",
+        max_seconds=5,
+        interval_seconds=1,
+        gh_run=_gh_pr_list_with_repo_view(pr_sets),
+        membership_reader=membership_reader,
+        monotonic=monotonic,
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert len(recorded) == 1
+    call = recorded[0]
+    assert call["pr"] == 99
+    assert call["repo"] == _TEST_REPO_SLUG
+    assert call["deadline"] > 0
+    assert call["deadline"] == watcher_deadline - mono[0]
+    assert "timeout" not in call
+
+
+def test_pr_set_changed_slow_read_refusal_degrades_without_partial_stack(
+    tmp_path, monkeypatch,
+):
+    pr_sets = [{10}, {10, 99}]
+    mono = [1000.0]
+
+    def membership_reader(**kwargs):
+        mono[0] += 10.0
+        return {"ok": False, "reason": sc.REASON_STACK_UNREADABLE}
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ww.run(
+        repo,
+        "batch-982",
+        max_seconds=5,
+        interval_seconds=1,
+        gh_run=_gh_pr_list_with_repo_view(pr_sets),
+        membership_reader=membership_reader,
+        monotonic=lambda: mono[0],
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in result["degraded"]
+    assert result["ungrouped"] == [99]
+    assert result["stacks"] == []
+    assert not any(99 in entry["prs"] for entry in result["stacks"])
+
+
+def test_pr_set_changed_real_read_membership_whole_read_bounded_by_watcher_budget(
+    tmp_path, monkeypatch,
+):
+    pr_sets = [{10}, {10, 99}]
+    monkeypatch.setattr(
+        sc.shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None,
+    )
+    times = [1000.0, 1000.0, 1000.0, 2000.0]
+    sc_index = [0]
+
+    def sc_monotonic():
+        index = sc_index[0]
+        sc_index[0] += 1
+        return times[index] if index < len(times) else times[-1]
+
+    monkeypatch.setattr(sc.time, "monotonic", sc_monotonic)
+
+    run = _stack_check_graphql_run(99)
+
+    def membership_reader(**kwargs):
+        return sc.read_membership(run=run, **kwargs)
+
+    mono = [1000.0]
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ww.run(
+        repo,
+        "batch-982",
+        max_seconds=5,
+        interval_seconds=1,
+        gh_run=_gh_pr_list_with_repo_view(pr_sets),
+        membership_reader=membership_reader,
+        monotonic=lambda: mono[0],
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in result["degraded"]
+    assert result["ungrouped"] == [99]
+    assert result["stacks"] == []
 

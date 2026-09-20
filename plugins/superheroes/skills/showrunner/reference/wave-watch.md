@@ -262,7 +262,10 @@ When **`pr-set-changed`** fires, the payload carries the open PR set plus what m
 - `ungrouped` — sorted changed PRs that belong to no stack (or whose membership read
   refused). When stack membership is unavailable, `stack-signal-unavailable` rides on the
   result and grouping is partial — the original `prs` / `prsAdded` / `prsRemoved` keys
-  are unchanged.
+  are unchanged. Stack membership is read through `lib/stack_check.py`'s `read_membership`
+  — the single membership reader, never re-implemented here — and the read is bounded by
+  **one** budget covering the whole read, so an unresolvable read degrades to
+  `stack-signal-unavailable` rather than returning partial membership.
 
 When **`pr-set-changed`** sends you to read a lane's CI, select the run by **workflow name and head
 sha** — never `gh run list --limit 1`. The newest run on a branch is whatever workflow happened to
