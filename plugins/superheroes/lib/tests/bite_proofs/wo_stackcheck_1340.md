@@ -2,7 +2,7 @@
 
 Per-guard bite proof for `plugins/superheroes/lib/stack_check.py`: each `# axis:` clause is neutralized in source, the proving test must go red alone, then the clause is restored and the suite goes green again.
 
-**Register:** 36 guards — grew from 33 after a census of refusing clauses found three that carried no `# axis:` line (parsed JSON payload not an object; non-empty `errors` array; `pageInfo.hasNextPage` missing or not a boolean) and one whose axis line described a sibling clause (`errors` present but not a list).
+**Register:** 37 guards — grew from 33 after a census of refusing clauses found three that carried no `# axis:` line (parsed JSON payload not an object; non-empty `errors` array; `pageInfo.hasNextPage` missing or not a boolean) and one whose axis line described a sibling clause (`errors` present but not a list); grew from 36 when the two-pass enumeration-drift refusal was added without a record entry.
 
 **Provenance:** cursor / composer-2.5.
 
@@ -51,7 +51,8 @@ Per-guard bite proof for `plugins/superheroes/lib/stack_check.py`: each `# axis:
 | E33 | stack_check.py:410 | the collected entries are exactly the positions 1..size | `test_e30_collected_positions_not_exact` | proven |
 | E34 | stack_check.py:416 | the queried pull request is not present exactly once at its reported position | `test_e30_queried_pr_not_at_reported_position` | proven |
 | E35 | stack_check.py:422 | that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields | `test_e33_queried_entry_head_ref_oid_disagrees`, `test_e33_queried_entry_base_ref_name_disagrees` | proven |
-| E36 | stack_check.py:468 | the parse boundary (malformed CLI call returns bad-argument instead of argparse exit) | `test_e10_parse_boundary` | proven |
+| E36 | stack_check.py:438 | membership changes between two complete enumeration passes | `test_e37_mixed_time_member_head_change_refuses` | proven |
+| E37 | stack_check.py:478 | the parse boundary (malformed CLI call returns bad-argument instead of argparse exit) | `test_e10_parse_boundary` | proven |
 
 ---
 
@@ -1125,7 +1126,39 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e33_queried_entry
 
 ---
 
-## E36 — the parse boundary (malformed CLI call returns bad-argument instead of argparse exit)
+## E36 — membership changes between two complete enumeration passes
+
+**neutralization** (`plugins/superheroes/lib/stack_check.py`):
+```python
+        # axis: membership changes between two complete enumeration passes
+        if current_members != prior_members:
+            return _refusal(REASON_ORDER_MISMATCH,
+                "membership changed between enumeration passes", repo=repo, pr=pr, pages=pages)
+```
+→
+```python
+        # axis: membership changes between two complete enumeration passes
+        if False:  # bite-proof
+            return _refusal(REASON_ORDER_MISMATCH,
+                "membership changed between enumeration passes", repo=repo, pr=pr, pages=pages)
+```
+
+**command:** the command (see top).
+
+**raw red** (traceback body elided):
+```
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e37_mixed_time_member_head_change_refuses
+1 failed, 51 passed in 0.68s
+```
+
+**raw green** after restore:
+```
+52 passed in 0.45s
+```
+
+---
+
+## E37 — the parse boundary (malformed CLI call returns bad-argument instead of argparse exit)
 
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
@@ -1163,8 +1196,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_cli_bad_argument_
 
 **`git status --porcelain` (mutated files):**
 ```
- M plugins/superheroes/lib/stack_check.py
- M plugins/superheroes/lib/tests/test_stack_check.py
+
 ```
 
 **`shasum -a 256` before first neutralization / after last restore:**
