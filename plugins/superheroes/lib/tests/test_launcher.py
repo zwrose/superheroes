@@ -6939,6 +6939,48 @@ def test_dependency_gate_pr_read_refusal_refuses_with_detail(tmp_path, monkeypat
     assert result["detail"] == "read failed"
 
 
+def test_dependency_gate_unrecognised_pr_state_refuses(tmp_path, monkeypatch):
+  # axis: unrecognised dependency PR state refuses dependency-read-unavailable
+    from types import SimpleNamespace
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def _gh_run(*args, **kwargs):
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "state": "UNKNOWN",
+                "isDraft": False,
+                "headRefOid": head,
+                "body": "",
+            }),
+            stderr="",
+        )
+
+    def reader(pr, repo_name, **kwargs):
+        return L.stack_check.read_pr_vet_state(pr, repo_name, run=_gh_run, **kwargs)
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    assert "UNKNOWN" in result.get("detail", "")
+
+
 def test_dependency_gate_not_open_passes(tmp_path, monkeypatch):
   # axis: merged or closed dependency passes without applying gate
     repo = _init_repo(tmp_path / "repo")
