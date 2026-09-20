@@ -53,27 +53,9 @@ creates or updates the pull requests from it. A superheroes lane does **not** ru
 
 ## How membership is verified
 
-The **only** honest read of membership is GitHub's own, by GraphQL:
-
-```graphql
-query($owner:String!,$repo:String!,$pr:Int!,$after:String){
-  repository(owner:$owner,name:$repo){
-    pullRequest(number:$pr){
-      number baseRefName headRefName headRefOid
-      stackEntry{
-        position
-        stack{
-          number size baseRefName
-          entries(first:50, after:$after){
-            pageInfo{ hasNextPage endCursor }
-            nodes{ position pullRequest{ number state isDraft headRefName headRefOid baseRefName } }
-          }
-        }
-      }
-    }
-  }
-}
-```
+The **only** honest read of membership is GitHub's own, by GraphQL. The membership query
+lives in `lib/stack_check.py` (`QUERY`) — that module is the authoritative home; cite it
+rather than restating the query here (CONVENTIONS §11).
 
 `entries` is a connection and needs its sub-selection. An abbreviated `stack { number size entries }`
 does not run. A **null `stackEntry` means the pull request is in no stack**. That is the refusal a

@@ -79,7 +79,7 @@ saw. Nothing in the tooling closes that gap; this rule does.
    invoked by **stack number**. This re-read is not optional and is not satisfied by the earlier read
    at click-list time: the point of it is the window between them. The re-read is the same
    `lib/stack_check.py` invocation again; a non-zero exit **refuses** and stops the merge, returning
-   one of `bad-argument`, `not-linked`, `stack-unreadable`, or `order-mismatch`.
+   the refusal `reason` from `lib/stack_check.py` (`REASON_*` constants).
 
 4. **One command merges the stack, in order** — `gh stack merge <stack-or-pr> --yes --squash`; every
    member up to and including the chosen pull request. A **direct** merge is atomic (all or nothing);
