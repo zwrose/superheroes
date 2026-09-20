@@ -16,14 +16,14 @@ Per-guard bite proof for `resolve_repo_slug` and `read_vet_verdict` classificati
 
 | ID | Guarded element (file:line) | Axis | Proving test | Verdict |
 |---|---|---|---|---|
-| E1 | stack_check.py:663 | reminder prefix present → not-ready | `test_l2d_read_vet_verdict_reminder_present_is_not_ready` | proven |
+| E1 | stack_check.py:671 | reminder prefix present → not-ready | `test_l2d_read_vet_verdict_reminder_present_is_not_ready` | proven |
 | E2 | stack_check.py:678 | negated READY phrasing → not-ready | `test_l2d_read_vet_verdict_not_ready_is_not_ready` | proven |
-| E2b | stack_check.py:681 | whole-word READY requirement | `test_l2d_read_vet_verdict_already_word_is_not_ready` | proven |
-| E3 | stack_check.py:657 | slot-boundary extraction | `test_l2d_read_vet_verdict_later_ready_section_is_not_ready` | proven |
-| E4 | stack_check.py:582 | `_REPO_RE` validation of returned slug | `test_l2d_resolve_repo_slug_name_with_owner_bad_pattern` | proven |
-| E5 | stack_check.py:607 | exhausted deadline refuses without calling gh | `test_l2d_resolve_repo_slug_deadline_exhausted` | proven |
-| E6 | stack_check.py:673 | head-pinning on READY verdict | `test_l2d_read_vet_verdict_stale_head_is_not_ready` | proven |
-| E7 | stack_check.py:749 | unreadable read returns refusal, not not-ready | `test_l2d_read_vet_verdict_unreadable_returns_refusal` | proven |
+| E2b | stack_check.py:682 | whole-word READY requirement | `test_l2d_read_vet_verdict_already_word_is_not_ready` | proven |
+| E3 | stack_check.py:674 | slot-boundary extraction | `test_l2d_read_vet_verdict_later_ready_section_is_not_ready` | proven |
+| E4 | stack_check.py:586 | `_REPO_RE` validation of returned slug | `test_l2d_resolve_repo_slug_name_with_owner_bad_pattern` | proven |
+| E5 | stack_check.py:611 | exhausted deadline refuses without calling gh | `test_l2d_resolve_repo_slug_deadline_exhausted` | proven |
+| E6 | stack_check.py:683 | head-pinning on READY verdict | `test_l2d_read_vet_verdict_stale_head_is_not_ready` | proven |
+| E7 | stack_check.py:760 | unreadable read returns refusal, not not-ready | `test_l2d_read_vet_verdict_unreadable_returns_refusal` | proven |
 
 ---
 
@@ -65,6 +65,8 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verd
 
 ## E2 — negated READY phrasing → not-ready
 
+Proving tests (all four go red under neutralization): `test_l2d_read_vet_verdict_not_ready_is_not_ready`, `test_l2d_read_vet_verdict_not_yet_ready_is_not_ready`, `test_l2d_read_vet_verdict_no_ready_is_not_ready`, `test_l2d_read_vet_verdict_never_ready_is_not_ready`.
+
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
     if _slot_has_negated_ready_verdict(slot_text):
@@ -72,23 +74,29 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verd
 ```
 →
 ```python
-    # negated-READY check removed
+    if False and _slot_has_negated_ready_verdict(slot_text):
+        return VET_NOT_READY
 ```
 
 **command:**
 ```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_not_ready_is_not_ready -q
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_not_ready_is_not_ready plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_not_yet_ready_is_not_ready plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_no_ready_is_not_ready plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_never_ready_is_not_ready -q
 ```
 
 **raw red** (traceback body elided):
 ```
+FFFF                                                                     [100%]
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_not_ready_is_not_ready
-1 failed in 0.34s
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_not_yet_ready_is_not_ready
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_no_ready_is_not_ready
+FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2d_read_vet_verdict_never_ready_is_not_ready
+4 failed in 0.50s
 ```
 
 **raw green** after restore:
 ```
-1 passed in 0.33s
+....                                                                     [100%]
+4 passed in 0.22s
 ```
 
 **restored lines:**
