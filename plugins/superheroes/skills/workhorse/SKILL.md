@@ -361,8 +361,8 @@ and each of the three is established from the **remote**, never from a local ass
   **observed** to refuse a stacked pull request with a 403 — a field observation, not a documented
   GitHub rule — which keeps your own commits; the moved head still
   takes a fresh remote-head check, CI on the new sha, and a receipt naming it; GitHub's cascading rebase is the disclosed alternative when a
-  merge cannot resolve the conflict, and it rewrites every commit above the change, so those layers'
-  receipts are re-taken in full
+  merge cannot resolve the conflict — it rewrites every commit above the change, and each moved layer then owes what the content pin decides: recompute the digest, and an equal digest re-pins with CI and re-reviews nothing while an unequal digest takes the branch the pin already
+  defines
   ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack stays current).
 - **A conflict round when a lower layer changes under you** — bring the lower layer current first, then
   update your layer from it, bottom-up, and **disclose the conflict round in the PR body**.
