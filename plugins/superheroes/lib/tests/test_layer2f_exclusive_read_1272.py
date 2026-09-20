@@ -126,6 +126,29 @@ def test_exclusive_read_ledger_family_live_content():
     assert _content_slice(merged) == _content_slice(live_row)
 
 
+def test_live_merged_into_without_ledger_seat_refuses():
+    """Biting case: live mergedInto without ledger seat refuses disposition-without-receipt."""
+    rep_key = "rep-key"
+    member_key = "member-key"
+    state = _ledger_owned_state(
+        dispositionLedger=[{
+            SC.FINDING_KEY_FIELD: rep_key,
+            "file": "r.py", "line": 1, "title": "rep", "severity": "Minor",
+            "disposition": "fixed", "dispositionRound": 2,
+        }],
+        findings=[{
+            SC.FINDING_KEY_FIELD: member_key,
+            "file": "m.py", "line": 5, "title": "member", "severity": "Important",
+            SC.MERGED_INTO_FIELD: rep_key,
+        }],
+    )
+    by_key, refusal = RC._certification_findings_by_key(state)
+    assert by_key == {}
+    assert refusal is not None
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["artifact"] == member_key
+
+
 def test_exclusive_read_live_disposition_without_ledger_refuses():
     """Biting case: live disposition with no ledger entry refuses disposition-without-receipt."""
     key = "k-no-receipt"

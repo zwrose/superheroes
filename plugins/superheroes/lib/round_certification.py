@@ -402,7 +402,7 @@ def _certification_findings_by_key(state):
         for key, live in live_by_key.items():
             if key in by_key:
                 continue
-            if live.get("disposition") is not None:
+            if session_contract.has_disposition_family(live):
                 # axis: live disposition without a ledger seat refuses — disposition-without-receipt
                 return {}, _refusal(
                     "disposition-without-receipt",

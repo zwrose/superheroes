@@ -199,3 +199,88 @@ E       AssertionError: assert None == 5
 ..............                                                           [100%]
 14 passed in 0.18s
 ```
+
+---
+
+## BP-2f-r2-a — family reader bites (mergedInto without ledger seat)
+
+**Guarded element.** `round_certification._certification_findings_by_key` no-ledger-seat refusal.
+
+**Axis.** Any disposition-family member on a live finding without its own ledger seat refuses — not only `disposition`.
+
+**Detector.** `test_live_merged_into_without_ledger_seat_refuses`.
+
+**Neutralization** (`round_certification.py`):
+
+```python
+            if live.get("disposition") is not None:
+```
+
+(replaced `session_contract.has_disposition_family(live)`)
+
+**Raw red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_live_merged_into_without_ledger_seat_refuses _______________
+
+>       assert by_key == {}
+E       AssertionError: assert {'member-key'...ep-key', ...}} == {}
+1 failed in 0.18s
+EXIT:1
+```
+
+**Restore.** Restored line:
+
+```python
+            if session_contract.has_disposition_family(live):
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 0.18s
+EXIT:0
+```
+
+---
+
+## BP-2f-r2-b — census bites stray member presence read
+
+**Guarded element.** `test_disposition_family_single_home_census` AST census matcher.
+
+**Axis.** No production module may test disposition-family member presence by naming a member.
+
+**Detector.** `test_disposition_family_single_home_census`.
+
+**Neutralization** (`round_certification.py`, beside chokepoint):
+
+```python
+            if live.get("mergedInto") is not None:
+                pass
+```
+
+**Raw red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________________ test_disposition_family_single_home_census __________________
+
+E       AssertionError: disposition-family member presence outside session_contract:
+E         round_certification.py:405: if live.get("mergedInto") is not None:
+1 failed in 0.42s
+EXIT:1
+```
+
+**Restore.** Removed the two neutralization lines.
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 0.41s
+EXIT:0
+```

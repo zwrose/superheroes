@@ -1395,19 +1395,11 @@ def _live_finding_by_key(state, key):
 
 
 def _strip_disposition_family(entry):
-    copy = dict(entry)
-    for field in session_contract.DISPOSITION_FAMILY_FIELDS:
-        copy.pop(field, None)
-    return copy
+    return session_contract.strip_disposition_family(entry)
 
 
 def _apply_disposition_family(target, family):
-    """Set every named disposition-family field on target and pop any member family omits."""
-    for field in session_contract.DISPOSITION_FAMILY_FIELDS:
-        if field in family:
-            target[field] = family[field]
-        else:
-            target.pop(field, None)
+    session_contract.apply_disposition_family(target, family)
 
 
 def _backfill_ledger_from_records(state, ledger, seen):
@@ -1418,11 +1410,7 @@ def _backfill_ledger_from_records(state, ledger, seen):
         idx = seen[key]
         entry = ledger[idx]
         if isinstance(entry, dict):
-            family_snapshots[key] = {
-                field: entry[field]
-                for field in session_contract.DISPOSITION_FAMILY_FIELDS
-                if field in entry
-            }
+            family_snapshots[key] = session_contract.disposition_family_snapshot(entry)
     for rec in state.get("_records") or []:
         if not isinstance(rec, dict):
             continue
@@ -1468,7 +1456,7 @@ def _stage_findings(state, compiled):
         entry = _strip_disposition_family(dict(finding))
         entry[session_contract.RAISED_ROUND_FIELD] = round_no
         if (isinstance(existing, dict)
-                and existing.get("disposition") is not None
+                and session_contract.has_disposition_family(existing)
                 and existing.get("dispositionRound") == round_no):
             for field in session_contract.DISPOSITION_FAMILY_FIELDS:
                 if field in existing:
@@ -5809,7 +5797,9 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
         if finding.get("disposition") == "fixed":
             receipt = finding.get("dispositionReceipt")
             if not isinstance(receipt, dict):
-                finding["dispositionReceipt"] = {"headSha": head, "verifyResult": "pass"}
+                family = session_contract.disposition_family_snapshot(finding)
+                family["dispositionReceipt"] = {"headSha": head, "verifyResult": "pass"}
+                session_contract.apply_disposition_family(finding, family)
             elif not receipt.get("headSha"):
                 receipt["headSha"] = head
     meta = {"sessionId": "run-loop-%s" % head[:16], "headSha": head, "producer": "run-loop"}

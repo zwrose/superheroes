@@ -30,6 +30,10 @@ __all__ = (
     "MERGED_INTO_FIELD",
     "RAISED_ROUND_FIELD",
     "DISPOSITION_FAMILY_FIELDS",
+    "has_disposition_family",
+    "disposition_family_snapshot",
+    "apply_disposition_family",
+    "strip_disposition_family",
     "evidence_digest_subject",
     "canonical",
     "payload_sha256",
@@ -86,6 +90,40 @@ DISPOSITION_FAMILY_FIELDS = (
     "disposition", "dispositionRound", "dispositionReceipt", "refutedReason",
     "outOfScopeReason", "followUp", MERGED_INTO_FIELD,
 )
+
+
+def has_disposition_family(row):
+    """True when row carries any disposition-family member with a non-None value."""
+    if not isinstance(row, dict):
+        return False
+    for field in DISPOSITION_FAMILY_FIELDS:
+        if field in row and row[field] is not None:
+            return True
+    return False
+
+
+def disposition_family_snapshot(row):
+    """Snapshot of disposition-family members present on row."""
+    if not isinstance(row, dict):
+        return {}
+    return {field: row[field] for field in DISPOSITION_FAMILY_FIELDS if field in row}
+
+
+def apply_disposition_family(target, family):
+    """Set every named disposition-family field on target and pop any member family omits."""
+    for field in DISPOSITION_FAMILY_FIELDS:
+        if field in family:
+            target[field] = family[field]
+        else:
+            target.pop(field, None)
+
+
+def strip_disposition_family(row):
+    """Return a copy of row with every disposition-family member removed."""
+    copy = dict(row)
+    for field in DISPOSITION_FAMILY_FIELDS:
+        copy.pop(field, None)
+    return copy
 
 
 def location_key(finding):
