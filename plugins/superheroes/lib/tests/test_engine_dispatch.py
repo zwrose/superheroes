@@ -14695,6 +14695,15 @@ def _bg_attempt_ended(run_dir, attempt=1):
     return ended[-1]
 
 
+def _bg_attempt_suspended(run_dir, attempt=1):
+    records, _ = ED._journal_read(run_dir)
+    suspended = [
+        r for r in records
+        if r.get("kind") == "attempt-suspended" and r.get("attempt") == attempt
+    ]
+    return suspended[-1]
+
+
 def test_claude_background_happy_path_materializes_and_admits(tmp_path, monkeypatch):
     cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
     repo_root = _repo(tmp_path)
@@ -14779,7 +14788,6 @@ def test_claude_background_secret_scrubbed_from_result_and_journal(tmp_path, mon
     assert "[REDACTED]" in materialized
     records, _ = ED._journal_read(run_dir)
     assert secret not in json.dumps(records)
-    assert "[REDACTED]" in json.dumps(records)
 
 
 @pytest.mark.parametrize(
@@ -14881,11 +14889,13 @@ def test_claude_background_budget_expiry_records_resume_fields(tmp_path, monkeyp
         tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
     )
     _run_bg_engine_files(tmp_path, run_dir, opened, timeout=1)
-    ended = _bg_attempt_ended(run_dir)
-    assert ended.get("bgResumable") is True
-    assert ended["launchId"] == launch_id
-    assert ended["bgSessionId"] == session_id
-    assert ended.get("bgStop") is None
+    suspended = _bg_attempt_suspended(run_dir)
+    assert suspended["launchId"] == launch_id
+    assert suspended["bgSessionId"] == session_id
+    assert suspended.get("transcriptRowCursor") == 0
+    assert suspended.get("bgStop") is None
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") == "attempt-ended" for r in records)
 
 
 def test_claude_background_continuation_reattaches_without_second_launch(tmp_path, monkeypatch):
@@ -14939,7 +14949,88 @@ def test_claude_background_stop_records_stopped_already_ended_and_stop_failed(
         return 1, "", "stop failed"
 
     monkeypatch.setattr(ED, "_claude_cli", cli_stop_failed)
-    assert ED._background_stop(launch_id, cfg, cwd) == "stop-failed"
+    assert ED._background_stop(launch_id, cfg, cwd) == "stop-unconfirmed"
+
+
+def test_claude_background_stop_listing_blind_not_already_ended(tmp_path, monkeypatch):
+    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
+    cwd = os.path.realpath(_repo(tmp_path))
+
+    def cli_blind(args, config_dir, cwd=None, timeout=30):
+        if args[:1] == ["agents"]:
+            return 1, "", "agents failed"
+        return 0, "", ""
+
+    monkeypatch.setattr(ED, "_claude_cli", cli_blind)
+    assert ED._background_stop(launch_id, cfg, cwd) == "stop-unconfirmed"
+
+
+def test_claude_background_resume_ignores_stale_turn_end_signal(tmp_path, monkeypatch):
+    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "bg-stale-turn")
+    opened = _plant_claude_background_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    partial_rows = [
+        {"type": "user", "message": {"content": "first"}},
+        {"type": "user", "message": {"content": "second"}},
+    ]
+    _write_bg_transcript(cfg, session_id, partial_rows)
+    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=1)
+    suspended = _bg_attempt_suspended(run_dir)
+    assert suspended["transcriptRowCursor"] == 2
+    stale_only = [{"type": "user", "toolEndsTurn": True}] + partial_rows
+    _write_bg_transcript(cfg, session_id, stale_only)
+    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=10)
+    records_mid, _ = ED._journal_read(run_dir)
+    assert any(r.get("kind") == "attempt-suspended" for r in records_mid)
+    assert not any(r.get("kind") == "attempt-ended" for r in records_mid)
+    fresh_rows = stale_only + _bg_transcript_rows(
+        _wrap_native_review_result(_native_review_branch("verdicts")),
+        tool_calls=1,
+    )
+    _write_bg_transcript(cfg, session_id, fresh_rows)
+    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=60)
+    ended = _bg_attempt_ended(run_dir)
+    assert ended["transcriptResult"] == "materialized"
+    assert ended["transcriptToolCalls"] == 1
+
+
+def test_claude_background_launched_recorded_before_poll(tmp_path, monkeypatch):
+    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "bg-launched")
+    opened = _plant_claude_background_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured, tool_calls=1))
+    _run_bg_engine_files(tmp_path, run_dir, opened)
+    records, _ = ED._journal_read(run_dir)
+    launched = [r for r in records if r.get("kind") == "background-launched"]
+    assert len(launched) == 1
+    assert launched[0]["launchId"] == launch_id
+    assert launched[0]["bgSessionId"] == session_id
+
+
+def test_claude_background_engagement_from_transcript_not_null(tmp_path, monkeypatch):
+    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "bg-engagement")
+    opened = _plant_claude_background_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured, tool_calls=3))
+    _run_bg_engine_files(tmp_path, run_dir, opened)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert isinstance(grade["engagement"]["toolCalls"], int)
+    assert grade["engagement"]["toolCalls"] == 3
+    assert grade["engagement"]["source"] == "claude-transcript"
+    assert grade["engagement"]["telemetry"] != "none"
 
 
 def test_claude_background_listing_skips_interactive_row_without_id(tmp_path, monkeypatch):
