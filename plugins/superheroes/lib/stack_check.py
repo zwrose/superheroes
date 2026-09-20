@@ -577,6 +577,109 @@ def _parse_repo_slug_payload(proc):
     return name, None
 
 
+def _pr_vet_state_argv(pr, repo):
+    return [
+        "gh", "pr", "view", str(pr), "--repo", repo,
+        "--json", "state,isDraft,headRefOid,body",
+    ]
+
+
+def _parse_pr_vet_state_payload(proc, pr):
+    if proc.returncode != 0:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, _proc_output(proc) or "gh pr view failed")
+
+    try:
+        payload = json.loads(proc.stdout or "")
+    except json.JSONDecodeError:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "gh pr view returned output that is not JSON")
+
+    if not isinstance(payload, dict):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "gh pr view returned JSON that is not an object")
+
+    state = payload.get("state")
+    if not isinstance(state, str):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "state is missing or not a string")
+
+    is_draft = payload.get("isDraft")
+    if not isinstance(is_draft, bool):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "isDraft is missing or not a boolean")
+
+    head_ref_oid = payload.get("headRefOid")
+    if not isinstance(head_ref_oid, str) or not _SHA40_RE.match(head_ref_oid):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE,
+            "headRefOid is missing, not a string, or not 40 hex")
+
+    body = payload.get("body")
+    if not isinstance(body, str):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "body is missing or not a string")
+
+    return {
+        "number": pr,
+        "state": state,
+        "isDraft": is_draft,
+        "headRefOid": head_ref_oid,
+        "body": body,
+    }, None
+
+
+def read_pr_vet_state(pr, repo, *, deadline=None, timeout=GH_TIMEOUT, run=None, env=None):
+    """Return (state, refusal) — exactly one is non-None.
+
+    state: {"number": int, "state": str, "isDraft": bool, "headRefOid": str, "body": str}
+    """
+    if run is None:
+        run = subprocess.run
+
+    if not _is_int(pr):
+        return None, _read_refusal(REASON_BAD_ARGUMENT, "pr must be a positive integer")
+    if pr < 1:
+        return None, _read_refusal(REASON_BAD_ARGUMENT, "pr must be a positive integer")
+    if not isinstance(repo, str) or not _REPO_RE.match(repo):
+        return None, _read_refusal(REASON_BAD_ARGUMENT, "repo must be owner/name")
+
+    arg_refusal = _validate_read_timeout(timeout)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    arg_refusal = _validate_read_deadline(deadline)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    deadline_at = None if deadline is None else time.monotonic() + deadline
+    if deadline_at is not None and time.monotonic() >= deadline_at:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE,
+            "read budget of %g seconds exhausted before gh pr view" % deadline)
+
+    if not shutil.which("gh"):
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "gh not on PATH")
+
+    effective_timeout = _effective_timeout(timeout, deadline_at)
+    argv = _pr_vet_state_argv(pr, repo)
+    run_kwargs = _run_kwargs(env)
+    try:
+        proc = run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=effective_timeout,
+            **run_kwargs,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, str(exc))
+    except subprocess.TimeoutExpired:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "gh call timed out")
+
+    return _parse_pr_vet_state_payload(proc, pr)
+
+
 def resolve_repo_slug(repo_root, *, deadline=None, timeout=GH_TIMEOUT, run=None, env=None):
     """Return (slug, refusal) — exactly one is non-None."""
     if run is None:

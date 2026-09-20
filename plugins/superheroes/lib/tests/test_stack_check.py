@@ -1552,3 +1552,153 @@ def test_l2f_v28_head_sha_short_refuses():
 def test_l2f_v29_head_sha_none_refuses():
     # axis: head_sha is None
     _assert_vet_refusal(_vet_body("**Verdict: READY** · %s" % HEAD_SHA), None, sc.REASON_BAD_ARGUMENT)
+
+
+# --- WO #1340 layer 2f: read_pr_vet_state ----------------------------------------------
+
+
+DEP_PR = 701
+
+
+def _pr_vet_argv():
+    return tuple(sc._pr_vet_state_argv(DEP_PR, REPO))
+
+
+def _pr_vet_ok(
+    head_ref_oid=HEAD_SHA,
+    state="OPEN",
+    is_draft=False,
+    body="",
+):
+    return SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({
+            "state": state,
+            "isDraft": is_draft,
+            "headRefOid": head_ref_oid,
+            "body": body,
+        }),
+        stderr="",
+    )
+
+
+def test_l2f_read_pr_vet_state_happy_path():
+    # axis: well-formed payload returns every field
+    body = "vet body"
+    run, calls = _make_run({_pr_vet_argv(): _pr_vet_ok(body=body)})
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert refusal is None
+    assert state == {
+        "number": DEP_PR,
+        "state": "OPEN",
+        "isDraft": False,
+        "headRefOid": HEAD_SHA,
+        "body": body,
+    }
+    assert calls[0] == list(_pr_vet_argv())
+
+
+def test_l2f_read_pr_vet_state_nonzero_exit():
+    # axis: gh exits non-zero
+    run, _calls = _make_run(
+        {_pr_vet_argv(): SimpleNamespace(returncode=1, stdout="", stderr="nope")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_stdout_not_json():
+    # axis: stdout is not JSON
+    run, _calls = _make_run(
+        {_pr_vet_argv(): SimpleNamespace(returncode=0, stdout="not-json", stderr="")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_missing_state_key():
+    # axis: a required key is missing
+    run, _calls = _make_run(
+        {_pr_vet_argv(): SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"isDraft": False, "headRefOid": HEAD_SHA, "body": ""}),
+            stderr="",
+        )}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_is_draft_not_boolean():
+    # axis: isDraft is not a boolean
+    run, _calls = _make_run(
+        {_pr_vet_argv(): SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "state": "OPEN",
+                "isDraft": "false",
+                "headRefOid": HEAD_SHA,
+                "body": "",
+            }),
+            stderr="",
+        )}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_head_ref_oid_not_40_hex():
+    # axis: headRefOid is not 40 hex
+    run, _calls = _make_run(
+        {_pr_vet_argv(): _pr_vet_ok(head_ref_oid="short")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_deadline_exhausted(monkeypatch):
+    # axis: exhausted deadline — no gh call made
+    times = [100.0, 105.0]
+    index = 0
+
+    def fake_monotonic():
+        nonlocal index
+        value = times[index] if index < len(times) else times[-1]
+        index += 1
+        return value
+
+    monkeypatch.setattr(sc.time, "monotonic", fake_monotonic)
+    run, calls = _make_run({_pr_vet_argv(): _pr_vet_ok()})
+
+    def _fail_run(*args, **kwargs):
+        raise AssertionError("gh should not run when deadline is exhausted")
+
+    state, refusal = sc.read_pr_vet_state(
+        DEP_PR, REPO, deadline=5.0, run=_fail_run,
+    )
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert calls == []
+
+
+def test_l2f_read_pr_vet_state_gh_not_on_path(monkeypatch):
+    # axis: gh is not on PATH
+    monkeypatch.setattr(sc.shutil, "which", lambda name: None)
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_timeout_expired():
+    # axis: run raises subprocess.TimeoutExpired
+    def _run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=1)
+
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=_run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
