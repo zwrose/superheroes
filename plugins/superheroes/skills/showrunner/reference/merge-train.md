@@ -90,10 +90,9 @@ saw. Nothing in the tooling closes that gap; this rule does.
    branch-protection evaluation, the history condition each layer must satisfy, and merge-queue
    behaviour live in `rubric/native-stacks.md` § *How a stack merges*.
 
-5. **A stack is brought current by merge, bottom-up** — locally merge the layer below into each
-   affected layer and push plainly; `gh pr update-branch` is refused on a stacked pull request. CI on
-   a stacked head is obtainable only once the stack is current. Each moved head then takes a fresh
-   remote-head check, CI on the new sha, and a receipt naming that sha
+5. **A stack is brought current by merge, bottom-up** — `gh pr update-branch` on each affected
+   layer starting just above the change, which keeps every layer's own commits; each moved head then
+   takes a fresh remote-head check, CI on the new sha, and a receipt naming that sha
    (`rubric/native-stacks.md` § *How a stack stays current*). GitHub's cascading rebase (the
    server-side **Rebase stack** action for a lane; `gh stack rebase` + `gh stack push` only for a
    local tracked stack an operator owns end to end) is the disclosed alternative when a merge

@@ -73,7 +73,9 @@ shape change is in `TRANSITION.md`:
 The launcher's `stack-read-unavailable` is its own token, never an alias of the reader's
 `stack-unreadable`. The bottom layer (`layerPosition == 1`) is **not** gated — the launcher reads
 nothing there, because a stack cannot be read without a member pull request, so a bottom-layer
-premise claiming an occupied position is not caught.
+premise claiming an occupied position is not caught. A child whose only blocker is an open pull
+request with a READY vet launches immediately as a native stack layer on that pull request's head;
+waiting for the merge is a defect, not caution.
 
 ## How membership is verified
 
@@ -147,15 +149,11 @@ When the stack's base branch or a lower layer has moved, each layer above the ch
 contain the tip of the layer below it. Two mechanisms restore that, and they differ in what they do
 to the layer's head:
 
-- **Bring the layer current by merge** — locally merge the layer below (or, at the bottom layer, the
-  base branch) into the layer's branch, then push it as a plain push, on each affected layer
-  **bottom-up** (the layer just above the change first). **`gh pr update-branch` does not work on a
-  stacked pull request** — GitHub answers 403 with `Updating a stacked PR's branch via this endpoint
-  is not supported`. This adds one merge commit per layer and rewrites none of the layer's own
-  commits. A rebase or force-push of a layer under review remains forbidden. The head still moves,
-  so the layer takes a fresh remote-head check, CI on the new sha, and a receipt that names that sha
-  — the re-review is of the merge, not of commits a panel already read. This is how a superheroes
-  lane brings a layer current.
+- **Bring the layer current by merge** — `gh pr update-branch` on each affected layer, **bottom-up**
+  (the layer just above the change first). This adds one merge commit per layer and rewrites none of
+  the layer's own commits. The head still moves, so the layer takes a fresh remote-head check, CI
+  on the new sha, and a receipt that names that sha — the re-review is of the merge, not of commits
+  a panel already read. This is how a superheroes lane brings a layer current.
 - **Cascading rebase** — GitHub's **Rebase stack** action from a pull request in the stack, or
   `gh stack rebase` followed by `gh stack push` for a local tracked stack. This rewrites every
   commit of every affected layer, so every layer above the change needs fresh remote-head checks
@@ -169,10 +167,6 @@ review.
 When a **lower layer changes under it**, bring the lower layer current first, then the layer above
 from it, bottom-up. The builder discloses the conflict round. Every layer whose head sha changes
 needs fresh remote-head checks and qualifying review and CI receipts on the new head.
-
-When a stack's merge into the base is **dirty**, GitHub provides **no merge ref**, so **no
-`pull_request` workflow run fires on any member**. CI on a stacked head is therefore obtainable only
-once the stack is current — bring it current first, then read CI.
 
 ## Anti-patterns
 
