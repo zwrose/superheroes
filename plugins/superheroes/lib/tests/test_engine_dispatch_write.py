@@ -3711,6 +3711,36 @@ def test_claude_mode_unsupported_codex_background_refused_write(tmp_path):
     assert len(fake.calls) == 0
 
 
+def test_claude_mode_background_write_open_records_caller_provenance(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "bg-open")
+    seat = _implementer_claude_seat()
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    res = _dispatch_write(
+        tmp_path, fake,
+        cwd=wt,
+        run_dir=run_dir,
+        seat=seat,
+        claude_mode="background",
+    )
+    assert res["ok"] is False
+    assert res.get("terminal") is True
+    assert res["detail"] == "claude-mode-not-dispatchable:background"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+    opened = _write_opened_record(run_dir)
+    assert opened["claudeMode"] == "background"
+    assert opened["resolvedInputs"]["claudeMode"] == "background"
+    assert opened["resolvedInputs"]["claudeModeSource"] == "caller"
+    schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
+    with open(schema_path, encoding="utf-8") as fh:
+        schema_text = fh.read().rstrip("\n")
+    assert opened["argv"][-2:] == ["--json-schema", schema_text]
+    assert "--bg" in opened["argv"]
+    assert ED._spawn_argv_coherence(opened, opened["argv"])[1] is None
+
+
 def test_legacy_write_journal_without_claude_mode_continues_with_explicit_print(
     tmp_path, monkeypatch,
 ):
@@ -3723,7 +3753,9 @@ def test_legacy_write_journal_without_claude_mode_continues_with_explicit_print(
         tmp_path, run_dir, wt, seat, config_dir=cfg,
     )
     assert "claudeMode" not in planted
-    fake = FakeRunner([])
+    with open(os.path.join(run_dir, ED.PROMPT_NAME), "w", encoding="utf-8") as fh:
+        fh.write(planted["fedPrompt"])
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
     res = _dispatch_write(
         tmp_path,
         fake,
@@ -3734,6 +3766,13 @@ def test_legacy_write_journal_without_claude_mode_continues_with_explicit_print(
         claude_mode="print",
     )
     assert res.get("detail") != ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH
+    assert res["ok"] is True
+    assert res["attempts"] == 1
+    assert len(fake.calls) == 1
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["argv"] == planted["argv"]
+    assert ED._spawn_argv_coherence(opened, opened["argv"])[1] is None
 
 
 def test_run_dir_claude_mode_mismatch_refused_write(tmp_path, monkeypatch):
