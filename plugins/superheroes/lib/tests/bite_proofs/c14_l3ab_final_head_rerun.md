@@ -1,21 +1,23 @@
 # C14 layer 3a-b — the orchestrator's bite-proof re-run at the final head
 
-**Head:** `9b9d6c0c` (`merge(superheroes): C14 layer 3a-b WO-G — suite-wide fixture repair (#1273)`), the branch head at the time of this re-run.
-**Who:** the layer 3a-b build orchestrator (`launch-fd24fcb829c3545b`), not an implementer. Every implementer's own proof was produced against that order's own working head; **this file is the re-run of every guarded element against the head that actually ships**, which is what catches detector-narrowing staleness — a later order tightening or relocating a branch can leave an earlier proof describing a detector that no longer exists in that shape.
+**Head:** `135913fd` (`test(superheroes): C14 layer 3a-b WO-R2 — derive the injected deadline from the clock it is compared against (#1273)`), the branch head at the time of this re-run.
+**Who:** the layer 3a-b build orchestrator, not an implementer. Every implementer's own proof was produced against that order's own working head; **this file is the re-run of every guarded element against the head that actually ships**, which is what catches detector-narrowing staleness — a later order tightening or relocating a branch can leave an earlier proof describing a detector that no longer exists in that shape.
 
-**Method, uniform across all thirteen elements.** The landed work was committed first, so the tree was clean before any probe. Each neutralization was applied as a **targeted, revertible edit through the host's edit action** — never a whole-file rewrite, never a shell edit, never `git checkout` to revert (the worktree guard refuses that here, by design: issue #682). The proving test was run **unedited** and observed red; the neutralization was then removed by the **inverse edit**; and the tree was confirmed byte-clean at the end by `git status --porcelain` returning empty, followed by a green run of all four affected test files together.
+**Why this file was rewritten.** The previous version of this record was earned at `9b9d6c0c`. Three commits landed after it — the review round's fixes, and the two test re-pins — so it described a head that no longer ships. Every element below was re-neutralized and re-observed at `135913fd`; nothing is carried forward on the strength of the earlier run.
+
+**Method, uniform across all thirteen elements.** The landed work was committed first, so the tree was clean before any probe, and the probes ran in a **detached worktree pinned at the final head**, never in a tree another reader holds. Each neutralization was applied as a **targeted, revertible edit through the host's edit action** — never a whole-file rewrite, never a shell edit, never `git checkout` to revert (the worktree guard refuses that here, by design). The proving test was run **unedited** and observed red; the neutralization was then removed by the **inverse edit**; and the tree was confirmed byte-clean at the end by `git status --porcelain` returning empty, followed by a green run of all four affected test files together.
 
 **Closing receipt — the two lines that make this record checkable:**
 
 ```
 $ git status --porcelain
                                    (empty)
-$ /usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest \
+$ /usr/bin/python3 -B -X pycache_prefix=<scratch> -m pytest \
     plugins/superheroes/lib/tests/test_engine_result_channel.py \
     plugins/superheroes/lib/tests/test_engine_dispatch.py \
     plugins/superheroes/lib/tests/test_admission_clock_census.py \
     plugins/superheroes/lib/tests/test_conformance_probe.py -q -n auto
-1055 passed in 34.23s
+1063 passed in 13.23s
 ```
 
 ## The thirteen guarded elements, and how each bit
@@ -33,15 +35,25 @@ $ /usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest \
 | BP-C3 | the `timedOut`-without-`deadlineMono` guard | the guard gated to `if False and ended.get("timedOut")` | `test_timed_out_write_without_recorded_deadline_forfeits` | `4 failed` (all params) |
 | BP-C4 | the admission-path census detects a timestamp read | `os.path.getmtime(run_dir_real)` planted inside `_load_native_result_json` | `test_admission_path_does_not_read_filesystem_timestamps` | `1 failed`, naming `('_load_native_result_json', 'getmtime')` |
 | BP-C5 | the census's vacuity guard | one `ENTRY_POINTS` name changed to `_load_native_result_json_renamed` | `test_admission_path_closure_covers_entry_points` | `1 failed` |
-| BP-D2 | `probe()`'s all-mode preflight abort | the `any_reused` short-circuit gated to `if False and any_reused` | `test_probe_preflight_aborts_all_modes_when_one_mode_reused` | `1 failed` |
+| BP-D2 | `probe()`'s all-mode preflight abort | the `any_reused` short-circuit gated to `elif False and any_reused` | `test_probe_preflight_aborts_all_modes_when_one_mode_reused` | `1 failed` |
 
 **BP-C1 and BP-D1 share one production element** — the completion window inside `_load_native_result_json` — and are recorded as one neutralization proving two independent test sets, rather than as two probes of the same line. That is stated rather than quietly collapsed, because "thirteen elements, twelve neutralizations" is exactly the kind of arithmetic a reader should not have to reconstruct.
 
+## The re-pinned test carries its own vacuity probe
+
+`test_completion_producer_natural_exit_after_cap_forfeits` was re-pinned at this head: it no longer races a real child against a real wall cap, and the recorded deadline is injected. An injected value invites the question a green run cannot answer — *is this test still capable of failing?* — so it was probed like a detector, with the same method as the table above.
+
+| neutralization | observed |
+| --- | --- |
+| the injected deadline moved from *before* the run's clock reading to `1e12` (far after any completion instant) | `1 failed` — `AssertionError: assert None is True` on `grade.get("forfeit")`, with the grade coming back `{'ok': True, 'signal': 'ok', ...}` |
+
+The test therefore still turns red when the admission it guards stops forfeiting. Its green is earned by the deadline comparison, not by the construction that supplies the deadline.
+
 ## One proof that did not bite on the first attempt, and why that is in the record
 
-BP-B1 was first neutralized by deleting **only** the `rc is not None` branch's observation call. The test stayed **green** (`1 passed`), because the top-of-loop observation still fired on the iteration before the exit was noticed. The element's real shape is the **pair** — per-poll observation *plus* the natural-exit observation — so the proof was redone as the implementer's record describes it: observation moved into the heartbeat block (restoring the 10-second cadence the defect lived in) *and* removed from the break branch. It then went red.
+BP-B1 was first neutralized, in the earlier run at `9b9d6c0c`, by deleting **only** the `rc is not None` branch's observation call. The test stayed **green**, because the top-of-loop observation still fired on the iteration before the exit was noticed. The element's real shape is the **pair** — per-poll observation *plus* the natural-exit observation — so the proof is recorded, and was re-run here, as the paired neutralization: observation moved into the heartbeat block (restoring the 10-second cadence the defect lived in) *and* removed from the break branch. It went red at this head as it did at the last.
 
-This is recorded rather than quietly corrected because a first attempt that fails to bite is evidence about the *element*, not noise: it says the guard has redundancy in it, and that a future change removing only one half would not be caught by this test alone. That is a real, narrow residual and it belongs where the next reader will find it.
+This is kept rather than quietly corrected because a first attempt that fails to bite is evidence about the *element*, not noise: it says the guard has redundancy in it, and that a future change removing only one half would not be caught by this test alone. That is a real, narrow residual and it belongs where the next reader will find it.
 
 ## What this re-run does not claim
 
