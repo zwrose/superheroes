@@ -29,6 +29,31 @@ def _cfg():
     return {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "codex"}
 
 
+def _cfg_cert(**over):
+    base = _cfg()
+    base["baseGuard"] = RC.BASE_GUARD_CHECKED
+    base.update(over)
+    return base
+
+
+def _run_loop_seams():
+    return {
+        "reviewer": lambda dim, tier, rnd, ctx: [],
+        "verifier": lambda clusters, rnd: [],
+        "synthesis": lambda findings, rnd: None,
+        "auditor": lambda targets, rnd: [],
+        "fix_step": lambda batch, rnd, payload: {
+            "fixes": [], "headDiff": "diff", "changedSubjects": ["Code"],
+        },
+        "verify_runner": lambda command, rnd: "pass",
+        "io": {},
+    }
+
+
+def _state_canonical(state):
+    return json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
 def _ledger_by_key(state):
     return {SC.finding_identity_key(e): e
             for e in (state.get("dispositionLedger") or []) if isinstance(e, dict)}
@@ -234,6 +259,59 @@ def test_family_sync_no_live_row_ledger_only():
     assert set(_family_slice(entry)) == {SC.MERGED_INTO_FIELD}
 
 
+# --- marker: _fold chokepoint refuses unrecognized ------------------------------------
+
+def test_marker_run_loop_parks_on_unrecognized_disposition_ledger_owner():
+    parked_reasons = []
+    orig_park = RD._park_cannot_certify
+    orig_new_state = RD.new_state
+
+    def _capture_park(state, detail):
+        parked_reasons.append(detail)
+        return orig_park(state, detail)
+
+    def _state_with_unrecognized_marker(config=None):
+        state = orig_new_state(config)
+        state["dispositionLedgerOwner"] = "ledger-v2"
+        return state
+
+    RD._park_cannot_certify = _capture_park
+    RD.new_state = _state_with_unrecognized_marker
+    try:
+        result = RD.run_loop(_run_loop_seams(), _cfg_cert())
+    finally:
+        RD._park_cannot_certify = orig_park
+        RD.new_state = orig_new_state
+    assert result["loopTerminal"] == "cannot-certify"
+    assert result["loopCertificationShape"] is None
+    assert "verdict" not in result
+    assert parked_reasons == [RD.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE]
+
+
+def test_marker_fold_chokepoint_raises_before_mutation():
+    state = RD.new_state(_cfg())
+    state["dispositionLedgerOwner"] = "ledger-v2"
+    before = _state_canonical(state)
+    with pytest.raises(RD.DispositionLedgerOwnerRefusal) as exc:
+        RD._fold(state, state["config"], RD.P_PANEL, _panel_artifact())
+    assert exc.value.reason == RD.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE
+    assert _state_canonical(state) == before
+
+
+def test_marker_fold_absent_marker_still_folds():
+    state = RD.new_state(_cfg())
+    RD._fold(state, state["config"], RD.P_PANEL, _panel_artifact())
+    assert state.get("rounds")
+
+
+def test_marker_fold_recognized_marker_still_folds():
+    state = RD.new_state(_cfg())
+    state["dispositionLedgerOwner"] = "ledger"
+    state["dispositionLedger"] = []
+    RD._fold(state, state["config"], RD.P_PANEL, _panel_artifact())
+    assert state.get("rounds")
+
+
 # --- bite-proof detectors (axis lines live at the guarded production sites) -------------
 
 def test_bite_bp2f_a_certification_marker_refusal():
@@ -294,3 +372,11 @@ def test_bite_bp2f_d_record_merged_into_family_sync():
                 if SC.finding_identity_key(f) == key)
     assert set(_family_slice(entry)) == {SC.MERGED_INTO_FIELD}
     assert _family_slice(entry) == _family_slice(live)
+
+
+def test_bite_bp2f_i_fold_chokepoint_refusal():
+    """axis: unrecognized dispositionLedgerOwner refuses at _fold — never reaches a fold arm."""
+    state = RD.new_state(_cfg())
+    state["dispositionLedgerOwner"] = "ledger-v2"
+    with pytest.raises(RD.DispositionLedgerOwnerRefusal):
+        RD._fold(state, state["config"], RD.P_PANEL, _panel_artifact())

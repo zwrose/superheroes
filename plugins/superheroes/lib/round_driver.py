@@ -509,6 +509,17 @@ class FixBatchCapRefusal(ValueError):
         self.value = value
 
 
+class DispositionLedgerOwnerRefusal(ValueError):
+    """Fold-time refusal for an unrecognized ``dispositionLedgerOwner`` marker — sibling of
+    ``RoundCeilingRefusal``.
+
+    Raised only from ``_fold`` — the single chokepoint every fold passes through."""
+    def __init__(self, reason, value=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.value = value
+
+
 RECEIPT_FAULT_WRITE = "receipt-write"                 # round-receipt.json could not be written
 RECEIPT_FAULT_CERTIFICATION = "certification-artifact"  # certification receipt/refusal artifact could not be written
 RECEIPT_FAULT_VERIFY = "receipt-verify"               # the on-disk receipt failed re-verification
@@ -1434,8 +1445,6 @@ def _stage_findings(state, compiled):
     ledger = _ensure_disposition_ledger(state)
     seen = _ledger_index_by_key(ledger)
     owner_class = session_contract.disposition_ledger_owner_classification(state)
-    if owner_class == "unrecognized":
-        return
     first_ledger_owner = owner_class == "absent"
     if first_ledger_owner:
         _backfill_ledger_from_records(state, ledger, seen)
@@ -2161,6 +2170,8 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     `changed_subjects_seam` is threaded to the fixer fold: run_loop passes the injected seam (the
     eval harness replays the fixture's subjects); the CLI submit path passes None so the fixer fold
     wires the real git derivation. It is inert for every other phase."""
+    if session_contract.disposition_ledger_owner_classification(state) == "unrecognized":
+        raise DispositionLedgerOwnerRefusal(DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE)
     artifact = artifact if isinstance(artifact, dict) else {}
     _record_adapter_provenance(state, artifact, phase)
     if phase == P_PANEL:
@@ -5756,7 +5767,11 @@ def run_loop(seams, config=None):
                 if fault is not None:
                     _record_round_append(state, "verifierArtifactFault",
                                          {"fault": fault, "round": state["round"]})
-            _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
+            try:
+                _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
+            except DispositionLedgerOwnerRefusal as refusal:
+                _park_cannot_certify(state, refusal.reason)
+                return _run_loop_certified_receipt(state, guard)
             _persist_round_records(state, state["config"])
             # a delta round routes scoped candidates through verifiers; when that path is armed the
             # synthesis fold must re-settle the delta rather than the round-1 path.
@@ -6028,7 +6043,13 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             state = prep["state"]
             round_no = prep["round_no"]
             art_hash = prep["art_hash"]
-            _fold(state, state["config"], phase, artifact, session_dir=session_dir)
+            try:
+                _fold(state, state["config"], phase, artifact, session_dir=session_dir)
+            except DispositionLedgerOwnerRefusal:
+                _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                              "round": round_no, "attempt": attempt,
+                                              "outcome": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE})
+                return {"ok": False, "reason": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE}
             if _via_advance and _pending_policy_applied is not None:
                 applied = state.get("_policyApplied")
                 if not isinstance(applied, list):

@@ -12,6 +12,7 @@ inverse (never `git checkout`).
 | BP-2f-b | `round_driver._cmd_submit_prepare` submit preflight | unrecognized marker refuses submit before fold — `loop-state.json` byte-unchanged |
 | BP-2f-c | `round_driver._apply_disposition_family` via `_record_disposition` | re-staged family byte-equal on ledger and live; stale members popped |
 | BP-2f-d | `round_driver._apply_disposition_family` via `_record_merged_into` | merge family is only `mergedInto` on ledger and live |
+| BP-2f-i | `round_driver._fold` unrecognized-marker chokepoint | unrecognized `dispositionLedgerOwner` refuses at the fold chokepoint — never reaches a fold arm |
 
 ---
 
@@ -137,3 +138,35 @@ E       AssertionError: assert {'disposition'... 'mergedInto'} == {'mergedInto'}
 **Restore.** Restored `_apply_disposition_family` calls for entry and live.
 
 **Raw green:** same as BP-2f-a green (`14 passed`).
+
+---
+
+## BP-2f-i — `_fold` chokepoint refusal
+
+**Neutralization** (`round_driver._fold`):
+
+```python
+    if False and session_contract.disposition_ledger_owner_classification(state) == "unrecognized":  # bite neutralized BP-2f-i
+```
+
+**Test.** `test_bite_bp2f_i_fold_chokepoint_refusal` (+ `test_marker_fold_chokepoint_raises_before_mutation`, `test_marker_run_loop_parks_on_unrecognized_disposition_ledger_owner`).
+
+**Raw red:**
+
+```
+..........FF......F                                                      [100%]
+3 failed, 16 passed in 5.57s
+```
+
+**Restore.** Removed `False and` prefix — restored line:
+
+```python
+    if session_contract.disposition_ledger_owner_classification(state) == "unrecognized":
+```
+
+**Raw green:**
+
+```
+...................                                                      [100%]
+19 passed in 5.34s
+```
