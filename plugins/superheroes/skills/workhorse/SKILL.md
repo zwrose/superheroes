@@ -331,16 +331,31 @@ on a CI runner, so a fixture's own commits still pass an explicit inline one.)
 
 ### Building a layer of a stack
 
-Every multi-PR child of a superheroes project is a [native stack](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/glossary.md#native-stacks); an exception is owner-ruled and recorded — see [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) for what a stack is and the glossary for the two terms. A layer's branch, its PR base, and its stack membership all name the **layer below**, and each of the three is established from the **remote**, never from a local assumption.
+Every multi-PR child of a superheroes project is a [native stack](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/glossary.md#stack); an exception is owner-ruled and recorded — see
+[native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) for what a stack is and the glossary for the two terms.
+A layer's branch, its PR base, and its stack membership all name the **layer below**,
+and each of the three is established from the **remote**, never from a local assumption.
 
-- **Branch from the layer below's head** and set the **PR base to that branch** — the bottom layer branches from and targets the stack's base (normally `main`).
-- **`gh stack link` at handback**, arguments bottom to top ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack comes to exist). A base-branch chain that was never linked **is not a stack** — nothing downstream, not the advisor's click list, not the atomic merge, works on it.
-- **Membership is verified from the branch before it is claimed** — the GraphQL read in [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How membership is verified, not `gh stack view`, which reads local tracking state only. "Linked" is a claim like any other: quote the PR's own `stackEntry` position and the stack's ordered entries in the PR body.
-- **The verify gate takes the pinned base** — on a stacked branch the review session's verify command carries `{baseRef}` bound to the **pinned base commit** (`review-code` § *The verify command*); without it a layer's gate selects the whole stack below it.
-- **The register check reads main's copy, and the handback says which copy it read** — a layer's worktree carries whatever the layers below wrote ([register-check.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md)).
-- **Size is reported at 300 and the call is handed up at 600** ([review-discipline.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md) § Review bars and recorded residuals) — a layer growing past the bars is split into another layer rather than allowed to swallow two surfaces.
-- **Never rebase and never force-push a layer inside a lane** — both move a head other layers and the review are pinned to; take in a moved base with `gh pr update-branch` per layer, bottom-up, by merge ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack stays current).
-- **A conflict round when a lower layer changes under you** — bring the lower layer current first, then update your layer from it, bottom-up, and **disclose the conflict round in the PR body**.
+- **Branch from the layer below's head** and set the **PR base to that branch** — the bottom layer
+  branches from and targets the stack's base (normally `main`).
+- **`gh stack link` at handback**, arguments bottom to top ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack comes to exist).
+  A base-branch chain that was never linked **is not a stack** — nothing downstream, not the advisor's click list,
+  not the atomic merge, works on it.
+- **Membership is verified from the branch before it is claimed** — the GraphQL read in
+  [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How membership is verified, not `gh stack view`, which reads local tracking state only.
+  "Linked" is a claim like any other: quote the PR's own `stackEntry` position and the stack's ordered entries in the PR body.
+- **The verify gate takes the pinned base** — on a stacked branch the review session's verify command
+  carries `{baseRef}` bound to the **pinned base commit** (`review-code` § *The verify command*); without it a layer's
+  gate selects the whole stack below it.
+- **The register check reads main's copy, and the handback says which copy it read** — a layer's
+  worktree carries whatever the layers below wrote ([register-check.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md)).
+- **Size is reported at 300 and the call is handed up at 600** ([review-discipline.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md) § Review bars and recorded residuals) — a layer growing past the bars is split into another layer rather than
+  allowed to swallow two surfaces.
+- **Never rebase and never force-push a layer inside a lane** — both move a head other layers and the
+  review are pinned to; take in a moved base with `gh pr update-branch` per layer, bottom-up, by merge
+  ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack stays current).
+- **A conflict round when a lower layer changes under you** — bring the lower layer current first, then
+  update your layer from it, bottom-up, and **disclose the conflict round in the PR body**.
 
 Your own worktree + branch off the issue's base, and **bring the app up** the way test-pilot will
 run it (dev server, any login/seed the app needs to be usable). **No running app (a plugin, library,
@@ -757,7 +772,7 @@ without a tool call.
   Bash tool call (every engine dispatch — reviewer and fixer — runs as a Bash tool call with a
   structural 600 s floor from `PreToolUse(Bash)`; see
   `review-code/reference/auto-fix-loop.md`); the in-place fixer is explicitly not a `dispatch-write`
-  consumer.   **`review-code`'s codex/cursor seats run the native shape** — `dispatch-review` with
+  consumer. **`review-code`'s codex/cursor seats run the native shape** — `dispatch-review` with
   `--max-wait` slices and originating-verb continuation on the same `--run-dir` until terminal
   (`review-code/reference/auto-fix-loop.md`); every runner-dispatched review seat's durable record is
   written with `record-result --evidence-run-dir <the completed dispatch-review run directory>` —

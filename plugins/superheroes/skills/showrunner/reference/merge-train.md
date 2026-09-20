@@ -58,7 +58,7 @@ saw. Nothing in the tooling closes that gap; this rule does.
 
 1. **Membership is read from GitHub before any click list is drafted** — the GraphQL read in
    `rubric/native-stacks.md` § *How membership is verified*. `gh stack view` reads local tracking
-   state only and is never evidence (see § *Anti-patterns*). A base-branch chain that was never
+   state only and is never evidence (see `rubric/native-stacks.md` § *Anti-patterns*). A base-branch chain that was never
    linked is **not** a stack and cannot be merged as one.
 
 2. **The word enumerates every pull request in the intended merge prefix**, by number and in order —
@@ -73,14 +73,14 @@ saw. Nothing in the tooling closes that gap; this rule does.
 
 4. **One command merges the stack, in order, atomically** — `gh stack merge <stack-or-pr> --yes
    --squash`; every member up to and including the chosen pull request, all or nothing. **Never
-   pull request by pull request**: serial merges are the anti-pattern (§ *Anti-patterns*), and they
+   pull request by pull request**: serial merges are the anti-pattern (`rubric/native-stacks.md` § *Anti-patterns*), and they
    leave the trunk holding intermediate layers if one member fails. Merge semantics, the
    bare-number ambiguity, per-pull-request branch-protection evaluation, and merge-queue behaviour
    live in `rubric/native-stacks.md` § *How a stack merges*.
 
 5. **A stack is brought current with `main` by merge, bottom-up** — `gh pr update-branch` per layer
-   from the bottom (§ *How a stack stays current*); never a rebase or a force-push of a layer
-   under review, which the doctrine names as an anti-pattern (§ *Anti-patterns*).
+   from the bottom (`rubric/native-stacks.md` § *How a stack stays current*); never a rebase or a force-push of a layer
+   under review, which the doctrine names as an anti-pattern (`rubric/native-stacks.md` § *Anti-patterns*).
 
 6. **After the merge, report what merged** — each pull request number with the head sha that landed
    — and then this file's existing rules apply unchanged: the train is green when **`main`'s own
