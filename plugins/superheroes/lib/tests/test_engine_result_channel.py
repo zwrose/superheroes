@@ -720,10 +720,17 @@ def test_ruling_new_issues_detailed_entry_validates_and_survives_grading(tmp_pat
         "nativeSchemaPath": schema_path,
         "expectedResultKind": "ruling",
     }
+    envelope = _wrap_result(branch)
+    scrubbed = ed._scrub_native_payload(envelope)
+    ended = {
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": 0, "wallSeconds": 1.0,
+    }
+    ended.update(ERC.completion_stamp(1.0, ERC.canonical_payload_digest(scrubbed)))
+    ed._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     state = {
         "opened": opened,
-        "attempts": {1: {"ended": {"exit": 0, "timedOut": False, "refusal": None,
-                                   "stdoutBytes": 0, "wallSeconds": 1.0}}},
+        "attempts": {1: {"ended": ended}},
     }
     grade = ed._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True

@@ -9626,13 +9626,19 @@ def test_grade_review_pr_body_payload_without_investigation_forfeit(tmp_path):
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
         fh.write(stdout)
     _sync_native_review_result_from_stdout(run_dir, stdout)
-    ended = _stamp_ended_from_native_result(run_dir, state["attempts"][1]["ended"])
-    _journal_test_attempt_ended(run_dir, 1, ended)
-    state["attempts"][1]["ended"] = ended
+    ended = _stamp_ended_from_native_result(run_dir, {
+        "exit": 0, "timedOut": False, "signal": None,
+        "refusal": None, "at": time.time(), "wallSeconds": 1.0, "stdoutBytes": len(stdout),
+    })
     records, _ = ED._journal_read(run_dir)
     for rec in records:
         if rec.get("kind") == "run-opened":
             rec["prBodySourcePath"] = os.path.join(str(tmp_path), "session", "pr-body.md")
+    records = [
+        rec for rec in records
+        if not (rec.get("kind") == "attempt-ended" and rec.get("attempt") == 1)
+    ]
+    records.append({"kind": "attempt-ended", "attempt": 1, **ended})
     path = ED._journal_path(run_dir)
     with open(path, "w", encoding="utf-8") as fh:
         for rec in records:
@@ -12130,10 +12136,15 @@ def test_grade_native_review_attempt_result_malformed_json(tmp_path):
 
 
 def test_grade_native_review_attempt_result_malformed_no_result_key(tmp_path):
-    run_dir, state = _native_review_grade_state(tmp_path, _native_review_branch("findings"))
+    run_dir, state = _native_review_grade_state(
+        tmp_path, _native_review_branch("findings"), write_result=False,
+    )
     with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
         json.dump({"findings": []}, fh)
-    ended = _stamp_ended_from_native_result(run_dir, state["attempts"][1]["ended"])
+    ended = _stamp_ended_from_native_result(run_dir, {
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": 0, "wallSeconds": 1.0,
+    })
     _journal_test_attempt_ended(run_dir, 1, ended)
     state["attempts"][1]["ended"] = ended
     grade = ED._grade_review_attempt(run_dir, state, 1)
