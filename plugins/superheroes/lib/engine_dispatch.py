@@ -77,6 +77,7 @@ MAX_WAIT_REFUSAL_RANGE = "max-wait-out-of-range"
 MAX_WAIT_REFUSAL_TYPE = "max-wait-not-an-integer"
 MAX_ATTEMPTS = 2                 # unchanged semantics: one tight-inline retry
 SUPERVISOR_POLL_INTERVAL = 0.5
+_ATTEMPT_POLL_INTERVAL = 0.2
 RUN_CHILD_RECORD_WAIT_SECONDS = 10
 RUN_LOCK_TTL = 2 * MAX_SYNC_WAIT
 ABANDON_CONFIRM_SECONDS = 10
@@ -3917,7 +3918,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             # one written before the cap (see timeoutAt on the ended record).
             timeout_at = timeout_deadline_wall
             break
-        time.sleep(0.2)
+        time.sleep(_ATTEMPT_POLL_INTERVAL)
     _terminate_process_group(pgid)
     try:
         proc.wait(timeout=2)

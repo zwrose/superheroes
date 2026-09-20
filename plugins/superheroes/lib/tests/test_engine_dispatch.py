@@ -3622,6 +3622,7 @@ def test_native_write_timeout_poll_gap_result_after_cap_refused(tmp_path):
 
 # axis: timeoutAt on a P1 timeout is the computed wall cap, not the poll/ended instant.
 def test_native_write_timeout_at_is_cap_not_poll_time(tmp_path, monkeypatch):
+    monkeypatch.setattr(ED, "_ATTEMPT_POLL_INTERVAL", 3.0)
     script = (
         "import signal, time\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
@@ -3635,8 +3636,11 @@ def test_native_write_timeout_at_is_cap_not_poll_time(tmp_path, monkeypatch):
     started = next(r for r in records if r.get("kind") == "engine-started")
     start_wall = started["at"]
     cap = ended["capSeconds"]
-    assert abs(ended["timeoutAt"] - (start_wall + cap)) <= 0.25
+    cap_deadline = start_wall + cap
+    assert abs(ended["timeoutAt"] - cap_deadline) <= 0.5
     assert ended["timeoutAt"] < ended["at"]
+    # Deliberate poll slack (~3 s) must sit between the cap stamp and attempt-ended.
+    assert ended["at"] - ended["timeoutAt"] >= 2.0
 
 
 # axis: P2 background timeout records timeoutAt and refuses a native result written after it.
