@@ -9,6 +9,7 @@ import pytest
 import heartbeat as hb
 import launch_ledger as ll
 import launcher
+import stack_check as sc
 import wave_watch as ww
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -3364,4 +3365,235 @@ def test_loop_log_line_carries_the_suppression_note(tmp_path, monkeypatch):
     logged = lines[0]["result"]["staleSuppressed"]
     assert logged[0]["launchId"] == "lane-a"
     assert logged[0]["note"] == ww.NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH
+
+
+# --- pr-set-changed stack grouping (#1340 layer 2b) ---------------------------
+
+
+_TEST_REPO_SLUG = "owner/repo"
+
+
+def _stack_membership(stack_number, pr_numbers_in_order):
+    return {
+        "ok": True,
+        "reason": None,
+        "stack": {
+            "number": stack_number,
+            "size": len(pr_numbers_in_order),
+            "baseRefName": "main",
+        },
+        "members": [
+            {"position": index + 1, "number": number}
+            for index, number in enumerate(pr_numbers_in_order)
+        ],
+    }
+
+
+def _gh_pr_list_with_repo_view(pr_sets, repo_slug=_TEST_REPO_SLUG):
+    idx = [0]
+
+    def gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout=json.dumps({"nameWithOwner": repo_slug}),
+                stderr="",
+            )
+        if argv[:3] == ["gh", "pr", "list"]:
+            body = [{"number": n} for n in sorted(pr_sets[idx[0]])]
+            idx[0] += 1
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps(body), stderr="",
+            )
+        raise AssertionError("unexpected gh argv: %r" % argv)
+
+    return gh_run
+
+
+def _run_pr_set_changed(
+    tmp_path, monkeypatch, pr_sets, membership_reader, *, max_seconds=5,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    return ww.run(
+        repo,
+        "batch-982",
+        max_seconds=max_seconds,
+        interval_seconds=1,
+        gh_run=_gh_pr_list_with_repo_view(pr_sets),
+        membership_reader=membership_reader,
+    )
+
+
+def test_pr_set_changed_two_stacks_groups_all_members_in_position_order(
+    tmp_path, monkeypatch,
+):
+    pr_sets = [{10, 20, 30, 40}, {10, 20, 30, 40, 50, 60}]
+    calls = []
+
+    def membership_reader(*, pr, repo, timeout):
+        calls.append({"pr": pr, "timeout": timeout})
+        if pr == 50:
+            return _stack_membership(100, [50, 51])
+        if pr == 60:
+            return _stack_membership(200, [60, 61, 62])
+        raise AssertionError("unexpected pr %r" % pr)
+
+    result = _run_pr_set_changed(
+        tmp_path, monkeypatch, pr_sets, membership_reader,
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert result["prsAdded"] == [50, 60]
+    assert result["stacks"] == [
+        {"stack": 100, "prs": [50, 51]},
+        {"stack": 200, "prs": [60, 61, 62]},
+    ]
+    assert result["ungrouped"] == []
+    assert [entry["pr"] for entry in calls] == [50, 60]
+
+
+def test_pr_set_changed_second_member_in_stack_costs_no_extra_reader_call(
+    tmp_path, monkeypatch,
+):
+    pr_sets = [{10, 20}, {10, 20, 30, 40}]
+    calls = []
+
+    def membership_reader(*, pr, repo, timeout):
+        calls.append(pr)
+        return _stack_membership(100, [30, 40])
+
+    result = _run_pr_set_changed(
+        tmp_path, monkeypatch, pr_sets, membership_reader,
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert result["prsAdded"] == [30, 40]
+    assert calls == [30]
+    assert result["stacks"] == [{"stack": 100, "prs": [30, 40]}]
+    assert result["ungrouped"] == []
+
+
+def test_pr_set_changed_not_linked_lands_in_ungrouped(tmp_path, monkeypatch):
+    pr_sets = [{10}, {10, 99}]
+
+    def membership_reader(*, pr, repo, timeout):
+        return {"ok": False, "reason": sc.REASON_NOT_LINKED}
+
+    result = _run_pr_set_changed(
+        tmp_path, monkeypatch, pr_sets, membership_reader,
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert result["prsAdded"] == [99]
+    assert result["stacks"] == []
+    assert result["ungrouped"] == [99]
+
+
+def test_pr_set_changed_refusing_read_degrades_and_preserves_prs_keys(
+    tmp_path, monkeypatch,
+):
+    pr_sets = [{10}, {10, 99}]
+
+    def membership_reader(*, pr, repo, timeout):
+        return {"ok": False, "reason": "stack-unreadable"}
+
+    result = _run_pr_set_changed(
+        tmp_path, monkeypatch, pr_sets, membership_reader,
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert result["prs"] == [10, 99]
+    assert result["prsAdded"] == [99]
+    assert result["prsRemoved"] == []
+    assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in result["degraded"]
+    assert result["stacks"] == []
+    assert result["ungrouped"] == [99]
+
+
+def test_pr_set_changed_exhausted_deadline_stops_walk_no_reader_after(
+    tmp_path, monkeypatch,
+):
+    pr_sets = [{10}, {10, 30, 40}]
+    reader_calls = []
+    mono = [1000.0]
+
+    def membership_reader(*, pr, repo, timeout):
+        reader_calls.append(pr)
+        if pr == 30:
+            mono[0] += 10.0
+            return _stack_membership(100, [30, 31])
+        return _stack_membership(200, [40, 41])
+
+    def monotonic():
+        return mono[0]
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ww.run(
+        repo,
+        "batch-982",
+        max_seconds=5,
+        interval_seconds=1,
+        gh_run=_gh_pr_list_with_repo_view(pr_sets),
+        membership_reader=membership_reader,
+        monotonic=monotonic,
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert reader_calls == [30]
+    assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in result["degraded"]
+    assert result["stacks"] == [{"stack": 100, "prs": [30, 31]}]
+    assert result["ungrouped"] == [40]
+
+
+def test_pr_set_changed_membership_read_timeout_bounded_by_remaining(
+    tmp_path, monkeypatch,
+):
+    pr_sets = [{10}, {10, 99}]
+    seen_timeouts = []
+    mono = [500.0]
+    deadline = 505.0
+
+    def membership_reader(*, pr, repo, timeout):
+        seen_timeouts.append(timeout)
+        return {"ok": False, "reason": sc.REASON_NOT_LINKED}
+
+    def monotonic():
+        return mono[0]
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ww.run(
+        repo,
+        "batch-982",
+        max_seconds=5,
+        interval_seconds=1,
+        gh_run=_gh_pr_list_with_repo_view(pr_sets),
+        membership_reader=membership_reader,
+        monotonic=monotonic,
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert seen_timeouts == [deadline - mono[0]]
+
+
+def test_pr_set_changed_no_stacks_empty_stacks_all_changed_in_ungrouped(
+    tmp_path, monkeypatch,
+):
+    pr_sets = [{10}, {10, 88, 99}]
+
+    def membership_reader(*, pr, repo, timeout):
+        return {"ok": False, "reason": sc.REASON_NOT_LINKED}
+
+    result = _run_pr_set_changed(
+        tmp_path, monkeypatch, pr_sets, membership_reader,
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert result["prsAdded"] == [88, 99]
+    assert result["prsRemoved"] == []
+    assert result["stacks"] == []
+    assert result["ungrouped"] == [88, 99]
 
