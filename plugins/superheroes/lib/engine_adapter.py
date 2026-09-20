@@ -84,6 +84,8 @@ SHAPE_OBJECT_VERDICTS_NOT_A_LIST = "object-verdicts-not-a-list"
 SHAPE_ARRAY_NOT_ALL_OBJECTS = "array-not-all-objects"
 SHAPE_FINDINGS_HOLLOW_MEMBER = "findings-hollow-member"
 SHAPE_VERDICTS_HOLLOW_MEMBER = "verdicts-hollow-member"
+SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER = "findings-partial-hollow-member"
+SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER = "verdicts-partial-hollow-member"
 SHAPE_PLACEHOLDER_LITERAL_REFUSAL = "placeholder-literal-refusal"
 SHAPE_NO_PARSEABLE_JSON = "no-parseable-json"
 SHAPE_EMPTY_STDOUT = "empty-stdout"
@@ -95,8 +97,10 @@ REVIEW_PAYLOAD_SHAPES = (
     SHAPE_OBJECT_FINDINGS_NOT_A_LIST,   # a JSON object parsed with a `findings` key that is not a list
     SHAPE_OBJECT_VERDICTS_NOT_A_LIST,   # a JSON object parsed with a `verdicts` key that is not a list
     SHAPE_ARRAY_NOT_ALL_OBJECTS,        # a bare top-level array parsed, but not every element is an object
-    SHAPE_FINDINGS_HOLLOW_MEMBER,       # a findings array parsed with at least one hollow object member
-    SHAPE_VERDICTS_HOLLOW_MEMBER,       # a verdicts array parsed with at least one hollow object member
+    SHAPE_FINDINGS_HOLLOW_MEMBER,       # a findings array parsed with only hollow object members
+    SHAPE_VERDICTS_HOLLOW_MEMBER,       # a verdicts array parsed with only invalid members
+    SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER,  # findings list carries substantive and hollow members
+    SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER,  # verdicts list carries valid and invalid members
     SHAPE_PLACEHOLDER_LITERAL_REFUSAL,  # an item carries a review-base template literal in id or severity
     SHAPE_NO_PARSEABLE_JSON,            # stdout was non-empty but held no parseable top-level JSON value
     SHAPE_EMPTY_STDOUT,                 # stdout was empty or whitespace only
@@ -1899,6 +1903,101 @@ def _bound_top_level_keys(obj):
     return keys, keys_truncated
 
 
+def _findings_list_member_counts(findings, *, echo_nonce=None):
+    """Return (substantive, hollow) dict-member counts for a findings list."""
+    substantive = 0
+    hollow = 0
+    if not isinstance(findings, list):
+        return substantive, hollow
+    for item in findings:
+        if not isinstance(item, dict):
+            continue
+        if _finding_is_substantive(item, echo_nonce=echo_nonce):
+            substantive += 1
+        else:
+            hollow += 1
+    return substantive, hollow
+
+
+def _findings_list_hollow_grade(findings, *, echo_nonce=None):
+    """Return 'plain' or 'partial' when a findings list has hollow members, else None."""
+    substantive, hollow = _findings_list_member_counts(findings, echo_nonce=echo_nonce)
+    if hollow == 0:
+        return None
+    if substantive > 0:
+        return "partial"
+    return "plain"
+
+
+def _findings_list_shape_got(findings, *, echo_nonce=None):
+    """Bounded member-shape summary for a findings list."""
+    count = len(findings) if isinstance(findings, list) else 0
+    substantive, hollow = _findings_list_member_counts(findings, echo_nonce=echo_nonce)
+    return "list:count=%d,hollow=%d,substantive=%d" % (count, hollow, substantive)
+
+
+def _verdicts_list_member_counts(verdicts):
+    """Return (valid, invalid) member counts for a verdicts list."""
+    valid = 0
+    invalid = 0
+    if not isinstance(verdicts, list):
+        return valid, invalid
+    for item in verdicts:
+        if _verdict_is_valid(item):
+            valid += 1
+        else:
+            invalid += 1
+    return valid, invalid
+
+
+def _verdicts_list_hollow_grade(verdicts):
+    """Return 'plain' or 'partial' when a verdicts list has invalid members, else None."""
+    valid, invalid = _verdicts_list_member_counts(verdicts)
+    if invalid == 0:
+        return None
+    if valid > 0:
+        return "partial"
+    return "plain"
+
+
+def _verdicts_list_shape_got(verdicts):
+    """Bounded member-shape summary for a verdicts list."""
+    count = len(verdicts) if isinstance(verdicts, list) else 0
+    valid, invalid = _verdicts_list_member_counts(verdicts)
+    return "list:count=%d,invalid=%d,valid=%d" % (count, invalid, valid)
+
+
+def _investigated_list_shape_got(paths, *, echo_nonce=None):
+    """Bounded member-shape summary for an investigated path list."""
+    if not isinstance(paths, list):
+        return "not-a-list"
+    count = len(paths)
+    placeholder = sum(
+        1 for path in paths
+        if _investigated_path_is_placeholder_echo(path, echo_nonce=echo_nonce)
+    )
+    return "list:count=%d,placeholder-echo=%d" % (count, placeholder)
+
+
+def _hollow_family_diagnostic(list_kind, grade, *, member_shape_wanted, member_shape_got):
+    """Single mint for hollow-family payload-shape diagnostics. Never raises."""
+    if list_kind == "findings":
+        parsed = (SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER if grade == "partial"
+                  else SHAPE_FINDINGS_HOLLOW_MEMBER)
+    elif list_kind == "verdicts":
+        parsed = (SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER if grade == "partial"
+                  else SHAPE_VERDICTS_HOLLOW_MEMBER)
+    else:
+        parsed = SHAPE_FINDINGS_HOLLOW_MEMBER
+    return {
+        "parsed": parsed,
+        "topLevelKeys": [],
+        "keysTruncated": False,
+        "memberShapeWanted": member_shape_wanted,
+        "memberShapeGot": member_shape_got,
+    }
+
+
 def _review_payload_shape_findings_obj(obj, *, echo_nonce=None):
     """Findings-kind shape diagnostic for a recognised review object. Never raises."""
     if "findings" not in obj:
@@ -1907,8 +2006,12 @@ def _review_payload_shape_findings_obj(obj, *, echo_nonce=None):
             accepted, _ = _scrub_investigated(investigated)
             if accepted:
                 if _investigated_list_all_placeholder_echo(accepted, echo_nonce=echo_nonce):
-                    return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
-                            "topLevelKeys": [], "keysTruncated": False}
+                    return _hollow_family_diagnostic(
+                        "investigated", "plain",
+                        member_shape_wanted="non-placeholder-investigated-path",
+                        member_shape_got=_investigated_list_shape_got(
+                            accepted, echo_nonce=echo_nonce),
+                    )
                 return None
         top_keys, keys_truncated = _bound_top_level_keys(obj)
         return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
@@ -1921,15 +2024,22 @@ def _review_payload_shape_findings_obj(obj, *, echo_nonce=None):
         return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
                 "topLevelKeys": [], "keysTruncated": False}
     if _findings_list_has_hollow_member(findings, echo_nonce=echo_nonce):
-        return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
-                "topLevelKeys": [], "keysTruncated": False}
+        return _hollow_family_diagnostic(
+            "findings", _findings_list_hollow_grade(findings, echo_nonce=echo_nonce),
+            member_shape_wanted="engaged-finding-member",
+            member_shape_got=_findings_list_shape_got(findings, echo_nonce=echo_nonce),
+        )
     investigated = obj.get("investigated")
     if isinstance(investigated, list) and investigated:
         accepted, _ = _scrub_investigated(investigated)
         if accepted and _investigated_list_all_placeholder_echo(
                 accepted, echo_nonce=echo_nonce):
-            return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
-                    "topLevelKeys": [], "keysTruncated": False}
+            return _hollow_family_diagnostic(
+                "investigated", "plain",
+                member_shape_wanted="non-placeholder-investigated-path",
+                member_shape_got=_investigated_list_shape_got(
+                    accepted, echo_nonce=echo_nonce),
+            )
     return None
 
 
@@ -1943,8 +2053,11 @@ def _review_payload_shape_verdicts_obj(obj):
         return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
                 "topLevelKeys": [], "keysTruncated": False}
     if _verdicts_list_has_hollow_member(verdicts):
-        return {"parsed": SHAPE_VERDICTS_HOLLOW_MEMBER,
-                "topLevelKeys": [], "keysTruncated": False}
+        return _hollow_family_diagnostic(
+            "verdicts", _verdicts_list_hollow_grade(verdicts),
+            member_shape_wanted="valid-verdict-member",
+            member_shape_got=_verdicts_list_shape_got(verdicts),
+        )
     return None
 
 
@@ -1980,7 +2093,9 @@ def review_payload_shape(stdout, fed_prompt=None, *, echo_nonce=None):
     Returns {"parsed": <one of REVIEW_PAYLOAD_SHAPES>,
              "topLevelKeys": [str, ...],      # [] unless `parsed` is object-without-findings
                                                # or object-both-payload-keys
-             "keysTruncated": bool}
+             "keysTruncated": bool,
+             "memberShapeWanted": str,          # hollow-family only — required member shape
+             "memberShapeGot": str}            # hollow-family only — bounded shape read
     Returns None when `stdout` DOES parse as a valid review payload — there is nothing to diagnose.
     Never raises."""
     try:
@@ -2016,8 +2131,12 @@ def review_payload_shape(stdout, fed_prompt=None, *, echo_nonce=None):
                         return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
                                 "topLevelKeys": [], "keysTruncated": False}
                     if _findings_list_has_hollow_member(arr, echo_nonce=echo_nonce):
-                        return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
-                                "topLevelKeys": [], "keysTruncated": False}
+                        return _hollow_family_diagnostic(
+                            "findings", _findings_list_hollow_grade(arr, echo_nonce=echo_nonce),
+                            member_shape_wanted="engaged-finding-member",
+                            member_shape_got=_findings_list_shape_got(
+                                arr, echo_nonce=echo_nonce),
+                        )
                     return None
                 return {"parsed": SHAPE_ARRAY_NOT_ALL_OBJECTS,
                         "topLevelKeys": [], "keysTruncated": False}
