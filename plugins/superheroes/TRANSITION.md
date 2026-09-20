@@ -56,6 +56,39 @@ The `pr-set-changed` event payload gains `stacks` and `ungrouped`. `stack-signal
 joins the degradation set. The existing `prs`, `prsAdded`, and `prsRemoved` keys are unchanged, so
 a strict key enumeration must accept the two new ones.
 
+### `wave_watch.py` `stack-state-changed` event
+
+`wave_watch.py` gains a new event, `stack-state-changed`, at precedence rank four — immediately
+above `pr-set-changed` and below `builder-exited`. Its payload carries `stacks` (one entry per
+stack the batch's launches name, each with `stack`, `state`, `layersPlanned`, `missingPositions`,
+and `reason`) and `flags` (today only `idle-seat-launchable-child`, naming `stack`, `position`, and
+`flag`). The event is not suppressible per lane through `--ignore-event`; naming it refuses
+`ignore-event-invalid`. Within one `loop` invocation the stack-state snapshot baseline threads across
+internal arms and advances when the event fires, so the same snapshot does not re-fire on every arm.
+
+### `launch_ledger.fold` lane `dependency` key
+
+`fold` puts a fourth per-lane premise-derived key on **every** lane record — `dependency` — beside
+the three stack keys. The value is the stamped premise's `dependency` pull-request number when
+present and a positive integer, else `None`. A strict key enumeration must accept it rather than
+refuse. The documented signal is **`None`, never a missing key** — a pre-dependency record, a
+premise that omits `dependency`, and a malformed non-integer value read alike.
+
+### Launcher premise `dependency` field
+
+`validate_premise` accepts an optional `dependency` field on the premise — a positive integer pull
+request number, independent of the stack fields. When `dependency` is present but not a positive
+integer (`bool` is not an integer here), validation refuses `premise-dependency-invalid`. A stamped
+premise carries `dependency` only when the launch supplied a valid one.
+
+### Launcher dependency gate refusals
+
+`launcher.py launch` adds two refusal tokens when the premise names a `dependency` and the
+dependency gate runs: `dependency-open-ready-pr` when the dependency is an open pull request
+carrying a READY vet and the resolved base commit is not that pull request's current head; and
+`dependency-read-unavailable` when the dependency pull request, its head, or its vet could not be
+read so the gate could not run.
+
 ### `register_check.py check`
 
 `register_check check` gains `--register-copy {auto,main,worktree}`. Two new result keys —
