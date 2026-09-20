@@ -17,7 +17,7 @@ Re-run on head `11b2dba7` (branch `build/1273-c14-layer2a-mode-contract`). Three
 | BP-9 | write `_claude_mode_unsupported_detail` | `background` on codex write seat refuses with `claude-mode-unsupported:codex` | `test_claude_mode_unsupported_codex_background_refused_write` |
 | BP-10 | write continuation claude-mode mismatch gate (`normalize_claude_mode`) | disagreeing `--claude-mode` on write refuses `run-dir-claude-mode-mismatch` with `attempts: 0` | `test_run_dir_claude_mode_mismatch_refused_write` |
 | BP-11 | `engine_adapter.claude_mode_supported` | codex + `background` refused before open via `claude_mode_supported` check | `test_claude_mode_unsupported_codex_background_refused` |
-| BP-12 | `_stdout_delivery_gate` unresolved-delivery refusal (`_result_delivery_gate_refusal`) | `result_delivery` exception forfeits with `result-delivery-unresolved` instead of falling open | *(no covering test — see BP-12 entry)* |
+| BP-12 | `_stdout_delivery_gate` unresolved-delivery refusal (`_result_delivery_gate_refusal`) | `result_delivery` exception forfeits with `result-delivery-unresolved` instead of falling open | `test_stdout_delivery_gate_unresolved_delivery_forfeits` |
 | BP-13 | `test_native_materializer_delivery_census` drift pin | `_NATIVE_MATERIALIZER_DELIVERIES` must equal stdout + transcript members | `test_native_materializer_delivery_census` |
 
 ---
@@ -727,16 +727,57 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_claude_mode_u
 
 - **axis:** when `engine_result_channel.result_delivery` raises `UnknownEngineError` or `ValueError`, `_stdout_delivery_gate` must forfeit with detail `result-delivery-unresolved` rather than falling open
 
-**neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_stdout_delivery_gate`):
+**neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_result_delivery_gate_refusal`):
 
 ```python
-    except (engine_result_channel.UnknownEngineError, ValueError):
-        return None
+def _result_delivery_gate_refusal():
+    return None
 ```
 
-(replaces `return _result_delivery_gate_refusal()`)
+**command:**
 
-**proving test:** none found. The string `result-delivery-unresolved` appears only in `engine_dispatch.py` (`_result_delivery_gate_refusal`); no test in the suite asserts this detail. Neutralization was not run against a named test — a covering test is owed.
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_stdout_delivery_gate_unresolved_delivery_forfeits -q
+```
+
+**raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_stdout_delivery_gate_unresolved_delivery_forfeits ____________
+
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-2237/test_stdout_delivery_gate_unre0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x103f3aa60>
+
+    def test_stdout_delivery_gate_unresolved_delivery_forfeits(tmp_path, monkeypatch):
+        cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+        run_dir = str(tmp_path / "corrupt-delivery-mode")
+        repo_root = _repo(tmp_path)
+        opened = _plant_claude_review_journal(
+            tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+        )
+        opened["claudeMode"] = "bogus"
+        gate = ED._stdout_delivery_gate(run_dir, 1, opened)
+>       assert gate is not None
+E       assert None is not None
+
+plugins/superheroes/lib/tests/test_engine_dispatch.py:14495: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_stdout_delivery_gate_unresolved_delivery_forfeits
+1 failed in 0.95s
+```
+
+**restore:** revert `_result_delivery_gate_refusal` to return the forfeit dict with `detail: "result-delivery-unresolved"`.
+
+**restore receipt:** `git status --porcelain` lists only `plugins/superheroes/lib/tests/test_engine_dispatch.py` and `plugins/superheroes/lib/tests/bite_proofs/c14_l2_claude_mode.md` after restore.
+
+**raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 0.84s
+```
 
 ---
 

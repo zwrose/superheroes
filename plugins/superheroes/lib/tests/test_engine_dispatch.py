@@ -14483,6 +14483,21 @@ def test_legacy_journal_without_claude_mode_dispatches_print_argv(tmp_path, monk
     assert ED._spawn_argv_coherence(opened, opened["argv"])[1] is None
 
 
+def test_stdout_delivery_gate_unresolved_delivery_forfeits(tmp_path, monkeypatch):
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "corrupt-delivery-mode")
+    repo_root = _repo(tmp_path)
+    opened = _plant_claude_review_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    opened["claudeMode"] = "bogus"
+    gate = ED._stdout_delivery_gate(run_dir, 1, opened)
+    assert gate is not None
+    assert gate["forfeit"] is True
+    assert gate["reason"] == ED.dispatch_outcome.REASON_FORFEITED
+    assert gate["detail"] == "result-delivery-unresolved"
+
+
 def test_native_materializer_delivery_census():
     assert ED._NATIVE_MATERIALIZER_DELIVERIES <= ERC.RESULT_DELIVERY_MEMBERS
     assert ED._NATIVE_MATERIALIZER_DELIVERIES == frozenset({
