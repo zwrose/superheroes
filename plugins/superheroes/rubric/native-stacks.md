@@ -12,8 +12,8 @@ not fall back to an unlinked base-branch chain or serial merges.
 
 A stack is a **GitHub-side object**, not a local convention. It has a **number** of its own (distinct
 from any pull request number), a **base branch** (`baseRefName`), a **size**, and an **ordered set
-of entries**. Each entry carries a **position** (1 at the bottom) and one **pull request**. Stack
-numbers and pull request numbers never overlap, so a bare number is unambiguous to the CLI.
+of entries**. Each entry carries a **position** (1 at the bottom) and one **pull request**. A bare number
+passed to a stack verb is resolved by the precedence § How a stack merges states.
 
 A stack holds **two or more pull requests in one repository**. A stack across forks is not a thing.
 The **bottom** pull request's base is the stack's base branch (normally `main`). **Every higher**
@@ -41,7 +41,9 @@ Arguments run **bottom to top**. Each argument is a branch name, pull request nu
 request URL. The command does not rely on `gh-stack` local tracking state. Branch arguments are
 pushed and get pull requests created with the correct base chaining. **Existing pull requests are
 reused**; **existing members are never removed**. Passing a **stack number first** appends the
-remaining arguments to the top of that stack. An argument that belongs to a **different** stack is
+remaining arguments to the top of that stack. Linking a new layer onto an **existing** stack names
+**every member, bottom to top**, and then the new layer. The two-argument form, the layer below and
+the new layer, is refused: that is the field fact C13 paid for. An argument that belongs to a **different** stack is
 **rejected**. `--base` sets the bottom's base branch. The command is **idempotent in the sense that
 matters** — re-linking existing members skips them. Linking **pushes branch arguments** (creating
 or updating those remote branches and opening pull requests for branches that have none), and it
@@ -63,8 +65,9 @@ shape change is in `TRANSITION.md`:
 - `premise-stack-fields-incomplete` — only one of `stack` or `layerPosition` was supplied.
 - `premise-stack-field-invalid` — either key is present but not a positive integer (`bool` is not
   an integer here).
-- `premise-stack-layers-planned-incomplete` — `layersPlanned` was supplied without both
-  `stack` and `layerPosition`.
+- `premise-stack-layers-planned-incomplete` — `layersPlanned` was supplied while **both**
+  `stack` and `layerPosition` were absent. The pair check runs first, so a premise carrying
+  `layersPlanned` and **exactly one** of the pair is refused as `premise-stack-fields-incomplete`.
 - `premise-stack-layers-planned-invalid` — `layersPlanned` is present but not a positive integer
   (`bool` is not an integer here).
 - `premise-stack-layers-planned-under-position` — `layersPlanned` is less than `layerPosition`.
@@ -100,6 +103,10 @@ request's number, state, draft status, head branch, head sha, and base branch. T
 queried pull request's own `position`, `headRefOid`, and the stack's `number`, `size`, and
 `baseRefName`, these fields are the whole membership claim, read from GitHub.
 
+Verify membership with **both** reads before any click list: the GraphQL query above, and the
+shipped tool `lib/stack_check.py`, which runs it and applies the pagination and count rules. A lane
+working from a checkout that predates that module names the GraphQL read alone.
+
 **`gh stack view` is not verification.** It reads **local tracking state only**. Run in a worktree
 whose branch is simply not locally tracked, it answers that the current branch is not part of a
 stack whenever the branch is merely not **locally tracked** — including when that branch is a
@@ -128,6 +135,11 @@ descendants ([GitHub's stacked-pull-request troubleshooting
 guide](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-stacked-pull-requests)).
 **Bypassing merge requirements is not supported for stacks.**
 
+CI follows mergeability. A stack whose merge into `main` is dirty gets **no merge ref**, and so
+**no CI run on any member**, while a member whose own merge is clean gets its run. That is an
+observed field fact, not a documented GitHub rule, and it is why a red-looking member is read
+against the stack's mergeability first.
+
 GitHub's overview names a **"fully linear history between every branch in the stack"** as a merge
 requirement without defining it ([GitHub's stacked-pull-request
 overview](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)), and
@@ -140,6 +152,14 @@ to break the requirement is a layer whose branch no longer descends from the tip
 — a lower layer that moved after the layer above was last updated.
 
 **One command merges the stack; never one PR at a time.**
+
+**The stack is the unit of merge.** A stack merges when its **feature** is complete: every layer
+the issue's plan names, vetted. A vetted prefix is never a click. The ruling this records is the
+owner's standing rule, "keep stacks stacks" (walk 7, 2026-09-20). New scope that a tripwire or a
+vet discovers **on that feature** joins the stack as a layer rather than becoming a follow-on. A
+finding outside the feature's owner-ratified scope stays a **follow-up** under the existing scope
+rule, which this leaves alone. The click list names whole stacks with their remaining layers, and
+an incomplete stack is never listed.
 
 Merging up to a middle pull request merges everything below it and leaves the pull requests above
 **open**. GitHub documents that the next unmerged pull request is then **automatically rebased to
@@ -155,16 +175,33 @@ When the stack's base branch or a lower layer has moved, each layer above the ch
 contain the tip of the layer below it. Two mechanisms restore that, and they differ in what they do
 to the layer's head:
 
-- **Bring the layer current by merge** — `gh pr update-branch` on each affected layer, **bottom-up**
-  (the layer just above the change first). This adds one merge commit per layer and rewrites none of
-  the layer's own commits. The head still moves, so the layer takes a fresh remote-head check, CI
-  on the new sha, and a receipt that names that sha — the re-review is of the merge, not of commits
-  a panel already read. This is how a superheroes lane brings a layer current.
-- **Cascading rebase** — GitHub's **Rebase stack** action from a pull request in the stack, or
-  `gh stack rebase` followed by `gh stack push` for a local tracked stack. This rewrites every
-  commit of every affected layer, so every layer above the change needs fresh remote-head checks
-  and its review and CI receipts re-taken in full. It is the mechanism GitHub's pages name; a lane
-  uses it only when a merge cannot resolve the conflict, and discloses it.
+- **Bring the layer current by merge** — merge the layer below into the layer **locally with
+  `--no-ff`** and push the result plainly, **bottom-up** (the layer just above the change first).
+  This adds one merge commit per layer, rewrites none of the layer's own commits, and puts the
+  lower tip in the layer's history, which is the ancestry condition § How a stack merges states.
+  Do not use `gh pr update-branch`. The REST endpoint behind it was **observed** to refuse a
+  stacked pull request with a **403** (PR #1354, 2026-09-20). That is a field observation on a
+  public-preview feature, not a documented GitHub rule. This is how a superheroes lane brings a
+  layer current.
+- **Cascading rebase** — GitHub's server-side **Rebase stack** action from a pull request in the
+  stack. `gh stack checkout <n>`, then `gh stack rebase`, then `gh stack push` is GitHub's own
+  named CLI equivalent, and it belongs to a **local tracked stack an operator owns end to end**,
+  because it creates local tracking for the whole stack and force-pushes non-atomically. Either
+  form rewrites every commit of every affected layer, so every layer above the change needs fresh
+  remote-head checks and its review and CI receipts re-taken in full. A lane uses it only when a
+  merge cannot resolve the conflict, and discloses it.
+
+A bring-current is a **mechanical operation**, by merge or by rebase, and the receipt that covers
+it is pinned to **content**: the head sha and the digest of the pull request's diff.
+`skills/showrunner/reference/vet-receipt.md` spine field 1 is the home of that rule and of the
+command that takes the digest. What a lane needs here is the consequence. Recompute the digest
+after the bring-current. **Equal digest**: re-pin the sha in place with a dated line, let CI run on
+the new head, and re-review nothing. **Unequal, or `digest-unavailable`**: `git range-diff` names
+the changed commits, a changed hunk in tests, fixtures or prose takes CI and a disclosure line and
+**no reviewer**, and a changed hunk in **product code** takes the merge train's existing union-fix
+floor. A layer is not rebased while its review loop is open. The field case behind this form is the
+C13 pass of 2026-09-20: seven layers, six re-pinned receipts, recorded on #1272. The tax it removes
+is the per-layer re-review C11 (#1306 through #1335) and C13 (#1322 through #1330) paid.
 
 For a **local tracked** stack, `gh stack sync` and `gh stack rebase` are the native verbs and they
 do move local branches. That is why they belong to that route and not to a lane whose layer is under
