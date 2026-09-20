@@ -197,7 +197,7 @@ The sanctioned way to dispatch a long-running **external reviewer** seat is `dis
 seat's delivery contract is in `rubric/review-base.md` ("Findings output format"); `auto-fix-loop.md`
 documents the runner's result mechanics — read both before authoring seat prompts; this subsection is
 the at-dispatch-time summary only. For the full CLI argument surface, read
-`skills/workhorse/reference/dispatch-entry.md`.
+`skills/workhorse/reference/dispatch-entry.md`. `--session-dir` pairs with `--pr-body-path`; either alone refuses `pr-body-args-unpaired`.
 
 ### Result channels
 
