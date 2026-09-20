@@ -234,201 +234,211 @@ def read_membership(
     if not shutil.which("gh"):
         return _refusal(REASON_STACK_UNREADABLE, "gh not on PATH", repo=repo, pr=pr)
 
-    collected = []
-    pages = 0
-    snapshot = None
-    stack_size = None
-    used_cursors = set()
-    after = None
+    prior_members = None
+    for verification_pass in (0, 1):
+        collected = []
+        pages = 0
+        snapshot = None
+        stack_size = None
+        used_cursors = set()
+        after = None
 
-    while True:
-        argv = _graphql_argv(owner, name, pr, page_size, after)
-        try:
-            proc = run(argv, capture_output=True, text=True, timeout=timeout)
-        except (FileNotFoundError, OSError) as exc:
-            # axis: run raises FileNotFoundError/OSError
-            return _refusal(REASON_STACK_UNREADABLE, str(exc), repo=repo, pr=pr, pages=pages)
-        except subprocess.TimeoutExpired:
-            # axis: run raises subprocess.TimeoutExpired
-            return _refusal(REASON_STACK_UNREADABLE, "gh call timed out", repo=repo, pr=pr, pages=pages)
+        while True:
+            argv = _graphql_argv(owner, name, pr, page_size, after)
+            try:
+                proc = run(argv, capture_output=True, text=True, timeout=timeout)
+            except (FileNotFoundError, OSError) as exc:
+                # axis: run raises FileNotFoundError/OSError
+                return _refusal(REASON_STACK_UNREADABLE, str(exc), repo=repo, pr=pr, pages=pages)
+            except subprocess.TimeoutExpired:
+                # axis: run raises subprocess.TimeoutExpired
+                return _refusal(REASON_STACK_UNREADABLE, "gh call timed out", repo=repo, pr=pr, pages=pages)
 
-        pages += 1
+            pages += 1
 
-        # axis: gh exits non-zero
-        if proc.returncode != 0:
-            return _refusal(REASON_STACK_UNREADABLE, _stderr(proc) or "gh api graphql failed",
-                repo=repo, pr=pr, pages=pages)
+            # axis: gh exits non-zero
+            if proc.returncode != 0:
+                return _refusal(REASON_STACK_UNREADABLE, _stderr(proc) or "gh api graphql failed",
+                    repo=repo, pr=pr, pages=pages)
 
-        try:
-            payload = json.loads(proc.stdout or "")
-        except json.JSONDecodeError:
-            # axis: stdout is not JSON
-            return _refusal(REASON_STACK_UNREADABLE,
-                "gh api graphql returned output that is not JSON", repo=repo, pr=pr, pages=pages)
-
-        # axis: parsed JSON payload is not an object
-        if not isinstance(payload, dict):
-            return _refusal(REASON_STACK_UNREADABLE,
-                "gh api graphql returned JSON that is not an object", repo=repo, pr=pr, pages=pages)
-
-        errors = payload.get("errors")
-        if errors is None:
-            errors = []
-        # axis: errors is present but not a list
-        if not isinstance(errors, list):
-            return _refusal(REASON_STACK_UNREADABLE, "gh api graphql errors is not a list",
-                repo=repo, pr=pr, pages=pages)
-        # axis: response carries a non-empty errors array
-        if errors:
-            return _refusal(REASON_STACK_UNREADABLE, json.dumps(errors), repo=repo, pr=pr, pages=pages)
-
-        data = payload.get("data")
-        repository = data.get("repository") if isinstance(data, dict) else None
-        # axis: data/repository is null or not an object
-        if not isinstance(data, dict) or not isinstance(repository, dict):
-            return _refusal(REASON_STACK_UNREADABLE,
-                "graphql data/repository is null or not an object", repo=repo, pr=pr, pages=pages)
-
-        pull_request = repository.get("pullRequest")
-        # axis: pullRequest is null or not an object
-        if not isinstance(pull_request, dict):
-            return _refusal(REASON_STACK_UNREADABLE, "graphql pullRequest is null or not an object",
-                repo=repo, pr=pr, pages=pages)
-
-        pr_number = pull_request.get("number")
-        pr_base_ref = pull_request.get("baseRefName")
-        pr_head_ref = pull_request.get("headRefName")
-        pr_head_oid = pull_request.get("headRefOid")
-        # axis: a required top-level pull-request field is missing or of the wrong type
-        if (
-            not _is_int(pr_number)
-            or not isinstance(pr_base_ref, str)
-            or not isinstance(pr_head_ref, str)
-            or not isinstance(pr_head_oid, str)
-        ):
-            return _refusal(REASON_STACK_UNREADABLE,
-                "required pullRequest field is missing or of the wrong type",
-                repo=repo, pr=pr, pages=pages)
-
-        stack_entry = pull_request.get("stackEntry")
-        # axis: stackEntry is null
-        if stack_entry is None:
-            return _refusal(REASON_NOT_LINKED,
-                "pull request is not in a stack", repo=repo, pr=pr, pages=pages)
-
-        entry_position = stack_entry.get("position") if isinstance(stack_entry, dict) else None
-        # axis: stackEntry is present but not an object, or position is missing/not an int
-        if not isinstance(stack_entry, dict) or not _is_int(entry_position):
-            return _refusal(REASON_STACK_UNREADABLE,
-                "stackEntry is not an object or position is missing or not an integer",
-                repo=repo, pr=pr, pages=pages)
-
-        stack = stack_entry.get("stack")
-        stack_number = stack.get("number") if isinstance(stack, dict) else None
-        stack_size_value = stack.get("size") if isinstance(stack, dict) else None
-        stack_base_ref = stack.get("baseRefName") if isinstance(stack, dict) else None
-        # axis: stack is missing/not an object, or number/size/baseRefName wrong type
-        if (
-            not isinstance(stack, dict)
-            or not _is_int(stack_number)
-            or not _is_int(stack_size_value)
-            or not isinstance(stack_base_ref, str)
-        ):
-            return _refusal(REASON_STACK_UNREADABLE, "stack field is missing or of the wrong type",
-                repo=repo, pr=pr, pages=pages)
-
-        entries = stack.get("entries")
-        page_info = entries.get("pageInfo") if isinstance(entries, dict) else None
-        nodes = entries.get("nodes") if isinstance(entries, dict) else None
-        # axis: entries/pageInfo/nodes is missing or of the wrong type
-        if not isinstance(entries, dict) or not isinstance(page_info, dict) or not isinstance(nodes, list):
-            return _refusal(REASON_STACK_UNREADABLE,
-                "stack entries/pageInfo/nodes is missing or of the wrong type",
-                repo=repo, pr=pr, pages=pages)
-
-        if pages == 1:
-            snapshot = _snapshot_from_page(pull_request, stack_entry, stack)
-            stack_size = stack_size_value
-        else:
-            # axis: a later page reports a different page-one snapshot value
-            if not _snapshot_matches(snapshot, pull_request, stack_entry, stack):
-                return _refusal(REASON_ORDER_MISMATCH,
-                    "later page disagrees with page-one snapshot", repo=repo, pr=pr, pages=pages)
-
-        added = 0
-        for node in nodes:
-            member, parse_err = _parse_member(node)
-            if parse_err:
-                # axis: a node, its position, or one of its pull-request fields is missing or wrong type
-                return _refusal(REASON_STACK_UNREADABLE, parse_err, repo=repo, pr=pr, pages=pages)
-            # axis: the collected count would exceed size mid-read
-            if len(collected) + 1 > stack_size:
+            try:
+                payload = json.loads(proc.stdout or "")
+            except json.JSONDecodeError:
+                # axis: stdout is not JSON
                 return _refusal(REASON_STACK_UNREADABLE,
-                    "collected member count would exceed stack size", repo=repo, pr=pr, pages=pages)
-            collected.append(member)
-            added += 1
+                    "gh api graphql returned output that is not JSON", repo=repo, pr=pr, pages=pages)
 
-        has_next_page = page_info.get("hasNextPage")
-        # axis: pageInfo hasNextPage is missing or not a boolean
-        if not isinstance(has_next_page, bool):
-            return _refusal(REASON_STACK_UNREADABLE,
-                "pageInfo hasNextPage is missing or not a boolean", repo=repo, pr=pr, pages=pages)
+            # axis: parsed JSON payload is not an object
+            if not isinstance(payload, dict):
+                return _refusal(REASON_STACK_UNREADABLE,
+                    "gh api graphql returned JSON that is not an object", repo=repo, pr=pr, pages=pages)
 
-        end_cursor = page_info.get("endCursor")
+            errors = payload.get("errors")
+            if errors is None:
+                errors = []
+            # axis: errors is present but not a list
+            if not isinstance(errors, list):
+                return _refusal(REASON_STACK_UNREADABLE, "gh api graphql errors is not a list",
+                    repo=repo, pr=pr, pages=pages)
+            # axis: response carries a non-empty errors array
+            if errors:
+                return _refusal(REASON_STACK_UNREADABLE, json.dumps(errors), repo=repo, pr=pr, pages=pages)
 
-        if not has_next_page:
-            break
-        if len(collected) >= stack_size:
-            break
+            data = payload.get("data")
+            repository = data.get("repository") if isinstance(data, dict) else None
+            # axis: data/repository is null or not an object
+            if not isinstance(data, dict) or not isinstance(repository, dict):
+                return _refusal(REASON_STACK_UNREADABLE,
+                    "graphql data/repository is null or not an object", repo=repo, pr=pr, pages=pages)
 
-        # axis: a page adds zero nodes while hasNextPage is true
-        if added == 0:
-            return _refusal(REASON_STACK_UNREADABLE,
-                "page added zero nodes while hasNextPage is true", repo=repo, pr=pr, pages=pages)
+            pull_request = repository.get("pullRequest")
+            # axis: pullRequest is null or not an object
+            if not isinstance(pull_request, dict):
+                return _refusal(REASON_STACK_UNREADABLE, "graphql pullRequest is null or not an object",
+                    repo=repo, pr=pr, pages=pages)
 
-        # axis: a next page requires a usable string cursor
-        if not isinstance(end_cursor, str):
-            return _refusal(REASON_STACK_UNREADABLE,
-                "hasNextPage is true but endCursor is null or absent",
+            pr_number = pull_request.get("number")
+            pr_base_ref = pull_request.get("baseRefName")
+            pr_head_ref = pull_request.get("headRefName")
+            pr_head_oid = pull_request.get("headRefOid")
+            # axis: a required top-level pull-request field is missing or of the wrong type
+            if (
+                not _is_int(pr_number)
+                or not isinstance(pr_base_ref, str)
+                or not isinstance(pr_head_ref, str)
+                or not isinstance(pr_head_oid, str)
+            ):
+                return _refusal(REASON_STACK_UNREADABLE,
+                    "required pullRequest field is missing or of the wrong type",
+                    repo=repo, pr=pr, pages=pages)
+
+            stack_entry = pull_request.get("stackEntry")
+            # axis: stackEntry is null
+            if stack_entry is None:
+                return _refusal(REASON_NOT_LINKED,
+                    "pull request is not in a stack", repo=repo, pr=pr, pages=pages)
+
+            entry_position = stack_entry.get("position") if isinstance(stack_entry, dict) else None
+            # axis: stackEntry is present but not an object, or position is missing/not an int
+            if not isinstance(stack_entry, dict) or not _is_int(entry_position):
+                return _refusal(REASON_STACK_UNREADABLE,
+                    "stackEntry is not an object or position is missing or not an integer",
+                    repo=repo, pr=pr, pages=pages)
+
+            stack = stack_entry.get("stack")
+            stack_number = stack.get("number") if isinstance(stack, dict) else None
+            stack_size_value = stack.get("size") if isinstance(stack, dict) else None
+            stack_base_ref = stack.get("baseRefName") if isinstance(stack, dict) else None
+            # axis: stack is missing/not an object, or number/size/baseRefName wrong type
+            if (
+                not isinstance(stack, dict)
+                or not _is_int(stack_number)
+                or not _is_int(stack_size_value)
+                or not isinstance(stack_base_ref, str)
+            ):
+                return _refusal(REASON_STACK_UNREADABLE, "stack field is missing or of the wrong type",
+                    repo=repo, pr=pr, pages=pages)
+
+            entries = stack.get("entries")
+            page_info = entries.get("pageInfo") if isinstance(entries, dict) else None
+            nodes = entries.get("nodes") if isinstance(entries, dict) else None
+            # axis: entries/pageInfo/nodes is missing or of the wrong type
+            if not isinstance(entries, dict) or not isinstance(page_info, dict) or not isinstance(nodes, list):
+                return _refusal(REASON_STACK_UNREADABLE,
+                    "stack entries/pageInfo/nodes is missing or of the wrong type",
+                    repo=repo, pr=pr, pages=pages)
+
+            if pages == 1:
+                snapshot = _snapshot_from_page(pull_request, stack_entry, stack)
+                stack_size = stack_size_value
+            else:
+                # axis: a later page reports a different page-one snapshot value
+                if not _snapshot_matches(snapshot, pull_request, stack_entry, stack):
+                    return _refusal(REASON_ORDER_MISMATCH,
+                        "later page disagrees with page-one snapshot", repo=repo, pr=pr, pages=pages)
+
+            added = 0
+            for node in nodes:
+                member, parse_err = _parse_member(node)
+                if parse_err:
+                    # axis: a node, its position, or one of its pull-request fields is missing or wrong type
+                    return _refusal(REASON_STACK_UNREADABLE, parse_err, repo=repo, pr=pr, pages=pages)
+                # axis: the collected count would exceed size mid-read
+                if len(collected) + 1 > stack_size:
+                    return _refusal(REASON_STACK_UNREADABLE,
+                        "collected member count would exceed stack size", repo=repo, pr=pr, pages=pages)
+                collected.append(member)
+                added += 1
+
+            has_next_page = page_info.get("hasNextPage")
+            # axis: pageInfo hasNextPage is missing or not a boolean
+            if not isinstance(has_next_page, bool):
+                return _refusal(REASON_STACK_UNREADABLE,
+                    "pageInfo hasNextPage is missing or not a boolean", repo=repo, pr=pr, pages=pages)
+
+            end_cursor = page_info.get("endCursor")
+
+            if not has_next_page:
+                break
+
+            # axis: a page adds zero nodes while hasNextPage is true
+            if added == 0:
+                return _refusal(REASON_STACK_UNREADABLE,
+                    "page added zero nodes while hasNextPage is true", repo=repo, pr=pr, pages=pages)
+
+            # axis: a next page requires a usable string cursor
+            if not isinstance(end_cursor, str):
+                return _refusal(REASON_STACK_UNREADABLE,
+                    "hasNextPage is true but endCursor is null or absent",
+                    repo=repo, pr=pr, pages=pages)
+
+            # axis: endCursor repeats a cursor already used
+            if end_cursor in used_cursors:
+                return _refusal(REASON_STACK_UNREADABLE, "endCursor repeats a cursor already used",
+                    repo=repo, pr=pr, pages=pages)
+
+            used_cursors.add(end_cursor)
+            after = end_cursor
+
+        # axis: expect_stack was supplied and does not equal stack.number
+        if expect_stack is not None and expect_stack != snapshot["stack_number"]:
+            return _refusal(REASON_ORDER_MISMATCH, "expect_stack does not equal stack number",
                 repo=repo, pr=pr, pages=pages)
 
-        # axis: endCursor repeats a cursor already used
-        if end_cursor in used_cursors:
-            return _refusal(REASON_STACK_UNREADABLE, "endCursor repeats a cursor already used",
+        positions = {member["position"] for member in collected}
+        expected_positions = set(range(1, stack_size + 1))
+        # axis: the collected entries are exactly the positions 1..size
+        if len(collected) != stack_size or positions != expected_positions:
+            return _refusal(REASON_ORDER_MISMATCH, "collected member count does not equal stack size",
                 repo=repo, pr=pr, pages=pages)
 
-        used_cursors.add(end_cursor)
-        after = end_cursor
+        members_at_position = [member for member in collected if member["position"] == snapshot["position"]]
+        # axis: the queried pull request is not present exactly once at its reported position
+        if len(members_at_position) != 1:
+            return _refusal(REASON_ORDER_MISMATCH,
+                "queried pull request is not present exactly once at its reported position",
+                repo=repo, pr=pr, pages=pages)
+        member_at_position = members_at_position[0]
+        # axis: that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields
+        if (
+            member_at_position["number"] != snapshot["pr_number"]
+            or member_at_position["headRefName"] != snapshot["pr_headRefName"]
+            or member_at_position["headRefOid"] != snapshot["pr_headRefOid"]
+            or member_at_position["baseRefName"] != snapshot["pr_baseRefName"]
+        ):
+            return _refusal(REASON_ORDER_MISMATCH,
+                "queried pull request entry disagrees with top-level pull request fields",
+                repo=repo, pr=pr, pages=pages)
 
-    # axis: expect_stack was supplied and does not equal stack.number
-    if expect_stack is not None and expect_stack != snapshot["stack_number"]:
-        return _refusal(REASON_ORDER_MISMATCH, "expect_stack does not equal stack number",
-            repo=repo, pr=pr, pages=pages)
+        if verification_pass == 0:
+            prior_members = sorted(collected, key=lambda item: item["position"])
+            continue
 
-    positions = {member["position"] for member in collected}
-    expected_positions = set(range(1, stack_size + 1))
-    # axis: the collected entries are exactly the positions 1..size
-    if len(collected) != stack_size or positions != expected_positions:
-        return _refusal(REASON_ORDER_MISMATCH, "collected member count does not equal stack size",
-            repo=repo, pr=pr, pages=pages)
-
-    members_at_position = [member for member in collected if member["position"] == snapshot["position"]]
-    # axis: the queried pull request is not present exactly once at its reported position
-    if len(members_at_position) != 1:
-        return _refusal(REASON_ORDER_MISMATCH,
-            "queried pull request is not present exactly once at its reported position",
-            repo=repo, pr=pr, pages=pages)
-    member_at_position = members_at_position[0]
-    # axis: that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields
-    if (
-        member_at_position["number"] != snapshot["pr_number"]
-        or member_at_position["headRefName"] != snapshot["pr_headRefName"]
-        or member_at_position["headRefOid"] != snapshot["pr_headRefOid"]
-        or member_at_position["baseRefName"] != snapshot["pr_baseRefName"]
-    ):
-        return _refusal(REASON_ORDER_MISMATCH,
-            "queried pull request entry disagrees with top-level pull request fields",
-            repo=repo, pr=pr, pages=pages)
+        current_members = sorted(collected, key=lambda item: item["position"])
+        # axis: membership changes between two complete enumeration passes
+        if current_members != prior_members:
+            return _refusal(REASON_ORDER_MISMATCH,
+                "membership changed between enumeration passes", repo=repo, pr=pr, pages=pages)
 
     members = sorted(collected, key=lambda item: item["position"])
     stack = {

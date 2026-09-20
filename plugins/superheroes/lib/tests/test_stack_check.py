@@ -37,7 +37,12 @@ def _make_run(handlers):
     calls = []
     queues = {}
     for key, value in handlers.items():
-        queues[key] = list(value) if isinstance(value, list) else [value]
+        if isinstance(value, list):
+            queues[key] = list(value)
+            if len(queues[key]) == 1:
+                queues[key] = queues[key] + queues[key]
+        else:
+            queues[key] = [value, value]
 
     def _run(argv, **kwargs):
         calls.append(list(argv))
@@ -495,6 +500,37 @@ def test_e27_collected_count_would_exceed_size():
     _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
 
 
+def test_e32_full_size_with_has_next_page_fetches_next_and_refuses():
+    page1 = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=True,
+        end_cursor="cursor-1",
+        stack_size=1,
+    )
+    page1["number"] = PR
+    page1["stackEntry"]["position"] = 1
+    page2 = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(2)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page2["number"] = PR
+    page2["stackEntry"]["position"] = 1
+    run, calls = _make_run(
+        {
+            _argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page1),
+            _argv_page(PR, sc.DEFAULT_PAGE_SIZE, "cursor-1"): _graphql_ok(page2),
+        }
+    )
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert len(calls) == 2
+
+
 # --- register E28: not-linked -----------------------------------------------------
 
 
@@ -549,6 +585,51 @@ def test_e30_queried_pr_not_at_reported_position():
     run, _calls = _make_run({_argv_page(PR, 2): _graphql_ok(page)})
     result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
     _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+
+
+def test_e37_mixed_time_member_head_change_refuses():
+    page1_pass1 = _pull_request(
+        nodes=[_member(1, headRefOid="old-oid"), _member(2)],
+        has_next_page=True,
+        end_cursor="cursor-1",
+        stack_size=5,
+    )
+    page2_pass1 = _pull_request(
+        nodes=[_member(3, number=PR), _member(4)],
+        has_next_page=True,
+        end_cursor="cursor-2",
+        stack_size=5,
+    )
+    page3_pass1 = _pull_request(
+        nodes=[_member(5)],
+        has_next_page=False,
+        stack_size=5,
+    )
+    page1_pass2 = _pull_request(
+        nodes=[_member(1, headRefOid="new-oid"), _member(2)],
+        has_next_page=True,
+        end_cursor="cursor-1",
+        stack_size=5,
+    )
+    run, _calls = _make_run(
+        {
+            _argv_page(PR, 2): [
+                _graphql_ok(page1_pass1),
+                _graphql_ok(page1_pass2),
+            ],
+            _argv_page(PR, 2, "cursor-1"): [
+                _graphql_ok(page2_pass1),
+                _graphql_ok(page2_pass1),
+            ],
+            _argv_page(PR, 2, "cursor-2"): [
+                _graphql_ok(page3_pass1),
+                _graphql_ok(page3_pass1),
+            ],
+        }
+    )
+    result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert "enumeration passes" in result["detail"]
 
 
 def test_e31_later_page_snapshot_mismatch():
@@ -704,8 +785,13 @@ def test_argv_pinning():
         if arg == "-f" and page_two[index + 1].startswith("after=")
     ]
     assert ["-f", "after=cursor-1"] in page_two_after_pairs
-    first_pairs = [page_one[index : index + 2] for index, arg in enumerate(page_one) if arg == "-F"]
-    assert ["-F", "first=2"] in first_pairs
+    form_pairs = [page_one[index : index + 2] for index, arg in enumerate(page_one) if arg == "-F"]
+    assert ["-F", "owner=owner"] in form_pairs
+    assert ["-F", "repo=example"] in form_pairs
+    assert ["-F", "pr=103"] in form_pairs
+    assert ["-F", "first=2"] in form_pairs
+    query_pairs = [page_one[index : index + 2] for index, arg in enumerate(page_one) if arg == "-f"]
+    assert ["-f", "query=%s" % sc.QUERY] in query_pairs
 
 
 # --- CLI projection ---------------------------------------------------------------

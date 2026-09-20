@@ -73,12 +73,12 @@ Per-guard bite proof for `plugins/superheroes/lib/stack_check.py`: each `# axis:
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e1_pr_not_int
-1 failed, 40 passed in 0.22s
+1 failed, 51 passed in 0.22s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.20s
+52 passed in 0.20s
 ```
 
 ---
@@ -101,12 +101,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e1_pr_not_int
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e2_pr_less_than_one
-1 failed, 40 passed in 0.22s
+1 failed, 51 passed in 0.22s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.21s
+52 passed in 0.21s
 ```
 
 ---
@@ -129,12 +129,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e2_pr_less_than_o
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e3_repo_not_string
-1 failed, 40 passed in 0.22s
+1 failed, 51 passed in 0.22s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.20s
+52 passed in 0.20s
 ```
 
 ---
@@ -157,12 +157,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e3_repo_not_strin
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e4_repo_bad_pattern
-1 failed, 40 passed in 0.25s
+1 failed, 51 passed in 0.25s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.20s
+52 passed in 0.20s
 ```
 
 ---
@@ -187,12 +187,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e4_repo_bad_patte
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e5_expect_stack_not_int
-1 failed, 40 passed in 0.23s
+1 failed, 51 passed in 0.23s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.22s
+52 passed in 0.22s
 ```
 
 ---
@@ -217,12 +217,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e5_expect_stack_n
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e6_expect_stack_less_than_one
-1 failed, 40 passed in 0.25s
+1 failed, 51 passed in 0.25s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.20s
+52 passed in 0.20s
 ```
 
 ---
@@ -249,12 +249,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e6_expect_stack_l
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e7_page_size_not_int
-1 failed, 40 passed in 0.26s
+1 failed, 51 passed in 0.26s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.21s
+52 passed in 0.21s
 ```
 
 ---
@@ -281,12 +281,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e7_page_size_not_
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e8_page_size_below_min
-1 failed, 40 passed in 0.23s
+1 failed, 51 passed in 0.23s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.24s
+52 passed in 0.24s
 ```
 
 ---
@@ -313,12 +313,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e8_page_size_belo
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e9_page_size_above_max
-1 failed, 40 passed in 0.22s
+1 failed, 51 passed in 0.22s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.24s
+52 passed in 0.24s
 ```
 
 ---
@@ -344,12 +344,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e9_page_size_abov
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e11_gh_not_on_path
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_cli_refusal_projection
-2 failed, 39 passed in 0.58s
+2 failed, 50 passed in 0.58s
 ```
 
 **raw green** after restore:
 ```
-47 passed in 0.24s
+52 passed in 0.24s
 ```
 
 ---
@@ -374,12 +374,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_cli_refusal_proje
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e12_run_raises_file_not_found
-1 failed, 40 passed in 0.24s
+1 failed, 51 passed in 0.24s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.22s
+52 passed in 0.22s
 ```
 
 ---
@@ -404,12 +404,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e12_run_raises_fi
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e13_run_raises_timeout_expired
-1 failed, 40 passed in 0.24s
+1 failed, 51 passed in 0.24s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.20s
+52 passed in 0.20s
 ```
 
 ---
@@ -434,12 +434,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e13_run_raises_ti
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e14_gh_exits_nonzero_with_valid_stdout
-1 failed, 46 passed in 0.27s
+1 failed, 51 passed in 0.27s
 ```
 
 **raw green** after restore:
 ```
-47 passed in 0.24s
+52 passed in 0.24s
 ```
 
 ---
@@ -464,12 +464,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e14_gh_exits_nonz
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e15_stdout_not_json
-1 failed, 40 passed in 0.22s
+1 failed, 51 passed in 0.22s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.21s
+52 passed in 0.21s
 ```
 
 ---
@@ -496,12 +496,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e15_stdout_not_js
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e15_payload_not_object
-1 failed, 49 passed in 0.23s
+1 failed, 51 passed in 0.23s
 ```
 
 **raw green** after restore:
 ```
-50 passed in 0.23s
+52 passed in 0.23s
 ```
 
 ---
@@ -530,12 +530,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e15_payload_not_o
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e16_errors_not_list
-1 failed, 49 passed in 0.30s
+1 failed, 51 passed in 0.30s
 ```
 
 **raw green** after restore:
 ```
-50 passed in 0.22s
+52 passed in 0.22s
 ```
 
 ---
@@ -560,12 +560,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e16_errors_not_li
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e16_graphql_errors_nonempty
-1 failed, 49 passed in 0.23s
+1 failed, 51 passed in 0.23s
 ```
 
 **raw green** after restore:
 ```
-50 passed in 0.20s
+52 passed in 0.20s
 ```
 
 ---
@@ -590,12 +590,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e16_graphql_error
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e17_data_or_repository_missing
-1 failed, 40 passed in 0.25s
+1 failed, 51 passed in 0.25s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.20s
+52 passed in 0.20s
 ```
 
 ---
@@ -620,12 +620,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e17_data_or_repos
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e18_pull_request_missing
-1 failed, 40 passed in 0.27s
+1 failed, 51 passed in 0.27s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.21s
+52 passed in 0.21s
 ```
 
 ---
@@ -652,12 +652,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e18_pull_request_
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e19_required_pull_request_field_wrong_type
-1 failed, 40 passed in 0.22s
+1 failed, 51 passed in 0.22s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.19s
+52 passed in 0.19s
 ```
 
 ---
@@ -682,12 +682,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e19_required_pull
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e28_stack_entry_null
-1 failed, 40 passed in 0.23s
+1 failed, 51 passed in 0.23s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.14s
+52 passed in 0.14s
 ```
 
 ---
@@ -714,12 +714,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e28_stack_entry_n
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e20_stack_entry_bad
-1 failed, 40 passed in 0.13s
+1 failed, 51 passed in 0.13s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.12s
+52 passed in 0.12s
 ```
 
 ---
@@ -744,12 +744,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e20_stack_entry_b
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e21_stack_field_wrong_type
-1 failed, 40 passed in 0.12s
+1 failed, 51 passed in 0.12s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.11s
+52 passed in 0.11s
 ```
 
 ---
@@ -776,12 +776,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e21_stack_field_w
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e22_entries_page_info_empty_object
-1 failed, 46 passed in 0.27s
+1 failed, 51 passed in 0.27s
 ```
 
 **raw green** after restore:
 ```
-47 passed in 0.21s
+52 passed in 0.21s
 ```
 
 ---
@@ -806,12 +806,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e22_entries_page_
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e31_later_page_snapshot_mismatch
-1 failed, 40 passed in 0.14s
+1 failed, 51 passed in 0.14s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.11s
+52 passed in 0.11s
 ```
 
 ---
@@ -836,12 +836,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e31_later_page_sn
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e23_node_field_wrong_type
-1 failed, 40 passed in 0.16s
+1 failed, 51 passed in 0.16s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.14s
+52 passed in 0.14s
 ```
 
 ---
@@ -866,12 +866,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e23_node_field_wr
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e27_collected_count_would_exceed_size
-1 failed, 40 passed in 0.21s
+1 failed, 51 passed in 0.21s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.17s
+52 passed in 0.17s
 ```
 
 ---
@@ -898,12 +898,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e27_collected_cou
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e26_has_next_page_not_boolean
-1 failed, 49 passed in 0.23s
+1 failed, 51 passed in 0.23s
 ```
 
 **raw green** after restore:
 ```
-50 passed in 0.22s
+52 passed in 0.22s
 ```
 
 ---
@@ -928,12 +928,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e26_has_next_page
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e24_zero_nodes_with_has_next_page
-1 failed, 40 passed in 0.20s
+1 failed, 51 passed in 0.20s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.16s
+52 passed in 0.16s
 ```
 
 ---
@@ -960,12 +960,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e24_zero_nodes_wi
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e26_has_next_page_without_end_cursor
-1 failed, 46 passed in 0.26s
+1 failed, 51 passed in 0.26s
 ```
 
 **raw green** after restore:
 ```
-47 passed in 0.24s
+52 passed in 0.24s
 ```
 
 ---
@@ -990,12 +990,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e26_has_next_page
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e25_repeated_end_cursor
-1 failed, 40 passed in 0.19s
+1 failed, 51 passed in 0.19s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.15s
+52 passed in 0.15s
 ```
 
 ---
@@ -1020,12 +1020,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e25_repeated_end_
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e29_expect_stack_does_not_equal_stack_number
-1 failed, 46 passed in 0.29s
+1 failed, 51 passed in 0.29s
 ```
 
 **raw green** after restore:
 ```
-47 passed in 0.26s
+52 passed in 0.26s
 ```
 
 ---
@@ -1050,12 +1050,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e29_expect_stack_
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e30_collected_positions_not_exact
-1 failed, 46 passed in 0.29s
+1 failed, 51 passed in 0.29s
 ```
 
 **raw green** after restore:
 ```
-47 passed in 0.22s
+52 passed in 0.22s
 ```
 
 ---
@@ -1082,12 +1082,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e30_collected_pos
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e30_queried_pr_not_at_reported_position
-1 failed, 40 passed in 0.19s
+1 failed, 51 passed in 0.19s
 ```
 
 **raw green** after restore:
 ```
-41 passed in 0.16s
+52 passed in 0.16s
 ```
 
 ---
@@ -1115,12 +1115,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e30_queried_pr_no
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e33_queried_entry_head_ref_oid_disagrees
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e33_queried_entry_base_ref_name_disagrees
-2 failed, 45 passed in 0.27s
+2 failed, 50 passed in 0.27s
 ```
 
 **raw green** after restore:
 ```
-47 passed in 0.28s
+52 passed in 0.28s
 ```
 
 ---
@@ -1149,12 +1149,12 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_e33_queried_entry
 **raw red** (traceback body elided):
 ```
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_cli_bad_argument_cases[argv3]
-5 failed, 36 passed in 0.22s
+5 failed, 47 passed in 0.22s
 ```
 
 **raw green** after restore:
 ```
-47 passed in 0.24s
+52 passed in 0.24s
 ```
 
 ---
@@ -1169,8 +1169,8 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_cli_bad_argument_
 
 **`shasum -a 256` before first neutralization / after last restore:**
 ```
-3ccd2886befe02bb434e97fbfd51ad67445389ded84c59b87415b6882fe5768d  plugins/superheroes/lib/stack_check.py
-3ccd2886befe02bb434e97fbfd51ad67445389ded84c59b87415b6882fe5768d  plugins/superheroes/lib/stack_check.py
-dd2bbc280f5fd4e6c5389e55d3e2900c6b0b95f3063295cf2201b8a864e5913d  plugins/superheroes/lib/tests/test_stack_check.py
-dd2bbc280f5fd4e6c5389e55d3e2900c6b0b95f3063295cf2201b8a864e5913d  plugins/superheroes/lib/tests/test_stack_check.py
+d00ae0e0c2ffc7c91f02988562ec6107eaa0f311d070d699919a9956db5a0076  plugins/superheroes/lib/stack_check.py
+d00ae0e0c2ffc7c91f02988562ec6107eaa0f311d070d699919a9956db5a0076  plugins/superheroes/lib/stack_check.py
+c3d9ab00e30c25866272b3e53c6856428778a359fc2d348aae87c0988048f06f  plugins/superheroes/lib/tests/test_stack_check.py
+c3d9ab00e30c25866272b3e53c6856428778a359fc2d348aae87c0988048f06f  plugins/superheroes/lib/tests/test_stack_check.py
 ```
