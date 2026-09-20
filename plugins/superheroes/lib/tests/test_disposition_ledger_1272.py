@@ -831,3 +831,40 @@ def test_L7_departure_preserves_raised_round_through_archive_and_record(tmp_path
 
 
 # --- L8 uses L2 open-representative case (bite-proof run separately) -----------------
+
+
+def test_bite_verify_backfill_preserves_disposition_family():
+    """axis: the same-round verify stamp adds verifyResult and erases no family member.
+
+    A fixed row retained with `mergedInto` (or a refuted/out-of-scope reason) must keep it.
+    Losing `mergedInto` here turns a row that certification REFUSES on an unresolved merge
+    chain into an independently graded fixed disposition — a fail-direction inversion.
+    """
+    head = "c" * 40
+    key = "fixed-key"
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    state["rounds"] = {"2": {"fixFoldHead": head}}
+    state[SC.DISPOSITION_LEDGER_KEY] = [{
+        SC.FINDING_KEY_FIELD: key,
+        "file": "a.py",
+        "line": 1,
+        "title": "t",
+        "severity": "Minor",
+        "disposition": "fixed",
+        "dispositionRound": 2,
+        "dispositionReceipt": {"headSha": head},
+        SC.MERGED_INTO_FIELD: "representative-key",
+        "outOfScopeReason": "carried reason",
+    }]
+    state["findings"] = []
+
+    RD._backfill_fixed_disposition_verify_receipts(state, 2, "pass")
+
+    entry = _ledger_by_key(state)[key]
+    assert entry["dispositionReceipt"]["verifyResult"] == "pass"
+    assert entry["dispositionReceipt"]["headSha"] == head
+    assert entry[SC.MERGED_INTO_FIELD] == "representative-key"
+    assert entry["outOfScopeReason"] == "carried reason"
+    assert entry["disposition"] == "fixed"
+    assert entry["dispositionRound"] == 2

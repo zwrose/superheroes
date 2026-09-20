@@ -1628,8 +1628,17 @@ def _backfill_fixed_disposition_verify_receipts(state, round_no, verify_result):
             continue
         updated_receipt = dict(receipt)
         updated_receipt["verifyResult"] = verify_result
-        _record_disposition(
-            state, key, "fixed", round_no, dispositionReceipt=updated_receipt)
+        # The writer applies a WHOLE family and pops every member the family omits, so the
+        # stamp carries the row's existing family forward. Passing the receipt alone would
+        # delete `mergedInto` (and the refuted/out-of-scope reasons) from a retained row and
+        # turn a refusing unresolved-merge chain into a certifiable independent disposition —
+        # a fail-direction inversion, not a cosmetic loss.
+        family = session_contract.disposition_family_snapshot(entry)
+        family.pop("disposition", None)
+        family.pop("dispositionRound", None)
+        family["dispositionReceipt"] = updated_receipt
+        _record_disposition(state, key, "fixed", round_no, **family)
+
 
 def _archive_departures(state, departing):
     """Write every departing keyed finding into dispositionLedger (replace-by-key)."""
