@@ -8,10 +8,13 @@ the child is quoted. Call-site-agnostic — the caller names the register path.
 """
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
 
 import md_fence
+import store_core
 
 # --- vocabulary: ONE authoritative home (CONVENTIONS §11) --------------------
 
@@ -50,15 +53,34 @@ EXIT_PASS = 0
 EXIT_FAIL = 1
 EXIT_UNDECIDED = 2
 
+REGISTER_COPY_AUTO = "auto"
+REGISTER_COPY_MAIN = "main"
+REGISTER_COPY_WORKTREE = "worktree"
+REGISTER_COPY_MODES = frozenset({
+    REGISTER_COPY_AUTO,
+    REGISTER_COPY_MAIN,
+    REGISTER_COPY_WORKTREE,
+})
+
+MAIN_REFS = ("origin/main", "main")
+
 RESULT_FIELDS = (
-    "schema", "result", "ok", "reason", "detail", "child", "register", "body",
-    "registerEntries", "requiredEntries", "quotedEntries", "duplicateQuoteIds",
-    "entriesWithoutConsumers", "findings", "firstDifference",
+    "schema", "result", "ok", "reason", "detail", "child", "register",
+    "registerCopy", "registerRef", "body", "registerEntries", "requiredEntries",
+    "quotedEntries", "duplicateQuoteIds", "entriesWithoutConsumers", "findings",
+    "firstDifference",
 )
 FINDING_FIELDS = ("kind", "entry", "line", "column", "expected", "actual", "detail")
 
 ENTRY_HEADER_RE = re.compile(r"^\*\*(R\d+)\s+—\s")
 CONSUMERS_LINE_RE = re.compile(r"^\*Consumers:\*\s*(.*)")
+
+
+def _lines_from_text(text):
+    lines = text.split("\n")
+    if text.endswith("\n"):
+        lines = lines[:-1]
+    return [line[:-1] if line.endswith("\r") else line for line in lines]
 
 
 def _read_lines(path):
@@ -67,10 +89,116 @@ def _read_lines(path):
             text = fh.read()
     except (OSError, UnicodeDecodeError):
         return None
-    lines = text.split("\n")
-    if text.endswith("\n"):
-        lines = lines[:-1]
-    return [line[:-1] if line.endswith("\r") else line for line in lines]
+    return _lines_from_text(text)
+
+
+def _git_probe_cwd(register_path):
+    abs_path = os.path.abspath(register_path)
+    if os.path.isfile(abs_path):
+        return os.path.dirname(abs_path)
+    if os.path.isdir(abs_path):
+        return abs_path
+    return os.path.dirname(abs_path)
+
+
+def _repo_root_for_path(register_path):
+    cwd = _git_probe_cwd(register_path)
+    res = store_core.run_git_result(cwd, "rev-parse", "--show-toplevel")
+    if res.status == store_core.GIT_OK:
+        return res.out, None
+    if res.status == store_core.GIT_UNAVAILABLE:
+        return None, f"git unavailable while resolving repo root: {res.detail}"
+    return None, None
+
+
+def _rel_path_in_repo(repo_root, register_path):
+    abs_path = os.path.abspath(register_path)
+    rel = os.path.relpath(abs_path, repo_root)
+    if rel.startswith(".."):
+        return None
+    return rel.replace(os.sep, "/")
+
+
+def _git_env():
+    env = dict(os.environ)
+    env["LC_ALL"] = "C"
+    env["LANGUAGE"] = "C"
+    return env
+
+
+def _git_show_blob(repo_root, ref, rel_path):
+    try:
+        proc = subprocess.run(
+            ["git", "-C", repo_root, "show", f"{ref}:{rel_path}"],
+            capture_output=True,
+            timeout=10,
+            env=_git_env(),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    if proc.returncode != 0:
+        detail = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+        if not detail:
+            detail = f"git show exited {proc.returncode}"
+        return None, detail
+    try:
+        return proc.stdout.decode("utf-8"), None
+    except UnicodeDecodeError:
+        return None, "register blob is not valid UTF-8"
+
+
+def _resolve_register_copy_selection(register_path, register_copy):
+    if register_copy == REGISTER_COPY_WORKTREE:
+        return REGISTER_COPY_WORKTREE
+    if register_copy == REGISTER_COPY_MAIN:
+        return REGISTER_COPY_MAIN
+    repo_root, root_err = _repo_root_for_path(register_path)
+    if repo_root is not None:
+        return REGISTER_COPY_MAIN
+    if root_err is not None:
+        return REGISTER_COPY_MAIN
+    return REGISTER_COPY_WORKTREE
+
+
+def _resolve_main_ref(repo_root):
+    for ref in MAIN_REFS:
+        res = store_core.run_git_result(repo_root, "rev-parse", "--verify", ref)
+        if res.status == store_core.GIT_UNAVAILABLE:
+            return None, res.detail
+        if res.status == store_core.GIT_OK:
+            return ref, None
+    return None, None
+
+
+def _read_register_lines_from_main(register_path):
+    repo_root, root_err = _repo_root_for_path(register_path)
+    if root_err is not None:
+        return None, None, root_err
+    if repo_root is None:
+        return None, None, (
+            f"register path {register_path!r} is not inside a git work tree"
+        )
+    rel_path = _rel_path_in_repo(repo_root, register_path)
+    if rel_path is None:
+        return None, None, (
+            f"register path {register_path!r} is outside repo root {repo_root!r}"
+        )
+    main_ref, git_err = _resolve_main_ref(repo_root)
+    if git_err is not None:
+        return None, None, (
+            f"git unavailable while resolving main ref for {rel_path!r}: {git_err}"
+        )
+    if main_ref is None:
+        return None, None, (
+            f"could not read register from main: no ref among "
+            f"{', '.join(MAIN_REFS)} exists for {rel_path!r}"
+        )
+    text, show_err = _git_show_blob(repo_root, main_ref, rel_path)
+    if text is None:
+        return None, main_ref, (
+            f"could not read register from {main_ref!r} at {rel_path!r}: {show_err}"
+        )
+    return _lines_from_text(text), main_ref, None
 
 
 def _is_italic_metadata_line(line):
@@ -123,6 +251,8 @@ def _make_result(
     detail,
     child,
     register_path,
+    register_copy,
+    register_ref,
     body_path,
     register_entries,
     required_entries,
@@ -140,6 +270,8 @@ def _make_result(
         detail,
         child,
         register_path,
+        register_copy,
+        register_ref,
         body_path,
         register_entries,
         required_entries,
@@ -250,11 +382,35 @@ def parse_register_lines(lines):
     return entries, None, None, None
 
 
-def load_register(register_path):
-    lines = _read_lines(register_path)
+def load_register(register_path, register_copy=REGISTER_COPY_AUTO):
+    selected_copy = _resolve_register_copy_selection(register_path, register_copy)
+    if selected_copy == REGISTER_COPY_WORKTREE:
+        lines = _read_lines(register_path)
+        if lines is None:
+            return (
+                None,
+                UNDECIDED_REGISTER_UNREADABLE,
+                None,
+                "register file is missing or not valid UTF-8",
+                REGISTER_COPY_WORKTREE,
+                None,
+            )
+        entries, reason, line, detail = parse_register_lines(lines)
+        return entries, reason, line, detail, REGISTER_COPY_WORKTREE, None
+
+    lines, main_ref, unreadable_detail = _read_register_lines_from_main(register_path)
     if lines is None:
-        return None, UNDECIDED_REGISTER_UNREADABLE, None, None
-    return parse_register_lines(lines)
+        # axis: failed main read must not fall back to worktree — register fail-closed.
+        return (
+            None,
+            UNDECIDED_REGISTER_UNREADABLE,
+            None,
+            unreadable_detail,
+            REGISTER_COPY_MAIN,
+            main_ref,
+        )
+    entries, reason, line, detail = parse_register_lines(lines)
+    return entries, reason, line, detail, REGISTER_COPY_MAIN, main_ref
 
 
 def _unprefix_blockquote(line):
@@ -377,6 +533,8 @@ def _base_result(
     detail,
     child,
     register_path,
+    register_copy,
+    register_ref,
     body_path,
     register_entries,
     required_entries,
@@ -398,6 +556,8 @@ def _base_result(
         detail,
         child,
         register_path,
+        register_copy,
+        register_ref,
         body_path,
         register_entries,
         required_entries,
@@ -414,6 +574,8 @@ def _undecided(
     detail,
     child=None,
     register_path=None,
+    register_copy=None,
+    register_ref=None,
     body_path=None,
 ):
     return _base_result(
@@ -422,6 +584,8 @@ def _undecided(
         detail,
         child,
         register_path,
+        register_copy,
+        register_ref,
         body_path,
         [],
         [],
@@ -432,25 +596,43 @@ def _undecided(
     )
 
 
-def check_body(register_path, body_path, child, allow_no_required_entries=False):
+def check_body(
+    register_path,
+    body_path,
+    child,
+    allow_no_required_entries=False,
+    register_copy=REGISTER_COPY_AUTO,
+):
     """Compare a consumer body against a register for the named child token."""
+    selected_copy = _resolve_register_copy_selection(register_path, register_copy)
+    register_ref = None
+
     if child is None or not str(child).strip():
         return _undecided(
             UNDECIDED_USAGE,
             "child token must be a non-empty string",
             child=child,
             register_path=register_path,
+            register_copy=selected_copy,
+            register_ref=register_ref,
             body_path=body_path,
         )
 
-    entries, reg_reason, reg_line, reg_detail = load_register(register_path)
+    entries, reg_reason, reg_line, reg_detail, loaded_copy, loaded_ref = load_register(
+        register_path,
+        register_copy,
+    )
+    selected_copy = loaded_copy
+    register_ref = loaded_ref
     if entries is None:
         if reg_reason == UNDECIDED_REGISTER_UNREADABLE:
             return _undecided(
                 UNDECIDED_REGISTER_UNREADABLE,
-                "register file is missing or not valid UTF-8",
+                reg_detail or "register file is missing or not valid UTF-8",
                 child=child,
                 register_path=register_path,
+                register_copy=selected_copy,
+                register_ref=register_ref,
                 body_path=body_path,
             )
         if reg_reason == UNDECIDED_REGISTER_EMPTY:
@@ -459,6 +641,8 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
                 reg_detail,
                 child=child,
                 register_path=register_path,
+                register_copy=selected_copy,
+                register_ref=register_ref,
                 body_path=body_path,
             )
         detail = reg_detail
@@ -469,6 +653,8 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
             detail,
             child=child,
             register_path=register_path,
+            register_copy=selected_copy,
+            register_ref=register_ref,
             body_path=body_path,
         )
 
@@ -479,6 +665,8 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
             "body file is missing or not valid UTF-8",
             child=child,
             register_path=register_path,
+            register_copy=selected_copy,
+            register_ref=register_ref,
             body_path=body_path,
         )
 
@@ -492,6 +680,8 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
             ),
             child=child,
             register_path=register_path,
+            register_copy=selected_copy,
+            register_ref=register_ref,
             body_path=body_path,
         )
 
@@ -514,6 +704,8 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
             f"no register entry names child {child!r} on its Consumers line",
             child=child,
             register_path=register_path,
+            register_copy=selected_copy,
+            register_ref=register_ref,
             body_path=body_path,
         )
 
@@ -599,6 +791,8 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
             None,
             child,
             register_path,
+            selected_copy,
+            register_ref,
             body_path,
             register_entries,
             required_entries,
@@ -613,6 +807,8 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
         None,
         child,
         register_path,
+        selected_copy,
+        register_ref,
         body_path,
         register_entries,
         required_entries,
@@ -631,7 +827,21 @@ def _emit(result):
 class _RegisterCheckArgumentParser(argparse.ArgumentParser):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._usage_paths = {"child": None, "register": None, "body": None}
+        self._usage_paths = {
+            "child": None,
+            "register": None,
+            "register_copy": REGISTER_COPY_AUTO,
+            "body": None,
+        }
+
+    def _usage_register_copy(self):
+        register_path = self._usage_paths["register"]
+        if register_path is None:
+            return REGISTER_COPY_AUTO
+        return _resolve_register_copy_selection(
+            register_path,
+            self._usage_paths["register_copy"],
+        )
 
     def error(self, message):
         result = _undecided(
@@ -639,6 +849,8 @@ class _RegisterCheckArgumentParser(argparse.ArgumentParser):
             message,
             child=self._usage_paths["child"],
             register_path=self._usage_paths["register"],
+            register_copy=self._usage_register_copy(),
+            register_ref=None,
             body_path=self._usage_paths["body"],
         )
         _emit(result)
@@ -652,6 +864,8 @@ class _RegisterCheckArgumentParser(argparse.ArgumentParser):
                 detail,
                 child=self._usage_paths["child"],
                 register_path=self._usage_paths["register"],
+                register_copy=self._usage_register_copy(),
+                register_ref=None,
                 body_path=self._usage_paths["body"],
             )
             _emit(result)
@@ -677,12 +891,22 @@ def main(argv=None):
     parser = _RegisterCheckArgumentParser(description=__doc__.splitlines()[0])
     parser._usage_paths["child"] = _peek_argv_value(argv, "--child")
     parser._usage_paths["register"] = _peek_argv_value(argv, "--register")
+    register_copy_peek = _peek_argv_value(argv, "--register-copy")
+    if register_copy_peek is not None:
+        parser._usage_paths["register_copy"] = register_copy_peek
     parser._usage_paths["body"] = _peek_argv_value(argv, "--body-file")
     sub = parser.add_subparsers(dest="cmd")
     check = sub.add_parser("check", help="compare a consumer body against a register")
     check.add_argument("--register", required=True, help="path to register markdown")
     check.add_argument("--body-file", required=True, help="path to consumer body markdown")
     check.add_argument("--child", required=True, help="child token to match on Consumers lines")
+    check.add_argument(
+        "--register-copy",
+        choices=sorted(REGISTER_COPY_MODES),
+        default=REGISTER_COPY_AUTO,
+        help="which register copy to read: auto (main in a repo, else worktree), "
+        "main (origin/main or main ref), or worktree (file on disk)",
+    )
     check.add_argument(
         "--allow-no-required-entries",
         action="store_true",
@@ -713,13 +937,20 @@ def main(argv=None):
             args.body_file,
             args.child,
             allow_no_required_entries=args.allow_no_required_entries,
+            register_copy=args.register_copy,
         )
     except Exception as exc:
+        selected_copy = _resolve_register_copy_selection(
+            args.register,
+            args.register_copy,
+        )
         result = _undecided(
             UNDECIDED_INTERNAL_ERROR,
             f"{type(exc).__name__}: {exc}",
             child=args.child,
             register_path=args.register,
+            register_copy=selected_copy,
+            register_ref=None,
             body_path=args.body_file,
         )
         _emit(result)
