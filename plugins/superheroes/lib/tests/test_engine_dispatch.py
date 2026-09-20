@@ -13602,3 +13602,645 @@ def test_journal_line_not_object_refused_at_every_consumer_site(tmp_path, site):
         abandoned = ED.dispatch_abandon(run_dir)
         assert token in str(abandoned.get("detail", ""))
 
+
+# --- claude stdout delivery (#1273) ---
+
+_TEA = importlib.util.spec_from_file_location(
+    "test_engine_adapter", os.path.join(_HERE, "test_engine_adapter.py"))
+_TEA_MOD = importlib.util.module_from_spec(_TEA)
+_TEA.loader.exec_module(_TEA_MOD)
+_claude_event_stream = _TEA_MOD._claude_event_stream
+
+_MR = importlib.util.spec_from_file_location(
+    "model_registry", os.path.join(_HERE, "..", "model_registry.py"))
+MR = importlib.util.module_from_spec(_MR)
+_MR.loader.exec_module(MR)
+
+_OFF_ALLOWLIST_CLAUDE = "haiku-4.5"
+
+
+def _claude_seat(model="sonnet", effort="high", role=_REVIEW_ROLE):
+    return {"vendor": "claude", "model": model, "effort": effort, "role": role}
+
+
+def _reviewer_claude_seat():
+    cell = MR.matrix_config("reviewer", "claude")
+    return {"vendor": "claude", "model": cell[0], "effort": cell[1], "role": "reviewer"}
+
+
+def _reviewer_deep_claude_seat():
+    cell = MR.matrix_config("reviewer-deep", "claude")
+    return {"vendor": "claude", "model": cell[0], "effort": cell[1], "role": "reviewer-deep"}
+
+
+def _stable_build_view(tmp_path):
+    base = _fake_build_view(tmp_path)
+    cache = {}
+
+    def build_view(repo_real, **kwargs):
+        key = os.path.realpath(repo_real)
+        if key not in cache:
+            cache[key] = base(repo_real, **kwargs)
+        return cache[key]
+
+    return build_view
+
+
+def _claude_argv_for_run(seat, role_kind, cwd):
+    built = EA.build_argv_result(seat, role_kind, {"cwd": cwd})
+    assert built["reason"] is None, built
+    return built["argv"]
+
+
+def _ensure_claude_config_dir(tmp_path, monkeypatch, *, relative=None):
+    """Point claude config resolution at a real directory under tmp_path."""
+    if relative is not None:
+        rel_dir = tmp_path / relative
+        rel_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", relative)
+        monkeypatch.delenv("HOME", raising=False)
+        return str(rel_dir.resolve())
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    cfg = home / ".claude"
+    cfg.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    return str(cfg)
+
+
+class _ClaudeStdoutFakeRunner(FakeRunner):
+    """FakeRunner that does not sync stdout into the native result file (materializer owns it)."""
+
+    def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+        self.calls.append({
+            "argv": list(argv),
+            "prompt_bytes": prompt_bytes,
+            "timeout": timeout,
+            "cwd": cwd,
+        })
+        idx = len(self.calls) - 1
+        if idx >= len(self.responses):
+            raise AssertionError("fake called too many times")
+        resp = self.responses[idx]
+        if callable(resp):
+            out = resp(argv, prompt_bytes, timeout, progress_cb, cwd)
+        else:
+            out = resp
+        if isinstance(out, tuple) and len(out) == 4:
+            stdout, timed_out, rc, stderr_tail = out
+        elif isinstance(out, tuple) and out and isinstance(out[0], str):
+            stdout, timed_out, rc, stderr_tail = out[0], False, 0, ""
+        else:
+            stdout, timed_out, rc, stderr_tail = out, False, 0, ""
+        return _wrap_codex_fake_stdout(argv, stdout), timed_out, rc, stderr_tail
+
+
+def _claude_native_verdicts_runner(tool_calls=0, structured_output=None):
+    if structured_output is None:
+        branch = _native_review_branch("verdicts")
+        structured_output = _wrap_native_review_result(branch)
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        tool_names = ["Glob"] * tool_calls
+        stream = _claude_event_stream(tool_names=tool_names, result=structured_output)
+        return stream, False, 0, ""
+    return runner
+
+
+def _plant_claude_review_journal(tmp_path, run_dir, repo_root, seat, *, config_dir):
+    os.makedirs(run_dir, exist_ok=True)
+    prompt_path = _valid_prompt(tmp_path)
+    fed = _fed_prompt(open(prompt_path, encoding="utf-8").read(), view_meta={"headSha": "abc"})
+    cwd = os.path.realpath(repo_root)
+    argv = _claude_argv_for_run(seat, "review", cwd)
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "claude", list(argv), ED.RUN_KIND_REVIEW,
+    )
+    assert native_err is None, native_err
+    opened = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "claude",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "claude-native",
+        "argv": argv,
+        "cwd": cwd, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE,
+        "configDir": config_dir,
+        "supervisorPid": 1, "at": time.time(),
+        "fedPrompt": fed,
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    if native_schema_path is not None:
+        opened["nativeSchemaPath"] = native_schema_path
+    ED._journal_append(run_dir, opened)
+    return opened
+
+
+@pytest.mark.parametrize(
+    "config_env,expect_open",
+    [
+        ("missing", False),
+        ("relative", True),
+    ],
+    ids=["edge1-nonexistent", "edge2-relative"],
+)
+def test_claude_review_open_records_native_channel_config_dir_and_json_schema_argv(
+    tmp_path, monkeypatch, config_env, expect_open,
+):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    seat = _reviewer_claude_seat()
+    build_view = _stable_build_view(tmp_path)
+    view = build_view(os.path.realpath(repo_root))
+    dispatch_cwd = os.path.realpath(view["path"])
+    if config_env == "missing":
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-such-config"))
+    else:
+        rel = "cfg/relative"
+        rel_dir = os.path.join(dispatch_cwd, rel)
+        os.makedirs(rel_dir, exist_ok=True)
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", rel)
+        monkeypatch.delenv("HOME", raising=False)
+        expected_cfg = os.path.normpath(rel_dir)
+    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
+    res = ED.dispatch_review(
+        seat=seat,
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=build_view,
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    if not expect_open:
+        assert res["ok"] is False
+        assert res["terminal"] is True
+        assert res["reason"] == "unrunnable"
+        assert res["detail"] == "config-dir-unusable:not-a-directory"
+        assert res["attempts"] == 0
+        assert not os.path.isfile(os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME))
+        return
+    opened = _review_opened_record(run_dir)
+    assert opened["channel"] == ERC.CHANNEL_NATIVE
+    assert os.path.isabs(opened["configDir"])
+    if config_env == "relative":
+        assert opened["configDir"] == expected_cfg
+    with open(opened["nativeSchemaPath"], encoding="utf-8") as fh:
+        schema_text = fh.read().rstrip("\n")
+    assert opened["argv"][-2:] == ["--json-schema", schema_text]
+    assert ED._spawn_argv_coherence(opened, opened["argv"])[1] is None
+
+
+def test_claude_review_open_default_config_dir_missing_refuses(tmp_path, monkeypatch):
+    # edge 3 absent: no CLAUDE_CONFIG_DIR and no .claude under HOME
+    home = tmp_path / "home-empty"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    res = ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_ClaudeStdoutFakeRunner([]),
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    assert res["detail"] == "config-dir-unusable:not-a-directory"
+    assert res["attempts"] == 0
+
+
+def test_claude_review_open_default_config_dir_resolves(tmp_path, monkeypatch):
+    # edge 3 present: HOME/.claude exists
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()]),
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    opened = _review_opened_record(run_dir)
+    assert opened["configDir"] == cfg
+
+
+def test_claude_review_admits_structured_output_through_injected_seam(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    tool_calls = 2
+    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner(tool_calls=tool_calls)])
+    res = ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        expected_result_kind="verdicts",
+    )
+    assert res["ok"] is True
+    assert res["resultKind"] == "verdicts"
+    assert res["engagement"]["source"] == "claude-stream"
+    assert res["engagement"]["toolCalls"] == tool_calls
+    records, _ = ED._journal_read(res["runDir"])
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended["stdoutResult"] == "materialized"
+    branch = _native_review_branch("verdicts")
+    expected = json.dumps(_wrap_native_review_result(branch), separators=(",", ":")) + "\n"
+    with open(ED._native_result_path(res["runDir"], 1), encoding="utf-8") as fh:
+        assert fh.read() == expected
+
+
+def test_claude_review_stdout_no_result_forfeits_native_result_missing(tmp_path, monkeypatch):
+    # edge 6
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+
+    def no_result(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return _claude_event_stream(tool_names=["Read"]), False, 0, ""
+
+    res = ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_ClaudeStdoutFakeRunner([no_result, no_result]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-missing"
+
+
+def test_claude_review_errored_result_forfeits_native_result_missing(tmp_path, monkeypatch):
+    # edge 7
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    branch = _native_review_branch("verdicts")
+    bad = {
+        "type": "result", "subtype": "success", "is_error": True,
+        "structured_output": _wrap_native_review_result(branch),
+    }
+
+    def errored(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return json.dumps(bad) + "\n", False, 0, ""
+
+    res = ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_ClaudeStdoutFakeRunner([errored, errored]),
+        build_view=_fake_build_view(tmp_path),
+        expected_result_kind="verdicts",
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-missing"
+
+
+def test_claude_review_off_schema_structured_output_forfeits_schema_invalid(tmp_path, monkeypatch):
+    # edge 8
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    off_schema = {"result": {"resultKind": "verdicts"}}
+    runner = _claude_native_verdicts_runner(structured_output=off_schema)
+    fake = _ClaudeStdoutFakeRunner([runner, runner])
+    res = ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        expected_result_kind="verdicts",
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-schema-invalid"
+
+
+def test_claude_review_planted_result_without_stdout_result_forfeits_occupied(tmp_path, monkeypatch):
+    # edge 9
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "occupied-no-result")
+    os.makedirs(run_dir, exist_ok=True)
+    monkeypatch.setenv("WO_B_CLAUDE_RUN_DIR", os.path.realpath(run_dir))
+
+    plant_calls = []
+
+    def plant_no_result(argv, prompt_bytes, timeout, progress_cb, cwd):
+        attempt = len(plant_calls) + 1
+        plant_calls.append(attempt)
+        result_path = ED._native_result_path(os.environ["WO_B_CLAUDE_RUN_DIR"], attempt)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            fh.write('{"planted": true}\n')
+        return "", False, 0, ""
+
+    res = ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_ClaudeStdoutFakeRunner([plant_no_result, plant_no_result]),
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-path-occupied"
+
+
+def test_claude_review_planted_result_with_valid_stdout_forfeits_occupied(tmp_path, monkeypatch):
+    # edge 10
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "occupied-with-result")
+    os.makedirs(run_dir, exist_ok=True)
+    monkeypatch.setenv("WO_B_CLAUDE_RUN_DIR", os.path.realpath(run_dir))
+
+    plant_calls = []
+
+    def plant_then_result(argv, prompt_bytes, timeout, progress_cb, cwd):
+        attempt = len(plant_calls) + 1
+        plant_calls.append(attempt)
+        result_path = ED._native_result_path(os.environ["WO_B_CLAUDE_RUN_DIR"], attempt)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            fh.write('{"planted": true}\n')
+        return _claude_native_verdicts_runner()(argv, prompt_bytes, timeout, progress_cb, cwd)
+
+    res = ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_ClaudeStdoutFakeRunner([plant_then_result, plant_then_result]),
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        expected_result_kind="verdicts",
+    )
+    assert res["forfeited"] is True
+    assert res["detail"] == "native-result-path-occupied"
+
+
+def test_claude_review_last_result_event_materialized(tmp_path, monkeypatch):
+    # edge 11
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    first = _wrap_native_review_result(_native_review_branch("findings"))
+    second = _wrap_native_review_result(_native_review_branch("verdicts"))
+
+    def two_results(argv, prompt_bytes, timeout, progress_cb, cwd):
+        stream = _claude_event_stream(result=first)
+        stream += _claude_event_stream(result=second)
+        return stream, False, 0, ""
+
+    res = ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_ClaudeStdoutFakeRunner([two_results]),
+        build_view=_fake_build_view(tmp_path),
+        expected_result_kind="verdicts",
+    )
+    assert res["ok"] is True
+    assert res["resultKind"] == "verdicts"
+    expected = json.dumps(second, separators=(",", ":")) + "\n"
+    with open(ED._native_result_path(res["runDir"], 1), encoding="utf-8") as fh:
+        assert fh.read() == expected
+
+
+def test_claude_native_channel_suffix_unreadable_schema_refuses_coherence(tmp_path):
+    # edge 13
+    run_dir = str(tmp_path / "unreadable-schema")
+    os.makedirs(run_dir, exist_ok=True)
+    schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
+    with open(schema_path, "w", encoding="utf-8") as fh:
+        fh.write('{"type":"object"}\n')
+    os.chmod(schema_path, 0)
+    opened = {
+        "engine": "claude", "channel": ERC.CHANNEL_NATIVE,
+        "nativeSchemaPath": schema_path,
+        "argv": ["claude"], "cwd": run_dir,
+        "resolvedInputs": _spawn_gate_resolved_inputs(_reviewer_claude_seat()),
+    }
+    assert ED._native_channel_suffix(opened) == ()
+    _, err = ED._spawn_argv_coherence(opened, opened["argv"])
+    assert err is not None
+
+
+def test_claude_review_prompt_has_schema_contract_not_legacy(tmp_path, monkeypatch):
+    # B11 detector: stdout delivery gets schema contract only, not legacy stdout contract
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "prompt-contract")
+    ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()]),
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+        max_wait=0,
+    )
+    opened = _review_opened_record(run_dir)
+    prompt = open(opened["promptPath"], encoding="utf-8").read()
+    schema = ERC.declared_schema("claude", ERC.RUN_KIND_REVIEW)
+    contract = ERC.review_result_contract_from_schema(
+        schema, delivery=ERC.RESULT_DELIVERY_STDOUT,
+    )
+    assert prompt.count(contract.strip()) == 1
+    assert "Review result contract (your graded stdout must match" not in prompt
+
+
+def test_claude_run_engine_files_hands_popen_the_recorded_env(tmp_path, monkeypatch):
+    # edge 5
+    monkeypatch.setenv("CLAUDE_CODE_EFFORT_LEVEL", "low")
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    config_dir = str(tmp_path / "claude-cfg")
+    os.makedirs(config_dir)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    seat = _reviewer_deep_claude_seat()
+    opened = _plant_claude_review_journal(
+        tmp_path, run_dir, repo_root, seat, config_dir=config_dir,
+    )
+    with open(os.path.join(run_dir, "journal-root.txt"), "w", encoding="utf-8") as fh:
+        fh.write(os.environ.get(ED.JOURNAL_ROOT_ENV, "") + "\n")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1,
+        "childPid": os.getpid(), "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1,
+        "childPid": os.getpid(), "argv": list(opened["argv"]), "at": time.time(),
+    })
+    captured = []
+
+    class _FakeProc:
+        pid = 4242
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(*_args, **kwargs):
+        captured.append(dict(kwargs.get("env") or {}))
+        stdout_fd = kwargs["stdout"]
+        branch = _native_review_branch("verdicts")
+        stream = _claude_event_stream(
+            tool_names=["Glob"],
+            result=_wrap_native_review_result(branch),
+        )
+        os.write(stdout_fd, stream.encode("utf-8"))
+        os.close(stdout_fd)
+        return _FakeProc()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, opened.get("progressPath") or os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert captured
+    env = captured[0]
+    assert env["CLAUDE_CODE_EFFORT_LEVEL"] == "xhigh"
+    assert "CLAUDE_EFFORT" not in env
+    assert env["CLAUDE_CONFIG_DIR"] == config_dir
+    records, _ = ED._journal_read(run_dir)
+    started = next(r for r in records if r.get("kind") == "engine-started")
+    assert started["env"] == {
+        "CLAUDE_CONFIG_DIR": config_dir,
+        "CLAUDE_CODE_EFFORT_LEVEL": "xhigh",
+    }
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended["stdoutResult"] == "materialized"
+
+
+def test_claude_run_engine_files_config_dir_removed_refuses_spawn(tmp_path, monkeypatch):
+    # edge 4
+    config_dir = str(tmp_path / "claude-cfg")
+    os.makedirs(config_dir)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    seat = _reviewer_claude_seat()
+    opened = _plant_claude_review_journal(
+        tmp_path, run_dir, repo_root, seat, config_dir=config_dir,
+    )
+    shutil.rmtree(config_dir)
+    popen_calls = []
+    monkeypatch.setattr(
+        subprocess, "Popen",
+        lambda *_args, **kwargs: popen_calls.append(kwargs) or None,
+    )
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1,
+        "childPid": os.getpid(), "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1,
+        "childPid": os.getpid(), "argv": list(opened["argv"]), "at": time.time(),
+    })
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._run_engine_files(
+        run_dir, 1, opened["argv"], opened["cwd"],
+        opened["promptPath"], stdout_path, stderr_path,
+        ED.RETRY_MIN_TIMEOUT, os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert popen_calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended["refusal"] == "config-dir-unusable:not-a-directory"
+
+
+def test_claude_review_secret_scrubbed_from_result_and_journal(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    finding = {}
+    for key in RFS.CANONICAL_MEMBER_KEYS:
+        schema = RFS.FINDING_PROPERTY_SCHEMAS[key]
+        if "enum" in schema:
+            finding[key] = next(v for v in schema["enum"] if v is not None)
+        elif schema.get("type") == ["integer", "null"]:
+            finding[key] = None
+        elif schema.get("type") == ["boolean", "null"]:
+            finding[key] = None
+        elif schema.get("type") == ["string", "null"]:
+            finding[key] = "example"
+        else:
+            finding[key] = "example"
+    secret = "ghp_" + ("a" * 36)
+    finding["body"] = "log shows %s" % secret
+    branch = _native_review_branch("findings", findings=[finding])
+    structured = _wrap_native_review_result(branch)
+    stream = _claude_event_stream(tool_names=["Read"], result=structured) + secret
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return stream, False, 0, ""
+
+    res = ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=_ClaudeStdoutFakeRunner([runner]),
+        build_view=_fake_build_view(tmp_path),
+        expected_result_kind="findings",
+    )
+    assert res.get("ok") is True
+    assert secret not in json.dumps(res)
+    records, _ = ED._journal_read(res["runDir"])
+    assert secret not in json.dumps(records)
+    polled = ED.dispatch_poll(res["runDir"])
+    assert secret not in json.dumps(polled)
+
+
+def test_claude_off_allowlist_seat_refused_at_spawn_gate_review(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    seat = _claude_seat(model="haiku-4.5", effort="high", role="reviewer")
+    res = ED.dispatch_review(
+        seat=seat,
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=_ClaudeStdoutFakeRunner([]),
+        build_view=_fake_build_view(tmp_path),
+        max_wait=0,
+    )
+    assert res["ok"] is False
+    assert res["attempts"] == 0
+    assert _OFF_ALLOWLIST_CLAUDE in res["detail"]
+    run_dir = str(tmp_path / "spawn-gate")
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    _plant_claude_review_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["resolvedInputs"]["model"] = _OFF_ALLOWLIST_CLAUDE
+    with open(ED._journal_path(run_dir), "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=_ClaudeStdoutFakeRunner([]))
+    assert ok is False
+    assert _OFF_ALLOWLIST_CLAUDE in detail
+
+
+def test_no_quota_leg_on_the_claude_dispatch_path():
+    pattern = re.compile(r"\bquota\b", re.IGNORECASE)
+    for name in ("engine_dispatch.py", "engine_adapter.py"):
+        path = os.path.join(_HERE, "..", name)
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        assert not pattern.search(text), "unexpected quota mention in %s" % name
+

@@ -176,12 +176,13 @@ appends one when `configRead.readError` is non-null).
 
 ### B.0 — Run the conformance probe per engine
 
-Before launch, run one real review dispatch per dispatchable engine — the wave-preflight liveness
-check the selftest is not:
+Before launch, run one real review dispatch per dispatchable engine (`codex`, `cursor`, and
+`claude` — the set in `lib/conformance_probe.py` `DISPATCHABLE_ENGINES`) — the wave-preflight
+liveness check the selftest is not:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -B "$ROOT_DIR/lib/conformance_probe.py" run --engine <codex|cursor> [--wave <launch-id>]
+python3 -B "$ROOT_DIR/lib/conformance_probe.py" run --engine <codex|cursor|claude> [--wave <launch-id>]
 ```
 
 Compose the walked `engine-auth` check with `preflight-entry` from those results (one per

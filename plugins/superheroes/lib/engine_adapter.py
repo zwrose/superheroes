@@ -244,6 +244,8 @@ def _registered_engine_models_detail(vendor):
         models = model_registry.codex_models()
     elif vendor == "cursor":
         models = model_registry.cursor_models()
+    elif vendor == "claude":
+        models = model_registry.claude_models()
     else:
         return None
     return (
@@ -252,7 +254,7 @@ def _registered_engine_models_detail(vendor):
     )
 
 
-BUILD_ARGV_VENDORS = ("codex", "cursor")
+BUILD_ARGV_VENDORS = ("codex", "cursor", "claude")
 
 
 def _unknown_engine_detail(vendor):
@@ -378,6 +380,26 @@ def _resolve_engine_model_pin(vendor, model_id, claude_tier):
                 )
             return parsed[0], resolved_inputs_vocab.RESOLVED, None, None
         return "composer-2.5", resolved_inputs_vocab.DEFAULT, None, None
+    if vendor == "claude":
+        engine_model = model_id
+        if isinstance(engine_model, str) and engine_model:
+            if model_registry.is_registered("claude", engine_model):
+                return engine_model, resolved_inputs_vocab.CALLER, None, None
+            parsed = model_registry.parse_dispatch_token("claude", engine_model)
+            if parsed is None:
+                return (
+                    None,
+                    resolved_inputs_vocab.DECLARED_NONE,
+                    "unregistered-engine-model",
+                    _registered_engine_models_detail("claude"),
+                )
+            return parsed[0], resolved_inputs_vocab.RESOLVED, None, None
+        return (
+            None,
+            resolved_inputs_vocab.DECLARED_NONE,
+            "unregistered-engine-model",
+            _registered_engine_models_detail("claude"),
+        )
     return (
         None,
         resolved_inputs_vocab.DECLARED_NONE,
@@ -489,6 +511,35 @@ def build_argv_result(seat, role_kind, opts):
             "cursor-agent", "--model", model, "-p", "--trust", "-f",
             "--sandbox", "enabled", "--output-format", "stream-json",
         ]
+        return _ok(argv)
+    if vendor == "claude":
+        engine_model, _source, refusal_reason, refusal_detail = _resolve_engine_model_pin(
+            vendor, model_id, claude_tier,
+        )
+        if refusal_reason is not None:
+            return _refuse(refusal_reason, detail=refusal_detail)
+        if engine_model == "fable-5":
+            return _refuse("fable-unrunnable", detail=_fable_unrunnable_detail("fable"))
+        ok, _reason = model_registry.validate_config("claude", engine_model, effort)
+        if not ok:
+            return _refuse(
+                "invalid-model-effort",
+                detail=_invalid_model_effort_detail("claude", engine_model, effort),
+            )
+        tok = model_registry.dispatch_token("claude", engine_model)
+        if not tok:
+            return _refuse(
+                "untokenizable",
+                detail=_untokenizable_detail("claude", engine_model, effort),
+            )
+        argv = [
+            "claude", "-p", "--model", tok, "--effort", effort,
+            "--output-format", "stream-json", "--verbose",
+        ]
+        if is_read:
+            argv += ["--restricted"]
+        else:
+            argv += ["--permission-mode", "acceptEdits", "--restricted"]
         return _ok(argv)
     return _refuse("unknown-engine", detail=_unknown_engine_detail(vendor))
 
@@ -699,6 +750,81 @@ def _iter_codex_event_lines(stdout):
             continue
         if isinstance(obj, dict):
             yield obj
+
+
+_CLAUDE_EVENT_TYPES = frozenset({"assistant", "user", "system", "result"})
+
+
+def _is_claude_event_object(obj):
+    return isinstance(obj, dict) and obj.get("type") in _CLAUDE_EVENT_TYPES
+
+
+def _iter_claude_event_lines(stdout):
+    """Yield parsed JSON objects from claude stream-json stdout. Never raises."""
+    if not isinstance(stdout, str) or not stdout:
+        return
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            yield obj
+
+
+def claude_tool_calls(stdout):
+    """Count distinct tool_use ids in claude stream-json stdout; int or None. Never raises.
+
+    Blocks whose name is StructuredOutput are excluded — that call is the result, not telemetry."""
+    try:
+        if not isinstance(stdout, str) or not stdout:
+            return None
+        parsed_any = False
+        tool_ids = set()
+        for obj in _iter_claude_event_lines(stdout):
+            if not _is_claude_event_object(obj):
+                continue
+            parsed_any = True
+            if obj.get("type") != "assistant":
+                continue
+            message = obj.get("message")
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                name = block.get("name")
+                if name == "StructuredOutput":
+                    continue
+                block_id = block.get("id")
+                if isinstance(block_id, str) and block_id:
+                    tool_ids.add(block_id)
+        if not parsed_any:
+            return None
+        return len(tool_ids)
+    except Exception:
+        return None
+
+
+def claude_result_envelope(stdout):
+    """Return the last result event dict from claude stream-json stdout, or None. Never raises."""
+    try:
+        if not isinstance(stdout, str) or not stdout:
+            return None
+        last = None
+        for obj in _iter_claude_event_lines(stdout):
+            if not isinstance(obj, dict) or obj.get("type") != "result":
+                continue
+            last = obj
+        return last
+    except Exception:
+        return None
 
 
 def is_codex_event_stream(stdout):

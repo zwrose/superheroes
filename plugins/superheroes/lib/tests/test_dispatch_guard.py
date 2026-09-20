@@ -529,3 +529,42 @@ def test_wo8_edge7_dispatch_guard_check_valid_and_off_allowlist_unchanged():
     assert off_payload["ok"] is False
     assert "gpt-5.3-codex-high" in off_payload["reason"]
     assert _PARK_TAIL in off.stderr
+
+
+def test_claude_cells_on_allowlist_per_role():
+    for role in MR.roles():
+        cell = MR.matrix_config(role, "claude")
+        if cell is None:
+            continue
+        model_id, effort = cell
+        seat = {"vendor": "claude", "model": model_id, "effort": effort, "role": role}
+        proc = subprocess.run(
+            [sys.executable, _MOD, "check", "--seat", json.dumps(seat)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, (role, proc.stdout, proc.stderr)
+        payload = json.loads(proc.stdout)
+        assert payload["ok"] is True
+        assert payload["dispatch_token"] == MR.dispatch_token("claude", model_id, effort)
+
+
+def test_claude_off_cell_refused():
+    proc = subprocess.run(
+        [
+            sys.executable, _MOD, "check", "--seat",
+            json.dumps({
+                "vendor": "claude", "model": "haiku-4.5", "effort": "high",
+                "role": "reviewer",
+            }),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert "haiku-4.5" in payload["reason"] or "haiku" in str(payload.get("allowlist"))
+    assert proc.stderr.strip()

@@ -437,6 +437,10 @@ def claude_dispatch_tokens() -> tuple[str, ...]:
     return tuple(out)
 
 
+def claude_models() -> tuple[str, ...]:
+    return tuple(_MODELS["claude"])
+
+
 def codex_models() -> tuple[str, ...]:
     return tuple(_MODELS["codex"])
 
