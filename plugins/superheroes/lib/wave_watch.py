@@ -7,7 +7,7 @@ Verbs:
 - run: single-shot watch — one arm, one result.
 - loop: re-arms run internally until a refusal or a non-timer event; the arming
   shape for a background advisor call per batch. loop owns one set of state
-  cells (ledger_observed, pr_state, pr_sampled) threaded through every arm so
+  cells (ledger_observed, pr_state, stack_state, pr_sampled) threaded through every arm so
   store loss across an arm boundary is not mistaken for benign pre-arm silence,
   PR deltas across an arm boundary are not absorbed into a fresh baseline, and
   a prior arm's successful PR poll is not forgotten on the next arm's timer.
@@ -16,18 +16,18 @@ Contract:
 - Refusals (ok=False): batch-invalid, max-total-seconds-invalid,
   ignore-event-invalid, interval-invalid, max-seconds-invalid, repo-root-invalid,
   store-unresolvable, ledger-unreadable, internal-error.
-- Events (ok=True): lane-terminal, lane-blocked, builder-exited, pr-set-changed,
-  lane-stale, timer.
+- Events (ok=True): lane-terminal, lane-blocked, builder-exited, stack-state-changed,
+  pr-set-changed, lane-stale, timer.
 - Degradations (non-fatal): ledger-torn-tail, ledger-unreadable,
   heartbeat-unreadable, pid-probe-uncertain, pr-signal-unavailable,
   stack-signal-unavailable, lane-never-stamped, pr-signal-never-sampled,
   log-unwritable, transcript-ambiguous, transcript-unresolved.
-- gh child env-scrubbing: ambient git/GH routing variables in _GIT_SCRUB_VARS
-  are stripped via _scrub_env before the gh subprocess runs.
+- gh child env-scrubbing: ambient git/GH routing variables in _GH_SCRUB_VARS
+  are stripped via ll.scrub_env before the gh subprocess runs.
 - Deadline-bound polling: no gh poll starts when remaining time is below
   _MIN_PR_POLL_SECONDS; each poll's timeout is min(30.0, remaining).
 - Precedence: lane-terminal (E1) > lane-blocked (E2) > builder-exited (E3) >
-  pr-set-changed (E4) > lane-stale (E5) > timer (E6).
+  stack-state-changed (E4) > pr-set-changed (E5) > lane-stale (E6) > timer (E7).
 - lane-stale: a lane whose heartbeat class is stale, whose latest recorded pid is
   positively live, and whose session transcript did NOT get written inside its own
   promise window — a wedged builder alive but frozen past its own
@@ -72,7 +72,8 @@ Contract:
   an already-handled lane that cannot be terminalized does not re-fire.
 - ignore-events: caller-supplied (launchId, event) pairs suppress that event
   for that lane only — lane-terminal, lane-blocked, builder-exited, and
-  lane-stale are suppressible; pr-set-changed and timer are not. Suppression
+  lane-stale are suppressible; stack-state-changed, pr-set-changed, and timer
+  are not. Suppression
   affects actionability only.
 - Pid liveness: probes ONLY the recorded leader pid (never the process group).
   launch_ledger._child_group_is_live biases uncertain toward ALIVE because a
@@ -138,7 +139,7 @@ NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH = "stale-suppressed-transcript-fresh"
 # literals would still pass if the runtime key were renamed underneath it.
 RESULT_KEY_STALE_SUPPRESSED = "staleSuppressed"
 
-_GIT_SCRUB_VARS = (
+_GH_SCRUB_VARS = (
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",
@@ -161,12 +162,11 @@ _GIT_SCRUB_VARS = (
 )
 
 
-def _scrub_env(env):
-    base = dict(env)
-    for key in _GIT_SCRUB_VARS:
-        base.pop(key, None)
-    base.pop(ll.LEDGER_ROOT_ENV, None)
-    return base
+def _gh_scrub_env(env):
+    # Superset of the ledger's git scrub vars, deliberately — GH_REPO and the
+    # GIT_CONFIG family can silently point the PR poll at a different repository.
+    # The ledger root stays in the child env (no roots= strip here).
+    return ll.scrub_env(env, keys=_GH_SCRUB_VARS, roots=())
 
 # --- wave_watch vocabulary (authoritative for this module) --------------------
 
@@ -195,6 +195,7 @@ REFUSALS = frozenset({
 EVENT_LANE_TERMINAL = "lane-terminal"
 EVENT_LANE_BLOCKED = "lane-blocked"
 EVENT_BUILDER_EXITED = "builder-exited"
+EVENT_STACK_STATE_CHANGED = "stack-state-changed"
 EVENT_PR_SET_CHANGED = "pr-set-changed"
 EVENT_LANE_STALE = "lane-stale"
 EVENT_TIMER = "timer"
@@ -203,6 +204,7 @@ EVENTS = frozenset({
     EVENT_LANE_TERMINAL,
     EVENT_LANE_BLOCKED,
     EVENT_BUILDER_EXITED,
+    EVENT_STACK_STATE_CHANGED,
     EVENT_PR_SET_CHANGED,
     EVENT_LANE_STALE,
     EVENT_TIMER,
@@ -238,6 +240,9 @@ EVENT_PRECEDENCE = (
     EVENT_LANE_TERMINAL,
     EVENT_LANE_BLOCKED,
     EVENT_BUILDER_EXITED,
+    # Above pr-set-changed so a completion wins on a tick where both hold; the
+    # PR-set evaluator does not run that tick and so never advances pr_state.
+    EVENT_STACK_STATE_CHANGED,
     EVENT_PR_SET_CHANGED,
     EVENT_LANE_STALE,
     EVENT_TIMER,
@@ -375,7 +380,7 @@ def _build_also_observed(
     return also or None
 
 
-def _derive_live_lanes(
+def _derive_batch_lanes(
     repo_root, batch_id, env, degraded, ignore_launch_ids, ledger_observed,
 ):
     read_result = ll.read(repo_root, env=env)
@@ -388,30 +393,32 @@ def _derive_live_lanes(
     elif state == "missing":
         if ledger_observed[0]:
             degraded.add(DEGRADATION_LEDGER_UNREADABLE)
-            return {}, False
+            return {}, {}, False
         records = []
     elif state in ("unreadable", "interiorCorrupt"):
         degraded.add(DEGRADATION_LEDGER_UNREADABLE)
-        return {}, False
+        return {}, {}, False
     else:
         degraded.add(DEGRADATION_LEDGER_UNREADABLE)
-        return {}, False
+        return {}, {}, False
 
     folded = ll.fold(records)
     if not folded["ok"]:
         degraded.add(DEGRADATION_LEDGER_UNREADABLE)
-        return {}, False
+        return {}, {}, False
 
     ignore = set(ignore_launch_ids)
-    return {
+    all_lanes = {
         lid: info
         for lid, info in folded["launches"].items()
-        if (
-            info.get("batchId") == batch_id
-            and not info.get("terminal")
-            and lid not in ignore
-        )
-    }, True
+        if info.get("batchId") == batch_id and lid not in ignore
+    }
+    live_lanes = {
+        lid: info
+        for lid, info in all_lanes.items()
+        if not info.get("terminal")
+    }
+    return all_lanes, live_lanes, True
 
 
 def _evaluate_lane_heartbeats(repo_root, live_lanes, env, degraded):
@@ -698,10 +705,10 @@ def _parse_pr_numbers(stdout):
 
 
 def _resolve_repo_slug(repo_root, deadline, monotonic, gh_run, env):
-    """Return owner/name for stack membership reads, or None. Never raises."""
+    """Return (slug, refusal) — exactly one is non-None. Never raises."""
     remaining = deadline - monotonic()
     if remaining < _MIN_PR_POLL_SECONDS:
-        return None
+        return None, None
     timeout = min(30.0, remaining)
     try:
         slug, refusal = sc.resolve_repo_slug(
@@ -709,13 +716,17 @@ def _resolve_repo_slug(repo_root, deadline, monotonic, gh_run, env):
             deadline=remaining,
             timeout=timeout,
             run=gh_run,
-            env=_scrub_env(env),
+            env=_gh_scrub_env(env),
         )
     except Exception:
-        return None
+        return None, {
+            "ok": False,
+            "reason": sc.REASON_STACK_UNREADABLE,
+            "detail": "resolve_repo_slug raised",
+        }
     if refusal is not None:
-        return None
-    return slug
+        return None, refusal
+    return slug, None
 
 
 def _resolve_pr_stack_groups(
@@ -731,15 +742,15 @@ def _resolve_pr_stack_groups(
     stacks = []
     ungrouped = []
     covered_prs = set()
-    stack_numbers_seen = set()
+    stack_position_maps = {}
 
-    repo_slug = _resolve_repo_slug(
+    repo_slug, slug_refusal = _resolve_repo_slug(
         repo_root, deadline, monotonic, gh_run, env,
     )
     if repo_slug is None:
         if changed_prs:
             degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
-        return stacks, sorted(changed_prs)
+        return stacks, sorted(changed_prs), stack_position_maps
 
     for pr_num in sorted(changed_prs):
         # bite-axis: COVERED — a changed PR whose stack was already read costs
@@ -773,18 +784,12 @@ def _resolve_pr_stack_groups(
                 ungrouped[:] = [
                     listed for listed in ungrouped if listed not in covered_prs
                 ]
-            if stack_number not in stack_numbers_seen:
-                stacks.append({"stack": stack_number, "prs": member_prs})
-                stack_numbers_seen.add(stack_number)
-            else:
-                for entry in stacks:
-                    if entry["stack"] == stack_number:
-                        merged = list(entry["prs"])
-                        for listed in member_prs:
-                            if listed not in merged:
-                                merged.append(listed)
-                        entry["prs"] = merged
-                        break
+            position_pairs = stack_position_maps.get(stack_number)
+            if position_pairs is None:
+                position_pairs = []
+                stack_position_maps[stack_number] = position_pairs
+            for member in members:
+                position_pairs.append((member["position"], member["number"]))
         elif read_result.get("reason") == sc.REASON_NOT_LINKED:
             if pr_num not in covered_prs:
                 ungrouped.append(pr_num)
@@ -793,21 +798,34 @@ def _resolve_pr_stack_groups(
             if pr_num not in covered_prs:
                 ungrouped.append(pr_num)
 
+    for stack_number in sorted(stack_position_maps):
+        position_pairs = stack_position_maps[stack_number]
+        seen_numbers = set()
+        ordered_prs = []
+        for position in sorted({pair[0] for pair in position_pairs}):
+            for pair_position, number in sorted(position_pairs):
+                if pair_position == position and number not in seen_numbers:
+                    ordered_prs.append(number)
+                    seen_numbers.add(number)
+        stacks.append({
+            "stack": stack_number,
+            "prs": ordered_prs,
+        })
     stacks.sort(key=lambda entry: entry["stack"])
     ungrouped.sort()
-    return stacks, ungrouped
+    return stacks, ungrouped, stack_position_maps
 
 
-def _evaluate_pr_set_changed(
-    repo_root, deadline, monotonic, gh_run, pr_state, degraded, env,
-    pr_sampled, membership_reader,
+def _poll_open_pr_numbers(
+    repo_root, deadline, monotonic, gh_run, env, degraded, pr_sampled,
 ):
+    """One open-PR-list read per tick. Returns (sorted numbers, ok). Never raises."""
     remaining = deadline - monotonic()
     if remaining <= 0:
-        return None
+        return None, False
     timeout = min(30.0, remaining)
     if timeout < _MIN_PR_POLL_SECONDS:
-        return None
+        return None, False
     try:
         proc = gh_run(
             _GH_PR_LIST_ARGV,
@@ -815,25 +833,34 @@ def _evaluate_pr_set_changed(
             text=True,
             timeout=timeout,
             cwd=repo_root,
-            env=_scrub_env(env),
+            env=_gh_scrub_env(env),
         )
     except Exception:
         degraded.add(DEGRADATION_PR_SIGNAL_UNAVAILABLE)
-        return None
+        return None, False
 
     if proc.returncode != 0:
         degraded.add(DEGRADATION_PR_SIGNAL_UNAVAILABLE)
-        return None
+        return None, False
 
     numbers = _parse_pr_numbers(proc.stdout)
     if numbers is None:
         degraded.add(DEGRADATION_PR_SIGNAL_UNAVAILABLE)
-        return None
+        return None, False
 
     if pr_sampled is not None:
         pr_sampled[0] = True
 
-    pr_set = set(numbers)
+    return sorted(numbers), True
+
+
+def _evaluate_pr_set_changed(
+    open_pr_numbers, pr_state, repo_root, deadline, monotonic, gh_run,
+    membership_reader, env, degraded,
+):
+    if open_pr_numbers is None:
+        return None
+    pr_set = set(open_pr_numbers)
     pr_baseline = pr_state[0]
     if pr_baseline is None:
         pr_state[0] = pr_set
@@ -843,7 +870,7 @@ def _evaluate_pr_set_changed(
     added = sorted(pr_set - pr_baseline)
     removed = sorted(pr_baseline - pr_set)
     changed_prs = added + removed
-    stacks, ungrouped = _resolve_pr_stack_groups(
+    stacks, ungrouped, _position_maps = _resolve_pr_stack_groups(
         repo_root, deadline, monotonic, gh_run, membership_reader, env,
         degraded, changed_prs,
     )
@@ -854,6 +881,221 @@ def _evaluate_pr_set_changed(
         "stacks": stacks,
         "ungrouped": ungrouped,
     }
+
+
+def _batch_stack_numbers(batch_lanes):
+    stacks = set()
+    for info in batch_lanes.values():
+        stack = info.get("stack")
+        if stack is not None:
+            stacks.add(stack)
+    return sorted(stacks)
+
+
+def _layers_planned_for_stack(batch_lanes, stack_number):
+    values = set()
+    for info in batch_lanes.values():
+        if info.get("stack") != stack_number:
+            continue
+        layers_planned = info.get("layersPlanned")
+        if layers_planned is not None:
+            values.add(layers_planned)
+    return values
+
+
+def _occupied_layer_positions(batch_lanes, stack_number):
+    occupied = set()
+    for info in batch_lanes.values():
+        if info.get("stack") != stack_number:
+            continue
+        position = info.get("layerPosition")
+        if position is not None:
+            occupied.add(position)
+    return occupied
+
+
+def _position_ready_map(
+    position_map, repo_slug, deadline, monotonic, gh_run, env, degraded,
+    pr_vet_reader=None,
+):
+    """Return {position: True} for positions READY at current head; None on budget."""
+    if pr_vet_reader is None:
+        pr_vet_reader = sc.read_pr_vet_state
+    ready = {}
+    for position in sorted(position_map):
+        remaining = deadline - monotonic()
+        if remaining < _MIN_PR_POLL_SECONDS:
+            return None
+        pr_number = position_map[position]
+        state, refusal = pr_vet_reader(
+            pr_number,
+            repo_slug,
+            deadline=remaining,
+            run=gh_run,
+            env=_gh_scrub_env(env),
+        )
+        if refusal is not None:
+            continue
+        verdict, vet_refusal = sc.read_vet_verdict(
+            state["body"], state["headRefOid"],
+        )
+        if vet_refusal is not None:
+            continue
+        if verdict == sc.VERDICT_READY:
+            ready[position] = True
+    return ready
+
+
+def _compute_stack_state_snapshot(
+    batch_lanes, open_pr_numbers, repo_root, deadline, monotonic, gh_run,
+    membership_reader, env, degraded, pr_vet_reader=None,
+):
+    """Compute per-stack completion snapshot and idle-seat flags. Never raises."""
+    stacks_out = []
+    flags = []
+    if not _batch_stack_numbers(batch_lanes):
+        return {"stacks": stacks_out, "flags": flags}
+    if open_pr_numbers is None:
+        open_pr_numbers = []
+
+    _stacks, _ungrouped, membership_by_stack = _resolve_pr_stack_groups(
+        repo_root,
+        deadline,
+        monotonic,
+        gh_run,
+        membership_reader,
+        env,
+        degraded,
+        list(open_pr_numbers),
+    )
+
+    repo_slug, _slug_refusal = _resolve_repo_slug(
+        repo_root, deadline, monotonic, gh_run, env,
+    )
+
+    for stack_number in _batch_stack_numbers(batch_lanes):
+        layers_values = _layers_planned_for_stack(batch_lanes, stack_number)
+        entry = {
+            "stack": stack_number,
+            "layersPlanned": None,
+            "missingPositions": [],
+            "reason": None,
+        }
+        if not layers_values:
+            entry["state"] = "stack-incomplete"
+            entry["reason"] = "layers-planned-unknown"
+            stacks_out.append(entry)
+            continue
+        if len(layers_values) > 1:
+            entry["state"] = "stack-incomplete"
+            entry["reason"] = "layers-planned-disagreed"
+            stacks_out.append(entry)
+            continue
+
+        layers_planned = next(iter(layers_values))
+        entry["layersPlanned"] = layers_planned
+
+        position_map = {}
+        for position, number in membership_by_stack.get(stack_number, ()):
+            position_map[position] = number
+        if not position_map or repo_slug is None:
+            entry["state"] = "stack-incomplete"
+            entry["reason"] = "membership-unresolved"
+            stacks_out.append(entry)
+            continue
+
+        ready_positions = _position_ready_map(
+            position_map,
+            repo_slug,
+            deadline,
+            monotonic,
+            gh_run,
+            env,
+            degraded,
+            pr_vet_reader=pr_vet_reader,
+        )
+        if ready_positions is None:
+            entry["state"] = "stack-incomplete"
+            entry["missingPositions"] = list(range(1, layers_planned + 1))
+            stacks_out.append(entry)
+            continue
+
+        missing = []
+        for position in range(1, layers_planned + 1):
+            if position not in position_map or position not in ready_positions:
+                missing.append(position)
+        if missing:
+            entry["state"] = "stack-incomplete"
+            entry["missingPositions"] = missing
+            stacks_out.append(entry)
+            continue
+
+        entry["state"] = "stack-complete"
+        stacks_out.append(entry)
+
+        occupied = _occupied_layer_positions(batch_lanes, stack_number)
+        for position in sorted(ready_positions):
+            next_position = position + 1
+            if (
+                next_position <= layers_planned
+                and next_position not in occupied
+            ):
+                flags.append({
+                    "flag": "idle-seat-launchable-child",
+                    "stack": stack_number,
+                    "position": position,
+                })
+
+    return {"stacks": stacks_out, "flags": flags}
+
+
+def _stack_state_fires(snapshot, baseline):
+    if baseline is None:
+        return any(
+            entry["state"] == "stack-complete" for entry in snapshot["stacks"]
+        )
+    return snapshot != baseline
+
+
+def _payload_stack_state_changed(ctx):
+    open_pr_numbers = ctx.get("open_pr_numbers")
+    if open_pr_numbers is None:
+        return None
+    snapshot = _compute_stack_state_snapshot(
+        ctx["batch_lanes"],
+        open_pr_numbers,
+        ctx["repo_root"],
+        ctx["deadline"],
+        ctx["monotonic"],
+        ctx["gh_run"],
+        ctx["membership_reader"],
+        ctx["env"],
+        ctx["degraded"],
+        pr_vet_reader=ctx.get("pr_vet_reader"),
+    )
+    stack_state = ctx["stack_state"]
+    baseline = stack_state[0]
+    if baseline is None and not _stack_state_fires(snapshot, baseline):
+        stack_state[0] = snapshot
+        return None
+    if baseline is not None and snapshot == baseline:
+        return None
+    # run() returns on the first event and loop() re-arms with the same cells,
+    # so a state-change event whose baseline never advanced would fire on every
+    # arm forever and starve every event below it in the precedence order.
+    stack_state[0] = snapshot
+    payload = dict(snapshot)
+    also = _build_also_observed(
+        EVENT_STACK_STATE_CHANGED,
+        ctx["terminal_launches"],
+        ctx["blocked_launches"],
+        ctx["exited_launches"],
+        ctx["stale_live_launches"],
+    )
+    if also is not None:
+        payload["alsoObserved"] = also
+    return payload
+
 
 
 def _payload_lane_terminal(ctx):
@@ -929,15 +1171,15 @@ def _payload_builder_exited(ctx):
 
 def _payload_pr_set_changed(ctx):
     pr_change = _evaluate_pr_set_changed(
+        ctx.get("open_pr_numbers"),
+        ctx["pr_state"],
         ctx["repo_root"],
         ctx["deadline"],
         ctx["monotonic"],
         ctx["gh_run"],
-        ctx["pr_state"],
-        ctx["degraded"],
-        ctx["env"],
-        ctx["pr_sampled"],
         ctx["membership_reader"],
+        ctx["env"],
+        ctx["degraded"],
     )
     if pr_change is None:
         return None
@@ -980,6 +1222,7 @@ _EVENT_PAYLOAD_BUILDERS = {
     EVENT_LANE_TERMINAL: _payload_lane_terminal,
     EVENT_LANE_BLOCKED: _payload_lane_blocked,
     EVENT_BUILDER_EXITED: _payload_builder_exited,
+    EVENT_STACK_STATE_CHANGED: _payload_stack_state_changed,
     EVENT_PR_SET_CHANGED: _payload_pr_set_changed,
     EVENT_LANE_STALE: _payload_lane_stale,
 }
@@ -1049,6 +1292,7 @@ def run(
     ignore_events=(),
     ledger_observed=None,
     pr_state=None,
+    stack_state=None,
     pr_sampled=None,
 ):
     """Watch one batch until the first event. Returns the result dict; never raises."""
@@ -1089,6 +1333,8 @@ def run(
             ledger_observed = [False]
         if pr_state is None:
             pr_state = [None]
+        if stack_state is None:
+            stack_state = [None]
         if pr_sampled is None:
             pr_sampled = [False]
 
@@ -1105,7 +1351,7 @@ def run(
         arm_suppressed = {}
 
         while True:
-            live_lanes, ledger_readable = _derive_live_lanes(
+            batch_lanes, live_lanes, ledger_readable = _derive_batch_lanes(
                 repo_root, batch_id, env, degraded, ignore_launch_ids,
                 ledger_observed,
             )
@@ -1133,12 +1379,23 @@ def run(
                 arm_suppressed.pop(entry["launchId"], None)
             exited_launches = exited[1] if exited is not None else []
 
+            open_pr_numbers, _pr_poll_ok = _poll_open_pr_numbers(
+                repo_root,
+                deadline,
+                monotonic,
+                gh_run,
+                env,
+                degraded,
+                pr_sampled,
+            )
+
             event_ctx = {
                 "terminal_launches": terminal_launches,
                 "blocked_launches": blocked_launches,
                 "exited": exited,
                 "exited_launches": exited_launches,
                 "stale_live_launches": stale_live_launches,
+                "batch_lanes": batch_lanes,
                 "batch_id": batch_id,
                 "degraded": degraded,
                 "ignore_set": ignore_set,
@@ -1147,6 +1404,8 @@ def run(
                 "monotonic": monotonic,
                 "gh_run": gh_run,
                 "pr_state": pr_state,
+                "stack_state": stack_state,
+                "open_pr_numbers": open_pr_numbers,
                 "pr_sampled": pr_sampled,
                 "env": env,
                 "membership_reader": membership_reader,
@@ -1155,7 +1414,7 @@ def run(
             for event in EVENT_PRECEDENCE:
                 if event == EVENT_TIMER:
                     if monotonic() >= deadline:
-                        live_lanes, deadline_readable = _derive_live_lanes(
+                        _batch_lanes, live_lanes, deadline_readable = _derive_batch_lanes(
                             repo_root, batch_id, env, degraded,
                             ignore_launch_ids, ledger_observed,
                         )
@@ -1261,6 +1520,7 @@ def loop(
 
         ledger_observed = [False]
         pr_state = [None]
+        stack_state = [None]
         pr_sampled = [False]
         total_start = monotonic()
         total_deadline = (
@@ -1310,6 +1570,7 @@ def loop(
                 ignore_events=ignore_events,
                 ledger_observed=ledger_observed,
                 pr_state=pr_state,
+                stack_state=stack_state,
                 pr_sampled=pr_sampled,
             )
 
