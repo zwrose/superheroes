@@ -5202,6 +5202,16 @@ def run_execution_record(run_dir):
         observation = _observation_from_attempt(run_dir_real, state, attempt)
         if not isinstance(observation, dict):
             return None, "observation-unavailable"
+        view_head_sha = None
+        view_meta = opened.get("viewMeta")
+        if isinstance(view_meta, dict):
+            head_sha_val = view_meta.get("headSha")
+            if isinstance(head_sha_val, str) and head_sha_val:
+                view_head_sha = head_sha_val
+        if view_head_sha is None:
+            base_sha = opened.get("baseSha")
+            if isinstance(base_sha, str) and base_sha:
+                view_head_sha = base_sha
         record = {
             "source": engine,
             "runnerNonce": echo_nonce,
@@ -5209,6 +5219,8 @@ def run_execution_record(run_dir):
             "observation": observation,
             "promptSha256": prompt_sha256,
             "orderPromptSha256": opened.get("basePromptSha256"),
+            "runKind": run_kind,
+            "viewHeadSha": view_head_sha,
         }
         if isinstance(result_digest, str) and result_digest and isinstance(result_kind, str) and result_kind:
             record["resultDigest"] = result_digest

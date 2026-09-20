@@ -7928,7 +7928,8 @@ def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurr
         c.add_replace_file(diff_path, diff_bytes)
         c.add_replace_file(spath, round_records.canonical(final).encode("utf-8"))
         if journal_entry is not None:
-            journal_entry.update(round_records.recorded_row_fields(final, cited_head))
+            journal_entry.update(round_records.recorded_row_fields(
+                final, cited_head, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR))
             c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
@@ -8074,32 +8075,34 @@ def _runner_shaped_result(phase, result_kind, envelope_payload):
     return {"ok": True, "resultKind": result_kind, result_kind: envelope_payload}
 
 
-def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
-    """Bind runner telemetry to the driver's order hash. Returns (envelope, refusal_reason, extra)."""
+def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_cited_head):
+    """Bind runner telemetry to the driver's order hash.
+
+    Returns (envelope, refusal_reason, extra, cited_head_source)."""
     if not evidence_run_dir:
-        return None, None, {}
+        return None, None, {}, None
     import engine_dispatch
     record, err = engine_dispatch.run_execution_record(evidence_run_dir)
     if err is not None:
-        return None, "evidence-run-dir-unreadable", {"detail": err}
+        return None, "evidence-run-dir-unreadable", {"detail": err}, None
     prompt_sha = record.get("orderPromptSha256")
     order_sha = envelope.get("orderSha256")
     # Absent order-prompt hash cannot prove the binding — refuse rather than compare promptSha256.
     if not isinstance(prompt_sha, str) or not prompt_sha or prompt_sha != order_sha:
         return None, "evidence-order-mismatch", {"orderPromptSha256": prompt_sha,
-                                                 "orderSha256": order_sha}
+                                                 "orderSha256": order_sha}, None
     result_digest = record.get("resultDigest")
     result_kind = record.get("resultKind")
     if (not isinstance(result_digest, str) or not result_digest
             or not isinstance(result_kind, str) or not result_kind):
-        return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}
+        return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}, None
     envelope_payload = envelope.get("payload")
     if result_kind == session_contract.WRITE_RESULT_KIND:
         pass
     else:
         if not isinstance(envelope_payload, dict):
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "resultKind": result_kind}
+                                                       "resultKind": result_kind}, None
         shaped = _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload)
         carried, adapter_subject = engine_adapter.review_payload_carried(shaped, result_kind)
         digest_carried, digest_subject = session_contract.evidence_digest_subject(
@@ -8108,22 +8111,42 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
         # pins it equal to review_payload_carried on the runner-shaped result.
         if not carried or not digest_carried:
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "resultKind": result_kind}
+                                                       "resultKind": result_kind}, None
         if round_records.payload_sha256(adapter_subject) != round_records.payload_sha256(
                 digest_subject):
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "resultKind": result_kind,
-                                                       "subjectDisagreement": True}
+                                                       "subjectDisagreement": True}, None
         payload_digest = round_records.payload_sha256(digest_subject)
         if result_digest != payload_digest:
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "payloadSha256": payload_digest,
-                                                       "resultKind": result_kind}
+                                                       "resultKind": result_kind}, None
+    run_kind = record.get("runKind")
+    cited_head_source = None
+    view_head = None
+    if run_kind == engine_dispatch.RUN_KIND_WRITE:
+        cited_head_source = round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
+    elif run_kind == engine_dispatch.RUN_KIND_REVIEW:
+        view_head = record.get("viewHeadSha")
+        if not isinstance(view_head, str) or not view_head:
+            return None, "view-head-underivable", {"runKind": run_kind}, None
+        if not isinstance(anchor_cited_head, str) or not anchor_cited_head:
+            return None, "view-head-underivable", {"runKind": run_kind,
+                                                    "anchorCitedHead": anchor_cited_head}, None
+        if view_head != anchor_cited_head:
+            return None, "view-head-anchor-mismatch", {"viewHeadSha": view_head,
+                                                        "anchorCitedHead": anchor_cited_head}, None
+        cited_head_source = round_records.CITED_HEAD_SOURCE_RUNNER_VIEW
+    else:
+        return None, "view-head-underivable", {"runKind": run_kind}, None
     evidence = {key: record[key] for key in round_records.EXECUTION_EVIDENCE_FIELDS}
     out = dict(envelope)
+    if cited_head_source == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW:
+        out["headSha"] = view_head
     out["executionEvidence"] = evidence
     out["envelopeSha256"] = round_records.envelope_sha256(out.get("payload"), evidence)
-    return out, None, {}
+    return out, None, {}, cited_head_source
 
 
 def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=False,
@@ -8238,6 +8261,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     # Validate BEFORE storing: a refusal must leave nothing behind.
     landing_replace_path = None
     assembled = None
+    cited_head = _anchor_cited_head(state, session_dir, rnd, phase, cur_attempt)
+    cited_head_source = round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
     if isinstance(seat, str) and seat in roster:
         envelope, _lerr, landing_replace_path = _read_landing_envelope(
             session_dir, rnd, phase, seat, cur_attempt, occurrence)
@@ -8246,8 +8271,10 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                                attempt=cur_attempt, seat=_slot_label(seat, occurrence))
         if (seat_schema == round_records.SEAT_RESULT_SCHEMA_V2 and isinstance(envelope, dict)
                 and envelope.get("provenance") == round_records.PROVENANCE_DISPATCH_OBSERVED):
-            assembled, ev_reason, ev_extra = _assemble_dispatch_evidence(
-                session_dir, envelope, evidence_run_dir)
+            assembled, ev_reason, ev_extra, assembly_source = _assemble_dispatch_evidence(
+                session_dir, envelope, evidence_run_dir, cited_head)
+            if assembly_source is not None:
+                cited_head_source = assembly_source
             if ev_reason is not None:
                 return _refuse_cmd(session_dir, "record-result", ev_reason, phase=phase,
                                    rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
@@ -8284,11 +8311,13 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     if head_content is not None:
         head_store_path, head_diff_bytes, envelope, payload_sha = _envelope_with_head_diff(
             session_dir, envelope, head_content, rnd, phase, seat, cur_attempt, occurrence)
-    cited_head = _anchor_cited_head(state, session_dir, rnd, phase, cur_attempt)
+    row_cited_head = cited_head
+    if cited_head_source == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW:
+        row_cited_head = assembled["headSha"]
     journal_entry = _journal_entry_for_commit(
         session_dir, "record-result", "recorded", phase=phase, round=rnd, attempt=cur_attempt,
         seat=seat, occurrence=occurrence,
-        **round_records.recorded_row_fields(envelope, cited_head),
+        **round_records.recorded_row_fields(envelope, row_cited_head, cited_head_source),
         superseded=bool(plan["superseded"]), headDiffStorePath=head_store_path,
         **_journal_addressing_fields(expect_round, expect_phase),
         **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
@@ -8449,7 +8478,8 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                                    fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
                                    seat=seat, storePath=spath)
             cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
-            revision_fields = round_records.recorded_row_fields(stored_envelope, cited_head)
+            revision_fields = round_records.recorded_row_fields(
+                stored_envelope, cited_head, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
             _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                            seat=seat, occurrence=occurrence, **revision_fields,
                            **_journal_addressing_fields(expect_round, expect_phase),
@@ -8585,7 +8615,8 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
     cited_head = _anchor_cited_head(state, session_dir, rnd, phase, cur_attempt)
     _journal_event(session_dir, "record-missing", "recorded", phase=phase, round=rnd,
                    attempt=cur_attempt, seat=seat, occurrence=occurrence, reason=reason,
-                   **round_records.recorded_row_fields(stored_envelope, cited_head),
+                   **round_records.recorded_row_fields(
+                       stored_envelope, cited_head, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR),
                    **_journal_addressing_fields(expect_round, expect_phase),
                    **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     return {"ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
@@ -9176,7 +9207,9 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
         "journal": _journal_entry_for_commit(
             session_dir, "advance", "recorded", phase=phase, round=rnd, attempt=attempt,
             seat=seat_key, occurrence=occurrence,
-            **round_records.recorded_row_fields(envelope, cited_head), superseded=False,
+            **round_records.recorded_row_fields(
+                envelope, cited_head, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR),
+            superseded=False,
             **_journal_identity_fields(phase, seat_key, occurrence, attempt)),
     }
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), payload,
@@ -9300,7 +9333,8 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
                                fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
                                seat=seat_key, storePath=spath)
         cited_head = _anchor_cited_head(state, session_dir, rnd, phase, entry_attempt)
-        revision_fields = round_records.recorded_row_fields(stored_envelope, cited_head)
+        revision_fields = round_records.recorded_row_fields(
+            stored_envelope, cited_head, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
         _journal_event(session_dir, "advance", "recorded", phase=phase, round=rnd,
                        attempt=entry_attempt, seat=slot[0] if slot else None,
                        occurrence=slot[1] if slot else None,

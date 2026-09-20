@@ -452,9 +452,13 @@ file.
 
 The manifest and per-order hashes are mirrored into state (`_ordersAnchors`) and journaled as
 `orders-emitted`; ingestion checks envelopes against that anchor (`manifest-anchor-mismatch` when
-they disagree). The anchor and the hashed manifest also carry the emission head as `headSha`, which
-every `recorded` journal row carries as `citedHead` — the head the order was bound to at emission,
-not a runner-observed view head.
+they disagree). The anchor and the hashed manifest also carry the emission head as `headSha`. Every
+`recorded` journal row declares how its `citedHead` was derived via `citedHeadSource`. For a seat
+whose evidence is minted from a runner **review** run, the cited head is the runner-observed view
+head and must equal the emission anchor head — disagreement refuses `view-head-anchor-mismatch` at
+record time and stores nothing; an underivable run kind or absent view head refuses
+`view-head-underivable`. A **write** run has no sanitized view: the row keeps the emission-anchor
+citation and declares `order-anchor`.
 
 **Order-input ownership.** Orders cite round-scoped paths that must exist before a seat can run.
 The driver materializes them before order emit (see also the inline comment at

@@ -333,8 +333,6 @@ def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
     head_diff_path = str(tmp_path / (name + "-head.diff"))
     with open(head_diff_path, "w", encoding="utf-8") as fh:
         fh.write(HEAD_DIFF)
-    out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
-    assert out["ok"], out
     if head_sha is not None:
         if head_sha is _WRITE_META_HEAD:
             head_sha = _fake_git(gitdir)(session_dir, "rev-parse", "HEAD")
@@ -347,6 +345,8 @@ def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
         with open(meta_path, "w", encoding="utf-8") as fh:
             json.dump(meta, fh, sort_keys=True)
             fh.write("\n")
+    out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
+    assert out["ok"], out
     return session_dir, gitdir, head_diff_path
 
 
@@ -739,7 +739,7 @@ def _codex_event_stream(payload_text, *, action_items=1):
 
 
 def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-panel-e2e",
-                       telemetry_shape="dispatch-observed"):
+                       telemetry_shape="dispatch-observed", view_head_sha="abc123fake"):
     """Build a runner run directory for dispatch-observed evidence tests.
 
     This run directory is a test double for the runner's own record of a real dispatch; the
@@ -762,7 +762,7 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
         fh.write("gitdir: /fake/worktree\n")
     view_path = str(tmp_path / "dispatch-evidence-view")
     os.makedirs(view_path, exist_ok=True)
-    view_meta = {"headSha": "abc123fake", "stripped": [], "path": view_path}
+    view_meta = {"headSha": view_head_sha, "stripped": [], "path": view_path}
     with open(order_path, encoding="utf-8") as fh:
         base_prompt = fh.read()
     notice = sanitized_view.sanitized_view_notice(view_meta, mode="review")
@@ -811,6 +811,9 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
     assert reason is None, (phase, reason)
     slots = _slots_of(roster)
     _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
+    anchor = round_driver._orders_anchor(state, session_dir, pend["round"], pend["phase"],
+                                         pend["attempt"])
+    anchor_head = (anchor or {}).get("headSha")
     for seat, occurrence in slots:
         payload = _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
         if phase == round_driver.P_PANEL and seat == FINDING_SEAT and state["round"] == 1:
@@ -818,8 +821,10 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
             order_path = round_records.order_prompt_path(
                 session_dir, pend["round"], pend["phase"],
                 round_records.storage_key(seat, occurrence), pend["attempt"])
+            view_head = anchor_head or "abc123fake"
             run_dir = _execution_run_dir(
-                tmp_path, order_path, panel_findings, telemetry_shape=telemetry_shape)
+                tmp_path, order_path, panel_findings, telemetry_shape=telemetry_shape,
+                view_head_sha=view_head)
             out = round_driver.cmd_record_result(
                 session_dir, seat, occurrence=occurrence, evidence_run_dir=run_dir)
         else:
@@ -1107,10 +1112,11 @@ def test_assemble_dispatch_evidence_write_run_fixer_envelope(tmp_path):
     record, err = engine_dispatch.run_execution_record(run_dir)
     assert err is None, err
     envelope = _fixer_envelope_for_write_run(record)
-    assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir)
+    assembled, refusal, extra, cited_head_source = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir, "abc")
     assert refusal is None, extra
     assert assembled is not None
+    assert cited_head_source == round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
     assert assembled["executionEvidence"]["resultKind"] == session_contract.WRITE_RESULT_KIND
     assert assembled["envelopeSha256"] == round_records.envelope_sha256(
         envelope["payload"], assembled["executionEvidence"])
@@ -1124,8 +1130,8 @@ def test_assemble_dispatch_evidence_write_run_order_mismatch_refuses(tmp_path):
     record, err = engine_dispatch.run_execution_record(run_dir)
     assert err is None, err
     envelope = _fixer_envelope_for_write_run(record, order_sha="0" * 64)
-    assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir)
+    assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir, "abc")
     assert assembled is None
     assert refusal == "evidence-order-mismatch"
 
@@ -1141,8 +1147,8 @@ def test_assemble_dispatch_evidence_write_run_binding_incomplete_refuses(tmp_pat
     assert err is None, err
     assert "resultDigest" not in record
     envelope = _fixer_envelope_for_write_run(record)
-    assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir)
+    assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir, "abc")
     assert assembled is None
     assert refusal == "evidence-run-dir-unreadable"
     assert extra.get("detail") == "result-binding-incomplete"
@@ -1167,8 +1173,8 @@ def test_assemble_dispatch_evidence_kind_not_in_payload_refuses(tmp_path):
     engine_dispatch.run_execution_record = _patched
     try:
         envelope = _fixer_envelope_for_write_run(record)
-        assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
-            str(tmp_path / "session"), envelope, run_dir)
+        assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
+            str(tmp_path / "session"), envelope, run_dir, "abc")
     finally:
         engine_dispatch.run_execution_record = real_record
     assert assembled is None
@@ -1187,8 +1193,8 @@ def test_assemble_dispatch_evidence_review_kind_absent_from_payload_refuses(tmp_
         "orderSha256": record["orderPromptSha256"],
         "payload": {"fixes": []},
     }
-    assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir)
+    assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir, "abc123fake")
     assert assembled is None
     assert refusal == "evidence-result-mismatch"
     assert extra.get("resultKind") == "findings"

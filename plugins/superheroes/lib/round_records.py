@@ -70,6 +70,9 @@ SEAT_RESULT_V2_FIELDS = SEAT_RESULT_FIELDS + ("executionEvidence", "provenance",
 REVISION_IDENTITY_FIELDS = ("payloadSha256", "casToken", "executionEvidence", "provenance",
                             "envelopeSha256", "executionEvidencePresent", "citedHead")
 PROVENANCE_DISPATCH_OBSERVED = "dispatch-observed"
+CITED_HEAD_SOURCE_RUNNER_VIEW = "runner-view"
+CITED_HEAD_SOURCE_ORDER_ANCHOR = "order-anchor"
+CITED_HEAD_SOURCES = (CITED_HEAD_SOURCE_RUNNER_VIEW, CITED_HEAD_SOURCE_ORDER_ANCHOR)
 PROVENANCE_HAND_LANDED = "hand-landed"
 PROVENANCE_ORCHESTRATOR_FULFILLED = "orchestrator-fulfilled"
 AUDIT_PROVENANCE_RUNNER_RECORD = "runner-record"
@@ -173,12 +176,14 @@ class IncompleteRevisionIdentity(ValueError):
         super().__init__("incomplete revision identity: missing %s" % (self.missing,))
 
 
-def recorded_row_fields(stored_envelope, cited_head):
+def recorded_row_fields(stored_envelope, cited_head, cited_head_source):
     """THE builder for revision identity on a `recorded` journal row.
 
     Accepts a stored `seat-result/1`, `seat-result/2`, or `seat-missing/1` envelope; a non-dict
     raises `IncompleteRevisionIdentity` because a row with no stored envelope has no revision
     identity to record."""
+    if cited_head_source not in CITED_HEAD_SOURCES:
+        raise IncompleteRevisionIdentity(("citedHeadSource",))
     if not isinstance(stored_envelope, dict):
         raise IncompleteRevisionIdentity(REVISION_IDENTITY_FIELDS)
     schema = stored_envelope.get("schema")
@@ -198,6 +203,7 @@ def recorded_row_fields(stored_envelope, cited_head):
         "envelopeSha256": stored_envelope.get("envelopeSha256"),
         "executionEvidencePresent": "executionEvidence" in stored_envelope,
         "citedHead": cited_head,
+        "citedHeadSource": cited_head_source,
     }
 
 
