@@ -593,6 +593,16 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch_write.py::test_claude_
 
 ## BP-10 — write `run-dir-claude-mode-mismatch`
 
+> **This proof no longer bites, and the gap is repaired elsewhere (r2).** Re-running it at the
+> layer 2b final head left the detector GREEN with the gate's condition disabled: the named test
+> asserts the background-write refusal token, not the mismatch token, because WO-2 put
+> `_claude_mode_background_write_refusal` in front of the gate. The gate is unreachable by
+> construction while the declared claude modes are exactly print and background. The guard stays;
+> the unreachability is stated at the site, the test is renamed
+> (`test_background_journal_refuses_claude_mode_background_write_before_run_dir_mismatch`), and a
+> literal census pins the mode set. See element 22 of `c14_l2b_r2_final_head_rerun.md` and E4 of
+> `c14_l2b_r2_gate_coverage.md`.
+
 - **axis:** write continuation with disagreeing `claude_mode` refuses `run-dir-claude-mode-mismatch` with `attempts: 0`
 - **stale target:** yes — comparison now uses `engine_result_channel.normalize_claude_mode()` on both sides
 

@@ -244,6 +244,12 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_claude_backgr
 
 ## transcript admission gate
 
+> **Proof upgraded (r2).** The detector named below is an uncommitted one-off `python3 -c` assert,
+> which is a session artifact rather than a durable detector (CONVENTIONS §12.1). This element is
+> now carried by a committed test, `test_stdout_delivery_gate_transcript_branch`, proved as E1-E3
+> in `c14_l2b_r2_gate_coverage.md` and re-run at the final head as elements 24-26 of
+> `c14_l2b_r2_final_head_rerun.md`. The entry below stands as the historical receipt.
+
 - **axis:** transcript absent must refuse at _stdout_delivery_gate
 - **detector:** `inline gate assert`
 
@@ -262,6 +268,12 @@ AssertionError
 ```
 
 ## stop-and-confirm
+
+> **Axis restated at the final head (r2).** `stop-failed` is not an outcome of `_background_stop`
+> at this head: WO-2 settled the outcome set at `stopped` / `already-ended` / `stop-unconfirmed`.
+> The live axis is *a stop that cannot be confirmed is recorded `stop-unconfirmed`, never
+> `stopped`*, re-run as element 7 of `c14_l2b_r2_final_head_rerun.md`. The red below is the
+> historical receipt from the head that shipped it.
 
 - **axis:** stop failure surfaces stop-failed not stopped
 - **detector:** `plugins/superheroes/lib/tests/test_engine_dispatch.py::test_claude_background_stop_records_stopped_already_ended_and_stop_failed`
