@@ -357,8 +357,10 @@ and each of the three is established from the **remote**, never from a local ass
   allowed to swallow two surfaces.
 - **Never hand-rebase and never force-push a layer inside a lane** — both move a head other layers and the
   review are pinned to; take in a moved base or a moved lower layer **by merge** (`gh pr update-branch`,
-  bottom-up), which keeps your history and re-takes only CI; GitHub's cascading rebase is the disclosed
-  alternative when a merge cannot resolve the conflict, and it costs every layer above fresh receipts
+  bottom-up), which keeps your own commits — the moved head still takes a fresh remote-head check, CI
+  on the new sha, and a receipt naming it; GitHub's cascading rebase is the disclosed alternative when a
+  merge cannot resolve the conflict, and it rewrites every commit above the change, so those layers'
+  receipts are re-taken in full
   ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack stays current).
 - **A conflict round when a lower layer changes under you** — bring the lower layer current first, then
   update your layer from it, bottom-up, and **disclose the conflict round in the PR body**.

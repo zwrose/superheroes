@@ -85,11 +85,13 @@ saw. Nothing in the tooling closes that gap; this rule does.
    behaviour live in `rubric/native-stacks.md` § *How a stack merges*.
 
 5. **A stack is brought current by merge, bottom-up** — `gh pr update-branch` on each affected
-   layer starting just above the change, which keeps every layer's history and re-takes only CI on
-   the new head (`rubric/native-stacks.md` § *How a stack stays current*). GitHub's cascading
-   rebase (server-side, or `gh stack rebase` + `gh stack push`) is the disclosed alternative when a
-   merge cannot resolve the conflict, and it rewrites every affected head, so every layer above the
-   change then needs fresh review and CI receipts. Never a hand-rebase or force-push of a layer under
+   layer starting just above the change, which keeps every layer's own commits; each moved head then
+   takes a fresh remote-head check, CI on the new sha, and a receipt naming that sha
+   (`rubric/native-stacks.md` § *How a stack stays current*). GitHub's cascading rebase (the
+   server-side **Rebase stack** action for a lane; `gh stack rebase` + `gh stack push` only for a
+   local tracked stack an operator owns end to end) is the disclosed alternative when a merge
+   cannot resolve the conflict; it rewrites every commit of every affected layer, so those layers'
+   review and CI receipts are re-taken in full. Never a hand-rebase or force-push of a layer under
    review, which the doctrine names as an anti-pattern (`rubric/native-stacks.md` § *Anti-patterns*).
 
 6. **After the merge, report what merged** — each pull request number with the head sha that landed

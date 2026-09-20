@@ -116,19 +116,24 @@ guide](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-req
 
 GitHub's overview names a **"fully linear history between every branch in the stack"** as a merge
 requirement without defining it ([GitHub's stacked-pull-request
-overview](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)). The condition
-the tooling actually checks is the one `gh stack rebase` states: **each branch in the stack has the
-tip of the previous layer in its commit history**. A merge of the layer below (or of the base, at
-the bottom) into a layer satisfies it; a stack whose layers each carried such merge commits has
-merged atomically. What breaks it is a layer whose branch no longer descends from the tip of the
-layer below — a lower layer that moved after the layer above was last updated.
+overview](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)), and
+`gh stack merge --help` names no ancestry check of its own — GitHub evaluates the merge when it
+runs. The ancestry condition the tooling states is the one `gh stack rebase` restores: **each branch
+in the stack has the tip of the previous layer in its commit history**. A merge of the layer below
+(or of the base, at the bottom) into a layer puts that tip in its history, and the observed field
+case is that a stack whose every layer carried such merge commits merged atomically. What is known
+to break the requirement is a layer whose branch no longer descends from the tip of the layer below
+— a lower layer that moved after the layer above was last updated.
 
 **One command merges the stack; never one PR at a time.**
 
 Merging up to a middle pull request merges everything below it and leaves the pull requests above
-**open**. GitHub's pages do not say what happens to those branches' heads; treat every remaining
-layer as needing a fresh remote-head check and qualifying review and CI receipts on whatever head it
-then has before it is considered mergeable.
+**open**. GitHub documents that the next unmerged pull request is then **automatically rebased to
+target the stack base directly** ([merging stacked pull
+requests](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-stacked-pull-requests)),
+which rewrites its commits and changes its head sha; we have not smoke-tested it. Every remaining
+layer therefore needs a fresh remote-head check and its review and CI receipts re-taken on the head
+it then has before it is considered mergeable.
 
 ## How a stack stays current
 
@@ -137,14 +142,15 @@ contain the tip of the layer below it. Two mechanisms restore that, and they dif
 to the layer's head:
 
 - **Bring the layer current by merge** — `gh pr update-branch` on each affected layer, **bottom-up**
-  (the layer just above the change first). This adds one merge commit per layer and rewrites no
-  history, so the review receipts on the layer's own commits stay valid and only CI on the new head
-  is re-taken. This is how a superheroes lane brings a layer current.
+  (the layer just above the change first). This adds one merge commit per layer and rewrites none of
+  the layer's own commits. The head still moves, so the layer takes a fresh remote-head check, CI
+  on the new sha, and a receipt that names that sha — the re-review is of the merge, not of commits
+  a panel already read. This is how a superheroes lane brings a layer current.
 - **Cascading rebase** — GitHub's **Rebase stack** action from a pull request in the stack, or
   `gh stack rebase` followed by `gh stack push` for a local tracked stack. This rewrites every
-  affected layer's head, so every layer above the change needs fresh remote-head checks and fresh
-  review and CI receipts. It is the mechanism GitHub's pages name; a lane uses it only when a merge
-  cannot resolve the conflict, and discloses it.
+  commit of every affected layer, so every layer above the change needs fresh remote-head checks
+  and its review and CI receipts re-taken in full. It is the mechanism GitHub's pages name; a lane
+  uses it only when a merge cannot resolve the conflict, and discloses it.
 
 For a **local tracked** stack, `gh stack sync` and `gh stack rebase` are the native verbs and they
 do move local branches. That is why they belong to that route and not to a lane whose layer is under
