@@ -981,3 +981,22 @@ def test_deadline_none_leaves_timeout_untouched():
     run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
     sc.read_membership(pr=PR, repo=REPO, timeout=120, deadline=None, run=run)
     assert run.kw_calls[0]["timeout"] == 120
+
+
+def test_deadline_with_timeout_none_returns_dict_not_typeerror():
+    budget = 50.0
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    result = sc.read_membership(
+        pr=PR, repo=REPO, timeout=None, deadline=budget, run=run,
+    )
+    assert set(result.keys()) == TOTAL_KEYS
+    assert result["ok"] is True

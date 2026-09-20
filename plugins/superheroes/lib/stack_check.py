@@ -250,7 +250,11 @@ def _transport_graphql(
     effective_timeout = timeout
     if deadline_at is not None:
         remaining = deadline_at - time.monotonic()
-        effective_timeout = min(timeout, remaining)
+        # axis: timeout=None beside a read budget
+        if timeout is None:
+            effective_timeout = remaining
+        else:
+            effective_timeout = min(timeout, remaining)
 
     argv = _graphql_argv(owner, name, pr, page_size, after)
     try:
