@@ -809,7 +809,8 @@ def native_review_payload_shape(detail, envelope=None, branch=None, echo_nonce=N
             # kind instead of falling into the both-payload-keys ambiguity case.
             matched = [
                 k for k in matched
-                if ea.review_payload_carried(branch, k)[0]
+                if (key := ea.review_payload_key(k)) is not None
+                and branch.get(key) is not None
             ]
             top_keys, keys_truncated = ea._bound_top_level_keys(branch)
             if len(matched) > 1:

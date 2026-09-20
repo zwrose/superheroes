@@ -1833,6 +1833,17 @@ _REVIEW_PAYLOAD_SEMANTICS = {
 }
 
 
+def review_payload_key(kind):
+    """Return the payload key for kind from the home registry. Never raises."""
+    try:
+        record = _REVIEW_PAYLOAD_SEMANTICS.get(kind)
+        if record is None:
+            return None
+        return record.key
+    except Exception:
+        return None
+
+
 def review_payload_carried(result, kind):
     """Whether a review result carries a payload for kind, and the value. Never raises."""
     try:
