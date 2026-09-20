@@ -1302,6 +1302,8 @@ def _run_engine_files_background(
     dispatch_path = _dispatch_path_from_opened(opened)
     write_progress = _progress_writer(progress_path)
     start = _NOW()
+    start_wall = time.time()
+    timeout_deadline_wall = start_wall + timeout
     deadline = start + timeout
     launch_id = resume_launch_id
     session_id = resume_session_id
@@ -1399,11 +1401,13 @@ def _run_engine_files_background(
     refusal = None
     bg_resumable = False
     timed_out = False
+    timeout_at = None
     wall_cap = _attempt_bg_wall_cap(opened, attempt)
     wall_seconds = round(_NOW() - start, 1) + prior_wall_seconds
 
     if prior_wall_seconds >= wall_cap:
         timed_out = True
+        timeout_at = time.time()
     else:
         while _NOW() < deadline:
             rows, transcript_paths, file_size = _read_session_transcript_rows(
@@ -1488,6 +1492,7 @@ def _run_engine_files_background(
             bg_resumable = True
         else:
             timed_out = True
+            timeout_at = timeout_deadline_wall
 
     if bg_resumable:
         _journal_bg_suspended({
@@ -1523,6 +1528,8 @@ def _run_engine_files_background(
         ended_record["transcriptToolCalls"] = tool_calls
     if bg_stop is not None:
         ended_record["bgStop"] = bg_stop
+    if timed_out:
+        ended_record["timeoutAt"] = timeout_at
     _journal_bg_ended(ended_record)
 
 
@@ -3871,6 +3878,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         return
 
     start = time.monotonic()
+    start_wall = time.time()
+    timeout_deadline_wall = start_wall + timeout
     last_beat = start
     timed_out = False
     timeout_at = None
@@ -3906,7 +3915,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             # axis: the wall-cap deadline is stamped BEFORE termination begins, so a native
             # result written during the SIGTERM/SIGKILL grace window can be told apart from
             # one written before the cap (see timeoutAt on the ended record).
-            timeout_at = time.time()
+            timeout_at = timeout_deadline_wall
             break
         time.sleep(0.2)
     _terminate_process_group(pgid)
@@ -4052,6 +4061,8 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         write_progress(_a, elapsed, stdout_bytes, stderr_bytes)
 
     t0 = time.monotonic()
+    t0_wall = time.time()
+    timeout_deadline_wall = t0_wall + timeout
     stdout, timed_out, rc, stderr_tail = run_engine(argv, prompt_bytes, timeout, cb, cwd)
     elapsed = time.monotonic() - t0
 
@@ -4094,8 +4105,18 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     }
     if stdout_result is not None:
         ended["stdoutResult"] = stdout_result
+    if timed_out:
+        ended["timeoutAt"] = timeout_deadline_wall
     _journal_append(run_dir_real, ended)
     return True, ""
+
+
+def _recorded_timeout_deadline(ended):
+    """Return the ended record's persisted wall-cap deadline, or None if unusable."""
+    timeout_at = ended.get("timeoutAt")
+    if isinstance(timeout_at, bool) or not isinstance(timeout_at, (int, float)):
+        return None
+    return float(timeout_at)
 
 
 def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None, resume=False):
@@ -4553,11 +4574,11 @@ def _verify_native_schema(opened, run_kind, expected_result_kind=None):
 def _admit_native_write_result(run_dir_real, attempt, opened, *, timeout_deadline=None):
     """Single admission authority for the native write channel (codex, cursor). Never raises.
 
-    `timeout_deadline` is the wall-clock instant (epoch seconds) the attempt's timeout was
-    declared, when the attempt timed out. A native result whose file was last written strictly
-    after that instant was produced during the SIGTERM/SIGKILL grace window, not before the
-    cap — the timeout contract promises admission only for a result complete before the wall
-    cap, so such a result is rejected rather than silently admitted.
+    `timeout_deadline` is the attempt's recorded wall-cap deadline read from the ended record's
+    `timeoutAt` field — not an instant the caller computed. A native result whose file was last
+    written strictly after that instant was produced during the SIGTERM/SIGKILL grace window, not
+    before the cap — the timeout contract promises admission only for a result complete before
+    the wall cap, so such a result is rejected rather than silently admitted.
     """
     gate = _stdout_delivery_gate(run_dir_real, attempt, opened)
     if gate is not None:
@@ -4877,7 +4898,16 @@ def _grade_write_attempt(run_dir_real, state, attempt):
 
     admitted = None
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
-        timeout_deadline = ended.get("timeoutAt") if ended.get("timedOut") else None
+        if ended.get("timedOut"):
+            timeout_deadline = _recorded_timeout_deadline(ended)
+            if timeout_deadline is None:
+                return {
+                    "forfeit": True,
+                    "reason": dispatch_outcome.REASON_FORFEITED,
+                    "detail": "timeout-deadline-unrecorded",
+                }
+        else:
+            timeout_deadline = None
         admitted = _admit_native_write_result(
             run_dir_real, attempt, opened, timeout_deadline=timeout_deadline)
         if not admitted.get("forfeit"):
@@ -5225,6 +5255,10 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                 ):
                     if _attempt_bg_budget_exhausted(opened, attempts[latest], latest):
                         suspended = (attempts[latest].get("suspended") or {})
+                        # axis: cumulative background budget exhaustion has no per-leg wall
+                        # deadline; record the observation instant before termination begins so
+                        # anything written during or after the stop is refused.
+                        budget_observed_at = time.time()
                         _stop_live_background_sessions(
                             state, opened, run_dir_real=run_dir_real,
                         )
@@ -5232,6 +5266,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             "kind": "attempt-ended", "attempt": latest,
                             "exit": None, "timedOut": True, "signal": None,
                             "refusal": None, "at": time.time(),
+                            "timeoutAt": budget_observed_at,
                             "wallSeconds": suspended.get("wallSeconds"),
                             "capSeconds": _attempt_bg_wall_cap(opened, latest),
                             "launchId": suspended.get("launchId"),

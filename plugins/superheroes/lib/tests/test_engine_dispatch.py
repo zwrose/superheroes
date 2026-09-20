@@ -3579,6 +3579,181 @@ def test_native_write_timeout_result_written_after_deadline_rejected(tmp_path, m
     assert grade.get("admissionDetail") == "native-result-after-timeout"
 
 
+def _codex_native_write_grade_state(tmp_path, run_dir, *, ended_overrides=None):
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    os.makedirs(run_dir, exist_ok=True)
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = {
+        "exit": 1, "timedOut": True, "refusal": None,
+        "at": time.time(), "capSeconds": 1,
+    }
+    if ended_overrides:
+        ended.update(ended_overrides)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state, ended
+
+
+# axis: a native result written after the recorded cap but before the poll instant is refused.
+def test_native_write_timeout_poll_gap_result_after_cap_refused(tmp_path):
+    run_dir = str(tmp_path / "poll-gap")
+    timeout_at = 1000.0
+    poll_at = 1000.25
+    run_dir, state, _ended = _codex_native_write_grade_state(
+        tmp_path, run_dir,
+        ended_overrides={"timeoutAt": timeout_at, "at": poll_at},
+    )
+    result_path = ED._native_result_path(run_dir, 1)
+    gap_mtime = timeout_at + 0.05
+    with open(result_path, "w", encoding="utf-8") as fh:
+        fh.write(_native_write_result_json() + "\n")
+    os.utime(result_path, (gap_mtime, gap_mtime))
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "timeout-native-result-unadmitted"
+    assert grade.get("admissionDetail") == "native-result-after-timeout"
+    assert grade.get("ok") is not True
+
+
+# axis: timeoutAt on a P1 timeout is the computed wall cap, not the poll/ended instant.
+def test_native_write_timeout_at_is_cap_not_poll_time(tmp_path, monkeypatch):
+    script = (
+        "import signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+    )
+    run_dir, _state, ended = _run_codex_native_write_timeout_script(
+        tmp_path, monkeypatch, script,
+    )
+    records, _ = ED._journal_read(run_dir)
+    started = next(r for r in records if r.get("kind") == "engine-started")
+    start_wall = started["at"]
+    cap = ended["capSeconds"]
+    assert abs(ended["timeoutAt"] - (start_wall + cap)) <= 0.25
+    assert ended["timeoutAt"] < ended["at"]
+
+
+# axis: P2 background timeout records timeoutAt and refuses a native result written after it.
+def test_background_timeout_records_timeout_at_and_rejects_late_native_write(
+    tmp_path, monkeypatch,
+):
+    cfg, launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "bg-write-timeout")
+    os.makedirs(run_dir)
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _codex_argv_for_run(seat, "build", run_dir)
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "codex", list(argv), ED.RUN_KIND_WRITE,
+    )
+    assert native_err is None, native_err
+    opened = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+        "roleKind": "build", "orderId": "bg-timeout-test", "argv": argv,
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "configDir": cfg,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    if native_schema_path is not None:
+        opened["nativeSchemaPath"] = native_schema_path
+    ED._journal_append(run_dir, opened)
+    cap = opened["timeout"]
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    progress_path = os.path.join(run_dir, "progress.jsonl")
+    native_result_path = ED._native_result_path(run_dir, 1)
+    ED._run_engine_files_background(
+        run_dir, 1, opened, list(argv), run_dir, prompt_path,
+        stdout_path, stderr_path, cap, progress_path, native_result_path,
+        resume_launch_id=launch_id, resume_session_id=session_id,
+        prior_wall_seconds=cap,
+    )
+    ended = _bg_attempt_ended(run_dir)
+    assert ended["timedOut"] is True
+    assert isinstance(ended["timeoutAt"], (int, float))
+    with open(native_result_path, "w", encoding="utf-8") as fh:
+        fh.write(_native_write_result_json() + "\n")
+    late_mtime = ended["timeoutAt"] + 0.05
+    os.utime(native_result_path, (late_mtime, late_mtime))
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "timeout-native-result-unadmitted"
+    assert grade.get("admissionDetail") == "native-result-after-timeout"
+    assert grade.get("ok") is not True
+
+
+# axis: P3 in-process capture timeout records timeoutAt on the ended record.
+def test_injected_capture_timeout_records_timeout_at(tmp_path):
+    run_dir = str(tmp_path / "injected-timeout")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    os.makedirs(run_dir)
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+
+    def fake_run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return ("", True, 1, "")
+
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake_run_engine)
+    assert ok, detail
+    records, _ = ED._journal_read(run_dir)
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["timedOut"] is True
+    assert isinstance(ended["timeoutAt"], (int, float))
+    started = next(
+        r for r in records
+        if r.get("kind") == "engine-started" and r.get("attempt") == 1
+    )
+    cap = ended["capSeconds"]
+    assert abs(ended["timeoutAt"] - (started["at"] + cap)) <= 0.25
+
+
+@pytest.mark.parametrize(
+    "timeout_at_value",
+    [
+        pytest.param("missing", id="absent"),
+        pytest.param(None, id="none"),
+        pytest.param("not-a-number", id="non-numeric"),
+    ],
+)
+def test_timed_out_write_without_recorded_deadline_forfeits(
+    tmp_path, timeout_at_value,
+):
+    ended_overrides = {"timedOut": True}
+    if timeout_at_value != "missing":
+        ended_overrides["timeoutAt"] = timeout_at_value
+    run_dir = str(tmp_path / ("deadline-%s" % timeout_at_value))
+    run_dir, state, _ended = _codex_native_write_grade_state(
+        tmp_path, run_dir, ended_overrides=ended_overrides,
+    )
+    result_path = ED._native_result_path(run_dir, 1)
+    with open(result_path, "w", encoding="utf-8") as fh:
+        fh.write(_native_write_result_json() + "\n")
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "timeout-deadline-unrecorded"
+    assert grade.get("ok") is not True
+
+
 # axis: timed-out native write with no result file forfeits timeout-no-native-result.
 def test_native_write_timeout_without_result_forfeits(tmp_path, monkeypatch):
     script = (
@@ -15564,6 +15739,8 @@ def test_supervise_bg_budget_exhaustion_ends_attempt_without_resume(tmp_path, mo
     assert ended["capSeconds"] == cap
     assert ended["launchId"] == launch_id
     assert ended["bgSessionId"] == session_id
+    assert isinstance(ended["timeoutAt"], (int, float))
+    assert ended["timeoutAt"] <= ended["at"]
     assert not any(resume for _att, resume in spawn_calls if resume)
     assert any(call[:1] == ["stop"] for call in harness["cli_calls"])
 
