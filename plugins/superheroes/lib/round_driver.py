@@ -1459,12 +1459,14 @@ def _fix_receipt_content_fields(session_dir, head_sha, file_path):
     return {}
 
 
-def _verify_result_for_disposition(state, round_no):
-    """Per-round verify result, or the latest prior round's when a delta audits without re-verify."""
+def _verify_result_for_disposition(state, round_no, bound_head):
+    """Per-round verify result, or a prior round's only when its fix-fold head matches bound_head."""
     rounds = state.get("rounds") or {}
     rec = rounds.get(str(round_no)) or {}
     if rec.get("verifyResult") is not None:
         return rec.get("verifyResult")
+    if not isinstance(bound_head, str) or not bound_head:
+        return None
     prior = []
     for key in rounds:
         try:
@@ -1474,8 +1476,12 @@ def _verify_result_for_disposition(state, round_no):
     for rnd in sorted(prior, reverse=True):
         if rnd >= round_no:
             continue
-        val = (rounds.get(str(rnd)) or {}).get("verifyResult")
-        if val is not None:
+        prior_rec = rounds.get(str(rnd)) or {}
+        val = prior_rec.get("verifyResult")
+        if val is None:
+            continue
+        prior_head = prior_rec.get("fixFoldHead")
+        if isinstance(prior_head, str) and prior_head and prior_head == bound_head:
             return val
     return None
 
@@ -1483,7 +1489,7 @@ def _verify_result_for_disposition(state, round_no):
 def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):
     cfg = state.get("config") or {}
     head = cfg.get(FIX_FOLD_HEAD_KEY) if isinstance(cfg, dict) else None
-    verify_result = _verify_result_for_disposition(state, state.get("round"))
+    verify_result = _verify_result_for_disposition(state, state.get("round"), head)
     receipt = {}
     if isinstance(head, str) and head:
         receipt["headSha"] = head
@@ -1550,6 +1556,8 @@ def _archive_departures(state, departing):
             for field in _DISPOSITION_FAMILY_FIELDS:
                 if field in prior and field not in replacement:
                     replacement[field] = prior[field]
+            if "raisedRound" in prior and "raisedRound" not in replacement:
+                replacement["raisedRound"] = prior["raisedRound"]
         if key in seen:
             ledger[seen[key]] = replacement
         else:
@@ -3408,6 +3416,7 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         if head_err:
             _record_round(state, "fixFoldHeadRefused", head_err)
         else:
+            _record_round(state, "fixFoldHead", head)
             _record_fix_content_on_findings(state, session_dir, artifact, head)
             _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
     queue = state.get("_fixQueue") or []

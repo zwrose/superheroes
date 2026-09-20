@@ -1,4 +1,6 @@
 """#1272 WO-2: disposition ledger is the one owner — staging, recording, writer merge."""
+import base64
+import hashlib
 import importlib.util
 import json
 import os
@@ -35,19 +37,56 @@ def _ledger_by_key(state):
             for e in (state.get("dispositionLedger") or []) if isinstance(e, dict)}
 
 
-def _ctx(state, tmp_path):
+_FIX_PRESENT_BYTES = b"fix present\n"
+_FIX_PRESENT_DIGEST = hashlib.sha256(_FIX_PRESENT_BYTES).hexdigest()
+
+
+def _head_content_blobs(findings, head):
+    reads = []
+    files = {}
+    for finding in findings:
+        if not isinstance(finding, dict) or finding.get("disposition") != "fixed":
+            continue
+        path = finding.get("file")
+        if not isinstance(path, str) or not path:
+            continue
+        reads.append({
+            "headSha": head,
+            "path": path,
+            "contentDigest": _FIX_PRESENT_DIGEST,
+            "bytes": len(_FIX_PRESENT_BYTES),
+            "readAt": "2026-01-01T00:00:00Z",
+            "source": "git-show",
+            "readError": None,
+        })
+        files[path] = base64.b64encode(_FIX_PRESENT_BYTES).decode("ascii")
+    if not reads:
+        return None
+    return {
+        "schema": SC.HEAD_CONTENT_BLOBS_SCHEMA,
+        "headSha": head,
+        "files": files,
+        "reads": reads,
+    }
+
+
+def _ctx(state, tmp_path, certified_head=None):
     session_dir = str(tmp_path / "sess")
     os.makedirs(session_dir, exist_ok=True)
     RD.save_state(session_dir, state)
     with open(os.path.join(session_dir, RD.JOURNAL_FILE), "w", encoding="utf-8") as fh:
         fh.write("")
-    meta = {"sessionId": "s", "headSha": "a" * 40,
-            "baseGuard": RC.BASE_GUARD_CHECKED}
+    head = certified_head or ("a" * 40)
+    meta = {"sessionId": "s", "headSha": head, "baseGuard": RC.BASE_GUARD_CHECKED}
     meta_path = os.path.join(session_dir, RR.META_FILE)
     with open(meta_path, "w", encoding="utf-8") as fh:
         json.dump(meta, fh)
     state.setdefault("config", {})["baseGuard"] = RC.BASE_GUARD_CHECKED
-    state["config"]["headSha"] = "a" * 40
+    state["config"]["headSha"] = head
+    blobs = _head_content_blobs(state.get("findings") or [], head)
+    if blobs is not None:
+        with open(os.path.join(session_dir, RC.HEAD_CONTENT_BLOBS_FILE), "w", encoding="utf-8") as fh:
+            json.dump(blobs, fh)
     RD.save_state(session_dir, state)
     ctx, err = RC._load_context(session_dir)
     assert err is None
@@ -272,6 +311,116 @@ def test_L6_with_owner_marker_empty_ledger_excludes_records_findings():
     assert certified == []
 
 
+# --- C13: head-bound verify receipts -------------------------------------------------
+
+def _audit_discharge_fixed(state, head_sha):
+    """Fold audits discharging the sole fix-batch target; return ledger key and receipt."""
+    discharged_f = {"title": "fixed bug", "severity": "Important", "file": "f.py", "line": 1}
+    state["config"][RD.FIX_FOLD_HEAD_KEY] = head_sha
+    state["fixBatch"] = [discharged_f]
+    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+    discharged_id = RD._finding_key_of(discharged_f)
+    RD._set_findings(state, [discharged_f])
+    state["_newSurface"] = True
+    auditor = state["_auditTargets"][0]["auditorVendor"]
+    manifest = {discharged_id: auditor}
+    RD._fold_audits(state, state["config"], {
+        "results": [{"id": discharged_id, "ruling": "discharged", "reason": "gone"}],
+        "collectionManifest": manifest,
+    })
+    entry = _ledger_by_key(state)[discharged_id]
+    return discharged_id, entry.get("dispositionReceipt") or {}
+
+
+def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
+    head1, head2 = "a" * 40, "b" * 40
+    state = RD.new_state(_cfg())
+    state["round"] = 1
+    state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": head1}}
+    key, receipt1 = _audit_discharge_fixed(state, head1)
+    assert receipt1.get("verifyResult") == "pass"
+    assert receipt1.get("headSha") == head1
+
+    state["round"] = 2
+    state["rounds"]["2"] = {}
+    key, receipt2 = _audit_discharge_fixed(state, head2)
+    assert receipt2.get("headSha") == head2
+    assert receipt2.get("verifyResult") is None
+
+    RD._fold_verify(state, state["config"], {"result": "pass"})
+    entry = _ledger_by_key(state)[key]
+    receipt_after = entry.get("dispositionReceipt") or {}
+    assert receipt_after.get("verifyResult") == "pass"
+    assert receipt_after.get("headSha") == head2
+
+    state["dispositionLedgerOwner"] = "ledger"
+    entry = dict(entry)
+    receipt_after = dict(entry.get("dispositionReceipt") or {})
+    receipt_after["fixContentDigest"] = _FIX_PRESENT_DIGEST
+    entry["dispositionReceipt"] = receipt_after
+    state["findings"] = [entry]
+    ctx = _ctx(state, tmp_path, certified_head=head2)
+    assert RC.check_disposition_without_receipt(ctx) is None
+
+
+def test_C13_two_round_moving_head_verify_never_passes_refuses(tmp_path):
+    head1, head2 = "a" * 40, "b" * 40
+    state = RD.new_state(_cfg())
+    state["round"] = 1
+    state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": head1}}
+    _audit_discharge_fixed(state, head1)
+
+    state["round"] = 2
+    state["rounds"]["2"] = {}
+    key, receipt2 = _audit_discharge_fixed(state, head2)
+    assert receipt2.get("verifyResult") is None
+
+    entry = _ledger_by_key(state)[key]
+    state["dispositionLedgerOwner"] = "ledger"
+    state["findings"] = [entry]
+    ctx = _ctx(state, tmp_path)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is not None
+    assert refusal["bindingFailure"] == "verify-not-pass"
+
+
+def test_C13_fix_fold_records_fix_fold_head(tmp_path, monkeypatch):
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    head = "f" * 40
+    monkeypatch.setattr(RD, "_resolve_fix_fold_head_sha", lambda _sd, _st: (head, None))
+    state["_fixBatch"] = []
+    RD._fold_fixer(state, state["config"], {"fixes": []}, session_dir=str(tmp_path))
+    assert state["rounds"]["2"]["fixFoldHead"] == head
+
+
+def test_C13_delta_same_head_carries_prior_pass():
+    head = "c" * 40
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    state["rounds"] = {"2": {"verifyResult": "pass", "fixFoldHead": head}}
+    _audit_discharge_fixed(state, head)
+
+    state["round"] = 3
+    state["rounds"]["3"] = {}
+    _, receipt3 = _audit_discharge_fixed(state, head)
+    assert receipt3.get("verifyResult") == "pass"
+    assert receipt3.get("headSha") == head
+
+
+def test_C13_prior_verify_without_fix_fold_head_not_carried():
+    head1, head2 = "d" * 40, "e" * 40
+    state = RD.new_state(_cfg())
+    state["round"] = 1
+    state["rounds"] = {"1": {"verifyResult": "pass"}}
+    _audit_discharge_fixed(state, head1)
+
+    state["round"] = 2
+    state["rounds"]["2"] = {}
+    _, receipt2 = _audit_discharge_fixed(state, head2)
+    assert receipt2.get("verifyResult") is None
+
+
 # --- L7 bite-proof: departure chokepoint ---------------------------------------------
 
 def test_L7_departure_outside_chokepoint_still_on_ledger(tmp_path):
@@ -290,6 +439,21 @@ def test_L7_departure_outside_chokepoint_still_on_ledger(tmp_path):
     assert refusal is not None
     assert refusal["class"] == "disposition-without-receipt"
     assert refusal["detail"] == "finding has no disposition recorded"
+
+
+def test_L7_departure_preserves_raised_round_through_archive_and_record(tmp_path):
+    finding = {"file": "d.py", "line": 1, "title": "live", "severity": "Important"}
+    compiled, _ = RD.mechanical_compile([finding], None)
+    state = RD.new_state(_cfg())
+    RD._stage_findings(state, compiled)
+    key = SC.finding_identity_key(compiled[0])
+    assert _ledger_by_key(state)[key]["raisedRound"] == 1
+    RD._set_findings(state, compiled)
+    RD._set_findings(state, [])
+    archived = _ledger_by_key(state)[key]
+    assert archived.get("raisedRound") == 1
+    RD._record_disposition(state, key, "refuted", 1, refutedReason="gone")
+    assert _ledger_by_key(state)[key].get("raisedRound") == 1
 
 
 # --- L8 uses L2 open-representative case (bite-proof run separately) -----------------

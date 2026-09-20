@@ -657,10 +657,13 @@ certification writer reads it when told to.
   whether or not it carries a disposition.
 - A candidate merged into a representative at synthesis carries `mergedInto` and is graded through
   the representative; a chain that does not resolve refuses `disposition-without-receipt`.
-- The state marker `dispositionLedgerOwner: "ledger"` tells the certification writer to read the
-  **ledger** for the disposition family and the live list for non-disposition content only. A session
-  without the marker is graded on its recorded shape. No stored field is removed and there is **no
-  state-schema version bump**.
+- The state marker `dispositionLedgerOwner: "ledger"` tells the certification writer that the
+  **disposition ledger is the durable owner of record** — the writer's finding set is seeded from
+  the ledger and every key it holds is graded, with a live row for the same key supplying the graded
+  shape where one is still open. The writer does not yet read the ledger exclusively, so a live row
+  can still supply a disposition family; the exclusive read — with its refusal for a live disposition
+  the ledger does not hold — lands in a later layer. A session without the marker is graded on its
+  recorded shape. No stored field is removed and there is **no state-schema version bump**.
 - The three dispositions: `fixed` carries `dispositionReceipt {headSha, verifyResult,
   fixContentHeadSha, fixContentDigest, fixContentBytes}`; `refuted` carries `refutedReason`;
   `out-of-scope` carries `outOfScopeReason` plus a `followUp {item, revisitTrigger, classClosure}`.

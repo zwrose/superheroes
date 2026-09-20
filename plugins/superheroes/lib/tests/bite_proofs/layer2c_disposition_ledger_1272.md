@@ -104,3 +104,71 @@ FAILED ...test_real_loop_with_finding_refuses_disposition_without_receipt_until_
 .                                                                        [100%]
 1 passed in 3.46s
 ```
+
+## BP-2c-e — C13 head-equality on prior-round verify carry
+
+**Guarded element.** `round_driver._verify_result_for_disposition`, the `prior_head == bound_head`
+check before returning a prior round's `verifyResult`.
+**Axis.** A prior round's pass is carried onto a fixed receipt only when that round's recorded
+`fixFoldHead` matches the head the receipt binds.
+**Detector.** `test_C13_two_round_moving_head_verify_never_passes_refuses`.
+
+**Neutralization.** Drop the head-equality gate — return `val` whenever a prior round has any
+`verifyResult`:
+
+```python
+        val = prior_rec.get("verifyResult")
+        if val is not None:
+            return val
+```
+
+**Raw red** (exit 1):
+
+```
+FAILED plugins/superheroes/lib/tests/test_disposition_ledger_1272.py::test_C13_two_round_moving_head_verify_never_passes_refuses
+...
+>       assert receipt2.get("verifyResult") is None
+E       AssertionError: assert 'pass' is None
+E        +  where 'pass' = {'headSha': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'verifyResult': 'pass'}.get
+1 failed in 0.16s
+```
+
+**Restore.** Reinstate the `fixFoldHead` presence and `prior_head == bound_head` guard.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.17s
+```
+
+## BP-2c-f — C13 `fixFoldHead` round recording at fix fold
+
+**Guarded element.** `round_driver._fold_fixer`, `_record_round(state, "fixFoldHead", head)` on the
+successful `_resolve_fix_fold_head_sha` branch.
+**Axis.** Each fix fold records the resolved head on the round record so later disposition receipts
+can match prior verify verdicts head-for-head.
+**Detector.** `test_C13_fix_fold_records_fix_fold_head`.
+
+**Neutralization.** Remove the `_record_round(state, "fixFoldHead", head)` line (leave
+`_record_fix_content_on_findings` and blob persistence intact).
+
+**Raw red** (exit 1):
+
+```
+FAILED plugins/superheroes/lib/tests/test_disposition_ledger_1272.py::test_C13_fix_fold_records_fix_fold_head
+...
+>       assert state["rounds"]["2"]["fixFoldHead"] == head
+E       KeyError: 'fixFoldHead'
+1 failed in 0.16s
+```
+
+**Restore.** Reinstate `_record_round(state, "fixFoldHead", head)` before
+`_record_fix_content_on_findings`.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.15s
+```
