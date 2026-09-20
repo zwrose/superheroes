@@ -4845,14 +4845,14 @@ def _grade_write_attempt(run_dir_real, state, attempt):
         result["detail"] = ended["refusal"]
         return result
 
+    if ended.get("exit") not in (0, None) and not ended.get("timedOut"):
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
+
     admitted = None
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
         admitted = _admit_native_write_result(run_dir_real, attempt, opened)
         if not admitted.get("forfeit"):
             return admitted
-
-    if ended.get("exit") not in (0, None) and not ended.get("timedOut"):
-        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
     if admitted is not None and admitted.get("forfeit"):
         result = dict(admitted)
@@ -4869,11 +4869,7 @@ def _grade_write_attempt(run_dir_real, state, attempt):
         return {
             "forfeit": True,
             "reason": dispatch_outcome.REASON_FORFEITED,
-            "detail": "timeout-no-native-result",
         }
-
-    if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
-        return admitted
 
     return _marker_arm_retired_grade()
 
