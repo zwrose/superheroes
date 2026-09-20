@@ -1752,6 +1752,28 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** capability-gap — detection replaces version pinning. Tag: `wave-preflight`.
 
+#### S19 — Order lint (deterministic half + semantic seat)
+
+- **Component.** Not a census row. `lib/order_lint.py check` (the deterministic half) and the
+  `mechanical`-role Haiku seat under `rubric/orders/order-lint-semantic.md` (the semantic half),
+  run by the workhorse before every implementer and review-fix dispatch and by the round driver at
+  every fixer-order emission. Cost: one sub-second CLI run plus one sub-minute Haiku dispatch per
+  order.
+- **Condition.** Catch-based, non-default window: **ten consecutive full lanes with zero
+  order-quality reworks** (a rework is one the build record's dispatch-provenance table attributes to
+  order quality), read from the vet receipts of those lanes — a window in lanes, not days, because
+  the signal only exists when lanes run. On firing, a proposal to the owner at a gardening pass to
+  retire both halves or keep only the deterministic one.
+- **Last demonstrated benefit.** The three C11 layer 3 reworks reconstructed as fixtures
+  (`plugins/superheroes/lib/tests/fixtures/order_lint/`; PR #1332's dispatch-provenance table) —
+  two caught by the deterministic half, the third named for the semantic half. Reconstructed, not a
+  live catch.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — the lint compensates for an orchestrator that writes orders faster than
+  it re-reads them; a model that never leaves a placeholder or a dangling path unfilled would retire
+  it. Arrives with issue #1339.
+
 
 ## The workaround-marker inventory
 

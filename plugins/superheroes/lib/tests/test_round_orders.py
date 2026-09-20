@@ -363,9 +363,15 @@ def test_clause_manifest_survives_in_rendered_orders():
     }
     test_clause_manifest_covers_every_order_template()
     for template_name, clauses in manifest.items():
-        phase, ph_fn = phase_map[template_name]
-        text, reason = RO.render_order(phase, "seat", _base_context(placeholders=ph_fn()))
-        assert reason is None, "%s: %s" % (template_name, reason)
+        # a non-driver prompt (order-lint-semantic) is dispatched verbatim; its text is its render.
+        if template_name not in phase_map:
+            path = RO.order_template_path(template_name)
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        else:
+            phase, ph_fn = phase_map[template_name]
+            text, reason = RO.render_order(phase, "seat", _base_context(placeholders=ph_fn()))
+            assert reason is None, "%s: %s" % (template_name, reason)
         for clause in clauses:
             assert _clause_in_rendered(clause, text), (
                 "missing clause %r in %s" % (clause, template_name))
