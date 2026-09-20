@@ -37,6 +37,8 @@ VET_NOT_READY = "vet-not-ready"
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _SHA40_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+PR_VET_STATE_VALUES = frozenset({"OPEN", "CLOSED", "MERGED"})
+
 _VET_SEPARATOR = " · "
 _VET_VERDICT_TOKENS = (
     ("**Verdict: READY**", VERDICT_READY),
@@ -603,6 +605,10 @@ def _parse_pr_vet_state_payload(proc, pr):
     if not isinstance(state, str):
         return None, _read_refusal(
             REASON_STACK_UNREADABLE, "state is missing or not a string")
+    if state not in PR_VET_STATE_VALUES:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE,
+            "state is not one of the enumerated values: %r" % state)
 
     is_draft = payload.get("isDraft")
     if not isinstance(is_draft, bool):

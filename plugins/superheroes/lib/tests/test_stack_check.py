@@ -1702,3 +1702,46 @@ def test_l2f_read_pr_vet_state_timeout_expired():
     state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=_run)
     assert state is None
     _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_unrecognised_state():
+    # axis: unrecognised state value refuses stack-unreadable
+    run, _calls = _make_run(
+        {_pr_vet_argv(): _pr_vet_ok(state="UNKNOWN")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert "UNKNOWN" in refusal["detail"]
+    assert "enumerated" in refusal["detail"]
+
+
+def test_l2f_read_pr_vet_state_lowercase_open_refuses():
+    # axis: case-sensitive allowlist — lowercase open is not OPEN
+    run, _calls = _make_run(
+        {_pr_vet_argv(): _pr_vet_ok(state="open")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert "open" in refusal["detail"]
+
+
+def test_l2f_read_pr_vet_state_merged_accepted():
+    # axis: MERGED is a legal GitHub state
+    run, _calls = _make_run(
+        {_pr_vet_argv(): _pr_vet_ok(state="MERGED")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert refusal is None
+    assert state["state"] == "MERGED"
+
+
+def test_l2f_read_pr_vet_state_closed_accepted():
+    # axis: CLOSED is a legal GitHub state
+    run, _calls = _make_run(
+        {_pr_vet_argv(): _pr_vet_ok(state="CLOSED")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert refusal is None
+    assert state["state"] == "CLOSED"
