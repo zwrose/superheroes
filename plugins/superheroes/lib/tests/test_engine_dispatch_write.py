@@ -10,6 +10,8 @@ import time
 
 import pytest
 
+from bite_support import _stamp_ended_from_native_result
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -2459,11 +2461,13 @@ def _execution_record_completed_write_attempt(
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "wallSeconds": 1.0, "stdoutBytes": len(stdout),
         "at": time.time(),
+    }, 1)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1, **ended,
     })
 
 
@@ -3052,11 +3056,13 @@ def _native_write_grade_state(tmp_path, obj, *, write_result=True, schema_mutato
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "wallSeconds": 1.0, "stdoutBytes": 0,
         "at": time.time(),
+    }, 1)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1, **ended,
     })
     records, _ = ED._journal_read(run_dir)
     return run_dir, ED._journal_state(records)

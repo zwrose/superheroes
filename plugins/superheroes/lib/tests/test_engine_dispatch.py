@@ -12,6 +12,11 @@ import time
 
 import pytest
 
+from bite_support import (
+    _ended_with_completion_stamp,
+    _stamp_ended_from_native_result,
+)
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Sentinel for monkeypatch.setattr two-argument form (target, name) without private pytest API.
@@ -3576,36 +3581,6 @@ def test_native_write_timeout_result_written_after_deadline_rejected(tmp_path):
 
 def _journal_test_attempt_ended(run_dir, attempt, ended):
     ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": attempt, **ended})
-
-
-def _ended_with_completion_stamp(payload, *, complete_at=1.0, deadline_mono=None, **ended_base):
-    ended = dict(ended_base)
-    if isinstance(payload, dict):
-        payload = ED._scrub_native_payload(payload)
-    digest = ERC.canonical_payload_digest(payload)
-    ended.update(ERC.completion_stamp(complete_at, digest))
-    if deadline_mono is not None:
-        ended.update(ERC.deadline_stamp(deadline_mono))
-    return ended
-
-
-def _stamp_ended_from_native_result(run_dir, ended, attempt=1):
-    result_path = ED._native_result_path(run_dir, attempt)
-    if not result_path or not os.path.isfile(result_path):
-        return ended
-    try:
-        with open(result_path, encoding="utf-8") as fh:
-            payload = json.load(fh)
-    except (OSError, json.JSONDecodeError, ValueError):
-        return ended
-    if isinstance(payload, dict):
-        payload = ED._scrub_native_payload(payload)
-    digest = ERC.canonical_payload_digest(payload)
-    if digest is None:
-        return ended
-    out = dict(ended)
-    out.update(ERC.completion_stamp(1.0, digest))
-    return out
 
 
 def _codex_native_write_grade_state(tmp_path, run_dir, *, ended_overrides=None, payload=None):
