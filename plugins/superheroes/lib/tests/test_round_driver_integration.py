@@ -24,6 +24,8 @@ import time
 
 import pytest
 
+from bite_support import _stamp_ended_from_native_result
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 if _LIB not in sys.path:
@@ -832,11 +834,13 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
     if engine == "codex":
         _write_native_review_result(
             run_dir, repo_root, panel_findings=panel_findings)
-    engine_dispatch._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "wallSeconds": 0.1, "stdoutBytes": len(stdout),
         "at": time.time(),
+    }, 1)
+    engine_dispatch._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1, **ended,
     })
     with open(os.path.join(run_dir, "attempt-1.stdout"), "wb") as fh:
         fh.write(stdout.encode("utf-8"))
@@ -1136,11 +1140,13 @@ def _write_execution_run_dir(tmp_path, order_path, echo_nonce="nonce-fixer-e2e")
         assert ok is True, reason
     with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
         fh.write("")
-    engine_dispatch._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "wallSeconds": 1.0, "stdoutBytes": len(stdout),
         "at": time.time(),
+    }, 1)
+    engine_dispatch._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1, **ended,
     })
     return run_dir
 
