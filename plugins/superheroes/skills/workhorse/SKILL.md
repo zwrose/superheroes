@@ -356,8 +356,10 @@ and each of the three is established from the **remote**, never from a local ass
 - **Size is reported at 300 and the call is handed up at 600** ([review-discipline.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md) § Review bars and recorded residuals) — a layer growing past the bars is split into another layer rather than
   allowed to swallow two surfaces.
 - **Never hand-rebase and never force-push a layer inside a lane** — both move a head other layers and the
-  review are pinned to; take in a moved base with GitHub's cascading rebase (server-side or
-  `gh stack rebase`/`gh stack push` per [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack stays current).
+  review are pinned to; take in a moved base or a moved lower layer **by merge** (`gh pr update-branch`,
+  bottom-up), which keeps your history and re-takes only CI; GitHub's cascading rebase is the disclosed
+  alternative when a merge cannot resolve the conflict, and it costs every layer above fresh receipts
+  ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack stays current).
 - **A conflict round when a lower layer changes under you** — bring the lower layer current first, then
   update your layer from it, bottom-up, and **disclose the conflict round in the PR body**.
 

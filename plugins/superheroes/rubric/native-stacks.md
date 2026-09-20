@@ -114,40 +114,45 @@ descendants ([GitHub's stacked-pull-request troubleshooting
 guide](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-stacked-pull-requests)).
 **Bypassing merge requirements is not supported for stacks.**
 
-The stack must have a **fully linear history** between layers — a merge requirement GitHub enforces
-before any member can land ([GitHub's stacked-pull-request
-overview](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)).
+GitHub's overview names a **"fully linear history between every branch in the stack"** as a merge
+requirement without defining it ([GitHub's stacked-pull-request
+overview](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)). The condition
+the tooling actually checks is the one `gh stack rebase` states: **each branch in the stack has the
+tip of the previous layer in its commit history**. A merge of the layer below (or of the base, at
+the bottom) into a layer satisfies it; a stack whose layers each carried such merge commits has
+merged atomically. What breaks it is a layer whose branch no longer descends from the tip of the
+layer below — a lower layer that moved after the layer above was last updated.
 
 **One command merges the stack; never one PR at a time.**
 
 Merging up to a middle pull request merges everything below it and leaves the pull requests above
-**open**. GitHub **automatically rebases** the remaining branches onto the new base, changing their
-head shas. That behaviour is GitHub's documented behaviour; we have not smoke-tested it. Every
-remaining layer needs a fresh remote-head check and qualifying review and CI receipts on the new
-head before it is considered mergeable.
+**open**. GitHub's pages do not say what happens to those branches' heads; treat every remaining
+layer as needing a fresh remote-head check and qualifying review and CI receipts on whatever head it
+then has before it is considered mergeable.
 
 ## How a stack stays current
 
-When the stack's base branch or a lower layer has moved, bring the stack current with a **cascading
-rebase** — the sanctioned mechanism GitHub documents for restoring the fully linear history a
-stack merge requires ([GitHub's stacked-pull-request
-overview](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests);
-[troubleshooting guide](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-stacked-pull-requests)):
+When the stack's base branch or a lower layer has moved, each layer above the change must again
+contain the tip of the layer below it. Two mechanisms restore that, and they differ in what they do
+to the layer's head:
 
-- **Server-side** — trigger the **Rebase stack** action from a pull request in the stack.
-- **Locally** — `gh stack rebase` followed by `gh stack push`.
-
-A merge commit from the base into a layer — what `gh pr update-branch` does by default — **breaks
-the linear history** the stack merge requires, so **`gh pr update-branch` in its default merge mode
-is not how a stack is brought current**.
+- **Bring the layer current by merge** — `gh pr update-branch` on each affected layer, **bottom-up**
+  (the layer just above the change first). This adds one merge commit per layer and rewrites no
+  history, so the review receipts on the layer's own commits stay valid and only CI on the new head
+  is re-taken. This is how a superheroes lane brings a layer current.
+- **Cascading rebase** — GitHub's **Rebase stack** action from a pull request in the stack, or
+  `gh stack rebase` followed by `gh stack push` for a local tracked stack. This rewrites every
+  affected layer's head, so every layer above the change needs fresh remote-head checks and fresh
+  review and CI receipts. It is the mechanism GitHub's pages name; a lane uses it only when a merge
+  cannot resolve the conflict, and discloses it.
 
 For a **local tracked** stack, `gh stack sync` and `gh stack rebase` are the native verbs and they
 do move local branches. That is why they belong to that route and not to a lane whose layer is under
 review.
 
-When a **lower layer changes under it**, bring the lower layer current first, then rebase the layer
-above from it, bottom-up. The builder discloses the conflict round. Every layer whose head sha
-changes needs fresh remote-head checks and qualifying review and CI receipts on the new head.
+When a **lower layer changes under it**, bring the lower layer current first, then the layer above
+from it, bottom-up. The builder discloses the conflict round. Every layer whose head sha changes
+needs fresh remote-head checks and qualifying review and CI receipts on the new head.
 
 ## Anti-patterns
 
@@ -163,9 +168,9 @@ membership.
 
 **Hand-rewriting a layer's history** — a rebase or force-push a builder improvises on a layer under
 review. It breaks review continuity on that pull request and moves a head other layers are based
-on. This is not GitHub's **own cascading rebase** (server-side or via `gh stack rebase`/`gh stack
-push`), and it is not `gh stack sync` or `rebase` on a **local tracked** stack the builder owns end
-to end.
+on. This is not the **disclosed cascading rebase** of § How a stack stays current (GitHub's
+server-side action, or `gh stack rebase`/`gh stack push`), and it is not `gh stack sync` or
+`rebase` on a **local tracked** stack the builder owns end to end.
 
 **Reading the stack's copy of a register from inside a layer** — a layer's worktree carries whatever
 the layers below it wrote, which can be a stale or amended copy. The copy that grades a child is

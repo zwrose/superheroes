@@ -81,13 +81,16 @@ saw. Nothing in the tooling closes that gap; this rule does.
    **Never pull request by pull request**: serial merges are the anti-pattern
    (`rubric/native-stacks.md` § *Anti-patterns*), and they leave the trunk holding intermediate
    layers if one member fails. Merge semantics, the bare-number ambiguity, per-pull-request
-   branch-protection evaluation, linear-history requirement, and merge-queue behaviour live in
-   `rubric/native-stacks.md` § *How a stack merges*.
+   branch-protection evaluation, the history condition each layer must satisfy, and merge-queue
+   behaviour live in `rubric/native-stacks.md` § *How a stack merges*.
 
-5. **A stack is brought current with a cascading rebase** — server-side from a pull request, or
-   `gh stack rebase` followed by `gh stack push` locally (`rubric/native-stacks.md` § *How a stack
-   stays current*); never a hand-rebase or force-push of a layer under review, which the doctrine
-   names as an anti-pattern (`rubric/native-stacks.md` § *Anti-patterns*).
+5. **A stack is brought current by merge, bottom-up** — `gh pr update-branch` on each affected
+   layer starting just above the change, which keeps every layer's history and re-takes only CI on
+   the new head (`rubric/native-stacks.md` § *How a stack stays current*). GitHub's cascading
+   rebase (server-side, or `gh stack rebase` + `gh stack push`) is the disclosed alternative when a
+   merge cannot resolve the conflict, and it rewrites every affected head, so every layer above the
+   change then needs fresh review and CI receipts. Never a hand-rebase or force-push of a layer under
+   review, which the doctrine names as an anti-pattern (`rubric/native-stacks.md` § *Anti-patterns*).
 
 6. **After the merge, report what merged** — each pull request number with the head sha that landed
    — and then this file's existing rules apply unchanged: the train is green when **`main`'s own
