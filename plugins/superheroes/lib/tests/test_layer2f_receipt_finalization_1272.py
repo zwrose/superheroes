@@ -108,6 +108,13 @@ def _audit_discharge_fixed(state, head_sha):
         },
     )
     entry = _ledger_by_key(state)[discharged_id]
+    receipt = dict(entry.get("dispositionReceipt") or {})
+    receipt["fixContentDigest"] = _FIX_DIGEST
+    RD._record_disposition(
+        state, discharged_id, "fixed", entry.get("dispositionRound"),
+        dispositionReceipt=receipt,
+    )
+    entry = _ledger_by_key(state)[discharged_id]
     return discharged_id, entry
 
 
@@ -274,15 +281,11 @@ def _blobs_for_bytes(head, path, raw):
 def test_fixed_receipt_rebound_certifies_from_disk(tmp_path):
     """Fix in round 1, terminal at a later head — reload from disk and certify."""
     repo, head1 = _init_repo(tmp_path)
-    head2_bytes = b"fixed at head2\n"
-    path = repo / "f.py"
-    path.write_bytes(head2_bytes)
-    subprocess.run(["git", "add", "f.py"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-q", "-m", "fix2"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "fix2"], cwd=repo, check=True, capture_output=True)
     head2 = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
     ).stdout.strip()
-    head2_blobs, head2_digest = _blobs_for_bytes(head2, "f.py", head2_bytes)
+    head2_blobs, head2_digest = _blobs_for_bytes(head2, "f.py", _FIX_BYTES)
 
     state = RD.new_state(_cfg())
     state["config"]["baseGuard"] = RC.BASE_GUARD_CHECKED
@@ -658,10 +661,7 @@ def test_head_unchanged_stamps_verify_result_when_blobs_unreadable(tmp_path):
 
 def test_persistence_order_rebound_on_disk(tmp_path):
     repo, head1 = _init_repo(tmp_path)
-    path = repo / "f.py"
-    path.write_bytes(b"later head\n")
-    subprocess.run(["git", "add", "f.py"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-q", "-m", "later"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "later"], cwd=repo, check=True, capture_output=True)
     head2 = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
     ).stdout.strip()

@@ -79,9 +79,9 @@ def disposition_ledger_owner_classification(state):
     """Single derivation of the disposition-ledger owner marker — absent, recognized, or unrecognized."""
     if not isinstance(state, dict):
         return "absent"
-    value = state.get(DISPOSITION_LEDGER_OWNER_FIELD)
-    if value is None:
+    if DISPOSITION_LEDGER_OWNER_FIELD not in state:
         return "absent"
+    value = state[DISPOSITION_LEDGER_OWNER_FIELD]
     if value == DISPOSITION_LEDGER_OWNER_VALUE:
         return "recognized"
     return "unrecognized"

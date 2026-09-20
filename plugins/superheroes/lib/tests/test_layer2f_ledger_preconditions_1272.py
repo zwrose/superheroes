@@ -84,6 +84,21 @@ def _unrecognized_marker_state():
     }
 
 
+def _null_owner_marker_state():
+    legacy = {
+        "file": "old.py", "line": 1, "title": "legacy", "severity": "Minor",
+        SC.FINDING_KEY_FIELD: "legacy-key",
+        "disposition": "fixed", "dispositionRound": 1,
+    }
+    return {
+        "schemaVersion": 5,
+        "dispositionLedgerOwner": None,
+        "dispositionLedger": [],
+        "findings": [],
+        "_records": [{"findings": [legacy]}],
+    }
+
+
 def _ctx(state, tmp_path):
     session_dir = str(tmp_path / "sess")
     os.makedirs(session_dir, exist_ok=True)
@@ -150,6 +165,42 @@ def test_marker_certification_refuses_unrecognized_via_build_receipt(tmp_path):
     assert receipt is None
     assert refusal is not None
     assert refusal["bindingFailure"] == "disposition-ledger-owner-unrecognized"
+
+
+def test_marker_certification_refuses_null_owner_via_findings_by_key():
+    state = _null_owner_marker_state()
+    by_key, refusal = RC._certification_findings_by_key(state)
+    assert refusal is not None
+    assert refusal["bindingFailure"] == "disposition-ledger-owner-unrecognized"
+    assert "legacy-key" not in by_key
+
+
+def test_marker_driver_submit_refuses_null_owner(tmp_path):
+    session_dir = str(tmp_path)
+    n = RD.cmd_next(session_dir, _cfg())
+    assert n["ok"], n
+    ok, state = RD.load_state(session_dir)
+    assert ok and state is not None
+    state["dispositionLedgerOwner"] = None
+    RD.save_state(session_dir, state)
+    n = RD.cmd_next(session_dir)
+    assert n["ok"], n
+    before = _state_bytes(session_dir)
+    out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
+                        _panel_artifact())
+    assert out["ok"] is False
+    assert out["reason"] == RD.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE
+    assert _state_bytes(session_dir) == before
+
+
+def test_marker_fold_chokepoint_raises_on_null_owner():
+    state = RD.new_state(_cfg())
+    state["dispositionLedgerOwner"] = None
+    before = _state_canonical(state)
+    with pytest.raises(RD.DispositionLedgerOwnerRefusal) as exc:
+        RD._fold(state, state["config"], RD.P_PANEL, _panel_artifact())
+    assert exc.value.reason == RD.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE
+    assert _state_canonical(state) == before
 
 
 # --- marker: driver submit preflight ------------------------------------------------

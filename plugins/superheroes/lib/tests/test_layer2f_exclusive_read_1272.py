@@ -165,6 +165,31 @@ def test_exclusive_read_live_disposition_without_ledger_refuses():
     assert refusal["artifact"] == key
 
 
+def test_ledger_owned_malformed_disposition_ledger_refuses():
+    """Ledger-owned: non-list dispositionLedger refuses instead of an empty certification view."""
+    state = _ledger_owned_state(
+        dispositionLedger=None,
+        _records=[{"findings": [{
+            "file": "x.py", "line": 1, "title": "blocking", "severity": "Critical",
+            SC.FINDING_KEY_FIELD: "k",
+        }]}],
+    )
+    by_key, refusal = RC._certification_findings_by_key(state)
+    assert by_key == {}
+    assert refusal is not None
+    assert refusal["bindingFailure"] == "disposition-ledger-malformed"
+
+
+def test_ledger_owned_keyless_ledger_row_refuses():
+    state = _ledger_owned_state(
+        dispositionLedger=["not-a-dict"],
+    )
+    by_key, refusal = RC._certification_findings_by_key(state)
+    assert by_key == {}
+    assert refusal is not None
+    assert refusal["bindingFailure"] == "disposition-ledger-malformed"
+
+
 # --- merged-row projection ------------------------------------------------------------
 
 def test_merged_row_projection_reports_representative_family():

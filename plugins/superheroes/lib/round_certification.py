@@ -370,12 +370,31 @@ def _certification_findings_by_key(state):
         # axis: ledger-owned reads take disposition family from the ledger only — _records is not a source
         ledger_by_key = {}
         ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
-        if isinstance(ledger, list):
-            for finding in ledger:
-                if isinstance(finding, dict):
-                    key = _finding_identity_key(finding)
-                    if key:
-                        ledger_by_key[key] = finding
+        if not isinstance(ledger, list):
+            return {}, _refusal(
+                "disposition-without-receipt",
+                STATE_FILE,
+                "dispositionLedger must be a list when dispositionLedgerOwner is %r"
+                % (session_contract.DISPOSITION_LEDGER_OWNER_VALUE,),
+                binding_failure="disposition-ledger-malformed",
+            )
+        for finding in ledger:
+            if not isinstance(finding, dict):
+                return {}, _refusal(
+                    "disposition-without-receipt",
+                    STATE_FILE,
+                    "dispositionLedger row must be an object",
+                    binding_failure="disposition-ledger-malformed",
+                )
+            key = _finding_identity_key(finding)
+            if not key:
+                return {}, _refusal(
+                    "disposition-without-receipt",
+                    STATE_FILE,
+                    "dispositionLedger row lacks a finding key",
+                    binding_failure="disposition-ledger-malformed",
+                )
+            ledger_by_key[key] = finding
         live_by_key = {}
         for finding in state.get("findings") or []:
             if isinstance(finding, dict):

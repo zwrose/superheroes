@@ -5,15 +5,14 @@ import sys
 
 import pytest
 
+import session_contract
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
-_DISPOSITION_FAMILY_MEMBERS = frozenset({
-    "disposition", "dispositionRound", "dispositionReceipt", "refutedReason",
-    "outOfScopeReason", "followUp", "mergedInto",
-})
+_DISPOSITION_FAMILY_MEMBERS = frozenset(session_contract.DISPOSITION_FAMILY_FIELDS)
 
 _UNAMBIGUOUS_LITERALS = (
     "dispositionRound", "dispositionReceipt", "refutedReason",
