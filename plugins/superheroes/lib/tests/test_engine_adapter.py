@@ -2955,11 +2955,17 @@ def test_hollow_family_diagnostic_carries_member_shape_fields():
     assert res["memberShapeGot"] == "list:count=1,hollow=1,substantive=0"
 
 
-_HOLLOW_FAMILY_SHAPE_CONSTANTS = (
-    "SHAPE_FINDINGS_HOLLOW_MEMBER",
-    "SHAPE_VERDICTS_HOLLOW_MEMBER",
-    "SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER",
-    "SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER",
+# Derived from the production registry, not hand-spelled: a hollow-family constant is any
+# SHAPE_* name in engine_adapter's own REVIEW_PAYLOAD_SHAPES tuple whose identifier carries
+# "HOLLOW_MEMBER" — the naming convention _hollow_family_diagnostic's callers use. If a new
+# hollow-family shape is minted at the constructor home and added to REVIEW_PAYLOAD_SHAPES,
+# this set picks it up without an edit here; a rename likewise tracks automatically. This
+# does not, by itself, catch a hollow-family value spelled as a bare string literal outside
+# the constructor (no SHAPE_* identifier involved) — that axis is not covered by this census.
+_HOLLOW_FAMILY_SHAPE_CONSTANTS = tuple(
+    name for name in dir(EA)
+    if name.startswith("SHAPE_") and "HOLLOW_MEMBER" in name
+    and getattr(EA, name) in EA.REVIEW_PAYLOAD_SHAPES
 )
 
 
@@ -3000,6 +3006,14 @@ def _hollow_family_shape_constant_refs(source):
 def test_hollow_member_shape_tokens_minted_only_via_constructor():
     # axis: hollow-family SHAPE_* tokens are minted only at the constructor home
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/c14_l3a_hollow_member_grade.md (BP3)
+    # population guard: the derived census must not silently collapse to empty (which would
+    # make the `stray == []` assertion below vacuously true for every constant).
+    assert set(_HOLLOW_FAMILY_SHAPE_CONSTANTS) == {
+        "SHAPE_FINDINGS_HOLLOW_MEMBER",
+        "SHAPE_VERDICTS_HOLLOW_MEMBER",
+        "SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER",
+        "SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER",
+    }
     adapter_path = os.path.join(_HERE, "..", "engine_adapter.py")
     with open(adapter_path, encoding="utf-8") as fh:
         source = fh.read()

@@ -3534,9 +3534,49 @@ def test_native_write_timeout_with_valid_result_admits(tmp_path, monkeypatch):
     )
     assert ended["timedOut"] is True
     assert ended["exit"] not in (0, None)
+    assert ended.get("timeoutAt") is not None
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade["ok"] is True
     assert grade["report"] == "Receipt prose."
+    # axis: the process still needed termination at the wall cap even though its result was
+    # admitted (written before the deadline) — the success must carry that fact rather than
+    # reading identical to a clean, un-timed-out exit.
+    assert grade["admittedAfterTimeout"] is True
+
+
+# axis: a native write result written during the SIGTERM/SIGKILL grace window — i.e. AFTER the
+# wall-cap deadline, not before it — must be rejected, not silently admitted as a clean success.
+def test_native_write_timeout_result_written_after_deadline_rejected(tmp_path, monkeypatch):
+    native_write = _native_write_result_json()
+    script = (
+        "import signal, sys, time\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "def _write_after_term(signum, frame):\n"
+        "    if _path:\n"
+        "        open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        "signal.signal(signal.SIGTERM, _write_after_term)\n"
+        "while True:\n"
+        "    time.sleep(0.02)\n"
+        % native_write
+    )
+    run_dir, state, ended = _run_codex_native_write_timeout_script(
+        tmp_path, monkeypatch, script,
+    )
+    assert ended["timedOut"] is True
+    assert ended.get("timeoutAt") is not None
+    result_path = ED._native_result_path(run_dir, 1)
+    assert os.path.isfile(result_path)
+    assert os.stat(result_path).st_mtime > ended["timeoutAt"]
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is not True
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "timeout-native-result-unadmitted"
+    assert grade.get("admissionDetail") == "native-result-after-timeout"
 
 
 # axis: timed-out native write with no result file forfeits timeout-no-native-result.

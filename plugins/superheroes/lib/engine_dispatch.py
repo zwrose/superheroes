@@ -3873,6 +3873,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     start = time.monotonic()
     last_beat = start
     timed_out = False
+    timeout_at = None
     natural_rc = None
     # lastActivityAt is accurate to the poll interval (HEARTBEAT_INTERVAL / sleep), not to the byte.
     last_activity_at = None
@@ -3902,6 +3903,10 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             break
         if now - start >= timeout:
             timed_out = True
+            # axis: the wall-cap deadline is stamped BEFORE termination begins, so a native
+            # result written during the SIGTERM/SIGKILL grace window can be told apart from
+            # one written before the cap (see timeoutAt on the ended record).
+            timeout_at = time.time()
             break
         time.sleep(0.2)
     _terminate_process_group(pgid)
@@ -3935,6 +3940,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         "capSeconds": timeout,
         "dispatchPath": dispatch_path,
     }
+    if timed_out:
+        ended_record["timeoutAt"] = timeout_at
     if prompt_bytes is not None:
         ended_record["promptBytes"] = prompt_bytes
     if stdout_observed is not None:
@@ -4543,8 +4550,15 @@ def _verify_native_schema(opened, run_kind, expected_result_kind=None):
     return declared, None
 
 
-def _admit_native_write_result(run_dir_real, attempt, opened):
-    """Single admission authority for the native write channel (codex, cursor). Never raises."""
+def _admit_native_write_result(run_dir_real, attempt, opened, *, timeout_deadline=None):
+    """Single admission authority for the native write channel (codex, cursor). Never raises.
+
+    `timeout_deadline` is the wall-clock instant (epoch seconds) the attempt's timeout was
+    declared, when the attempt timed out. A native result whose file was last written strictly
+    after that instant was produced during the SIGTERM/SIGKILL grace window, not before the
+    cap — the timeout contract promises admission only for a result complete before the wall
+    cap, so such a result is rejected rather than silently admitted.
+    """
     gate = _stdout_delivery_gate(run_dir_real, attempt, opened)
     if gate is not None:
         return gate
@@ -4555,6 +4569,19 @@ def _admit_native_write_result(run_dir_real, attempt, opened):
             "reason": dispatch_outcome.REASON_FORFEITED,
             "detail": detail,
         }
+
+    if timeout_deadline is not None:
+        result_path = _native_result_path(run_dir_real, attempt)
+        try:
+            mtime = os.stat(result_path).st_mtime if result_path else None
+        except OSError:
+            mtime = None
+        if mtime is None or mtime > timeout_deadline:
+            return {
+                "forfeit": True,
+                "reason": dispatch_outcome.REASON_FORFEITED,
+                "detail": "native-result-after-timeout",
+            }
 
     declared, schema_err = _verify_native_schema(opened, RUN_KIND_WRITE)
     if schema_err:
@@ -4850,8 +4877,15 @@ def _grade_write_attempt(run_dir_real, state, attempt):
 
     admitted = None
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
-        admitted = _admit_native_write_result(run_dir_real, attempt, opened)
+        timeout_deadline = ended.get("timeoutAt") if ended.get("timedOut") else None
+        admitted = _admit_native_write_result(
+            run_dir_real, attempt, opened, timeout_deadline=timeout_deadline)
         if not admitted.get("forfeit"):
+            if ended.get("timedOut"):
+                # axis: the process still had to be terminated at the wall cap even though its
+                # result was admitted (written before the deadline) — carry that fact onto the
+                # success so it never reads identical to a clean, un-timed-out exit.
+                return dict(admitted, admittedAfterTimeout=True)
             return admitted
 
     if admitted is not None and admitted.get("forfeit"):
@@ -5287,6 +5321,12 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             result["itemCheck"] = item_check
                         if "report" in grade:
                             result["report"] = grade["report"]
+                        if grade.get("admittedAfterTimeout"):
+                            # axis: a write attempt hit the wall cap but was admitted (its
+                            # result was written before the deadline) — carry that fact onto
+                            # the terminal result so it never reads as a clean, un-timed-out
+                            # success on the receipt.
+                            result["admittedAfterTimeout"] = True
                     else:
                         terminal_ok = {
                             "ok": True, "terminal": True,

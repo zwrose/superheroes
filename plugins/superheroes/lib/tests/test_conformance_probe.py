@@ -351,7 +351,76 @@ def test_run_grades_three_legs_ok_on_valid_native_result(tmp_path):
     assert "plugins/superheroes" not in prompt_text
 
 
-def test_run_grades_three_legs_ok_on_valid_claude_native_result(tmp_path, monkeypatch):
+def test_probe_refuses_symlinked_run_dir(tmp_path):
+    repo = _repo(tmp_path)
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    run_link = tmp_path / "run-link"
+    os.symlink(str(real_dir), str(run_link))
+    payload, code, stderr = CP.probe(
+        "codex", repo_root=repo, run_dir=str(run_link), timeout=30,
+    )
+    assert code == 1
+    # resolving the leaf symlink via realpath first (rather than refusing on the raw path)
+    # would silently swap in the symlink's target and bypass this refusal entirely.
+    assert payload["legs"]["resultProduction"]["detail"].endswith("run-dir-is-symlink")
+    assert stderr is not None
+
+
+def test_probe_refuses_parent_run_dir_with_unrecognized_entries(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "stray.txt").write_text("x", encoding="utf-8")
+    payload, code, stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=str(run_dir), timeout=30,
+    )
+    assert code == 1
+    assert payload["modeLegs"]["print"]["resultProduction"]["detail"] == "run-dir-not-empty-unopened"
+    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == "run-dir-not-empty-unopened"
+    assert stderr is not None
+
+
+def test_probe_accepts_parent_run_dir_with_only_recognized_mode_subdirs(tmp_path, monkeypatch):
+    # Negative half of the guard above: a parent containing only the recognized print/
+    # background/ mode subdirectories (both empty — no prior journal) is NOT refused as
+    # run-dir-not-empty-unopened, and the probe proceeds to dispatch normally.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "print").mkdir()
+    (run_dir / "background").mkdir()
+    structured = {"result": _native_verdicts_branch()}
+    stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return stdout, False, 0, ""
+
+    fake = FakeRunner([runner, runner], sync_native=False)
+    payload, code, stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=str(run_dir), timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    for mode in ("print", "background"):
+        assert payload["modeLegs"][mode]["resultProduction"]["detail"] != "run-dir-not-empty-unopened"
+
+
+def test_claude_probe_background_mode_without_native_result_fails_overall(tmp_path, monkeypatch):
+    # NOTE: this drives the injected `run_engine` test seam for BOTH claude modes. The
+    # background runner below never writes a native result file, so this proves the
+    # all-FAILED path for the background leg — it is not a claude happy-path test. See
+    # test_claude_probe_green_as_far_as_the_injected_seam_can_reach below for how far a
+    # green claude probe can be pushed under this harness, and why one leg stays red.
     home = tmp_path / "home"
     home.mkdir()
     (home / ".claude").mkdir()
@@ -389,6 +458,77 @@ def test_run_grades_three_legs_ok_on_valid_claude_native_result(tmp_path, monkey
     assert payload["legs"]["progressTelemetry"]["detail"] == "background: telemetry-absent"
     assert code == 1
     assert stderr is not None
+
+
+def test_claude_probe_green_as_far_as_the_injected_seam_can_reach(tmp_path, monkeypatch):
+    """Push the claude two-mode aggregation as close to all-green as the test harness allows,
+    and disclose in one place why it cannot go further — rather than a renamed test whose name
+    still implies full green-path coverage it does not have.
+
+    print's three legs pass exactly as in the all-green single-mode tests above. background can
+    be fed a schema-valid `StructuredOutput` transcript row (the shape
+    `engine_adapter.claude_transcript_result` reads — see
+    `test_claude_telemetry_absent_when_only_the_structured_output_call` above for the same
+    shape), and `_materialize_stdout_result` genuinely writes a valid native result file for it.
+    Even so, background's resultProduction still reads `native-result-missing`: for
+    RESULT_DELIVERY_TRANSCRIPT, `_stdout_delivery_gate` (engine_dispatch.py) requires
+    `ended["transcriptResult"] == "materialized"`, but the injected `run_engine` seam
+    (`_execute_injected_attempt`) always stamps the materialization outcome onto
+    `ended["stdoutResult"]` regardless of delivery kind — it never sets `transcriptResult`. So
+    the gate refuses admission no matter what the transcript contains. background's
+    progressTelemetry has the same shape of gap: engagement there is read from
+    `ended["transcriptToolCalls"]`, a field only the REAL `_run_engine_files_background`
+    transcript poller ever populates, never `_execute_injected_attempt`.
+    Both are seam gaps in test plumbing, not in the code under test, and neither is a finding
+    this round is scoped to fix — they are recorded here so a full-green claude probe test is
+    never silently implied by a renamed passing test.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    structured = {"result": _native_verdicts_branch()}
+    print_stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
+    # Background delivery is RESULT_DELIVERY_TRANSCRIPT: `_materialize_stdout_result` reads the
+    # last `StructuredOutput` tool_use block's `input` straight from the transcript rows (see
+    # `engine_adapter.claude_transcript_result`) — the same shape used by the progressTelemetry
+    # test above (`test_claude_telemetry_absent_when_only_the_structured_output_call`) — rather
+    # than the `structured_output` envelope field STDOUT delivery reads.
+    background_stdout = json.dumps({
+        "type": "assistant",
+        "message": {"content": [{
+            "type": "tool_use", "id": "so1", "name": "StructuredOutput",
+            "input": _native_verdicts_branch(),
+        }]},
+    })
+
+    def print_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return print_stdout, False, 0, ""
+
+    def background_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return background_stdout, False, 0, ""
+
+    fake = FakeRunner([print_runner, background_runner], sync_native=False)
+    payload, code, stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert payload["probedModes"] == ["print", "background"]
+    for leg_name in CP._LEG_NAMES:
+        assert payload["modeLegs"]["print"][leg_name]["ok"] is True, leg_name
+    assert payload["modeLegs"]["background"]["completionDetection"]["ok"] is True
+    # The two legs the injected seam cannot turn green (see docstring) — both read from a
+    # journal field `_execute_injected_attempt` never populates for transcript delivery:
+    assert payload["modeLegs"]["background"]["resultProduction"]["ok"] is False
+    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == "native-result-missing"
+    assert payload["modeLegs"]["background"]["progressTelemetry"]["ok"] is False
+    assert payload["modeLegs"]["background"]["progressTelemetry"]["detail"] == "telemetry-absent"
+    assert payload["ok"] is False
+    assert code == 1
 
 
 def test_result_production_fails_on_claude_native_schema_invalid(tmp_path, monkeypatch):

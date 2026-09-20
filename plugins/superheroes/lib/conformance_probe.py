@@ -289,11 +289,16 @@ def _stamp_mode_run_dir(legs, mode_run_dir):
     return stamped
 
 def _ensure_mode_run_dir(mode_run_dir):
-    """Create `mode_run_dir` and report whether its journal is already folded (reused).
+    """Create `mode_run_dir` and report whether it is already terminally incompatible
+    with a fresh dispatch — reused (mirrors `dispatch_review`'s own refusal conditions).
 
     Returns (mode_run_dir_real, reused, setup_error). `setup_error` is a detail string
     when the directory itself could not be created; `reused` is only meaningful when
-    `setup_error` is None.
+    `setup_error` is None. `reused` covers both an already-opened journal (folded or
+    not — a fresh probe always mints a new order_id, so `dispatch_review` would refuse
+    any opened journal as `run-dir-reused` regardless of fold state) and a nonempty
+    directory with no journal at all (`dispatch_review`'s `run-dir-not-empty-unopened`),
+    so the all-mode preflight can fail every mode before dispatching any of them.
     """
     ok, result = engine_dispatch._validate_run_dir(mode_run_dir, create=True)
     if not ok:
@@ -301,7 +306,10 @@ def _ensure_mode_run_dir(mode_run_dir):
     mode_run_dir_real = result
     try:
         records, _ = engine_dispatch._journal_read(mode_run_dir_real)
-        if engine_dispatch._journal_state(records).get("folded") is not None:
+        state = engine_dispatch._journal_state(records)
+        if state.get("opened") is not None:
+            return mode_run_dir_real, True, None
+        if engine_dispatch._run_dir_nonempty(mode_run_dir_real):
             return mode_run_dir_real, True, None
     except OSError:
         pass
