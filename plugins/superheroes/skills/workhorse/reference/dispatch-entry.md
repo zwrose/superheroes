@@ -148,7 +148,7 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--progress-file` | no | `free-text` | none |  |
 | `--expect-item` | no | `free-text` | none |  |
 | `--expect-items-file` | no | `free-text` | none |  |
-| `--claude-mode` | no | `choices:print,background` | none | background is declared but is not dispatchable |
+| `--claude-mode` | no | `choices:print,background` | none | background refused before spawn; detail claude-mode-background-write |
 
 #### `engine_dispatch.py dispatch-review`
 
@@ -165,7 +165,7 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--order-id` | no | `free-text` | none |  |
 | `--diff-base` | no | `free-text` | none | pinned commit object id (40 hex, or 64 in a SHA-256 repository) to stage the merge-base->head review patch against; a revision expression, branch name or tag is refused |
 | `--mode` | no | `choices:review,brief-check` | none |  |
-| `--claude-mode` | no | `choices:print,background` | none | background is declared but is not dispatchable |
+| `--claude-mode` | no | `choices:print,background` | none | background is dispatchable |
 | `--expected-result-kind` | no | `choices:findings,verdicts,grouping,ruling` | none | mechanical pin: refuse attempts whose parsed resultKind differs |
 | `--pr-body-path` | no | `free-text` | none |  |
 | `--session-dir` | no | `existing-directory` | none |  |

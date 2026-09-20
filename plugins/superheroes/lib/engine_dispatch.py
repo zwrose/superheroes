@@ -7066,7 +7066,7 @@ def build_parser():
                     choices=sanitized_view.REVIEW_MODES)
     cc.add_argument(d, "--claude-mode", contract=_CLAUDE_MODES_CHOICES_CONTRACT, default=None,
                     choices=engine_result_channel.CLAUDE_MODES,
-                    help="background is declared but is not dispatchable")
+                    help="background is dispatchable")
     cc.add_argument(d, "--expected-result-kind", contract=_REVIEW_RESULT_KINDS_CHOICES_CONTRACT,
                     default=None, choices=REVIEW_RESULT_KINDS,
                     help="mechanical pin: refuse attempts whose parsed resultKind differs")
@@ -7090,7 +7090,7 @@ def build_parser():
     cc.add_argument(w, "--expect-items-file", contract="free-text", default=None)
     cc.add_argument(w, "--claude-mode", contract=_CLAUDE_MODES_CHOICES_CONTRACT, default=None,
                     choices=engine_result_channel.CLAUDE_MODES,
-                    help="background is declared but is not dispatchable")
+                    help="background refused before spawn; detail claude-mode-background-write")
 
     p = sub.add_parser("dispatch-poll")
     cc.add_argument(p, "--run-dir", contract="existing-directory", required=True)
