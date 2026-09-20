@@ -1184,3 +1184,421 @@ def test_deadline_with_timeout_none_returns_dict_not_typeerror():
     )
     assert set(result.keys()) == TOTAL_KEYS
     assert result["ok"] is True
+
+
+# --- layer 2d: resolve_repo_slug and read_vet_verdict ---------------------------
+
+
+REPO_ROOT = "/tmp/example-repo"
+HEAD_OID = "c205c7aea4d1d4dfb2c23b38517aa23dd777fe9e"
+HEAD_ABBREV = "c205c7ae"
+VET_PR = 1357
+
+
+def _repo_slug_argv():
+    return tuple(sc._repo_slug_argv())
+
+
+def _vet_argv(pr=VET_PR, repo=REPO):
+    return tuple(sc._vet_verdict_argv(pr, repo))
+
+
+def _repo_slug_ok(name_with_owner=REPO):
+    return SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({"nameWithOwner": name_with_owner}),
+        stderr="",
+    )
+
+
+def _vet_payload(**overrides):
+    payload = {
+        "body": "",
+        "headRefOid": HEAD_OID,
+        "state": "OPEN",
+        "isDraft": False,
+    }
+    payload.update(overrides)
+    return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+
+def _assert_read_refusal(refusal, reason):
+    assert refusal == {"ok": False, "reason": reason, "detail": refusal["detail"]}
+    assert isinstance(refusal["detail"], str)
+    assert refusal["detail"]
+
+
+def _ready_vet_body(*, head=HEAD_ABBREV, include_reminder=False):
+    lines = [
+        "## Advisor vet",
+        sc.ADVISOR_VET_MARKER,
+    ]
+    if include_reminder:
+        lines.append(sc.ADVISOR_VET_REMINDER_PREFIX)
+    lines.append("Vet READY at `%s`" % head)
+    return "\n".join(lines)
+
+
+def test_l2d_advisor_vet_marker_matches_grounding_stage():
+    import grounding_stage
+
+    assert sc.ADVISOR_VET_MARKER == grounding_stage.REGION_MARKERS["advisor-vet"]
+
+
+def test_l2d_resolve_repo_slug_run_raises():
+    # axis: run raises any exception
+    def _run(*args, **kwargs):
+        raise OSError("boom")
+
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=_run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert refusal["detail"] == "boom"
+
+
+def test_l2d_resolve_repo_slug_nonzero_exit():
+    # axis: non-zero return code
+    run, calls = _make_run({_repo_slug_argv(): SimpleNamespace(returncode=1, stdout="", stderr="nope")})
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert "nope" in refusal["detail"]
+    assert calls[0] == list(_repo_slug_argv())
+
+
+def test_l2d_resolve_repo_slug_stdout_not_json():
+    # axis: stdout is not JSON
+    run, _calls = _make_run(
+        {_repo_slug_argv(): SimpleNamespace(returncode=0, stdout="not-json", stderr="")}
+    )
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_resolve_repo_slug_json_not_object():
+    # axis: JSON is not an object
+    run, _calls = _make_run(
+        {_repo_slug_argv(): SimpleNamespace(returncode=0, stdout=json.dumps([]), stderr="")}
+    )
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_resolve_repo_slug_name_with_owner_missing():
+    # axis: nameWithOwner missing, not a string, or empty
+    run, _calls = _make_run(
+        {_repo_slug_argv(): SimpleNamespace(returncode=0, stdout=json.dumps({}), stderr="")}
+    )
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_resolve_repo_slug_name_with_owner_bad_pattern():
+    # axis: nameWithOwner present but not matching _REPO_RE
+    run, _calls = _make_run({_repo_slug_argv(): _repo_slug_ok("bad repo")})
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_resolve_repo_slug_deadline_exhausted(monkeypatch):
+    # axis: deadline supplied and already exhausted — refuse without calling gh
+    times = [100.0, 105.0]
+    index = 0
+
+    def fake_monotonic():
+        nonlocal index
+        value = times[index] if index < len(times) else times[-1]
+        index += 1
+        return value
+
+    monkeypatch.setattr(sc.time, "monotonic", fake_monotonic)
+    run, calls = _make_run({_repo_slug_argv(): _repo_slug_ok()})
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, deadline=5.0, run=run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert calls == []
+
+
+def test_l2d_resolve_repo_slug_deadline_caps_timeout(monkeypatch):
+    # axis: deadline supplied and smaller than timeout — call uses the smaller value
+    times = [100.0, 100.5, 100.5]
+    index = 0
+
+    def fake_monotonic():
+        nonlocal index
+        value = times[index] if index < len(times) else times[-1]
+        index += 1
+        return value
+
+    monkeypatch.setattr(sc.time, "monotonic", fake_monotonic)
+    run, _calls = _make_run({_repo_slug_argv(): _repo_slug_ok()})
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, deadline=2.0, timeout=120.0, run=run)
+    assert slug == REPO
+    assert refusal is None
+    assert run.kw_calls[0]["timeout"] == pytest.approx(1.5)
+
+
+def test_l2d_resolve_repo_slug_bad_repo_root():
+    slug, refusal = sc.resolve_repo_slug("", run=lambda *a, **k: None)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_BAD_ARGUMENT)
+
+
+def test_l2d_resolve_repo_slug_happy_path():
+    run, calls = _make_run({_repo_slug_argv(): _repo_slug_ok()})
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run)
+    assert slug == REPO
+    assert refusal is None
+    assert calls[0] == list(_repo_slug_argv())
+    assert run.kw_calls[0]["cwd"] == REPO_ROOT
+
+
+def test_l2d_read_vet_verdict_closed_is_not_ready():
+    # axis: classification rule 1 — state is not OPEN
+    run, _calls = _make_run({_vet_argv(): _vet_payload(state="MERGED", body=_ready_vet_body())})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_draft_is_not_ready():
+    # axis: classification rule 1 — isDraft is true
+    run, _calls = _make_run({_vet_argv(): _vet_payload(isDraft=True, body=_ready_vet_body())})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_marker_absent():
+    # axis: classification rule 2 — marker absent
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body="no marker here")})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_ABSENT
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_reminder_present_is_not_ready():
+    # axis: classification rule 3 — marker present and reminder prefix present
+    run, _calls = _make_run(
+        {_vet_argv(): _vet_payload(body=_ready_vet_body(include_reminder=True))}
+    )
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_ready_with_head_abbrev():
+    # axis: classification rule 4 — READY whole word with head abbreviation
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=_ready_vet_body(head=HEAD_ABBREV))})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_catch_all_not_ready():
+    # axis: classification rule 5 — anything else
+    body = "\n".join(
+        [
+            "## Advisor vet",
+            sc.ADVISOR_VET_MARKER,
+            "Vet pending review.",
+        ]
+    )
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_empty_body_is_absent():
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body="")})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_ABSENT
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_bad_pr():
+    verdict, refusal = sc.read_vet_verdict(pr=True, repo=REPO, run=lambda *a, **k: None)
+    assert verdict is None
+    _assert_read_refusal(refusal, sc.REASON_BAD_ARGUMENT)
+
+
+def test_l2d_read_vet_verdict_bad_repo():
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo="bad repo", run=lambda *a, **k: None)
+    assert verdict is None
+    _assert_read_refusal(refusal, sc.REASON_BAD_ARGUMENT)
+
+
+def test_l2d_read_vet_verdict_run_raises():
+    def _run(*args, **kwargs):
+        raise OSError("gh down")
+
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=_run)
+    assert verdict is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_read_vet_verdict_nonzero_exit():
+    run, _calls = _make_run(
+        {_vet_argv(): SimpleNamespace(returncode=1, stdout="", stderr="pr view failed")}
+    )
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_read_vet_verdict_stdout_not_json():
+    run, _calls = _make_run(
+        {_vet_argv(): SimpleNamespace(returncode=0, stdout="not-json", stderr="")}
+    )
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_read_vet_verdict_json_not_object():
+    run, _calls = _make_run(
+        {_vet_argv(): SimpleNamespace(returncode=0, stdout=json.dumps([]), stderr="")}
+    )
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_read_vet_verdict_body_missing():
+    run, _calls = _make_run(
+        {_vet_argv(): SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"headRefOid": HEAD_OID, "state": "OPEN", "isDraft": False}),
+            stderr="",
+        )}
+    )
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_read_vet_verdict_head_ref_oid_missing():
+    run, _calls = _make_run(
+        {_vet_argv(): SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"body": _ready_vet_body(), "state": "OPEN", "isDraft": False}),
+            stderr="",
+        )}
+    )
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_read_vet_verdict_state_missing():
+    run, _calls = _make_run(
+        {_vet_argv(): SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {"body": _ready_vet_body(), "headRefOid": HEAD_OID, "isDraft": False}
+            ),
+            stderr="",
+        )}
+    )
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_read_vet_verdict_is_draft_missing():
+    run, _calls = _make_run(
+        {_vet_argv(): SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {"body": _ready_vet_body(), "headRefOid": HEAD_OID, "state": "OPEN"}
+            ),
+            stderr="",
+        )}
+    )
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_read_vet_verdict_deadline_exhausted(monkeypatch):
+    times = [200.0, 203.0]
+    index = 0
+
+    def fake_monotonic():
+        nonlocal index
+        value = times[index] if index < len(times) else times[-1]
+        index += 1
+        return value
+
+    monkeypatch.setattr(sc.time, "monotonic", fake_monotonic)
+    run, calls = _make_run({_vet_argv(): _vet_payload(body=_ready_vet_body())})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, deadline=3.0, run=run)
+    assert verdict is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert calls == []
+
+
+def test_l2d_read_vet_verdict_stale_head_is_not_ready():
+    body = _ready_vet_body(head="deadbeef")
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_unreadable_returns_refusal():
+    run, _calls = _make_run(
+        {_vet_argv(): SimpleNamespace(returncode=1, stdout="", stderr="unreadable")}
+    )
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_read_vet_verdict_unvetted_open_returns_not_ready():
+    body = "\n".join(
+        [
+            "## Advisor vet",
+            sc.ADVISOR_VET_MARKER,
+            "Still drafting the owner register.",
+        ]
+    )
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_already_word_is_not_ready():
+    body = "\n".join(
+        [
+            "## Advisor vet",
+            sc.ADVISOR_VET_MARKER,
+            "Vet already reviewed at `%s`" % HEAD_ABBREV,
+        ]
+    )
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def test_l2d_read_vet_verdict_later_ready_section_is_not_ready():
+    body = "\n".join(
+        [
+            "## Advisor vet",
+            sc.ADVISOR_VET_MARKER,
+            "Vet pending.",
+            "## Unrelated",
+            "READY %s" % HEAD_OID,
+        ]
+    )
+    run, _calls = _make_run({_vet_argv(): _vet_payload(body=body)})
+    verdict, refusal = sc.read_vet_verdict(pr=VET_PR, repo=REPO, run=run)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None

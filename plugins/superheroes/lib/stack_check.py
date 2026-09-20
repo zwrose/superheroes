@@ -22,7 +22,15 @@ REASON_NOT_LINKED = "not-linked"
 REASON_STACK_UNREADABLE = "stack-unreadable"
 REASON_ORDER_MISMATCH = "order-mismatch"
 
+VET_READY = "ready"
+VET_NOT_READY = "not-ready"
+VET_ABSENT = "absent"
+
+ADVISOR_VET_MARKER = "<!-- superheroes:advisor-vet -->"
+ADVISOR_VET_REMINDER_PREFIX = "<!-- advisor: BEFORE writing this slot"
+
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+_HEAD_ABBREV_RE = re.compile(r"\b[0-9a-fA-F]{8,}\b")
 
 QUERY = """\
 query($owner:String!,$repo:String!,$pr:Int!,$first:Int!,$after:String){
@@ -107,6 +115,20 @@ def _success(repo, pr, stack, queried, members, pages):
 
 def _is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_positive_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
+def _read_refusal(reason, detail):
+    return {"ok": False, "reason": reason, "detail": detail}
+
+
+def _run_kwargs(env):
+    if env is None:
+        return {}
+    return {"env": env}
 
 
 def _proc_output(proc):
@@ -483,6 +505,260 @@ def _validate_stack_invariants(
         "result": _success(repo, pr, stack, queried, members, pages)}
 
 
+def _repo_slug_argv():
+    return ["gh", "repo", "view", "--json", "nameWithOwner"]
+
+
+def _vet_verdict_argv(pr, repo):
+    return [
+        "gh",
+        "pr",
+        "view",
+        str(pr),
+        "--repo",
+        repo,
+        "--json",
+        "body,headRefOid,state,isDraft",
+    ]
+
+
+def _effective_timeout(timeout, deadline_at):
+    if deadline_at is None:
+        return timeout
+    remaining = deadline_at - time.monotonic()
+    if timeout is None:
+        return remaining
+    return min(timeout, remaining)
+
+
+def _validate_repo_root(repo_root):
+    if not isinstance(repo_root, str) or not repo_root:
+        return _read_refusal(REASON_BAD_ARGUMENT, "repo_root must be a non-empty string")
+    return None
+
+
+def _validate_read_timeout(timeout):
+    if not _is_positive_number(timeout):
+        return _read_refusal(REASON_BAD_ARGUMENT, "timeout must be a positive number of seconds")
+    return None
+
+
+def _validate_read_deadline(deadline):
+    if deadline is None:
+        return None
+    if not _is_positive_number(deadline):
+        return _read_refusal(REASON_BAD_ARGUMENT, "deadline must be a positive number of seconds")
+    return None
+
+
+def _validate_vet_arguments(pr, repo):
+    if not _is_int(pr) or pr < 1:
+        return _read_refusal(REASON_BAD_ARGUMENT, "pr must be a positive integer")
+    if not isinstance(repo, str) or not _REPO_RE.match(repo):
+        return _read_refusal(REASON_BAD_ARGUMENT, "repo must be owner/name")
+    return None
+
+
+def _parse_repo_slug_payload(proc):
+    if proc.returncode != 0:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, _proc_output(proc) or "gh repo view failed")
+
+    try:
+        payload = json.loads(proc.stdout or "")
+    except json.JSONDecodeError:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "gh repo view returned output that is not JSON")
+
+    if not isinstance(payload, dict):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "gh repo view returned JSON that is not an object")
+
+    name = payload.get("nameWithOwner")
+    if not isinstance(name, str) or not name:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "nameWithOwner is missing, not a string, or empty")
+
+    if not _REPO_RE.match(name):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "nameWithOwner is not a valid owner/name slug")
+
+    return name, None
+
+
+def resolve_repo_slug(repo_root, *, deadline=None, timeout=GH_TIMEOUT, run=None, env=None):
+    """Return (slug, refusal) — exactly one is non-None."""
+    if run is None:
+        run = subprocess.run
+
+    arg_refusal = _validate_repo_root(repo_root)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    arg_refusal = _validate_read_timeout(timeout)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    arg_refusal = _validate_read_deadline(deadline)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    deadline_at = None if deadline is None else time.monotonic() + deadline
+    if deadline_at is not None and time.monotonic() >= deadline_at:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE,
+            "read budget of %g seconds exhausted before gh repo view" % deadline)
+
+    if not shutil.which("gh"):
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "gh not on PATH")
+
+    effective_timeout = _effective_timeout(timeout, deadline_at)
+    argv = _repo_slug_argv()
+    run_kwargs = _run_kwargs(env)
+    try:
+        proc = run(
+            argv,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=effective_timeout,
+            **run_kwargs,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, str(exc))
+    except subprocess.TimeoutExpired:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "gh call timed out")
+
+    return _parse_repo_slug_payload(proc)
+
+
+def _vet_slot_text(body, marker):
+    marker_pos = body.find(marker)
+    if marker_pos == -1:
+        return None
+    after_marker = body[marker_pos + len(marker):]
+    heading_pos = after_marker.find("\n## ")
+    if heading_pos == -1:
+        return after_marker
+    return after_marker[:heading_pos]
+
+
+def _slot_names_head(slot_text, head_ref_oid):
+    if head_ref_oid in slot_text:
+        return True
+    for match in _HEAD_ABBREV_RE.finditer(slot_text):
+        token = match.group(0)
+        if len(token) >= 8 and head_ref_oid.startswith(token):
+            return True
+    return False
+
+
+def _classify_vet_verdict(body, head_ref_oid, state, is_draft):
+    if state != "OPEN" or is_draft:
+        return VET_NOT_READY
+
+    if ADVISOR_VET_MARKER not in body:
+        return VET_ABSENT
+
+    if ADVISOR_VET_REMINDER_PREFIX in body:
+        return VET_NOT_READY
+
+    slot_text = _vet_slot_text(body, ADVISOR_VET_MARKER)
+    if slot_text is None:
+        return VET_ABSENT
+
+    if (
+        re.search(r"\bREADY\b", slot_text) is not None
+        and _slot_names_head(slot_text, head_ref_oid)
+    ):
+        return VET_READY
+
+    return VET_NOT_READY
+
+
+def _parse_vet_verdict_payload(payload):
+    if not isinstance(payload, dict):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "gh pr view returned JSON that is not an object")
+
+    body = payload.get("body")
+    if body is None or not isinstance(body, str):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "pull request body is missing or not a string")
+
+    head_ref_oid = payload.get("headRefOid")
+    if not isinstance(head_ref_oid, str) or not head_ref_oid:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "headRefOid is missing or not a string")
+
+    state = payload.get("state")
+    if not isinstance(state, str):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "state is missing or not a string")
+
+    is_draft = payload.get("isDraft")
+    if not isinstance(is_draft, bool):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "isDraft is missing or not a boolean")
+
+    return _classify_vet_verdict(body, head_ref_oid, state, is_draft), None
+
+
+def read_vet_verdict(*, pr, repo, timeout=GH_TIMEOUT, deadline=None, run=None, env=None):
+    """Return (verdict, refusal) — exactly one is non-None."""
+    if run is None:
+        run = subprocess.run
+
+    arg_refusal = _validate_vet_arguments(pr, repo)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    arg_refusal = _validate_read_timeout(timeout)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    arg_refusal = _validate_read_deadline(deadline)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    deadline_at = None if deadline is None else time.monotonic() + deadline
+    if deadline_at is not None and time.monotonic() >= deadline_at:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE,
+            "read budget of %g seconds exhausted before gh pr view" % deadline)
+
+    if not shutil.which("gh"):
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "gh not on PATH")
+
+    effective_timeout = _effective_timeout(timeout, deadline_at)
+    argv = _vet_verdict_argv(pr, repo)
+    run_kwargs = _run_kwargs(env)
+    try:
+        proc = run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=effective_timeout,
+            **run_kwargs,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, str(exc))
+    except subprocess.TimeoutExpired:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "gh call timed out")
+
+    if proc.returncode != 0:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, _proc_output(proc) or "gh pr view failed")
+
+    try:
+        payload = json.loads(proc.stdout or "")
+    except json.JSONDecodeError:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "gh pr view returned output that is not JSON")
+
+    return _parse_vet_verdict_payload(payload)
+
+
 def read_membership(
     *,
     pr,
@@ -493,7 +769,7 @@ def read_membership(
     deadline=None,
     run=None,
 ):
-    """Return the membership read dict. Never raises."""
+    """Return the membership read dict; GitHub-side and argument-side failures return a refusal dict and raise nothing, while a violated internal pair-slot invariant raises AssertionError."""
     if run is None:
         run = subprocess.run
 
