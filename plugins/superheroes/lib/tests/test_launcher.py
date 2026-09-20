@@ -6129,8 +6129,8 @@ def test_stack_gate_zero_entry_candidates_refuses(tmp_path, monkeypatch):
         _stack_premise(repo, stack=1, layerPosition=2),
         _all_checks(),
         log_dir,
-        pr_lookup=lambda r, sha, env=None, gh_run=None: L._lookup_stack_entry_pr(
-            r, sha, env=env, gh_run=empty_pr_list_gh_run,
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=empty_pr_list_gh_run, deadline=deadline,
         ),
     )
     assert result["ok"] is False
@@ -6144,13 +6144,32 @@ def test_stack_gate_two_entry_candidates_refuses(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def two_pr_gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps({"nameWithOwner": "owner/repo"}), "",
+            )
+        if argv[:3] == ["gh", "pr", "list"]:
+            pr_list = [
+                {"number": 100, "headRefOid": head, "state": "OPEN"},
+                {"number": 101, "headRefOid": head, "state": "OPEN"},
+            ]
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps(pr_list), "",
+            )
+        raise AssertionError("unexpected gh call: %s" % argv)
+
     result = L.launch_build(
         repo,
         656,
         _stack_premise(repo, stack=1, layerPosition=2),
         _all_checks(),
         log_dir,
-        pr_lookup=lambda *a, **k: {"ok": False, "reason": "stack-read-unavailable"},
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=two_pr_gh_run, deadline=deadline,
+        ),
     )
     assert result["ok"] is False
     assert result["reason"] == "stack-read-unavailable"
@@ -6173,8 +6192,8 @@ def test_stack_gate_repo_view_failure_refuses(tmp_path, monkeypatch):
         _stack_premise(repo, stack=1, layerPosition=2),
         _all_checks(),
         log_dir,
-        pr_lookup=lambda r, sha, env=None, gh_run=None: L._lookup_stack_entry_pr(
-            r, sha, env=env, gh_run=failing_gh_run,
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=failing_gh_run, deadline=deadline,
         ),
     )
     assert result["ok"] is False
@@ -6202,8 +6221,8 @@ def test_stack_gate_pr_list_unparseable_refuses(tmp_path, monkeypatch):
         _stack_premise(repo, stack=1, layerPosition=2),
         _all_checks(),
         log_dir,
-        pr_lookup=lambda r, sha, env=None, gh_run=None: L._lookup_stack_entry_pr(
-            r, sha, env=env, gh_run=bad_pr_list_gh_run,
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=bad_pr_list_gh_run, deadline=deadline,
         ),
     )
     assert result["ok"] is False
@@ -6218,7 +6237,7 @@ def test_stack_gate_not_linked_refuses(tmp_path, monkeypatch):
     head = _head_sha(repo)
 
     def reader(**kwargs):
-        return {"ok": False, "reason": "not-linked"}
+        return {"ok": False, "reason": L.stack_check.REASON_NOT_LINKED}
 
     result = L.launch_build(
         repo,
@@ -6309,14 +6328,19 @@ def test_stack_gate_full_agreement_proceeds(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
     head = _head_sha(repo)
+    captured = []
 
     def reader(**kwargs):
+        captured.append(dict(kwargs))
+        assert kwargs["pr"] == 1352
+        assert kwargs["repo"] == "owner/repo"
+        assert kwargs["expect_stack"] == 7
         return _membership_ok(1, head)
 
     result = L.launch_build(
         repo,
         656,
-        _stack_premise(repo, stack=1, layerPosition=2),
+        _stack_premise(repo, stack=7, layerPosition=2),
         _all_checks(),
         log_dir,
         spawn_fn=_make_spawn_fn("sleep"),
@@ -6327,11 +6351,12 @@ def test_stack_gate_full_agreement_proceeds(tmp_path, monkeypatch):
     assert result["ok"] is True
     assert result["stackGate"] == {
         "applied": True,
-        "stack": 1,
+        "stack": 7,
         "layerPosition": 2,
         "entryPr": 1352,
         "layerBelowHead": head,
     }
+    assert len(captured) == 1
     try:
         os.kill(result["pid"], signal.SIGTERM)
     except ProcessLookupError:

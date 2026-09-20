@@ -309,6 +309,19 @@ def test_e15_payload_not_object():
     _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
 
 
+def test_e15_payload_missing_data_key():
+    run, _calls = _make_run(
+        {
+            _argv_page(PR, sc.DEFAULT_PAGE_SIZE): SimpleNamespace(
+                returncode=0, stdout="{}", stderr=""
+            ),
+        }
+    )
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert "graphql data/repository is null or not an object" in result["detail"]
+
+
 def test_e16_graphql_errors_nonempty():
     page = _pull_request(
         pr_number=PR,

@@ -1351,11 +1351,21 @@ def _observe_settle(proc, settle_seconds, deadline=None):
     return rc
 
 
-def _lookup_stack_entry_pr(repo_root, resolved_base_commit, env=None, gh_run=None):
+def _lookup_stack_entry_pr(
+    repo_root, resolved_base_commit, env=None, gh_run=None, deadline=None,
+):
     """Resolve the open PR whose head is the resolved base commit. Never raises."""
     if gh_run is None:
         gh_run = subprocess.run
     scrubbed = _scrub_env(env)
+    if deadline is not None and time.monotonic() >= deadline:
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    repo_timeout = 120
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"ok": False, "reason": "stack-read-unavailable"}
+        repo_timeout = min(120, remaining)
     try:
         repo_proc = gh_run(
             ["gh", "repo", "view", "--json", "nameWithOwner"],
@@ -1363,7 +1373,7 @@ def _lookup_stack_entry_pr(repo_root, resolved_base_commit, env=None, gh_run=Non
             capture_output=True,
             text=True,
             env=scrubbed,
-            timeout=120,
+            timeout=repo_timeout,
         )
     except (subprocess.TimeoutExpired, OSError):
         return {"ok": False, "reason": "stack-read-unavailable"}
@@ -1376,6 +1386,14 @@ def _lookup_stack_entry_pr(repo_root, resolved_base_commit, env=None, gh_run=Non
         return {"ok": False, "reason": "stack-read-unavailable"}
     if not isinstance(repo_name, str) or not repo_name:
         return {"ok": False, "reason": "stack-read-unavailable"}
+    if deadline is not None and time.monotonic() >= deadline:
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    pr_timeout = 120
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"ok": False, "reason": "stack-read-unavailable"}
+        pr_timeout = min(120, remaining)
     try:
         pr_proc = gh_run(
             [
@@ -1388,7 +1406,7 @@ def _lookup_stack_entry_pr(repo_root, resolved_base_commit, env=None, gh_run=Non
             capture_output=True,
             text=True,
             env=scrubbed,
-            timeout=120,
+            timeout=pr_timeout,
         )
     except (subprocess.TimeoutExpired, OSError):
         return {"ok": False, "reason": "stack-read-unavailable"}
@@ -1428,6 +1446,7 @@ def _apply_stack_gate(
     env,
     pr_lookup,
     membership_reader,
+    deadline=None,
 ):
     """Run the layer gate when the premise names a stack. Never raises."""
     stack_num = stamped_premise["stack"]
@@ -1437,7 +1456,9 @@ def _apply_stack_gate(
             "ok": True,
             "stackGate": {"applied": False, "reason": "bottom-layer"},
         }
-    lookup = pr_lookup(repo_root, resolved_base_commit, env=env)
+    if deadline is not None and time.monotonic() >= deadline:
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    lookup = pr_lookup(repo_root, resolved_base_commit, env=env, deadline=deadline)
     if not lookup["ok"]:
         out = {"ok": False, "reason": lookup["reason"]}
         if "detail" in lookup:
@@ -1445,13 +1466,22 @@ def _apply_stack_gate(
         return out
     entry_pr = lookup["pr"]
     repo_name = lookup["repo"]
+    membership_deadline = None
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"ok": False, "reason": "stack-read-unavailable"}
+        membership_deadline = remaining
     membership = membership_reader(
-        pr=entry_pr, repo=repo_name, expect_stack=stack_num,
+        pr=entry_pr,
+        repo=repo_name,
+        expect_stack=stack_num,
+        deadline=membership_deadline,
     )
     if not membership["ok"]:
         reason = membership.get("reason")
         # axis: entry PR is not linked to a stack
-        if reason == "not-linked":
+        if reason == stack_check.REASON_NOT_LINKED:
             return {"ok": False, "reason": "base-not-layer-head"}
         return {
             "ok": False,
@@ -1620,6 +1650,7 @@ def launch_build(
             env,
             pr_lookup,
             membership_reader,
+            deadline=deadline,
         )
         if not gate_result["ok"]:
             stage = "stack"

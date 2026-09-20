@@ -506,7 +506,7 @@ def read_membership(
             transport_result = _transport_graphql(
                 owner, name, pr, page_size, after, timeout, run, repo, pages,
                 deadline=deadline, deadline_at=deadline_at)
-            if not isinstance(transport_result, dict) or "data" not in transport_result:
+            if isinstance(transport_result, dict) and transport_result.get("ok") is False:
                 return transport_result
 
             pages += 1
