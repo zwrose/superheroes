@@ -322,7 +322,8 @@ def _probe_one_mode(engine, mode, seat, repo_real, parent_run_dir, prompt_path, 
     if setup_error:
         return _stamp_mode_run_dir(_all_legs_failed(setup_error), mode_run_dir_real)
     if reused:
-        return _stamp_mode_run_dir(_all_legs_failed("run-dir-reused"), mode_run_dir_real)
+        return _stamp_mode_run_dir(
+            _all_legs_failed(dispatch_outcome.DETAIL_RUN_DIR_REUSED), mode_run_dir_real)
     claude_mode = mode if engine == "claude" else None
     order_id = "conformance-probe:%s:%s:%s" % (engine, mode, order_suffix)
     deadline = time.monotonic() + timeout + BOUND_PAD_SECONDS
@@ -391,7 +392,7 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
         while stripped.endswith(os.sep) and len(stripped) > 1:
             stripped = stripped[:-1]
         if os.path.islink(stripped):
-            return _refuse(engine, "run-dir-is-symlink", repo_real, seat=seat)
+            return _refuse(engine, dispatch_outcome.DETAIL_RUN_DIR_IS_SYMLINK, repo_real, seat=seat)
         expected_names = set(_modes_for_engine(engine))
         # Only engines with nested per-mode subdirectories (currently claude: print/,
         # background/) have a meaningful "recognized top-level entries" set — for a
@@ -403,7 +404,8 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
             except OSError as exc:
                 return _refuse(engine, "run-dir-setup-failed:%s" % type(exc).__name__, repo_real, seat=seat)
             if entries - expected_names:
-                return _refuse(engine, "run-dir-not-empty-unopened", repo_real, seat=seat)
+                return _refuse(
+                    engine, dispatch_outcome.DETAIL_RUN_DIR_NOT_EMPTY_UNOPENED, repo_real, seat=seat)
     parent_run_dir = os.path.realpath(run_dir)
     if run_dir_given:
         prompt_path = os.path.join(
@@ -436,7 +438,8 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
             mode_legs[mode] = _stamp_mode_run_dir(_all_legs_failed(setup_error), mode_dirs[mode])
     elif any_reused:
         for mode in modes:
-            mode_legs[mode] = _stamp_mode_run_dir(_all_legs_failed("run-dir-reused"), mode_dirs[mode])
+            mode_legs[mode] = _stamp_mode_run_dir(
+                _all_legs_failed(dispatch_outcome.DETAIL_RUN_DIR_REUSED), mode_dirs[mode])
     else:
         for mode in modes:
             mode_legs[mode] = _probe_one_mode(

@@ -2981,7 +2981,7 @@ def _validate_run_dir(run_dir, *, create=False):
     while path.endswith(os.sep) and len(path) > 1:
         path = path[:-1]
     if os.path.islink(path):
-        return False, "run-dir-is-symlink"
+        return False, dispatch_outcome.DETAIL_RUN_DIR_IS_SYMLINK
     if create and not os.path.exists(path):
         try:
             os.makedirs(path, mode=0o700, exist_ok=True)
@@ -5951,7 +5951,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 if order_id is not None and opened.get("orderId") != order_id:
                     return _finish_preflight_terminal(
                         repo_detail,
-                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-reused",
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": dispatch_outcome.DETAIL_RUN_DIR_REUSED,
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=opened.get("argv") or [], engine=engine,
                     )
@@ -6022,7 +6023,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 return _finish_preflight_terminal(
                     repo_detail,
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                     "detail": "run-dir-not-empty-unopened",
+                     "detail": dispatch_outcome.DETAIL_RUN_DIR_NOT_EMPTY_UNOPENED,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, engine=engine,
                 )
@@ -6569,7 +6570,8 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 )
             if order_id is not None and opened.get("orderId") != order_id:
                 return _write_preflight_terminal(
-                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-reused",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": dispatch_outcome.DETAIL_RUN_DIR_REUSED,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
@@ -6673,7 +6675,8 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
 
             if _run_dir_nonempty(run_dir_real):
                 return _write_preflight_terminal(
-                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-not-empty-unopened",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": dispatch_outcome.DETAIL_RUN_DIR_NOT_EMPTY_UNOPENED,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
