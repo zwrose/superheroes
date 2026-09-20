@@ -1190,6 +1190,53 @@ def test_main_copy_unaffected_by_ambient_git_routing(tmp_path, monkeypatch):
     assert result_dirty == result_clean
 
 
+def test_register_check_does_not_mutate_os_environ(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    register = repo / "register.md"
+    register.write_text(_tiny_register_text("Main copy."), encoding="utf-8")
+    _git_commit_all(repo, "main copy")
+    body = repo / "body.md"
+    body.write_text("> **R1 — Main copy.**\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_DIR", "/bogus/nonexistent/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/bogus/nonexistent")
+    before = dict(os.environ)
+    _check(register, body, "C1", register_copy=rc.REGISTER_COPY_MAIN)
+    assert dict(os.environ) == before
+
+
+def test_usage_error_without_register_reports_worktree_not_auto():
+    code, out, _err = _run_cli("--child", "C1")
+    assert code == rc.EXIT_UNDECIDED
+    payload = json.loads(out.strip())
+    assert payload["registerCopy"] == rc.REGISTER_COPY_WORKTREE
+
+
+def test_usage_error_rejects_unknown_register_copy_before_auto_normalization():
+    code, out, _err = _run_raw_cli("check", "--register-copy", "bogus")
+    assert code == rc.EXIT_UNDECIDED
+    payload = json.loads(out.strip())
+    assert payload["reason"] == rc.UNDECIDED_USAGE
+    assert payload["registerCopy"] == rc.REGISTER_COPY_WORKTREE
+    assert "bogus" in payload["detail"]
+
+
+def test_auto_selects_main_when_git_unavailable(tmp_path, monkeypatch):
+    import store_core
+
+    register = _tiny_register(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
+
+    def boom(*_args, **_kwargs):
+        raise store_core.RepoRootUnavailable("git down", git_status=store_core.GIT_UNAVAILABLE)
+
+    monkeypatch.setattr(rc.store_core, "repo_root", boom)
+    result = _check(register, body, "C1")
+    assert result["registerCopy"] == rc.REGISTER_COPY_MAIN
+
+
 def test_register_copy_fields_on_every_result_path(tmp_path):
     register = _tiny_register(tmp_path)
     pass_body = tmp_path / "pass.md"

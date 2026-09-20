@@ -17,7 +17,7 @@ path containment, branch-only ref resolution, and ambient git-routing isolation.
 |---|---|---|---|---|
 | E1 | register_check.py `_rel_path_in_repo` realpath | symlinked ancestor must not read as outside repo | `test_main_copy_symlinked_ancestor_matches_real_path` | proven |
 | E2 | register_check.py `_resolve_main_ref` fq branch refs | branch `main` must win over tag `main` | `test_main_copy_grades_branch_not_tag_when_both_named_main` | proven |
-| E3 | register_check.py `_isolated_git_routing_env` + `_git_env` | ambient GIT_* must not re-route main read | `test_main_copy_unaffected_by_ambient_git_routing` | proven |
+| E3 | register_check.py `_resolve_main_ref` explicit `env=` | ambient GIT_* must not re-route main read | `test_main_copy_unaffected_by_ambient_git_routing` | proven |
 
 ---
 
@@ -158,28 +158,21 @@ FAILED plugins/superheroes/lib/tests/test_register_check.py::test_main_copy_grad
 
 ## E3 — ambient GIT_* must not re-route main read
 
-**neutralization** (`plugins/superheroes/lib/register_check.py`):
+Supersedes the prior two-mechanism neutralization (`_git_env` scrub call plus
+`_isolated_git_routing_env` body): deliverable 3 removed the context manager; the single guard is
+the explicit child environment passed to `run_git_result`.
+
+**neutralization** (`plugins/superheroes/lib/register_check.py` `_resolve_main_ref`):
 ```
-    env = launch_ledger._scrub_env(os.environ)
-```
-→
-```
-    env = dict(os.environ)
-```
-and
-```
-    saved = {}
-    for key in launch_ledger._GIT_SCRUB_VARS:
-        if key in os.environ:
-            saved[key] = os.environ.pop(key)
-    try:
-        yield
-    finally:
-        os.environ.update(saved)
+        res = store_core.run_git_result(
+            repo_root, "rev-parse", "--verify", fq_ref, env=git_env,
+        )
 ```
 →
 ```
-    yield
+        res = store_core.run_git_result(
+            repo_root, "rev-parse", "--verify", fq_ref,
+        )
 ```
 
 **command:** `...::test_main_copy_unaffected_by_ambient_git_routing -q`
@@ -189,50 +182,27 @@ and
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _______________ test_main_copy_unaffected_by_ambient_git_routing _______________
-
-tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-2746/test_main_copy_unaffected_by_a0')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10210d2b0>
-
-    def test_main_copy_unaffected_by_ambient_git_routing(tmp_path, monkeypatch):
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_git_repo(repo)
-        register = repo / "register.md"
-        register.write_text(_tiny_register_text("Main copy."), encoding="utf-8")
-        _git_commit_all(repo, "main copy")
-        body = repo / "body.md"
-        body.write_text("> **R1 — Main copy.**\n", encoding="utf-8")
-        result_clean = _check(
-            register, body, "C1", register_copy=rc.REGISTER_COPY_MAIN,
-        )
-        monkeypatch.setenv("GIT_DIR", "/bogus/nonexistent/.git")
-        monkeypatch.setenv("GIT_WORK_TREE", "/bogus/nonexistent")
-        result_dirty = _check(
-            register, body, "C1", register_copy=rc.REGISTER_COPY_MAIN,
-        )
-        assert result_clean["result"] == rc.RESULT_PASS
->       assert result_dirty == result_clean
-E       AssertionError: assert {'body': Posi...Ids': [], ...} == {'body': Posi...Ids': [], ...}
-E         
-E         Omitting 9 identical items, use -vv to show
-E         Differing items:
-E         {'result': 'undecided'} != {'result': 'pass'}
-E         {'registerRef': None} != {'registerRef': 'main'}
-E         {'requiredEntries': []} != {'requiredEntries': ['R1']}
-E         {'ok': False} != {'ok': True}...
-E         
-E         ...Full output truncated (5 lines hidden), use '-vv' to show
-
-plugins/superheroes/lib/tests/test_register_check.py:1190: AssertionError
+plugins/superheroes/lib/tests/test_register_check.py:1190: in test_main_copy_unaffected_by_ambient_git_routing
+    assert result_dirty == result_clean
+E   AssertionError: assert {'body': Posi...Ids': [], ...} == {'body': Posi...Ids': [], ...}
+E     
+E     Omitting 9 identical items, use -vv to show
+E     Differing items:
+E     {'quotedEntries': []} != {'quotedEntries': ['R1']}
+E     {'detail': "could not read register from main: no ref among origin/main, main exists for 'register.md'"} != {'detail': None}
+E     {'result': 'undecided'} != {'result': 'pass'}
+E     {'reason': 'register-unreadable'} != {'reason': None}...
+E     
+E     ...Full output truncated (5 lines hidden), use '-vv' to show
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_register_check.py::test_main_copy_unaffected_by_ambient_git_routing
-1 failed in 0.39s
+1 failed in 0.69s
 ```
 
-**restore:** reverted both neutralizations (quoted left-hand sides under **neutralization**).
+**restore:** reverted the neutralization (quoted left-hand side under **neutralization**).
 
 **raw green** after restore:
 ```
 .                                                                        [100%]
-1 passed in 0.38s
+1 passed in 0.58s
 ```

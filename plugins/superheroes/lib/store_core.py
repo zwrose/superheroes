@@ -259,13 +259,16 @@ def git_dot_entry_ancestor(cwd):
         path = parent
 
 
-def run_git_result(cwd, *args):
+def run_git_result(cwd, *args, env=None):
     """`run_git` plus WHY there is no output (issue #699 rider 11).
 
     ``GIT_DECLINED`` means git ran and answered no — callers may believe it. ``GIT_UNAVAILABLE``
     means git never ran (missing binary, OSError, timeout), so a caller that would otherwise fall
     back to a default must fail closed instead: it has no answer, not a negative one."""
-    env = dict(os.environ)
+    if env is None:
+        env = dict(os.environ)
+    else:
+        env = dict(env)
     env["LC_ALL"] = "C"
     env["LANGUAGE"] = "C"  # stderr messages only; path output is locale-independent
     try:
@@ -278,19 +281,24 @@ def run_git_result(cwd, *args):
     return GitResult(r.stdout.strip(), GIT_OK, None)
 
 
-def run_git(cwd, *args):
+def run_git(cwd, *args, env=None):
     """Run git with an argv array + timeout. Return stdout (stripped) or None.
     Thin wrapper over `run_git_result` — see it for the failure distinction."""
-    return run_git_result(cwd, *args).out
+    if env is None:
+        return run_git_result(cwd, *args).out
+    return run_git_result(cwd, *args, env=env).out
 
 
-def get_remote_result(cwd):
+def get_remote_result(cwd, env=None):
     """``get_remote`` plus WHY there is no remote — (normalized_remote, status).
 
     ``status`` is the ``run_git_result`` status: ``GIT_OK``/``GIT_DECLINED`` are authoritative
     answers a caller may cache; ``GIT_UNAVAILABLE`` means git never ran, so the "no remote" is
     unknown, not negative, and must never be memoized as fact."""
-    res = run_git_result(cwd, "remote", "get-url", "origin")
+    if env is None:
+        res = run_git_result(cwd, "remote", "get-url", "origin")
+    else:
+        res = run_git_result(cwd, "remote", "get-url", "origin", env=env)
     return normalize_remote(res.out), res.status
 
 
