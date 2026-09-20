@@ -85,7 +85,10 @@ git still registers, refuses the launch rather than being reused. **When the pre
 (`premise-stack-fields-incomplete`, `premise-stack-field-invalid`); optional `layersPlanned` requires
 both and must be a positive integer at least `layerPosition`
 (`premise-stack-layers-planned-incomplete`, `premise-stack-layers-planned-invalid`,
-`premise-stack-layers-planned-under-position`); for `layerPosition >= 2`, launch refuses unless the
+`premise-stack-layers-planned-under-position`) — the pair check runs first, so
+`premise-stack-layers-planned-incomplete` fires only when `layersPlanned` is supplied and **both**
+pair keys are absent, while exactly one pair key present, with or without `layersPlanned`, refuses as
+`premise-stack-fields-incomplete`; for `layerPosition >= 2`, launch refuses unless the
 resolved base commit is the current head of the stack member at position `layerPosition - 1`
 (`base-not-layer-head`, `stack-read-unavailable`, `order-mismatch`, `layer-position-occupied`). **`launch` also refuses a
 `CLAUDE_CONFIG_DIR` pin that is not the calling seat's own instance** (`launch-foreign-instance-pin`

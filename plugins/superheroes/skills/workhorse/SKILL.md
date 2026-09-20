@@ -356,9 +356,11 @@ and each of the three is established from the **remote**, never from a local ass
 - **Size is reported at 300 and the call is handed up at 600** ([review-discipline.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md) § Review bars and recorded residuals) — a layer growing past the bars is split into another layer rather than
   allowed to swallow two surfaces.
 - **Never hand-rebase and never force-push a layer inside a lane** — both move a head other layers and the
-  review are pinned to; take in a moved base or a moved lower layer **by merge** (`gh pr update-branch`,
-  bottom-up), which keeps your own commits — the moved head still takes a fresh remote-head check, CI
-  on the new sha, and a receipt naming it; GitHub's cascading rebase is the disclosed alternative when a
+  review are pinned to; take in a moved base or a moved lower layer **by merge** — a **local `--no-ff`
+  merge of the layer below, pushed plainly**, bottom-up, never `gh pr update-branch`, which was
+  **observed** to refuse a stacked pull request with a 403 (PR #1354, 2026-09-20 — a field
+  observation, not a documented GitHub rule) — which keeps your own commits; the moved head still
+  takes a fresh remote-head check, CI on the new sha, and a receipt naming it; GitHub's cascading rebase is the disclosed alternative when a
   merge cannot resolve the conflict, and it rewrites every commit above the change, so those layers'
   receipts are re-taken in full
   ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack stays current).
