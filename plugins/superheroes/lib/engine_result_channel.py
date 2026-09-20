@@ -807,10 +807,9 @@ def native_review_payload_shape(detail, envelope=None, branch=None, echo_nonce=N
             # kind whose key is merely present-but-null. Narrow to kinds whose own payload key
             # actually carries a value, so a genuinely single-kind branch is diagnosed as one
             # kind instead of falling into the both-payload-keys ambiguity case.
-            populated_key = {"findings": "findings", "verdicts": "verdicts", "grouping": "grouping"}
             matched = [
                 k for k in matched
-                if k not in populated_key or branch.get(populated_key[k]) is not None
+                if ea.review_payload_carried(branch, k)[0]
             ]
             top_keys, keys_truncated = ea._bound_top_level_keys(branch)
             if len(matched) > 1:

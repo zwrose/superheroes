@@ -794,6 +794,49 @@ def test_verdict_reason_required_in_contract_and_schema():
     assert ok
 
 
+def _malformed_ruling_branch_with_spurious_findings_list():
+    """Ruling branch that structurally matches findings via a spurious empty list."""
+    contract, reason = PC.payload_contract(PC.P_AUDITS)
+    assert reason is None
+    ruling_val = contract["enums"]["ruling"][0]
+    return {
+        "resultKind": "ruling",
+        "findings": [],
+        "verdicts": None,
+        "investigated": ["path/to/file.py"],
+        "id": "audit-seat",
+        "ruling": ruling_val,
+        "reason": "grounds",
+    }
+
+
+def test_native_branch_narrowing_consults_payload_key_home_for_ruling():
+    # axis: ruling is narrowed like every other kind — not exempt by omission
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/c14_l3a_h_payload_key_home.md
+    branch = _malformed_ruling_branch_with_spurious_findings_list()
+    assert "ruling" in EA._recognised_review_kinds(branch)
+    assert "findings" in EA._recognised_review_kinds(branch)
+    shape = ERC.native_review_payload_shape(
+        "native-result-schema-invalid", branch=branch)
+    assert shape["parsed"] != EA.SHAPE_OBJECT_BOTH_PAYLOAD_KEYS
+    assert len([
+        k for k in EA._recognised_review_kinds(branch)
+        if EA.review_payload_carried(branch, k)[0]
+    ]) == 1
+
+
+def test_native_branch_narrowing_null_payload_key_not_carried():
+    # axis: present-but-null payload keys for covered kinds stop matching
+    branch = _valid_review_branch("ruling")
+    assert "verdicts" in EA._recognised_review_kinds(branch)
+    assert EA.review_payload_carried(branch, "verdicts") == (False, None)
+    narrowed = [
+        k for k in EA._recognised_review_kinds(branch)
+        if EA.review_payload_carried(branch, k)[0]
+    ]
+    assert "verdicts" not in narrowed
+
+
 def test_engine_output_byte_cap_single_home():
     # axis: ENGINE_OUTPUT_MAX_BYTES is the single literal home for the 8 MiB cap
     home = EA.ENGINE_OUTPUT_MAX_BYTES
