@@ -461,27 +461,19 @@ def test_claude_probe_background_mode_without_native_result_fails_overall(tmp_pa
 
 
 def test_claude_probe_green_as_far_as_the_injected_seam_can_reach(tmp_path, monkeypatch):
-    """Push the claude two-mode aggregation as close to all-green as the test harness allows,
-    and disclose in one place why it cannot go further — rather than a renamed test whose name
-    still implies full green-path coverage it does not have.
+    """Push the claude two-mode aggregation as close to all-green as this harness setup allows
+    without also supplying background telemetry.
 
     print's three legs pass exactly as in the all-green single-mode tests above. background can
     be fed a schema-valid `StructuredOutput` transcript row (the shape
     `engine_adapter.claude_transcript_result` reads — see
     `test_claude_telemetry_absent_when_only_the_structured_output_call` above for the same
-    shape), and `_materialize_stdout_result` genuinely writes a valid native result file for it.
-    Even so, background's resultProduction still reads `native-result-missing`: for
-    RESULT_DELIVERY_TRANSCRIPT, `_stdout_delivery_gate` (engine_dispatch.py) requires
-    `ended["transcriptResult"] == "materialized"`, but the injected `run_engine` seam
-    (`_execute_injected_attempt`) always stamps the materialization outcome onto
-    `ended["stdoutResult"]` regardless of delivery kind — it never sets `transcriptResult`. So
-    the gate refuses admission no matter what the transcript contains. background's
-    progressTelemetry has the same shape of gap: engagement there is read from
-    `ended["transcriptToolCalls"]`, a field only the REAL `_run_engine_files_background`
-    transcript poller ever populates, never `_execute_injected_attempt`.
-    Both are seam gaps in test plumbing, not in the code under test, and neither is a finding
-    this round is scoped to fix — they are recorded here so a full-green claude probe test is
-    never silently implied by a renamed passing test.
+    shape), and `_materialize_stdout_result` genuinely writes a valid native result file for it;
+    `_execute_injected_attempt` now stamps that outcome on `transcriptResult` and records
+    `transcriptToolCalls` from the transcript rows, so background's resultProduction passes.
+    This setup still omits a non-StructuredOutput tool call in the background transcript, so
+    progressTelemetry stays `telemetry-absent` — see `test_claude_probe_all_green_both_modes`
+    for the full both-mode green path.
     """
     home = tmp_path / "home"
     home.mkdir()
@@ -502,7 +494,7 @@ def test_claude_probe_green_as_far_as_the_injected_seam_can_reach(tmp_path, monk
         "type": "assistant",
         "message": {"content": [{
             "type": "tool_use", "id": "so1", "name": "StructuredOutput",
-            "input": _native_verdicts_branch(),
+            "input": {"result": _native_verdicts_branch()},
         }]},
     })
 
@@ -521,14 +513,65 @@ def test_claude_probe_green_as_far_as_the_injected_seam_can_reach(tmp_path, monk
     for leg_name in CP._LEG_NAMES:
         assert payload["modeLegs"]["print"][leg_name]["ok"] is True, leg_name
     assert payload["modeLegs"]["background"]["completionDetection"]["ok"] is True
-    # The two legs the injected seam cannot turn green (see docstring) — both read from a
-    # journal field `_execute_injected_attempt` never populates for transcript delivery:
-    assert payload["modeLegs"]["background"]["resultProduction"]["ok"] is False
-    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == "native-result-missing"
+    assert payload["modeLegs"]["background"]["resultProduction"]["ok"] is True
     assert payload["modeLegs"]["background"]["progressTelemetry"]["ok"] is False
     assert payload["modeLegs"]["background"]["progressTelemetry"]["detail"] == "telemetry-absent"
     assert payload["ok"] is False
+    assert payload["legs"]["resultProduction"]["ok"] is True
+    assert payload["legs"]["progressTelemetry"]["ok"] is False
+    assert payload["legs"]["progressTelemetry"]["detail"] == "background: telemetry-absent"
     assert code == 1
+
+
+def test_claude_probe_all_green_both_modes(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    structured = {"result": _native_verdicts_branch()}
+    print_stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
+    background_lines = [
+        json.dumps({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use", "id": "tool-0", "name": "Glob", "input": {},
+            }]},
+        }),
+        json.dumps({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use", "id": "so1", "name": "StructuredOutput",
+                "input": {"result": _native_verdicts_branch()},
+            }]},
+        }),
+        json.dumps({"type": "user", "toolEndsTurn": True}),
+    ]
+    background_stdout = "\n".join(background_lines) + "\n"
+
+    def print_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return print_stdout, False, 0, ""
+
+    def background_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return background_stdout, False, 0, ""
+
+    fake = FakeRunner([print_runner, background_runner], sync_native=False)
+    payload, code, stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert payload["probedModes"] == ["print", "background"]
+    for mode in ("print", "background"):
+        for leg_name in CP._LEG_NAMES:
+            assert payload["modeLegs"][mode][leg_name]["ok"] is True, (mode, leg_name)
+    for leg_name in CP._LEG_NAMES:
+        assert payload["legs"][leg_name]["ok"] is True, leg_name
+    assert payload["ok"] is True
+    assert code == 0
+    assert stderr is None
 
 
 def test_result_production_fails_on_claude_native_schema_invalid(tmp_path, monkeypatch):
@@ -1128,6 +1171,61 @@ def test_probe_refuses_reused_run_dir_with_folded_result(tmp_path):
     )
     assert code2 == 1
     assert payload2["legs"]["resultProduction"]["detail"] == "default: run-dir-reused"
+
+
+def test_claude_probe_refuses_reused_background_before_any_mode_dispatches(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    seed_run = tmp_path / "seed-run"
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "print").mkdir()
+    structured = {"result": _native_verdicts_branch()}
+    print_stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
+    background_lines = [
+        json.dumps({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use", "id": "tool-0", "name": "Glob", "input": {},
+            }]},
+        }),
+        json.dumps({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use", "id": "so1", "name": "StructuredOutput",
+                "input": {"result": _native_verdicts_branch()},
+            }]},
+        }),
+        json.dumps({"type": "user", "toolEndsTurn": True}),
+    ]
+    background_stdout = "\n".join(background_lines) + "\n"
+
+    def print_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return print_stdout, False, 0, ""
+
+    def background_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return background_stdout, False, 0, ""
+
+    seed = FakeRunner([print_runner, background_runner], sync_native=False)
+    payload1, code1, _ = CP.probe(
+        "claude", repo_root=repo, run_dir=str(seed_run), timeout=30, run_engine=seed,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert code1 == 0
+    shutil.copytree(seed_run / "background", run_dir / "background")
+    fake = FakeRunner([(print_stdout, False, 0, "")])
+    payload2, code2, _ = CP.probe(
+        "claude", repo_root=repo, run_dir=str(run_dir), timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert len(fake.calls) == 0
+    assert code2 == 1
+    assert payload2["modeLegs"]["print"]["resultProduction"]["detail"] == "run-dir-reused"
+    assert payload2["modeLegs"]["background"]["resultProduction"]["detail"] == "run-dir-reused"
 
 
 def test_probe_run_dir_setup_failure_never_raises(tmp_path, monkeypatch):

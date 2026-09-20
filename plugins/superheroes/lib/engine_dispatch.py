@@ -4105,7 +4105,21 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         "activitySource": "injected-seam",
     }
     if stdout_result is not None:
-        ended["stdoutResult"] = stdout_result
+        try:
+            delivery = engine_result_channel.result_delivery(
+                opened.get("engine"), opened.get("claudeMode"),
+            )
+        except (engine_result_channel.UnknownEngineError, ValueError):
+            delivery = None
+        if delivery == engine_result_channel.RESULT_DELIVERY_TRANSCRIPT:
+            ended["transcriptResult"] = stdout_result
+            rows = _read_transcript_rows(stdout_path)
+            if rows is not None and engine_adapter.claude_transcript_turn_ended(rows):
+                tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
+                if tool_calls is not None:
+                    ended["transcriptToolCalls"] = tool_calls
+        else:
+            ended["stdoutResult"] = stdout_result
     if timed_out:
         ended["timeoutAt"] = timeout_deadline_wall
     _journal_append(run_dir_real, ended)
