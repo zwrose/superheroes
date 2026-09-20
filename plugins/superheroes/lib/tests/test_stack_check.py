@@ -576,11 +576,30 @@ def test_e28_stack_entry_null():
 # --- register E29-E31: order-mismatch -------------------------------------------
 
 
-def test_e29_collected_count_or_positions_mismatch():
+def test_e33_collected_count_not_equal_stack_size():
     page = _pull_request(nodes=[_member(1), _member(2)], has_next_page=False, stack_size=5)
     run, _calls = _make_run({_argv_page(PR, 2): _graphql_ok(page)})
     result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
     _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert result["detail"] == "collected member count does not equal stack size"
+
+
+def test_e34_collected_positions_not_one_to_size():
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR), _member(3)],
+        has_next_page=False,
+        stack_size=2,
+        head_ref_name="branch-1",
+        head_ref_oid="oid1",
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    run, _calls = _make_run({_argv_page(PR, 2): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert result["detail"] == "collected positions are not exactly 1..size"
 
 
 def test_e30_collected_positions_not_exact():
@@ -598,6 +617,7 @@ def test_e30_collected_positions_not_exact():
     run, _calls = _make_run({_argv_page(PR, 2): _graphql_ok(page)})
     result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
     _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert result["detail"] == "collected positions are not exactly 1..size"
 
 
 def test_e30_queried_pr_not_at_reported_position():
