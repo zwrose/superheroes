@@ -1220,6 +1220,22 @@ def test_usage_error_rejects_unknown_register_copy_before_auto_normalization():
     assert payload["reason"] == rc.UNDECIDED_USAGE
     assert payload["registerCopy"] == rc.REGISTER_COPY_WORKTREE
     assert "bogus" in payload["detail"]
+    assert "invalid choice" in payload["detail"]
+
+
+def test_usage_error_good_register_copy_records_usage_path(tmp_path):
+    register = _tiny_register(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
+    code, out, _err = _run_cli(
+        "--register", str(register),
+        "--body-file", str(body),
+        "--child", "C1",
+        "--register-copy", "worktree",
+    )
+    assert code == rc.EXIT_PASS
+    payload = json.loads(out.strip())
+    assert payload["registerCopy"] == rc.REGISTER_COPY_WORKTREE
 
 
 def test_auto_selects_main_when_git_unavailable(tmp_path, monkeypatch):

@@ -921,12 +921,7 @@ def main(argv=None):
     parser._usage_paths["child"] = _peek_argv_value(argv, "--child")
     parser._usage_paths["register"] = _peek_argv_value(argv, "--register")
     register_copy_peek = _peek_argv_value(argv, "--register-copy")
-    if register_copy_peek is not None:
-        if register_copy_peek not in REGISTER_COPY_MODES:
-            parser.error(
-                "argument --register-copy: invalid choice: %r (choose from %s)"
-                % (register_copy_peek, ", ".join(sorted(REGISTER_COPY_MODES)))
-            )
+    if register_copy_peek in REGISTER_COPY_MODES:
         parser._usage_paths["register_copy"] = register_copy_peek
     parser._usage_paths["body"] = _peek_argv_value(argv, "--body-file")
     sub = parser.add_subparsers(dest="cmd")
