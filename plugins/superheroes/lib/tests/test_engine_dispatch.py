@@ -3544,42 +3544,71 @@ def test_native_write_timeout_with_valid_result_admits(tmp_path, monkeypatch):
     assert grade["admittedAfterTimeout"] is True
 
 
-# axis: a native write result written during the SIGTERM/SIGKILL grace window — i.e. AFTER the
-# wall-cap deadline, not before it — must be rejected, not silently admitted as a clean success.
-def test_native_write_timeout_result_written_after_deadline_rejected(tmp_path, monkeypatch):
+# axis: a native write result whose completion stamp is after the monotonic deadline must be
+# rejected, not silently admitted as a clean success.
+def test_native_write_timeout_result_written_after_deadline_rejected(tmp_path):
     native_write = _native_write_result_json()
-    script = (
-        "import signal, sys, time\n"
-        "_path = None\n"
-        "args = sys.argv[1:]\n"
-        "for i, arg in enumerate(args):\n"
-        "    if arg == '-o' and i + 1 < len(args):\n"
-        "        _path = args[i + 1]\n"
-        "        break\n"
-        "def _write_after_term(signum, frame):\n"
-        "    if _path:\n"
-        "        open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
-        "signal.signal(signal.SIGTERM, _write_after_term)\n"
-        "while True:\n"
-        "    time.sleep(0.02)\n"
-        % native_write
+    payload = json.loads(native_write)
+    deadline_mono = 10.0
+    run_dir, state, _ended = _codex_native_write_grade_state(
+        tmp_path, str(tmp_path / "after-deadline"),
+        ended_overrides=_ended_with_completion_stamp(
+            payload,
+            complete_at=deadline_mono + 1.0,
+            deadline_mono=deadline_mono,
+            exit=1,
+            timedOut=True,
+            timeoutAt=1000.0,
+            at=time.time(),
+            capSeconds=1,
+        ),
+        payload=payload,
     )
-    run_dir, state, ended = _run_codex_native_write_timeout_script(
-        tmp_path, monkeypatch, script,
-    )
-    assert ended["timedOut"] is True
-    assert ended.get("timeoutAt") is not None
     result_path = ED._native_result_path(run_dir, 1)
-    assert os.path.isfile(result_path)
-    assert os.stat(result_path).st_mtime > ended["timeoutAt"]
+    with open(result_path, "w", encoding="utf-8") as fh:
+        fh.write(native_write + "\n")
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade.get("ok") is not True
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "timeout-native-result-unadmitted"
-    assert grade.get("admissionDetail") == "native-result-after-timeout"
+    assert grade.get("admissionDetail") == "result-completion-after-deadline"
 
 
-def _codex_native_write_grade_state(tmp_path, run_dir, *, ended_overrides=None):
+def _journal_test_attempt_ended(run_dir, attempt, ended):
+    ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": attempt, **ended})
+
+
+def _ended_with_completion_stamp(payload, *, complete_at=1.0, deadline_mono=None, **ended_base):
+    ended = dict(ended_base)
+    if isinstance(payload, dict):
+        payload = ED._scrub_native_payload(payload)
+    digest = ERC.canonical_payload_digest(payload)
+    ended.update(ERC.completion_stamp(complete_at, digest))
+    if deadline_mono is not None:
+        ended.update(ERC.deadline_stamp(deadline_mono))
+    return ended
+
+
+def _stamp_ended_from_native_result(run_dir, ended, attempt=1):
+    result_path = ED._native_result_path(run_dir, attempt)
+    if not result_path or not os.path.isfile(result_path):
+        return ended
+    try:
+        with open(result_path, encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return ended
+    if isinstance(payload, dict):
+        payload = ED._scrub_native_payload(payload)
+    digest = ERC.canonical_payload_digest(payload)
+    if digest is None:
+        return ended
+    out = dict(ended)
+    out.update(ERC.completion_stamp(1.0, digest))
+    return out
+
+
+def _codex_native_write_grade_state(tmp_path, run_dir, *, ended_overrides=None, payload=None):
     prompt_path = os.path.join(run_dir, "prompt.txt")
     os.makedirs(run_dir, exist_ok=True)
     open(prompt_path, "w").write("go\n")
@@ -3587,6 +3616,8 @@ def _codex_native_write_grade_state(tmp_path, run_dir, *, ended_overrides=None):
     _journal_codex_run_for_engine_files(
         run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
     )
+    if payload is None:
+        payload = json.loads(_native_write_result_json())
     records, _ = ED._journal_read(run_dir)
     state = ED._journal_state(records)
     ended = {
@@ -3595,28 +3626,37 @@ def _codex_native_write_grade_state(tmp_path, run_dir, *, ended_overrides=None):
     }
     if ended_overrides:
         ended.update(ended_overrides)
+    _journal_test_attempt_ended(run_dir, 1, ended)
     state["attempts"][1] = {"ended": ended}
     return run_dir, state, ended
 
 
-# axis: a native result written after the recorded cap but before the poll instant is refused.
+# axis: a native result whose completion stamp is after the monotonic deadline is refused.
 def test_native_write_timeout_poll_gap_result_after_cap_refused(tmp_path):
-    run_dir = str(tmp_path / "poll-gap")
-    timeout_at = 1000.0
-    poll_at = 1000.25
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    deadline_mono = 10.0
     run_dir, state, _ended = _codex_native_write_grade_state(
-        tmp_path, run_dir,
-        ended_overrides={"timeoutAt": timeout_at, "at": poll_at},
+        tmp_path, str(tmp_path / "poll-gap"),
+        ended_overrides=_ended_with_completion_stamp(
+            payload,
+            complete_at=deadline_mono + 0.5,
+            deadline_mono=deadline_mono,
+            exit=1,
+            timedOut=True,
+            timeoutAt=1000.0,
+            at=1000.25,
+            capSeconds=1,
+        ),
+        payload=payload,
     )
     result_path = ED._native_result_path(run_dir, 1)
-    gap_mtime = timeout_at + 0.05
     with open(result_path, "w", encoding="utf-8") as fh:
-        fh.write(_native_write_result_json() + "\n")
-    os.utime(result_path, (gap_mtime, gap_mtime))
+        fh.write(native_write + "\n")
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "timeout-native-result-unadmitted"
-    assert grade.get("admissionDetail") == "native-result-after-timeout"
+    assert grade.get("admissionDetail") == "result-completion-after-deadline"
     assert grade.get("ok") is not True
 
 
@@ -3643,58 +3683,33 @@ def test_native_write_timeout_at_is_cap_not_poll_time(tmp_path, monkeypatch):
     assert ended["at"] - ended["timeoutAt"] >= 2.0
 
 
-# axis: P2 background timeout records timeoutAt and refuses a native result written after it.
-def test_background_timeout_records_timeout_at_and_rejects_late_native_write(
-    tmp_path, monkeypatch,
-):
-    cfg, launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-write-timeout")
-    os.makedirs(run_dir)
-    prompt_path = os.path.join(run_dir, "prompt.txt")
-    open(prompt_path, "w").write("go\n")
-    seat = _codex_seat(role=_WRITE_ROLE)
-    argv = _codex_argv_for_run(seat, "build", run_dir)
-    argv, native_err, native_schema_path = ED._open_native_channel_argv(
-        run_dir, "codex", list(argv), ED.RUN_KIND_WRITE,
+# axis: P2 background timeout records timeoutAt and refuses a native result stamped after it.
+def test_background_timeout_records_timeout_at_and_rejects_late_native_write(tmp_path):
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    deadline_mono = 10.0
+    run_dir, state, ended = _codex_native_write_grade_state(
+        tmp_path, str(tmp_path / "bg-write-timeout"),
+        ended_overrides=_ended_with_completion_stamp(
+            payload,
+            complete_at=deadline_mono + 1.0,
+            deadline_mono=deadline_mono,
+            exit=1,
+            timedOut=True,
+            timeoutAt=1000.0,
+            at=time.time(),
+            capSeconds=30,
+        ),
+        payload=payload,
     )
-    assert native_err is None, native_err
-    opened = {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
-        "roleKind": "build", "orderId": "bg-timeout-test", "argv": argv,
-        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "channel": ERC.CHANNEL_NATIVE, "configDir": cfg,
-        "supervisorPid": 1, "at": time.time(),
-        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
-    }
-    if native_schema_path is not None:
-        opened["nativeSchemaPath"] = native_schema_path
-    ED._journal_append(run_dir, opened)
-    cap = opened["timeout"]
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
-    progress_path = os.path.join(run_dir, "progress.jsonl")
-    native_result_path = ED._native_result_path(run_dir, 1)
-    ED._run_engine_files_background(
-        run_dir, 1, opened, list(argv), run_dir, prompt_path,
-        stdout_path, stderr_path, cap, progress_path, native_result_path,
-        resume_launch_id=launch_id, resume_session_id=session_id,
-        prior_wall_seconds=cap,
-    )
-    ended = _bg_attempt_ended(run_dir)
     assert ended["timedOut"] is True
     assert isinstance(ended["timeoutAt"], (int, float))
-    with open(native_result_path, "w", encoding="utf-8") as fh:
-        fh.write(_native_write_result_json() + "\n")
-    late_mtime = ended["timeoutAt"] + 0.05
-    os.utime(native_result_path, (late_mtime, late_mtime))
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        fh.write(native_write + "\n")
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "timeout-native-result-unadmitted"
-    assert grade.get("admissionDetail") == "native-result-after-timeout"
+    assert grade.get("admissionDetail") == "result-completion-after-deadline"
     assert grade.get("ok") is not True
 
 
@@ -3732,29 +3747,41 @@ def test_injected_capture_timeout_records_timeout_at(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "timeout_at_value",
+    "deadline_overrides",
     [
-        pytest.param("missing", id="absent"),
-        pytest.param(None, id="none"),
-        pytest.param("not-a-number", id="non-numeric"),
+        pytest.param({}, id="absent"),
+        pytest.param({ERC.FIELD_DEADLINE_MONO: None}, id="none-deadline-mono"),
+        pytest.param({ERC.FIELD_DEADLINE_MONO: "not-a-number"}, id="non-numeric-deadline-mono"),
+        pytest.param(
+            {ERC.FIELD_DEADLINE_MONO: 10.0, ERC.FIELD_DEADLINE_EPOCH: ""},
+            id="empty-deadline-epoch",
+        ),
     ],
 )
 def test_timed_out_write_without_recorded_deadline_forfeits(
-    tmp_path, timeout_at_value,
+    tmp_path, deadline_overrides, request,
 ):
-    ended_overrides = {"timedOut": True}
-    if timeout_at_value != "missing":
-        ended_overrides["timeoutAt"] = timeout_at_value
-    run_dir = str(tmp_path / ("deadline-%s" % timeout_at_value))
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    ended_overrides = {
+        "timedOut": True,
+        "timeoutAt": 1000.0,
+        "exit": 1,
+        "at": time.time(),
+        "capSeconds": 1,
+    }
+    ended_overrides.update(deadline_overrides)
+    run_dir = str(tmp_path / request.node.callspec.id)
     run_dir, state, _ended = _codex_native_write_grade_state(
-        tmp_path, run_dir, ended_overrides=ended_overrides,
+        tmp_path, run_dir, ended_overrides=ended_overrides, payload=payload,
     )
     result_path = ED._native_result_path(run_dir, 1)
     with open(result_path, "w", encoding="utf-8") as fh:
-        fh.write(_native_write_result_json() + "\n")
+        fh.write(native_write + "\n")
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
-    assert grade.get("detail") == "timeout-deadline-unrecorded"
+    assert grade.get("detail") == "timeout-native-result-unadmitted"
+    assert grade.get("admissionDetail") == "timeout-deadline-unrecorded"
     assert grade.get("ok") is not True
 
 
@@ -4800,12 +4827,12 @@ def _manual_two_attempt_review_poll_fixture(tmp_path, run_dir):
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write(_VALID_FINDINGS_STDOUT)
     _sync_native_review_result_from_stdout(run_dir, _VALID_FINDINGS_STDOUT)
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "stdoutBytes": len(_VALID_FINDINGS_STDOUT), "wallSeconds": 1.0,
         "at": time.time(),
     })
+    ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 2, "childPid": 99999, "at": time.time(),
     })
@@ -4819,12 +4846,12 @@ def _manual_running_attempt1_ended_attempt2_live(tmp_path, run_dir):
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write(_VALID_FINDINGS_STDOUT)
     _sync_native_review_result_from_stdout(run_dir, _VALID_FINDINGS_STDOUT)
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "stdoutBytes": len(_VALID_FINDINGS_STDOUT), "wallSeconds": 1.0,
         "at": time.time(),
     })
+    ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     proc = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(120)"],
         start_new_session=True,
@@ -5575,11 +5602,11 @@ def _grade_state_with_view_meta(tmp_path, view_meta, *, omit_view_meta=False, ru
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "signal": None,
         "refusal": None, "at": time.time(), "wallSeconds": 1.0, "stdoutBytes": len(stdout),
     })
+    ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     records, _ = ED._journal_read(run_dir)
     state = ED._journal_state(records)
     patch_path = os.path.join(view["path"], "SUPERHEROES_REVIEW_DIFF.patch")
@@ -5638,11 +5665,11 @@ def test_grade_review_view_meta_config_path_rejects_config_only_investigation(tm
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "signal": None,
         "refusal": None, "at": time.time(), "wallSeconds": 1.0, "stdoutBytes": len(stdout),
     })
+    ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     records, _ = ED._journal_read(run_dir)
     state = ED._journal_state(records)
     patch_path = os.path.join(view["path"], "SUPERHEROES_REVIEW_DIFF.patch")
@@ -9599,10 +9626,19 @@ def test_grade_review_pr_body_payload_without_investigation_forfeit(tmp_path):
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
         fh.write(stdout)
     _sync_native_review_result_from_stdout(run_dir, stdout)
+    ended = _stamp_ended_from_native_result(run_dir, {
+        "exit": 0, "timedOut": False, "signal": None,
+        "refusal": None, "at": time.time(), "wallSeconds": 1.0, "stdoutBytes": len(stdout),
+    })
     records, _ = ED._journal_read(run_dir)
     for rec in records:
         if rec.get("kind") == "run-opened":
             rec["prBodySourcePath"] = os.path.join(str(tmp_path), "session", "pr-body.md")
+    records = [
+        rec for rec in records
+        if not (rec.get("kind") == "attempt-ended" and rec.get("attempt") == 1)
+    ]
+    records.append({"kind": "attempt-ended", "attempt": 1, **ended})
     path = ED._journal_path(run_dir)
     with open(path, "w", encoding="utf-8") as fh:
         for rec in records:
@@ -11567,8 +11603,9 @@ def _native_review_grade_state(
     write_result=True,
     write_schema=True,
     attempt=1,
+    run_name="run",
 ):
-    run_dir = str(tmp_path / "run")
+    run_dir = str(tmp_path / run_name)
     repo_root = _repo(tmp_path)
     os.makedirs(run_dir, exist_ok=True)
     if schema is None:
@@ -11599,17 +11636,23 @@ def _native_review_grade_state(
     }
     if expected_result_kind is not None:
         opened["expectedResultKind"] = expected_result_kind
+    ended = {
+        "exit": 0,
+        "timedOut": False,
+        "refusal": None,
+        "stdoutBytes": len(stdout),
+        "wallSeconds": 1.0,
+    }
+    if write_result:
+        envelope = _wrap_native_review_result(branch)
+        scrubbed = ED._scrub_native_payload(envelope)
+        ended.update(ERC.completion_stamp(1.0, ERC.canonical_payload_digest(scrubbed)))
+        _journal_test_attempt_ended(run_dir, attempt, ended)
     state = {
         "opened": opened,
         "attempts": {
             attempt: {
-                "ended": {
-                    "exit": 0,
-                    "timedOut": False,
-                    "refusal": None,
-                    "stdoutBytes": len(stdout),
-                    "wallSeconds": 1.0,
-                },
+                "ended": ended,
             },
         },
     }
@@ -11662,6 +11705,7 @@ def _execution_record_completed_attempt(
     }
     if ended_overrides:
         ended.update(ended_overrides)
+    ended = _stamp_ended_from_native_result(run_dir, ended, 1)
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
@@ -11754,6 +11798,10 @@ def _codex_native_runner(branch, stderr_tail=""):
     return runner
 
 
+def _opened_for_load_test():
+    return {"engine": "codex"}
+
+
 # axis: _load_native_result_json reads a regular file with O_NOFOLLOW open.
 def test_load_native_result_json_reads_regular_file(tmp_path):
     run_dir = str(tmp_path / "run")
@@ -11762,7 +11810,11 @@ def test_load_native_result_json_reads_regular_file(tmp_path):
     result_path = ED._native_result_path(run_dir, 1)
     with open(result_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh)
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    _journal_test_attempt_ended(
+        run_dir, 1,
+        _ended_with_completion_stamp(payload, exit=0, timedOut=False),
+    )
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert detail is None
     assert obj == payload
 
@@ -11775,7 +11827,7 @@ def test_load_native_result_json_refuses_symlink_to_valid_file(tmp_path):
     real_path.write_text('{"result": {"ok": true}}\n', encoding="utf-8")
     result_path = ED._native_result_path(run_dir, 1)
     os.symlink(str(real_path), result_path)
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert obj is None
     assert detail == "native-result-missing"
 
@@ -11786,7 +11838,7 @@ def test_load_native_result_json_fifo_returns_missing_without_blocking(tmp_path)
     os.makedirs(run_dir)
     result_path = ED._native_result_path(run_dir, 1)
     os.mkfifo(result_path)
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert obj is None
     assert detail == "native-result-missing"
 
@@ -11801,7 +11853,7 @@ def test_load_native_result_json_directory_and_dangling_symlink_are_missing(tmp_
         os.makedirs(result_path)
     else:
         os.symlink(str(tmp_path / "missing-target"), result_path)
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert obj is None
     assert detail == "native-result-missing"
 
@@ -11813,7 +11865,7 @@ def test_load_native_result_json_oversized(tmp_path):
     result_path = ED._native_result_path(run_dir, 1)
     with open(result_path, "wb") as fh:
         fh.write(b"x" * (ERC.NATIVE_RESULT_MAX_BYTES + 1))
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert obj is None
     assert detail == "native-result-oversized"
 
@@ -11834,7 +11886,7 @@ def test_load_native_result_json_oversized_by_read_length(tmp_path, monkeypatch)
         return os.stat_result(fields)
 
     monkeypatch.setattr(ED.os, "fstat", fake_fstat)
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert obj is None
     assert detail == "native-result-oversized"
 
@@ -11846,7 +11898,7 @@ def test_load_native_result_json_malformed_utf8_and_json(tmp_path):
     result_path = ED._native_result_path(run_dir, 1)
     with open(result_path, "wb") as fh:
         fh.write(b"\xff\xfe")
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert obj is None
     assert detail == "native-result-malformed"
 
@@ -11855,7 +11907,7 @@ def test_load_native_result_json_malformed_utf8_and_json(tmp_path):
     result_path2 = ED._native_result_path(run_dir2, 1)
     with open(result_path2, "w", encoding="utf-8") as fh:
         fh.write("not-json\n")
-    obj2, detail2 = ED._load_native_result_json(run_dir2, 1)
+    obj2, detail2 = ED._load_native_result_json(run_dir2, 1, _opened_for_load_test())
     assert obj2 is None
     assert detail2 == "native-result-malformed"
 
@@ -12084,9 +12136,17 @@ def test_grade_native_review_attempt_result_malformed_json(tmp_path):
 
 
 def test_grade_native_review_attempt_result_malformed_no_result_key(tmp_path):
-    run_dir, state = _native_review_grade_state(tmp_path, _native_review_branch("findings"))
+    run_dir, state = _native_review_grade_state(
+        tmp_path, _native_review_branch("findings"), write_result=False,
+    )
     with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
         json.dump({"findings": []}, fh)
+    ended = _stamp_ended_from_native_result(run_dir, {
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": 0, "wallSeconds": 1.0,
+    })
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    state["attempts"][1]["ended"] = ended
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "native-result-malformed"
@@ -12303,12 +12363,12 @@ def test_run_execution_record_native_parse_binding_survives_view_removal(tmp_pat
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "signal": None,
         "refusal": None, "at": time.time(),
         "wallSeconds": 1.0, "stdoutBytes": len(stream),
     })
+    ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     state = ED._journal_state(ED._journal_read(run_dir)[0])
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
@@ -12969,7 +13029,9 @@ def test_admit_native_review_semantic_guards_use_adapter_not_scrub_branch(tmp_pa
     assert grade.get("detail") == "native-result-malformed"
     placeholder = _native_review_branch("findings")
     placeholder["findings"][0]["id"] = EA.REVIEW_BASE_TEMPLATE_ID
-    run_dir2, state2 = _native_review_grade_state(tmp_path, placeholder)
+    run_dir2, state2 = _native_review_grade_state(
+        tmp_path, placeholder, run_name="run-placeholder",
+    )
     grade2 = ED._grade_review_attempt(run_dir2, state2, 1)
     assert grade2.get("forfeit") is True
     assert grade2.get("detail") == "native-result-malformed"
@@ -16244,4 +16306,331 @@ def test_supervise_bg_budget_exhaustion_carries_deadline_not_completion(tmp_path
     assert ERC.FIELD_DEADLINE_EPOCH in ended
     for key in _COMPLETION_KEYS:
         assert key not in ended
+
+
+# --- admission completion window (#1273 WO-C) ---
+
+
+def _write_payload_obj():
+    return json.loads(_native_write_result_json())
+
+
+def _review_payload_envelope():
+    return _wrap_native_review_result(_native_review_branch("findings"))
+
+
+def _write_admission_codex_argv(tmp_path, ended, payload):
+    run_dir = str(tmp_path / "write-argv")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    os.makedirs(run_dir, exist_ok=True)
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, separators=(",", ":"))
+        fh.write("\n")
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+def _write_admission_cursor_prompt(tmp_path, ended, payload):
+    run_dir = str(tmp_path / "write-prompt")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    os.makedirs(run_dir, exist_ok=True)
+    open(prompt_path, "w").write("go\n")
+    seat = _cursor_seat(role=_WRITE_ROLE)
+    _journal_cursor_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, separators=(",", ":"))
+        fh.write("\n")
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+def _write_admission_claude_stdout(tmp_path, monkeypatch, ended, payload):
+    run_dir = str(tmp_path / "write-stdout")
+    os.makedirs(run_dir)
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = {"vendor": "claude", "model": "sonnet", "effort": "high", "role": "build"}
+    argv = _claude_argv_for_run(seat, "build", run_dir)
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "claude", list(argv), ED.RUN_KIND_WRITE,
+    )
+    assert native_err is None, native_err
+    record = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "claude",
+        "roleKind": "build", "orderId": "admission-write-stdout",
+        "argv": argv, "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "configDir": cfg,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    if native_schema_path is not None:
+        record["nativeSchemaPath"] = native_schema_path
+    ED._journal_append(run_dir, record)
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, separators=(",", ":"))
+        fh.write("\n")
+    ended = dict(ended, stdoutResult="materialized")
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+def _review_admission_codex_argv(tmp_path, ended, envelope):
+    branch = envelope["result"]
+    run_dir, state = _native_review_grade_state(tmp_path, branch, write_result=False)
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, separators=(",", ":"))
+        fh.write("\n")
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+def _review_admission_cursor_prompt(tmp_path, ended, envelope):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "review-prompt")
+    _plant_native_cursor_review_journal(tmp_path, run_dir, repo_root)
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, separators=(",", ":"))
+        fh.write("\n")
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+def _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "review-stdout")
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    _plant_claude_review_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, separators=(",", ":"))
+        fh.write("\n")
+    ended = dict(ended, stdoutResult="materialized")
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+def _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "review-transcript")
+    cfg, _launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
+    _plant_claude_background_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, separators=(",", ":"))
+        fh.write("\n")
+    ended = dict(ended, transcriptResult="materialized", transcriptToolCalls=0)
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+_WRITE_ADMISSION_DELIVERIES = ("argv", "prompt", "stdout")
+_REVIEW_ADMISSION_DELIVERIES = ("argv", "prompt", "stdout", "transcript")
+
+
+@pytest.mark.parametrize("delivery", _WRITE_ADMISSION_DELIVERIES)
+def test_write_admission_complete_before_deadline_admits(tmp_path, delivery, monkeypatch):
+    payload = _write_payload_obj()
+    ended = _ended_with_completion_stamp(
+        payload, complete_at=5.0, deadline_mono=10.0,
+        exit=1, timedOut=True, timeoutAt=1000.0,
+    )
+    if delivery == "argv":
+        run_dir, state = _write_admission_codex_argv(tmp_path, ended, payload)
+    elif delivery == "prompt":
+        run_dir, state = _write_admission_cursor_prompt(tmp_path, ended, payload)
+    else:
+        run_dir, state = _write_admission_claude_stdout(tmp_path, monkeypatch, ended, payload)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("admittedAfterTimeout") is True
+
+
+@pytest.mark.parametrize("delivery", _WRITE_ADMISSION_DELIVERIES)
+def test_write_admission_complete_after_deadline_forfeits(tmp_path, delivery, monkeypatch):
+    payload = _write_payload_obj()
+    ended = _ended_with_completion_stamp(
+        payload, complete_at=11.0, deadline_mono=10.0,
+        exit=1, timedOut=True, timeoutAt=1000.0,
+    )
+    if delivery == "argv":
+        run_dir, state = _write_admission_codex_argv(tmp_path, ended, payload)
+    elif delivery == "prompt":
+        run_dir, state = _write_admission_cursor_prompt(tmp_path, ended, payload)
+    else:
+        run_dir, state = _write_admission_claude_stdout(tmp_path, monkeypatch, ended, payload)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "timeout-native-result-unadmitted"
+    assert grade.get("admissionDetail") == "result-completion-after-deadline"
+
+
+@pytest.mark.parametrize("delivery", _WRITE_ADMISSION_DELIVERIES)
+def test_write_admission_no_completion_stamp_forfeits(tmp_path, delivery, monkeypatch):
+    payload = _write_payload_obj()
+    ended = {"exit": 0, "timedOut": False, "refusal": None}
+    if delivery == "argv":
+        run_dir, state = _write_admission_codex_argv(tmp_path, ended, payload)
+    elif delivery == "prompt":
+        run_dir, state = _write_admission_cursor_prompt(tmp_path, ended, payload)
+    else:
+        run_dir, state = _write_admission_claude_stdout(tmp_path, monkeypatch, ended, payload)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "result-completion-unrecorded"
+
+
+@pytest.mark.parametrize("delivery", _REVIEW_ADMISSION_DELIVERIES)
+def test_review_admission_complete_before_deadline_admits(tmp_path, delivery, monkeypatch):
+    envelope = _review_payload_envelope()
+    ended = _ended_with_completion_stamp(
+        envelope, complete_at=5.0, deadline_mono=10.0,
+        exit=0, timedOut=False,
+    )
+    if delivery == "argv":
+        run_dir, state = _review_admission_codex_argv(tmp_path, ended, envelope)
+    elif delivery == "prompt":
+        run_dir, state = _review_admission_cursor_prompt(tmp_path, ended, envelope)
+    elif delivery == "stdout":
+        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
+    else:
+        run_dir, state = _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+
+
+@pytest.mark.parametrize("delivery", _REVIEW_ADMISSION_DELIVERIES)
+def test_review_admission_complete_after_deadline_forfeits(tmp_path, delivery, monkeypatch):
+    envelope = _review_payload_envelope()
+    ended = _ended_with_completion_stamp(
+        envelope, complete_at=11.0, deadline_mono=10.0,
+        exit=0, timedOut=False,
+    )
+    if delivery == "argv":
+        run_dir, state = _review_admission_codex_argv(tmp_path, ended, envelope)
+    elif delivery == "prompt":
+        run_dir, state = _review_admission_cursor_prompt(tmp_path, ended, envelope)
+    elif delivery == "stdout":
+        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
+    else:
+        run_dir, state = _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "result-completion-after-deadline"
+
+
+@pytest.mark.parametrize("delivery", _REVIEW_ADMISSION_DELIVERIES)
+def test_review_admission_no_completion_stamp_forfeits(tmp_path, delivery, monkeypatch):
+    envelope = _review_payload_envelope()
+    ended = {"exit": 0, "timedOut": False, "refusal": None}
+    if delivery == "argv":
+        run_dir, state = _review_admission_codex_argv(tmp_path, ended, envelope)
+    elif delivery == "prompt":
+        run_dir, state = _review_admission_cursor_prompt(tmp_path, ended, envelope)
+    elif delivery == "stdout":
+        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
+    else:
+        run_dir, state = _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "result-completion-unrecorded"
+
+
+def test_admission_payload_rewrite_forfeits_mismatch(tmp_path):
+    first = _write_payload_obj()
+    second = json.loads(_native_write_result_json(report="rewritten after stamp"))
+    ended = _ended_with_completion_stamp(
+        first, complete_at=5.0, deadline_mono=10.0,
+        exit=1, timedOut=True, timeoutAt=1000.0,
+    )
+    run_dir, state = _write_admission_codex_argv(tmp_path, ended, second)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "timeout-native-result-unadmitted"
+    assert grade.get("admissionDetail") == "result-completion-payload-mismatch"
+
+
+def test_admission_clean_exit_with_valid_stamp_admits(tmp_path):
+    payload = _write_payload_obj()
+    ended = _ended_with_completion_stamp(payload, complete_at=1.0, exit=0, timedOut=False)
+    run_dir, state = _write_admission_codex_argv(tmp_path, ended, payload)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert "admittedAfterTimeout" not in grade
+
+
+def test_admission_scalar_payload_forfeits_unrecorded(tmp_path):
+    run_dir = str(tmp_path / "scalar")
+    os.makedirs(run_dir)
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    result_path = ED._native_result_path(run_dir, 1)
+    with open(result_path, "w", encoding="utf-8") as fh:
+        fh.write("42\n")
+    ended = {"exit": 0, "timedOut": False, "refusal": None}
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "result-completion-unrecorded"
+
+
+def test_admission_second_attempt_without_stamp_does_not_inherit_first(tmp_path):
+    payload = _write_payload_obj()
+    run_dir = str(tmp_path / "two-attempts")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    os.makedirs(run_dir, exist_ok=True)
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    ended1 = _ended_with_completion_stamp(payload, complete_at=1.0, exit=0, timedOut=False)
+    _journal_test_attempt_ended(run_dir, 1, ended1)
+    ended2 = {"exit": 0, "timedOut": False, "refusal": None, "attempt": 2}
+    _journal_test_attempt_ended(run_dir, 2, ended2)
+    with open(ED._native_result_path(run_dir, 2), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, separators=(",", ":"))
+        fh.write("\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][2] = {"ended": ended2}
+    grade = ED._grade_write_attempt(run_dir, state, 2)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "result-completion-unrecorded"
 

@@ -1431,7 +1431,7 @@ def _run_engine_files_background(
                 tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
                 if payload is not None and completion_stamp is None:
                     completion_stamp = engine_result_channel.completion_stamp(
-                        time.monotonic(),
+                        _NOW(),
                         engine_result_channel.canonical_payload_digest(payload),
                     )
                 result_path = _native_result_path(run_dir_real, attempt)
@@ -1468,7 +1468,7 @@ def _run_engine_files_background(
                     tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
                     if payload is not None and completion_stamp is None:
                         completion_stamp = engine_result_channel.completion_stamp(
-                            time.monotonic(),
+                            _NOW(),
                             engine_result_channel.canonical_payload_digest(payload),
                         )
                     result_path = _native_result_path(run_dir_real, attempt)
@@ -3745,7 +3745,9 @@ def _observe_stdout_completion(obs_state, stdout_path):
             or env.get("is_error") is True
             or "structured_output" not in env):
         return
-    digest = engine_result_channel.canonical_payload_digest(env["structured_output"])
+    digest = engine_result_channel.canonical_payload_digest(
+        _scrub_native_payload(env["structured_output"]),
+    )
     stamp = engine_result_channel.completion_stamp(time.monotonic(), digest)
     if stamp is not None:
         obs_state["stamp"] = stamp
@@ -3779,7 +3781,7 @@ def _observe_native_file_completion(obs_state, run_dir_real, attempt):
         return
     if not isinstance(obj, dict):
         return
-    digest = engine_result_channel.canonical_payload_digest(obj)
+    digest = engine_result_channel.canonical_payload_digest(_scrub_native_payload(obj))
     stamp = engine_result_channel.completion_stamp(time.monotonic(), digest)
     if stamp is not None:
         obs_state["stamp"] = stamp
@@ -3808,7 +3810,7 @@ def _completion_payload_for_delivery(
                 or env.get("is_error") is True
                 or "structured_output" not in env):
             return None
-        return env["structured_output"]
+        return _scrub_native_payload(env["structured_output"])
     if delivery == engine_result_channel.RESULT_DELIVERY_TRANSCRIPT:
         rows = _read_transcript_rows(stdout_path)
         if rows is None:
@@ -3828,7 +3830,7 @@ def _completion_payload_for_delivery(
             return None
         if not isinstance(obj, dict):
             return None
-        return obj
+        return _scrub_native_payload(obj)
     return None
 
 
@@ -4301,14 +4303,6 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     return True, ""
 
 
-def _recorded_timeout_deadline(ended):
-    """Return the ended record's persisted wall-cap deadline, or None if unusable."""
-    timeout_at = ended.get("timeoutAt")
-    if isinstance(timeout_at, bool) or not isinstance(timeout_at, (int, float)):
-        return None
-    return float(timeout_at)
-
-
 def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None, resume=False):
     if state.get("abandonRequested"):
         return False, "abandon-requested"
@@ -4602,7 +4596,7 @@ def _native_review_forfeit(engagement, detail, *, payload_shape=None, **extra):
     return result
 
 
-def _load_native_result_json(run_dir_real, attempt):
+def _load_native_result_json(run_dir_real, attempt, opened):
     """Load native result JSON via fd. Returns (obj, None) or (None, detail). Never raises."""
     path = _native_result_path(run_dir_real, attempt)
     if path is None:
@@ -4642,14 +4636,37 @@ def _load_native_result_json(run_dir_real, attempt):
             obj = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
             return None, "native-result-malformed"
+        records, _corrupt = _journal_read(run_dir_real)
+        state = _journal_state(records)
+        attempt_rec = state.get("attempts", {}).get(attempt)
+        ended = attempt_rec.get("ended") if isinstance(attempt_rec, dict) else None
+        if not isinstance(ended, dict):
+            return None, engine_result_channel.REFUSAL_RESULT_COMPLETION_UNRECORDED
+        if ended.get("timedOut"):
+            deadline_mono = ended.get(engine_result_channel.FIELD_DEADLINE_MONO)
+            deadline_epoch = ended.get(engine_result_channel.FIELD_DEADLINE_EPOCH)
+            if (
+                isinstance(deadline_mono, bool)
+                or not isinstance(deadline_mono, (int, float))
+                or not isinstance(deadline_epoch, str)
+                or not deadline_epoch
+            ):
+                return None, "timeout-deadline-unrecorded"
+        digest_obj = _scrub_native_payload(obj) if isinstance(obj, dict) else obj
+        digest = engine_result_channel.canonical_payload_digest(digest_obj)
+        if digest is None:
+            return None, engine_result_channel.REFUSAL_RESULT_COMPLETION_UNRECORDED
+        verdict, detail = engine_result_channel.completion_window(ended, digest)
+        if verdict == "forfeit":
+            return None, detail
         return obj, None
     finally:
         os.close(fd)
 
 
-def _read_native_review_envelope(run_dir_real, attempt, engagement):
+def _read_native_review_envelope(run_dir_real, attempt, engagement, opened):
     """Load and unwrap a native review result envelope. Returns (envelope, branch) or a forfeit."""
-    envelope, detail = _load_native_result_json(run_dir_real, attempt)
+    envelope, detail = _load_native_result_json(run_dir_real, attempt, opened)
     if detail == "native-result-missing":
         shape = engine_result_channel.native_review_payload_shape("native-result-missing")
         return _native_review_forfeit(engagement, "native-result-missing", payload_shape=shape)
@@ -4658,6 +4675,8 @@ def _read_native_review_envelope(run_dir_real, attempt, engagement):
     if detail == "native-result-malformed":
         shape = engine_result_channel.native_review_payload_shape("native-result-malformed")
         return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
+    if detail:
+        return _native_review_forfeit(engagement, detail)
     if not isinstance(envelope, dict) or "result" not in envelope:
         shape = engine_result_channel.native_review_payload_shape(
             "native-result-malformed", envelope=envelope if isinstance(envelope, dict) else None)
@@ -4761,38 +4780,18 @@ def _verify_native_schema(opened, run_kind, expected_result_kind=None):
     return declared, None
 
 
-def _admit_native_write_result(run_dir_real, attempt, opened, *, timeout_deadline=None):
-    """Single admission authority for the native write channel (codex, cursor). Never raises.
-
-    `timeout_deadline` is the attempt's recorded wall-cap deadline read from the ended record's
-    `timeoutAt` field — not an instant the caller computed. A native result whose file was last
-    written strictly after that instant was produced during the SIGTERM/SIGKILL grace window, not
-    before the cap — the timeout contract promises admission only for a result complete before
-    the wall cap, so such a result is rejected rather than silently admitted.
-    """
+def _admit_native_write_result(run_dir_real, attempt, opened):
+    """Single admission authority for the native write channel (codex, cursor). Never raises."""
     gate = _stdout_delivery_gate(run_dir_real, attempt, opened)
     if gate is not None:
         return gate
-    obj, detail = _load_native_result_json(run_dir_real, attempt)
+    obj, detail = _load_native_result_json(run_dir_real, attempt, opened)
     if detail:
         return {
             "forfeit": True,
             "reason": dispatch_outcome.REASON_FORFEITED,
             "detail": detail,
         }
-
-    if timeout_deadline is not None:
-        result_path = _native_result_path(run_dir_real, attempt)
-        try:
-            mtime = os.stat(result_path).st_mtime if result_path else None
-        except OSError:
-            mtime = None
-        if mtime is None or mtime > timeout_deadline:
-            return {
-                "forfeit": True,
-                "reason": dispatch_outcome.REASON_FORFEITED,
-                "detail": "native-result-after-timeout",
-            }
 
     declared, schema_err = _verify_native_schema(opened, RUN_KIND_WRITE)
     if schema_err:
@@ -4851,7 +4850,7 @@ def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_
             gate["detail"],
             payload_shape=engine_result_channel.native_review_payload_shape(gate["detail"]),
         )
-    loaded = _read_native_review_envelope(run_dir_real, attempt, engagement)
+    loaded = _read_native_review_envelope(run_dir_real, attempt, engagement, opened)
     if not isinstance(loaded, tuple):
         return loaded
     envelope, branch = loaded
@@ -5088,18 +5087,7 @@ def _grade_write_attempt(run_dir_real, state, attempt):
 
     admitted = None
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
-        if ended.get("timedOut"):
-            timeout_deadline = _recorded_timeout_deadline(ended)
-            if timeout_deadline is None:
-                return {
-                    "forfeit": True,
-                    "reason": dispatch_outcome.REASON_FORFEITED,
-                    "detail": "timeout-deadline-unrecorded",
-                }
-        else:
-            timeout_deadline = None
-        admitted = _admit_native_write_result(
-            run_dir_real, attempt, opened, timeout_deadline=timeout_deadline)
+        admitted = _admit_native_write_result(run_dir_real, attempt, opened)
         if not admitted.get("forfeit"):
             if ended.get("timedOut"):
                 # axis: the process still had to be terminated at the wall cap even though its
