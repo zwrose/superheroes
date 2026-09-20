@@ -3432,6 +3432,8 @@ def _fold_sibling_worktrees(state):
 def _background_stop_unconfirmed(state):
     """True when any attempt recorded stop-unconfirmed. Never raises."""
     for slot in (state.get("attempts") or {}).values():
+        if _attempt_bg_stop_recorded(slot) is not None:
+            continue
         for key in ("ended", "suspended", "backgroundLaunched"):
             rec = slot.get(key) or {}
             if rec.get("bgStop") == "stop-unconfirmed":
@@ -5605,6 +5607,7 @@ def dispatch_review(*args, seat=None, prompt_path=None,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
     caller always sees JSON and can fall open to the host model."""
     resolved_mode = {"mode": None}
+    resolved_claude_mode = {"claudeMode": claude_mode}
     timeout_source = (
         resolved_inputs_vocab.DEFAULT if timeout is _PARAM_UNSET else resolved_inputs_vocab.CALLER
     )
@@ -5710,10 +5713,12 @@ def dispatch_review(*args, seat=None, prompt_path=None,
             build_view=build_view, run_dir=run_dir, run_dir_supplied=run_dir_supplied,
             max_wait=max_wait, max_wait_source=max_wait_source, order_id=order_id,
             diff_base=diff_base, mode=mode, resolved_mode=resolved_mode,
-            claude_mode=claude_mode, expected_result_kind=expected_result_kind,
+            claude_mode=claude_mode, resolved_claude_mode=resolved_claude_mode,
+            expected_result_kind=expected_result_kind,
             pr_body_path=pr_body_path, session_dir=session_dir)
         stamped = dict(result)
         stamped["mode"] = resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW)
+        stamped["claudeMode"] = resolved_claude_mode["claudeMode"]
         return stamped
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(

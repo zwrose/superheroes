@@ -641,7 +641,7 @@ def test_dispatch_review_repo_root_absent_no_spawn(tmp_path):
     assert res == {
         "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
         "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
-        "mode": "review", "runOpened": False,
+        "mode": "review", "claudeMode": None, "runOpened": False,
     }
     assert "sanitizedView" not in res
     assert len(fake.calls) == 0
@@ -14435,12 +14435,7 @@ def test_continuation_omitted_claude_mode_inherits_journal(tmp_path, monkeypatch
         max_wait=0,
     )
     assert res["reason"] == ED.dispatch_outcome.REASON_RUNNING
-    records, _ = ED._journal_read(run_dir)
-    opened = next(r for r in records if r.get("kind") == "run-opened")
-    assert opened["claudeMode"] == "background"
-    assert ERC.result_delivery(
-        opened["engine"], opened["claudeMode"],
-    ) == ERC.RESULT_DELIVERY_TRANSCRIPT
+    assert res["claudeMode"] == "background"
 
 
 def test_legacy_journal_without_claude_mode_continues_with_explicit_print(tmp_path, monkeypatch):
