@@ -256,8 +256,8 @@ def test_L2_merged_away_member_resolves_through_representative(tmp_path):
     assert len(live) == 1
     rep = live[0]
     assert SC.finding_identity_key(rep) == key0
-    rep["disposition"] = "refuted"
-    rep["refutedReason"] = "merged into representative"
+    RD._record_disposition(state, key0, "refuted", 1,
+                           refutedReason="merged into representative")
     state["dispositionLedgerOwner"] = "ledger"
     ctx = _ctx(state, tmp_path)
     assert RC.check_disposition_without_receipt(ctx) is None
@@ -524,11 +524,12 @@ def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
     assert receipt_after.get("headSha") == head2
 
     state["dispositionLedgerOwner"] = "ledger"
-    entry = dict(entry)
     receipt_after = dict(entry.get("dispositionReceipt") or {})
     receipt_after["fixContentDigest"] = _FIX_PRESENT_DIGEST
-    entry["dispositionReceipt"] = receipt_after
-    state["findings"] = [entry]
+    RD._record_disposition(
+        state, key, entry["disposition"], entry["dispositionRound"],
+        dispositionReceipt=receipt_after,
+    )
     ctx = _ctx(state, tmp_path, certified_head=head2)
     assert RC.check_disposition_without_receipt(ctx) is None
 
@@ -693,18 +694,21 @@ def test_C13_backfill_merges_record_severity_preserves_disposition_family(tmp_pa
 def test_C13_out_of_scope_reason_required_before_follow_up_checks(tmp_path):
     follow_up = {"item": "defer auth redesign", "revisitTrigger": "when #1300 lands",
                  "classClosure": "tracked separately"}
-    base = {"file": "o", "line": 1, "title": "old", "severity": "Important",
-            "disposition": "out-of-scope", "dispositionRound": 1, "followUp": follow_up}
+    finding = {"file": "o", "line": 1, "title": "old", "severity": "Important"}
+    compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
+    RD._stage_findings(state, compiled)
+    key = SC.finding_identity_key(compiled[0])
     state["dispositionLedgerOwner"] = "ledger"
-    state["findings"] = [dict(base)]
+    RD._record_disposition(state, key, "out-of-scope", 1, followUp=follow_up)
     ctx = _ctx(state, tmp_path)
     refusal = RC.check_disposition_without_receipt(ctx)
     assert refusal is not None
     assert refusal["class"] == "disposition-without-receipt"
     assert refusal["detail"] == "out-of-scope disposition lacks recorded reason"
     reason = "deferred to next release"
-    state["findings"] = [dict(base, outOfScopeReason=reason)]
+    RD._record_disposition(state, key, "out-of-scope", 1,
+                           outOfScopeReason=reason, followUp=follow_up)
     ctx = _ctx(state, tmp_path)
     assert RC.check_disposition_without_receipt(ctx) is None
     assert ctx["important_disclosures"] == [
