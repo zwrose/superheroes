@@ -1102,6 +1102,59 @@ def test_not_a_repository_false_on_other_declined():
     assert sc.not_a_repository(sc.GitResult("/repo", sc.GIT_OK, None)) is False
 
 
+def test_run_git_result_env_none_copies_ambient_with_locale_pins(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROBE_ENV_VAR", "visible")
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        class _Ok:
+            returncode = 0
+            stdout = "ok\n"
+            stderr = ""
+        return _Ok()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    sc.run_git_result(str(tmp_path), "status")
+    assert captured["env"]["PROBE_ENV_VAR"] == "visible"
+    assert captured["env"]["LC_ALL"] == "C"
+    assert captured["env"]["LANGUAGE"] == "C"
+
+
+def test_run_git_result_explicit_env_replaces_ambient(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROBE_ENV_VAR", "ambient")
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        class _Ok:
+            returncode = 0
+            stdout = "ok\n"
+            stderr = ""
+        return _Ok()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    sc.run_git_result(
+        str(tmp_path),
+        "status",
+        env={"PROBE_ENV_VAR": "explicit"},
+    )
+    assert captured["env"]["PROBE_ENV_VAR"] == "explicit"
+    assert "ambient" not in captured["env"].values()
+    assert captured["env"]["LC_ALL"] == "C"
+    assert captured["env"]["LANGUAGE"] == "C"
+
+
+def test_run_git_result_unavailable_with_explicit_env_means_git_never_ran(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError("no git")),
+    )
+    res = sc.run_git_result(str(tmp_path), "status", env={"HOME": "/tmp"})
+    assert res.out is None
+    assert res.status == sc.GIT_UNAVAILABLE
+
+
 # ---------------------------------------------------------------------------
 # issue #752 — repo_identity_memo / get_remote_result
 # ---------------------------------------------------------------------------

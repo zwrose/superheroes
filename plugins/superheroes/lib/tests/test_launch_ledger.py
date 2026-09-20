@@ -5205,3 +5205,100 @@ def test_fold_seat_instance_and_foreign_allowed_are_none_when_omitted():
     lane = result["launches"]["l1"]
     assert lane["seatInstance"] is None
     assert lane["foreignInstanceAllowed"] is None
+
+
+# --- public git scrub helpers (#1340 layer 2d) -------------------------------
+
+
+def test_scrub_env_public_name_matches_private_behavior(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_DIR", "/tmp/bogus/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/tmp/bogus")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, "/tmp/ledger-root")
+    monkeypatch.setenv("SAFE_VAR", "keep")
+    scrubbed = ll.scrub_env()
+    for key in ll.GIT_SCRUB_VARS:
+        assert key not in scrubbed
+    assert ll.LEDGER_ROOT_ENV not in scrubbed
+    assert scrubbed["SAFE_VAR"] == "keep"
+
+
+def test_git_scrub_vars_is_public_tuple():
+    assert ll.GIT_SCRUB_VARS == (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CEILING_DIRECTORIES",
+    )
+
+
+# --- fold premise stack fields (#1340 layer 2d) ------------------------------
+
+
+def test_fold_premise_stack_fields_from_well_formed_premise():
+    rec = _reserved(
+        "l1",
+        "b",
+        ["a"],
+        "/tmp",
+        premise={"stack": 3, "layerPosition": 2, "layersPlanned": 4},
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    lane = result["launches"]["l1"]
+    assert lane["stack"] == 3
+    assert lane["layerPosition"] == 2
+    assert lane["layersPlanned"] == 4
+
+
+@pytest.mark.parametrize(
+    "premise",
+    [
+        {},
+        "not-a-dict",
+        {"stack": False, "layerPosition": 0, "layersPlanned": "3"},
+    ],
+)
+def test_fold_premise_stack_fields_none_when_missing_or_malformed(premise):
+    rec = _reserved("l1", "b", ["a"], "/tmp", premise=premise)
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    lane = result["launches"]["l1"]
+    assert lane["stack"] is None
+    assert lane["layerPosition"] is None
+    assert lane["layersPlanned"] is None
+
+
+def test_fold_premise_stack_negative_int_folds_to_none_for_that_field_only():
+    rec = _reserved(
+        "l1",
+        "b",
+        ["a"],
+        "/tmp",
+        premise={"stack": -1, "layerPosition": 2, "layersPlanned": 4},
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    lane = result["launches"]["l1"]
+    assert lane["stack"] is None
+    assert lane["layerPosition"] == 2
+    assert lane["layersPlanned"] == 4
+
+
+def test_fold_premise_stack_field_invalid_values_fold_to_none():
+    # bite-axis: positive-int validation — bool/0/string/negative premise values fold to None
+    rec = _reserved(
+        "l1",
+        "b",
+        ["a"],
+        "/tmp",
+        premise={"stack": False, "layerPosition": 0, "layersPlanned": "3"},
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    lane = result["launches"]["l1"]
+    assert lane["stack"] is None
+    assert lane["layerPosition"] is None
+    assert lane["layersPlanned"] is None
