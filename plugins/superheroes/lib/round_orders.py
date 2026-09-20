@@ -213,13 +213,38 @@ def _format_residual_block(context: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+_RESULT_CHANNEL_NEUTRAL_DELIVERY = (
+    "Deliver the object on the runner's declared result channel: the runner appends "
+    "the authoritative result contract at the end of this prompt — when it names a "
+    "result file, write exactly that file and reply DONE; otherwise emit the object "
+    "as your final response with nothing after it. Never write a landing file "
+    "(read-only sandbox)."
+)
+
+
+def _result_channel_neutral_delivery(stdout_example=None):
+    """Channel-neutral delivery prose for engine seats (stdout or typed-file)."""
+    if stdout_example is None:
+        return _RESULT_CHANNEL_NEUTRAL_DELIVERY
+    return (
+        "Deliver the object on the runner's declared result channel: the runner appends "
+        "the authoritative result contract at the end of this prompt — when it names a "
+        "result file, write exactly that file and reply DONE; otherwise emit `%s` as your "
+        "final response with nothing after it. Never write a landing file "
+        "(read-only sandbox)." % stdout_example
+    )
+
+
 def _panel_stdout_delivery_text(include_investigated_reminder: bool = False) -> str:
     """Format-only panel stdout delivery — shape illustration, not a literal emit target."""
     lines = [
         review_findings_schema.example_prompt_block(),
         "",
-        "Emit a single JSON object of this shape as your final stdout with nothing "
-        "after it. Replace every value in the example above with your own review "
+        "Deliver a single JSON object of this shape on the runner's declared result channel: "
+        "the runner appends the authoritative result contract at the end of this prompt — "
+        "when it names a result file, write exactly that file and reply DONE; otherwise emit "
+        "the object as your final response with nothing after it. Never write a landing file "
+        "(read-only sandbox). Replace every value in the example above with your own review "
         "content — do not echo the example. A review with nothing to flag emits "
         "`\"findings\": []` (an empty list).",
     ]
@@ -272,17 +297,9 @@ def _format_landing_block(context: dict, phase: str) -> tuple[str | None, str | 
         if reason:
             return None, reason
         if phase == round_phases.P_PANEL:
-            lines.extend([
-                "Deliver on the stdout channel described in the Delivery section above — "
-                "your final stdout must be a single JSON object with nothing after it. "
-                "Do not write a landing file (read-only sandbox).",
-            ])
+            lines.extend([_RESULT_CHANNEL_NEUTRAL_DELIVERY])
         else:
-            lines.extend([
-                "Deliver on stdout — emit `%s` as your final stdout with nothing after it. "
-                "Do not write a landing file (read-only sandbox)."
-                % stdout_example,
-            ])
+            lines.extend([_result_channel_neutral_delivery(stdout_example)])
     return "\n".join(lines), None
 
 
@@ -368,15 +385,11 @@ def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
             return ph
         if phase == round_phases.P_SYNTHESIS:
             ph["OUTPUT_CHANNEL_BLOCK"] = (
-                "Emit `%s` as your final stdout with nothing after it; do not write a grouping "
-                "file (read-only sandbox — nothing reads one). Every survivor id appears exactly "
-                "once across all groups." % stdout_example
+                _result_channel_neutral_delivery(stdout_example)
+                + " Every survivor id appears exactly once across all groups."
             )
         else:
-            ph["OUTPUT_CHANNEL_BLOCK"] = (
-                "Emit `%s` as your final stdout with nothing after it. Do not write a landing file "
-                "(read-only sandbox)." % stdout_example
-            )
+            ph["OUTPUT_CHANNEL_BLOCK"] = _result_channel_neutral_delivery(stdout_example)
     elif phase == round_phases.P_VERIFIERS:
         ph["OUTPUT_CHANNEL_BLOCK"] = (
             "Write your verdict payload to %s — the `verdicts` array carries exactly one entry "

@@ -5937,3 +5937,62 @@ def test_cli_launch_parser_threads_allow_foreign_instance(tmp_path, monkeypatch)
     with redirect_stdout(io.StringIO()):
         assert L.main(base_args) == 0
     assert seen["allow"] is False
+
+
+def test_walk_preflight_failed_check_carries_checks(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    checks = _all_checks()
+    checks["engine-auth"] = {
+        "state": "fail",
+        "reason": "conformance probe failed: codex",
+        "evidence": "codex channel=native cell=codex/gpt-5.6-sol/xhigh",
+    }
+    result = L.walk_preflight(checks, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-failed:engine-auth"
+    assert "checks" in result
+    auth = [c for c in result["checks"] if c["id"] == "engine-auth"][0]
+    assert auth["state"] == "fail"
+    assert "codex" in auth["evidence"]
+
+
+def test_walk_preflight_later_walked_failure_carries_every_earlier_pass(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    ids = [cid for cid, _ in LD.PREFLIGHT_CHECKS if cid not in LD.LAUNCHER_OWNED_CHECKS]
+    checks = _all_checks()
+    checks[ids[-1]] = {"state": "fail", "reason": "late"}
+    result = L.walk_preflight(checks, repo)
+    assert result["reason"] == "preflight-failed:" + ids[-1]
+    walked_ids = [cid for cid, _ in LD.PREFLIGHT_CHECKS]
+    fail_idx = walked_ids.index(ids[-1])
+    expected_ids = walked_ids[:fail_idx + 1]
+    check_ids = [c["id"] for c in result["checks"]]
+    assert check_ids == expected_ids
+    for c in result["checks"][:-1]:
+        assert c["state"] == "pass"
+    assert result["checks"][-1]["state"] == "fail"
+
+
+def test_launch_refusal_record_keeps_failed_check(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    checks = _all_checks()
+    checks["engine-auth"] = {
+        "state": "fail",
+        "reason": "conformance probe failed: codex",
+        "evidence": "codex channel=native legs=resultProduction:fail",
+    }
+    result = L.launch_build(
+        repo,
+        1270,
+        _valid_premise(repo),
+        checks,
+        str(tmp_path / "logs"),
+    )
+    assert result["ok"] is False
+    reserved = [r for r in ll.read(repo)["records"] if r.get("event") == "reserved"][0]
+    preflight_checks = reserved.get("preflight", {}).get("checks") or []
+    auth = [c for c in preflight_checks if c.get("id") == "engine-auth"]
+    assert auth, preflight_checks
+    assert auth[0]["state"] == "fail"
+    assert "codex" in auth[0].get("evidence", "")

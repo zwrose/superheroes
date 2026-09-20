@@ -55,18 +55,18 @@ def test_we511_shape_parks():
     assert result["resolved_model"] is None
 
 
-def test_listed_models_pass():
-    r1 = DG.validate("implementer", "cursor", "composer-2.5")
-    assert r1["ok"] is True
-    assert r1["resolved_model"] == "composer-2.5"
-
-    r2 = DG.validate("implementer", "cursor", "cursor-grok-4.6-xhigh")
-    assert r2["ok"] is True
-    assert r2["resolved_model"] == "cursor-grok-4.6-xhigh"
-
-    r3 = DG.validate("implementer", "codex", "gpt-5.6-terra")
-    assert r3["ok"] is True
-    assert r3["resolved_model"] == "gpt-5.6-terra"
+@pytest.mark.parametrize(
+    "vendor,model,expected",
+    [
+        ("cursor", "composer-2.5", "composer-2.5"),
+        ("cursor", "cursor-grok-4.6-xhigh", "cursor-grok-4.6-xhigh"),
+        ("codex", "gpt-5.6-terra", "gpt-5.6-terra"),
+    ],
+)
+def test_listed_models_pass(vendor, model, expected):
+    result = DG.validate("implementer", vendor, model)
+    assert result["ok"] is True
+    assert result["resolved_model"] == expected
 
 
 def test_registry_model_id_form_passes():
@@ -529,3 +529,42 @@ def test_wo8_edge7_dispatch_guard_check_valid_and_off_allowlist_unchanged():
     assert off_payload["ok"] is False
     assert "gpt-5.3-codex-high" in off_payload["reason"]
     assert _PARK_TAIL in off.stderr
+
+
+def test_claude_cells_on_allowlist_per_role():
+    for role in MR.roles():
+        cell = MR.matrix_config(role, "claude")
+        if cell is None:
+            continue
+        model_id, effort = cell
+        seat = {"vendor": "claude", "model": model_id, "effort": effort, "role": role}
+        proc = subprocess.run(
+            [sys.executable, _MOD, "check", "--seat", json.dumps(seat)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, (role, proc.stdout, proc.stderr)
+        payload = json.loads(proc.stdout)
+        assert payload["ok"] is True
+        assert payload["dispatch_token"] == MR.dispatch_token("claude", model_id, effort)
+
+
+def test_claude_off_cell_refused():
+    proc = subprocess.run(
+        [
+            sys.executable, _MOD, "check", "--seat",
+            json.dumps({
+                "vendor": "claude", "model": "haiku-4.5", "effort": "high",
+                "role": "reviewer",
+            }),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert "haiku-4.5" in payload["reason"] or "haiku" in str(payload.get("allowlist"))
+    assert proc.stderr.strip()

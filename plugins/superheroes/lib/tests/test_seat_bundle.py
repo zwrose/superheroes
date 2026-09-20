@@ -84,7 +84,7 @@ def test_entry_clis_route_through_chokepoint_and_expose_seat_flag(cli_module, su
         payload = json.loads(out.splitlines()[0])
         assert payload["reason"] == "chokepoint-sentinel"
     else:
-        assert rc == 0
+        assert rc == 1
         result = json.loads(out.splitlines()[-1])
         assert result["detail"] == "sentinel"
 
@@ -497,18 +497,24 @@ def test_brief_check_role_guard_check_omitted_mode_accepted():
 
 
 @pytest.mark.parametrize("verb", ["dispatch-review", "dispatch-write"])
-def test_claude_vendor_refused_at_dispatch_chokepoint(verb):
-    # axis: vendor with no engine adapter is refused at resolve_entry, not engine-config later
+def test_claude_vendor_passes_dispatch_chokepoint_for_on_allowlist_cell(verb):
+    # axis: claude is now in BUILD_ARGV_VENDORS — passes vendor gate (#1273 WO-A)
     role = _REVIEW_ROLE if verb == "dispatch-review" else _WRITE_ROLE
     resolved = SB.resolve_entry(
-        _seat_json("claude", "opus-5", "xhigh", role),
+        _seat_json("claude", "sonnet-5", "high", role),
         verb=verb,
     )
+    assert resolved["ok"] is True
+    assert resolved["vendor"] == "claude"
+
+
+def test_claude_haiku_refused_by_allowlist_for_reviewer_role():
+    resolved = SB.resolve_entry(
+        _seat_json("claude", "haiku-4.5", "medium", _REVIEW_ROLE),
+        verb="dispatch-review",
+    )
     assert resolved["ok"] is False
-    assert resolved["entryReason"] == "undispatchable-vendor"
-    assert "claude" in resolved["detail"]
-    assert "codex" in resolved["detail"]
-    assert "cursor" in resolved["detail"]
+    assert resolved["entryReason"] == "allowlist-refused"
 
 
 @pytest.mark.parametrize("role", ["mechanical", "synthesis", "pilot"])
@@ -636,6 +642,24 @@ def test_allowlist_guard_raise_refused(monkeypatch):
     )
     assert resolved["ok"] is False
     assert resolved["entryReason"] == "allowlist-raised"
+    assert resolved["detail"].startswith("allowlist guard raised unexpectedly")
+    assert "RuntimeError" in resolved["detail"]
+    assert "guard exploded" in resolved["detail"]
+
+
+def test_build_argv_vendors_public_name_matches_dispatchable_set(monkeypatch):
+    import engine_adapter as EA
+
+    assert set(EA.BUILD_ARGV_VENDORS) == {"codex", "cursor", "claude"}
+    monkeypatch.setattr(EA, "BUILD_ARGV_VENDORS", ("codex", "cursor"))
+    resolved = SB.resolve_entry(
+        _seat_json("claude", "sonnet-5", "high", _REVIEW_ROLE),
+        verb="dispatch-review",
+    )
+    assert resolved["ok"] is False
+    assert resolved["entryReason"] == "undispatchable-vendor"
+    for vendor in ("codex", "cursor"):
+        assert vendor in resolved["detail"]
 
 
 def test_dict_seat_without_ok_promotion_refused():

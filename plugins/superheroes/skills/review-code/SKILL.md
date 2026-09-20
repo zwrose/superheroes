@@ -118,6 +118,7 @@ BASE_FETCH=fetched; git fetch --quiet origin "+refs/heads/${BASE_BRANCH}:refs/re
 BASE_REF=$(git rev-parse --verify --quiet "refs/remotes/origin/$BASE_BRANCH^{commit}") \
   || { BASE_REF=$(git rev-parse --verify --quiet "$BASE_BRANCH^{commit}"); BASE_FETCH="$BASE_FETCH; no-remote-ref — diffing the LOCAL base"; }
 BASE_REF=$(git rev-parse --verify --quiet "$BASE_REF^{commit}") || { echo "review-code: base '${BASE_BRANCH:-<empty>}' did not resolve to a commit (BASE_FETCH=${BASE_FETCH}) — refusing to review (#637)" >&2; exit 1; }
+printf '%s' "$BASE_REF" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$' && VERIFY_CMD="${VERIFY_CMD//\{baseRef\}/$BASE_REF}"   # bind the verify command's {baseRef} token (§ The verify command)
 ```
 
 **The base must RESOLVE TO A COMMIT — validated once at Setup, and every consumer uses the guarded command.** This is the only validation, and it is deliberately not a non-emptiness test: `$BASE_REF` reaching `git diff` as an empty string makes argv `...HEAD`, which git reads as `HEAD...HEAD` — a **zero-line diff at exit 0** the loop would certify clean — and reaching it as the literal string `null` (what `jq -r` prints for an absent key) passes any `[ -n … ]` check while `git diff null...HEAD` exits 128 and *still* leaves an empty `diff.txt`. `git rev-parse --verify --quiet "$BASE_REF^{commit}"` rejects both, plus a deleted branch and a non-commit tag. **Every** producer of `$BASE_REF` — the fetch/pin above, the local fallback, the `meta.json` restore below — routes through it; never add a second, weaker guard beside it, and never let a caller "recover" by substituting a branch name. On every auto-fix `next`, `round_driver.py` independently re-checks in code that the base is a *pinned commit id* and that the pin has not moved mid-session, refusing with `base-not-pinned`, `base-unresolved`, or `base-pin-moved` if not (see `reference/round-driver.md` § Base guard).
@@ -380,7 +381,7 @@ The orchestrator's verify gate (loop step 12) and the fixer (prompt step 3) both
 - **`mode: unverified` →** there is no verify command. SKIP the verify gate (step 12); tell the fixer to skip checks (verify command `"none"`); commits proceed ungated. State "unverified" in the dispatch summary and the End-of-Loop summary.
 - **`mode: review-only` →** the project opted out of auto-fix. The default path degrades to a single review pass + the `--review-only` presentation (no triage, no fixer, no commits, no loop). Note this in the dispatch summary.
 
-`meta.json` records the verify story (`verify`: the command string, or `"unverified"` / `"review-only"`) so a cold-resumed orchestrator recovers it without re-reading the profile.
+`meta.json` records the verify story (`verify`: the command string, or `"unverified"` / `"review-only"`) so a cold-resumed orchestrator recovers it without re-reading the profile. A `{baseRef}` token in the command is bound to the pinned base commit at Setup and in the driver's `run-verify` payload (`reference/setup.md`), so a touched-tests gate on a stacked branch diffs against the PR base, not main; with no full-hex pin the token stays and the gate refuses loudly.
 
 Test-receipt evidence policy: `rubric/test-receipt-evidence.md`.
 
