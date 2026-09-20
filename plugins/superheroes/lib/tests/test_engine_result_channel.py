@@ -795,13 +795,13 @@ def test_verdict_reason_required_in_contract_and_schema():
 
 
 def _malformed_ruling_branch_with_spurious_findings_list():
-    """Ruling branch that structurally matches findings via a spurious empty list."""
+    """Ruling branch that structurally matches findings via a present-but-null key."""
     contract, reason = PC.payload_contract(PC.P_AUDITS)
     assert reason is None
     ruling_val = contract["enums"]["ruling"][0]
     return {
         "resultKind": "ruling",
-        "findings": [],
+        "findings": None,
         "verdicts": None,
         "investigated": ["path/to/file.py"],
         "id": "audit-seat",
@@ -819,10 +819,11 @@ def test_native_branch_narrowing_consults_payload_key_home_for_ruling():
     shape = ERC.native_review_payload_shape(
         "native-result-schema-invalid", branch=branch)
     assert shape["parsed"] != EA.SHAPE_OBJECT_BOTH_PAYLOAD_KEYS
-    assert len([
+    assert [
         k for k in EA._recognised_review_kinds(branch)
-        if EA.review_payload_carried(branch, k)[0]
-    ]) == 1
+        if (key := EA.review_payload_key(k)) is not None
+        and branch.get(key) is not None
+    ] == ["ruling"]
 
 
 def test_native_branch_narrowing_null_payload_key_not_carried():
@@ -835,6 +836,17 @@ def test_native_branch_narrowing_null_payload_key_not_carried():
         if EA.review_payload_carried(branch, k)[0]
     ]
     assert "verdicts" not in narrowed
+
+
+def test_native_branch_narrowing_present_but_null_grouping_not_second_kind():
+    # axis: present-but-null grouping key does not count as a second matched kind
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/c14_l3a_h_payload_key_home.md
+    branch = _valid_review_branch("findings")
+    assert "grouping" in EA._recognised_review_kinds(branch)
+    assert EA.review_payload_carried(branch, "grouping") == (True, None)
+    shape = ERC.native_review_payload_shape(
+        "native-result-schema-invalid", branch=branch)
+    assert shape["parsed"] != EA.SHAPE_OBJECT_BOTH_PAYLOAD_KEYS
 
 
 def test_engine_output_byte_cap_single_home():
