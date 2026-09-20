@@ -6,11 +6,18 @@ or mixed-time picture. All validation lives in read_membership; the CLI is a thi
 projection."""
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import time
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import grounding_stage  # noqa: E402
 
 GH_TIMEOUT = 120
 DEFAULT_PAGE_SIZE = 50
@@ -21,8 +28,21 @@ REASON_BAD_ARGUMENT = "bad-argument"
 REASON_NOT_LINKED = "not-linked"
 REASON_STACK_UNREADABLE = "stack-unreadable"
 REASON_ORDER_MISMATCH = "order-mismatch"
+REASON_VET_UNREADABLE = "vet-unreadable"
+
+VERDICT_READY = "READY"
+VERDICT_NOT_READY = "NOT-READY"
+VERDICT_PARKED = "PARKED"
+VET_NOT_READY = "vet-not-ready"
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+_SHA40_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+_VET_SEPARATOR = " · "
+_VET_VERDICT_TOKENS = (
+    ("**Verdict: READY**", VERDICT_READY),
+    ("**Verdict: NOT-READY**", VERDICT_NOT_READY),
+    ("**Verdict: PARKED**", VERDICT_PARKED),
+)
 
 QUERY = """\
 query($owner:String!,$repo:String!,$pr:Int!,$first:Int!,$after:String){
@@ -601,6 +621,91 @@ def resolve_repo_slug(repo_root, *, deadline=None, timeout=GH_TIMEOUT, run=None,
         return None, _read_refusal(REASON_STACK_UNREADABLE, "gh call timed out")
 
     return _parse_repo_slug_payload(proc)
+
+
+def _validate_head_sha(head_sha):
+    if not isinstance(head_sha, str) or not _SHA40_RE.match(head_sha):
+        return _read_refusal(REASON_BAD_ARGUMENT, "head_sha must be a 40-character hex string")
+    return None
+
+
+def _first_nonempty_line(text):
+    for line in text.splitlines():
+        if line.strip():
+            return line
+    return None
+
+
+def _parse_vet_verdict_line(line, head_sha):
+    matched_verdict = None
+    matched_token = None
+    for token, verdict in _VET_VERDICT_TOKENS:
+        if line.startswith(token):
+            matched_verdict = verdict
+            matched_token = token
+            break
+    if matched_verdict is None:
+        return VET_NOT_READY
+
+    rest = line[len(matched_token):]
+    for token, _verdict in _VET_VERDICT_TOKENS:
+        if token in rest:
+            return VET_NOT_READY
+
+    if not rest.startswith(_VET_SEPARATOR):
+        return VET_NOT_READY
+
+    after_sep = rest[len(_VET_SEPARATOR):]
+    if len(after_sep) < 40:
+        return VET_NOT_READY
+
+    sha_part = after_sep[:40]
+    after_sha = after_sep[40:]
+    if not _SHA40_RE.match(sha_part):
+        return VET_NOT_READY
+
+    if after_sha and not after_sha.startswith(" "):
+        return VET_NOT_READY
+
+    if sha_part.lower() != head_sha.lower():
+        return VET_NOT_READY
+
+    return matched_verdict
+
+
+def read_vet_verdict(body, head_sha):
+    """Return (verdict, refusal) — exactly one is non-None.
+
+    Consumers test ``verdict == VERDICT_READY`` and nothing else; every other
+    value, ``VET_NOT_READY`` included, is not-ready."""
+    # axis: body is not a str
+    if not isinstance(body, str):
+        return None, _read_refusal(REASON_VET_UNREADABLE, "body is not a string")
+
+    arg_refusal = _validate_head_sha(head_sha)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    marker = grounding_stage.REGION_MARKERS["advisor-vet"]
+    scan = grounding_stage._context_scan(body)
+    try:
+        region_text, _line_count, _region_start_line = grounding_stage._extract_region(
+            body, marker, scan, "advisor-vet",
+        )
+    except grounding_stage._BodyRefusal:
+        # axis: more than one live advisor-vet marker
+        return VET_NOT_READY, None
+
+    # axis: no advisor-vet marker
+    if region_text is None:
+        return VET_NOT_READY, None
+
+    # axis: marker present with no non-empty line after it
+    line = _first_nonempty_line(region_text)
+    if line is None:
+        return VET_NOT_READY, None
+
+    return _parse_vet_verdict_line(line, head_sha), None
 
 
 def read_membership(
