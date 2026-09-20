@@ -51,17 +51,23 @@ or updating those remote branches and opening pull requests for branches that ha
 `push`, `sync`, `rebase`, and `unstack` around them. The CLI tracks the branch chain locally and
 creates or updates the pull requests from it. A superheroes lane does **not** run this way.
 
-A launch premise may carry `stack` (the stack's number) and `layerPosition` (this layer's 1-based
-position). Both are optional, and **optional together** — one without the other is refused at
-launch. For `layerPosition >= 2`, the launcher refuses a base that is not the current head of the
-member at `layerPosition - 1` (the **base-not-layer-head** gate), reading membership through the
-same GraphQL read this section's successor describes. The launcher can emit six refusal tokens from
+A launch premise may carry `stack` (the stack's number), `layerPosition` (this layer's 1-based
+position), and optionally `layersPlanned` (the stack's planned layer count). `stack` and
+`layerPosition` are optional together — one without the other is refused at launch; `layersPlanned`
+requires both. For `layerPosition >= 2`, the launcher refuses a base that is not the current head of
+the member at `layerPosition - 1` (the **base-not-layer-head** gate), reading membership through the
+same GraphQL read this section's successor describes. The launcher can emit nine refusal tokens from
 premise validation and the layer gate — each token's meaning is in `lib/launcher.py`; the premise
 shape change is in `TRANSITION.md`:
 
 - `premise-stack-fields-incomplete` — only one of `stack` or `layerPosition` was supplied.
 - `premise-stack-field-invalid` — either key is present but not a positive integer (`bool` is not
   an integer here).
+- `premise-stack-layers-planned-incomplete` — `layersPlanned` was supplied without both
+  `stack` and `layerPosition`.
+- `premise-stack-layers-planned-invalid` — `layersPlanned` is present but not a positive integer
+  (`bool` is not an integer here).
+- `premise-stack-layers-planned-under-position` — `layersPlanned` is less than `layerPosition`.
 - `base-not-layer-head` — for `layerPosition >= 2`, the resolved base commit is not the current
   head of the stack member at position `layerPosition - 1`.
 - `stack-read-unavailable` — the launcher could not read stack membership and the gate could not
