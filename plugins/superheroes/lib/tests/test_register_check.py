@@ -20,12 +20,19 @@ _LIVE_REGISTER = os.path.join(
 )
 
 
-def _check(register_path, body_path, child, allow_no_required_entries=False):
+def _check(
+    register_path,
+    body_path,
+    child,
+    allow_no_required_entries=False,
+    register_copy=rc.REGISTER_COPY_AUTO,
+):
     return rc.check_body(
         register_path,
         body_path,
         child,
         allow_no_required_entries=allow_no_required_entries,
+        register_copy=register_copy,
     )
 
 
@@ -75,7 +82,10 @@ def _load_live_entries():
         "live register missing at %s — the register-check real-shape tests "
         "are unproven without it" % _LIVE_REGISTER
     )
-    entries, reason, _line, _detail = rc.load_register(_LIVE_REGISTER)
+    entries, reason, _line, _detail, *_rest = rc.load_register(
+        _LIVE_REGISTER,
+        register_copy=rc.REGISTER_COPY_WORKTREE,
+    )
     if entries is None:
         pytest.fail(f"live register unreadable or malformed: {reason}")
     return entries
@@ -89,7 +99,10 @@ def _assert_live_register_quotables_are_single_paragraph():
         lines = lines[:-1]
     lines = [line[:-1] if line.endswith("\r") else line for line in lines]
 
-    entries, reason, _line, _detail = rc.load_register(_LIVE_REGISTER)
+    entries, reason, _line, _detail, *_rest = rc.load_register(
+        _LIVE_REGISTER,
+        register_copy=rc.REGISTER_COPY_WORKTREE,
+    )
     assert reason is None
     for entry in entries:
         j = entry["header_line"]
@@ -126,7 +139,10 @@ def test_live_register_census():
         "live register missing at %s — the register-check real-shape tests "
         "are unproven without it" % _LIVE_REGISTER
     )
-    entries, reason, _line, _detail = rc.load_register(_LIVE_REGISTER)
+    entries, reason, _line, _detail, *_rest = rc.load_register(
+        _LIVE_REGISTER,
+        register_copy=rc.REGISTER_COPY_WORKTREE,
+    )
     assert reason is None
     ids = [entry["id"] for entry in entries]
     assert ids, "live register has no entries"
@@ -910,6 +926,222 @@ def test_deterministic_stdout(tmp_path):
         (rc.KIND_TEXT_DRIFT, "R2"),
         (rc.KIND_UNKNOWN_ENTRY, "R99"),
     ]
+
+
+def _git_commit_all(repo, message="commit"):
+    subprocess.run(
+        [
+            "git", "-C", str(repo),
+            "-c", "user.name=test",
+            "-c", "user.email=test@test",
+            "add", "-A",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git", "-C", str(repo),
+            "-c", "user.name=test",
+            "-c", "user.email=test@test",
+            "commit", "-m", message,
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def _init_git_repo(path):
+    subprocess.run(
+        ["git", "init", "-b", "main", str(path)],
+        check=True,
+        capture_output=True,
+    )
+
+
+def _tiny_register_text(header_suffix="One line entry."):
+    return (
+        f"**R1 — {header_suffix}**\n"
+        "*Consumers:* C1\n"
+    )
+
+
+# --- register copy selection (#1340) ----------------------------------------
+
+
+def test_main_copy_used_when_branch_copy_differs(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    register = repo / "register.md"
+    register.write_text(_tiny_register_text("Main copy."), encoding="utf-8")
+    _git_commit_all(repo, "main copy")
+    register.write_text(_tiny_register_text("Stale branch copy."), encoding="utf-8")
+    body = repo / "body.md"
+    body.write_text("> **R1 — Stale branch copy.**\n", encoding="utf-8")
+    result = _check(register, body, "C1", register_copy=rc.REGISTER_COPY_MAIN)
+    assert result["result"] == rc.RESULT_FAIL
+    assert result["registerCopy"] == rc.REGISTER_COPY_MAIN
+    assert result["registerRef"] in rc.MAIN_REFS
+    assert result["findings"][0]["kind"] == rc.KIND_TEXT_DRIFT
+
+
+def test_auto_inside_repo_selects_main(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    register = repo / "register.md"
+    register.write_text(_tiny_register_text("Main copy."), encoding="utf-8")
+    _git_commit_all(repo, "main copy")
+    register.write_text(_tiny_register_text("Stale branch copy."), encoding="utf-8")
+    body = repo / "body.md"
+    body.write_text("> **R1 — Stale branch copy.**\n", encoding="utf-8")
+    result = _check(register, body, "C1")
+    assert result["registerCopy"] == rc.REGISTER_COPY_MAIN
+    assert result["result"] == rc.RESULT_FAIL
+
+
+def test_auto_outside_repo_selects_worktree(tmp_path):
+    register = _tiny_register(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
+    result = _check(register, body, "C1")
+    assert result["registerCopy"] == rc.REGISTER_COPY_WORKTREE
+    assert result["registerRef"] is None
+    assert result["result"] == rc.RESULT_PASS
+
+
+def test_register_copy_worktree_explicit_inside_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    register = repo / "register.md"
+    register.write_text(_tiny_register_text("Main copy."), encoding="utf-8")
+    _git_commit_all(repo, "main copy")
+    register.write_text(_tiny_register_text("Stale branch copy."), encoding="utf-8")
+    body = repo / "body.md"
+    body.write_text("> **R1 — Stale branch copy.**\n", encoding="utf-8")
+    result = _check(register, body, "C1", register_copy=rc.REGISTER_COPY_WORKTREE)
+    assert result["registerCopy"] == rc.REGISTER_COPY_WORKTREE
+    assert result["registerRef"] is None
+    assert result["result"] == rc.RESULT_PASS
+
+
+def test_origin_main_preferred_over_main(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    register = repo / "register.md"
+    register.write_text(_tiny_register_text("Origin main copy."), encoding="utf-8")
+    _git_commit_all(repo, "origin snapshot")
+    origin_sha = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "-C", str(repo), "update-ref", "refs/remotes/origin/main", origin_sha],
+        check=True,
+        capture_output=True,
+    )
+    register.write_text(_tiny_register_text("Local main copy."), encoding="utf-8")
+    _git_commit_all(repo, "local main")
+    body = repo / "body.md"
+    body.write_text("> **R1 — Origin main copy.**\n", encoding="utf-8")
+    result = _check(register, body, "C1", register_copy=rc.REGISTER_COPY_MAIN)
+    assert result["registerRef"] == "origin/main"
+    assert result["result"] == rc.RESULT_PASS
+
+
+def test_main_selected_no_refs_undecided(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    register = repo / "register.md"
+    register.write_text(_tiny_register_text(), encoding="utf-8")
+    body = repo / "body.md"
+    body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
+    result = _check(register, body, "C1", register_copy=rc.REGISTER_COPY_MAIN)
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_REGISTER_UNREADABLE
+    assert result["registerCopy"] == rc.REGISTER_COPY_MAIN
+    assert "origin/main" in result["detail"]
+    assert "main" in result["detail"]
+    code, out, _err = _run_cli(
+        "--register", str(register),
+        "--body-file", str(body),
+        "--child", "C1",
+        "--register-copy", "main",
+    )
+    assert code == rc.EXIT_UNDECIDED
+    payload = json.loads(out.strip())
+    assert payload["reason"] == rc.UNDECIDED_REGISTER_UNREADABLE
+
+
+def test_main_selected_path_not_tracked_undecided(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    readme = repo / "README.md"
+    readme.write_text("seed\n", encoding="utf-8")
+    _git_commit_all(repo, "seed")
+    register = repo / "register.md"
+    register.write_text(_tiny_register_text(), encoding="utf-8")
+    body = repo / "body.md"
+    body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
+    result = _check(register, body, "C1", register_copy=rc.REGISTER_COPY_MAIN)
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_REGISTER_UNREADABLE
+    assert result["registerCopy"] == rc.REGISTER_COPY_MAIN
+    assert "register.md" in result["detail"]
+
+
+def test_main_selected_git_unavailable_undecided(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    register = repo / "register.md"
+    register.write_text(_tiny_register_text(), encoding="utf-8")
+    _git_commit_all(repo, "main")
+    body = repo / "body.md"
+    body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
+
+    def boom(*_args, **_kwargs):
+        return rc.store_core.GitResult(
+            None,
+            rc.store_core.GIT_UNAVAILABLE,
+            "git unavailable",
+        )
+
+    monkeypatch.setattr(rc.store_core, "run_git_result", boom)
+    result = _check(register, body, "C1", register_copy=rc.REGISTER_COPY_MAIN)
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_REGISTER_UNREADABLE
+    assert result["registerCopy"] == rc.REGISTER_COPY_MAIN
+
+
+def test_register_copy_fields_on_every_result_path(tmp_path):
+    register = _tiny_register(tmp_path)
+    pass_body = tmp_path / "pass.md"
+    pass_body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
+    pass_result = _check(register, pass_body, "C1")
+    assert "registerCopy" in pass_result
+    assert "registerRef" in pass_result
+    _assert_result_field_keys(pass_result)
+
+    drift_body = tmp_path / "drift.md"
+    drift_body.write_text("> **R1 — One line entry.X**\n", encoding="utf-8")
+    drift_result = _check(register, drift_body, "C1")
+    _assert_result_field_keys(drift_result)
+
+    undecided_result = _check(register, drift_body, "C09")
+    _assert_result_field_keys(undecided_result)
+
+    unreadable = tmp_path / "bad.md"
+    unreadable.write_bytes(b"\xff\xfe")
+    unreadable_result = _check(register, unreadable, "C1")
+    _assert_result_field_keys(unreadable_result)
 
 
 def test_vocabulary_constants():
