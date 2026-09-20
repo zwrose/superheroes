@@ -104,11 +104,13 @@ COUNT_RESULT_BLOCKS = ("counts", "amendments", "lanes", "attempts", "laneDetail"
 CHARTER_NAMED_COUNT_BLOCKS = ("lanes", "attempts", "laneDetail")
 
 
-def scrub_env(env=None):
+def scrub_env(env=None, *, keys=GIT_SCRUB_VARS, roots=(LEDGER_ROOT_ENV,)):
+    """Return a copy of env with every key in keys and roots removed."""
     base = dict(env if env is not None else os.environ)
-    for key in GIT_SCRUB_VARS:
+    for key in keys:
         base.pop(key, None)
-    base.pop(LEDGER_ROOT_ENV, None)
+    for root in roots:
+        base.pop(root, None)
     return base
 
 
