@@ -6145,6 +6145,11 @@ def test_stack_gate_two_entry_candidates_refuses(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
     head = _head_sha(repo)
+    membership_calls = []
+
+    def reader(**kwargs):
+        membership_calls.append(dict(kwargs))
+        return _membership_ok(1, head)
 
     def two_pr_gh_run(argv, **kwargs):
         if argv[:3] == ["gh", "repo", "view"]:
@@ -6170,9 +6175,14 @@ def test_stack_gate_two_entry_candidates_refuses(tmp_path, monkeypatch):
         pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
             r, sha, env=env, gh_run=two_pr_gh_run, deadline=deadline,
         ),
+        membership_reader=reader,
     )
     assert result["ok"] is False
     assert result["reason"] == "stack-read-unavailable"
+    assert "detail" not in result
+    assert membership_calls == []
+    refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
+    assert any(r.get("stage") == "stack" for r in refused)
 
 
 def test_stack_gate_repo_view_failure_refuses(tmp_path, monkeypatch):

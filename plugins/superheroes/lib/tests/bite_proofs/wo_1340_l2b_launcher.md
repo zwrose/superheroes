@@ -14,7 +14,7 @@ Per-guard bite proof for stack field validation (I1) and the layer gate in `laun
 | BP-B-6 | `_apply_stack_gate` not-linked branch | entry PR is not linked to a stack | `test_stack_gate_not_linked_refuses` |
 | BP-B-7 | `_lookup_stack_entry_pr` ambiguous lookup | ambiguous or unreadable entry PR lookup | `test_stack_gate_two_entry_candidates_refuses` |
 
-Budget note: invocations 7–14 recorded red/green for BP-B-1 through BP-B-4; BP-B-5 through BP-B-7 have proving tests but no separate red/green capture in this dispatch (budget ceiling).
+Budget note: invocations 7–14 recorded red/green for BP-B-1 through BP-B-4 in this file; BP-B-5 and BP-B-6 red/green captures live in the PR build record (orchestrator-proven at this head); BP-B-7 red/green capture is recorded below (R4 dispatch).
 
 ---
 
@@ -224,4 +224,53 @@ FAILED plugins/superheroes/lib/tests/test_launcher.py::test_stack_gate_position_
 ```
 .                                                                        [100%]
 1 passed in 2.49s
+```
+
+---
+
+## BP-B-7 — ambiguous entry PR lookup
+
+- **axis:** ambiguous or unreadable entry PR lookup
+
+**neutralization** (`plugins/superheroes/lib/launcher.py`):
+```python
+    if False and len(candidates) > 1:
+```
+(replaces `if len(candidates) > 1:`)
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_launcher.py::test_stack_gate_two_entry_candidates_refuses -q
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________________ test_stack_gate_two_entry_candidates_refuses _________________
+
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-2599/test_stack_gate_two_entry_cand0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1065b5640>
+
+    def test_stack_gate_two_entry_candidates_refuses(tmp_path, monkeypatch):
+      # axis: ambiguous entry PR lookup refuses stack-read-unavailable
+        ...
+>       assert result["ok"] is False
+E       assert True is False
+
+plugins/superheroes/lib/tests/test_launcher.py:6180: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launcher.py::test_stack_gate_two_entry_candidates_refuses
+1 failed in 20.88s
+```
+
+**restore:**
+```python
+    if len(candidates) > 1:
+```
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.53s
 ```
