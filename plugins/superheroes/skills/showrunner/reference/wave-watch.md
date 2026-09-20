@@ -121,7 +121,8 @@ that result** — but a `timer` result carries no `alsoObserved` at all, so a la
 suppressed is invisible in that arm's output. Use `--log` to keep sight of a suppressed lane across
 a long arm chain. Only the four **lane-keyed** events are suppressible: `lane-terminal`,
 `lane-blocked`, `builder-exited`, `lane-stale`.
-`pr-set-changed` and `timer` are not lane-keyed; naming them is a refusal (`ignore-event-invalid`).
+`pr-set-changed`, `stack-state-changed`, and `timer` are not per-lane suppressible; naming
+them is a refusal (`ignore-event-invalid`).
 A malformed pair is a refusal (`ignore-event-invalid`), never a silent drop.
 
 **Pattern — the exception, not the routine:** when `loop` wakes you on an event you have **verified**
@@ -132,9 +133,9 @@ events still do**. Within a single `loop` invocation, the first unsuppressed act
 the loop; persistence across invocations is **your** job — pass `--ignore-event` on re-arm. The tool
 does not dedupe suppressed pairs across invocations by itself. **Do not pre-arm `--ignore-event` for
 `lane-stale` as a matter of course**: an arm that ignores every lane's stale signal has quietly
-reduced the watcher to `pr-set-changed`, and the wave's wedges arrive as surprises. If you find
-yourself suppressing the same event on most lanes of a wave, that is a field observation to record
-(the promise or the second chance is wrong), not a pattern to keep.
+reduced the watcher to `stack-state-changed` and `pr-set-changed`, and the wave's wedges arrive as
+surprises. If you find yourself suppressing the same event on most lanes of a wave, that is a field
+observation to record (the promise or the second chance is wrong), not a pattern to keep.
 
 ## Before treating `lane-stale` as a wedge
 
@@ -240,17 +241,39 @@ The watcher prints **one JSON line on stdout**; **exit 0 on an event, exit 1 on 
 - `lane-terminal`
 - `lane-blocked`
 - `builder-exited`
+- `stack-state-changed`
 - `pr-set-changed`
 - `lane-stale`
 - `timer`
 
 **Precedence**, highest first:
 
-`lane-terminal` > `lane-blocked` > `builder-exited` > `pr-set-changed` > `lane-stale` > `timer`
+`lane-terminal` > `lane-blocked` > `builder-exited` > `stack-state-changed` >
+`pr-set-changed` > `lane-stale` > `timer`
 
 When an event fires, co-occurring lower-precedence lane signals from the same interval ride along
 under `alsoObserved` (launch ids only) — read it, or you will act on one lane and miss its
 siblings. A `timer` result has no `alsoObserved`.
+
+When **`stack-state-changed`** fires, the payload carries one entry per stack the batch's
+launches name, plus a `flags` list:
+
+- `stacks` — one object per distinct stack number stamped on any lane in the batch, sorted by
+  `stack`: `stack` (the stack number), `state` (`stack-complete` or `stack-incomplete`),
+  `layersPlanned` (the agreed layer count when known, else `null`), `missingPositions` (sorted
+  positions still incomplete — empty when `state` is `stack-complete`), and `reason` (`null` when
+  complete, else one of `layers-planned-unknown`, `layers-planned-disagreed`, or
+  `membership-unresolved`).
+- `flags` — observations that ride with the snapshot; today the only flag is
+  `idle-seat-launchable-child`, each entry naming `stack`, `position` (the vetted layer), and
+  `flag`.
+
+**Complete** means every position from `1` through `layersPlanned` has a stack member whose vet
+reads READY at that pull request's **current** head. **Everything else is incomplete** — a member
+whose vet could not be read, membership that could not be resolved, a disagreed `layersPlanned`
+across the batch's lanes, or `layersPlanned` absent entirely. **`idle-seat-launchable-child`**
+observes a vetted layer whose next planned position (`position + 1`) is within `layersPlanned` but
+no launch in the batch occupies it — a seat the wave could fill without waiting for a merge.
 
 When **`pr-set-changed`** fires, the payload carries the open PR set plus what moved:
 
