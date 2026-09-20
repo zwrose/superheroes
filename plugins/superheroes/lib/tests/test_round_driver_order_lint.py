@@ -292,10 +292,53 @@ def test_fixer_emission_ignores_lint_triggers_inside_verify_command(tmp_path, mo
     order_path = RR.order_prompt_path(session_dir, state["round"], RP.P_FIXER, _FIXER_SKEY, 0)
     order_text = open(order_path, encoding="utf-8").read()
     assert verify in order_text
+    # R28 re-pin (C13 bring-current, option b): the retired VERIFY_COMMAND placeholder is no
+    # longer the elision's source — the owner's command is read from the session config and
+    # elided inside the scoped verify budget. The emission above is the production gate; this
+    # asserts the lint text the emission built.
+    budget = RD._fixer_verify_budget(state.get("fixBatch") or [], state["config"])
     lint = OL.check_text(RD._order_lint_text(order_text, {
-        "placeholders": {"VERIFY_COMMAND": verify},
+        "placeholders": {"VERIFY_BUDGET": budget},
+        "verify_command": verify,
     }), repo, kind="fixer")
     assert lint["ok"] is True
+
+
+def test_fixer_emission_elides_only_the_owner_verify_command_from_the_budget(tmp_path, monkeypatch):
+    # axis: the narrow elision — the owner's command goes, the driver's target-file list stays graded
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    repo = str(tmp_path / "proj")
+    os.makedirs(repo)
+    # A real project-shaped verify command: validator paths, the driver-bound `{baseRef}` token
+    # (exempt by `order_lint._DRIVER_PH`, so it is NOT what bites), and one ordinary `{name}`
+    # token of the owner's own — which is what the lint would refuse on if it were not elided.
+    verify = ("/venv/bin/python .github/scripts/validate_skills.py"
+              " && /usr/bin/python3 .github/scripts/verify_touched_tests.py --base {baseRef}"
+              " && xargs -I {item} echo ok")
+    state.setdefault("config", {})["repoRoot"] = repo
+    state["config"]["verifyCommand"] = verify
+    target = "plugins/superheroes/lib/round_driver.py"
+    # Every path the order names resolves, so the ONE thing the lint could still refuse on is
+    # the `{baseRef}` token inside the owner's command — the production failure exactly.
+    for path in (target, ".github/scripts/validate_skills.py",
+                 ".github/scripts/verify_touched_tests.py"):
+        os.makedirs(os.path.join(repo, os.path.dirname(path)), exist_ok=True)
+        open(os.path.join(repo, path), "w", encoding="utf-8").close()
+    state["fixBatch"] = [{"file": target, "title": "t", "line": 1}]
+    # The production path emits without refusing.
+    assert "manifestSha256" in _emit_fixer(session_dir, state)
+    order_path = RR.order_prompt_path(session_dir, state["round"], RP.P_FIXER, _FIXER_SKEY, 0)
+    order_text = open(order_path, encoding="utf-8").read()
+    assert verify in order_text
+    budget = RD._fixer_verify_budget(state["fixBatch"], state["config"])
+    lint_text = RD._order_lint_text(order_text, {
+        "placeholders": {"VERIFY_BUDGET": budget},
+        "verify_command": verify,
+    })
+    # The owner's command is gone from the lint text; the driver's own target-file list is not.
+    assert verify not in lint_text
+    assert RD.QUOTED_DATA_LINT_ELISION in lint_text
+    assert target in lint_text
 
 
 def test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root(tmp_path, monkeypatch):

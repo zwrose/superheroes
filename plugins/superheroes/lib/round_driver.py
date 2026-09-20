@@ -122,10 +122,24 @@ QUOTED_DATA_LINT_ELISION = "(quoted data elided from the order lint)"
 
 
 def _order_lint_text(order_text, context):
-    """The rendered order minus every quoted-data block: the lint grades the driver's text, never the owner's."""
+    """The rendered order minus every quoted-data block: the lint grades the driver's text, never the owner's.
+
+    The owner's verify command is quoted data wherever it rides. The round economy (C13 layer 2d)
+    retired the fixer template's bare ``VERIFY_COMMAND`` placeholder in favour of the scoped
+    ``VERIFY_BUDGET``, which quotes the owner's command INSIDE driver-authored prose — so the
+    command is sourced from the session config (``verify_command``), never from a placeholder no
+    template fills any more, and the elision is NARROW: only the command itself is replaced, and
+    only where it rides inside the budget block, so the budget's own target-file list, its
+    instructions, and every path in them stay graded by the lint.
+    """
     ph = context.get("placeholders") if isinstance(context.get("placeholders"), dict) else {}
     text = order_text
-    for quoted in (ph.get("GATE_GUIDANCE"), ph.get("VERIFY_COMMAND"), context.get("ratified_residuals")):
+    budget = ph.get("VERIFY_BUDGET")
+    verify = context.get("verify_command")
+    if (isinstance(budget, str) and budget.strip()
+            and isinstance(verify, str) and verify.strip() and verify in budget):
+        text = text.replace(budget, budget.replace(verify, QUOTED_DATA_LINT_ELISION, 1), 1)
+    for quoted in (ph.get("GATE_GUIDANCE"), context.get("ratified_residuals")):
         if isinstance(quoted, str) and quoted.strip():
             text = text.replace(quoted, QUOTED_DATA_LINT_ELISION, 1)
     return text
@@ -7232,6 +7246,10 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
         "landing_path": paths["landing_path"],
         "envelope_stub_path": paths["envelope_stub_path"],
         "ratified_residuals": residuals,
+        # Quoted data for the order lint (see `_order_lint_text`): the owner's own verify command,
+        # read from the session config — the one source now that the fixer template quotes it
+        # inside the scoped verify budget rather than through a placeholder of its own.
+        "verify_command": cfg.get("verifyCommand"),
         "residuals_provenance": prov,
         "residuals_read_failure": res_failure,
         "payload": pending_payload if isinstance(pending_payload, dict) else {},
