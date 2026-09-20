@@ -38,6 +38,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import background_outcome  # noqa: E402  background refusal vocabulary (#1273)
 import cli_contract as cc  # noqa: E402  argparse caller-contract builders
 import config_dir  # noqa: E402  claude config root resolution (#1273)
 import dispatch_guard  # noqa: E402  model allowlist gate (#600, #1269 WO-B)
@@ -926,16 +927,41 @@ def _claude_agent_row_for_launch(rows, launch_id):
     return None
 
 
+def _session_id_path_safe(session_id):
+    """Reject session ids that escape the projects tree or expand globs. Never raises."""
+    if not isinstance(session_id, str) or not session_id:
+        return False
+    if os.sep in session_id or "/" in session_id or ".." in session_id:
+        return False
+    if any(ch in session_id for ch in "*?[\\"):
+        return False
+    return True
+
+
+def _transcript_path_contained(path, config_dir):
+    """True when path resolves under config_dir/projects/. Never raises."""
+    try:
+        projects_root = os.path.realpath(os.path.join(config_dir, "projects"))
+        resolved = os.path.realpath(path)
+        prefix = projects_root + os.sep
+        return resolved == projects_root or resolved.startswith(prefix)
+    except (OSError, ValueError):
+        return False
+
+
 def _glob_transcript_paths(config_dir, session_id):
     """Glob transcript paths for session_id. Never raises."""
     paths = []
     try:
         if not isinstance(config_dir, str) or not config_dir:
             return paths
-        if not isinstance(session_id, str) or not session_id:
+        if not _session_id_path_safe(session_id):
             return paths
         pattern = os.path.join(config_dir, "projects", "*", session_id + ".jsonl")
-        paths = glob.glob(pattern)
+        paths = [
+            path for path in glob.glob(pattern)
+            if _transcript_path_contained(path, config_dir)
+        ]
     except Exception:
         return []
     return paths
@@ -945,15 +971,17 @@ def _read_session_transcript_rows(config_dir, session_id):
     """Read capped transcript JSONL rows; missing file is empty. Never raises."""
     paths = _glob_transcript_paths(config_dir, session_id)
     if len(paths) != 1:
-        return [], paths
+        return [], paths, 0
     rows = []
+    file_size = 0
     try:
         with open(paths[0], "rb") as fh:
-            capped, _truncated, _observed = _bounded_stdout_cap_from_file(
+            capped, _truncated, observed = _bounded_stdout_cap_from_file(
                 fh, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT,
             )
+            file_size = observed or 0
         if capped is None:
-            return [], paths
+            return [], paths, file_size
         text = capped.decode("utf-8", errors="ignore")
         for line in text.splitlines():
             line = line.strip()
@@ -966,8 +994,8 @@ def _read_session_transcript_rows(config_dir, session_id):
             if isinstance(obj, dict):
                 rows.append(obj)
     except OSError:
-        return [], paths
-    return rows, paths
+        return [], paths, file_size
+    return rows, paths, file_size
 
 
 def _scrub_native_payload(obj):
@@ -1106,6 +1134,8 @@ def _background_session_ended(row):
 
 def _attempt_bg_resumable(state, attempt):
     slot = (state.get("attempts") or {}).get(attempt) or {}
+    if slot.get("ended") is not None:
+        return False
     suspended = slot.get("suspended") or {}
     return bool(suspended.get("launchId"))
 
@@ -1132,7 +1162,7 @@ def _attempt_bg_launch_id(attempt_rec):
 def _attempt_bg_stop_recorded(attempt_rec):
     """Return recorded bgStop when cleanup was already confirmed. Never raises."""
     attempt_rec = attempt_rec or {}
-    for key in ("ended", "suspended"):
+    for key in ("ended", "suspended", "backgroundLaunched"):
         rec = attempt_rec.get(key) or {}
         bg_stop = rec.get("bgStop")
         if bg_stop in ("stopped", "already-ended"):
@@ -1165,6 +1195,26 @@ def _journal_attempt_bg_stop(run_dir_real, attempt, bg_stop):
     })
 
 
+def _record_bg_stop_on_slot(slot, stop_outcome):
+    """Record bgStop without manufacturing an ended placeholder. Never raises."""
+    suspended = slot.get("suspended")
+    if isinstance(suspended, dict):
+        suspended = dict(suspended)
+        suspended["bgStop"] = stop_outcome
+        slot["suspended"] = suspended
+        return
+    launched = slot.get("backgroundLaunched")
+    if isinstance(launched, dict):
+        launched = dict(launched)
+        launched["bgStop"] = stop_outcome
+        slot["backgroundLaunched"] = launched
+        return
+    if slot.get("ended") is not None:
+        ended = dict(slot["ended"])
+        ended["bgStop"] = stop_outcome
+        slot["ended"] = ended
+
+
 def _stop_live_background_sessions(state, opened, *, run_dir_real=None):
     """Stop any live background session on terminal fold, abandon, or retry. Never raises."""
     attempts = state.get("attempts") or {}
@@ -1180,14 +1230,7 @@ def _stop_live_background_sessions(state, opened, *, run_dir_real=None):
         stop_outcome = _background_stop(launch_id, config_dir, cwd)
         if not stop_outcome:
             continue
-        ended = dict(slot.get("ended") or {})
-        ended["bgStop"] = stop_outcome
-        slot["ended"] = ended
-        suspended = slot.get("suspended")
-        if isinstance(suspended, dict):
-            suspended = dict(suspended)
-            suspended["bgStop"] = stop_outcome
-            slot["suspended"] = suspended
+        _record_bg_stop_on_slot(slot, stop_outcome)
         if run_dir_real:
             _journal_attempt_bg_stop(run_dir_real, att, stop_outcome)
 
@@ -1248,21 +1291,27 @@ def _run_engine_files_background(
         run_dir_real, attempt, opened, argv, cwd, prompt_path, stdout_path,
         stderr_path, timeout, progress_path, native_result_path, *,
         resume_launch_id=None, resume_session_id=None, prior_wall_seconds=0,
-        transcript_row_cursor=0):
+        transcript_row_cursor=0, prior_transcript_file_size=None):
     """Background transcript delivery: launch, poll, materialize, stop. Never raises."""
     config_dir = opened.get("configDir")
     dispatch_path = _dispatch_path_from_opened(opened)
     write_progress = _progress_writer(progress_path)
     start = _NOW()
-    deadline = start + max(0.0, timeout - prior_wall_seconds)
+    deadline = start + timeout
     launch_id = resume_launch_id
     session_id = resume_session_id
     transcript_paths = []
     rows = []
+    file_size = 0
     tool_calls = None
     cursor = transcript_row_cursor if isinstance(transcript_row_cursor, int) else 0
     if cursor < 0:
         cursor = 0
+    prior_file_size = (
+        prior_transcript_file_size
+        if isinstance(prior_transcript_file_size, int) and prior_transcript_file_size >= 0
+        else None
+    )
 
     def _journal_bg_ended(ended_record):
         _journal_append(run_dir_real, ended_record)
@@ -1281,7 +1330,7 @@ def _run_engine_files_background(
                 "kind": "attempt-ended", "attempt": attempt,
                 "exit": exit_code if exit_code is not None else 127,
                 "timedOut": False, "signal": None,
-                "refusal": "background-launch-unacknowledged",
+                "refusal": background_outcome.REFUSAL_LAUNCH_UNACKNOWLEDGED,
                 "at": time.time(),
                 "wallSeconds": round(_NOW() - start, 1),
                 "capSeconds": timeout,
@@ -1292,8 +1341,26 @@ def _run_engine_files_background(
             _journal_bg_ended({
                 "kind": "attempt-ended", "attempt": attempt,
                 "exit": exit_code, "timedOut": False, "signal": None,
-                "refusal": "background-launch-failed",
+                "refusal": background_outcome.REFUSAL_LAUNCH_FAILED,
                 "refusalDetail": str(exit_code),
+                "launchId": launch_id,
+                "at": time.time(),
+                "wallSeconds": round(_NOW() - start, 1),
+                "capSeconds": timeout,
+                "dispatchPath": dispatch_path,
+            })
+            return
+        if not _journal_append(run_dir_real, {
+            "kind": "background-launched",
+            "attempt": attempt,
+            "launchId": launch_id,
+            "at": time.time(),
+        }):
+            _background_stop(launch_id, config_dir, cwd)
+            _journal_bg_ended({
+                "kind": "attempt-ended", "attempt": attempt,
+                "exit": 127, "timedOut": False, "signal": None,
+                "refusal": "journal-append-failed",
                 "launchId": launch_id,
                 "at": time.time(),
                 "wallSeconds": round(_NOW() - start, 1),
@@ -1303,10 +1370,11 @@ def _run_engine_files_background(
             return
         session_id, _agent_rows = _resolve_bg_session_id(launch_id, config_dir, cwd)
         if session_id is None:
+            _background_stop(launch_id, config_dir, cwd)
             _journal_bg_ended({
                 "kind": "attempt-ended", "attempt": attempt,
                 "exit": 0, "timedOut": False, "signal": None,
-                "refusal": "background-session-unlisted",
+                "refusal": background_outcome.REFUSAL_SESSION_UNLISTED,
                 "launchId": launch_id,
                 "at": time.time(),
                 "wallSeconds": round(_NOW() - start, 1) + prior_wall_seconds,
@@ -1328,11 +1396,20 @@ def _run_engine_files_background(
     wall_seconds = round(_NOW() - start, 1) + prior_wall_seconds
 
     while _NOW() < deadline:
-        rows, transcript_paths = _read_session_transcript_rows(config_dir, session_id)
+        rows, transcript_paths, file_size = _read_session_transcript_rows(
+            config_dir, session_id,
+        )
         if len(transcript_paths) > 1:
-            refusal = "background-transcript-ambiguous"
+            refusal = background_outcome.REFUSAL_TRANSCRIPT_AMBIGUOUS
             break
-        rows_after_cursor = rows[cursor:] if cursor else rows
+        if (
+            prior_file_size is not None
+            and file_size != prior_file_size
+            and file_size > MAX_STDOUT_CAPTURE
+        ):
+            rows_after_cursor = rows
+        else:
+            rows_after_cursor = rows[cursor:] if cursor else rows
         if engine_adapter.claude_transcript_turn_ended(rows_after_cursor):
             payload = engine_adapter.claude_transcript_result(rows)
             tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
@@ -1350,12 +1427,38 @@ def _run_engine_files_background(
             break
         agent_rows, listing_ok = _claude_agents_rows(config_dir, cwd)
         if not listing_ok:
-            refusal = "background-agents-unreadable"
+            refusal = background_outcome.REFUSAL_AGENTS_UNREADABLE
             break
         agent_row = _claude_agent_row_for_launch(agent_rows, launch_id)
         if _background_session_ended(agent_row):
+            rows, transcript_paths, file_size = _read_session_transcript_rows(
+                config_dir, session_id,
+            )
+            if (
+                prior_file_size is not None
+                and file_size != prior_file_size
+                and file_size > MAX_STDOUT_CAPTURE
+            ):
+                rows_after_cursor = rows
+            else:
+                rows_after_cursor = rows[cursor:] if cursor else rows
+            if engine_adapter.claude_transcript_turn_ended(rows_after_cursor):
+                payload = engine_adapter.claude_transcript_result(rows)
+                tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
+                result_path = _native_result_path(run_dir_real, attempt)
+                if result_path is None:
+                    transcript_result = "error"
+                elif payload is not None:
+                    transcript_result = _native_result_materialization_status(
+                        result_path, payload,
+                    )
+                else:
+                    transcript_result = _native_result_materialization_status(
+                        result_path, None,
+                    )
+                break
             if transcript_result is None:
-                refusal = "background-session-ended-without-result"
+                refusal = background_outcome.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
             break
         elapsed = _NOW() - start
         try:
@@ -1375,6 +1478,7 @@ def _run_engine_files_background(
             "launchId": launch_id,
             "bgSessionId": session_id,
             "transcriptRowCursor": len(rows),
+            "transcriptFileSize": file_size,
             "wallSeconds": wall_seconds,
             "at": time.time(),
         })
@@ -1820,6 +1924,7 @@ def _journal_state(records):
                         slot["endedSuperseded"] = rec
                     else:
                         slot["endedSuperseded"] = rec
+                slot.pop("suspended", None)
         elif kind == "attempt-suspended":
             att = rec.get("attempt")
             if att is not None:
@@ -1834,14 +1939,7 @@ def _journal_state(records):
             att = rec.get("attempt")
             if att is not None:
                 slot = state["attempts"].setdefault(att, {"childPid": None, "enginePgid": None, "ended": None})
-                ended = dict(slot.get("ended") or {})
-                ended["bgStop"] = rec.get("bgStop")
-                slot["ended"] = ended
-                suspended = slot.get("suspended")
-                if isinstance(suspended, dict):
-                    suspended = dict(suspended)
-                    suspended["bgStop"] = rec.get("bgStop")
-                    slot["suspended"] = suspended
+                _record_bg_stop_on_slot(slot, rec.get("bgStop"))
         elif kind == "run-folded":
             state["folded"] = rec.get("result")
         elif kind == "run-abandoned":
@@ -3218,6 +3316,9 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
     elif record_kind == "run-abandoned":
         # axis: that repeat reads return the stored result — not a fresh abandon mint.
         abandon_result = _abandon_terminal_result(run_dir_real, state)
+        if _background_stop_unconfirmed(state):
+            abandon_result = dict(abandon_result)
+            abandon_result["backgroundStopUnconfirmed"] = True
         record = {
             "kind": "run-abandoned",
             "detail": abandon_detail or "abandoned",
@@ -3303,7 +3404,7 @@ def _fold_sibling_worktrees(state):
 def _background_stop_unconfirmed(state):
     """True when any attempt recorded stop-unconfirmed. Never raises."""
     for slot in (state.get("attempts") or {}).values():
-        for key in ("ended", "suspended"):
+        for key in ("ended", "suspended", "backgroundLaunched"):
             rec = slot.get(key) or {}
             if rec.get("bgStop") == "stop-unconfirmed":
                 return True
@@ -3315,6 +3416,8 @@ def _fold_run(run_dir_real, state, result):
     if sibling is not None:
         result = dict(result)
         result["siblingWorktrees"] = sibling
+    opened = state.get("opened") or {}
+    _stop_live_background_sessions(state, opened, run_dir_real=run_dir_real)
     if _background_stop_unconfirmed(state):
         result = dict(result)
         result["backgroundStopUnconfirmed"] = True
@@ -3678,11 +3781,13 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         resume_session_id = None
         prior_wall_seconds = 0
         transcript_row_cursor = 0
+        prior_transcript_file_size = None
         if prior_suspended.get("launchId"):
             resume_launch_id = prior_suspended.get("launchId")
             resume_session_id = prior_suspended.get("bgSessionId")
             prior_wall_seconds = prior_suspended.get("wallSeconds") or 0
             transcript_row_cursor = prior_suspended.get("transcriptRowCursor") or 0
+            prior_transcript_file_size = prior_suspended.get("transcriptFileSize")
         _run_engine_files_background(
             run_dir_real, attempt, opened, argv, cwd, prompt_path,
             stdout_path, stderr_path, timeout, progress_path, native_result_path,
@@ -3690,6 +3795,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             resume_session_id=resume_session_id,
             prior_wall_seconds=prior_wall_seconds,
             transcript_row_cursor=transcript_row_cursor,
+            prior_transcript_file_size=prior_transcript_file_size,
         )
         return
     dispatch_path = _dispatch_path_from_opened(opened)
@@ -5038,7 +5144,10 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
 
                 latest = max(attempts)
                 latest_ended = (attempts[latest].get("ended") or {})
-                if _attempt_bg_resumable(state, latest):
+                if (
+                    attempts[latest].get("ended") is None
+                    and _attempt_bg_resumable(state, latest)
+                ):
                     ok_spawn, detail = _spawn_attempt(
                         run_dir_real, state, latest, run_engine=run_engine, resume=True,
                     )

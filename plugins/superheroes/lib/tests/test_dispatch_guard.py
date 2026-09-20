@@ -535,8 +535,7 @@ def test_claude_cells_on_allowlist_per_role():
     cells_checked = 0
     for role in MR.roles():
         cell = MR.matrix_config(role, "claude")
-        if cell is None:
-            continue
+        assert cell is not None, role
         cells_checked += 1
         model_id, effort = cell
         seat = {"vendor": "claude", "model": model_id, "effort": effort, "role": role}
@@ -550,7 +549,7 @@ def test_claude_cells_on_allowlist_per_role():
         payload = json.loads(proc.stdout)
         assert payload["ok"] is True
         assert payload["dispatch_token"] == MR.dispatch_token("claude", model_id, effort)
-    assert cells_checked == 10
+    assert cells_checked == len(MR.roles())
 
 
 def test_claude_off_cell_refused():

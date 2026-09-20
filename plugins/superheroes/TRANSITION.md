@@ -61,9 +61,8 @@ through stdout: the runner materializes the last `{"type":"result"}` envelope's
 session transcript on `dispatch-review` only — a write dispatch in background mode refuses
 `claude-mode-background-write` before spawn; a continuation with a disagreeing mode refuses
 `run-dir-claude-mode-mismatch`. Background attempt outcomes can carry
-`background-launch-unacknowledged`, `background-launch-failed`, `background-session-unlisted`,
-`background-transcript-ambiguous`, `background-agents-unreadable`, or
-`background-session-ended-without-result`. Background telemetry is read from the session
+the refusal tokens in `lib/background_outcome.py` (`ALL_REFUSALS`).
+Background telemetry is read from the session
 transcript's tool calls, not from stdout.
 
 Refusal tokens a consumer can meet on claude: `config-dir-unusable:<why>`,

@@ -194,16 +194,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `claude-mode-background-write` | a `dispatch-write` call supplies `--claude-mode background` — background mode is review-only; refused with `attempts: 0`, nothing spawned |
 >
 > **Background attempt refusals** (claude `--claude-mode background` on `dispatch-review` only —
-> attempt outcomes on `attempt-ended.refusal`, not pre-spawn refusals):
->
-> | token | when |
-> |---|---|
-> | `background-launch-unacknowledged` | the launch child exited without a parseable launch id in its acknowledgement stdout |
-> | `background-launch-failed` | the launch child exited non-zero after acknowledging |
-> | `background-session-unlisted` | the launch id was acknowledged but the session does not appear in the per-account agent listing |
-> | `background-transcript-ambiguous` | more than one transcript file matches the session |
-> | `background-agents-unreadable` | the per-account agent listing could not be read while polling |
-> | `background-session-ended-without-result` | the session ended in the listing before a structured-output payload appeared in the transcript |
+> attempt outcomes on `attempt-ended.refusal`, not pre-spawn refusals): authoritative token
+> list and meanings live in `lib/background_outcome.py` (`ALL_REFUSALS`).
 >
 > **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
 > the investigation floor and forfeits vacuously — fail-safe (the seat falls open to the host model), never a

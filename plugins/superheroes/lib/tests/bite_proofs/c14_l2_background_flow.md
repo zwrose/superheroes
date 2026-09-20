@@ -201,6 +201,36 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_claude_backgr
 1 passed in 1.02s
 ```
 
+## background-agents-unreadable
+
+- **axis:** unreadable agents listing during poll refuses background-agents-unreadable
+- **detector:** `plugins/superheroes/lib/tests/test_engine_dispatch.py::test_claude_background_agents_unreadable_refused`
+
+**raw red (exit 1):**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_claude_background_agents_unreadable_refused ___________
+
+    def test_claude_background_agents_unreadable_refused(tmp_path, monkeypatch):
+        ...
+>       assert ended["refusal"] == "background-agents-unreadable"
+E       AssertionError: assert None == 'background-agents-unreadable'
+
+plugins/superheroes/lib/tests/test_engine_dispatch.py:15130: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_claude_background_agents_unreadable_refused
+1 failed in 1.19s
+```
+
+**raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 1.06s
+```
+
 ## background-session-ended-without-result
 
 - **axis:** stopped session without result refuses background-session-ended-without-result
