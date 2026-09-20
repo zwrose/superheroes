@@ -784,7 +784,11 @@ def _resolve_pr_stack_groups(
             else:
                 for entry in stacks:
                     if entry["stack"] == stack_number:
-                        entry["prs"] = member_prs
+                        merged = list(entry["prs"])
+                        for listed in member_prs:
+                            if listed not in merged:
+                                merged.append(listed)
+                        entry["prs"] = merged
                         break
         elif read_result.get("reason") == sc.REASON_NOT_LINKED:
             if pr_num not in covered_prs:

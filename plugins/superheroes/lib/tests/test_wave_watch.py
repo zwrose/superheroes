@@ -3518,6 +3518,32 @@ def test_resolve_pr_stack_groups_changing_snapshot_covers_every_changed_pr():
     assert ungrouped == []
 
 
+def test_resolve_pr_stack_groups_shrinking_snapshot_covers_every_changed_pr():
+    degraded = set()
+
+    def membership_reader(*, pr, repo, **kwargs):
+        if pr == 30:
+            return _stack_membership(1, [30])
+        if pr == 40:
+            return _stack_membership(1, [40])
+        raise AssertionError("unexpected pr %r" % pr)
+
+    stacks, ungrouped = ww._resolve_pr_stack_groups(
+        "/fake/repo",
+        deadline=time.monotonic() + 30,
+        monotonic=time.monotonic,
+        gh_run=lambda *args, **kwargs: _gh_repo_view_proc(),
+        membership_reader=membership_reader,
+        env={},
+        degraded=degraded,
+        changed_prs=[30, 40],
+    )
+
+    assert _changed_pr_partition(stacks, ungrouped) == {30, 40}
+    assert stacks == [{"stack": 1, "prs": [30, 40]}]
+    assert ungrouped == []
+
+
 def test_resolve_pr_stack_groups_refusal_then_membership_no_duplicate():
     degraded = set()
 

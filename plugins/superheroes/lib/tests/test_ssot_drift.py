@@ -3613,7 +3613,8 @@ def _launcher_dict_refusal_reason(node):
     for key, val in zip(node.keys, node.values):
         if isinstance(key, _ast.Constant):
             fields[key.value] = val
-    if fields.get("ok") != _ast.Constant(value=False):
+    ok_val = fields.get("ok")
+    if not isinstance(ok_val, _ast.Constant) or ok_val.value is not False:
         return None
     reason = fields.get("reason")
     if isinstance(reason, _ast.Constant) and isinstance(reason.value, str):
