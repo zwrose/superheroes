@@ -3839,20 +3839,23 @@ def test_pr_set_changed_real_read_membership_whole_read_bounded_by_watcher_budge
     monkeypatch.setattr(
         sc.shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None,
     )
-    times = [1000.0, 1000.0, 1000.0, 2000.0]
-    sc_index = [0]
+    # Stable until membership GraphQL transport runs; then jump past the shared
+    # read budget so verification sees exhaustion without pinning call count.
+    sc_clock = [1000.0]
 
     def sc_monotonic():
-        index = sc_index[0]
-        sc_index[0] += 1
-        return times[index] if index < len(times) else times[-1]
+        return sc_clock[0]
 
     monkeypatch.setattr(sc.time, "monotonic", sc_monotonic)
 
-    run = _stack_check_graphql_run(99)
+    base_run = _stack_check_graphql_run(99)
+
+    def membership_graphql_run(argv, **kwargs):
+        sc_clock[0] = 2000.0
+        return base_run(argv, **kwargs)
 
     def membership_reader(**kwargs):
-        return sc.read_membership(run=run, **kwargs)
+        return sc.read_membership(run=membership_graphql_run, **kwargs)
 
     mono = [1000.0]
     repo = _init_repo(tmp_path / "repo")
@@ -3871,4 +3874,131 @@ def test_pr_set_changed_real_read_membership_whole_read_bounded_by_watcher_budge
     assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in result["degraded"]
     assert result["ungrouped"] == [99]
     assert result["stacks"] == []
+
+
+# --- pr-set-changed slug read de-duplication (#1340 layer 2d) -----------------
+
+
+def test_pr_set_changed_resolve_repo_slug_refusal_degrades_to_ungrouped(
+    tmp_path, monkeypatch,
+):
+    pr_sets = [{10}, {10, 99}]
+
+    def membership_reader(*, pr, repo, **kwargs):
+        raise AssertionError("membership_reader must not run when slug read refused")
+
+    def refusing_resolve(*args, **kwargs):
+        return None, {
+            "ok": False,
+            "reason": sc.REASON_STACK_UNREADABLE,
+            "detail": "test refusal",
+        }
+
+    monkeypatch.setattr(sc, "resolve_repo_slug", refusing_resolve)
+    result = _run_pr_set_changed(
+        tmp_path, monkeypatch, pr_sets, membership_reader,
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in result["degraded"]
+    assert result["stacks"] == []
+    assert result["ungrouped"] == [99]
+
+
+def test_pr_set_changed_resolve_repo_slug_argument_refusal_degrades_to_ungrouped(
+    tmp_path, monkeypatch,
+):
+    pr_sets = [{10}, {10, 99}]
+
+    def membership_reader(*, pr, repo, **kwargs):
+        raise AssertionError("membership_reader must not run when slug read refused")
+
+    def argument_refusing_resolve(*args, **kwargs):
+        return None, {
+            "ok": False,
+            "reason": sc.REASON_BAD_ARGUMENT,
+            "detail": "bad repo_root",
+        }
+
+    monkeypatch.setattr(sc, "resolve_repo_slug", argument_refusing_resolve)
+    result = _run_pr_set_changed(
+        tmp_path, monkeypatch, pr_sets, membership_reader,
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in result["degraded"]
+    assert result["stacks"] == []
+    assert result["ungrouped"] == [99]
+
+
+def test_resolve_repo_slug_sub_min_budget_makes_no_gh_call():
+    gh_calls = []
+    mono = [1000.0]
+
+    def gh_run(argv, **kwargs):
+        gh_calls.append(argv)
+        return _gh_repo_view_proc()
+
+    slug = ww._resolve_repo_slug(
+        "/fake/repo",
+        deadline=1000.5,
+        monotonic=lambda: mono[0],
+        gh_run=gh_run,
+        env={},
+    )
+
+    assert slug is None
+    assert gh_calls == []
+
+
+def test_run_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
+    pr_sets = [{10}, {10, 99}]
+    recorded = []
+
+    def membership_reader(*, pr, repo, **kwargs):
+        recorded.append(pr)
+        return {"ok": False, "reason": sc.REASON_NOT_LINKED}
+
+    result = _run_pr_set_changed(
+        tmp_path, monkeypatch, pr_sets, membership_reader,
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert recorded == [99]
+
+
+def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    pr_sets = [{10}, {10, 99}]
+    recorded = []
+    arm = [0]
+    real_run = ww.run
+
+    def membership_reader(*, pr, repo, **kwargs):
+        recorded.append(pr)
+        return {"ok": False, "reason": sc.REASON_NOT_LINKED}
+
+    def run_fn(repo_root, batch_id, **kwargs):
+        arm[0] += 1
+        call_kwargs = dict(kwargs)
+        call_kwargs["gh_run"] = _gh_pr_list_with_repo_view(pr_sets)
+        call_kwargs["max_seconds"] = 2
+        call_kwargs["interval_seconds"] = 1
+        call_kwargs["membership_reader"] = kwargs["membership_reader"]
+        call_kwargs["sleep"] = lambda _d: None
+        return real_run(repo_root, batch_id, **call_kwargs)
+
+    result = ww.loop(
+        repo,
+        "batch-982",
+        max_seconds=2,
+        interval_seconds=1,
+        sleep=lambda _d: None,
+        run_fn=run_fn,
+        membership_reader=membership_reader,
+    )
+
+    assert result["event"] == "pr-set-changed"
+    assert recorded == [99]
 
