@@ -16666,9 +16666,10 @@ def test_completion_producer_natural_exit_after_cap_forfeits(tmp_path, monkeypat
         % native_write
     )
     real_deadline_stamp = ED.engine_result_channel.deadline_stamp
+    forced_deadline = time.monotonic() - 1.0
 
     def _injected_deadline_stamp(_mono_deadline):
-        return real_deadline_stamp(-1.0)
+        return real_deadline_stamp(forced_deadline)
 
     monkeypatch.setattr(
         ED.engine_result_channel, "deadline_stamp", _injected_deadline_stamp,
