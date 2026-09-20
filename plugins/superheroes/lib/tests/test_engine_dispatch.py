@@ -16654,8 +16654,7 @@ def test_completion_producer_natural_exit_after_cap_forfeits(tmp_path, monkeypat
     """axis: natural exit just after wall cap — deadline present, late stamp forfeits."""
     native_write = _native_write_result_json()
     script = (
-        "import sys, time\n"
-        "time.sleep(0.45)\n"
+        "import sys\n"
         "_path = None\n"
         "args = sys.argv[1:]\n"
         "for i, arg in enumerate(args):\n"
@@ -16666,8 +16665,16 @@ def test_completion_producer_natural_exit_after_cap_forfeits(tmp_path, monkeypat
         "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
         % native_write
     )
+    real_deadline_stamp = ED.engine_result_channel.deadline_stamp
+
+    def _injected_deadline_stamp(_mono_deadline):
+        return real_deadline_stamp(-1.0)
+
+    monkeypatch.setattr(
+        ED.engine_result_channel, "deadline_stamp", _injected_deadline_stamp,
+    )
     run_dir, state, ended = _run_codex_native_write_timeout_script(
-        tmp_path, monkeypatch, script, timeout=0.5,
+        tmp_path, monkeypatch, script, timeout=1e9,
     )
     assert ended["timedOut"] is False
     assert ERC.FIELD_DEADLINE_MONO in ended
