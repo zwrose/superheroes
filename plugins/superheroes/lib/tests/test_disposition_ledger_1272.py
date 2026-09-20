@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -26,6 +27,13 @@ SC = _load("session_contract")
 RC = _load("round_certification")
 V = _load("verification")
 RR = _load("round_records")
+
+_RCF_SPEC = importlib.util.spec_from_file_location(
+    "round_certification_fixtures",
+    os.path.join(_HERE, "round_certification_fixtures.py"),
+)
+_RCF = importlib.util.module_from_spec(_RCF_SPEC)
+_RCF_SPEC.loader.exec_module(_RCF)
 
 
 def _cfg():
@@ -483,6 +491,28 @@ def test_L6_first_stage_backfills_records_into_ledger_undisposed(tmp_path):
 
 # --- C13: head-bound verify receipts -------------------------------------------------
 
+def _init_two_head_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True, capture_output=True)
+    path = repo / "f.py"
+    path.write_bytes(_FIX_PRESENT_BYTES)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-q", "-m", "one"], cwd=repo, check=True, capture_output=True)
+    head1 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "commit", "-q", "--allow-empty", "-m", "two"], cwd=repo, check=True, capture_output=True,
+    )
+    head2 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    return repo, head1, head2
+
+
 def _audit_discharge_fixed(state, head_sha):
     """Fold audits discharging the sole fix-batch target; return ledger key and receipt."""
     discharged_f = {"title": "fixed bug", "severity": "Important", "file": "f.py", "line": 1}
@@ -503,8 +533,9 @@ def _audit_discharge_fixed(state, head_sha):
 
 
 def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
-    head1, head2 = "a" * 40, "b" * 40
+    repo, head1, head2 = _init_two_head_repo(tmp_path)
     state = RD.new_state(_cfg())
+    state["config"]["repoRoot"] = str(repo)
     state["round"] = 1
     state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": head1}}
     key, receipt1 = _audit_discharge_fixed(state, head1)
@@ -518,9 +549,11 @@ def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
     assert receipt2.get("verifyResult") is None
 
     RD._fold_verify(state, state["config"], {"result": "pass"})
+    state["rounds"]["2"]["verifyResult"] = "pass"
+    state["rounds"]["2"]["fixFoldHead"] = head2
     entry = _ledger_by_key(state)[key]
     receipt_after = entry.get("dispositionReceipt") or {}
-    assert receipt_after.get("verifyResult") == "pass"
+    assert receipt_after.get("verifyResult") is None
     assert receipt_after.get("headSha") == head2
 
     state["dispositionLedgerOwner"] = "ledger"
@@ -530,7 +563,42 @@ def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
         state, key, entry["disposition"], entry["dispositionRound"],
         dispositionReceipt=receipt_after,
     )
-    ctx = _ctx(state, tmp_path, certified_head=head2)
+    entry = _ledger_by_key(state)[key]
+    state["findings"] = [entry]
+    state["terminal"] = "converged"
+    state["step"] = RD.P_TERMINAL
+    state["certification"] = {
+        "shape": "audited-chain",
+        "fullPanel": False,
+        "independence": "independent",
+        "base": "fetched",
+        "shapeDrivers": [],
+    }
+    state["decisions"] = [{"round": 2, "kind": "converged", "detail": "certified"}]
+    state["config"]["headSha"] = head2
+    state["config"]["baseGuard"] = RC.BASE_GUARD_CHECKED
+    session_dir = _RCF.write_session(
+        tmp_path,
+        name="c13-terminal",
+        state=state,
+        meta={
+            "headSha": head2,
+            "baseGuard": RC.BASE_GUARD_CHECKED,
+            "repoRoot": str(repo),
+        },
+        faithful_session=True,
+    )
+    ok, live = RD.load_state(session_dir)
+    assert ok and live is not None
+    fault = RD._terminal_receipt_gate(session_dir, live)
+    assert fault is None, fault
+    ok, reloaded = RD.load_state(session_dir)
+    assert ok
+    terminal_receipt = _ledger_by_key(reloaded)[key].get("dispositionReceipt") or {}
+    assert terminal_receipt.get("verifyResult") == "pass"
+    assert terminal_receipt.get("headSha") == head2
+    ctx, err = RC._load_context(session_dir)
+    assert err is None
     assert RC.check_disposition_without_receipt(ctx) is None
 
 
