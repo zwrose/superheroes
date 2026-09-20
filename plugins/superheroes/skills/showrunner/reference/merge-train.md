@@ -67,20 +67,24 @@ saw. Nothing in the tooling closes that gap; this rule does.
 
 3. **Immediately before the irreversible command, re-read remote membership** and compare it to the
    enumeration. Mismatch — a different order, a missing member, an **extra** layer, a member no
-   longer open or now draft — **refuses**, and the advisor asks the owner again rather than merging
-   a container whose contents changed. This re-read is not optional and is not satisfied by the
-   earlier read at click-list time: the point of it is the window between them.
+   longer open or now draft, or a head sha that no longer matches the recorded evidence — **refuses**,
+   and the advisor asks the owner again rather than merging a container whose contents changed. This
+   re-read is not optional and is not satisfied by the earlier read at click-list time: the point of
+   it is the window between them.
 
-4. **One command merges the stack, in order, atomically** — `gh stack merge <stack-or-pr> --yes
-   --squash`; every member up to and including the chosen pull request, all or nothing. **Never
-   pull request by pull request**: serial merges are the anti-pattern (`rubric/native-stacks.md` § *Anti-patterns*), and they
-   leave the trunk holding intermediate layers if one member fails. Merge semantics, the
-   bare-number ambiguity, per-pull-request branch-protection evaluation, and merge-queue behaviour
-   live in `rubric/native-stacks.md` § *How a stack merges*.
+4. **One command merges the stack, in order** — `gh stack merge <stack-or-pr> --yes --squash`; every
+   member up to and including the chosen pull request. A **direct** merge is atomic (all or nothing);
+   a **merge-queue** merge is ordered and best-effort and can leave a merged prefix on the trunk.
+   **Never pull request by pull request**: serial merges are the anti-pattern
+   (`rubric/native-stacks.md` § *Anti-patterns*), and they leave the trunk holding intermediate
+   layers if one member fails. Merge semantics, the bare-number ambiguity, per-pull-request
+   branch-protection evaluation, linear-history requirement, and merge-queue behaviour live in
+   `rubric/native-stacks.md` § *How a stack merges*.
 
-5. **A stack is brought current with `main` by merge, bottom-up** — `gh pr update-branch` per layer
-   from the bottom (`rubric/native-stacks.md` § *How a stack stays current*); never a rebase or a force-push of a layer
-   under review, which the doctrine names as an anti-pattern (`rubric/native-stacks.md` § *Anti-patterns*).
+5. **A stack is brought current with a cascading rebase** — server-side from a pull request, or
+   `gh stack rebase` followed by `gh stack push` locally (`rubric/native-stacks.md` § *How a stack
+   stays current*); never a hand-rebase or force-push of a layer under review, which the doctrine
+   names as an anti-pattern (`rubric/native-stacks.md` § *Anti-patterns*).
 
 6. **After the merge, report what merged** — each pull request number with the head sha that landed
    — and then this file's existing rules apply unchanged: the train is green when **`main`'s own

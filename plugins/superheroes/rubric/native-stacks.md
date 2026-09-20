@@ -2,8 +2,11 @@
 
 The `gh stack` verbs come from the **`github/gh-stack` extension**, a separately installed
 public-preview extension rather than part of `gh` itself. Run `gh extension list` to confirm the
-extension is installed before you use a stack verb. A missing verb means the extension is absent,
-not that stacks do not exist on GitHub.
+extension is installed before you use a stack verb; install it with `gh extension install
+github/gh-stack` and upgrade with `gh extension upgrade gh-stack`. A missing verb means the
+extension is absent, not that stacks do not exist on GitHub. When the extension is unavailable or
+the repository's server-side stacked-pull-request feature is not enabled, **stop and report** — do
+not fall back to an unlinked base-branch chain or serial merges.
 
 ## What the object is
 
@@ -40,7 +43,9 @@ pushed and get pull requests created with the correct base chaining. **Existing 
 reused**; **existing members are never removed**. Passing a **stack number first** appends the
 remaining arguments to the top of that stack. An argument that belongs to a **different** stack is
 **rejected**. `--base` sets the bottom's base branch. The command is **idempotent in the sense that
-matters** — re-linking existing members skips them — and it **does not move any branch head**.
+matters** — re-linking existing members skips them. Linking **pushes branch arguments** (creating
+or updating those remote branches and opening pull requests for branches that have none), and it
+**neither rewrites history nor re-points an existing pull request's head**.
 
 **A local tracked stack** uses `gh stack init`, `add`, and `submit`, with `checkout`, `modify`,
 `push`, `sync`, `rebase`, and `unstack` around them. The CLI tracks the branch chain locally and
@@ -51,15 +56,18 @@ creates or updates the pull requests from it. A superheroes lane does **not** ru
 The **only** honest read of membership is GitHub's own, by GraphQL:
 
 ```graphql
-query($owner:String!,$repo:String!,$pr:Int!){
+query($owner:String!,$repo:String!,$pr:Int!,$after:String){
   repository(owner:$owner,name:$repo){
     pullRequest(number:$pr){
-      number baseRefName headRefName
+      number baseRefName headRefName headRefOid
       stackEntry{
         position
         stack{
           number size baseRefName
-          entries(first:50){ nodes{ position pullRequest{ number state headRefName baseRefName } } }
+          entries(first:50, after:$after){
+            pageInfo{ hasNextPage endCursor }
+            nodes{ position pullRequest{ number state isDraft headRefName headRefOid baseRefName } }
+          }
         }
       }
     }
@@ -71,10 +79,12 @@ query($owner:String!,$repo:String!,$pr:Int!){
 does not run. A **null `stackEntry` means the pull request is in no stack**. That is the refusal a
 caller must handle, never "probably fine."
 
-The query returns the queried pull request's own `position`, and the stack's `number`, `size`,
-`baseRefName`, and its ordered `entries`. Each entry carries its position and its pull request's
-number, state, head branch, and base branch. Together these fields are the whole membership claim,
-read from GitHub.
+**Paginate `entries` to exhaustion** — follow `pageInfo.hasNextPage` with `after` until every page
+is collected. The collected node count **must equal `size`**; any missing page or count mismatch
+**refuses** before owner enumeration or merge. Each entry carries its position and its pull
+request's number, state, draft status, head branch, head sha, and base branch. Together with the
+queried pull request's own `position`, `headRefOid`, and the stack's `number`, `size`, and
+`baseRefName`, these fields are the whole membership claim, read from GitHub.
 
 **`gh stack view` is not verification.** It reads **local tracking state only**. Run in a worktree
 whose branch is simply not locally tracked, it answers that the current branch is not part of a
@@ -92,37 +102,52 @@ Use `--merge`, `--rebase`, or `--merge-method` instead of `--squash` when that i
 requires.
 
 Every member **up to and including** the chosen pull request is merged into the base branch in **one
-atomic, all-or-nothing operation — if any pull request cannot be merged, none are**. With no
+direct, atomic, all-or-nothing operation — if any pull request cannot be merged, none are**. With no
 argument the command uses the stack of the current branch. **A bare number is read first as a stack
 number, then as a pull request number.** `--yes` is required when nothing is interactive. Only
 **basic pull request state** (open, not draft) is checked client-side, while **GitHub evaluates
 branch protection and repository rules when the merge runs** and reports failures back. A **merge
 queue** on the base branch is honoured: the stack is queued and merges when the queue processes it.
+**A queued stack is not atomic** — GitHub may land members across consecutive merge groups, and a
+later failure can leave a merged prefix on the trunk while ejecting the failing member and its
+descendants ([GitHub's stacked-pull-request troubleshooting
+guide](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-stacked-pull-requests)).
 **Bypassing merge requirements is not supported for stacks.**
+
+The stack must have a **fully linear history** between layers — a merge requirement GitHub enforces
+before any member can land ([GitHub's stacked-pull-request
+overview](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)).
 
 **One command merges the stack; never one PR at a time.**
 
 Merging up to a middle pull request merges everything below it and leaves the pull requests above
-**open**. GitHub retargets the remainder onto the new base. That behaviour is GitHub's documented
-behaviour; we have not smoke-tested it.
+**open**. GitHub **automatically rebases** the remaining branches onto the new base, changing their
+head shas. That behaviour is GitHub's documented behaviour; we have not smoke-tested it. Every
+remaining layer needs a fresh remote-head check and qualifying review and CI receipts on the new
+head before it is considered mergeable.
 
 ## How a stack stays current
 
-When the stack's base branch has moved, bring the stack current **bottom-up, by merge**:
+When the stack's base branch or a lower layer has moved, bring the stack current with a **cascading
+rebase** — the sanctioned mechanism GitHub documents for restoring the fully linear history a
+stack merge requires ([GitHub's stacked-pull-request
+overview](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests);
+[troubleshooting guide](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-stacked-pull-requests)):
 
-```bash
-gh pr update-branch <pr>
-```
+- **Server-side** — trigger the **Rebase stack** action from a pull request in the stack.
+- **Locally** — `gh stack rebase` followed by `gh stack push`.
 
-Run that per layer from the bottom. The **default is a merge commit** of the base into the pull
-request branch; `--rebase` exists and is opt-in.
+A merge commit from the base into a layer — what `gh pr update-branch` does by default — **breaks
+the linear history** the stack merge requires, so **`gh pr update-branch` in its default merge mode
+is not how a stack is brought current**.
 
 For a **local tracked** stack, `gh stack sync` and `gh stack rebase` are the native verbs and they
 do move local branches. That is why they belong to that route and not to a lane whose layer is under
 review.
 
-When a **lower layer changes under it**, bring the lower layer current first, then update the layer
-above from it, bottom-up. The builder discloses the conflict round.
+When a **lower layer changes under it**, bring the lower layer current first, then rebase the layer
+above from it, bottom-up. The builder discloses the conflict round. Every layer whose head sha
+changes needs fresh remote-head checks and qualifying review and CI receipts on the new head.
 
 ## Anti-patterns
 
@@ -136,10 +161,11 @@ merges; it defeats the all-or-nothing guarantee and can leave the trunk in an in
 **`gh stack view` as verification** — see above. It reads local tracking state, not GitHub
 membership.
 
-**Hand-rewriting a layer's history** — a rebase or force-push of a layer under review. It breaks
-review continuity on that pull request and moves a head other layers are based on. This is not
-GitHub's **own** retargeting after a partial merge, and it is not `gh stack sync` or `rebase` on a
-**local tracked** stack the builder owns end to end.
+**Hand-rewriting a layer's history** — a rebase or force-push a builder improvises on a layer under
+review. It breaks review continuity on that pull request and moves a head other layers are based
+on. This is not GitHub's **own cascading rebase** (server-side or via `gh stack rebase`/`gh stack
+push`), and it is not `gh stack sync` or `rebase` on a **local tracked** stack the builder owns end
+to end.
 
 **Reading the stack's copy of a register from inside a layer** — a layer's worktree carries whatever
 the layers below it wrote, which can be a stale or amended copy. The copy that grades a child is

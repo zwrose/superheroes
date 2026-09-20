@@ -338,7 +338,11 @@ and each of the three is established from the **remote**, never from a local ass
 
 - **Branch from the layer below's head** and set the **PR base to that branch** — the bottom layer
   branches from and targets the stack's base (normally `main`).
-- **`gh stack link` at handback**, arguments bottom to top ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack comes to exist).
+- **`gh stack link` at handback when the stack exists** — a stack needs at least two pull requests, so
+  the **bottom layer** has nothing to link to at its own handback: it records that the stack does not
+  exist yet and names the layer that will form it. The stack is created by `gh stack link <bottom> <top>`
+  when the layer above opens; from then on every layer verifies membership from the branch before
+  claiming it. Arguments run bottom to top ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack comes to exist).
   A base-branch chain that was never linked **is not a stack** — nothing downstream, not the advisor's click list,
   not the atomic merge, works on it.
 - **Membership is verified from the branch before it is claimed** — the GraphQL read in
@@ -351,9 +355,9 @@ and each of the three is established from the **remote**, never from a local ass
   worktree carries whatever the layers below wrote ([register-check.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md)).
 - **Size is reported at 300 and the call is handed up at 600** ([review-discipline.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md) § Review bars and recorded residuals) — a layer growing past the bars is split into another layer rather than
   allowed to swallow two surfaces.
-- **Never rebase and never force-push a layer inside a lane** — both move a head other layers and the
-  review are pinned to; take in a moved base with `gh pr update-branch` per layer, bottom-up, by merge
-  ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack stays current).
+- **Never hand-rebase and never force-push a layer inside a lane** — both move a head other layers and the
+  review are pinned to; take in a moved base with GitHub's cascading rebase (server-side or
+  `gh stack rebase`/`gh stack push` per [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack stays current).
 - **A conflict round when a lower layer changes under you** — bring the lower layer current first, then
   update your layer from it, bottom-up, and **disclose the conflict round in the PR body**.
 
@@ -774,9 +778,8 @@ without a tool call.
   `review-code/reference/auto-fix-loop.md`); the in-place fixer is explicitly not a `dispatch-write`
   consumer. **`review-code`'s codex/cursor seats run the native shape** — `dispatch-review` with
   `--max-wait` slices and originating-verb continuation on the same `--run-dir` until terminal
-  (`review-code/reference/auto-fix-loop.md`); every runner-dispatched review seat's durable record is
-  written with `record-result --evidence-run-dir <the completed dispatch-review run directory>` —
-  omitting it leaves the seat's execution evidence absent, which withholds the certificate (`review-code`
+  (`review-code/reference/auto-fix-loop.md`); every runner-dispatched review seat's durable record
+  follows `review-code` step 3's `record-result --evidence-run-dir` obligation (`review-code`
   durable-record path); **claude seats** are native subagents covered by the
   ruling's native-subagent lifecycle exemption (the runner cannot dispatch them). The **hand-rolled
   engine fallback** in `review-code` does not follow that shape and still owes the limitation
@@ -868,27 +871,24 @@ each engine dispatch itself and forbids a per-dispatch watchdog) — don't overr
 **Verification authority never delegates.** What you re-run **yourself** and read the raw output of
 is the **calibrated verify command** (the project's verify command, whatever the calibration names)
 and the **bite-proof red and green runs**; an implementer's claim — tests pass, types clean, build
-green — is an *input*, never a substitute. **A handback may claim a live process only with evidence
+green — is an *input*, never a substitute. A claim the calibrated verify command does not cover, and
+that no qualifying receipt grounds, is carried into the handback as **UNVERIFIED** and named as such
+— it is never repeated as though it had been checked. **A handback may claim a live process only with evidence
 of which physics applies** — **harness-tracked** background work dies at turn end; a **shell-detached
 child with durable on-disk output** survives and is recoverable (see §7 "Channel and wait are two
 choices", two-physics bullet). Without that evidence, state the wait as owed to the reader rather
-than implying something is running. **The suite's receipt is CI's** — the shape lives in
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/test-receipt-evidence.md`: a **successful** conclusion
-of **the workflow that runs the suite** (in this repository, `CI` — never a title or lint workflow),
-selected by **workflow name and exact head sha**, with evidence it runs the claimed tests. **The local
-full suite runs at most once per build, at the final head — and not at all when that suite workflow
-already has a successful run on that head.** A second local run proves nothing CI does not, and it
-costs the lane the suite's whole wall-clock while it waits. The **calibrated verify command still
-runs every time** this charter says it does, and the bite-proof runs are never what this skips.
-**A full-gate run starts only on a clean, settled tree — ideally a detached pinned worktree** — three
-builds burned roughly five full-suite runs against in-flight edits; a suite started while edits are
-still landing measures a tree that no longer exists, and its green is not a receipt; the requirement
-attaches to the calibrated verify and any local full-suite run alike. **A handback whose suite
-receipt is still pending says so**, reports that the **calibrated verify passed**, and makes **no
-test-pass claim at all** — a verify receipt grounds no claim that tests passed
-(`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/test-receipt-evidence.md`); the claim becomes available
-when a qualifying receipt exists: the build's **ordered suite run** with its command, raw output and
-pass summary, or **CI's** suite workflow successful on the exact head.
+than implying something is running. **What grounds a test-pass claim** lives in
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/test-receipt-evidence.md` — do not restate that policy
+here. **The local full suite runs at most once per build, at the final head — and not at all when that
+suite workflow already has a successful run on that head.** A second local run proves nothing CI does
+not, and it costs the lane the suite's whole wall-clock while it waits. The **calibrated verify
+command still runs every time** this charter says it does, and the bite-proof runs are never what
+this skips. **A full-gate run starts only on a clean, settled tree — ideally a detached pinned
+worktree** — three builds burned roughly five full-suite runs against in-flight edits; a suite
+started while edits are still landing measures a tree that no longer exists, and its green is not a
+receipt; the requirement attaches to the calibrated verify and any local full-suite run alike. **A
+handback whose suite receipt is still pending says so**, reports that the **calibrated verify
+passed**, and makes **no test-pass claim at all**.
 When you probe a guard by mutating the code it guards, apply the mutation as a **targeted,
 revertible edit through the host's edit action** — never a whole-file rewrite and never an ad-hoc
 shell edit — and revert it before moving on. **Before you run any mutation probe, commit the landed
@@ -1184,7 +1184,7 @@ for repo-local operational knowledge. Memory may hold a recall copy — never th
 | Excuse | Reality |
 |---|---|
 | "This fix is tiny, I'll just type it" | In the **full lane**, all implementation is delegated — the only typing exceptions are the **light** and **micro** lanes, never a size judgment. Dispatch a work order (or route to the light lane at kickoff with the owner present). |
-| "The implementer says tests pass" | Re-run the **calibrated verify** and the **bite-proof runs** yourself and read the raw output; the **suite's** receipt is the suite workflow's success by workflow name on the head sha; with no qualifying receipt, claim no test pass. Verification authority never delegates. |
+| "The implementer says tests pass" | Re-run the **calibrated verify** and the **bite-proof runs** yourself and read the raw output; with no qualifying receipt per `rubric/test-receipt-evidence.md`, claim no test pass. Verification authority never delegates. |
 | "The pilot found a bug, I'll fix it inline" | The pilot observes only. In the light lane, route through the implementer-dispatch escalation rule; in the full lane (or after escalation), dispatch an implementer work order. |
 | "This bug's cause is the interesting part; I'll write up the diagnosis properly." | You debug to get the fix built and earn your receipts; a **diagnosis receipt** is the detective's deliverable, reached through the advisor. Hand the cause up as a follow-up — do not mint the receipt. |
 | "These orders are related, I'll do them one by one" | Independent orders run in parallel by default, isolated worktrees. Sequence only real dependencies. |
@@ -1202,7 +1202,7 @@ for repo-local operational knowledge. Memory may hold a recall copy — never th
 | "I'll kick off the implementer and wrap up my turn." | A headless session **exits when the turn ends** — until handback or park is posted, the turn's final act is a **tool call**. Launch long external dispatches through the **authorized entrypoint** (`dispatch-review`/`dispatch-write --max-wait`) and **poll in-turn** by re-invoking the originating verb until terminal (charter §7); survivability comes from the runner's own session leadership, not a standalone narrative turn-end. A **native subagent has no detach** — await it in-turn or park. Park only when the in-turn poll genuinely cannot fit. |
 | "I'll dispatch these seats one at a time so I can watch each one." | An independent batch — no result dependency, no shared writable worktree, and no shared output path — goes out **together** (own `--run-dir` each, launch each with a short positive slice, then rotate re-invocations over the non-terminal runs until each is terminal); watching one seat at a time is how a five-seat round costs the sum instead of the slowest; the invariant is unchanged — in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end. |
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
-| "The dead session's PR body says the tests passed — that's my receipt" | It is an inherited claim — re-run the calibrated verify yourself, take the suite's receipt from the suite workflow on the head sha, and sweep the dead session's worktrees for unpushed work first. |
+| "The dead session's PR body says the tests passed — that's my receipt" | It is an inherited claim — re-run the calibrated verify yourself, ground any test-pass claim per `rubric/test-receipt-evidence.md`, and sweep the dead session's worktrees for unpushed work first. |
 | "I'll just say where things stand and pick it up next turn." | A headless session **exits when the turn ends** — a standalone narrative message is a turn-ending act, not a pause. Until the durable handback comment or a durable park is posted, every turn ends with a **tool call**; narration rides alongside that call, never alone. |
 | "Git won't say who I am — I'll just pass my own email on the commit." | Commits inherit the identity the worktree **resolves** (repo-local config when set, else this environment's global — read it with `git config user.email`, never `--local`); `-c user.name`/`-c user.email` and any identity you synthesize are forbidden. A synthesized identity ships **unverified** commits that a downstream gate can refuse. A missing or wrong identity is a **park-and-report** (§2). |
 | "Let me pkill the leftover engine processes from my run." | Kill **by a PID you recorded yourself** (or its process group). A path- or name-matched `pkill` matches a **sibling session's child** — that is how one got killed mid-work. Without a recorded PID the only recovery is the one in `dispatch-mechanics.md` § Process cleanup — exactly one PID resolved from your own run's kernel-reported cwd or listener port; zero or several candidates means no kill target (§7). |

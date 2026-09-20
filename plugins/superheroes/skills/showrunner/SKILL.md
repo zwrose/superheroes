@@ -387,8 +387,9 @@ above).
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md`.
    - **The closure row** — fires when **this vet is the final one**. **The vet that carries the closure receipt is the one whose merge closes the spec's last open child, and it knows it is the final vet by the present-tense test: every other child is already merged or closed at the moment of this vet.** **Where more than one candidate closure moment is live — concurrent final vets, or a vet racing a sibling's no-PR close — the advisor sequences them so exactly one carries the receipt.** **Where the last open child closes without a PR — declined scope — the closure receipt is presented to the owner with that close, in the same sitting, and there is still no separate closure trigger.** That no-PR path produces **no PR**, so the receipt reaches the owner with the close itself — an advisor must not conclude that a closure with no PR needs no receipt. When the row fires, the vet **assembles and carries the closure receipt** — Detail:
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/closure.md`.
-   - **Trust the suite's receipt from CI** on the recorded head — per
-     `skills/showrunner/reference/vet-receipt.md` — do **not** re-run green suites.
+   - **Trust CI green on the recorded head** — including the suite's receipt per
+     `rubric/test-receipt-evidence.md` (run selection per
+     `skills/showrunner/reference/vet-receipt.md` spine field 1) — do **not** re-run green suites.
      Spend vet time on the **adversarial probes the suite does not contain**: does the guard
      actually fire when its target breaks? does the test assert what its name claims? does the
      behavior actually behave? Apply probe mutations as a **targeted, revertible edit through the
@@ -734,8 +735,9 @@ above).
    **Preconditions for executing inside the word.** Three, and none waives: the review and
    verification evidence the PR's lane requires (a READY vet for a full or light lane, or the
    independent reviewer's final-head receipt for a micro lane, which has no advisor vet by
-   design), the suite's receipt from CI on the recorded head (per
-     `skills/showrunner/reference/vet-receipt.md`), and a branch current with its base.
+   design), CI green on the recorded head — including the suite's receipt per
+     `rubric/test-receipt-evidence.md` (run selection per
+     `skills/showrunner/reference/vet-receipt.md` spine field 1) — and a branch current with its base.
    **Reporting.** Report each merge you execute at once, in the conversation that gave the word,
    as one line: the PR, the head merged, and the scope it rode. A wrong merge is then visible
    within minutes, and the word and the act sit in one thread. There is no separate list of
@@ -752,8 +754,9 @@ above).
    the moment with a word for that release.
    **The floor.** There is no mechanical merge floor.
    **Issuing the merge command is yours alone.** No subagent issues it. The mechanical duties
-   around it (sequencing, branch-update, waiting for the suite's receipt from CI on the recorded
-   head (per `skills/showrunner/reference/vet-receipt.md`), conflict resolution under an
+   around it (sequencing, branch-update, waiting for CI green on the recorded head — including the
+   suite's receipt per `rubric/test-receipt-evidence.md` (run selection per
+   `skills/showrunner/reference/vet-receipt.md` spine field 1), conflict resolution under an
    advisor-authored recipe, and post-merge hygiene) may be handed to a subagent under the three
    conditions below. A merge train's "green" includes post-merge `main` CI, and union fixes ride
    the last open PR, disclosed.
