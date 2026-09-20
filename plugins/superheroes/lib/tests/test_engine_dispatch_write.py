@@ -848,9 +848,10 @@ def test_write_salvage_scan_exception_leaves_terminal_forfeit_unchanged(tmp_path
         raise RuntimeError("salvage boom")
 
     _install_write_salvage(monkeypatch, boom)
+    # Timed-out attempts with a complete native result are admitted (layer 3a); use empty stdout so nothing is admissible.
     res = _dispatch_write(tmp_path, FakeRunner([
-        (_build_ok_stdout(), True, 0, ""),
-        (_build_ok_stdout(), True, 0, ""),
+        ("", True, 0, ""),
+        ("", True, 0, ""),
     ]), cwd=wt, seat=_cursor_seat())
 
     assert res["forfeited"] is True

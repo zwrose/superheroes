@@ -3468,6 +3468,49 @@ def _run_codex_native_write_timeout_script(tmp_path, monkeypatch, script_body, *
     return run_dir, state, attempt_ended
 
 
+# axis: a non-timed-out crash with a schema-valid native result still forfeits; admission is timeout-only.
+def test_native_write_crash_with_valid_result_forfeits(tmp_path, monkeypatch):
+    native_write = _native_write_result_json()
+    script = (
+        "import sys\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        "sys.exit(1)\n"
+        % native_write
+    )
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert ended.get("timedOut") is not True
+    assert ended.get("exit") not in (0, None)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") is None
+    assert grade.get("ok") is not True
+
+
 # axis: a completed native write result is admitted before the timeout forfeit when the child hangs after writing.
 def test_native_write_timeout_with_valid_result_admits(tmp_path, monkeypatch):
     native_write = _native_write_result_json()

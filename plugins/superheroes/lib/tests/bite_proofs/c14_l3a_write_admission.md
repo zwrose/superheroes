@@ -75,3 +75,22 @@ FAILED ...::test_supervise_pre_retry_refuses_on_background_stop_unconfirmed
 - **restore receipt:** pre-retry gate restored verbatim; `git status --porcelain` clean after restore
 - **raw green:** `.` / `1 passed in 0.85s`
 - **verdict:** RED→GREEN
+
+## BP-D1 — non-timed-out crash forfeits before native admission
+
+- **guarded element:** `engine_dispatch.py:_grade_write_attempt` — axis: a non-timed-out attempt whose engine exited non-zero forfeits without consulting the native result file; admission is licensed for the `timedOut` case only
+- **detector:** `plugins/superheroes/lib/tests/test_engine_dispatch.py::test_native_write_crash_with_valid_result_forfeits`
+- **neutralization:** `if ended.get("exit") not in (0, None) and not ended.get("timedOut"):` → `if ended.get("exit") not in (0, None) and ended.get("timedOut"):` (inverts the not-timed-out guard on the exit disqualification)
+- **raw red:**
+
+```
+>       assert grade.get("forfeit") is True
+E       AssertionError: assert None is True
+FAILED ...::test_native_write_crash_with_valid_result_forfeits
+1 failed in 4.58s
+```
+
+- **restore:** `and ended.get("timedOut")` → `and not ended.get("timedOut")` on the exit disqualification line
+- **restore receipt:** `if ended.get("exit") not in (0, None) and not ended.get("timedOut"):` quoted back in `_grade_write_attempt`; `git status --porcelain` empty after restore
+- **raw green:** `.` / `1 passed in 2.17s`
+- **verdict:** RED→GREEN
