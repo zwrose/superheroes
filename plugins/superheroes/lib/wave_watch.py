@@ -165,8 +165,8 @@ _GH_SCRUB_VARS = (
 def _gh_scrub_env(env):
     # Superset of the ledger's git scrub vars, deliberately — GH_REPO and the
     # GIT_CONFIG family can silently point the PR poll at a different repository.
-    # The ledger root stays in the child env (no roots= strip here).
-    return ll.scrub_env(env, keys=_GH_SCRUB_VARS, roots=())
+    # The ledger root is stripped with the default roots= (LEDGER_ROOT_ENV).
+    return ll.scrub_env(env, keys=_GH_SCRUB_VARS)
 
 # --- wave_watch vocabulary (authoritative for this module) --------------------
 
