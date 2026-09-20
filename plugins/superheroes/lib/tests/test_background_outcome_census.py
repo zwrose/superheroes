@@ -13,6 +13,38 @@ if _LIB not in sys.path:
 import background_outcome  # noqa: E402
 
 _EXEMPT_MODULE = "background_outcome.py"
+_REQUIRED_BASENAME = "engine_dispatch.py"
+
+
+def _lib_module_basenames():
+    """Every .py directly under lib/, excluding the exempt home."""
+    names = []
+    for name in os.listdir(_LIB):
+        if name == _EXEMPT_MODULE:
+            continue
+        path = os.path.join(_LIB, name)
+        if os.path.isfile(path) and name.endswith(".py"):
+            names.append(name)
+    names.sort()
+    return names
+
+
+def _validate_census_population(basenames):
+    if not basenames:
+        raise RuntimeError(
+            "Background-refusal census population collapsed: derived zero modules from %s "
+            "(expected every .py directly under lib/ except %s)"
+            % (_LIB, _EXEMPT_MODULE)
+        )
+    if _REQUIRED_BASENAME not in basenames:
+        raise RuntimeError(
+            "Background-refusal census population collapsed: derived population missing "
+            "required module %s" % _REQUIRED_BASENAME
+        )
+
+
+_CENSUS_MODULES = _lib_module_basenames()
+_validate_census_population(_CENSUS_MODULES)
 
 
 def _literal_offenders(source_path, banned):
@@ -26,7 +58,7 @@ def _literal_offenders(source_path, banned):
     return offenders
 
 
-@pytest.mark.parametrize("basename", ["engine_dispatch.py"])
+@pytest.mark.parametrize("basename", _CENSUS_MODULES)
 def test_background_refusal_literals_only_in_home(basename):
     banned = background_outcome.ALL_REFUSALS
     path = os.path.join(_LIB, basename)
