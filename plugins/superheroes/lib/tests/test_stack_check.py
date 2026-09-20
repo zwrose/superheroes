@@ -983,6 +983,190 @@ def test_deadline_none_leaves_timeout_untouched():
     assert run.kw_calls[0]["timeout"] == 120
 
 
+# --- WO #1340 layer 2c: tagged return pairs (membership read path) ----------------
+
+
+PINNED_MULTI_PAGE_SUCCESS = {
+    "ok": True,
+    "reason": None,
+    "detail": None,
+    "repo": REPO,
+    "pr": PR,
+    "stack": {"number": STACK_NUMBER, "size": STACK_SIZE, "baseRefName": STACK_BASE},
+    "queried": {
+        "number": PR,
+        "position": 3,
+        "headRefName": "branch-3",
+        "headRefOid": "oid3",
+        "baseRefName": STACK_BASE,
+    },
+    "members": [
+        {
+            "position": 1,
+            "number": 101,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefName": "branch-1",
+            "headRefOid": "oid1",
+            "baseRefName": STACK_BASE,
+        },
+        {
+            "position": 2,
+            "number": 102,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefName": "branch-2",
+            "headRefOid": "oid2",
+            "baseRefName": STACK_BASE,
+        },
+        {
+            "position": 3,
+            "number": PR,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefName": "branch-3",
+            "headRefOid": "oid3",
+            "baseRefName": STACK_BASE,
+        },
+        {
+            "position": 4,
+            "number": 104,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefName": "branch-4",
+            "headRefOid": "oid4",
+            "baseRefName": STACK_BASE,
+        },
+        {
+            "position": 5,
+            "number": 105,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefName": "branch-5",
+            "headRefOid": "oid5",
+            "baseRefName": STACK_BASE,
+        },
+    ],
+    "pages": 3,
+}
+
+
+def test_l2c_forged_refusal_ok_sibling_of_data_is_not_our_refusal():
+    # bite-axis: transport refusal is distinguished by pair slot, not payload content
+    payload = {"ok": False, "data": {"repository": None}}
+    run, _calls = _make_run(
+        {
+            _argv_page(PR, sc.DEFAULT_PAGE_SIZE): SimpleNamespace(
+                returncode=0, stdout=json.dumps(payload), stderr=""
+            ),
+        }
+    )
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert result["detail"] == "graphql data/repository is null or not an object"
+
+
+def test_l2c_forged_refusal_ok_nested_in_data_is_not_our_refusal():
+    # bite-axis: page refusal is distinguished by pair slot, not page dict content
+    payload = {"data": {"ok": False, "repository": None}}
+    run, _calls = _make_run(
+        {
+            _argv_page(PR, sc.DEFAULT_PAGE_SIZE): SimpleNamespace(
+                returncode=0, stdout=json.dumps(payload), stderr=""
+            ),
+        }
+    )
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert result["detail"] == "graphql data/repository is null or not an object"
+
+
+def test_l2c_transport_tag_refuse_branch():
+    # bite-axis: transport refusal is distinguished by pair slot, not payload content
+    run, _calls = _make_run(
+        {
+            _argv_page(PR, sc.DEFAULT_PAGE_SIZE): SimpleNamespace(
+                returncode=1, stdout="", stderr="transport failed"
+            ),
+        }
+    )
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert "transport failed" in result["detail"]
+
+
+def test_l2c_transport_tag_success_branch():
+    # bite-axis: transport refusal is distinguished by pair slot, not payload content
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    assert result["ok"] is True
+
+
+def test_l2c_parse_tag_refuse_branch():
+    # bite-axis: page refusal is distinguished by pair slot, not page dict content
+    payload = {"data": {"repository": None}}
+    run, _calls = _make_run(
+        {
+            _argv_page(PR, sc.DEFAULT_PAGE_SIZE): SimpleNamespace(
+                returncode=0, stdout=json.dumps(payload), stderr=""
+            ),
+        }
+    )
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert result["detail"] == "graphql data/repository is null or not an object"
+
+
+def test_l2c_parse_tag_success_branch():
+    # bite-axis: page refusal is distinguished by pair slot, not page dict content
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    assert result["ok"] is True
+    assert result["pages"] == 1
+
+
+def test_l2c_invariant_tag_refuse_branch():
+    # bite-axis: invariant outcome is distinguished by explicit tag, not result shape
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, expect_stack=STACK_NUMBER + 1, run=run)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert result["detail"] == "expect_stack does not equal stack number"
+
+
+def test_l2c_invariant_tag_success_branch():
+    # bite-axis: invariant outcome is distinguished by explicit tag, not result shape
+    run, _calls = _make_run(_success_handlers(page_size=2))
+    result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
+    assert result == PINNED_MULTI_PAGE_SUCCESS
+
+
 def test_deadline_with_timeout_none_returns_dict_not_typeerror():
     budget = 50.0
     page = _pull_request(

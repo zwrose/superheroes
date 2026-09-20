@@ -240,10 +240,10 @@ def _validate_membership_arguments(pr, repo, expect_stack, page_size, deadline):
 def _transport_graphql(
     owner, name, pr, page_size, after, timeout, run, repo, pages, deadline=None, deadline_at=None,
 ):
-    """Run one gh api graphql page. Return parsed payload dict or refusal dict."""
+    """Run one gh api graphql page. Return (payload, refusal) — exactly one is non-None."""
     # axis: read budget exhausted before a gh page
     if deadline_at is not None and time.monotonic() >= deadline_at:
-        return _refusal(REASON_STACK_UNREADABLE,
+        return None, _refusal(REASON_STACK_UNREADABLE,
             "read budget of %g seconds exhausted after %d pages" % (deadline, pages),
             repo=repo, pr=pr, pages=pages)
 
@@ -261,26 +261,26 @@ def _transport_graphql(
         proc = run(argv, capture_output=True, text=True, timeout=effective_timeout)
     except (FileNotFoundError, OSError) as exc:
         # axis: run raises FileNotFoundError/OSError
-        return _refusal(REASON_STACK_UNREADABLE, str(exc), repo=repo, pr=pr, pages=pages)
+        return None, _refusal(REASON_STACK_UNREADABLE, str(exc), repo=repo, pr=pr, pages=pages)
     except subprocess.TimeoutExpired:
         # axis: run raises subprocess.TimeoutExpired
-        return _refusal(REASON_STACK_UNREADABLE, "gh call timed out", repo=repo, pr=pr, pages=pages)
+        return None, _refusal(REASON_STACK_UNREADABLE, "gh call timed out", repo=repo, pr=pr, pages=pages)
 
     # axis: gh exits non-zero
     if proc.returncode != 0:
-        return _refusal(REASON_STACK_UNREADABLE, _proc_output(proc) or "gh api graphql failed",
+        return None, _refusal(REASON_STACK_UNREADABLE, _proc_output(proc) or "gh api graphql failed",
             repo=repo, pr=pr, pages=pages + 1)
 
     try:
         payload = json.loads(proc.stdout or "")
     except json.JSONDecodeError:
         # axis: stdout is not JSON
-        return _refusal(REASON_STACK_UNREADABLE,
+        return None, _refusal(REASON_STACK_UNREADABLE,
             "gh api graphql returned output that is not JSON", repo=repo, pr=pr, pages=pages + 1)
 
     # axis: parsed JSON payload is not an object
     if not isinstance(payload, dict):
-        return _refusal(REASON_STACK_UNREADABLE,
+        return None, _refusal(REASON_STACK_UNREADABLE,
             "gh api graphql returned JSON that is not an object", repo=repo, pr=pr, pages=pages + 1)
 
     errors = payload.get("errors")
@@ -288,28 +288,28 @@ def _transport_graphql(
         errors = []
     # axis: errors is present but not a list
     if not isinstance(errors, list):
-        return _refusal(REASON_STACK_UNREADABLE, "gh api graphql errors is not a list",
+        return None, _refusal(REASON_STACK_UNREADABLE, "gh api graphql errors is not a list",
             repo=repo, pr=pr, pages=pages + 1)
     # axis: response carries a non-empty errors array
     if errors:
-        return _refusal(REASON_STACK_UNREADABLE, json.dumps(errors), repo=repo, pr=pr, pages=pages + 1)
+        return None, _refusal(REASON_STACK_UNREADABLE, json.dumps(errors), repo=repo, pr=pr, pages=pages + 1)
 
-    return payload
+    return payload, None
 
 
 def _parse_membership_page(payload, repo, pr, pages, snapshot, stack_size, collected):
-    """Validate and extract one page. Return page dict or refusal dict."""
+    """Validate and extract one page. Return (page, refusal) — exactly one is non-None."""
     data = payload.get("data")
     repository = data.get("repository") if isinstance(data, dict) else None
     # axis: data/repository is null or not an object
     if not isinstance(data, dict) or not isinstance(repository, dict):
-        return _refusal(REASON_STACK_UNREADABLE,
+        return None, _refusal(REASON_STACK_UNREADABLE,
             "graphql data/repository is null or not an object", repo=repo, pr=pr, pages=pages)
 
     pull_request = repository.get("pullRequest")
     # axis: pullRequest is null or not an object
     if not isinstance(pull_request, dict):
-        return _refusal(REASON_STACK_UNREADABLE, "graphql pullRequest is null or not an object",
+        return None, _refusal(REASON_STACK_UNREADABLE, "graphql pullRequest is null or not an object",
             repo=repo, pr=pr, pages=pages)
 
     pr_number = pull_request.get("number")
@@ -323,20 +323,20 @@ def _parse_membership_page(payload, repo, pr, pages, snapshot, stack_size, colle
         or not isinstance(pr_head_ref, str)
         or not isinstance(pr_head_oid, str)
     ):
-        return _refusal(REASON_STACK_UNREADABLE,
+        return None, _refusal(REASON_STACK_UNREADABLE,
             "required pullRequest field is missing or of the wrong type",
             repo=repo, pr=pr, pages=pages)
 
     stack_entry = pull_request.get("stackEntry")
     # axis: stackEntry is null
     if stack_entry is None:
-        return _refusal(REASON_NOT_LINKED,
+        return None, _refusal(REASON_NOT_LINKED,
             "pull request is not in a stack", repo=repo, pr=pr, pages=pages)
 
     entry_position = stack_entry.get("position") if isinstance(stack_entry, dict) else None
     # axis: stackEntry is present but not an object, or position is missing/not an int
     if not isinstance(stack_entry, dict) or not _is_int(entry_position):
-        return _refusal(REASON_STACK_UNREADABLE,
+        return None, _refusal(REASON_STACK_UNREADABLE,
             "stackEntry is not an object or position is missing or not an integer",
             repo=repo, pr=pr, pages=pages)
 
@@ -351,7 +351,7 @@ def _parse_membership_page(payload, repo, pr, pages, snapshot, stack_size, colle
         or not _is_int(stack_size_value)
         or not isinstance(stack_base_ref, str)
     ):
-        return _refusal(REASON_STACK_UNREADABLE, "stack field is missing or of the wrong type",
+        return None, _refusal(REASON_STACK_UNREADABLE, "stack field is missing or of the wrong type",
             repo=repo, pr=pr, pages=pages)
 
     entries = stack.get("entries")
@@ -359,7 +359,7 @@ def _parse_membership_page(payload, repo, pr, pages, snapshot, stack_size, colle
     nodes = entries.get("nodes") if isinstance(entries, dict) else None
     # axis: entries/pageInfo/nodes is missing or of the wrong type
     if not isinstance(entries, dict) or not isinstance(page_info, dict) or not isinstance(nodes, list):
-        return _refusal(REASON_STACK_UNREADABLE,
+        return None, _refusal(REASON_STACK_UNREADABLE,
             "stack entries/pageInfo/nodes is missing or of the wrong type",
             repo=repo, pr=pr, pages=pages)
 
@@ -371,7 +371,7 @@ def _parse_membership_page(payload, repo, pr, pages, snapshot, stack_size, colle
     else:
         # axis: a later page reports a different page-one snapshot value
         if not _snapshot_matches(snapshot, pull_request, stack_entry, stack):
-            return _refusal(REASON_ORDER_MISMATCH,
+            return None, _refusal(REASON_ORDER_MISMATCH,
                 "later page disagrees with page-one snapshot", repo=repo, pr=pr, pages=pages)
 
     added = 0
@@ -379,10 +379,10 @@ def _parse_membership_page(payload, repo, pr, pages, snapshot, stack_size, colle
         member, parse_err = _parse_member(node)
         if parse_err:
             # axis: a node, its position, or one of its pull-request fields is missing or wrong type
-            return _refusal(REASON_STACK_UNREADABLE, parse_err, repo=repo, pr=pr, pages=pages)
+            return None, _refusal(REASON_STACK_UNREADABLE, parse_err, repo=repo, pr=pr, pages=pages)
         # axis: the collected count would exceed size mid-read
         if len(collected) + 1 > page_stack_size:
-            return _refusal(REASON_STACK_UNREADABLE,
+            return None, _refusal(REASON_STACK_UNREADABLE,
                 "collected member count would exceed stack size", repo=repo, pr=pr, pages=pages)
         collected.append(member)
         added += 1
@@ -390,7 +390,7 @@ def _parse_membership_page(payload, repo, pr, pages, snapshot, stack_size, colle
     has_next_page = page_info.get("hasNextPage")
     # axis: pageInfo hasNextPage is missing or not a boolean
     if not isinstance(has_next_page, bool):
-        return _refusal(REASON_STACK_UNREADABLE,
+        return None, _refusal(REASON_STACK_UNREADABLE,
             "pageInfo hasNextPage is missing or not a boolean", repo=repo, pr=pr, pages=pages)
 
     end_cursor = page_info.get("endCursor")
@@ -401,7 +401,12 @@ def _parse_membership_page(payload, repo, pr, pages, snapshot, stack_size, colle
         "added": added,
         "snapshot": page_snapshot,
         "stack_size": page_stack_size,
-    }
+    }, None
+
+
+_INVARIANT_TAG_REFUSAL = "refusal"
+_INVARIANT_TAG_CONTINUE = "continue"
+_INVARIANT_TAG_SUCCESS = "success"
 
 
 def _validate_stack_invariants(
@@ -415,30 +420,30 @@ def _validate_stack_invariants(
     prior_members,
     verification_pass,
 ):
-    """Whole-stack invariants after pagination. Return refusal, continue signal, or success tuple."""
+    """Whole-stack invariants after pagination. Return tagged refusal, continue, or success."""
     # axis: expect_stack was supplied and does not equal stack.number
     if expect_stack is not None and expect_stack != snapshot["stack_number"]:
-        return _refusal(REASON_ORDER_MISMATCH, "expect_stack does not equal stack number",
-            repo=repo, pr=pr, pages=pages)
+        return {"tag": _INVARIANT_TAG_REFUSAL, "result": _refusal(REASON_ORDER_MISMATCH,
+            "expect_stack does not equal stack number", repo=repo, pr=pr, pages=pages)}
 
     positions = {member["position"] for member in collected}
     expected_positions = set(range(1, stack_size + 1))
     # axis: collected member count does not equal stack size
     if len(collected) != stack_size:
-        return _refusal(REASON_ORDER_MISMATCH, "collected member count does not equal stack size",
-            repo=repo, pr=pr, pages=pages)
+        return {"tag": _INVARIANT_TAG_REFUSAL, "result": _refusal(REASON_ORDER_MISMATCH,
+            "collected member count does not equal stack size", repo=repo, pr=pr, pages=pages)}
 
     # axis: collected positions are not exactly 1..size
     if positions != expected_positions:
-        return _refusal(REASON_ORDER_MISMATCH, "collected positions are not exactly 1..size",
-            repo=repo, pr=pr, pages=pages)
+        return {"tag": _INVARIANT_TAG_REFUSAL, "result": _refusal(REASON_ORDER_MISMATCH,
+            "collected positions are not exactly 1..size", repo=repo, pr=pr, pages=pages)}
 
     members_at_position = [member for member in collected if member["position"] == snapshot["position"]]
     # axis: the queried pull request is not present exactly once at its reported position
     if len(members_at_position) != 1:
-        return _refusal(REASON_ORDER_MISMATCH,
+        return {"tag": _INVARIANT_TAG_REFUSAL, "result": _refusal(REASON_ORDER_MISMATCH,
             "queried pull request is not present exactly once at its reported position",
-            repo=repo, pr=pr, pages=pages)
+            repo=repo, pr=pr, pages=pages)}
     member_at_position = members_at_position[0]
     # axis: that entry's headRefName/headRefOid/baseRefName disagree with the top-level fields
     if (
@@ -447,18 +452,19 @@ def _validate_stack_invariants(
         or member_at_position["headRefOid"] != snapshot["pr_headRefOid"]
         or member_at_position["baseRefName"] != snapshot["pr_baseRefName"]
     ):
-        return _refusal(REASON_ORDER_MISMATCH,
+        return {"tag": _INVARIANT_TAG_REFUSAL, "result": _refusal(REASON_ORDER_MISMATCH,
             "queried pull request entry disagrees with top-level pull request fields",
-            repo=repo, pr=pr, pages=pages)
+            repo=repo, pr=pr, pages=pages)}
 
     if verification_pass == 0:
-        return ("continue", sorted(collected, key=lambda item: item["position"]))
+        return {"tag": _INVARIANT_TAG_CONTINUE,
+            "prior_members": sorted(collected, key=lambda item: item["position"])}
 
     current_members = sorted(collected, key=lambda item: item["position"])
     # axis: membership changes between two complete enumeration passes
     if current_members != prior_members:
-        return _refusal(REASON_ORDER_MISMATCH,
-            "membership changed between enumeration passes", repo=repo, pr=pr, pages=pages)
+        return {"tag": _INVARIANT_TAG_REFUSAL, "result": _refusal(REASON_ORDER_MISMATCH,
+            "membership changed between enumeration passes", repo=repo, pr=pr, pages=pages)}
 
     members = sorted(collected, key=lambda item: item["position"])
     stack = {
@@ -473,7 +479,8 @@ def _validate_stack_invariants(
         "headRefOid": snapshot["pr_headRefOid"],
         "baseRefName": snapshot["pr_baseRefName"],
     }
-    return _success(repo, pr, stack, queried, members, pages)
+    return {"tag": _INVARIANT_TAG_SUCCESS,
+        "result": _success(repo, pr, stack, queried, members, pages)}
 
 
 def read_membership(
@@ -507,18 +514,28 @@ def read_membership(
         after = None
 
         while True:
-            transport_result = _transport_graphql(
+            payload, transport_refusal = _transport_graphql(
                 owner, name, pr, page_size, after, timeout, run, repo, pages,
                 deadline=deadline, deadline_at=deadline_at)
-            if isinstance(transport_result, dict) and transport_result.get("ok") is False:
-                return transport_result
+            # bite-axis: transport refusal is distinguished by pair slot, not payload content
+            if transport_refusal is not None and payload is not None:
+                raise AssertionError("_transport_graphql returned both payload and refusal")
+            if transport_refusal is not None:
+                return transport_refusal
+            if payload is None:
+                raise AssertionError("_transport_graphql returned neither payload nor refusal")
 
             pages += 1
 
-            page_result = _parse_membership_page(
-                transport_result, repo, pr, pages, snapshot, stack_size, collected)
-            if "ok" in page_result and page_result["ok"] is False:
-                return page_result
+            page_result, page_refusal = _parse_membership_page(
+                payload, repo, pr, pages, snapshot, stack_size, collected)
+            # bite-axis: page refusal is distinguished by pair slot, not page dict content
+            if page_refusal is not None and page_result is not None:
+                raise AssertionError("_parse_membership_page returned both page and refusal")
+            if page_refusal is not None:
+                return page_refusal
+            if page_result is None:
+                raise AssertionError("_parse_membership_page returned neither page nor refusal")
 
             snapshot = page_result["snapshot"]
             stack_size = page_result["stack_size"]
@@ -559,10 +576,16 @@ def read_membership(
             prior_members,
             verification_pass,
         )
-        if isinstance(invariant_result, tuple):
-            prior_members = invariant_result[1]
+        # bite-axis: invariant outcome is distinguished by explicit tag, not result shape
+        invariant_tag = invariant_result.get("tag")
+        if invariant_tag == _INVARIANT_TAG_CONTINUE:
+            prior_members = invariant_result["prior_members"]
             continue
-        return invariant_result
+        if invariant_tag == _INVARIANT_TAG_REFUSAL:
+            return invariant_result["result"]
+        if invariant_tag == _INVARIANT_TAG_SUCCESS:
+            return invariant_result["result"]
+        raise AssertionError("_validate_stack_invariants returned unknown tag: %r" % invariant_tag)
 
 
 def _bad_argument_result(detail):
